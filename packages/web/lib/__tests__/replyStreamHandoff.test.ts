@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  REPLY_STREAM_CLOCK_ALLOWANCE_MS,
   REPLY_STREAM_HANDOFF_PREFIX_CHARS,
   REPLY_STREAM_HANDOFF_SKEW_MS,
+  REPLY_STREAM_HANDOFF_STAMP_SLACK_MS,
   REPLY_STREAM_STALE_MS,
 } from "@codecast/shared/contracts";
-import { replyStreamFresh, replyStreamHandedOff, replyStreamOpen, type StoredReplyStream } from "../replyStreamHandoff";
+import { replyStreamFresh, replyStreamHandedOff, replyStreamReceivedAt, replyStreamSlotSig, type StoredReplyStream } from "../replyStreamHandoff";
 
 const T0 = 1_800_000_000_000;
 
@@ -46,7 +48,8 @@ describe("replyStreamHandedOff", () => {
 
   test("a stream shorter than the prefix is matched whole, and only the prefix of a long one counts", () => {
     expect(replyStreamHandedOff(stream("Hi"), [assistant("Hi there", T0)])).toBe(true);
-    expect(replyStreamHandedOff(stream("Hi"), [assistant("Hello", T0)])).toBe(false);
+    // Stamped before the stamp slack, so only the text can hand it off.
+    expect(replyStreamHandedOff(stream("Hi"), [assistant("Hello", T0 - 2_000)])).toBe(false);
     const opening = "x".repeat(REPLY_STREAM_HANDOFF_PREFIX_CHARS);
     expect(replyStreamHandedOff(stream(`${opening} and the stream goes on`), [assistant(`${opening} but the message says otherwise`, T0)])).toBe(true);
   });
@@ -65,7 +68,56 @@ describe("replyStreamHandedOff", () => {
     // a blank line between paragraphs); the stream joins the hook's lines.
     const row = stream("Para one.\nPara two\n");
     expect(replyStreamHandedOff(row, [assistant("\n\nPara one.\n\nPara two goes on.", T0)])).toBe(true);
-    expect(replyStreamHandedOff(row, [assistant("Para one. Para three.", T0)])).toBe(false);
+    expect(replyStreamHandedOff(row, [assistant("Para one. Para three.", T0 - 2_000)])).toBe(false);
+  });
+});
+
+describe("replyStreamHandedOff by stamp", () => {
+  test("the text written before a tool call, stamped seconds before the next stream began, does not hand it off", () => {
+    const row = stream("Now the second part of the answer.", { started_at: T0 });
+    const before = assistant("Different words before the tool call.", T0 - 4_000);
+    const toolCall = assistant("", T0 + 500, { tool_calls: [{ id: "t1", name: "Read", input: {} }] });
+    const thinking = assistant("", T0 + 600, { thinking: "considering" });
+    expect(replyStreamHandedOff(row, [before, toolCall, thinking])).toBe(false);
+  });
+
+  test("a message whose opening sync rewrote hands it off when stamped after the stream began", () => {
+    const row = stream("![shot](/tmp/shot.png) The page loads now.", { started_at: T0 });
+    const stored = assistant("![shot](https://files.example/storage/abc) The page loads now.", T0 + 200);
+    expect(replyStreamHandedOff(row, [stored])).toBe(true);
+    // ... and within the slack before it, but not further back.
+    expect(replyStreamHandedOff(row, [assistant("API Error: overloaded", T0 - REPLY_STREAM_HANDOFF_STAMP_SLACK_MS)])).toBe(true);
+    expect(replyStreamHandedOff(row, [assistant("API Error: overloaded", T0 - REPLY_STREAM_HANDOFF_STAMP_SLACK_MS - 1)])).toBe(false);
+  });
+
+  test("a blank assistant row stamped after the start is not a text row", () => {
+    expect(replyStreamHandedOff(stream("Writing"), [assistant("  \n", T0 + 100)])).toBe(false);
+  });
+});
+
+describe("replyStreamReceivedAt", () => {
+  const now = T0 + 100_000;
+  test("the same push seen again keeps its first stamp", () => {
+    const held = stream("text", { seq: 4, received_at: T0 + 3 });
+    expect(replyStreamReceivedAt(held, { message_id: "hook-1", seq: 4, updated_at: T0 }, now)).toBe(T0 + 3);
+  });
+  test("a row first seen is as old as the server says, so a long-stopped reply is stale on arrival", () => {
+    const old = { message_id: "hook-1", seq: 9, updated_at: now - 10 * 60_000 };
+    const at = replyStreamReceivedAt(undefined, old, now);
+    expect(at).toBe(old.updated_at + REPLY_STREAM_CLOCK_ALLOWANCE_MS);
+    expect(replyStreamFresh(stream("text", { received_at: at }), now)).toBe(false);
+    // A new seq of the held row is a new push.
+    expect(replyStreamReceivedAt(stream("text", { seq: 8, received_at: T0 }), old, now)).toBe(at);
+  });
+  test("a browser clock behind the server's takes its own now, never a stamp from the future", () => {
+    const row = { message_id: "hook-2", seq: 1, updated_at: now + 30_000 };
+    expect(replyStreamReceivedAt(undefined, row, now)).toBe(now);
+  });
+  test("a browser clock a little ahead of the server's still reads a fresh push as fresh", () => {
+    const row = { message_id: "hook-2", seq: 1, updated_at: now - 4_000 };
+    const at = replyStreamReceivedAt(undefined, row, now);
+    expect(at).toBe(now);
+    expect(replyStreamFresh(stream("t", { received_at: at }), now)).toBe(true);
   });
 });
 
@@ -77,12 +129,13 @@ describe("replyStreamFresh", () => {
   });
 });
 
-describe("replyStreamOpen", () => {
-  test("open while the row has text and its message has not landed", () => {
+describe("replyStreamSlotSig", () => {
+  test("names the open reply until its message lands, and does not move on a push", () => {
     const state = { replyStreams: { c1: stream("Working on it") }, messages: { c1: [user("go", T0 - 1_000)] } };
-    expect(replyStreamOpen(state, "c1")).toBe(true);
-    expect(replyStreamOpen({ ...state, messages: { c1: [...state.messages.c1, assistant("Working on it now.", T0 + 500)] } }, "c1")).toBe(false);
-    expect(replyStreamOpen({ replyStreams: {}, messages: {} }, "c1")).toBe(false);
-    expect(replyStreamOpen({ replyStreams: { c1: stream("") }, messages: {} }, "c1")).toBe(false);
+    expect(replyStreamSlotSig(state, "c1")).toBe(`hook-1 ${T0}`);
+    expect(replyStreamSlotSig({ ...state, replyStreams: { c1: stream("Working on it, and more", { seq: 2 }) } }, "c1")).toBe(`hook-1 ${T0}`);
+    expect(replyStreamSlotSig({ ...state, messages: { c1: [...state.messages.c1, assistant("Working on it now.", T0 + 500)] } }, "c1")).toBe("");
+    expect(replyStreamSlotSig({ replyStreams: {}, messages: {} }, "c1")).toBe("");
+    expect(replyStreamSlotSig({ replyStreams: { c1: stream("") }, messages: {} }, "c1")).toBe("");
   });
 });

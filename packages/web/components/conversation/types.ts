@@ -312,6 +312,11 @@ export type ConversationViewProps = {
    *  (default). A host that puts panes beside the conversation (the diff
    *  panel) docks the rail at its outer edge instead and passes false. */
   hostsCommentRail?: boolean;
+  /** The messages on screen ARE the store's live tail for this conversation
+   *  (useConversationMessages outside target mode), so a reply being written
+   *  may draw after them. Off by default: a deep-linked window holds its own
+   *  copy, and the hand-off check reads the store. */
+  liveTail?: boolean;
 };
 
 export interface ConversationViewHandle {
@@ -484,9 +489,12 @@ export type StoryBeat = { heading: string; body: string; anchor_prompt: string; 
 export type ReceiptEntry = { messageId: string; messageUuid?: string; timestamp: number; tools: ToolCall[] };
 export type CondensedReceipt = { entries: ReceiptEntry[]; expanded: boolean; onToggle: () => void };
 
-// Messages, commits, pull requests and external events merged into one feed.
+// Messages, commits, pull requests and external events merged into one feed,
+// and, in a live conversation view only, the reply being written (its text
+// lives in the store's replyStreams row, read by ReplyStreamTail).
 export type TimelineItem =
   | { type: 'message'; data: Message; timestamp: number }
   | { type: 'commit'; data: Commit; timestamp: number }
   | { type: 'pull_request'; data: PullRequest; timestamp: number }
-  | { type: 'external_event'; data: ExternalEventRecord; timestamp: number };
+  | { type: 'external_event'; data: ExternalEventRecord; timestamp: number }
+  | { type: 'reply_stream'; data: { _id: string; messageId: string }; timestamp: number };

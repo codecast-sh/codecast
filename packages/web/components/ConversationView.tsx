@@ -134,7 +134,8 @@ import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type Cha
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { GhostDrafts } from "./conversation/GhostDrafts";
 import { ReplyStreamFeeder, ReplyStreamTail } from "./conversation/ReplyStreamTail";
-import { replyStreamFresh, replyStreamHandedOff, replyStreamOpen } from "../lib/replyStreamHandoff";
+import { replyStreamHandedOff, replyStreamRowKey } from "../lib/replyStreamHandoff";
+import { useReplyStreamSlot } from "../hooks/useReplyStreamSlot";
 import { SharedQueue } from "./conversation/SharedQueue";
 import { ReaderFaces, ReadingMarks } from "./conversation/ReadingMarks";
 import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
@@ -310,7 +311,7 @@ function recordVirtHeight(key: string, size: number) {
 // that adds a hook here keeps the fiber and crashes on the shifted hook slot
 // ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns: foldAsked = false, openAtTop = false, composerPlaceholder, hostsCommentRail = true, hideHeaderTitle }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns: foldAsked = false, openAtTop = false, composerPlaceholder, hostsCommentRail = true, hideHeaderTitle, liveTail = false }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const renderStart = performance.now();
   // Clean mode is the seat's own setting (anchors.clean_chat): the page asks
@@ -1105,7 +1106,7 @@ const ConversationViewInner = (
   const allCommits = useMemo(() => (outsideCommits.length ? [...commits, ...outsideCommits] : commits), [commits, outsideCommits]);
   const allPullRequests = useMemo(() => (outsidePullRequests.length ? [...pullRequests, ...outsidePullRequests] : pullRequests), [pullRequests, outsidePullRequests]);
 
-  const timeline: TimelineItem[] = useMemo(() => {
+  const messageTimeline: TimelineItem[] = useMemo(() => {
     const base = buildCompositeTimeline(
       messages,
       allCommits,
@@ -1146,8 +1147,45 @@ const ConversationViewInner = (
     // Server-side pending rows: every queued message, whichever device or CLI sent it
     // (serverPendingBubbles).
     toAdd.push(...serverPendingBubbles(serverPending, { seen, seenContent, local: toAdd, newestServerTs, atLiveTail: !hasMoreBelow, normalize: normalizePendingContent }));
-    return mergeTimelineMessages(base, toAdd) as TimelineItem[];
+    return mergeTimelineMessages(base as Parameters<typeof mergeTimelineMessages>[0], toAdd) as TimelineItem[];
   }, [messages, allCommits, allPullRequests, conversationExternalEvents, pendingMsgs, serverPending, pendingConvId, hasMoreAbove, hasMoreBelow]);
+  // Live replies: the reply Claude Code is writing gets a row of its own, drawn
+  // by ReplyStreamTail as the assistant text row it will become, in the place
+  // its message will sort (by when it began: after what came before it, ahead
+  // of what the person sent while it was being written). The row exists while
+  // the reply is open and fresh (useReplyStreamSlot), so the feed's item count
+  // changes when a reply opens, lands or goes stale, never on a push.
+  // Drawn only when the rows on screen are the store's live tail, which the
+  // hand-off reads, and in the feeds that draw every reply as its own row:
+  // compact folds a turn to its last reply and clean shows only what the
+  // agent said or its latest reply, so a partial reply there would draw beside
+  // the row it replaces. Story and summary have no feed rows.
+  const replyStreamDrawable = liveTail && !hasMoreBelow && !!convexConvId && !foldWorkingTurns && !foldTurns && density !== "story" && density !== "summary";
+  const replyStream = useReplyStreamSlot(convexConvId, replyStreamDrawable);
+  // The semantic readers (turn folding, the composer's waiting state) read
+  // messageTimeline; everything indexed like the feed reads this.
+  const timeline: TimelineItem[] = useMemo(() => {
+    if (!replyStream) return messageTimeline;
+    const item: TimelineItem = { type: 'reply_stream', data: { _id: replyStream.key, messageId: replyStream.messageId }, timestamp: replyStream.startedAt };
+    const at = messageTimeline.findIndex((it) => it.timestamp > replyStream.startedAt);
+    return at === -1 ? [...messageTimeline, item] : [...messageTimeline.slice(0, at), item, ...messageTimeline.slice(at)];
+  }, [messageTimeline, replyStream]);
+  // The message that replaces a reply drawn while it was written takes over
+  // that row's key (rowKeys), so the virtualizer keeps the row, its measured
+  // height and its place: the hand-off moves nothing and slides nothing in.
+  // message _id → the reply row's key, for this conversation's visit.
+  const replyStreamHandoffKeysRef = useRef<{ conv: string | undefined; keys: Map<string, string> }>({ conv: undefined, keys: new Map() });
+  if (replyStreamHandoffKeysRef.current.conv !== convexConvId) replyStreamHandoffKeysRef.current = { conv: convexConvId, keys: new Map() };
+  // The reply last drawn here, until a message takes its row.
+  // A reply that left by going stale, or a switch away, leaves no row to take.
+  const lastReplyStreamRef = useRef<{ conv: string; messageId: string } | null>(null);
+  if (replyStream && convexConvId) lastReplyStreamRef.current = { conv: convexConvId, messageId: replyStream.messageId };
+  else if (lastReplyStreamRef.current) {
+    const last = lastReplyStreamRef.current;
+    const st = useInboxStore.getState();
+    const row = st.replyStreams[last.conv];
+    if (last.conv !== convexConvId || !row || row.message_id !== last.messageId || !replyStreamHandedOff(row, st.messages[last.conv])) lastReplyStreamRef.current = null;
+  }
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
@@ -1319,7 +1357,7 @@ const ConversationViewInner = (
       });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
-  const { userMsgKindMap, turnAggregates, cleanRows, awaitingReplyTo, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
+  const { userMsgKindMap, turnAggregates, cleanRows, awaitingReplyTo, commandExpansionMap, nudgeRuns, isThinking, isWaitingForResponse } = useTimelineTurns({ messages, conversation, hasMoreAbove, timeline: messageTimeline, messageAuthors, hasMoreBelow, foldWorkingTurns });
   const { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery } = useSessionMentions({ conversation, managedSession });
   // The owner composer runs /goal itself, so it offers it beside the agent's commands.
   const composerSkills = useMemo(() => [GOAL_COMMAND, ...(sessionSkills ?? []).filter((k) => k.name !== GOAL_COMMAND.name)], [sessionSkills]);
@@ -1387,6 +1425,7 @@ const ConversationViewInner = (
       if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
       // The same ids the row renderer checks against (itemId in the feed below).
       if (item.type === 'external_event') return `event-${(item.data as any)._id}`;
+      if (item.type === 'reply_stream') return item.data._id;
       return `pr-${(item.data as any)._id}`;
     }));
 
@@ -1406,10 +1445,9 @@ const ConversationViewInner = (
               return `pr-${(i.data as any)._id}` === id;
             });
             if (item?.type === 'message' && (item.data as Message).role === 'user') continue;
-            // A reply that was on screen while it was written takes the live
-            // block's place without sliding in again (ReplyStreamTail).
-            const stream = convexConvId ? useInboxStore.getState().replyStreams[convexConvId] : undefined;
-            if (item?.type === 'message' && stream && replyStreamFresh(stream, Date.now()) && replyStreamHandedOff(stream, [item.data as Message])) continue;
+            // A reply drawn while it was written keeps its row (rowKeys), and
+            // slid in when that row first appeared.
+            if (replyStreamHandoffKeysRef.current.keys.has(id)) continue;
           }
           fresh.add(id);
         }
@@ -1634,12 +1672,30 @@ const ConversationViewInner = (
   // client_id on two messages (a delivery ack once stamped it on the harness's
   // boot <task-notification> turn AND on the real echo), and rows sharing a key
   // garble the virtualizer — overlapping ghost copies accreting on re-renders.
-  const rowKeys = useMemo(() => uniqueRowKeys(timeline.map((item) => {
-    if (item.type === 'message') return messageRowKey(item.data as Message);
-    if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
-    if (item.type === 'external_event') return `event-${(item.data as any)._id}`;
-    return `pr-${(item.data as any)._id}`;
-  })), [timeline]);
+  const knownMessageIdsRef = useRef<Set<string>>(new Set());
+  const rowKeys = useMemo(() => {
+    const handoffKeys = replyStreamHandoffKeysRef.current.keys;
+    // The reply drawn here last has left the feed: the message that arrived
+    // with it leaving and hands it off (the oldest such) takes its row's key.
+    const last = lastReplyStreamRef.current;
+    const stream = last && !timeline.some((it) => it.type === 'reply_stream') ? useInboxStore.getState().replyStreams[last.conv] : undefined;
+    if (last && stream && stream.message_id === last.messageId) {
+      const known = knownMessageIdsRef.current;
+      const taker = timeline.find((it) => it.type === 'message' && (it.data as Message).role === 'assistant' && !known.has((it.data as Message)._id) && replyStreamHandedOff(stream, [it.data as Message]));
+      if (taker) {
+        handoffKeys.set((taker.data as Message)._id, replyStreamRowKey(last.messageId));
+        lastReplyStreamRef.current = null;
+      }
+    }
+    knownMessageIdsRef.current = new Set(timeline.flatMap((it) => (it.type === 'message' ? [(it.data as Message)._id] : [])));
+    return uniqueRowKeys(timeline.map((item) => {
+      if (item.type === 'message') return handoffKeys.get((item.data as Message)._id) ?? messageRowKey(item.data as Message);
+      if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+      if (item.type === 'external_event') return `event-${(item.data as any)._id}`;
+      if (item.type === 'reply_stream') return item.data._id;
+      return `pr-${(item.data as any)._id}`;
+    }));
+  }, [timeline]);
   const getItemKey = useCallback((index: number) => rowKeys[index] ?? index, [rowKeys]);
 
   // Height-cache discriminator. In compact and condensed a row's height depends
@@ -1669,6 +1725,8 @@ const ConversationViewInner = (
     // reads item.data as a Message, so a non-message type must return here.
     if (item.type === 'external_event') return 44;
     if (item.type === 'pull_request') return 120;
+    // The reply being written: an assistant text row.
+    if (item.type === 'reply_stream') return 200;
 
     const msg = item.data as Message;
     if (cleanRows && msg.role === "assistant") return cleanRows.has(msg._id) ? 120 : 0;
@@ -1949,11 +2007,18 @@ const ConversationViewInner = (
       revealRowRef.current = { ...revealRowRef.current, until: Date.now() + 800 };
     }
   }, [openReveal, setUserScrolled]);
+  // A reply being written grows at its bottom, below anything a reader inside
+  // it is looking at, so its row is held for as long as it is drawn: scrolled
+  // up, nothing on screen moves; at the bottom, anchorTo:'end' keeps the view
+  // pinned as it grows.
+  const replyStreamKeyRef = useRef<string | null>(null);
+  replyStreamKeyRef.current = replyStream?.key ?? null;
   adjustScrollForResizeRule(virtualizer, (key) => {
     const hold = scrollHoldRef.current;
     const revealRow = revealRowRef.current;
     return (!!hold && key === hold.key && Date.now() < hold.until)
-      || (!!revealRow && String(key) === revealRow.key && Date.now() < revealRow.until);
+      || (!!revealRow && String(key) === revealRow.key && Date.now() < revealRow.until)
+      || (replyStreamKeyRef.current !== null && String(key) === replyStreamKeyRef.current);
   });
   const rowLookupRef = useRef({ timeline, getItemKey });
   rowLookupRef.current = { timeline, getItemKey };
@@ -3328,7 +3393,9 @@ const ConversationViewInner = (
         // A same-session jump starts on the tail timeline and the target-mode
         // window then replaces it — identity + re-resolution keep the settle
         // on the target row across that swap.
-        itemKey: targetItem?.type === "message" ? messageRowKey(targetItem.data as Message) : undefined,
+        // The row's own key (rowKeys): a reply drawn while it was written
+        // keeps that row's key.
+        itemKey: targetItem?.type === "message" ? String(getItemKey(itemIndex)) : undefined,
         resolveIndex: () =>
           timelineRef.current.findIndex(
             (item: any) => item.type === "message" && item.data._id === scrollToId,
@@ -3343,7 +3410,7 @@ const ConversationViewInner = (
         },
       });
     }
-  }, [targetMessageId, targetNonce, timeline, virtualizer, feedDensity, turnAggregates, expandedGroups, nudgeRuns]);
+  }, [targetMessageId, targetNonce, timeline, getItemKey, virtualizer, feedDensity, turnAggregates, expandedGroups, nudgeRuns]);
 
   // Land a branch switch scroll-stable: once the target conversation renders,
   // find the fork-point message (same message_uuid — fork copies preserve it)
@@ -3768,30 +3835,30 @@ const ConversationViewInner = (
     cache.set(msg, entry);
     return entry;
   };
-  // Live replies: the reply being written draws after the last row as the
-  // assistant text row it will become (ReplyStreamTail), in the feeds that
-  // draw every reply as its own row. Compact folds a turn to its last reply
-  // and clean shows only what the agent said or its latest reply, so a partial
-  // reply there would draw beside the row it replaces: those wait for the
-  // message. Story and summary have no feed rows.
-  const replyStreamDrawable = !!convexConvId && !foldWorkingTurns && !foldTurns && density !== "story" && density !== "summary";
-  // Flips when a reply starts and when it lands, never per push.
-  const replyStreamShown = useInboxStore((st) => replyStreamDrawable && replyStreamOpen(st as any, convexConvId!));
+  // The reply being written, drawn as the assistant text row its message will
+  // be: that message's author and model are the turn's, so the newest
+  // assistant message's; the header follows assistantRowDerived's rule.
   const replyStreamAuthor = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return messages[i];
     return null;
   }, [messages]);
-  const replyStreamPrev = replyStreamDrawable ? previousVisibleMessage(timeline.length) : null;
-  const replyStreamTail = replyStreamDrawable ? (
-    <ReplyStreamTail
-      conversationId={convexConvId!}
-      density={feedDensity}
-      prevAssistantAt={replyStreamPrev?.role === "assistant" ? replyStreamPrev.timestamp : null}
-      agentType={replyStreamAuthor ? messageAuthors.get(replyStreamAuthor._id) : conversation?.agent_type}
-      model={replyStreamAuthor?.model}
-      agentNameToChildMap={agentNameToChildMap}
-    />
-  ) : null;
+  const renderReplyStream = (item: Extract<TimelineItem, { type: 'reply_stream' }>, index: number) => {
+    const agentType = replyStreamAuthor ? messageAuthors.get(replyStreamAuthor._id) : conversation?.agent_type;
+    const model = replyStreamAuthor?.model;
+    const prevMsg = previousVisibleMessage(index);
+    const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant" || messageAuthors.get(prevMsg._id) !== agentType || prevMsg.model !== model || item.timestamp - prevMsg.timestamp > GROUP_WINDOW_MS;
+    return (
+      <ReplyStreamTail
+        key={item.data._id}
+        conversationId={convexConvId!}
+        density={feedDensity === "condensed" ? "condensed" : "full"}
+        showHeader={isFirstInSequence}
+        agentType={agentType}
+        model={model}
+        agentNameToChildMap={agentNameToChildMap}
+      />
+    );
+  };
   const toolResultsCacheRef = useRef(new WeakMap<Message, { globalToolResultMap: typeof globalToolResultMap; results: ToolResult[] | undefined }>());
   const relevantToolResultsFor = (msg: Message): ToolResult[] | undefined => {
     const cache = toolResultsCacheRef.current;
@@ -3864,6 +3931,7 @@ const ConversationViewInner = (
 
   const renderItem = (item: TimelineItem, index: number) => {
     if (!item || index < 0 || index >= timeline.length) return null;
+    if (item.type === 'reply_stream') return renderReplyStream(item, index);
     if (item.type === 'commit') {
       const commit = item.data;
       return (
@@ -5287,7 +5355,7 @@ const ConversationViewInner = (
               const content = renderItem(item, virtualItem.index);
               // Only once the scan is complete: pages land oldest first, so dimming
               // earlier would grey out recent rows whose hits are not counted yet.
-              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : `pr-${(item.data as any)._id}`;
+              const itemId = item.type === 'message' ? (item.data as Message)._id : item.type === 'commit' ? `commit-${(item.data as any).sha || (item.data as any)._id}` : item.type === 'external_event' ? `event-${(item.data as any)._id}` : item.type === 'reply_stream' ? item.data._id : `pr-${(item.data as any)._id}`;
               const isNew = newItemIdsRef.current.has(itemId);
               const isToolRow = item.type === 'message' && isToolReceiptRow(item.data as Message, showThinking);
               const isForkSelected = forkSelectionIdx !== null && forkSelectionIdx === virtualItem.index;
@@ -5302,7 +5370,7 @@ const ConversationViewInner = (
               // reply it read as the divider of a message that never came.
               const showIdleGap = isTail && !isHostedConv && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status });
               const tailRules = isTail && !hasMoreBelow ? handoffRulesAt(timeline.length) : undefined;
-              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules || (isTail && !hasMoreBelow && (!!hostedTailCard || replyStreamShown));
+              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules || (isTail && !hasMoreBelow && !!hostedTailCard);
               return (
                 <div
                   key={virtualItem.key}
@@ -5331,7 +5399,6 @@ const ConversationViewInner = (
                         </TimelineRule>
                       )}
                       {tailRules}
-                      {isTail && !hasMoreBelow && replyStreamTail}
                       {isTail && !hasMoreBelow && hostedTailCard}
                       {item.type === 'message' && conversation && composerPresenceEnabled(conversation) && (
                         <ReaderFaces conversationId={conversation._id.toString()} messageId={(item.data as Message)._id} />

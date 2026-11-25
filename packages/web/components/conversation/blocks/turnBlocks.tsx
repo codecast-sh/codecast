@@ -1473,10 +1473,13 @@ function AssistantBlockImpl({
                   className="relative"
                   style={!bubble && !contentExpanded && isOverflowing ? clippedStyle(CONTENT_MAX_HEIGHT) : undefined}
                 >
-                  {live ? (
+                  {live && conversationId ? (
                     // MessageReview's own wrappers, without its quote and
-                    // comment handles, so the hand-off moves nothing.
-                    <div className="cc-msg-review"><div className="cc-content">{renderAssistantBody(displayContent)}</div></div>
+                    // comment handles, so the hand-off moves nothing; the body
+                    // knows its conversation as the real row's does.
+                    <MessageIdentityProvider conversationId={String(conversationId)} messageId={messageId} live>
+                      <div className="cc-msg-review"><div className="cc-content">{renderAssistantBody(displayContent)}</div></div>
+                    </MessageIdentityProvider>
                   ) : conversationId ? (
                     <MessageIdentityProvider conversationId={String(conversationId)} messageId={messageId}>
                       <MessageReview
