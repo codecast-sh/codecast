@@ -428,18 +428,21 @@ function ViewedToggle({
   file,
   fileMarks,
   onToggleViewed,
+  folds = false,
   className,
 }: {
   file: DiffFile;
   fileMarks?: FileDiffLayoutProps["fileMarks"];
   onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
+  /** Whether marking it folds the file, so the tooltip says what happens. */
+  folds?: boolean;
   className?: string;
 }) {
   if (!onToggleViewed) return null;
   const path = file.originalFilename ?? file.filename;
   const viewed = !!fileMarks?.(path)?.viewed;
   return (
-    <ShortcutTooltip label={viewed ? "Clear the viewed mark" : "Mark viewed: it folds until it changes again"} action="diff.toggleSeen">
+    <ShortcutTooltip label={viewed ? "Clear the viewed mark" : folds ? "Mark viewed: it folds until it changes again" : "Mark viewed"} action="diff.toggleSeen">
     <label
       className={cn(
         "inline-flex items-center gap-1.5 cursor-pointer select-none text-meta transition-colors",
@@ -499,10 +502,12 @@ function UnifiedDiffView({
   const pathOf = (f: DiffFile) => f.originalFilename ?? f.filename;
   // A viewed file folds to its header, the way a reader puts a finished page
   // face down; a click on the chevron wins either way until the mark moves.
+  // The only file of a diff stays open: folding it would empty the panel.
+  const foldsViewed = files.length > 1;
   const [folded, setFolded] = useState<Map<string, boolean>>(new Map());
-  const isFolded = (path: string) => folded.get(path) ?? !!fileMarks?.(path)?.viewed;
+  const isFolded = (path: string) => folded.get(path) ?? (foldsViewed && !!fileMarks?.(path)?.viewed);
   useWatchEffect(() => {
-    if (focusFile && (folded.get(focusFile) ?? !!fileMarks?.(focusFile)?.viewed)) {
+    if (focusFile && isFolded(focusFile)) {
       setFolded((prev) => new Map(prev).set(focusFile, false));
     }
   }, [focusFile, focusNonce]);
@@ -565,7 +570,7 @@ function UnifiedDiffView({
                   <span className="mx-0.5 text-sol-text-dim/30 modern:text-sol-text-dim">/</span>
                   <span className="text-sol-red">-{file.deletions}</span>
                 </span>
-                <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={toggleViewed} />
+                <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={toggleViewed} folds={foldsViewed} />
               </span>
             </div>
             {shut ? null : file.patch ? (
@@ -663,16 +668,18 @@ function FlowDiffView({
   const files = useMemo(() => treeOrder(givenFiles), [givenFiles]);
 
   // Open or shut, per file. A viewed file folds by default, the way a reader
-  // puts a finished page face down; their own click wins either way.
+  // puts a finished page face down; their own click wins either way. The
+  // only file of a diff stays open: folding it would empty the page.
+  const foldsViewed = files.length > 1;
   const [folded, setFolded] = useState<Map<string, boolean>>(new Map());
-  const isFolded = (path: string) => folded.get(path) ?? !!fileMarks?.(path)?.viewed;
+  const isFolded = (path: string) => folded.get(path) ?? (foldsViewed && !!fileMarks?.(path)?.viewed);
   const setFold = (path: string, value: boolean) =>
     setFolded((prev) => new Map(prev).set(path, value));
   // An address that names a file opens it, even one the reader folded or
   // marked viewed: a link lands on what it points at.
   const selectedFile = flow.selected?.file;
   useWatchEffect(() => {
-    if (selectedFile && (folded.get(selectedFile) ?? !!fileMarks?.(selectedFile)?.viewed)) setFold(selectedFile, false);
+    if (selectedFile && isFolded(selectedFile)) setFold(selectedFile, false);
   }, [selectedFile, flow.selected?.anchor?.lineNumber]);
 
   // The file the reader is in: the topmost card under the sticky chrome.
@@ -903,8 +910,10 @@ function FlowDiffView({
                     <ViewedToggle
                       file={file}
                       fileMarks={fileMarks}
+                      folds={foldsViewed}
                       onToggleViewed={onToggleViewed ? (p) => {
-                        // Marking a file viewed folds it; unmarking opens it.
+                        // Marking a file viewed folds it (unless it is the
+                        // only one); unmarking opens it.
                         setFolded((prev) => { const next = new Map(prev); next.delete(p); return next; });
                         onToggleViewed(p);
                       } : undefined}
