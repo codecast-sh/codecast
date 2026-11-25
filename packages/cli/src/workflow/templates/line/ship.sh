@@ -51,9 +51,9 @@ if [ -z "$cmd" ]; then
   [ -n "$said" ] || said="cast ship run exited $code and said nothing"
   [ "$code" -eq 0 ] && ! landed --wait 3600 --node "$station_id" && echo "$said"
   if [ "$code" -eq 0 ]; then
-    cast task comment $task_id "Shipped: $said" -t progress > /dev/null
+    cast task comment $task_id "Merged: $said" -t progress > /dev/null
   else
-    cast task comment $task_id "Not shipped: $said" -t "$kind" > /dev/null
+    cast task comment $task_id "Not merged: $said" -t "$kind" > /dev/null
   fi
   exit "$code"
 fi
@@ -86,11 +86,11 @@ said="$(grep -v '^[[:space:]]*$' "$dir/ship.out" | tail -n 1)"
 [ "$code" -eq 0 ] && landed
 echo "$said"
 if [ "$code" -eq 0 ]; then
-  cast task comment $task_id "Shipped: $said" -t progress > /dev/null
+  cast task comment $task_id "Merged: $said" -t progress > /dev/null
 elif [ "$code" -eq 3 ]; then
   # Exit 3: the default branch moved since the rebase. The run rebases again.
   cast task comment $task_id "Rebasing again: $said" -t progress > /dev/null
 else
-  cast task comment $task_id "Not shipped: $said" -t "$kind" > /dev/null
+  cast task comment $task_id "Not merged: $said" -t "$kind" > /dev/null
 fi
 exit "$code"

@@ -3,7 +3,7 @@
 // fact. `cast flow landed` finds the commit there that carries the branch and
 // writes it to the run's merge.json, where the Deploy stage starts from; a land
 // command that exited 0 with nothing on main (one that applied the change to a
-// working tree and never committed) ends Land at Not shipped. Where Land only
+// working tree and never committed) ends Land at Not merged. Where Land only
 // opened a pull request (Ship's session merges it later), it waits for that
 // merge, bounded, naming the pull request while it waits.
 import { spawnSync } from "../proc.js";
@@ -79,7 +79,7 @@ export type LandedIO = {
 
 /**
  * `cast flow landed`: the commit on origin's `base` that carries `branch`, written to `out` as merge.json
- * ({ sha, files }) and printed last. Exits 1 with the line that ends Land at Not shipped when nothing was merged, or,
+ * ({ sha, files }) and printed last. Exits 1 with the line that ends Land at Not merged when nothing was merged, or,
  * with `wait`, 1 when the branch's pull request was closed unmerged and 2 when it has not merged in time.
  */
 export async function landedOrWait(opts: LandedOptions, io: LandedIO): Promise<{ code: 0 | 1 | 2; line: string; sha?: string; files?: string[]; pr_url?: string }> {

@@ -129,7 +129,7 @@ export function runStop(model: Steps, run: LineRunModel, raw: ReportRun | null |
     return out("waiting", at, `${who}${since ? ` since ${since}` : ""}`, "person");
   }
   // A decision nobody answered: the run went on past it and nothing was approved.
-  if (end === "not shipped") {
+  if (end === "not merged") {
     const i = lastWhere(vs, (v) => v.kind === "person");
     const asked = day(vs[i]?.startedAt ?? vs[i]?.at ?? run.at);
     return out("lapsed", i >= 0 ? i : lastStep(vs), asked ? `Asked ${asked}, no answer` : "Asked, no answer", "warn");

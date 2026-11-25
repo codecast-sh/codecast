@@ -224,7 +224,7 @@ describe("the proof a go-on run is checked by (ct-58847)", () => {
 describe("proseAdvice", () => {
   test("a closing review the step asks for before the build", () => {
     // ct-58694's Prove, which wrote no routing `next`.
-    const a = proseAdvice("All three approved fixes got as far as the Ship card.\n\nNext: the plan on Union ship exit has three parts. Two of them change codecast's shared line graph and runner, so they need an engineer's safety review before they're built.");
+    const a = proseAdvice("All three approved fixes got as far as the approval card.\n\nNext: the plan on Union ship exit has three parts. Two of them change codecast's shared line graph and runner, so they need an engineer's safety review before they're built.");
     expect(a).toMatchObject({ act: "review", by: null });
     expect(a?.why).toBe("Two of them change codecast's shared line graph and runner, so they need an engineer's safety review before they're built.");
     expect(proseAdvice("Needs an engineer's safety review before merge (Ashot by default).")?.by).toBe("Ashot");

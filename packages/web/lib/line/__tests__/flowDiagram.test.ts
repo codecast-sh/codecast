@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { flowDiagram, runReached, stepStates } from "../flowDiagram";
 import { appPool, flowBySlug, pushedFlow } from "../flowPool";
-import { flowRunState, readFlowFence } from "../flowFence";
+import { flowRunState, readFlowFence, runStatusWords } from "../flowFence";
 import { flowCommandTarget } from "../flowCommandOutput";
 import quickRun from "./quickChangeRun.fixture.json";
 
@@ -24,7 +24,7 @@ describe("a flow as a diagram", () => {
     const side = (i: number) => flowDiagram(change).steps[i].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
     expect(side(2)).toEqual([
       ["out", "pushed after this round", "Branch moved"], ["stop", "Branch keeps moving", null], ["stop", "Rejected", null], ["out", "CI never reported", "CI"], ["out", "no verdict this round", "Review"], ["stop", "CI never reported", null],
-      ["out", "every failure is main's", "Wait for main"], ["stop", "Main stayed red", null], ["out", "it edits CI", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
+      ["out", "every failure is main's", "Wait for green main"], ["stop", "Main stayed red", null], ["out", "it edits CI", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
       ["back", "conflicts with main", "this session"], ["back", "CI red, changes asked or no verdict", "this session"], ["stop", "No verdicts", null],
     ]);
     expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Not merged", null]]);
@@ -86,13 +86,17 @@ describe("a route in words", () => {
 describe("what a flow asks a person", () => {
   test("a gate is said by its own options", () => {
     const { flowAsks } = require("../flowDiagram");
-    expect(flowAsks(flowBySlug(pool, "decide")!)).toEqual(["Ship, revise or drop it"]);
+    expect(flowAsks(flowBySlug(pool, "decide")!)).toEqual(["Approve merge, revise or drop it"]);
     // The change line asks a person only about a change to CI.
-    expect(flowAsks(change)).toEqual(["Ship, revise or drop it"]);
+    expect(flowAsks(change)).toEqual(["Approve merge, revise or drop it"]);
   });
 });
 
 describe("a run in words", () => {
+  test("says a paused run waits for approval and capitalizes the rest", () => {
+    expect(runStatusWords("paused")).toBe("Waiting for approval");
+    expect(runStatusWords("running")).toBe("Running");
+  });
   const check = flowBySlug(pool, "check")!;
   test("an ended run is named by the end it reached", () => {
     expect(flowRunState({ status: "completed", current_node_id: "passed" }, check)).toMatchObject({ tone: "passed", words: "Passed" });
@@ -101,6 +105,10 @@ describe("a run in words", () => {
   test("a live run says where it is, a segment's step under the segment's name", () => {
     expect(flowRunState({ status: "running", current_node_id: "review" }, change).words).toBe("At Review");
     expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, quick).words).toBe("At Land: Rebase");
+  });
+  test("a run waiting on its card is waiting for approval, the card's question its why", () => {
+    expect(flowRunState({ status: "paused", current_node_id: "decide", gate_prompt: "Should this ship?\nMore" }, change)).toEqual({ tone: "waiting", words: "Waiting for approval", why: "Should this ship?" });
+    expect(flowRunState({ status: "paused", current_node_id: "decide" }, change)).toMatchObject({ words: "Waiting for approval", why: "at Decide" });
   });
   test("a run stopped at a station waiting on a person names the step, never its id", () => {
     expect(flowRunState({ status: "failed", current_node_id: "brief", fail_reason: "Stopped: brief is waiting on a person" }, change).why).toBe("Fix findings is waiting on a person");

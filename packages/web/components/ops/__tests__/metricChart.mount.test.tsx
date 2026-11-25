@@ -122,7 +122,7 @@ test("the line's tab sits in the gutter when the line can be moved, and releasin
 test("markers sit at their moments and link where they lead", async () => {
   const marks = [
     { at: T0 + 2 * H, kind: "crossed" as const, label: "Crossed the line at 25", sub: "eg-1", href: "/ops/issues/eg-1" },
-    { at: T0 + 3 * H, kind: "ship" as const, label: "Landed abcdef1", href: "https://github.com/x/commit/abc", external: true },
+    { at: T0 + 3 * H, kind: "ship" as const, label: "Merged abcdef1", href: "https://github.com/x/commit/abc", external: true },
     { at: T0 - H, kind: "fix" as const, label: "Outside the window" },
   ];
   const m = await mount(chart({ marks, warn: 16, unit: "/day" }));

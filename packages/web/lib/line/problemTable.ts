@@ -59,20 +59,20 @@ export function problemStatus(issue: Pick<LineIssue, "history" | "status"> & { a
 }
 
 /** Why a problem waits on you, in a word or two: what the person opens to act on it. Null when it does not wait on you. */
-const INBOX_WHY: Record<string, string> = { decide: "card", unapproved: "not shipped", confirm: "confirm", question: "question", review: "in review", failed: "failed run", stalled: "silent run", stopped: "go on" };
+const INBOX_WHY: Record<string, string> = { decide: "card", unapproved: "not merged", confirm: "confirm", question: "question", review: "in review", failed: "failed run", stalled: "silent run", stopped: "go on" };
 
 export function waitingWhy(issue: Pick<LineIssue, "history" | "status"> & { ask?: string | null; forYou?: string | null }, status: ProblemStatus): string | null {
   if (status !== "waiting") return null;
   if (issue.forYou) return INBOX_WHY[issue.forYou] ?? issue.forYou;
   if (issue.ask) return "question";
   const last = issue.history.attempts[issue.history.attempts.length - 1];
-  if (last?.unapproved && last.ended === "shipped") return "not shipped";
+  if (last?.unapproved && last.ended === "shipped") return "not merged";
   if (last && !last.ended && last.outcome.tone === "waiting") return last.card && !last.card.answer ? "card" : "question";
   return issue.status === "in_review" ? "in review" : null;
 }
 
 const WAIT_VERB: Record<string, string> = {
-  card: "Decide", decide: "Decide", trial: "Decide", "not shipped": "Ask again", unapproved: "Ask again", confirm: "Confirm", question: "Answer",
+  card: "Decide", decide: "Decide", trial: "Decide", "not merged": "Ask again", unapproved: "Ask again", confirm: "Confirm", question: "Answer",
   "in review": "In review", review: "In review", "failed run": "Failed run", failed: "Failed run", "silent run": "Silent run", stalled: "Silent run", "go on": "Go on?",
 };
 

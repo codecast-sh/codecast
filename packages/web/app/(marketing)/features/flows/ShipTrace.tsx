@@ -161,7 +161,7 @@ function TargetsFigure() {
     <Card className="flx-ship-fig relative p-4 sm:p-6">
       <div ref={ref} data-step={step} className="flx-ship-tgrid">
         <div className="min-w-0">
-          <Label>Landed on main, {CHANGE.landedOn}</Label>
+          <Label>Merged on main, {CHANGE.landedOn}</Label>
           <div className="mt-2 font-mono text-[14px] leading-snug" style={{ color: INK }}>
             <span className="font-semibold" style={{ color: LINE }}>{CHANGE.landed}</span> {CHANGE.subject}
           </div>
@@ -205,7 +205,7 @@ function TargetsFigure() {
                   <span className="flx-ship-csha">{c.sha}</span>
                   <span className="flx-ship-csub">{c.subject}</span>
                   <span className="flx-ship-flagslot">
-                    {i === 0 ? <span className="flx-ship-flag flx-ship-flag-landed">landed</span> : null}
+                    {i === 0 ? <span className="flx-ship-flag flx-ship-flag-landed">merged</span> : null}
                     {flag ? <In on className="flx-ship-flag">{flag} {DEPLOYS[flag].dp}</In> : null}
                   </span>
                 </li>
@@ -307,10 +307,10 @@ function WatchPanel() {
         <div className="flx-ship-watch mt-5">
           {/* On a phone the three dates read as one line above the axis. */}
           <div className="flx-ship-wdates">
-            <span>Landed {CHANGE.landedOn}</span><span>Live {CHANGE.deploys.backend} {CHANGE.liveOn}</span><span>until {CHANGE.watchUntil}</span>
+            <span>Merged {CHANGE.landedOn}</span><span>Live {CHANGE.deploys.backend} {CHANGE.liveOn}</span><span>until {CHANGE.watchUntil}</span>
           </div>
           <div className="flx-ship-axis">
-            <div className="flx-ship-mark" style={{ left: x(-1) }}><b>Landed</b><span>{CHANGE.landedOn}</span></div>
+            <div className="flx-ship-mark" style={{ left: x(-1) }}><b>Merged</b><span>{CHANGE.landedOn}</span></div>
             <In on={live} className="flx-ship-mark flx-ship-mark-live" style={{ left: x(0) }}><b>Live {CHANGE.deploys.backend}</b><span>{CHANGE.liveOn}</span></In>
             {DAYS.slice(1).map((d, i) => (
               <div key={d} className="flx-ship-tick" data-last={i === 6 ? "" : undefined} style={{ left: x(i + 1) }}><span>{d}</span></div>

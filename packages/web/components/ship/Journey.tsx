@@ -8,6 +8,7 @@
 import { memo, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
+import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
 import { WHO_WORDS, approvalWords, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
 import { ageShort } from "../../lib/lineFlow";
@@ -195,6 +196,8 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
   const since = (at: number | null | undefined) => (at ? <span className="sj-since">{ageShort(now_ms - at)}</span> : null);
   // The conversation on screen: opening the run's session from inside it goes nowhere, so the brief it sent is the press.
   const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
+  // A deploy a role sends names the role by its title (the Release Captain for @release); read only while one waits.
+  const roles = useInboxStore((s) => (now.kind === "landed" && now.hold.kind === "press" ? roleRowsOf(s as any).roles : undefined));
   const stop = now.kind === "stopped" || now.kind === "failed" ? now : null;
   const inSession = !!stop && stop.fix === "session" && !!stop.session && stop.session === here;
   const briefId = useBriefMessageId(inSession ? here : null, stop?.briefAt ?? null);
@@ -228,7 +231,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
       return (
         <div className="sj-now" data-kind={now.mine ? "you" : "gate"}>
           <i className="sj-wait" aria-hidden />
-          <b>{now.mine ? "Your call" : gateWaitWords(now.holder)}</b>
+          <b>{now.mine ? "Your call" : gateWaitWords(now.holder, now.who)}</b>
           <span className="sj-what">{now.prompt ?? now.stage}</span>
           {since(now.since)}
           {!now.mine && now.decisionId ? <Link className="sj-act" href={`/decisions/${run?.gate_decision_short_id ?? now.decisionId}`} data-journey-open-card>Open card</Link> : null}
@@ -240,23 +243,23 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
       return (
         <div className="sj-now" data-kind="landed">
           <Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />
-          <b>Landed</b>
+          <b>Merged</b>
           <code className="sj-sha">{now.sha.slice(0, 7)}</code>
-          <span className="sj-what" data-journey-hold={now.hold.kind}>{holdWords(now.hold).words}</span>
+          <span className="sj-what" data-journey-hold={now.hold.kind}>{holdWords(now.hold, roles).words}</span>
           <Waits waits={now.waits} named="Deploy" now_ms={now_ms} fallback={now.line} />
           <Link className="sj-act" href={deploysHref(run, now.line)} data-journey-deploys>Deploys</Link>
           {children}
         </div>
       );
     case "merged":
-      return <div className="sj-now" data-kind="landed"><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden /><b>Landed</b><code className="sj-sha">{now.sha.slice(0, 7)}</code>{since(now.at)}{children}</div>;
+      return <div className="sj-now" data-kind="landed"><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden /><b>Merged</b><code className="sj-sha">{now.sha.slice(0, 7)}</code>{since(now.at)}{children}</div>;
     case "passed":
       return <div className="sj-now" data-kind="live"><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden /><b>Done</b>{children}</div>;
     case "unlanded":
       return (
         <div className="sj-now" data-kind="stopped" data-journey-unlanded>
           <X className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />
-          <b>Not landed</b>
+          <b>Not merged</b>
           <span className="sj-what">{now.why}</span>
           {openRun}
           {children}

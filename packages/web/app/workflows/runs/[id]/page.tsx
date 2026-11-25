@@ -22,6 +22,7 @@ import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useS
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
 import { lineRefHref, lineWorkspaceHref, type LineSelectionPatch } from "../../../../lib/line/lineWorkspaceUrl";
 import { graphKeyOf, type GraphRun } from "../../../../lib/line/lineGraphs";
+import { runStatusWords } from "../../../../lib/line/flowFence";
 import { useRunWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { useForeignWorkspace } from "../../../../hooks/useForeignWorkspace";
@@ -186,7 +187,7 @@ function RunDetailContent({ runId }: { runId: string }) {
     line ? null : (
       <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${st.color} ${st.bg}`}>
         <StatusIcon className={`w-3 h-3 ${run.status === "running" ? "animate-spin" : ""}`} />
-        {run.status}
+        {runStatusWords(run.status)}
       </span>
     )
   );

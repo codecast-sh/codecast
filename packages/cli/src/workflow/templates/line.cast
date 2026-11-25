@@ -80,7 +80,7 @@
 //               after the Ship answer);
 //               an exit 7 says CI went red with its brief on the task, and the
 //               run goes back to the builder with that brief (three rounds a
-//               run; a fourth red ends it not shipped). The station parks, so
+//               run; a fourth red ends it not merged). The station parks, so
 //               a command waiting on CI holds no machine slot;
 //               without one, `cast ship run --task`: a ship session opens the
 //               pull request and shepherds it, merging only when the profile
@@ -97,7 +97,7 @@ digraph line {
   // on: the problem goes back to open with them, and nobody is asked.
   stopped  [shape=Msquare, label="Stopped", stop="$handoff_note"]
   rejected [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
-  ci_red   [shape=Msquare, label="Not shipped: CI stayed red", stop="Not shipped: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."]
+  ci_red   [shape=Msquare, label="Not merged: CI stayed red", stop="Not merged: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."]
 
   ground [label="Ground", backend=session, agent=claude, prompt="@line/ground.md"]
 
@@ -260,6 +260,6 @@ digraph line {
   ship -> implement      [condition="outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category != line", label="CI red", free_visit="implement"]
   ship -> implement_line [condition="outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category = line", label="CI red", free_visit="implement_line"]
   ship -> ci_red [condition="outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds > 3", label="CI stayed red"]
-  ship -> exit   [condition="outcome = failure and ship.exit_code != 3 and ship.exit_code != 7", label="not shipped"]
+  ship -> exit   [condition="outcome = failure and ship.exit_code != 3 and ship.exit_code != 7", label="not merged"]
   watch -> exit
 }

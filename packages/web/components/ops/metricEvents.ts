@@ -31,7 +31,7 @@ export function watchMarks(input: { transitions: { at: number; kind: "crossed" |
   const taskRef = task?.short_id ?? "Problem task";
   if (task?.created_at) out.push({ at: task.created_at, kind: "task", label: `${taskRef} filed`, href: `/tasks/${task._id}` });
   if (group?.fix_started_at) out.push({ at: group.fix_started_at, kind: "fix", label: "Fix session started", ...(group.fix_conversation_id ? { href: `/conversation/${group.fix_conversation_id}` } : {}) });
-  if (task?.landed) out.push({ at: task.landed.at, kind: "ship", label: `Landed ${task.landed.sha.slice(0, 7)}`, sub: taskRef, href: task.landed.url, external: true });
+  if (task?.landed) out.push({ at: task.landed.at, kind: "ship", label: `Merged ${task.landed.sha.slice(0, 7)}`, sub: taskRef, href: task.landed.url, external: true });
   if (task?.closed_at) out.push({ at: task.closed_at, kind: "task", label: `${taskRef} ${task.status === "dropped" ? "dropped" : "closed"}`, href: `/tasks/${task._id}` });
   if (group?.resolved_at && group.status === "resolved") out.push({ at: group.resolved_at, kind: "resolved", label: `${group.short_id} resolved`, ...(group.resolved_in ? { sub: `in ${group.resolved_in}` } : {}), href: input.issueHref });
   return out.sort((a, b) => a.at - b.at);
@@ -59,7 +59,7 @@ export function shipMarks(input: { deploys: readonly ShipDeploy[]; tasks: readon
     if (!inWin(t.landed.at) || seen.has(sha)) continue;
     seen.add(sha);
     out.push({
-      at: t.landed.at, kind: "deploy", label: t.title ? t.title : `Landed ${sha}`, sub: [sha, t.short_id, t.landed.branch].filter(Boolean).join(" · "), href: t.landed.url, external: true,
+      at: t.landed.at, kind: "deploy", label: t.title ? t.title : `Merged ${sha}`, sub: [sha, t.short_id, t.landed.branch].filter(Boolean).join(" · "), href: t.landed.url, external: true,
       ...(t.conversation_id ? { also: { label: "Session", href: `/conversation/${t.conversation_id}` } } : { also: { label: t.short_id ?? "Task", href: `/tasks/${t.short_id ?? t._id}` } }),
     });
   }

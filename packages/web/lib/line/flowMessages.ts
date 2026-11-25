@@ -76,3 +76,17 @@ export function pressFromSig(sig: string): Press | null {
   const [at, id, replyId, text] = sig.split("\u0000");
   return { at: Number(at), id: id!, reply: replyId ? { id: replyId, text: text! } : null };
 }
+
+/** How long a Ship press holds its button with no sign of it (its message back, a run), before it can be pressed again. */
+export const PRESS_WAIT_MS = 60_000;
+
+/** A Ship press this viewer sent:the session's newest run and newest press when it went, so its echo and its run read as new. */
+export type SentPress = { run: string | null; press: string | null };
+
+/** Whether Ship is waiting on a press: one the session has neither answered with a run nor declined. A press this viewer
+ *  just sent holds it until its message comes back; a run started since, or a reply once the session settled, frees it. */
+export function pressWaiting({ sent, newestRun, press, settled }: { sent: SentPress | null; newestRun: string | null; press: Press | null; settled: boolean }): boolean {
+  if (sent && newestRun !== sent.run) return false;
+  const seen = press && press.id !== sent?.press ? press : null;
+  return seen ? !(seen.reply && settled) : !!sent;
+}

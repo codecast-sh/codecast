@@ -39,6 +39,11 @@ type RunLike = {
   gate_prompt?: string | null;
 };
 
+/** A run's status as a word for a chip: a paused run waits on its card, so it reads "Waiting for approval", never "paused" (pl-1075 Words). */
+export function runStatusWords(status: string): string {
+  return status === "paused" ? "Waiting for approval" : status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 /** Where a run of a flow stands, in a few words, and the station's own words when it stopped. */
 export function flowRunState(run: RunLike, flow: Pick<ShippedFlow, "nodes">): { tone: FlowRunTone; words: string; why: string | null } {
   const label = (id: string | null | undefined) => {
@@ -54,7 +59,8 @@ export function flowRunState(run: RunLike, flow: Pick<ShippedFlow, "nodes">): { 
   const stop = run.fail_reason?.replace(/^Stopped:\s*/, "").replace(/^(\S+)(?= is waiting on a person$)/, (id) => label(id) ?? id) ?? null;
   switch (run.status) {
     case "completed": return { tone: "passed", words: end ?? (at ? `Done at ${at}` : "Done"), why: null };
-    case "paused": return { tone: "waiting", words: at ? `Waiting at ${at}` : "Waiting on a person", why: run.gate_prompt?.split("\n")[0] ?? null };
+    // A paused run waits on its card: "Waiting for approval", never "paused" (pl-1075 Words); the card's question is why.
+    case "paused": return { tone: "waiting", words: "Waiting for approval", why: run.gate_prompt?.split("\n")[0] ?? (at ? `at ${at}` : null) };
     case "failed": return run.fail_reason?.startsWith("Stopped")
       ? { tone: "stopped", words: end ?? (at ? `Stopped at ${at}` : "Stopped"), why: stop }
       : { tone: "failed", words: at ? `Failed at ${at}` : "Failed", why: stop };

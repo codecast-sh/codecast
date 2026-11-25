@@ -88,7 +88,7 @@ export const FANOUT_FLOW: FixtureFlowRow = {
     node("rerun_ci", "Run CI again", "command", { timeout: 60 }),
     node("merge", "Merge", "command", { timeout: 3_600 }),
     node("retest", "Retest", "command", { timeout: 120 }),
-    node("wait_main", "Wait for main", "command", { timeout: 15_000 }),
+    node("wait_main", "Wait for green main", "command", { timeout: 15_000 }),
     node("rebase", "Onto main", "command", { timeout: 600 }),
     node("ci_card", "Why a person", "command", { timeout: 120 }),
     ...ciDecide.nodes,
@@ -183,7 +183,7 @@ export const BRANCHING_FLOW: FixtureFlowRow = {
     node("fix_conflict", "Resolve conflict", "agent"),
     node("exit", "Live", "exit"),
     node("dropped", "Dropped", "exit"),
-    node("unshipped", "Not shipped", "exit"),
+    node("unshipped", "Not merged", "exit"),
   ],
   edges: [
     { from: "start", to: "check" },
@@ -236,7 +236,7 @@ export const LAND_FLOW: FixtureFlowRow = {
   fix [label="Fix findings", backend=subject, max_visits=3]
   fix_conflict [label="Resolve conflict", backend=subject, max_visits=3]
   revise [label="Revise", backend=subject, max_visits=3]
-  stopped [shape=Msquare, label="Not landed", stop="$stop_reason"]
+  stopped [shape=Msquare, label="Not merged", stop="$stop_reason"]
 }`,
   nodes: [
     node("start", "start", "start"),
@@ -244,7 +244,7 @@ export const LAND_FLOW: FixtureFlowRow = {
     node("fix_conflict", "Resolve conflict", "agent"),
     node("revise", "Revise", "agent"),
     node("exit", "Merged", "exit"),
-    node("stopped", "Not landed", "exit"),
+    node("stopped", "Not merged", "exit"),
     inLand("pr", "PR", "command", { timeout: 600 }),
     inLand("checks", "CI and review", "parallel_fanout"),
     inLand("ci", "CI", "command", { timeout: 3_600 }),
@@ -324,7 +324,7 @@ export const LAND_FLOW: FixtureFlowRow = {
     { from: "land__card", to: "land__card__decide" },
     { from: "land__card__decide", to: "land__card__ship", label: "[S] Ship :: Lands it on the main branch" },
     { from: "land__card__decide", to: "land__card__revise", label: "[R] Revise :: Your note goes to the session that made it; the change comes back through review" },
-    { from: "land__card__decide", to: "land__card__dropped", label: "[D] Drop :: Closes it unlanded; the session hears your reason" },
+    { from: "land__card__decide", to: "land__card__dropped", label: "[D] Drop :: Closes it without merging; the session hears your reason" },
   ],
 };
 

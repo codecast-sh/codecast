@@ -162,7 +162,7 @@ a declaration.
   `$run_dir/<run id>-ci-brief.md` for the builder, and the run goes back to
   implement. After a Ship answer a run gets up to three red-CI rounds and up
   to three other fix rounds (a conflict, a failed check, review changes), in
-  any order; a fourth red stops it at "Not shipped: CI stayed red". The Ship
+  any order; a fourth red stops it at "Not merged: CI stayed red". The Ship
   answer covers those rounds: a fix that review approves goes straight to
   rebase and ship, with no second card. The station parks, so a command that
   waits on CI holds no machine slot. Without one the ship

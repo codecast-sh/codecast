@@ -575,7 +575,7 @@ export function stopRunLedger(o: { problem: string; step: string; ms: number; us
  *  builder. Words a person can check against the band: which branch, onto what, who approved it. */
 export function rebaseLandLedger(o: { problem: string; branch: string | null; base: string; approved: string; change: HistoryAttempt["diff"] }): SwitchLedger {
   return {
-    name: "Rebase and land", subject: o.problem, shift: ["Approved", "Landed"],
+    name: "Rebase and land", subject: o.problem, shift: ["Approved", "Merged"],
     figures: o.change && o.change.files > 0 ? [
       { value: String(o.change.files), label: o.change.files === 1 ? "file" : "files" },
       { value: `+${o.change.added}`, label: "added" },
@@ -656,7 +656,7 @@ export type WorkRow = {
   owner: string | null;
 };
 
-const OUTCOME: Record<string, string> = { "not shipped": "Asked you, no answer", running: "Running", "waiting on you": "Waiting on you", stuck: "No progress" };
+const OUTCOME: Record<string, string> = { "not merged": "Asked you, no answer", running: "Running", "waiting on you": "Waiting on you", stuck: "No progress" };
 
 /** How a run that closed without a change ended, by what its close argued (HistoryAttempt.argued): the fix is another
  *  problem's ("Already being fixed in ct-57467"), it was fixed already, it is the same problem as another, the judge was
@@ -780,7 +780,7 @@ export function workRows(h: CauseHistory, runs: ReadonlyArray<LineRunModel>, opt
     else if (v.word === "failed") outcome = `Failed at ${failed?.label ?? lastStep ?? "a step"}`;
     else if (v.word === "dropped") outcome = card?.answer ? "Dropped by you" : "Dropped";
     else if (/^stopped/.test(v.word)) outcome = `Stopped at ${lastStep ?? "a step"}`;
-    else if (v.word === "not shipped" && card?.status === "withdrawn") outcome = "Withdrawn, no answer";
+    else if (v.word === "not merged" && card?.status === "withdrawn") outcome = "Withdrawn, no answer";
     else if (a.ended === "parked") outcome = (a.runId === newest && opts.parked) || "Parked";
     // Its fix decision nobody answered: the band's own words, one word for it everywhere (withdrawn, never "stopped at Ship").
     const unanswered = !paused ? endedAtDecision(a, opts.trial?.(a.runId)) : null;

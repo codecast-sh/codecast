@@ -6,11 +6,11 @@ digraph decide {
   decide [label="Decide", shape=hexagon, category=review,
     prompt="$review_question",
     doc="$review_body"]
-  ship    [shape=Msquare, label="Ship"]
+  ship    [shape=Msquare, label="Approved"]
   revise  [shape=Msquare, label="Revise", stop="Sent back for revision. $human_message"]
   dropped [shape=Msquare, label="Dropped", stop="Dropped at the gate. $human_message"]
   start -> decide
-  decide -> ship    [label="[S] Ship :: Lands it on the main branch"]
+  decide -> ship    [label="[S] Approve merge :: Merges it; it goes live with the next deploy"]
   decide -> revise  [label="[R] Revise :: Your note goes to the session that made it; the change comes back through review"]
-  decide -> dropped [label="[D] Drop :: Closes it unlanded; the session hears your reason"]
+  decide -> dropped [label="[D] Drop :: Closes it without merging; the session hears your reason"]
 }

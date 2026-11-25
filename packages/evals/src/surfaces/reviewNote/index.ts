@@ -41,7 +41,7 @@ export interface Verdict {
 
 export interface ReviewNoteSnap {
   title: string;
-  /** The task's title as the Ship card's question names it. */
+  /** The task's title as the approval card's question names it. */
   task_title: string;
   branch: string;
   /** The brief's values, read back out of the rendered brief, so this tree's review.md renders with the same facts. */
@@ -114,7 +114,7 @@ export function verdictOfCommand(text: string): Verdict | null {
 
 // ── the card as the person meets it ───────────────────────────────────────
 
-/** decide.cast's Ship card with the note as its document, read from this tree's decide.cast. */
+/** decide.cast's approval card with the note as its document, read from this tree's decide.cast. */
 export function renderCard(snap: Pick<ReviewNoteSnap, 'task_title' | 'branch'>, note: string): string {
   const graph = parseWorkflowFile(join(REPO_ROOT, DECIDE));
   const { question: review_question, body: review_body } = splitReviewNote(note);
@@ -126,7 +126,7 @@ export function renderCard(snap: Pick<ReviewNoteSnap, 'task_title' | 'branch'>, 
   return [`Question: ${question}`, ...context, '', 'Answers:', ...answers, '', 'Document:', review_body || '(empty)'].join('\n');
 }
 
-/** What the verdict puts in front of someone: an approve is the Ship card its person answers; any other verdict is the note the implementer gets back. */
+/** What the verdict puts in front of someone: an approve is the approval card its person answers; any other verdict is the note the implementer gets back. */
 export const replyOf = (snap: Pick<ReviewNoteSnap, 'task_title' | 'branch'>, v: Verdict): string =>
   v.verdict === 'approve' ? renderCard(snap, v.note) : `Verdict: ${v.verdict}, sent back to the implementer with this note:\n\n${v.note}`;
 
@@ -160,7 +160,7 @@ export function reviewRequest(snap: ReviewNoteSnap, model: string, template = tr
 
 // ── grading ───────────────────────────────────────────────────────────────
 
-const COLD_READ = (card: string) => `A Ship card just arrived in your decision queue. An AI agent made a change to the product you run, an independent AI reviewer checked it, and you answer whether it lands. You know the product's features, its agents, your team, customers and contacts by name, but not its code, and you never opened the session that made this change. You give it a couple of minutes.
+const COLD_READ = (card: string) => `An approval card just arrived in your decision queue. An AI agent made a change to the product you run, an independent AI reviewer checked it, and you answer whether it lands. You know the product's features, its agents, your team, customers and contacts by name, but not its code, and you never opened the session that made this change. You give it a couple of minutes.
 
 <card>
 ${card}
@@ -201,7 +201,7 @@ interface Parsed {
 
 const graderRequest = (prompt: string): SurfaceRequest => ({ model: JUDGE_MODEL, prompt, max_tokens: 8000 });
 
-const CONTEXT = '(An AI reviewer has just given its verdict on a change. On approve, its note becomes the Ship card its person answers in their decision queue: the person runs the product and knows its features, agents, team and customers, but not its code, and never opened the session that made the change, so the reply shown is the card they will see. On changes, the note goes back to the implementer instead, and the reply shown is that note. The review session behind it is not shown.)';
+const CONTEXT = '(An AI reviewer has just given its verdict on a change. On approve, its note becomes the approval card its person answers in their decision queue: the person runs the product and knows its features, agents, team and customers, but not its code, and never opened the session that made the change, so the reply shown is the card they will see. On changes, the note goes back to the implementer instead, and the reply shown is that note. The review session behind it is not shown.)';
 
 const impl: SurfaceImpl = {
   refForms: REF_FORMS,

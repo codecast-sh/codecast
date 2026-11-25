@@ -61,8 +61,8 @@ export type JourneyNow =
   | { kind: "working"; stage: string; verb: string | null; role: StageRole; who: StageWho; waits: JourneyWait[]; session: { id: string; title: string | null } | null }
   /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). */
   | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null }
-  | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; decisionId: string | null; prompt: string | null; since: number | null }
-  /** Landed, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
+  | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; who: string | null; decisionId: string | null; prompt: string | null; since: number | null }
+  /** Merged, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
   | { kind: "landed"; sha: string; at: number | null; line: string | null; hold: DeployHold; waits: JourneyWait[] }
   | { kind: "unlanded"; why: string; waits: JourneyWait[] }
   | { kind: "deploying"; targets: string[]; line: string | null; waits: JourneyWait[] }
@@ -124,7 +124,8 @@ export type GateDecision = {
 };
 
 /** Who looks at the run, and the run's open card when the store holds it. */
-export type JourneyViewer = { id: string | null; decision?: GateDecision | null };
+/** `holder_name`: who answers the open card, by name, when the store knows them. */
+export type JourneyViewer = { id: string | null; decision?: GateDecision | null; holder_name?: string | null };
 
 /**
  * Whether the viewer may answer a decision: the person it was passed to, else its user holder and the people it was
@@ -577,7 +578,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.
     const onStage = gateNode ? stageOf(gateNode) : null;
-    now = { kind: "gate", stage: onStage ? stageLabel(onStage.id)! : labelOf(gateNode ?? ""), mine: gateMine, holder: holderOf(viewer?.decision), decisionId: run.gate_decision_id ?? null, prompt: run.gate_prompt?.split("\n")[0] ?? null, since: statusOf(gateNode)?.started_at ?? null };
+    now = { kind: "gate", stage: onStage ? stageLabel(onStage.id)! : labelOf(gateNode ?? ""), mine: gateMine, holder: holderOf(viewer?.decision), who: viewer?.holder_name ?? null, decisionId: run.gate_decision_id ?? null, prompt: run.gate_prompt?.split("\n")[0] ?? null, since: statusOf(gateNode)?.started_at ?? null };
   } else if (atDeploy) {
     // With no merge recorded yet (one merged by its own script, a run from an older CLI) the bar says the wait and
     // claims neither landed nor not landed: the wait itself records the merge once it finds it on main.
@@ -610,7 +611,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : subject ? "session"
       : deliberate ? "run"
       : "again";
-    // Not landed is said only of a run that ended where its change should have been on main (Deploy found no merge).
+    // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
     if (!sha && stage?.role === "deploy") now = { kind: "unlanded", why: readableWhy(run.fail_reason) ?? "The run ended with no merge recorded", waits: [] };
     else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && walked.some((id) => id !== at && byId.get(id)?.type !== "exit") ? exit?.label ?? null : null };
   } else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
@@ -674,7 +675,19 @@ const phrase = (labels: string[]) => labels.map((l) => (l !== l.toUpperCase() ? 
 export type JourneyTone = "idle" | "working" | "agent" | "session" | "you" | "wait" | "ok" | "bad";
 
 /** The words for a card nobody the viewer is may answer. */
-export const gateWaitWords = (holder: "person" | "role") => (holder === "role" ? "Waiting on a role" : "Waiting on a person");
+/**
+ * Who a handle is, as a person reads it: a role (`@handle`) by its title from the roster when the caller has it, the
+ * Release Captain's (pl-1075 Words) when it does not; anyone else as named.
+ */
+export function whoWords(by: string | null | undefined, roles?: ReadonlyArray<{ handle?: string; name?: string }>): string | null {
+  if (!by) return null;
+  if (!by.startsWith("@")) return by;
+  const title = roles?.find((r) => `@${r.handle}` === by)?.name;
+  return title ?? (by === "@release" ? "Release Captain" : by);
+}
+
+/** A run waiting on its approval card, naming who answers it when the card says (never "paused": production's pause owns that word). */
+export const gateWaitWords = (holder: "person" | "role", who?: string | null) => (who ? `Waiting for approval from ${whoWords(who)}` : "Waiting for approval");
 
 /** A stop in a few words: the exit's own name when the run reached it off the main path, else the stage it stopped at. */
 export function stopWords(n: { stage: string | null; end: string | null }): string {
@@ -686,11 +699,11 @@ export function stopWords(n: { stage: string | null; end: string | null }): stri
 export const sentBackWords = (n: { stage: string; by: string | null }) => (n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
 
 /** A landed change's Deploy in a pill's words: "Deploying" only while a deploy carries it. */
-export function holdWords(hold: DeployHold): { words: string; tone: "working" | "wait" } {
+export function holdWords(hold: DeployHold, roles?: ReadonlyArray<{ handle?: string; name?: string }>): { words: string; tone: "working" | "wait" } {
   if (hold.kind === "out") return { words: "Deploying", tone: "working" };
-  if (hold.kind === "red") return { words: "Held: main CI red", tone: "wait" };
+  if (hold.kind === "red") return { words: "Waiting for green main", tone: "wait" };
   if (hold.kind === "ci") return { words: "Waiting on main CI", tone: "wait" };
-  if (hold.kind === "press") return { words: `Waiting for ${hold.by ?? "a person"} to deploy`, tone: "wait" };
+  if (hold.kind === "press") return { words: `Waiting for ${whoWords(hold.by, roles) ?? "a person"} to deploy`, tone: "wait" };
   return { words: "Waiting to deploy", tone: "wait" };
 }
 
@@ -707,12 +720,12 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
     }
     case "starting": return { words: "Starting", tone: "working" };
     case "session": return { words: "Fixing", tone: "session" };
-    case "gate": return n.mine ? { words: "Your call", tone: "you" } : { words: gateWaitWords(n.holder), tone: "wait" };
+    case "gate": return n.mine ? { words: "Your call", tone: "you" } : { words: gateWaitWords(n.holder, n.who), tone: "wait" };
     case "landed": return holdWords(n.hold);
     case "deploying": return { words: "Deploying", tone: "working" };
-    case "merged": return { words: "Landed", tone: "ok" };
+    case "merged": return { words: "Merged", tone: "ok" };
     case "passed": return { words: "Done", tone: "ok" };
-    case "unlanded": return { words: "Not landed", tone: "bad" };
+    case "unlanded": return { words: "Not merged", tone: "bad" };
     case "live": return { words: "Live", tone: "ok" };
     case "stopped": case "failed": return { words: stopWords(n), tone: "bad" };
     default: return { words: "Ship", tone: "idle" };
@@ -760,6 +773,15 @@ export function approvalOf(graph: Graph): Approval {
     if (turn) return { kind: "if", when: asksIfOf(graph, h) };
   }
   return { kind: "never" };
+}
+
+/**
+ * Whether Ship confirms before it starts the run. One click starts it (pl-1075): a card the run may ask later arrives
+ * as its own card. Only a flow that asks the person on every run confirms, since that question is its first stop; a
+ * ship from a risky checkout (`from`, far behind or conflicting) or one starting several runs at once confirms too.
+ */
+export function shipConfirms(approval: Approval, opts: { from?: string | null; runs?: number } = {}): boolean {
+  return approval.kind === "always" || !!opts.from || (opts.runs ?? 1) > 1;
 }
 
 /** An approval in a chip's words. */

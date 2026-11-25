@@ -1,7 +1,7 @@
 // A repository name is case insensitive on GitHub and byte-equal in our
 // indexes, so everything that parses one hands back the canonical spelling.
 import { describe, expect, test } from "bun:test";
-import { extractRepoFromRemoteUrl, normalizeRepository, parsePrRef, repositoryOwner } from "./prRefs";
+import { checkLabel, extractRepoFromRemoteUrl, normalizeRepository, parsePrRef, repositoryOwner } from "./prRefs";
 
 describe("normalizeRepository", () => {
   test("lower cases owner and name and trims", () => {
@@ -50,4 +50,10 @@ describe("extractRepoFromRemoteUrl canonical spelling", () => {
   test("a remote off GitHub is not a repository", () => {
     expect(extractRepoFromRemoteUrl("git@gitlab.com:Codecast-SH/Codecast.git")).toBeNull();
   });
+});
+
+test("the pr-evals jobs read as the PR eval check (pl-1075 Words); other checks keep GitHub's names", () => {
+  expect(checkLabel({ name: "pr-evals" })).toBe("PR eval check");
+  expect(checkLabel({ name: "pr-evals-enqueue", event: "push" })).toBe("PR eval check (enqueue) (push)");
+  expect(checkLabel({ name: "test", event: "pull_request" })).toBe("test (pull_request)");
 });

@@ -59,7 +59,7 @@ const LIBRARY: LibFlow[] = [
   { id: "eval", name: "Eval", exit: good("Passed"), steps: [S("Eval", [plain("Unscored"), bad("Eval failed")])] },
   { id: "judge", name: "Judge", exit: good("Low risk"), steps: [S("Guidelines"), S("Diff"), A("Judge", [plain("Unscored"), { name: "High risk", tone: "warn" }])] },
   { id: "decide", name: "Decide", exit: good("Ship"), steps: [P("Decide", [asked("Revise"), bad("Dropped")])] },
-  { id: "ship", name: "Land", exit: good("Shipped"), steps: [S("Rebase", [plain("Already landed"), asked("Conflict")]), S("Land", [loop("default branch moved"), bad("Not shipped")])] },
+  { id: "ship", name: "Land", exit: good("Merged"), steps: [S("Rebase", [plain("Already merged"), asked("Conflict")]), S("Land", [loop("default branch moved"), bad("Not merged")])] },
   { id: "deploy", name: "Deploy", exit: LIVE, steps: [S("Go live", [bad("Deploy failed")])] },
 ];
 

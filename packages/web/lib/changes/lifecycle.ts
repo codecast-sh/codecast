@@ -68,9 +68,9 @@ export type ChangeFacts = {
   draft?: boolean;
   /** GitHub's auto-merge is on: it lands itself once its requirements pass. */
   auto_merge?: boolean;
-  /** Landed, and how far it has gone is still being read: neither live nor touching nothing yet. */
+  /** Merged, and how far it has gone is still being read: neither live nor touching nothing yet. */
   reach_pending?: boolean;
-  /** Landed: how far it has gone toward production (deploys.md DP16); null when it touches no target. */
+  /** Merged: how far it has gone toward production (deploys.md DP16); null when it touches no target. */
   reach?: DeployReach | null;
   /** The repository has deploy targets at all; false: landing is the end. */
   deploys?: boolean;
@@ -216,7 +216,7 @@ export function changeLifecycle(f: ChangeFacts): Lifecycle {
   const check = f.check ?? null;
   const work = f.work ?? null;
 
-  // Landed: the rest is deploy reach.
+  // Merged: the rest is deploy reach.
   if (land.state === "landed") {
     // CI that ran after a direct push still says what main thinks of it.
     if (check?.after_land && check.ci === "failure") {

@@ -313,7 +313,7 @@ export function backendSwitchState(row: SessionCommandRow | undefined, actual: "
   if (row.error) return { failed: row.result === DISPATCH_REFUSED ? "The switch was refused" : row.error };
   const landed = landedOn(row);
   if (landed.fellBack) return { failed: `The SDK host did not start, so it runs in the terminal: ${landed.fellBack}` };
-  // Landed: the session's own registration says where it runs a moment later.
+  // Merged: the session's own registration says where it runs a moment later.
   return actual !== landed.backend && now - row.executed_at < BACKEND_FACT_LAG_MS ? { moving: landed.backend } : null;
 }
 

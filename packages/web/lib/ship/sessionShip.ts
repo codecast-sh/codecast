@@ -95,11 +95,11 @@ export function runShip(run: Run, viewer: string | null = null, decision: GateDe
     // A run is live only past a Deploy station of its own; a flow that ends at Land leaves its change on main for a deploy.
     if (deployedBy(run)) return { words: "Live", tone: "ok", run: run._id };
     // A finished run with no merge on it (a merge nobody recorded) says it finished, never that it did not land.
-    return sha ? { words: "Landed", tone: "ok", run: run._id } : { words: "Done", tone: "ok", run: run._id };
+    return sha ? { words: "Merged", tone: "ok", run: run._id } : { words: "Done", tone: "ok", run: run._id };
   }
   if (/^Stopped: The deploy that carried/.test(run.fail_reason ?? "")) return { words: "Deploy failed", tone: "bad", run: run._id };
-  // Not landed is said only of a run that ended at Deploy with no merge on it.
-  if (run.status === "failed" && top === "deploy" && !sha) return { words: "Not landed", tone: "bad", run: run._id };
+  // Not merged is said only of a run that ended at Deploy with no merge on it.
+  if (run.status === "failed" && top === "deploy" && !sha) return { words: "Not merged", tone: "bad", run: run._id };
   if (run.status === "failed") return { words: run.current_node_label ? `Stopped · ${run.current_node_label}` : "Stopped", tone: "bad", run: run._id };
   return null;
 }
@@ -143,7 +143,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
       if (!prev || at > (prev.live_at ?? prev.created_at)) map.set(s.conversation_id, d);
     }
   }
-  // A landed commit is read only through its own reach ("Landed" until it answers): a deploy that carried some commit of
+  // A landed commit is read only through its own reach ("Merged" until it answers): a deploy that carried some commit of
   // the session says nothing about this one. A run that landed without naming its commit can be overtaken only by a
   // deploy of the session's commits made after the run ended.
   const onlyReach = new Set<string>();
@@ -164,7 +164,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
     if (onlyReach.has(id)) continue;
     const cur = out.get(id);
     // A run in flight says more than an older deploy; a finished run is overtaken by where its commits went out.
-    if (cur && cur.tone !== "ok" && !cur.words.startsWith("Stopped") && cur.words !== "Not landed") continue;
+    if (cur && cur.tone !== "ok" && !cur.words.startsWith("Stopped") && cur.words !== "Not merged") continue;
     const since = after.get(id) ?? 0;
     const l = [live.get(id)].find((d) => d && (d.live_at ?? d.created_at) >= since);
     const f = [failed.get(id)].find((d) => d && d.created_at >= since);

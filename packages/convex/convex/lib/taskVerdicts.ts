@@ -1,13 +1,14 @@
-// A person's answers to decision cards: the task's Ship cards (the gate cards a
+// A person's answers to decision cards: the task's approval cards (the gate cards a
 // run posted that offered Ship, answered or dismissed by a person), and the
 // cards a session asked. Land reads the task's to know who authorizes a merge
 // (orgLineMerge.personAuthorized); the intent segment reads both beside the
 // person's typed lines (/cli/sessions/originator, /cli/intent/verify), where a
 // Revise on a card undoes an earlier "ship it" and a later "ship it" outranks it.
 import type { Id } from "../_generated/dataModel";
+import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
 
-// "Approve merge" is the same yes in the words a merge card may use (ct-100350); both read as Ship everywhere.
-export const optionIsShip = (label: unknown): boolean => /^(ship|approve merge)\b/i.test(String(label ?? "").trim());
+// "Approve merge" is the approval card's button and means what "Ship" did (shared/contracts/shipAnswer).
+export { optionIsShip };
 export const isShipAnswer = (card: any): boolean => card.status === "answered" && optionIsShip(card.options?.[card.answer_index ?? -1]?.label);
 export const offersShip = (card: any): boolean => (card.options ?? []).some((o: any) => optionIsShip(o?.label));
 export const cardRef = (card: any): string => card.short_id ?? String(card._id);
@@ -25,7 +26,7 @@ export const verdictPerson = (card: any): string | null =>
 export const verdictLabel = (card: any): string =>
   card.status === "dismissed" ? "Dismissed" : String(card.options?.[card.answer_index ?? -1]?.label ?? card.answer_text ?? "something other than Ship").trim();
 
-/** A task's Ship cards that are not a trial's, newest first, in the statuses given. */
+/** A task's approval cards that are not a trial's, newest first, in the statuses given. */
 export async function taskShipCards(ctx: any, taskId: Id<"tasks">, statuses: string[]): Promise<any[]> {
   const rows = await Promise.all(statuses.map((status) =>
     ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", taskId).eq("status", status)).order("desc").take(100)));
@@ -34,7 +35,7 @@ export async function taskShipCards(ctx: any, taskId: Id<"tasks">, statuses: str
 
 export type PersonVerdict = { ref: string; at: number; ship: boolean; label: string; note?: string; user_id: string; question: string };
 
-/** A person's verdicts on the task's Ship cards of its runs, newest first. */
+/** A person's verdicts on the task's approval cards of its runs, newest first. */
 export async function personVerdicts(ctx: any, taskId: Id<"tasks">): Promise<PersonVerdict[]> {
   const cards = await taskShipCards(ctx, taskId, ["answered", "dismissed"]);
   return cards.filter((d) => d.workflow_run_id && byPerson(d)).map((d) => ({

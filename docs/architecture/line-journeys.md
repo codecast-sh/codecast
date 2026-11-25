@@ -623,7 +623,7 @@ Answer paths that cannot be exercised on real data (answering, starting a line, 
 |---|---|
 | card, "Get a new card", "card unanswered" | decision; "Ask me again"; "asked, no answer" |
 | Ask again / Re-ask / Runs to ask again | Needs a new ask |
-| Not shipped: no answer | Asked, no answer |
+| Not merged: no answer | Asked, no answer |
 | Finished without choosing a next step | <step> finished: go on to <next stage>? (or "<step> ended without a report" when it said nothing) |
 | New, confirm | New, not confirmed |
 | Pipeline health | Failed |

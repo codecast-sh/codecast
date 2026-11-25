@@ -190,7 +190,7 @@ export function failCauseOf(d: StepDecision, causes?: ReadonlyMap<string, WorkCa
 /** The state a For you wait puts its row in. */
 const ASK_STATE: Record<string, WorkState> = { review: "review", unlanded: "unlanded", stopped: "stopped", fixed: "stopped" };
 
-/** A landing step's visit that put nothing in place ("Not merged: merge off", "Not shipped: …"): never a pass, whatever
+/** A landing step's visit that put nothing in place ("Not merged: merge off", "Not merged: …"): never a pass, whatever
  *  its exit code said. */
 const notLanded = (d: StepDecision): boolean => LANDING_STATIONS.has(d.id.slice(d.runId.length + 1)) && NOT_LANDED.test(d.decided.words);
 

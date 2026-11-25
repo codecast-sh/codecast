@@ -14,6 +14,7 @@ import { castJson } from '../../adapters/cast';
 import { apiConfig, readConversation, toConvoMessages } from '../../adapters/convo';
 import { REPO_ROOT } from '../../paths';
 import { gate, type Captured, type SurfaceImpl, type SurfaceRequest } from '../../surface';
+import { optionIsShip } from '@codecast/shared/contracts/shipAnswer';
 
 // The intent segment's Read station (intent.cast, flows.md FL4) replayed as a
 // run posts it: the asker's record rendered by the real flowAsker (one
@@ -66,7 +67,7 @@ export interface IntentReadLabel {
 
 type Answer = { ship: boolean; session: string; line: number; card?: string; quote: string; in_scope: boolean; why: string };
 
-const REF_FORMS = `intent-read@ takes a fixture or a real moment, like intent-read@fixture:<case> or intent-read@ct-98877:sd-4278:jx74md0:198fcb760^..198fcb760:sd-4263:not=1=clear (the task, the Ship card whose posting is the moment, the session the person typed in, the change's commits on main, the task's earlier Ship cards a person answered, lines a program wrote that the offline filter keeps, and whether the run should clear or ask; the cards the session asked come from its answer frames)`;
+const REF_FORMS = `intent-read@ takes a fixture or a real moment, like intent-read@fixture:<case> or intent-read@ct-98877:sd-4278:jx74md0:198fcb760^..198fcb760:sd-4263:not=1=clear (the task, the approval card whose posting is the moment, the session the person typed in, the change's commits on main, the task's earlier approval cards a person answered, lines a program wrote that the offline filter keeps, and whether the run should clear or ask; the cards the session asked come from its answer frames)`;
 
 const graph = () => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.intent!);
 
@@ -101,14 +102,14 @@ export function answerOf(text: string): Answer | null {
 /**
  * What the run would do with the answer: the read -> clear (or clear_card) edge of intent.cast, then the server's
  * check of the citation (verifyCitation, verifyCardCitation) over what the read was given: the line or the card
- * exists, is the starter's, holds the quote with whitespace folded, and no non-Ship answer on the task's Ship cards
+ * exists, is the starter's, holds the quote with whitespace folded, and no non-Ship answer on the task's approval cards
  * is newer than it.
  */
 export function outcomeOf(snap: IntentReadSnap, a: Answer | null): { clears: boolean; why: string } {
   if (!a) return { clears: false, why: 'no usable JSON answer' };
   if (!(a.ship && a.in_scope && a.quote)) return { clears: false, why: `ship ${a.ship}, in_scope ${a.in_scope}` };
   const newestOnTask = [...(snap.cards ?? [])].filter((c) => c.on_task).sort((x, y) => y.created_at.localeCompare(x.created_at))[0];
-  const takenBack = (at: string, ref?: string) => !!newestOnTask && newestOnTask.card !== ref && !/^ship\b/i.test(newestOnTask.answer) && newestOnTask.created_at > at;
+  const takenBack = (at: string, ref?: string) => !!newestOnTask && newestOnTask.card !== ref && !optionIsShip(newestOnTask.answer) && newestOnTask.created_at > at;
   if (a.session && a.line > 0) {
     const line = snap.typed.find((t) => t.short_id === a.session && t.line === a.line);
     if (!line) return { clears: false, why: `${a.session}:${a.line} is not a typed line the read was given` };
@@ -148,7 +149,7 @@ const impl: SurfaceImpl = {
     const shortId = session;
     const typed: IntentTyped[] = [];
     // A person's answers to cards, as the server reads them (originator.ts CardLine): the card row behind each answer
-    // frame the session holds, and the task's earlier Ship cards the ref names. An agent's answer is left out.
+    // frame the session holds, and the task's earlier approval cards the ref names. An agent's answer is left out.
     const cards = new Map<string, IntentCard>();
     const addCard = (d: any, sessionShort?: string) => {
       if (!d?.resolved_at || d.resolved_at > card.created_at || d.answered_by?.kind !== 'user' || !d.short_id) return;
@@ -157,7 +158,7 @@ const impl: SurfaceImpl = {
       cards.set(d.short_id, {
         card: d.short_id,
         ...(sessionShort ?? prev?.session_short_id ? { session_short_id: sessionShort ?? prev?.session_short_id } : {}),
-        ...(d.workflow_run_id && d.task_id === task._id && (d.options ?? []).some((o: any) => /^ship\b/i.test(String(o?.label ?? ''))) ? { on_task: true as const } : {}),
+        ...(d.workflow_run_id && d.task_id === task._id && (d.options ?? []).some((o: any) => optionIsShip(o?.label)) ? { on_task: true as const } : {}),
         question: String(d.question ?? ''),
         answer: label,
         ...(d.answer_text && d.answer_text.trim() !== label ? { note: d.answer_text } : {}),
@@ -191,7 +192,7 @@ const impl: SurfaceImpl = {
       approximate: [
         `the lines are every user-role line of ${shortId} before ${cardRef} was posted that the asker's text filter keeps, read as typed at the terminal: provenance is not checked offline, and the sessions above it on the chain are left out`,
         `the change is ${base}..${head} on main as it landed, which may differ from the branch the run read`,
-        'the cards are those whose answer frames the session holds, and the task\'s earlier Ship cards the ref names; an answer by anyone but the person the moment\'s card asked reads as someone else\'s',
+        'the cards are those whose answer frames the session holds, and the task\'s earlier approval cards the ref names; an answer by anyone but the person the moment\'s card asked reads as someone else\'s',
       ],
     };
     return {

@@ -71,13 +71,13 @@ describe("runPath", () => {
     const ship = phase("ship");
     expect(ship.steps.map((s) => [s.id, s.state])).toEqual([["ship", "done"]]);
     expect(ship.steps[0]).toMatchObject({ label: "Ship", note: "the flow could not merge it", href: "/tasks/ct-56750" });
-    expect(ship.steps[0].result).toMatch(/^Landed by hand \w+ \d+$/);
+    expect(ship.steps[0].result).toMatch(/^Merged by hand \w+ \d+$/);
     expect(ship.state).toBe("done");
     const open = runPath(shippedRun, null, { status: "in_progress" }).find((p) => p.key === "ship")!;
     expect(open.steps).toHaveLength(1);
-    expect(open.steps[0]).toMatchObject({ id: "ship", state: "noted", result: "Not landed: left to a person to land" });
+    expect(open.steps[0]).toMatchObject({ id: "ship", state: "noted", result: "Not merged: left to a person to merge" });
     const merged: ReportRun = { ...shippedRun, node_statuses: shippedRun.node_statuses!.map((x) => (x.node_id === "merge" ? { ...x, status: "completed", outcome: "success" } : x)) };
-    expect(runPath(merged).find((p) => p.key === "ship")!.steps).toMatchObject([{ id: "ship", state: "done", result: "Landed", note: "watching for the problem to come back" }]);
+    expect(runPath(merged).find((p) => p.key === "ship")!.steps).toMatchObject([{ id: "ship", state: "done", result: "Merged", note: "watching for the problem to come back" }]);
   });
 
   test("a run waiting at its card says so", () => {
@@ -87,20 +87,27 @@ describe("runPath", () => {
     expect(p.state).toBe("waiting");
   });
 
+  test("a card answered with a yes to merge, by either label, reads approved until the ship step starts", () => {
+    const answered = (gate_answer: string): ReportRun => ({ ...shippedRun, status: "running", current_node_id: "decide", gate_answer, node_statuses: shippedRun.node_statuses!.slice(0, 12) });
+    expect(runOutcome(answered("[S] Approve merge :: Merge the change")).text).toBe("Approved: waiting for the ship step to start.");
+    expect(runOutcome(answered("[S] Ship :: Land the change")).text).toBe("Approved: waiting for the ship step to start.");
+    expect(runOutcome(answered("[R] Revise :: Send it back")).text).toBe("Working: at Decide.");
+  });
+
   test("a card taken back, a run cut off, a station interrupted: none reads as a failure or as under way", () => {
     const upToCard = shippedRun.node_statuses!.slice(0, 12);
     // The card was withdrawn and the run routed on: Decide asked, Ship never ran.
     const withdrawn: ReportRun = { ...shippedRun, gate_answer: undefined, gate_response: undefined, gate_decision_status: "withdrawn", node_statuses: [...upToCard, n("decide", 12, "failed", { outcome: "failure" }), n("ship", 13, "failed", { outcome: "failure" })] };
     const steps = runPath(withdrawn).flatMap((p) => p.steps);
     expect(steps.find((s) => s.id === "decide")).toMatchObject({ state: "noted", result: "Asked; the card was withdrawn" });
-    expect(steps.find((s) => s.id === "ship")).toMatchObject({ state: "noted", result: "Not landed: the decision was withdrawn" });
+    expect(steps.find((s) => s.id === "ship")).toMatchObject({ state: "noted", result: "Not merged: the decision was withdrawn" });
     expect(runOutcome(withdrawn)).toMatchObject({ tone: "closed", text: "Stopped: the decision was withdrawn." });
     // A Ship that ran after nobody answered says it ran with no yes, then what it did, in the words the decision's
     // "Then" reads (ct-59561 Run 5: the runner of the day took the Ship edge on a failed gate).
     const refused: ReportRun = { ...withdrawn, node_statuses: [...upToCard, n("decide", 12, "failed", { outcome: "failure" }), n("ship", 13, "failed", { outcome: "failure", result_preview: "line: codecast/line-ct-59561 is behind origin/main; rebase it first" })] };
     const then = noAnswerFacts(refused as never)?.then;
     expect(then).toBe("Ship ran with no yes, refused: branch behind main");
-    expect(runPath(refused).flatMap((p) => p.steps).find((s) => s.id === "ship")).toMatchObject({ state: "noted", result: `Not landed: ${then!.charAt(0).toLowerCase()}${then!.slice(1)}` });
+    expect(runPath(refused).flatMap((p) => p.steps).find((s) => s.id === "ship")).toMatchObject({ state: "noted", result: `Not merged: ${then!.charAt(0).toLowerCase()}${then!.slice(1)}` });
     // The run failed while its gate row still says running: finished, not live.
     const cut: ReportRun = { ...withdrawn, status: "failed", current_node_id: "decide", fail_reason: "gate withdrawn", node_statuses: [...upToCard, n("decide", 12, "running", { outcome: undefined })] };
     expect(runPath(cut).flatMap((p) => p.steps).find((s) => s.id === "decide")?.state).toBe("noted");
@@ -257,11 +264,11 @@ describe("a run that went on past its withdrawn card (ct-58022)", () => {
   const task = { status: "open", watch_until: T0 + 7 * DAY };
   test("every surface says not shipped, never shipped and never waiting to be admitted", () => {
     expect(runEnd(run)).toBeNull();
-    expect(runOutcome(run, task, now).text).toMatch(/^Not shipped: the run went on past a card nobody answered/);
+    expect(runOutcome(run, task, now).text).toMatch(/^Not merged: the run went on past a card nobody answered/);
     expect(causeWhere(task, run, false, now).text).toBe(runOutcome(run, task, now).text);
     const steps = runPath(run).flatMap((p) => p.steps);
     // Ship, merge and watch read as one row that says the change did not land.
-    expect(steps.filter((x) => ["ship", "merge", "watch"].includes(x.id))).toEqual([expect.objectContaining({ id: "ship", state: "noted", result: "Not shipped: decision withdrawn unanswered after under a minute, nothing was approved" })]);
+    expect(steps.filter((x) => ["ship", "merge", "watch"].includes(x.id))).toEqual([expect.objectContaining({ id: "ship", state: "noted", result: "Not merged: decision withdrawn unanswered after under a minute, nothing was approved" })]);
   });
 });
 
@@ -430,7 +437,7 @@ describe("runOutcome on another graph (AgentWatch)", () => {
       node_statuses: [step("build", 0), step("card", 1), step("decide", 2, "failed"), step("ship", 3), step("merge", 4), step("watch", 5), step("exit", 6)],
     } as ReportRun;
     expect(runEnd(run)).toBeNull();
-    expect(runOutcome(run, { status: "done", watch_until: T0 + 7 * 24 * HOUR } as any, T0).text).toMatch(/^Not shipped: the run went on past a card nobody answered/);
+    expect(runOutcome(run, { status: "done", watch_until: T0 + 7 * 24 * HOUR } as any, T0).text).toMatch(/^Not merged: the run went on past a card nobody answered/);
   });
 });
 
@@ -457,7 +464,7 @@ describe("a decision closed without an answer", () => {
       node_statuses: [{ node_id: "decide", status: "failed", outcome: "failure", started_at: T, completed_at: T + 3 * 3_600_000 + 12 * 60_000 }, { node_id: "ship", status: "completed", started_at: T + 4 * 3_600_000, completed_at: T + 4 * 3_600_000 + 1 }] };
     const w = closedDecisionWords("withdrawn", run);
     expect(w.headline).toBe("Withdrawn: the run stopped waiting after 3h 12m; it was never answered");
-    expect(w.detail).toMatch(/built but not shipped/);
+    expect(w.detail).toMatch(/built but not merged/);
     expect(w.askAgain).toBe(true);
     expect(`${w.headline} ${w.detail}`).not.toMatch(/by the agent/);
   });

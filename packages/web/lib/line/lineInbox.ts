@@ -92,7 +92,7 @@ export type InboxGroup = { kind: InboxKind; label: string; rows: InboxRow[] };
 
 export const INBOX_LABELS: Record<InboxKind, string> = {
   decide: "Fixes to decide",
-  unapproved: "Not shipped: no answer",
+  unapproved: "Not merged: no answer",
   confirm: "New, confirm",
   question: "Questions",
   failed: "Pipeline health",

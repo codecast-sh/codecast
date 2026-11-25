@@ -191,7 +191,7 @@ describe("a merge no role is behind", () => {
   const check = (ctx: any) => checkMergeCore(ctx, HOST as any, "workflow_runs_1");
   const clear = (ctx: any, why = "founder-intent read: ship", head_sha = HEAD) => clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why, head_sha }, NOW + 1);
 
-  // A run with no role behind it, no Ship card and no clear stamp. Its observed landing authorizes nothing, so it records.
+  // A run with no role behind it, no approval card and no clear stamp. Its observed landing authorizes nothing, so it records.
   test("a run nothing authorizes may still record an observed landing", async () => {
     const { ctx, run } = solo();
     await expect(check(ctx)).rejects.toThrow("nothing authorizes the merge");
@@ -470,6 +470,21 @@ describe("a merge no role is behind", () => {
     await expect(check(ctx)).rejects.toThrow("its card sd-1 is still waiting on a person, so nothing authorizes the merge");
     Object.assign(tables.session_decisions[0], { status: "answered", answer_index: 0, answered_by: { kind: "user", id: HOST }, resolved_at: NOW });
     expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: "ship on card sd-1" } });
+  });
+
+  test("Approve merge, the approval card's button, authorizes as Ship does, on the run's card and on an earlier run's", async () => {
+    const options = [{ label: "Approve merge" }, { label: "Revise" }, { label: "Drop" }];
+    const own = solo();
+    Object.assign(own.run(), { gate_node_id: "decide__decide", gate_decision_id: "sd_1" });
+    own.tables.session_decisions.push(card("sd_1", { workflow_run_id: "workflow_runs_1", options }));
+    expect(await check(own.ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: "ship on card sd-1" } });
+    const earlier = solo();
+    earlier.tables.session_decisions.push(card("sd_2", { workflow_run_id: "workflow_runs_0", options }));
+    expect(await check(earlier.ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: "ship on earlier run's card sd-2" } });
+    // Revise on the same card is still no yes.
+    const revised = solo();
+    revised.tables.session_decisions.push(card("sd_3", { workflow_run_id: "workflow_runs_0", options, answer_index: 1 }));
+    await expect(check(revised.ctx)).rejects.toThrow("nothing authorizes the merge");
   });
 
   test("the run's own card decides whoever answered it: a role's Ship is no person's, and an older person's Ship does not override it", async () => {

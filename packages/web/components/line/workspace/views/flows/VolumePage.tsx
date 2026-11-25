@@ -266,7 +266,7 @@ function Opened({ map, show, href, go, now, toggle }: Ctx) {
 // ── is it flowing ───────────────────────────────────────────────────────────
 
 const SERIES: Array<{ key: keyof Omit<FlowDay, "day">; label: string }> = [
-  { key: "opened", label: "Problems opened" }, { key: "ran", label: "Runs started" }, { key: "landed", label: "Landed" }, { key: "clean", label: "Closed clean" },
+  { key: "opened", label: "Problems opened" }, { key: "ran", label: "Runs started" }, { key: "landed", label: "Merged" }, { key: "clean", label: "Closed clean" },
 ];
 
 function Days({ map, days, now }: { map: FlowMap; days: number; now: number }) {

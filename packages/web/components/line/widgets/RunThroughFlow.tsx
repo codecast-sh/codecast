@@ -16,11 +16,11 @@ import { useRunFlow } from "../../../hooks/useFlowObject";
 import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
 import { appPool, linesFirst, namedForRepo, type AppFlow } from "../../../lib/line/flowPool";
 import { defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
-import { approvalOf, approvalWords, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { approvalOf, approvalWords, journeyOf, shipConfirms, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
 import { useDeployReach, type DeployReachRow } from "../../../hooks/useDeployReach";
 import { shipLedgerFor } from "../../consequential/shipLedger";
-import { pressFromSig, pressSig, runThroughMessage, type Press, type PressMsg } from "../../../lib/line/flowMessages";
+import { PRESS_WAIT_MS, pressFromSig, pressSig, pressWaiting, runThroughMessage, type Press, type PressMsg, type SentPress } from "../../../lib/line/flowMessages";
 import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
 import { editedSince, fixRounds } from "../../../lib/ship/newEdits";
@@ -81,7 +81,7 @@ function useSettled(conversationId: string): boolean {
 /** The chip's words and tone for where the session's change is. The header has little room: a stop says only that it stopped. */
 function chipOf(journey: Journey | null, reach: DeployReachRow | undefined, landed: boolean): { words: string; tone: string } {
   // A change on main with no deploy of its own to wait on reads where the deploy records put it, as its inbox card does.
-  if (journey?.now.kind === "landed" && landed) return reach ? reachShip(reach) : { words: "Landed", tone: "ok" };
+  if (journey?.now.kind === "landed" && landed) return reach ? reachShip(reach) : { words: "Merged", tone: "ok" };
   const w = journeyWords(journey);
   return w.tone === "bad" ? { words: "Stopped", tone: "bad" } : w;
 }
@@ -118,6 +118,8 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
     approval.record();
     useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
   };
+  // One click starts the run (pl-1075, shipConfirms): a card a run may ask later arrives as its own card.
+  const ship = (flow: AppFlow) => (shipConfirms(approvalOf(flow)) ? setReviewing(flow) : send(flow));
   const showRun = !!run && !!runFlow && !again && !starting;
   const notice = declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
   const onOpenChange = (o: boolean) => { setOpen(o); if (!o) setAgain(false); };
@@ -134,7 +136,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
     <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
   ) : (
     // Mounted only while open: the pool's feed is read when someone looks, never by every header.
-    <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} /></>
+    <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); ship(flow); }} /></>
   );
   return (
     <>
@@ -234,14 +236,32 @@ function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain
   );
 }
 
-/** Ship again from a run's card in the thread: the same flow, through the same review a first Ship goes through. */
+/** Ship again from a run's card in the thread: the same flow, one click as a first Ship is. */
 export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }: { flow: AppFlow; conversationId: string; sessionTitle: string; primary: boolean }) {
   const [reviewing, setReviewing] = useState(false);
+  // The press is read back as the header's Ship reads it: waiting while the session has neither started its run nor
+  // declined, so a double click starts one run, and free again once the session answered without one. A press whose
+  // message never comes back (the thread not loaded here) frees it after a minute: no dead end.
+  // The approval is the judged files the confirm listed; a one-click press lists none, so it approves nothing.
   const approval = usePressApproval(conversationId, reviewing);
+  const runs = useSessionFlowRuns(conversationId);
+  const newest = runs?.[0] ?? null;
+  const press = usePress(conversationId, newest?.created_at ?? 0);
+  const settled = useSettled(conversationId);
+  const [mine, setMine] = useState<SentPress | null>(null);
+  const sent = pressWaiting({ sent: mine, newestRun: newest?._id ?? null, press, settled });
+  const send = () => {
+    const at: SentPress = { run: newest?._id ?? null, press: press?.id ?? null };
+    setMine(at);
+    setTimeout(() => setMine((m) => (m === at ? null : m)), PRESS_WAIT_MS);
+    approval.record();
+    useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
+  };
   return (
     <>
-      <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={() => setReviewing(true)} data-ship-again>Ship again</button>
-      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: approval.files })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); approval.record(); useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow)); }} /> : null}
+      <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} data-ship-again disabled={sent} aria-busy={sent || undefined}
+        onClick={() => { if (sent) return; if (shipConfirms(approvalOf(flow))) setReviewing(true); else send(); }}>{sent ? "Starting…" : "Ship again"}</button>
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: approval.files })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); send(); }} /> : null}
     </>
   );
 }

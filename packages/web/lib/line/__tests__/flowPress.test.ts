@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pressFromSig, pressSig, runThroughMessage, addToFlowsMessage } from "../flowMessages";
+import { pressFromSig, pressSig, pressWaiting, runThroughMessage, addToFlowsMessage } from "../flowMessages";
 import { formatDecisionAnswer } from "@codecast/shared/contracts";
 
 // A Ship press is a message to the session; whether its run started, is still to come, or will not come is read from
@@ -69,5 +69,25 @@ describe("a Ship press", () => {
     const text = read([press(1), said("a", "word ".repeat(80), 2)])!.reply!.text;
     expect(text.length).toBeLessThanOrEqual(221);
     expect(text.endsWith("word…")).toBe(true);
+  });
+});
+
+describe("Ship again waiting on its press", () => {
+  const declined = { at: 10, id: "p10", reply: { id: "a1", text: "Not run." } };
+  const pending = { at: 20, id: "p20", reply: null };
+  const sent = { run: "run_1", press: "p10" };
+  test("a press just sent holds it until its message comes back, then until a run answers it", () => {
+    expect(pressWaiting({ sent, newestRun: "run_1", press: declined, settled: true })).toBe(true);
+    expect(pressWaiting({ sent, newestRun: "run_1", press: pending, settled: true })).toBe(true);
+    expect(pressWaiting({ sent, newestRun: "run_2", press: null, settled: false })).toBe(false);
+  });
+  test("a press the session answered and settled without a run frees it for another try", () => {
+    expect(pressWaiting({ sent, newestRun: "run_1", press: { ...pending, reply: { id: "a2", text: "Nothing to take." } }, settled: true })).toBe(false);
+    expect(pressWaiting({ sent, newestRun: "run_1", press: { ...pending, reply: { id: "a2", text: "Checking." } }, settled: false })).toBe(true);
+  });
+  test("with no press of this viewer's, it follows any press the session has open, and nothing holds it otherwise", () => {
+    expect(pressWaiting({ sent: null, newestRun: "run_1", press: pending, settled: false })).toBe(true);
+    expect(pressWaiting({ sent: null, newestRun: "run_1", press: declined, settled: true })).toBe(false);
+    expect(pressWaiting({ sent: null, newestRun: "run_1", press: null, settled: false })).toBe(false);
   });
 });

@@ -280,7 +280,7 @@ describe("line.cast offline run through the session path", () => {
     expect(ended().slice(-2)).toEqual(["watch:completed", "exit:completed"]);
   }, 60000);
 
-  test("CI red at ship goes back to the builder with the run's brief, three rounds a run, and a fourth red stops the run not shipped", async () => {
+  test("CI red at ship goes back to the builder with the run's brief, three rounds a run, and a fourth red stops the run not merged", async () => {
     gateAnswers = ["S"];
     expect(await runWorkflow(seqLine([7, 7, 7, 7]), opts({ runId: "run_1" }))).toBe("failed");
     expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "review", "card_write", "implement", "review", "implement", "review", "implement", "review"]);
@@ -297,7 +297,7 @@ describe("line.cast offline run through the session path", () => {
     expect(ended().filter((n) => n.startsWith("rebase:"))).toEqual(["rebase:completed", "rebase:completed", "rebase:completed", "rebase:completed"]);
     expect(ended().some((n) => n.startsWith("watch:"))).toBe(false);
     expect(runEnd()?.node_id).toBe("ci_red");
-    expect(runEnd()?.fail_reason).toStartWith("Stopped: Not shipped: CI stayed red after three rounds back to the builder.");
+    expect(runEnd()?.fail_reason).toStartWith("Stopped: Not merged: CI stayed red after three rounds back to the builder.");
   }, 60000);
 
   test("a later run on the task counts its own CI rounds: the run before it ending at ci_red takes none of them", async () => {

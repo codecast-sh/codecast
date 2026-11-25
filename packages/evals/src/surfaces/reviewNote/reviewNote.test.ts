@@ -51,9 +51,9 @@ describe('reading the verdict', () => {
   });
 });
 
-test('the card is decide.cast Ship card: the first line of the note asks, the part before --- is its document', () => {
+test('the card is decide.cast approval card: the first line of the note asks, the part before --- is its document', () => {
   const card = renderCard({ task_title: 'X works', branch: 'b' }, 'Ship the fix that makes X work?\nX works now.\n---\nnit a.ts:1 y -> rejected');
-  expect(card).toStartWith('Question: Ship the fix that makes X work?\n\nAnswers:\n1. Ship (Lands it on the main branch)');
+  expect(card).toStartWith('Question: Ship the fix that makes X work?\n\nAnswers:\n1. Approve merge (Merges it; it goes live with the next deploy)');
   expect(card).toEndWith('Document:\nX works now.');
   expect(findingLines(card)).toBe(0);
 });

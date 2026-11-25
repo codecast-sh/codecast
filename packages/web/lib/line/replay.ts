@@ -29,7 +29,7 @@ export type RunEndTone = "ok" | "bad" | "warn" | "live" | "person" | "none";
 /** The one color a run's end carries: shipped is good, red is only a failure, stuck is amber, running and waiting have their own; a close or a normal stop is neutral. */
 export function runEndTone(word: string): RunEndTone {
   if (word === "shipped" || word === "deployed" || word === "merged") return "ok";
-  if (word.endsWith(", not deployed") || word === "not shipped") return "warn";
+  if (word.endsWith(", not deployed") || word === "not merged") return "warn";
   if (word === "failed" || word === "reopened") return "bad";
   if (word === "stuck") return "warn";
   if (word === "running") return "live";
@@ -40,7 +40,7 @@ export function runEndTone(word: string): RunEndTone {
 
 /** The groups a list of runs splits into, in reading order, each with its heading. */
 export const RUN_END_GROUPS: ReadonlyArray<[string, string]> = [
-  ["running", "Running"], ["waiting", "Waiting on you"], ["deployed", "Deployed"], ["merged", "Merged"], ["merged, not deployed", "Merged, not deployed"], ["shipped, not deployed", "Shipped, not deployed"], ["shipped", "Shipped"], ["reopened", "Shipped, came back"], ["not shipped", "Not shipped: no answer"], ["parked", "Parked"],
+  ["running", "Running"], ["waiting", "Waiting on you"], ["deployed", "Deployed"], ["merged", "Merged"], ["merged, not deployed", "Merged, not deployed"], ["shipped, not deployed", "Shipped, not deployed"], ["shipped", "Shipped"], ["reopened", "Shipped, came back"], ["not merged", "Not merged: no answer"], ["parked", "Parked"],
   ["failed", "Failed"], ["stuck", "Stuck"], ["stopped", "Stopped"], ["done", "Done"], ["closed", "Closed without a change"], ["dissolved", "Dissolved"], ["dropped", "Dropped"], ["superseded", "Superseded"], ["queued", "Queued"],
 ];
 

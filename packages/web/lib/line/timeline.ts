@@ -19,7 +19,7 @@ export const PROBLEM_STATE_WORDS: Record<ProblemState, string> = {
   regressed: "Regressed",
   cameback: "Came back",
   fixing: "Being fixed",
-  unapproved: "Not shipped: no answer",
+  unapproved: "Not merged: no answer",
   watching: "Shipped, watching",
   held: "Held",
   folded: "Folded, fix pending",
@@ -213,7 +213,7 @@ export const shownWatches = (h: Pick<CauseHistory, "watches" | "ships" | "covera
 /**
  * A run that went on past a card nobody answered, with nothing merged or deployed: nothing shipped, whatever steps
  * ran after. One reading for the run's verdict, the Problems chart's ship marks and the Fix column, so no screen
- * says "shipped" where another says "not shipped".
+ * says "shipped" where another says "not merged".
  */
 export const neverShipped = (a: Pick<HistoryAttempt, "unapproved" | "merge"> | undefined, ship?: { merge?: unknown; deploys?: ReadonlyArray<unknown> } | null): boolean =>
   !!a?.unapproved && !(a.merge || ship?.merge) && !ship?.deploys?.length;
@@ -223,7 +223,7 @@ export function attemptVerdict(a: HistoryAttempt, h?: Pick<CauseHistory, "ships"
   const ship = h?.ships.find((s) => s.runId === a.runId);
   if (a.ended === "shipped" || a.merge || ship) {
     const merged = !!(a.merge || ship?.merge);
-    if (neverShipped(a, ship)) return { word: "not shipped", tone: "warn" };
+    if (neverShipped(a, ship)) return { word: "not merged", tone: "warn" };
     const fixTone: MarkTone = a.unapproved ? "warn" : "ok";
     if (ship?.deploys.length) return { word: "deployed", tone: fixTone };
     if (h && notDeployed(a.runId, h)) return { word: `${merged ? "merged" : "shipped"}, not deployed`, tone: "warn" };

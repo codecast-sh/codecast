@@ -113,7 +113,7 @@ export function wouldLabel(label: string): string {
 
 /** The option key each verdict of a line card answers: a change card's Ship, Revise, Drop; a proposal's Build it, Revise, Not now. */
 const VERDICT_KEY: Record<string, { key: string; label: RegExp }> = {
-  ship: { key: "S", label: /^(would )?ship\b/i }, revise: { key: "R", label: /^(would )?revise\b/i }, drop: { key: "D", label: /^(would )?drop\b/i },
+  ship: { key: "S", label: /^(would )?(ship|approve merge)\b/i }, revise: { key: "R", label: /^(would )?revise\b/i }, drop: { key: "D", label: /^(would )?drop\b/i },
   build: { key: "A", label: /^(would )?(build|approve)\b/i }, wait: { key: "D", label: /^(would )?(not now|hold off|wait)\b/i },
 };
 

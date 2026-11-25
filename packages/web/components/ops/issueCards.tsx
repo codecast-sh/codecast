@@ -237,7 +237,7 @@ export function FixCard({ group, stage, task, sessions, plan, now, onStart, even
             </>
           ) : task?.landed ? (
             <>
-              <dt>{mismatch ? "Its commit" : "Landed"}</dt>
+              <dt>{mismatch ? "Its commit" : "Merged"}</dt>
               <dd>
                 <a href={task.landed.url} target="_blank" rel="noopener noreferrer" className="ops-mono hover:underline">{task.landed.sha.slice(0, 9)}</a>{" "}
                 <span className="ops-quiet">{relTimeShort(task.landed.at, now)} ago</span>

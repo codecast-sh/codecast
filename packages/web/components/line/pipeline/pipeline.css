@@ -204,6 +204,11 @@ button.pt-pill:hover, .pt-pill[data-picked] { border-color: var(--lw-ink-2); }
 .ck-figs b, .ck-marks b, .ck-stale b, .ck-files b { font-weight: 600; color: var(--lw-ink); font-variant-numeric: tabular-nums; }
 .ck-figs [data-tone="bad"], .ck-figs [data-tone="bad"] b { color: var(--lw-bad); }
 .ck-empty { padding: 4px 0 10px; font-size: 13px; color: var(--lw-ink-3); }
+.ck-shipped { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 4px 10px; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--lw-rule, currentColor); border-radius: 6px; font-size: 13px; color: var(--lw-ink); }
+.ck-shipped-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--lw-ink-3); }
+.ck-shipped ul { grid-column: 1 / -1; margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--lw-ink-2, var(--lw-ink)); }
+.ck-shipped li span { color: var(--lw-ink-3); }
+.ck-shipped .pv-btn { grid-column: 3; grid-row: 1; }
 .ck-group { padding: 10px 0; }
 .ck-group + .ck-group { border-top: 1px solid var(--lw-rule-2, var(--lw-rule)); }
 .ck-group-name { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--lw-ink-2); }

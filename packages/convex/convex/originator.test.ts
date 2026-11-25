@@ -558,7 +558,7 @@ describe("verifying the word a read cited", () => {
     expect(await stamp()).toBeUndefined();
   });
 
-  // A person's verdict on the task's Ship card, `at` ms from the cited line (line 3 of the lead).
+  // A person's verdict on the task's approval card, `at` ms from the cited line (line 3 of the lead).
   const revise = (s: { t: any; ana: unknown; task: unknown; run: unknown }, at: number) => s.t.run((ctx: any) => ctx.db.insert("session_decisions", {
     short_id: "sd-1", task_id: s.task, workflow_run_id: s.run, status: "answered", question: "Ship?", options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }],
     answer_index: 1, answer_text: "fix X first", answered_by: { kind: "user", id: s.ana }, created_at: at, resolved_at: at,
@@ -634,7 +634,7 @@ describe("verifying the word a read cited", () => {
     }]);
   });
 
-  test("the asker reads a person's answers on the task's Ship cards beside their typed lines", async () => {
+  test("the asker reads a person's answers on the task's approval cards beside their typed lines", async () => {
     const s = await seedRun();
     await revise(s, s.now() + 60_000);
     const read = await s.originator(s.worker, { task: "ct-7" });
