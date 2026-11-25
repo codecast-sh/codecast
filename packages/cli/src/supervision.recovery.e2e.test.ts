@@ -254,7 +254,8 @@ describe.skipIf(process.platform !== "darwin")("production watchdog process", ()
       fs.writeFileSync(path.join(home, ".codecast", "daemon.pid"), String(incumbent.pid));
       fs.writeFileSync(path.join(home, ".codecast", "daemon.version"), "0.0.1");
       // Any command that goes through the preAction daemon check; `config` skips it.
-      const result = await run(process.execPath, [path.join(import.meta.dir, "main.ts"), "task", "ls"], home);
+      // As a compiled CLI, which carries a build id: one run from source never bounces.
+      const result = await run(process.execPath, ["--define", 'CODECAST_DAEMON_BUILD_ID:"cli-build"', path.join(import.meta.dir, "main.ts"), "task", "ls"], home);
       expect(result, result.stderr).toMatchObject({ code: 0 });
       expect(incumbent.exitCode).toBeNull();
       expect(incumbent.signalCode).toBeNull();
