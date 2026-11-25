@@ -88,10 +88,22 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
   const [menu, setMenu] = useState<"color" | "align" | "art" | "shape" | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
+  // Measure once on mount, then let a ResizeObserver report each change of the
+  // bar's size (a menu opening, a new selection's buttons). Reading offsetWidth
+  // after every commit forced a layout of the whole board on each board render
+  // (ct-101372); the observer reads sizes the browser has already laid out.
   useLayoutEffect(() => {
-    const w = ref.current?.offsetWidth ?? 0;
-    if (w !== width) setWidth(w);
-  });
+    const el = ref.current;
+    if (!el) return;
+    setWidth(el.offsetWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      if (box) setWidth(Math.round(box.inlineSize));
+    });
+    ro.observe(el, { box: "border-box" });
+    return () => ro.disconnect();
+  }, []);
   const half = width / 2 + 8;
   const left = width ? Math.min(Math.max(at.x, half), Math.max(half, paneWidth - half)) : at.x;
   const kinds = new Set(selected.map((e) => e.kind));
