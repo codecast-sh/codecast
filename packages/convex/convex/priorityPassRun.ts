@@ -84,6 +84,8 @@ const INITIATIVES_READ = 200;
 const PASS_TIMEOUT_MS = 5 * 60_000;
 /** (person, workspace) pairs one sweep runs; the rest wait for the next sweep. */
 export const SWEEP_MAX_PAIRS = 40;
+/** A sweep looks for strays among a pair's newest priorities, a few sessions each (the pass reads as many). */
+const SWEEP_STRAY_PRIORITIES = 30;
 const SWEEP_STAGGER_MS = 5_000;
 
 /** Typed messages and pins a sweep reads per pair to see whether anything moved there. */
@@ -758,6 +760,12 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "error", reason: error };
   }
   const { cursor_at } = read;
+  if (!read.input.sessions.length && !read.input.calls.length && !args.force && read.strays.length) {
+    // Nothing new, but sessions a priority here holds have left the workspace: let them go without asking the model.
+    const plan: MergePlan = { creates: [], updates: [], merges: [], sessions: [], unmap: [], notes: [] };
+    const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: read.read_to, from_cursor: cursor_at, cost_usd: 0, plan, strays: read.strays });
+    return counts ? { status: "ok", counts, cost_usd: 0 } : { status: "skipped", reason: "superseded" };
+  }
   if (!read.input.sessions.length && !read.input.calls.length && !args.force) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
@@ -817,8 +825,9 @@ export const runNow = internalAction({
  * The (person, workspace) pairs a sweep runs: every member of a team with the
  * feature on, in that team and in their personal workspace, that has a typed
  * message or a pin in it since its cursor, or more activity since then than
- * the probe reads (the pass moves the cursor past what is not its own). At
- * most SWEEP_MAX_PAIRS.
+ * the probe reads (the pass moves the cursor past what is not its own), or
+ * whose priorities still hold a session that has left the workspace (the pass
+ * lets it go). At most SWEEP_MAX_PAIRS.
  */
 export const sweepCandidates = internalQuery({
   args: {},
@@ -845,19 +854,38 @@ export const sweepCandidates = internalQuery({
         continue;
       }
       const seen = new Set<string>();
+      let picked = false;
       for (const id of [...pins.map((p) => p.conversation_id), ...sends.map((s) => s.conversation_id)]) {
         if (seen.has(String(id))) continue;
         seen.add(String(id));
         const conv: Doc<"conversations"> | null = await ctx.db.get(id);
         if (conv && (await inWorkspace(vis, conv, pair.user_id, pair.workspace))) {
-          out.push(pair);
+          picked = true;
           break;
         }
       }
+      if (picked || (await holdsStray(ctx, vis, pair, now))) out.push(pair);
     }
     return out;
   },
 });
+
+/** Whether one of the pair's newest priorities holds a session that has left its workspace (passInputs' strays, read the same way). */
+async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: { user_id: Id<"users">; workspace: string }, now: number): Promise<boolean> {
+  const hiddenBefore = now - PRIORITY_PASS_CAPS.finished_days * DAY;
+  for (const status of LIVE_STATUSES) {
+    const rows: Doc<"priorities">[] = await ctx.db
+      .query("priorities")
+      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("status", status))
+      .take(SWEEP_STRAY_PRIORITIES);
+    for (const p of rows) {
+      if ((p.status === "done" || p.status === "quiet") && p.last_active_at < hiddenBefore) continue;
+      const held: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(PRIORITY_PASS_CAPS.sessions_per_priority);
+      for (const c of held) if (!(await inWorkspace(vis, c, pair.user_id, pair.workspace))) return true;
+    }
+  }
+  return false;
+}
 
 /** Every few hours: a pass for each pair with new work, a few seconds apart. */
 export const sweep = internalAction({

@@ -619,6 +619,25 @@ describe("session counts", () => {
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
   });
 
+  test("a session that left the workspace with nothing new: the sweep picks the pair and its pass lets it go without asking the model", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [p] = await w.priorities();
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { is_private: true, team_visibility: "private" }));
+    // The team pair has nothing new but a stray; the personal pair has the now-private session's work.
+    expect(await w.t.query(pass.sweepCandidates, {})).toContainEqual({ user_id: w.ana, workspace: w.team });
+    const asked = prompts.length;
+    const res = await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    expect(res).toMatchObject({ status: "ok", cost_usd: 0 });
+    expect(prompts.length).toBe(asked);
+    expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
+    expect((await w.t.run((ctx) => ctx.db.get(p._id)))?.session_count).toBe(0);
+    // Nothing left to let go: the next sweep leaves the team pair alone.
+    expect(await w.t.query(pass.sweepCandidates, {})).not.toContainEqual({ user_id: w.ana, workspace: w.team });
+  });
+
   test("a session made private and mapped by the personal pass leaves the team priority's count true", async () => {
     const w = await world();
     await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");

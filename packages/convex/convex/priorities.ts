@@ -13,7 +13,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
-import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
+import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
 import { runBlocker } from "./priorityPassRun";
@@ -22,15 +22,23 @@ import { sessionVisibility, type SessionVisibility } from "./lib/prioritySession
 import { isSessionOwner } from "./sessionOwners";
 import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import type {
-  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityPinLine, PriorityRow, PrioritySession, PriorityStatus,
+  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityPinLine, PriorityRef, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
 } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 
 const FEATURE = "priorities" as const;
 const DAY = 86_400_000;
-/** Sessions a list shows per priority, and how many mapped sessions it reads to count them ("50+" past that). */
+/** Sessions a list shows per priority, and how many of the owner's mapped sessions it reads to count them before the pass stored a count ("50+" past that). */
 const LIST_SESSIONS = 3;
 const LIST_COUNT_CAP = 50;
+/**
+ * A teammate's priority: the newest sessions read to decide whether they may
+ * read it (none of these listed to the team: hidden, failing closed) and the
+ * ones its row counts ("4+" past that).
+ */
+const TEAMMATE_SESSIONS = 4;
+/** The most teammates' priorities one list judges, the most recently active first; past that it says `teammates_truncated`. */
+export const TEAMMATE_PRIORITIES_CAP = 60;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
 const MAX_HISTORY_DAYS = 30;
@@ -88,13 +96,12 @@ type Reader = {
   /**
    * Who may read a priority (the feature check is the caller's): its owner;
    * a teammate holding its workspace key only while at least one of its
-   * newest TEAMMATE_READ sessions is listed to that team.
+   * newest TEAMMATE_SESSIONS sessions is listed to that team.
    */
   canRead: (p: Priority) => Promise<boolean>;
+  /** The priority's steps as the viewer may see them (stepsFor). */
+  stepsFor: (p: Priority) => Promise<PriorityStep[]>;
 };
-
-/** A teammate's priority: the sessions read to judge it, the same ones its row lists and counts. */
-const TEAMMATE_READ = LIST_COUNT_CAP + 1;
 
 async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> {
   const held = await heldKeysFor(ctx, viewer);
@@ -118,10 +125,54 @@ async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> {
     if (!authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    for (const c of await sessionsOf(p, TEAMMATE_READ)) if (await vis.listedTo(c, ws.teamId)) return true;
+    for (const c of (await sessionsOf(p, TEAMMATE_SESSIONS + 1)).slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
     return false;
   };
-  return { viewer, held, vis, sessionsOf, listed, canRead };
+
+  // A step ref shown to a teammate: a session listed to them, a task they can read, a pull request or commit in a repository of the team's.
+  const shown = new Map<string, Promise<boolean>>();
+  const refShown = (ref: PriorityRef, teamId: string | null) => {
+    const key = `${ref.kind}:${ref.id}`;
+    if (!shown.has(key)) {
+      shown.set(key, (async () => {
+        if (ref.kind === "session") {
+          const id = ctx.db.normalizeId("conversations", ref.id);
+          const conv: Doc<"conversations"> | null = id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.id)).first();
+          return !!conv && (await listed(conv));
+        }
+        if (ref.kind === "task") {
+          const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.id)).first();
+          return !!task && authorizedFor(await accessStampFor(ctx, "tasks", task), String(viewer), held);
+        }
+        const repository = ref.id.split(ref.kind === "pr" ? "#" : "@")[0];
+        if (!teamId || !repository) return false;
+        for (const table of ["pull_requests", "commits"]) {
+          if (await ctx.db.query(table).withIndex("by_team_repository", (q: any) => q.eq("team_id", teamId).eq("repository", repository)).first()) return true;
+        }
+        return false;
+      })());
+    }
+    return shown.get(key)!;
+  };
+  /**
+   * The owner sees every step whole. A teammate sees each step's refs they may
+   * read, and not at all a step whose refs were all sessions none of which is
+   * listed to them (its title came from work they cannot see).
+   */
+  const stepsFor = async (p: Priority): Promise<PriorityStep[]> => {
+    if (String(p.user_id) === String(viewer)) return p.steps;
+    const ws = parseWorkspaceKey(p.workspace);
+    const teamId = ws?.type === "team" ? String(ws.teamId) : null;
+    const out: PriorityStep[] = [];
+    for (const step of p.steps) {
+      const refs: PriorityRef[] = [];
+      for (const ref of step.refs) if (await refShown(ref, teamId)) refs.push(ref);
+      if (!refs.length && step.refs.length && step.refs.every((ref) => ref.kind === "session")) continue;
+      out.push({ ...step, refs });
+    }
+    return out;
+  };
+  return { viewer, held, vis, sessionsOf, listed, canRead, stepsFor };
 }
 
 /** The workspace a CLI call names: a team, the personal one, or none (every workspace). */
@@ -178,20 +229,25 @@ async function mappedSessions(r: Reader, p: Priority, read: number): Promise<Map
   return out;
 }
 
-/** The owner reads the pass's stored count, so a list reads only four sessions; anyone else counts what is listed to them. */
-const usesStoredCount = (viewer: Id<"users">, p: Priority) => String(p.user_id) === String(viewer) && p.session_count !== undefined;
+const isOwner = (viewer: Id<"users">, p: Priority) => String(p.user_id) === String(viewer);
 
-/** How many of the newest sessions a list reads: enough for its three, or to count up to LIST_COUNT_CAP. */
-const listRead = (viewer: Id<"users">, p: Priority) => (usesStoredCount(viewer, p) ? LIST_SESSIONS + 1 : LIST_COUNT_CAP + 1);
+/** How many mapped sessions the count reads: the owner's stored count needs none; else the owner's newest LIST_COUNT_CAP, a teammate's newest TEAMMATE_SESSIONS. */
+const countWindow = (viewer: Id<"users">, p: Priority): number =>
+  !isOwner(viewer, p) ? TEAMMATE_SESSIONS : p.session_count !== undefined ? 0 : LIST_COUNT_CAP;
+
+/** How many of the newest sessions a list reads: its three (and one spare), or the count's window and one more to know there are more. */
+const listRead = (viewer: Id<"users">, p: Priority) => Math.max(LIST_SESSIONS, countWindow(viewer, p)) + 1;
 
 /**
  * The session count a reader sees, the same in a list and in `show`: the
- * owner, the pass's stored count; anyone else (or before the pass stored one),
- * the sessions listed to them among the newest LIST_COUNT_CAP, "50+" past that.
+ * owner, the pass's stored count (before it stored one, the newest
+ * LIST_COUNT_CAP counted); a teammate, the sessions listed to them among the
+ * newest TEAMMATE_SESSIONS; "n+" when more were mapped than counted.
  */
 function sessionCount(viewer: Id<"users">, p: Priority, mapped: Mapped): { count: number; more: boolean } {
-  if (usesStoredCount(viewer, p)) return { count: p.session_count!, more: false };
-  return { count: mapped.slice(0, LIST_COUNT_CAP).filter(Boolean).length, more: mapped.length > LIST_COUNT_CAP };
+  const window = countWindow(viewer, p);
+  if (!window) return { count: p.session_count!, more: false };
+  return { count: mapped.slice(0, window).filter(Boolean).length, more: mapped.length > window };
 }
 
 async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, string>> {
@@ -203,8 +259,13 @@ async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, strin
   return names;
 }
 
-/** `position` is where it shows among the owner's active priorities (null when not active); the row lists at most `limit` sessions. */
-function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, mapped: Mapped, limit = Infinity): PriorityRow {
+/**
+ * `position` is where it shows among the owner's active priorities (null when
+ * not active); `steps` are the ones the viewer may see (Reader.stepsFor); the
+ * row lists at most `limit` sessions. The critical-path counts are the
+ * priority's own, over every step.
+ */
+function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, steps: PriorityStep[], mapped: Mapped, limit = Infinity): PriorityRow {
   const { count, more } = sessionCount(viewer, p, mapped);
   return {
     _id: p._id,
@@ -215,7 +276,7 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     rank: position,
     rank_set_by: p.rank_set_by,
     serves: p.serves ?? null,
-    steps: p.steps,
+    steps,
     counts: criticalCounts(p),
     workspace: p.workspace,
     user_id: p.user_id,
@@ -234,21 +295,24 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
 async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promise<PriorityRow> {
   const p: Priority = await ctx.db.get(id);
   const names = await ownerNames(ctx, [p]);
-  const mapped = await mappedSessions(await readerFor(ctx, viewer), p, listRead(viewer, p));
-  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), mapped, LIST_SESSIONS);
+  const r = await readerFor(ctx, viewer);
+  const mapped = await mappedSessions(r, p, listRead(viewer, p));
+  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), await r.stepsFor(p), mapped, LIST_SESSIONS);
 }
 
 /**
  * The priorities the viewer can read in one workspace (or all of theirs).
  * Merged ones only when asked for by status; without a status or `all`, done
- * and quiet ones only from the last FINISHED_WINDOW_DAYS.
+ * and quiet ones only from the last FINISHED_WINDOW_DAYS. Teammates' are
+ * judged the most recently active first, at most TEAMMATE_PRIORITIES_CAP.
  */
-async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<Priority[]> {
+async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; teammates_truncated: boolean }> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
   const recent = (p: Priority) => all || (p.status !== "done" && p.status !== "quiet") || (p.done_at ?? p.last_active_at) >= since;
   const featureOn = featureCheck(ctx);
   const keys = workspace ? (r.held.has(workspace) ? [workspace] : []) : [...r.held];
-  const out: Priority[] = [];
+  const own: Priority[] = [];
+  const theirs: Priority[] = [];
   for (const key of keys) {
     if (!(await featureOn(key))) continue;
     for (const st of status ? [status] : LISTED_STATUSES) {
@@ -256,19 +320,22 @@ async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefi
         .query("priorities")
         .withIndex("by_workspace_status", (q: any) => q.eq("workspace", key).eq("status", st))
         .collect();
-      for (const p of rows) if ((status || recent(p)) && (await r.canRead(p))) out.push(p);
+      for (const p of rows) if (status || recent(p)) (isOwner(r.viewer, p) ? own : theirs).push(p);
     }
   }
-  return out;
+  theirs.sort((a, b) => b.last_active_at - a.last_active_at);
+  const judged: Priority[] = [];
+  for (const p of theirs.slice(0, TEAMMATE_PRIORITIES_CAP)) if (await r.canRead(p)) judged.push(p);
+  return { rows: [...own, ...judged], teammates_truncated: theirs.length > TEAMMATE_PRIORITIES_CAP };
 }
 
 /**
  * The viewer's own first, then each teammate's; within a person, active
  * before done, quiet and set aside, each in rank order.
  */
-async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<PriorityRow[]> {
+async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<{ priorities: PriorityRow[]; teammates_truncated: boolean }> {
   const r = await readerFor(ctx, viewer);
-  const rows = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
+  const { rows, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const names = await ownerNames(ctx, rows);
   const positions = positionsOf(rows);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
@@ -282,8 +349,8 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || at(a) - at(b)
     || b.last_active_at - a.last_active_at);
   const out: PriorityRow[] = [];
-  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await mappedSessions(r, p, listRead(viewer, p)), LIST_SESSIONS));
-  return out;
+  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await r.stepsFor(p), await mappedSessions(r, p, listRead(viewer, p)), LIST_SESSIONS));
+  return { priorities: out, teammates_truncated };
 }
 
 async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
@@ -305,12 +372,13 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
   if ("error" in p) return p;
   const names = await ownerNames(ctx, [p]);
   const mapped = await mappedSessions(r, p, SHOW_SESSIONS);
-  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), mapped);
+  const steps = await r.stepsFor(p);
+  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), steps, mapped);
   const sessions = row.sessions;
   return {
     ...row,
-    steps: p.steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
-    other_sessions: sessions.filter((c) => !p.steps.some((s) => s.key === c.step_key)),
+    steps: steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
+    other_sessions: sessions.filter((c) => !steps.some((s) => s.key === c.step_key)),
   };
 }
 
@@ -337,7 +405,7 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
 
   const r = await readerFor(ctx, viewer);
   const featureOn = featureCheck(ctx);
-  const visible = await visiblePriorities(ctx, r, args.workspace, undefined, false);
+  const { rows: visible } = await visiblePriorities(ctx, r, args.workspace, undefined, false);
   const own = new Map(visible.filter((p) => String(p.user_id) === String(viewer)).map((p) => [String(p._id), p]));
   const byOwner = new Map<string, Priority[]>();
   for (const p of visible) if (String(p.user_id) !== String(viewer)) byOwner.set(String(p.user_id), [...(byOwner.get(String(p.user_id)) ?? []), p]);
@@ -396,8 +464,8 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
       if (p) await countInto(p, null, conv, day);
       continue;
     }
-    const key = send.team_id ? `team:${send.team_id}` : `user:${viewer}`;
-    if (args.workspace && key !== args.workspace) continue;
+    const key = await r.vis.workspaceOf(conv);
+    if (!r.held.has(key) || (args.workspace && key !== args.workspace)) continue;
     if (!(await featureOn(key))) continue;
     laneFor("unassigned", null, null).counts[day]++;
   }
@@ -532,7 +600,8 @@ export const list = query({
   handler: async (ctx, args): Promise<PriorityRow[]> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return [];
-    return listFor(ctx, viewer, args);
+    // The web reads the rows; teammates_truncated reaches the CLI (cliList).
+    return (await listFor(ctx, viewer, args)).priorities;
   },
 });
 
@@ -556,10 +625,12 @@ export const history = query({
 });
 
 /**
- * The line under a mapped session's pinned state, for a reader the session is
- * listed to (summary level is enough: the line names the priority, not the
- * transcript) who can read its priority: one conversation read, one priority
- * read, the access checks, and the owner's active priorities for its position.
+ * The line under a mapped session's pinned state: for the priority's owner,
+ * and for a teammate holding its workspace key when this open session is
+ * listed to that team (summary level is enough: the line names the priority,
+ * not the transcript). No scan of the priority's other sessions: one
+ * conversation read, one priority read, the owner's membership, and the
+ * owner's active priorities for its position.
  */
 export const pinLine = query({
   args: { conversation_id: v.id("conversations") },
@@ -570,8 +641,13 @@ export const pinLine = query({
     if (!conv?.priority_id) return null;
     const p = await ctx.db.get(conv.priority_id);
     if (!p || p.status === "merged") return null;
-    const r = await readerFor(ctx, viewer);
-    if (!(await r.listed(conv)) || !(await r.canRead(p)) || !(await featureCheck(ctx)(p.workspace))) return null;
+    // Only the open session is judged: the owner's, or a teammate's listed to the team that holds the priority.
+    if (String(p.user_id) !== String(viewer)) {
+      const ws = parseWorkspaceKey(p.workspace);
+      if (ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), await heldKeysFor(ctx, viewer))) return null;
+      if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
+    }
+    if (!(await featureCheck(ctx)(p.workspace))) return null;
     const step = p.steps.find((s) => s.key === conv.priority_step_key);
     return {
       short_id: p.short_id,
@@ -616,7 +692,7 @@ export const cliList = query({
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    return { priorities: await listFor(ctx, viewer, { workspace: cliWorkspace(viewer, args), status: args.status, all: args.all }) };
+    return await listFor(ctx, viewer, { workspace: cliWorkspace(viewer, args), status: args.status, all: args.all });
   },
 });
 

@@ -8,15 +8,17 @@
 // owner shared when it started (privacy.teamReadLevelSync over
 // effectiveMembershipVisibility). That last read is what keeps a locked-private
 // session out even when it was auto-shared, where the policy team
-// (teamVisibleConvTeam) would still name the team. A session listed to no team
+// (teamVisibleConvTeam) would still name the team. A workflow's run log is never
+// listed (isRunLog, as the team floor leaves it out). A session listed to no team
 // is its owner's personal work.
 //
 // Leaf: reads rows, defines no functions.
+import { isRunLog } from "@codecast/shared/contracts";
 import type { Doc, Id } from "../_generated/dataModel";
 import { getOwnerMembership, listsSessionsToTeam, teamReadLevelSync } from "../privacy";
 import { currentMembershipVisibility, effectiveMembershipVisibility, type MembershipVisibilityFacts } from "../teamVisibility";
 
-type Session = Pick<Doc<"conversations">, "user_id" | "team_id" | "is_private" | "team_visibility" | "started_at">;
+type Session = Pick<Doc<"conversations">, "user_id" | "team_id" | "is_private" | "team_visibility" | "started_at" | "is_workflow_primary" | "workflow_run_id">;
 
 /** Pure: the session listed to `teamId`, given its owner's account and their membership there (absent when not a member). */
 export function sessionListedToTeam(
@@ -25,7 +27,7 @@ export function sessionListedToTeam(
   owner: { activity_visibility?: string | null } | null,
   membership: MembershipVisibilityFacts | null | undefined,
 ): boolean {
-  if (!membership || !conv.team_id || String(conv.team_id) !== String(teamId)) return false;
+  if (!membership || !conv.team_id || String(conv.team_id) !== String(teamId) || isRunLog(conv)) return false;
   if (!listsSessionsToTeam(owner, currentMembershipVisibility(membership))) return false;
   return teamReadLevelSync(conv, effectiveMembershipVisibility(membership, conv.started_at)) !== "none";
 }

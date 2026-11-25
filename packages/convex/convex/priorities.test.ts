@@ -8,7 +8,8 @@ import { allModules } from "./testModules.testkit";
 import { api } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { HISTORY_SENDS_CAP } from "./priorities";
+import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorities";
+import { sessionListedToTeam } from "./lib/prioritySessionVisibility";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -101,7 +102,7 @@ describe("reads", () => {
   });
 
   test("a list counts up to 50 of a priority's sessions and shows the three newest; old finished ones only with all or a status", async () => {
-    const { t, as, ada, ws, p1, acme } = await world();
+    const { t, as, ada, bea, ws, p1, acme } = await world();
     await t.run(async (ctx) => {
       for (let i = 0; i < 50; i++) {
         await ctx.db.insert("conversations", {
@@ -121,6 +122,10 @@ describe("reads", () => {
     const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
     // show reads every session but counts as the list does, so the two agree.
     expect(shown).toMatchObject({ session_count: 50, session_count_more: true });
+    // A teammate counts among the newest four only: "4+", in the list and in show.
+    const theirs = (await as(bea).query(pri.list, { workspace: ws })).find((r: any) => r.short_id === "pri-1");
+    expect(theirs).toMatchObject({ session_count: 4, session_count_more: true });
+    expect(await as(bea).query(pri.show, { short_id: "pri-1" })).toMatchObject({ session_count: 4, session_count_more: true });
     expect(shown.other_sessions).toHaveLength(50);
     const ids = async (args: any) => (await as(ada).query(pri.list, { workspace: ws, ...args })).map((r: any) => r.short_id);
     expect(await ids({})).not.toContain("pri-7");
@@ -222,6 +227,101 @@ describe("reads", () => {
     expect((await as(bea).query(pri.list, {})).map((r: any) => r.short_id)).not.toContain("pri-1");
     expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
     expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
+  });
+
+  test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {
+    const { t, as, ada, bea, acme, p1, c1 } = await world();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 4; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: ada, team_id: acme, agent_type: "claude_code", session_id: `p${i}`, short_id: `jx7pvx${i}`, title: "private",
+          started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, team_visibility: "private", status: "active", priority_id: p1,
+        } as any);
+      }
+    });
+    expect((await as(bea).query(pri.list, {})).map((r: any) => r.short_id)).not.toContain("pri-1");
+    expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
+  });
+
+  test("a list judges at most TEAMMATE_PRIORITIES_CAP teammates' priorities, the most recently active, and says so", async () => {
+    const { t, ada, bea, acme, ws } = await world();
+    const BEA_TOKEN = "cc_test_priorities_bea";
+    await t.run(async (ctx) => {
+      await ctx.db.insert("api_tokens", { user_id: bea, token_hash: await hashToken(BEA_TOKEN), name: "cli", created_at: NOW, last_used_at: NOW } as any);
+      for (let i = 0; i < TEAMMATE_PRIORITIES_CAP; i++) {
+        const p = await ctx.db.insert("priorities", {
+          user_id: ada, workspace: ws, short_id: `pri-${100 + i}`, title: `More ${i}`, summary: "", status: "active", rank_set_by: "pass",
+          steps: [], first_seen_at: NOW, last_active_at: NOW + i, pass_at: NOW, created_at: NOW, updated_at: NOW,
+        } as any);
+        await ctx.db.insert("conversations", {
+          user_id: ada, team_id: acme, agent_type: "claude_code", session_id: `m${i}`, short_id: `jx7m${i}`, title: "m",
+          started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p,
+        } as any);
+      }
+    });
+    const res = await t.query(pri.cliList, { api_token: BEA_TOKEN, team_id: acme });
+    expect(res.teammates_truncated).toBe(true);
+    expect(res.priorities).toHaveLength(TEAMMATE_PRIORITIES_CAP);
+    expect(res.priorities.map((r: any) => r.short_id)).not.toContain("pri-1");
+  });
+
+  test("a teammate sees a step's refs they may read, and not a step written from a session since locked private", async () => {
+    const { t, as, ada, bea, acme, ws, p1, c1 } = await world();
+    await t.run(async (ctx) => {
+      // Another shared session keeps pri-1 readable once jx7one1 is locked.
+      await ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "keep", short_id: "jx7keep", title: "kept",
+        started_at: NOW, updated_at: NOW - 3 * DAY, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1,
+      } as any);
+      for (const [short_id, workspace] of [["ct-1", ws], ["ct-2", `user:${ada}`]] as const) {
+        await ctx.db.insert("tasks", { short_id, title: short_id, status: "open", task_type: "task", priority: "medium", source: "human", user_id: ada, workspace, created_at: 1, updated_at: 1 } as any);
+      }
+      await ctx.db.insert("pull_requests", {
+        team_id: acme, github_pr_id: 4, repository: "acme/web", number: 4, title: "PR 4", body: "", state: "open",
+        author_github_username: "ada", linked_session_ids: [], created_at: NOW, updated_at: NOW, head_ref: "ada/pr-4",
+      } as any);
+      await ctx.db.patch(p1, { steps: [
+        { key: "s1", title: "From the shared session", tier: "critical", tier_set_by: "pass", refs: [{ kind: "session", id: "jx7one1" }], done: false },
+        { key: "s2", title: "Mixed", tier: "critical", tier_set_by: "pass", refs: [{ kind: "task", id: "ct-1" }, { kind: "task", id: "ct-2" }, { kind: "pr", id: "acme/web#4" }, { kind: "pr", id: "elsewhere/x#1" }], done: false },
+      ] });
+    });
+    const stepsOf = async (who: Id<"users">) => (await as(who).query(pri.show, { short_id: "pri-1" })).steps.map((s: any) => [s.key, s.refs.map((r: any) => r.id)]);
+    expect(await stepsOf(bea)).toEqual([["s1", ["jx7one1"]], ["s2", ["ct-1", "acme/web#4"]]]);
+    await t.run(async (ctx) => ctx.db.patch(c1, { is_private: true, team_visibility: "private" }));
+    expect(await stepsOf(bea)).toEqual([["s2", ["ct-1", "acme/web#4"]]]);
+    expect((await as(bea).query(pri.list, {})).find((r: any) => r.short_id === "pri-1").steps.map((s: any) => s.key)).toEqual(["s2"]);
+    // The owner sees every step whole.
+    expect((await stepsOf(ada)).map(([key]: any) => key)).toEqual(["s1", "s2"]);
+  });
+
+  test("a member who left the team: their priorities there are read by nobody but them", async () => {
+    const { t, as, ada, bea, acme } = await world();
+    await t.run(async (ctx) => {
+      const membership = (await ctx.db.query("team_memberships").withIndex("by_user_id", (q) => q.eq("user_id", ada)).collect()).find((m) => m.team_id === acme)!;
+      await ctx.db.delete(membership._id);
+    });
+    expect((await as(bea).query(pri.list, {})).map((r: any) => r.short_id)).toEqual([]);
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
+  });
+
+  test("the viewer's unassigned lane files a session by the workspace it counts in, not the team it was started under", async () => {
+    const { t, as, ada, acme, c2 } = await world();
+    const unassigned = async (workspace: string) => (await as(ada).query(pri.history, { days: 15, workspace })).lanes.find((l: any) => l.key === "unassigned")?.total ?? 0;
+    expect([await unassigned(`team:${acme}`), await unassigned(`user:${ada}`)]).toEqual([1, 0]);
+    await t.run(async (ctx) => ctx.db.patch(c2, { is_private: true, team_visibility: "private" }));
+    expect([await unassigned(`team:${acme}`), await unassigned(`user:${ada}`)]).toEqual([0, 1]);
+  });
+
+  test("a workflow's run log is never listed to the team", () => {
+    const conv = { user_id: "u1", team_id: "t1", is_private: false, team_visibility: "full", started_at: NOW } as any;
+    expect(sessionListedToTeam(conv, "t1", {}, { visibility: "full" })).toBe(true);
+    expect(sessionListedToTeam({ ...conv, is_workflow_primary: true, workflow_run_id: "w1" }, "t1", {}, { visibility: "full" })).toBe(false);
+  });
+
+  test("a co-owner of a session sees no pin line for a personal priority", async () => {
+    const { t, as, ada, bea, c4 } = await world();
+    await t.run(async (ctx) => ctx.db.insert("session_owners", { conversation_id: c4, user_id: bea, added_by: ada, added_at: NOW }));
+    expect(await as(bea).query(pri.pinLine, { conversation_id: c4 })).toBeNull();
   });
 
   test("the pin line shows to a teammate the session is listed to at summary level", async () => {
