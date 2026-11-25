@@ -169,7 +169,9 @@ export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_run
 /**
  * A person settled a run's card. Ship (or Approve merge) inserts the approval of what the card carried; any other
  * answer or a dismissal revokes every approval of the run, the Ship press included, so a Revise or Drop is never
- * outlived by an earlier yes. An agent's, a role's or a policy's answer is no person's and changes nothing.
+ * outlived by an earlier yes. An agent's, a role's or a policy's answer is no person's and changes nothing, and a
+ * withdrawn card (`cast decide cancel`, or codecast taking back a stale approval card) was answered by nobody, so it
+ * approves and revokes nothing: whatever approved before still stands.
  */
 export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
@@ -178,6 +180,7 @@ export async function settleCardApproval(
   by: { kind: string; user_id?: Id<"users"> },
   now: number,
 ): Promise<void> {
+  if (verdict.status === "withdrawn") return;
   if (row.approval_card && row.approval) return settleApprovalCard(ctx, { ...row, approval: row.approval }, verdict, by, now);
   if (!row.workflow_run_id || row.trial || by.kind !== "user" || !by.user_id) return;
   const run: any = await ctx.db.get(row.workflow_run_id);
@@ -271,8 +274,7 @@ async function settleApprovalCard(
   by: { kind: string; user_id?: Id<"users"> },
   now: number,
 ): Promise<void> {
-  // A card codecast took back (its diff changed) approves and revokes nothing; another card asks in its place.
-  if (verdict.status === "withdrawn" || by.kind !== "user" || !by.user_id) return;
+  if (by.kind !== "user" || !by.user_id) return;
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
     await ctx.db.insert("change_approvals", {

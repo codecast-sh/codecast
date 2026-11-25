@@ -8,6 +8,7 @@ import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
 import { changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
+import { withdrawCore } from "./sessionDecisions";
 
 const REPO = "union-ai/union-mobile";
 const HEAD = "a".repeat(40);
@@ -259,6 +260,20 @@ describe("a person's approvals", () => {
     ] });
     await settleCardApproval({ db, scheduler: { runAfter: async () => {} } }, card("Revise") as any, { status: "answered", answer_index: 1 }, { kind: "user", user_id: "u1" as any }, 10);
     expect(db._tables.change_approvals.map((a: any) => a.revoked_at)).toEqual([10, 10]);
+  });
+
+  test("an agent's `cast decide cancel` on the run's card leaves its approvals standing; only a person's no revokes", async () => {
+    const held = [
+      { _id: "a1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [], user_id: "u1", created_at: 1 },
+      { _id: "a2", repository: REPO, workflow_run_id: "run1", source: "card", files: [], user_id: "u1", created_at: 2 },
+    ];
+    const pending = { ...card("Ship"), status: "pending", user_id: "u1", question: "Ship it?", kind: "single", created_at: 5 };
+    const db = makeFakeDb({ github_app_installations: [installation], workflow_runs: [run], change_approvals: held, session_decisions: [pending], decision_inbox: [] });
+    // The one withdraw every path takes: it settles the card as the conversation's owner, kind "user".
+    await withdrawCore({ db, scheduler: { runAfter: async () => {} } } as any, pending as any, 20, "c1" as any);
+    expect(db._tables.session_decisions[0].status).toBe("withdrawn");
+    expect(db._tables.change_approvals.map((a: any) => a.revoked_at)).toEqual([undefined, undefined]);
+    expect(db._inserted).toEqual([]);
   });
 
   test("a press joins the run its session started, and is tied to the judged diff of the run's first head", async () => {
