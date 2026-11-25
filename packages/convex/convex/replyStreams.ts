@@ -6,12 +6,13 @@
 // @codecast/shared/contracts/replyStream.
 //
 // COST. A push writes only while a page showing the conversation holds the
-// row's lease (watch) and the feature is on. Nothing here touches the
+// row's lease (replyStreamLease.watch) and the feature is on. Nothing here touches the
 // conversation document or `messages`, so a streaming reply re-runs only the
 // queries that read this row.
 
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { internal } from "./_generated/api";
 import { query, mutation, internalMutation } from "./functions";
 import { requireUserOrToken } from "./lib/auth";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
@@ -20,16 +21,13 @@ import { redactSecrets } from "./redact";
 import {
   REPLY_STREAM_LOAD_MAX_AGE_MS,
   REPLY_STREAM_MAX_CHARS,
-  REPLY_STREAM_WATCH_MS,
   withoutOpenKeyBlock,
   type ReplyStreamPushResult,
   type ReplyStreamRow,
 } from "@codecast/shared/contracts";
 
 const PRUNE_AFTER_MS = 60 * 60 * 1000;
-/** A renewal is written only when the lease has this much less left than a
- *  fresh one. */
-const WATCH_WRITE_EVERY_MS = 30_000;
+const PRUNE_BATCH = 500;
 
 /** The daemon's push of one reply's text so far. Answers whether it was
  *  written, so the daemon can stop pushing to a conversation nobody watches
@@ -88,38 +86,6 @@ export const push = mutation({
   },
 });
 
-/** A page showing the conversation says so, about once a minute while it is
- *  open and visible (ReplyStreamFeeder): the lease pushes are written under.
- *  It creates the conversation's row, empty, when there is none. Any number
- *  of windows and people may hold it; it only ever extends. */
-export const watch = mutation({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args): Promise<null> => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const conv = await ctx.db.get(args.conversation_id);
-    // Whoever may read the conversation's messages may watch it (get's rule).
-    if (!conv || (await checkConversationAccess(ctx, userId, conv)) === "denied") return null;
-    if (!(await workspaceHasFeature(ctx, { team_id: conv.team_id, user_id: conv.user_id }, "reply_streaming"))) return null;
-    const now = Date.now();
-    const until = now + REPLY_STREAM_WATCH_MS;
-    const row = await ctx.db
-      .query("reply_streams")
-      .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
-      .first();
-    if (!row) {
-      await ctx.db.insert("reply_streams", {
-        conversation_id: args.conversation_id, user_id: conv.user_id,
-        message_id: "", text: "", seq: 0, started_at: 0, updated_at: now, watch_until: until,
-      });
-    } else if ((row.watch_until ?? 0) < until - WATCH_WRITE_EVERY_MS) {
-      // Several windows renewing in the same half minute cost one write.
-      await ctx.db.patch(row._id, { watch_until: until });
-    }
-    return null;
-  },
-});
-
 /** The reply being written in a conversation, for whoever may read its
  *  messages. Reads the row first, so a quiet conversation costs its viewers
  *  one empty index range and no conversation read. */
@@ -149,19 +115,20 @@ export const get = query({
   },
 });
 
-/** Drop rows no push has touched for an hour and nobody is watching
- *  (crons.ts). The web stops drawing a row long before that; the next watch
- *  recreates it. */
+/** Drop rows whose lease ran out an hour ago (crons.ts). A push is written
+ *  only under a live lease, so such a row has had none for that hour either:
+ *  everything in the range goes, and a row someone watches all day never sits
+ *  in front of the ones that should. A full batch runs again at once, so a
+ *  busy hour cannot leave a backlog. */
 export const prune = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const now = Date.now();
     const rows = await ctx.db
       .query("reply_streams")
-      .withIndex("by_updated_at", (q) => q.lt("updated_at", now - PRUNE_AFTER_MS))
-      .take(500);
-    const gone = rows.filter((r) => (r.watch_until ?? 0) <= now);
-    for (const r of gone) await ctx.db.delete(r._id);
-    return { deleted: gone.length };
+      .withIndex("by_watch_until", (q) => q.lt("watch_until", Date.now() - PRUNE_AFTER_MS))
+      .take(PRUNE_BATCH);
+    for (const r of rows) await ctx.db.delete(r._id);
+    if (rows.length === PRUNE_BATCH) await ctx.scheduler.runAfter(0, internal.replyStreams.prune, {});
+    return { deleted: rows.length };
   },
 });
