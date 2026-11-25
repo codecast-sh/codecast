@@ -248,23 +248,24 @@ export async function livePriorities(ctx: { db: any }, userId: Id<"users">, work
 }
 
 /**
+ * A session's pin as it stood at `now`. A live pass's `now` is the clock, so
+ * it sees the pin as it is, none when the person cleared it. A calibration
+ * replay of a past window runs with `now` behind the clock: a pin written
+ * after it is the future and is withheld, and the session's newest pin event
+ * in the window stands in.
+ */
+function pinAsOf(conv: Doc<"conversations">, events: PassSession["pin_events"], now: number): PassSession["pin"] {
+  if ((conv.thread_state_at ?? 0) <= now) return conv.thread_state ? { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) } : null;
+  const last = events.at(-1);
+  return last ? { text: last.text } : null;
+}
+
+/**
  * Assembles the pass's input for one person in one workspace: what they
  * touched since the cursor, and their priorities now. A session filed under a
  * team whose data may not go to the model vendor is left out, whichever
  * workspace it reads in.
  */
-/**
- * A session's pin as it stood at `now`. A calibration replay of a past window
- * runs with `now` behind the clock: a pin written after it is the future and
- * is withheld, and the session's newest pin event in the window stands in. A
- * live pass's `now` is the clock, so it always sees the current pin.
- */
-function pinAsOf(conv: Doc<"conversations">, events: PassSession["pin_events"], now: number): PassSession["pin"] {
-  if (conv.thread_state && (conv.thread_state_at ?? 0) <= now) return { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) };
-  const last = events.at(-1);
-  return last ? { text: last.text } : null;
-}
-
 export const passInputs = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string(), now: v.optional(v.number()), window_start: v.optional(v.number()) },
   handler: async (ctx, args): Promise<PassInputs> => {

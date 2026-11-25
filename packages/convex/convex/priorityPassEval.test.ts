@@ -216,5 +216,10 @@ describe("evalPass", () => {
     // A live pass sees the current pin.
     const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team, window_start: end - 3 * DAY });
     expect(input.sessions.find((s: any) => s.id === "jx7team")?.pin).toEqual({ text: "Grader faults shipped, done", status: "working" });
+
+    // A pin the person cleared is gone for a live pass, whatever its events say.
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { thread_state: undefined, thread_state_status: undefined } as any));
+    const cleared = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team, window_start: end - 3 * DAY });
+    expect(cleared.input.sessions.find((s: any) => s.id === "jx7team")?.pin).toBeNull();
   });
 });
