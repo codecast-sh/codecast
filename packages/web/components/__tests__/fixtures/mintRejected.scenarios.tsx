@@ -17,20 +17,22 @@ const { MintTokenButton } = await import("../../MintTokenDialog");
 
 const REASON = "the browser signed into a different Claude account than work@example.com (and none of the other saved accounts) — sign out of claude.ai, sign in as work@example.com, and try again";
 const profiles = [{ name: "work", email: "work@example.com" }, { name: "home", email: "home@example.com" }];
-const client = { mutation: async () => ({}) } as any;
+const { getFunctionName } = await import("convex/server");
+const calls: Array<{ name: string; args: any }> = [];
+const client = { mutation: async (ref: any, args: any) => { calls.push({ name: getFunctionName(ref), args }); return { started_at: Date.now() }; } } as any;
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 const buttons = () => [...document.querySelectorAll<HTMLButtonElement>("button")];
 
-async function renderRow(finishedAgoMs: number) {
+async function renderRow(finishedAgoMs: number, status: "rejected" | "confirmed" | null = "rejected") {
   const now = Date.now();
   const device = { device_id: "mini", label: "Mac Mini", online: true, profiles, provider_key_pubkey: "",
-    mint_flow: { status: "rejected" as const, profile: "work", reason: REASON, started_at: now - finishedAgoMs - 60_000, finished_at: now - finishedAgoMs } };
+    mint_flow: status && { status, profile: "work", reason: status === "rejected" ? REASON : undefined, started_at: now - finishedAgoMs - 60_000, finished_at: now - finishedAgoMs } };
   await act(() => root.render(<ConvexProvider client={client}><MintTokenButton device={device} profile={profiles[0]} /></ConvexProvider>));
   return buttons()[0];
 }
 
-beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
+beforeEach(() => { calls.length = 0; host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
 afterEach(async () => { await act(() => root.unmount()); host.remove(); });
 afterAll(() => { dom.window.close(); restore(); });
 
@@ -55,4 +57,20 @@ test("opening the failed row offers recovery in the app: the reason, Try again, 
   expect(labels).toContain("Try again");
   expect(labels).toContain("Use a different account");
   expect(dialog.textContent).not.toMatch(/Terminal/);
+});
+
+test("Try again on the failed row starts a fresh mint for that account", async () => {
+  const row = await renderRow(2 * 60 * 60_000);
+  await act(async () => { row.click(); });
+  const retry = buttons().find(b => b.textContent?.trim() === "Try again")!;
+  await act(async () => { retry.click(); });
+  expect(calls).toEqual([{ name: "accountSwitch:requestMintToken", args: { device_id: "mini", profile: "work" } }]);
+});
+
+test("an account with no mint or a confirmed one keeps its plain row", async () => {
+  for (const status of [null, "confirmed"] as const) {
+    const row = await renderRow(2 * 60_000, status);
+    expect(row.textContent?.trim()).toBe("mint token");
+    expect(row.title).not.toContain("failed");
+  }
 });

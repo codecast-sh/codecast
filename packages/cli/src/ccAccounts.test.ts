@@ -51,6 +51,8 @@ import {
   matchProfileForCredential,
   tokenKey,
   writeAccountToken,
+  recordMintRejection,
+  mintRejectionNote,
   removeAccountToken,
   accountTokenInfo,
   accountTokenFilePath,
@@ -268,6 +270,25 @@ describe("createMtimeGatedCache", () => {
     expect(cache.get()).toBe(2);
     expect(cache.get()).toBe(2);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("rejected mint record (sandboxed $HOME)", () => {
+  let home: string;
+  let savedHome: string | undefined;
+  beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-mint-rej-")); savedHome = process.env.HOME; process.env.HOME = home; });
+  afterEach(() => { if (savedHome === undefined) delete process.env.HOME; else process.env.HOME = savedHome; fs.rmSync(home, { recursive: true, force: true }); });
+
+  it("names the reason and the in-app button, never Terminal steps, until a token is stored", () => {
+    expect(mintRejectionNote("contact")).toBeNull();
+    const reason = "the browser signed into a different Claude account than contact@example.com (and none of the other saved accounts) — sign out of claude.ai, sign in as contact@example.com, and try again";
+    recordMintRejection("contact", reason);
+    const note = mintRejectionNote("contact")!;
+    expect(note).toContain(reason);
+    expect(note).toContain(`"mint token" button in Settings`);
+    expect(note).not.toMatch(/setup-token|cast accounts token|Terminal/);
+    writeAccountToken("contact", `sk-ant-oat01-${"z".repeat(60)}`);
+    expect(mintRejectionNote("contact")).toBeNull();
   });
 });
 
@@ -2276,13 +2297,28 @@ describe("setup-token extraction + account fingerprint", () => {
     });
   });
 
-  it("same account = both reset timestamps match; unknown windows never match", () => {
+  it("same account = both reset timestamps agree; an unknown week never matches", () => {
     const a = { five_hour_reset: 1, seven_day_reset: 2, five_hour_utilization: 0.1, seven_day_utilization: 0.5 };
     expect(sameAccountFingerprint(a, { ...a, five_hour_utilization: 0.9 })).toBe(true);
-    expect(sameAccountFingerprint(a, { ...a, five_hour_reset: 3 })).toBe(false);
+    expect(sameAccountFingerprint(a, { ...a, five_hour_reset: 300 })).toBe(false);
     expect(sameAccountFingerprint(a, { ...a, seven_day_reset: 9 })).toBe(false);
     const unknown = { five_hour_reset: null, seven_day_reset: null, five_hour_utilization: null, seven_day_utilization: null };
     expect(sameAccountFingerprint(unknown, unknown)).toBe(false);
+  });
+
+  // ct-101490: a mint for the person's own account was rejected as "a
+  // different Claude account". Both probes run in parallel; on an idle account
+  // they open the windows themselves and each answer stamps its own reset.
+  it("the same account still matches when the parallel probes' resets land a second apart or one has no 5h window", () => {
+    const saved = { five_hour_reset: 1_788_338_000, seven_day_reset: 1_788_924_800, five_hour_utilization: 0, seven_day_utilization: 0.2 };
+    expect(sameAccountFingerprint(saved, { ...saved, five_hour_reset: saved.five_hour_reset + 1 })).toBe(true);
+    expect(sameAccountFingerprint(saved, { ...saved, seven_day_reset: saved.seven_day_reset - 1 })).toBe(true);
+    expect(sameAccountFingerprint(saved, { ...saved, five_hour_reset: null })).toBe(true);
+    expect(sameAccountFingerprint({ ...saved, five_hour_reset: null }, saved)).toBe(true);
+    // Another account: its week resets at another time, and that still rejects.
+    expect(sameAccountFingerprint(saved, { ...saved, seven_day_reset: saved.seven_day_reset + 3 * 3600 })).toBe(false);
+    expect(sameAccountFingerprint(saved, { ...saved, five_hour_reset: saved.five_hour_reset - 40 * 60 })).toBe(false);
+    expect(sameAccountFingerprint(saved, { ...saved, seven_day_reset: null })).toBe(false);
   });
 });
 

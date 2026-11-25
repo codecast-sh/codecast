@@ -121,7 +121,7 @@ import {
   elsewhereHint,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, mintRejectionNote, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { setReserved } from "./ccProfileFlags.js";
 import { buildAccountUsage, buildUsageReport, loadLocalUsageProfiles, renderAccountUsage, renderUsageReport } from "./usageCommand.js";
 import { recoveryModeOf, titleLine, type RecoveryMode } from "@codecast/shared/contracts";
@@ -4340,7 +4340,10 @@ accountsCmd
       const profiles = listProfiles();
       if (options.json) {
         const launch = launchProfileName();
-        console.log(JSON.stringify(profiles.map((p) => ({ ...p, active: launch ? p.name === launch : p.active })), null, 2));
+        console.log(JSON.stringify(profiles.map((p) => {
+          const mintFailed = accountTokenInfo(p.name) ? null : mintRejectionNote(p.name);
+          return { ...p, active: launch ? p.name === launch : p.active, ...(mintFailed && { mint_failed: mintFailed }) };
+        }), null, 2));
         return;
       }
       if (profiles.length === 0) {
@@ -4372,8 +4375,11 @@ accountsCmd
         const setup = accountTokenInfo(p.name);
         // A minted token outranks the store at launch, so it is the note that
         // says what sessions on this profile actually run on.
+        const mintFailed = !setup ? mintRejectionNote(p.name) : null;
         const tokenNote = p.access_refused_at
           ? ` ${c.yellow}· organization refuses subscription access — not used for sessions${c.reset}`
+          : mintFailed
+          ? ` ${c.yellow}· ${mintFailed}${c.reset}`
           : setup
           ? (setup.expires_at <= Date.now()
               ? ` ${c.yellow}· token expired — mint again from Settings${c.reset}`
