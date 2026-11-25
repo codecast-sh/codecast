@@ -231,12 +231,21 @@ export function placeOf(rawPath: string, names?: PlaceNames): Place {
 }
 
 /** The place key two paths share when they show the same place: the address
- *  without its query, except the inbox, where the session is the place. */
+ *  without its query, except the inbox, where the session is the place, and
+ *  the org chart, where a session or proposal open in its drawer is a place
+ *  of its own (so closing it steps back to the chart, ct-101312). */
 export function placeKey(rawPath: string): string {
   const path = canonicalPlacePath(rawPath);
   const sid = placeSessionId(path);
   if (sid) return `/inbox?s=${sid}`;
   const pathname = path.split("#")[0].split("?")[0].replace(/\/+$/, "") || "/";
+  if (pathname === "/org") {
+    const params = new URLSearchParams(path.split("#")[0].split("?")[1] ?? "");
+    const proposal = params.get("proposal");
+    if (proposal) return `/org?proposal=${proposal}`;
+    const session = params.get("session");
+    if (session) return `/org?session=${session}`;
+  }
   // An old alias is the same place as its page.
   if (pathname.startsWith("/schedules")) return `/triggers${pathname.slice("/schedules".length)}`;
   if (pathname === "/artifacts") return "/pages";
