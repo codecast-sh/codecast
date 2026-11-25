@@ -2,7 +2,8 @@ import { refuseSeatKill } from "./lib/seatKill";
 import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
-import { isClaudeSubagentSessionId } from "./lib/claudeSubagentSession";
+import { isClaudeSubagentSessionId } from "@codecast/shared/contracts/claudeSubagentSession";
+import { launchedHeadless } from "@codecast/shared/contracts/closeCascade";
 import { wakeFieldsOf } from "./wakeCost";
 import { cliSessionClassifier, recencyRankOf, type RecencyRank } from "./cliSessionClassifier";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
@@ -8817,6 +8818,9 @@ async function enrichInboxSessionRow(
     inbox_killed_at: conv.inbox_killed_at ?? null,
     inbox_closed_at: conv.inbox_closed_at ?? null,
     inbox_adopted_at: conv.inbox_adopted_at ?? null,
+    // Launched as a program (cli_flags --print, never sent): what a close of
+    // its lead reads (shared goesDownWithLead).
+    headless_launch: launchedHeadless(conv),
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
     agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
@@ -9050,6 +9054,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_killed_at: child.inbox_killed_at ?? null,
     inbox_closed_at: child.inbox_closed_at ?? null,
     inbox_adopted_at: child.inbox_adopted_at ?? null,
+    headless_launch: launchedHeadless(child),
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
     // holds those). Without these three the verdict is write-only on a

@@ -46,14 +46,33 @@ describe("SessionCloseTip", () => {
     expect(await tip({ ...settled, agent_status: "working", updated_at: NOW - 1000 } as InboxSession)).toBe("Close: hides it, lets it finish");
   });
 
-  test("an idle lead whose subagent is mid-turn", async () => {
+  async function withKids(kids: Record<string, Record<string, unknown>>, run: () => Promise<void>) {
     const sessions = useInboxStore.getState().sessions;
-    useInboxStore.setState({ sessions: { ...sessions, sub: { ...settled, _id: "sub", agent_status: "working", updated_at: NOW - 1000, parent_conversation_id: "c1" } } } as any);
-    try {
+    const rows = Object.fromEntries(Object.entries(kids).map(([id, k]) => [id, { ...settled, _id: id, session_id: id, is_subagent: true, parent_conversation_id: "c1", ...k }]));
+    useInboxStore.setState({ sessions: { ...sessions, ...rows } } as any);
+    try { await run(); } finally { useInboxStore.setState({ sessions } as any); }
+  }
+
+  test("an idle lead whose subagent is mid-turn", async () => {
+    await withKids({ "agent-a0a0a0737562": { agent_status: "working", updated_at: NOW - 1000 } }, async () => {
       expect(await tip(settled)).toBe("Close: hides it, lets it finish");
-    } finally {
-      useInboxStore.setState({ sessions } as any);
-    }
+    });
+  });
+
+  test("an idle lead whose spawned child is mid-turn stops alone: the child keeps running", async () => {
+    await withKids({ "ca19ce3d-spawned": { agent_status: "working", updated_at: NOW - 1000 } }, async () => {
+      expect(await tip(settled)).toBe("Close: stops it, clears it from the list");
+    });
+  });
+
+  test("an idle lead with finished subagents names them, skipping a closed one and a spawned child", async () => {
+    await withKids({
+      "agent-a0a0a031": {}, "agent-a0a0a032": {},
+      "agent-a0a0a0636c6f736564": { inbox_dismissed_at: 5, inbox_closed_at: 5 },
+      "ca19ce3d-spawned": {},
+    }, async () => {
+      expect(await tip(settled)).toBe("Close: stops it and the 2 agents under it, clears them from the list");
+    });
   });
 
   test("a session with armed triggers counts only its own", async () => {

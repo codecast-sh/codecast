@@ -8,7 +8,8 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
-import { cascadeTakesDown, nestedGroupOf } from "./lib/closeAside";
+import { cascadeTakesDown, finishedByRow, holdFactsOnServer, nestedGroupOf } from "./lib/closeAside";
+import { leadStillInClose, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -292,11 +293,15 @@ const HIDE_TEARDOWNS_INLINE = 20;
 // `decided`: rows this transaction's own gesture names (applyPatches notes them
 // first). A cascade never writes over one, whatever order the rows come in:
 // the row's own patch is its decision.
-type HideTxnState = { spent: number; done: Set<string>; decided: Set<string> };
+// `adoptions`: rows this gesture names only to adopt (a client's close
+// adoption, decided by dispatch.ts after the cascade). The cascade leaves their
+// adoption to that decision, but still takes one down that goes down with its
+// lead (a teammate the client painted as standing before it knew).
+type HideTxnState = { spent: number; done: Set<string>; decided: Set<string>; adoptions: Set<string> };
 const hideTxnStates = new WeakMap<object, HideTxnState>();
 function hideTxnState(ctx: { db: any }): HideTxnState {
   let state = hideTxnStates.get(ctx);
-  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set(), decided: new Set() }));
+  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set(), decided: new Set(), adoptions: new Set() }));
   return state;
 }
 export function hideBudgetLeft(ctx: { db: any }): number {
@@ -304,10 +309,20 @@ export function hideBudgetLeft(ctx: { db: any }): number {
 }
 /** The conversation rows a gesture's own patch names, noted before any of them
  *  applies, so no lead's cascade overrides one of them. */
-export function noteGestureRows(ctx: { db: any }, ids: Iterable<string>): void {
-  const decided = hideTxnState(ctx).decided;
-  for (const id of ids) decided.add(String(id));
+export function noteGestureRows(ctx: { db: any }, ids: Iterable<string>, adoptionIds: Iterable<string> = []): void {
+  const txn = hideTxnState(ctx);
+  for (const id of ids) txn.decided.add(String(id));
+  for (const id of adoptionIds) txn.adoptions.add(String(id));
 }
+
+/** Charge `units` of this transaction's hide budget (a unit is about one
+ *  teardown's reads; a group scan costs GROUP_SCAN_COST). */
+export function spendHideBudget(ctx: { db: any }, units: number): void {
+  hideTxnState(ctx).spent += units;
+}
+/** A lead's group scan (nestedGroupOf: up to two pages of NESTED_GROUP_SCAN
+ *  rows) in hide-budget units. */
+export const GROUP_SCAN_COST = 8;
 
 export async function applyHideTransition(
   ctx: { db: any },
@@ -432,6 +447,10 @@ export async function applyHideTransition(
 // the inbox renders beneath the card (nestParentIdOf): Task subagents
 // (parent_conversation_id) and agent-team teammates (spawned_by +
 // agent_team_name). A dismiss or kill stamps and tears down every child. A
+// close takes only the children that go down with the lead (shared
+// goesDownWithLead: Task subagents and teammates) and adopts the nested ones
+// it leaves up that still hold something, so they stand as their own cards
+// while the lead is closed (closeLeavesStanding). A
 // stash stamps only the children that are inbox members of their own
 // (teammates, plan handoffs): server windows and rideLeadPlacements read their
 // stamps. A child that is never its own member (isOrphanOrSubagent: a Task
@@ -466,15 +485,46 @@ export async function cascadeHideToNestedChildren(
   if (!stamp) return 0;
   // The same group a close's aside check reads (lib/closeAside nestedGroupOf).
   const childIds: string[] = [];
+  const standingIds: string[] = [];
   for (const child of await nestedGroupOf(ctx, lead)) {
     const idStr = child._id.toString();
+    if (hideTxnState(ctx).decided.has(idStr)) continue; // its own patch decides it
+    // A close leaves a child with its own process running; one that would
+    // only show beneath the closed lead and still holds something stands as
+    // its own card instead (shared closeLeavesStanding), judged in the
+    // batches below. A finished one (its row says so, no reads) stays nested
+    // under the closed lead and comes back with it.
+    if (opts?.close && field === "inbox_dismissed_at" && standsApartFromLead(child)) {
+      // A client's adoption of it is decided after this (dispatch.ts).
+      if (!hideTxnState(ctx).adoptions.has(idStr) && !finishedByRow(child, Date.now())) standingIds.push(idStr);
+      continue;
+    }
     // The one per-child rule the close's aside check scans by (lib/closeAside).
     if (!cascadeTakesDown(child, field, opts)) continue;
-    if (hideTxnState(ctx).decided.has(idStr)) continue; // its own patch decides it
     childIds.push(idStr);
   }
-  await hideNestedChildren(ctx, lead._id, field, stamp, childIds, opts);
+  await hideNestedChildren(ctx, lead._id, field, stamp, childIds, opts, standingIds);
   return childIds.length;
+}
+
+/** Whether the close stamped `stamp` adopts this child, by the cascade's own
+ *  tests: the lead is still in that close, the child stands apart from it,
+ *  sits in the window the cascade reads, and still holds something. A
+ *  client's adoption of a child is decided here (dispatch.ts), so it lands as
+ *  the cascade's would. The caller charges the decision; a group scan read
+ *  here charges GROUP_SCAN_COST. */
+export async function closeAdoptionHolds(ctx: { db: any }, child: any, stamp: number, windows: Map<string, Set<string>>): Promise<boolean> {
+  if (!child?.parent_conversation_id || !standsApartFromLead(child)) return false;
+  const lead = await ctx.db.get(child.parent_conversation_id);
+  if (!lead || !leadStillInClose(lead, stamp)) return false;
+  const key = String(lead._id);
+  let win = windows.get(key);
+  if (!win) {
+    spendHideBudget(ctx, GROUP_SCAN_COST);
+    windows.set(key, (win = new Set((await nestedGroupOf(ctx, lead)).map((c: any) => String(c._id)))));
+  }
+  if (!win.has(String(child._id)) || finishedByRow(child, Date.now())) return false;
+  return stillHolds(await holdFactsOnServer(ctx, child, Date.now()));
 }
 
 // Each child's teardown costs tens of reads, so a lead with 175 subagents
@@ -490,8 +540,12 @@ async function hideNestedChildren(
   stamp: number,
   childIds: string[],
   opts?: { forceKill?: boolean; close?: boolean; cause?: string },
+  // Children a close leaves up, to adopt if they still hold something. Each
+  // check reads its child's facts, so they share the batch with the teardowns.
+  standingIds: string[] = [],
 ): Promise<void> {
-  const now = ctx.scheduler ? childIds.slice(0, Math.min(CASCADE_BATCH, hideBudgetLeft(ctx))) : childIds;
+  const budget = ctx.scheduler ? Math.min(CASCADE_BATCH, hideBudgetLeft(ctx)) : Infinity;
+  const now = childIds.slice(0, budget);
   const txn = hideTxnState(ctx);
   for (const id of now) {
     // A child this transaction already decided (torn down, or named by the
@@ -508,10 +562,22 @@ async function hideNestedChildren(
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
     await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, close: opts?.close, cause: `cascade<-${opts?.cause ?? "hide"}` });
   }
+  let standNow = standingIds.slice(0, Math.max(0, budget - now.length));
+  let standRest = standingIds.slice(standNow.length);
+  // Every adoption batch adopts only while the lead is still in this close.
+  if (standingIds.length && !leadStillInClose((await ctx.db.get(leadId)) ?? {}, stamp)) standNow = standRest = [];
+  for (const id of standNow) {
+    if (txn.decided.has(String(id))) continue;
+    const child = await ctx.db.get(id);
+    if (!child || !standsApartFromLead(child)) continue;
+    txn.spent++;
+    if (stillHolds(await holdFactsOnServer(ctx, child, Date.now()))) await ctx.db.patch(child._id, { inbox_adopted_at: stamp });
+  }
   const rest = childIds.slice(now.length);
-  if (rest.length) {
+  if (rest.length || standRest.length) {
     await ctx.scheduler.runAfter(0, internal.cleanup.continueCascadeHide, {
       lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill, close: opts?.close, cause: opts?.cause,
+      ...(standRest.length ? { standing_ids: standRest } : {}),
     });
   }
 }
@@ -522,15 +588,17 @@ export const continueCascadeHide = internalMutation({
     field: v.union(v.literal("inbox_dismissed_at"), v.literal("inbox_stashed_at")),
     stamp: v.number(),
     child_ids: v.array(v.string()),
+    standing_ids: v.optional(v.array(v.string())),
     force_kill: v.optional(v.boolean()),
     close: v.optional(v.boolean()),
     cause: v.optional(v.string()),
   },
-  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill, close, cause }) => {
+  handler: async (ctx, { lead_id, field, stamp, child_ids, standing_ids, force_kill, close, cause }) => {
     const lead = await ctx.db.get(lead_id);
     if (!lead || !(lead as any)[field]) return;
     if (cause) noteWriteCause(ctx, cause);
-    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, close, cause });
+    // Adoptions belong to this close only (hideNestedChildren checks the lead).
+    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, close, cause }, standing_ids ?? []);
   },
 });
 

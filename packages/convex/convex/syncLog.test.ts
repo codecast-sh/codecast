@@ -584,6 +584,13 @@ describe("buildCargo", () => {
     expect(c.partial).toBeUndefined();
     expect(c.omitted!.sort()).toEqual(["content", "team_id"]);
   });
+  test("cli_flags never rides; its program-launch verdict does (headless_launch)", () => {
+    const c = buildCargo("conversations", { cli_flags: "--print", title: "t" }, { full: false });
+    expect(c.patch).toEqual({ title: "t", headless_launch: true });
+    expect(c.omitted).toEqual(["cli_flags"]);
+    expect(buildCargo("conversations", { cli_flags: "--interactive" }, { full: false }).patch).toEqual({ headless_launch: false });
+    expect(buildCargo("conversations", { title: "t" }, { full: false }).patch).toEqual({ title: "t" });
+  });
   test("churn-exempt fields never ride cargo, even inside a semantic patch", () => {
     const c = buildCargo("conversations", { pending_api_error: true, last_message_preview: "A", model: "x" }, { full: false });
     expect(c.patch).toEqual({ pending_api_error: true });

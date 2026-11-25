@@ -93,7 +93,8 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { adoptedByClose, cascadeTakesDownRow, closeAdoptionWindow, closeLeavesStanding } from "@codecast/shared/contracts/closeCascade";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import {
   rowLiveDeadlines,
   projectInbox,
@@ -103,7 +104,7 @@ import {
   rowPinPredatesTurn,
 } from "@codecast/shared/contracts/inboxPlacement";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
-import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
+import { closeFactsOf, closeSetsAside, holdFactsOfRow, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -803,6 +804,9 @@ export type InboxSession = {
   // The person talked to this nested session (a flow station), so it stands
   // alone in their inbox (shared isAdoptedChild). Set by adoptSession.
   inbox_adopted_at?: number | null;
+  // Launched as a program (the server's verdict on cli_flags --print, which it
+  // never sends): what a close of its lead reads (shared goesDownWithLead).
+  headless_launch?: boolean | null;
   // An adopted flow station's flow: its name and run (enrichInboxSessionRow).
   flow_name?: string | null;
   flow_run_id?: string | null;
@@ -9249,6 +9253,8 @@ function hideSessionInDraft(
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
+  // A kill (or a fresh close) stamps the lead anew, ending any earlier close.
+  if (mode === "kill") releaseCloseAdoptionsInDraft(draft, id);
   const sessionValues = Object.values(draft.sessions) as InboxSession[];
   // The removed set must match what the card visually contains, so the sweep
   // uses the SAME nesting definition the renderer does (nestParentIdOf): Task
@@ -9269,13 +9275,29 @@ function hideSessionInDraft(
       ? groupIds.filter((cid) => cascadeTakesDownRow(draft.sessions[cid], field, { forceKill: true, close: true, queued: !!draft.sessions[cid]?.has_pending }))
       : groupIds;
   const allIds = [id, ...childIds];
+  // A close leaves a child with its own process running (a `cast spawn`
+  // worker); one that would only show beneath the closed lead and still holds
+  // something is adopted, so it stands as its own card (shared
+  // closeLeavesStanding, the server cascade's twin). It stays on the list, so
+  // the selection may stay on it. A finished one stays nested under the lead.
+  // A teammate's row is not this viewer's to adopt (the server drops the
+  // patch), so it is left alone and its row stays out of the gesture.
   // The viewer. A session whose user_id isn't ours was injected into this cache
   // by viewing/searching a TEAMMATE's session — we can't durably hide it.
   const me = draft.currentUser?._id?.toString?.();
+  // Only within the window the server reads (shared closeAdoptionWindow), so
+  // the release, which reads that window, always covers what was adopted.
+  const adoptWindow = close ? closeAdoptionWindow(sessionValues, id) : null;
+  const standing = adoptWindow
+    ? groupIds.filter((cid) => !childIds.includes(cid) && isConvexId(cid) && adoptWindow.has(cid)
+      && !isForeignSession(draft.sessions[cid], draft.conversations[cid], me)
+      && closeLeavesStanding(draft.sessions[cid], holdFactsOfRow(draft.sessions[cid], now)))
+    : [];
+  for (const cid of standing) adoptInDraft(draft, cid, now);
   const hidden: string[] = [];
   const forgotten: string[] = [];
   const writes: HideResult["writes"] = {};
-  const newSessionId = sessionPastRemoved(draft, [id, ...groupIds]);
+  const newSessionId = sessionPastRemoved(draft, close ? allIds : [id, ...groupIds]);
   for (const sid of allIds) {
     // A local-only stub (optimistic create that never landed server-side)
     // can't be hidden durably: the server never knew it, so the reconcile's
@@ -9347,6 +9369,27 @@ function hideSessionInDraft(
   }
   advanceSelection(draft, newSessionId);
   return { hidden, forgotten, writes, ts: now };
+}
+
+// Adopt a nested row (shared isAdoptedChild) on both twins, and tell sibling
+// windows the exact stamp (gestureBridge BRIDGED_FIELDS), so their next
+// whole-row put carries it instead of writing the row back unadopted.
+function adoptInDraft(draft: any, id: string, at: number | null) {
+  if (draft.sessions[id]) draft.sessions[id].inbox_adopted_at = at;
+  if (draft.conversations[id]) draft.conversations[id].inbox_adopted_at = at;
+  broadcastGesture({ kind: "fields", id, fields: { inbox_adopted_at: at }, ts: Date.now() }, bridgeUserId(draft));
+}
+
+// A lead's close ending (it comes back, or a kill stamps it anew): clear the
+// adoptions that close stamped on its children (shared adoptedByClose, keyed
+// on the lead's inbox_closed_at), so they nest under it again. The server's
+// db wrapper (convex lib/adoptionRelease) does the same on every rail.
+function releaseCloseAdoptionsInDraft(draft: any, leadId: string) {
+  const lead = draft.sessions[leadId] ?? draft.conversations[leadId];
+  if (lead?.inbox_closed_at == null) return;
+  for (const row of Object.values(draft.sessions) as InboxSession[]) {
+    if (row.parent_conversation_id === leadId && adoptedByClose(row, lead.inbox_closed_at)) adoptInDraft(draft, row._id, null);
+  }
 }
 
 // The session to show once `removedIds` leave the list: the current one if it
@@ -9654,9 +9697,10 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
 // hide for this viewer.
 function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const now = Date.now();
-  // A lead any member of whose nested group is in flight is set aside whole: a
-  // close of it would take the group down with it (hideSessionInDraft and the
-  // server's cascade), killing that member's turn or wake.
+  // A lead any Task subagent or teammate of which is in flight is set aside
+  // whole: a close of it would take those down with it (hideSessionInDraft
+  // and the server's cascade), killing that member's turn or wake. A spawned
+  // child with its own process stays up, so it never holds the lead's close.
   const rows = Object.values(draft.sessions) as InboxSession[];
   const aside = ids.filter((id) => {
     const row = draft.sessions[id] ?? draft.conversations[id];
@@ -11705,6 +11749,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // kill-clear at all, and what `cast undismiss` writes.
   restoreSession: action(function (this: Draft, id: string) {
     const now = Date.now();
+    // A closed lead coming back takes back the children its close adopted
+    // (shared adoptedByClose; the server's db wrapper does the same).
+    releaseCloseAdoptionsInDraft(this, id);
     const childIds = Object.values(this.sessions as Record<string, InboxSession>)
       .filter((s) => isSessionHidden(s) && s.parent_conversation_id === id)
       .map((s) => s._id);
@@ -11824,10 +11871,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   adoptSession: action(function (this: Draft, id: string) {
     const row = this.sessions[id];
     if (!row || !isNestedIdentity(row)) return;
-    const now = Date.now();
-    row.inbox_adopted_at = now;
-    const conv = this.conversations[id] as any;
-    if (conv) conv.inbox_adopted_at = now;
+    adoptInDraft(this, id, Date.now());
   }),
 
   renameSession: action(function (this: Draft, id: string, title: string) {

@@ -1,4 +1,3 @@
-import { isOrphanOrSubagent } from "./inboxMembership";
 // A CLOSED session: the person's Close (web/phone), which stops an agent that
 // has nothing in flight without retiring it. Close writes inbox_closed_at equal
 // to the inbox_dismissed_at it stamps, and nothing else. The equality is the
@@ -13,27 +12,6 @@ export type ClosedFields = {
 
 export function isClosedSession(row: ClosedFields): boolean {
   return row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_dismissed_at && !row.inbox_killed_at;
-}
-
-/** Whether a hide of a lead takes this member of its nested group down: the
- *  one per-child rule the server's cascade, the server's aside scan and the
- *  web's optimistic close all apply (convex cleanup.ts / lib/closeAside, web
- *  store closeInDraft). `queued`: a message waits for it (the server's
- *  has_pending_messages, the web row's has_pending). */
-export function cascadeTakesDownRow(
-  child: ClosedFields & { inbox_stashed_at?: number | null; is_subagent?: boolean | null; parent_conversation_id?: unknown; [k: string]: any },
-  field: "inbox_dismissed_at" | "inbox_stashed_at",
-  opts: { forceKill?: boolean; close?: boolean; queued: boolean },
-): boolean {
-  // A stash takes only the members that are inbox rows of their own.
-  if (field === "inbox_stashed_at" && isOrphanOrSubagent(child as any)) return false;
-  // A quiet re-assert never re-kills.
-  if (child[field] && !opts.forceKill) return false;
-  // A close leaves a killed member alone (it is retired, nothing of it wakes),
-  // and a closed one with nothing queued (already stopped, its wakes kept).
-  if (opts.close && child.inbox_killed_at) return false;
-  if (opts.close && isClosedSession(child) && !opts.queued) return false;
-  return true;
 }
 
 /** A patch (or a row) that IS a close: the two stamps written together. */

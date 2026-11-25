@@ -26,6 +26,7 @@ import { makeLifecycleEventDb } from "./lifecycleEvents";
 import { makeSessionStartsDb } from "./lib/sessionStarts";
 import { makeParkedWakeDb } from "./lib/parkedWake";
 import { makeWellFormedDb } from "./lib/wellFormed";
+import { makeAdoptionReleaseDb } from "./lib/adoptionRelease";
 
 const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
 
@@ -40,8 +41,9 @@ function withChangeLog(ctx: any): any {
   const tracked = makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector));
   // session_starts follows conversation writes beneath it (lib/sessionStarts.ts),
   // and parked_wake_kind follows run, task and binding writes (lib/parkedWake.ts).
+  // A lead brought back releases the children its close adopted (lib/adoptionRelease.ts).
   // Outermost of all: every layer beneath sees only well-formed strings (lib/wellFormed.ts).
-  const wrapped: any = { ...ctx, db: makeWellFormedDb(makeLifecycleEventDb(makeParkedWakeDb(makeSessionStartsDb(tracked, ctx.db), ctx.db), ctx.db)) };
+  const wrapped: any = { ...ctx, db: makeWellFormedDb(makeAdoptionReleaseDb(makeLifecycleEventDb(makeParkedWakeDb(makeSessionStartsDb(tracked, ctx.db), ctx.db), ctx.db), ctx.db)) };
   wrapped[SYNC_ACK] = collector;
   return wrapped;
 }
