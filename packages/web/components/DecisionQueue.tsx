@@ -35,13 +35,23 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
   // THAT session's question; answering then walks the rest of the queue.
   // Only a fallback: the moment the user answers or skips, anchorKey owns
   // the position, so a resolved entry question can't drag us back to it.
-  const anchorIdx = anchorKey
+  const indexFor = (entryKey: string | null | undefined) => anchorKey
     ? queue.findIndex((i) => i.key === anchorKey)
-    : initialKey && queue.some((i) => i.key === initialKey)
-      ? queue.findIndex((i) => i.key === initialKey)
+    : entryKey && queue.some((i) => i.key === entryKey)
+      ? queue.findIndex((i) => i.key === entryKey)
       : initialConversationId
       ? queue.findIndex((i) => i.conversationId === initialConversationId)
       : -1;
+  // The page keeps this queue mounted while `?s=` stays the same session, so a
+  // new `&d=` arrives as a prop: a named decision takes the position, and a
+  // link that drops `&d=` keeps the person on the question they were reading.
+  const [seenKey, setSeenKey] = useState(initialKey);
+  if (seenKey !== initialKey) {
+    const reading = queue[indexFor(seenKey)]?.key ?? null;
+    setSeenKey(initialKey);
+    setAnchorKey(initialKey && queue.some((i) => i.key === initialKey) ? null : reading);
+  }
+  const anchorIdx = indexFor(initialKey);
   const position = anchorIdx >= 0 ? anchorIdx : 0;
   const current = queue[position];
 

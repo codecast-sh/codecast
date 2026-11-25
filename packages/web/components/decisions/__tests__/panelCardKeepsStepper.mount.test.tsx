@@ -122,3 +122,34 @@ test("clicking the panel card of the session already on screen keeps the stepper
   await act(async () => root.unmount());
   host.remove();
 });
+
+test("inside the session on screen, a named decision takes the stepper and the card head keeps it", async () => {
+  paneMounts.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => root.render(
+    <MemoryRouter initialEntries={[`/decisions?s=${CONV_A}&d=a1`]}>
+      <Where />
+      <InboxDecisionQueue collapsed={false} onToggle={() => {}} activeSessionId={CONV_A} extraSessions={[]} onSelectSession={() => {}} />
+      <DecisionsPage />
+    </MemoryRouter>,
+  ));
+  const card = () => host.querySelector(`[data-inbox-decision-queue] [data-session-id="${CONV_A}"]`)!;
+  const hereRow = () => card().querySelector("[data-here]")?.getAttribute("data-decision-queue-row");
+  expect(hereRow()).toBe("1");
+
+  // The person opens Alpha's second question from the panel.
+  await act(async () => { click(card().querySelectorAll("[data-decision-queue-row]")[1]!); });
+  expect(lastUrl).toBe(`/decisions?s=${CONV_A}&d=a2`);
+  expect(hereRow()).toBe("2");
+
+  // Then clicks Alpha's card head, which drops &d=: still on the second question.
+  await act(async () => { click(card().querySelector(":scope > a")!); });
+  expect(lastUrl).toBe(`/decisions?s=${CONV_A}`);
+  expect(hereRow()).toBe("2");
+  expect(paneMounts).toEqual([CONV_A]);
+
+  await act(async () => root.unmount());
+  host.remove();
+});

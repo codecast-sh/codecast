@@ -104,8 +104,11 @@ export function DecisionsPage({ id }: { id?: string }) {
   const anchor = params?.get("s") ?? null;
   const exit = useCallback(() => router.push("/decisions"), [router]);
   // The stepper owns its whole canvas: one decision at a time, on the asking session's pane.
+  // Keyed on the session alone: a link back to the session already on screen
+  // (a panel card head drops `&d=`) must not remount it and collapse the open
+  // cards. A `&d=` change inside the session is followed by the queue itself.
   if (!id && (anchor || params?.get("mode") === "step")) {
-    return <div className="h-full bg-sol-bg"><DecisionQueue key={`${anchor ?? "all"}:${params?.get("d") ?? ""}`} onExit={exit} initialConversationId={anchor} initialKey={params?.get("d")} /></div>;
+    return <div className="h-full bg-sol-bg"><DecisionQueue key={anchor ?? "all"} onExit={exit} initialConversationId={anchor} initialKey={params?.get("d")} /></div>;
   }
   return (
     <DetailSplitLayout list={<DecisionsList activeId={id} />} closeHref="/decisions">
