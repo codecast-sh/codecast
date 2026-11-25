@@ -27,6 +27,11 @@ import {
 
 const PRUNE_AFTER_MS = 60 * 60 * 1000;
 
+// A key block still being written: redaction needs its END line, which the
+// stream has not reached. The text stops before the block until it closes
+// and redacts whole, as it will in the message.
+const OPEN_KEY_BLOCK = /-----BEGIN [A-Z0-9 ]*KEY-----(?![\s\S]*-----END [A-Z0-9 ]*KEY-----)[\s\S]*$/;
+
 /** The daemon's push of one reply's text so far. Answers whether it was
  *  written, so the daemon can stop pushing to a conversation nobody watches
  *  or whose workspace has the feature off. */
@@ -80,7 +85,7 @@ export const push = mutation({
     // hands it off.
     let text = args.text.slice(0, REPLY_STREAM_MAX_CHARS);
     if (/[\ud800-\udbff]$/.test(text)) text = text.slice(0, -1);
-    text = redactSecrets(text);
+    text = redactSecrets(text).replace(OPEN_KEY_BLOCK, "");
     const fields = { message_id: args.message_id, text, seq: args.seq, started_at: args.started_at, updated_at: now };
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("reply_streams", { conversation_id: args.conversation_id, user_id: userId, ...fields });

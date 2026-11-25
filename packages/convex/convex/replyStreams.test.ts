@@ -117,6 +117,22 @@ describe("push", () => {
     expect(text).toBe(redactSecrets(`Run it with ${secret} set.`));
   });
 
+  test("a key block still being written is held back until it closes and redacts whole", async () => {
+    const s = await seed({ flag: true });
+    await view(s);
+    // Built at runtime: push protection rejects credential-shaped literals.
+    const begin = "-----BEGIN " + "PRIVATE KEY-----";
+    const end = "-----END " + "PRIVATE KEY-----";
+    await push(s, { seq: 1, text: `Here is the key:\n${begin}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n` });
+    expect((await rows(s))[0].text).toBe("Here is the key:\n");
+    const whole = `Here is the key:\n${begin}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n${end}\nDone.`;
+    await push(s, { seq: 2, text: whole });
+    const text = (await rows(s))[0].text;
+    expect(text).toBe(redactSecrets(whole));
+    expect(text).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC");
+    expect(text).toContain("Done.");
+  });
+
   test("a row nobody has written to for the load age no longer orders pushes", async () => {
     const s = await seed({ flag: true });
     await view(s);
