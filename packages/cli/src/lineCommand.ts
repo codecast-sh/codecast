@@ -15,6 +15,7 @@ import { registerReviewsCommands } from "./agentReviewsCommand.js";
 import { registerLineTrialCommands } from "./lineTrialCommand.js";
 import { registerLineDissolveCommand } from "./lineDissolveCommand.js";
 import { registerJudgingCommands } from "./judgingCommand.js";
+import { registerDeployPauseCommands } from "./deployPauseCommand.js";
 
 export function registerLineCommand(program: Command, deps: GroupDeps): void {
   const line = program.command("line", { hidden: true }).description(commandGroup("line").description);
@@ -164,6 +165,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       console.log(`${asked.short_id}: ${after?.status ?? "unknown"}${after?.sha ? ` at ${String(after.sha).slice(0, 10)}` : ""}`);
       if (after?.status !== "live") process.exit(code || 1);
     });
+  registerDeployPauseCommands(deploy, deps);
   deploy
     .command("targets")
     .description("This repository's deploy targets: what runs on each (its live deploy), what is going out, and the commits on main waiting for it, by session, with CI")

@@ -28,6 +28,7 @@ import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_reques
 import { recordExternalEvent } from "./externalEvents";
 import { recordCiRun, type CiRun } from "./ingest";
 import { JUDGING_TIMEOUT_MS, noteCiWorkflow, noteMainCiRun, notePayload } from "./mainRed";
+import { liftEndedPauses } from "./deployRollback";
 import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, recordWorkflowRunDeploy, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { markCommitDirty } from "./lib/changesDirty";
 import { claimDrain, releaseDrain, renewDrain } from "./lib/drainMarker";
@@ -1298,6 +1299,8 @@ async function applyWorkflowRun(ctx: any, payload: any) {
   const commitCi = workflowRunCi(payload);
   const team = ci || commitCi ? await resolveTeamForRepository(ctx, repository) : null;
   if (commitCi && team) await recordCommitCi(ctx, commitCi, team);
+  // A passing run may end a rollback's pause (deploys.md DP19).
+  if (commitCi && team && commitCi.status === "completed" && commitCi.conclusion === "success") await liftEndedPauses(ctx, commitCi.repository);
   // A run of a target's deploy workflow is that target's deploy, whoever dispatched it (deploys.md DP11).
   await recordWorkflowRunDeploy(ctx, payload);
   const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;

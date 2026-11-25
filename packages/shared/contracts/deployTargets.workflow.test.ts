@@ -44,3 +44,17 @@ describe("a [[target]]'s workflow", () => {
     expect(() => parseDeployTargets(raw, [])).toThrow(/target\[1\]: target api: workflow deploy.yml is already target web's/);
   });
 });
+
+describe("a workflow target's rollback inputs and CI workflow (deploys.md DP18, DP19)", () => {
+  test("rollback_inputs are what codecast adds to a rollback's dispatch, and ci_workflow names main's CI", () => {
+    const [t] = parse({ workflow: "deploy.yml", rollback_inputs: { components: "backend-web" }, ci_workflow: ".github/workflows/ci.yml" });
+    expect(t).toMatchObject({ rollback_inputs: { components: "backend-web" }, ci_workflow: "ci.yml" });
+    expect(publishableTarget(t!)).toMatchObject({ rollback_inputs: { components: "backend-web" }, ci_workflow: "ci.yml" });
+  });
+
+  test("rollback inputs need a workflow and string values; a ci_workflow must be a workflow file", () => {
+    expect(() => parse({ rollback_inputs: { components: "backend" } })).toThrow(/names none/);
+    expect(() => parse({ workflow: "deploy.yml", rollback_inputs: { components: 2 } })).toThrow(/table of strings/);
+    expect(() => parse({ ci_workflow: "ci" })).toThrow(/not a workflow file/);
+  });
+});

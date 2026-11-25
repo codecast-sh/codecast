@@ -76,6 +76,13 @@ export type DeployTarget = {
    * on the default branch is a deploy (running, then live, failed or cancelled), so one dispatched by hand shows too.
    */
   workflow?: string;
+  /**
+   * What a rollback adds to `sha` and `actor` when codecast dispatches `workflow` itself (`{ components = "backend-web" }`):
+   * a rollback sends only what can go back to an earlier commit.
+   */
+  rollback_inputs?: Record<string, string>;
+  /** The CI workflow file (`ci.yml`) whose pass on main makes a commit green: a rollback's pause lifts on it. */
+  ci_workflow?: string;
 };
 
 /** The keys a target holds that only the CLI reads: the server stores the rest. */
@@ -155,7 +162,7 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow", "rollback_inputs", "ci_workflow"] as const;
 /** The step commands a target may give its deploy (DP13), each run like `run`. */
 const STEP_KEYS = ["ci", "gate", "rollout", "finish"] as const;
 
@@ -226,7 +233,7 @@ export function releaseOrder<T extends Pick<DeployTarget, "name" | "after">>(tar
 function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget {
   if (!e || typeof e !== "object" || Array.isArray(e)) throw new DeployTargetError("must be a table");
   const r = e as Record<string, unknown>;
-  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", ...STEP_KEYS, "deadline", "workflow"]) {
+  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", ...STEP_KEYS, "deadline", "workflow", "ci_workflow"]) {
     if (r[key] !== undefined && typeof r[key] !== "string") throw new DeployTargetError(`'${key}' must be a string`);
   }
   const name = String(r["name"] ?? "").trim().toLowerCase();
@@ -254,6 +261,13 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   }
   const workflow = typeof r["workflow"] === "string" ? r["workflow"].trim().replace(/^\.github\/workflows\//, "") : "";
   if (r["workflow"] !== undefined && !DEPLOY_WORKFLOW_RE.test(workflow)) throw new DeployTargetError(`target ${name}: workflow "${r["workflow"]}" is not a workflow file (deploy.yml)`);
+  const ciWorkflow = typeof r["ci_workflow"] === "string" ? r["ci_workflow"].trim().replace(/^\.github\/workflows\//, "") : "";
+  if (r["ci_workflow"] !== undefined && !DEPLOY_WORKFLOW_RE.test(ciWorkflow)) throw new DeployTargetError(`target ${name}: ci_workflow "${r["ci_workflow"]}" is not a workflow file (ci.yml)`);
+  const rollbackInputs = r["rollback_inputs"];
+  if (rollbackInputs !== undefined && (!rollbackInputs || typeof rollbackInputs !== "object" || Array.isArray(rollbackInputs) || Object.values(rollbackInputs).some((x) => typeof x !== "string"))) {
+    throw new DeployTargetError(`target ${name}: rollback_inputs must be a table of strings ({ components = "backend-web" })`);
+  }
+  if (rollbackInputs !== undefined && !workflow) throw new DeployTargetError(`target ${name}: rollback_inputs are inputs of its workflow, and it names none`);
   return {
     name,
     ...(command ? { command } : {}),
@@ -267,6 +281,8 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     ...Object.fromEntries(steps.map((k) => [k, (r[k] as string).trim()])),
     ...(deadline ? { deadline } : {}),
     ...(workflow ? { workflow } : {}),
+    ...(rollbackInputs ? { rollback_inputs: { ...(rollbackInputs as Record<string, string>) } } : {}),
+    ...(ciWorkflow ? { ci_workflow: ciWorkflow } : {}),
   };
 }
 

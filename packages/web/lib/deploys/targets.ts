@@ -6,6 +6,7 @@
 import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 import { prNumberOf } from "@codecast/shared/changes";
 import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
+import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import type { TargetState } from "../ship/journey";
 
 export type DeployTargetRow = {
@@ -18,6 +19,10 @@ export type DeployTargetRow = {
   policy: DeployTargetPolicy;
   command: string | null;
   rollback: string | null;
+  /** The workflow its deploys run as: codecast rolls such a target back itself, pausing production first (DP19). */
+  workflow?: string | null;
+  /** What that rollback adds to the workflow's inputs; without them codecast cannot send one. */
+  rollback_inputs?: Record<string, string> | null;
   paths: string[];
   can_deploy: boolean;
   can_redeploy_sha: boolean;
@@ -42,6 +47,25 @@ export type DeployTargetRow = {
     groups: QueueGroup[];
   };
 };
+
+/** A repository's production (DP17), one row per repository: every target of it reads its pause from here. */
+export type DeployProductionRow = {
+  /** The repository. */
+  _id: string;
+  workspace: string;
+  team_id: string;
+  repository: string;
+  /** Its standing pause: nothing but the rollback that paused it is sent while it stands. */
+  pause: DeployPauseView | null;
+  /** The viewer may pause, lift and roll back production; lifting is further for whoever paused (can_lift). */
+  can_pause: boolean;
+  can_lift: boolean;
+};
+
+/** The production a target belongs to: its repository's row in the same workspace. */
+export function productionOf(productions: ReadonlyArray<DeployProductionRow>, t: Pick<DeployTargetRow, "workspace" | "repository">): DeployProductionRow | undefined {
+  return productions.find((p) => p.workspace === t.workspace && p.repository === t.repository);
+}
 
 export type DeployStatus = "requested" | "running" | "live" | "failed" | "cancelled";
 

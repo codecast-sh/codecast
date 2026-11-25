@@ -223,7 +223,9 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     // A deploy asked for at an earlier sha (a redeploy, a rollback) is finished only by its own sha.
     && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
     // A run's marker finishes an open deploy only when it ships that deploy's sha, or the deploy names none yet.
-    && (!m.workflow_run || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
+    && (!m.workflow_run || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
+    // A deploy codecast sends through GitHub (DP18) is finished only by its own sha: a queued one has sent nothing yet.
+    && (!d.dispatch || !!(m.sha && sameSha(d.sha, m.sha))),
   ));
 
   // The same failure reported again (a redelivery, a backfill) enriches the failed deploy it already recorded.

@@ -332,6 +332,9 @@ describe('mobileNotificationRoute', () => {
     // A dev push dropped the work: no deploy to open, so the targets screen.
     expect(mobileNotificationRoute({ link: '/deploys' })).toBe('/deploys');
     expect(mobileRouteForUrl('https://codecast.sh/deploys')).toBe('/deploys');
+    // Production still paused (deployRollback's reminder): the targets screen, which shows the pause and its Lift,
+    // never the rollback deploy its entity names.
+    expect(mobileNotificationRoute({ link: '/deploys', entity_type: 'deploy', entity_id: 'dp-2400' })).toBe('/deploys');
     expect(mobileNotificationRoute({ entity_type: 'weekly_card', entity_id: '2026-W47' })).toBe('/week?w=2026-W47');
     expect(mobileNotificationRoute({ entity_type: 'passkey', entity_id: 'pk' })).toBe('/passkeys');
     expect(mobileNotificationRoute({ entity_type: 'team', entity_id: 't' })).toBe('/settings/team');

@@ -111,6 +111,7 @@ export const DATA_SCOPE = {
   lineCards: "entity",
   lineDeploys: "workspace",
   deployTargets: "workspace",
+  deployProductions: "workspace",
   pipelines: "workspace",
   checkouts: "workspace",
   teamDeploys: "workspace",

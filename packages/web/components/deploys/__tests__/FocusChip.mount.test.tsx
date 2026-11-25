@@ -33,7 +33,7 @@ mock.module("next/link", () => ({
 
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { FocusChip } = await import("../DeploysPage");
+const { FocusChip, Paused } = await import("../DeploysPage");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -71,5 +71,48 @@ test("a session already named by its short id reads the same", () => {
 test("a task keeps its plain word", () => {
   const { host, unmount } = mount({ kind: "task", id: "ct-98653" });
   expect(host.querySelector(".dpp-focus b")!.textContent).toBe("ct-98653");
+  unmount();
+});
+
+// The repository's production pause (DP17): who, why, the rollback and the task that lift it, the migrations that rule
+// a revert out, and Lift only for whoever may lift it.
+function mountPaused(p: any, canLift: boolean, onLift = () => {}) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  act(() => root.render(<MemoryRouter><Paused p={p} canLift={canLift} now={p.at + 3 * 60_000} onLift={onLift} /></MemoryRouter>));
+  return { host, unmount: () => act(() => root.unmount()) };
+}
+
+test("a pause by hand says who and why, lifts by them or the Release Captain, and Lift is one press for its holder", () => {
+  let lifted = 0;
+  const p = { repository: "acme/app", by: "Ana", reason: "errors spiking", at: 1_000_000, lifts: "", rollback: null, until: null };
+  const { host, unmount } = mountPaused(p, true, () => lifted++);
+  const box = host.querySelector("[data-deploy-paused]")!;
+  expect(box.textContent).toContain("Paused");
+  expect(box.textContent).toContain("Ana");
+  expect(box.textContent).toContain("3m");
+  expect(box.querySelector("[data-deploy-pause-reason]")!.textContent).toBe("errors spiking");
+  expect(box.querySelector("[data-deploy-pause-lifts]")!.textContent).toBe("Ana or the Release Captain");
+  expect(box.querySelector("[data-deploy-pause-migrations]")).toBeNull();
+  act(() => (box.querySelector("[data-deploy-lift]") as HTMLButtonElement).click());
+  expect(lifted).toBe(1);
+  unmount();
+  const other = mountPaused(p, false);
+  expect(other.host.querySelector("[data-deploy-lift]")).toBeNull();
+  other.unmount();
+});
+
+test("a rollback's pause names its deploy and task, and a fix forward shows the migrations that rule a revert out", () => {
+  const p = { repository: "acme/app", by: "Ana", reason: "Rollback dp-10: checkout broken", at: 1_000_000, lifts: "", rollback: "dp-10", until: { task: "ct-5", kind: "fix_forward", migrations: ["drizzle/0007_x.sql"], commits: 2 } };
+  const { host, unmount } = mountPaused(p, false);
+  const box = host.querySelector("[data-deploy-paused]")!;
+  expect(box.textContent).toContain("dp-10");
+  expect(box.querySelector("[data-deploy-pause-lifts]")!.textContent).toContain("ct-5");
+  expect(box.querySelector("[data-deploy-pause-lifts]")!.textContent).toContain("fix forward green on main");
+  const warn = box.querySelector("[data-deploy-pause-migrations]")!;
+  expect(warn.getAttribute("role")).toBe("alert");
+  expect(warn.textContent).toContain("No revert: fix forward");
+  expect(warn.textContent).toContain("drizzle/0007_x.sql");
   unmount();
 });

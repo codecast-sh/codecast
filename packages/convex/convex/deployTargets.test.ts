@@ -5,16 +5,24 @@ import { publish, recordLiveRead, recordShipPass, reportMainCommits, request, vi
 import { checkSuiteCi, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
+import { cancelForPause, mayDispatchCore, nextCore, readRun, recordRun, send, settle, sweepCore } from "./deployDispatch";
+import { recordWorkflowRunDeploy } from "./deployTargetsCi";
+import { endingOf, liftEndedPauses, remindCore, rollback } from "./deployRollback";
+import { grant as grantPause, lift as liftPause, pause as pausePause, status as pauseStatus } from "./deployPause";
+import { dispatch } from "./dispatch";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):
 // published from the checkout, live from whichever path recorded it, the
 // commits on main after the live sha waiting by session with CI, and a deploy
 // of any target asked for from codecast. Synthetic data only.
 
-const TEAM = "team_1" as any;
+// Shaped like a server id, so the Deploys page's dispatch writes take it.
+const TEAM = "team1".padEnd(32, "0") as any;
 const WS = `team:${TEAM}`;
 const ME = "user_me";
 const TOKEN = "cast_targets_token";
+const BO = "user_bo";
+const BO_TOKEN = "cast_targets_token_bo";
 const REPO = "acme/app";
 const NOW = Date.now();
 
@@ -22,9 +30,9 @@ const sha = (n: number) => String(n).padStart(2, "0").repeat(20);
 
 async function seed() {
   return {
-    users: [{ _id: ME, name: "Ana" }],
-    api_tokens: [{ _id: "tok_1", user_id: ME, token_hash: await hashToken(TOKEN) }],
-    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "member" }],
+    users: [{ _id: ME, name: "Ana" }, { _id: BO, name: "Bo", email: "bo@acme.dev" }],
+    api_tokens: [{ _id: "tok_1", user_id: ME, token_hash: await hashToken(TOKEN) }, { _id: "tok_2", user_id: BO, token_hash: await hashToken(BO_TOKEN) }],
+    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "member" }, { _id: "m2", user_id: BO, team_id: TEAM, role: "member" }],
     teams: [{ _id: TEAM, name: "Acme" }],
     devices: [{ _id: "dev_row", user_id: ME, device_id: "ana-mac" }],
     github_app_installations: [],
@@ -38,6 +46,8 @@ async function seed() {
     commit_ci: [] as any[],
     deploy_targets: [] as any[],
     deploys: [] as any[],
+    deploy_pauses: [] as any[],
+    org_roles: [] as any[],
     ship_passes: [] as any[],
     external_events: [],
     event_groups: [],
@@ -82,6 +92,8 @@ async function pushMain(t: Record<string, any[]>, ctx: any, rows: Array<{ n: num
 }
 
 const viewOf = async (ctx: any, target?: string) => (await (view as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, ...(target ? { target } : {}) })).targets;
+/** A repository's production controls as the view gives them, once per repository. */
+const productionOf = async (ctx: any, token = TOKEN) => (await (view as any)._handler(ctx, { api_token: token, team_id: TEAM })).productions.find((p: any) => p.repository === REPO);
 
 describe("publishing targets (DP10)", () => {
   test("a checkout's targets are stored per repository, and one it stops declaring is retired", async () => {
@@ -397,5 +409,327 @@ describe("a json live reader's url (pollLiveReaders)", () => {
       "https://172.32.0.1/x",
       "https://[2606:4700::1111]/x",
     ]) expect([url, liveReaderUrlRefusal(url)]).toEqual([url, null]);
+  });
+});
+
+describe("production paused (DP17)", () => {
+  const as = (token: string) => ({ api_token: token, team_id: TEAM, repository: REPO });
+
+  test("a pause is held by admins and members an admin granted it, never by a deploy grant alone", async () => {
+    const { t, ctx } = await published();
+    await expect((pausePause as any)._handler(ctx, { ...as(TOKEN), reason: "errors spiking" })).rejects.toThrow(/held by founders, engineers and the Release Captain/);
+    t.team_memberships[0].role = "admin";
+    await expect((grantPause as any)._handler(ctx, { ...as(BO_TOKEN), person: "Ana" })).rejects.toThrow(/Only a team admin/);
+    expect(await (grantPause as any)._handler(ctx, { ...as(TOKEN), person: "bo@acme.dev" })).toEqual({ person: "Bo", holds: true });
+    expect(await (pauseStatus as any)._handler(ctx, as(BO_TOKEN))).toEqual({ repository: REPO, paused: null, can_pause: true });
+    await (grantPause as any)._handler(ctx, { ...as(TOKEN), person: "bo@acme.dev", revoke: true });
+    expect((await (pauseStatus as any)._handler(ctx, as(BO_TOKEN))).can_pause).toBe(false);
+  });
+
+  test("while paused nothing is sent to the repository's targets; whoever paused lifts it, and sends go again", async () => {
+    const { t, ctx } = await published();
+    t.team_memberships[0].role = "admin";
+    t.team_memberships[1].production_pause = true;
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);
+    const p = await (pausePause as any)._handler(ctx, { ...as(TOKEN), reason: "errors spiking" });
+    expect(p).toMatchObject({ repository: REPO, by: "Ana", reason: "errors spiking", lifts: "Ana or the Release Captain lifts it.", until: null });
+    await expect((pausePause as any)._handler(ctx, { ...as(BO_TOKEN), reason: "again" })).rejects.toThrow(/already paused by Ana/);
+    await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).rejects.toThrow(/Production is paused by Ana: errors spiking/);
+    expect(await productionOf(ctx)).toMatchObject({ pause: { by: "Ana", reason: "errors spiking" }, can_pause: true });
+    expect((await viewOf(ctx)).every((t: any) => !("pause" in t))).toBe(true);
+    await expect((liftPause as any)._handler(ctx, as(BO_TOKEN))).rejects.toThrow(/Ana paused production; they or the Release Captain lift it/);
+    expect(await (liftPause as any)._handler(ctx, as(TOKEN))).toEqual({ lifted: true, repository: REPO });
+    expect(t.deploy_pauses[0]).toMatchObject({ lifted_by: "Ana" });
+    expect(await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).toMatchObject({ action: "deploy" });
+  });
+
+  test("the Deploys page pauses and lifts through dispatch, and the repository says whether its viewer may lift", async () => {
+    const { t, ctx } = await published();
+    t.team_memberships[0].role = "admin";
+    t.team_memberships[1].production_pause = true;
+    const asUser = (user: string) => ({ ...ctx, auth: { getUserIdentity: async () => ({ subject: `${user}|session` }) } });
+    const press = (user: string, action: string, args: unknown[]) => (dispatch as any)._handler(asUser(user), { action, args });
+    expect(await press(ME, "pauseProduction", [TEAM, REPO, "errors spiking"])).toMatchObject({ by: "Ana", reason: "errors spiking", cancelled: [] });
+    expect(await productionOf(ctx)).toMatchObject({ pause: { by: "Ana" }, can_pause: true, can_lift: true });
+    expect((await viewOf(ctx, "backend"))[0]).toMatchObject({ workflow: null });
+    expect(await productionOf(ctx, BO_TOKEN)).toMatchObject({ can_pause: true, can_lift: false });
+    await expect(press(BO, "liftProductionPause", [TEAM, REPO])).rejects.toThrow(/Ana paused production/);
+    expect(await press(ME, "liftProductionPause", [TEAM, REPO])).toEqual({ lifted: true, repository: REPO });
+    expect(await productionOf(ctx)).toMatchObject({ pause: null, can_lift: false });
+  });
+});
+
+describe("codecast's deploy queue through its GitHub app (DP18)", () => {
+  const PROD = { name: "production", command: "./deploy.sh --sha $sha", runs: "here", live: { kind: "marker" }, policy: "press", paths: [], workflow: "deploy.yml", rollback_inputs: { components: "backend-web" } };
+
+  async function production() {
+    const t = await seed();
+    const scheduled: Array<{ fn: string; args: any }> = [];
+    const ctx = { ...ctxFor(t), scheduler: { runAfter: async (_ms: number, fn: any, args: any) => { scheduled.push({ fn: String(fn?.[Symbol.for("functionName")] ?? fn), args }); return null; } } } as any;
+    // No machine publishes it: only codecast's GitHub app can send it.
+    await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets: [PROD] });
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }, { n: 2, files: ["api/b.ts"] }], NOW - 60_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "m", at: NOW - 50_000 });
+    return { t, ctx, scheduled };
+  }
+  const ask = (ctx: any, more: Record<string, unknown> = {}) => (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "production", ...more });
+
+  test("a deploy with no publishing machine queues with main's exact head and goes out one at a time", async () => {
+    const { t, ctx } = await production();
+    const r = await ask(ctx);
+    expect(r).toMatchObject({ short_id: "dp-2", sha: sha(2) });
+    expect(t.daemon_commands).toEqual([]);
+    const d = t.deploys.find((x) => x.short_id === "dp-2");
+    expect(d.dispatch).toMatchObject({ state: "queued", inputs: { sha: sha(2), actor: "Ana" } });
+    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: "dp-2" });
+    expect(await nextCore(ctx, WS, "production")).toEqual({ waiting: "dp-2 is going out" });
+    await (settle as any)._handler(ctx, { deploy: d._id, outcome: "sent" });
+    expect(d.dispatch.state).toBe("sent");
+    await expect(ask(ctx)).rejects.toThrow(/dp-2 is already going out/);
+    // Its run, named by the sha in its run-name, is the queued deploy, not a deploy of its own.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "77", url: "https://github.com/acme/app/actions/runs/77", status: "running", at: NOW });
+    expect(t.deploys.filter((x) => x.target === "production")).toHaveLength(2);
+    expect(d).toMatchObject({ status: "running", workflow_run: "77" });
+  });
+
+  test("a rollback queues behind the running deploy instead of being refused, and goes out with the rollback inputs once it ends", async () => {
+    const { t, ctx } = await production();
+    t.team_memberships[0].role = "admin";
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "80", url: "https://github.com/acme/app/actions/runs/80", status: "running", at: NOW - 30_000 });
+    const running = t.deploys.find((x) => x.workflow_run === "80");
+    // Codecast's rollback is the one way back: a bare rollback request would skip its pause.
+    await expect(ask(ctx, { action: "rollback" })).rejects.toThrow(/pauses production first/);
+    const r = await (rollback as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "errors spiking" });
+    expect(r).toMatchObject({ target: "production", sha: sha(1) });
+    const rb = t.deploys.find((x) => x.short_id === r.deploy);
+    expect(rb).toMatchObject({ action: "rollback", status: "requested" });
+    expect(rb.dispatch.inputs).toEqual({ sha: sha(1), actor: "Ana", components: "backend-web" });
+    expect(await nextCore(ctx, WS, "production")).toEqual({ waiting: `${running.short_id} is going out` });
+    running.status = "live";
+    // Production is paused, and the rollback that paused it is the one deploy that goes out.
+    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: r.deploy });
+  });
+
+  test("the Deploys page's Roll back takes codecast's rollback, and its deploy carries the page's client key", async () => {
+    const { t, ctx } = await production();
+    t.team_memberships[0].role = "admin";
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    expect((await viewOf(ctx, "production"))[0]).toMatchObject({ workflow: "deploy.yml", rollback_inputs: { components: "backend-web" } });
+    const asAna = { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } };
+    const r = await (dispatch as any)._handler(asAna, { action: "rollbackProduction", args: ["dp-client-abc", TEAM, REPO, "production", null, "checkout broken"] });
+    expect(r).toMatchObject({ target: "production", sha: sha(1), ending: "revert" });
+    expect(t.deploys.find((x) => x.short_id === r.deploy)).toMatchObject({ action: "rollback", client_key: "dp-client-abc" });
+    expect((await productionOf(ctx)).pause).toMatchObject({ rollback: r.deploy, until: { task: r.task, kind: "revert" } });
+  });
+
+  test("a pause cancels what waits in the queue and stops a run before rollout; any other cancel is neutral", async () => {
+    const { t, ctx, scheduled } = await production();
+    const queued = await ask(ctx);
+    // A run another path dispatched for an earlier commit: a deploy of its own, going out.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "running", at: NOW - 30_000 });
+    const out = await cancelForPause(ctx, WS, REPO, "Ana", "production paused: errors");
+    expect(out).toHaveLength(2);
+    expect(t.deploys.find((x) => x.short_id === queued.short_id)).toMatchObject({ status: "cancelled", cancel: { by: "Ana", why: "production paused: errors" } });
+    expect(scheduled.some((c) => c.args?.why === "production paused: errors" && c.args?.deploy)).toBe(true);
+    // A run cancelled anywhere else carries no codecast cancel.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "cancelled", at: NOW });
+    expect(t.deploys.find((x) => x.workflow_run === "81")).toMatchObject({ status: "cancelled" });
+    expect(t.deploys.find((x) => x.workflow_run === "81").cancel).toBeUndefined();
+  });
+
+  const runPayload = (run: Record<string, unknown>) => ({
+    workflow_run: { id: 90, head_sha: sha(2), head_branch: "main", path: ".github/workflows/deploy.yml", event: "workflow_dispatch", run_attempt: 1, html_url: `https://github.com/${REPO}/actions/runs/90`, display_title: `Deploy ${sha(2)} for Ana`, name: "Deploy", run_started_at: new Date(NOW).toISOString(), created_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString(), status: "in_progress", conclusion: null, ...run },
+    repository: { full_name: REPO, default_branch: "main" },
+    workflow: { name: "Deploy" },
+  });
+
+  test("a pause that comes while a deploy is claimed cancels it before GitHub is asked; the pause's own rollback still goes", async () => {
+    const { t, ctx } = await production();
+    t.team_memberships[0].role = "admin";
+    const asked = await ask(ctx);
+    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: asked.short_id });
+    await (pausePause as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "errors" });
+    const d = t.deploys.find((x) => x.short_id === asked.short_id);
+    expect(await mayDispatchCore(ctx, d._id)).toBe(false);
+    expect(d).toMatchObject({ status: "cancelled", cancel: { by: "Ana", why: "production paused: errors" } });
+    // The rollback that paused passes the same read.
+    t.deploy_pauses[0].rollback = "dp-9";
+    d.status = "requested";
+    d.short_id = "dp-9";
+    d.dispatch = { ...d.dispatch, state: "sending" };
+    expect(await mayDispatchCore(ctx, d._id)).toBe(true);
+  });
+
+  test("a deploy sent before the pause is cancelled before rollout when its run starts after it", async () => {
+    const { t, ctx, scheduled } = await production();
+    t.team_memberships[0].role = "admin";
+    const asked = await ask(ctx);
+    await nextCore(ctx, WS, "production");
+    const d = t.deploys.find((x) => x.short_id === asked.short_id);
+    await (settle as any)._handler(ctx, { deploy: d._id, outcome: "sent" });
+    await (pausePause as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "errors" });
+    scheduled.length = 0;
+    expect(await recordWorkflowRunDeploy(ctx, runPayload({}))).toEqual([asked.short_id]);
+    expect(d).toMatchObject({ status: "running", workflow_run: "90" });
+    expect(scheduled.find((c) => c.args?.deploy === d._id)?.args).toEqual({ deploy: d._id, by: "Ana", why: "production paused: errors" });
+  });
+
+  test("a deploy whose webhooks went quiet is read from GitHub, and its finished run frees the queue", async () => {
+    const { t, ctx, scheduled } = await production();
+    const asked = await ask(ctx);
+    await nextCore(ctx, WS, "production");
+    const d = t.deploys.find((x) => x.short_id === asked.short_id);
+    await (settle as any)._handler(ctx, { deploy: d._id, outcome: "sent" });
+    await recordWorkflowRunDeploy(ctx, runPayload({}));
+    expect(d.status).toBe("running");
+    scheduled.length = 0;
+    expect((await sweepCore(ctx, d.updated_at + 60_000)).read).toEqual([]);
+    expect((await sweepCore(ctx, d.updated_at + 6 * 60_000)).read).toEqual([asked.short_id]);
+    expect(scheduled.some((c) => c.args?.deploy === d._id && !("by" in c.args))).toBe(true);
+    // The reader asks GitHub for the run and records what it says as the webhook would have.
+    const realFetch = globalThis.fetch;
+    const recorded: any[] = [];
+    globalThis.fetch = (async (url: string) => new Response(JSON.stringify(String(url).endsWith("/runs/90") ? runPayload({ status: "completed", conclusion: "success" }).workflow_run : { default_branch: "main" }), { status: 200 })) as any;
+    const actx = {
+      runQuery: async (_fn: any, args: any) => ("deploy" in args ? { repository: REPO, team_id: TEAM, workflow: "deploy.yml", run: "90", sha: sha(2), since: NOW } : { installation_id: 9 }),
+      runAction: async () => ({ token: "t" }),
+      runMutation: async (_fn: any, args: any) => { recorded.push(args); },
+    };
+    try {
+      expect(await (readRun as any)._handler(actx, { deploy: d._id })).toBe("completed success");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    await (recordRun as any)._handler(ctx, recorded[0]);
+    expect(d.status).toBe("live");
+  });
+
+  test("the send dispatches the workflow on the default branch with the exact sha, only when GitHub has no run going", async () => {
+    const calls: Array<{ url: string; method: string; body?: any }> = [];
+    let going = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET", ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      if (String(url).includes("/runs?status=")) return new Response(JSON.stringify({ total_count: String(url).includes("status=in_progress") ? going : 0 }), { status: 200 });
+      if (String(url).endsWith("/dispatches")) return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ default_branch: "main" }), { status: 200 });
+    }) as any;
+    const settled: any[] = [];
+    let mayGo = true;
+    const actx = {
+      runQuery: async (_fn: any, args: any) => ("deploy" in args ? { repository: REPO, team_id: TEAM, workflow: "deploy.yml", inputs: { sha: sha(2), actor: "Ana" } } : { installation_id: 9 }),
+      runAction: async () => ({ token: "t", permissions: { actions: "write" } }),
+      // settle records its outcome; mayDispatch is the pause read last, before the dispatch.
+      runMutation: async (_fn: any, args: any) => ("outcome" in args ? void settled.push(args) : mayGo),
+    };
+    try {
+      going = 1;
+      expect(await (send as any)._handler(actx, { deploy: "d1" })).toBe("a run is in_progress");
+      expect(settled.at(-1)).toMatchObject({ outcome: "busy" });
+      expect(calls.some((c) => c.method === "POST")).toBe(false);
+      going = 0;
+      // A pause that came since the claim: nothing is dispatched.
+      mayGo = false;
+      expect(await (send as any)._handler(actx, { deploy: "d1" })).toBe("paused");
+      expect(calls.some((c) => c.method === "POST")).toBe(false);
+      mayGo = true;
+      expect(await (send as any)._handler(actx, { deploy: "d1" })).toBe("sent");
+      const post = calls.find((c) => c.method === "POST")!;
+      expect(post.url).toBe(`https://api.github.com/repos/${REPO}/actions/workflows/deploy.yml/dispatches`);
+      expect(post.body).toEqual({ ref: "main", inputs: { sha: sha(2), actor: "Ana" } });
+      expect(settled.at(-1)).toMatchObject({ outcome: "sent" });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe("rolling production back (DP19)", () => {
+  const PROD = { name: "production", command: "./deploy.sh --sha $sha", runs: "here", live: { kind: "marker" }, policy: "press", paths: [], workflow: "deploy.yml", rollback_inputs: { components: "backend-web" }, ci_workflow: "ci.yml" };
+  const CAPTAIN = { _id: "role_rc", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Release Captain", handle: "release", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", authority: [{ id: "production-pause", kind: "write", label: "Pause", granted_by: ME, granted_at: 1 }] };
+
+  async function rolledBack(files2: string[]) {
+    const t = await seed();
+    t.team_memberships[0].role = "admin";
+    t.org_roles.push(CAPTAIN);
+    const ctx = ctxFor(t);
+    await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets: [PROD] });
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }, { n: 2, files: files2 }], NOW - 60_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "m", at: NOW - 50_000 });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    const r = await (rollback as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "checkout broken" });
+    return { t, ctx, r };
+  }
+  const ci = (t: Record<string, any[]>, n: number, status: string, conclusion?: string) =>
+    t.commit_ci.push({ _id: `ci_${n}_${t.commit_ci.length}`, workspace: WS, team_id: TEAM, repository: REPO, sha: sha(n), name: "CI", kind: "workflow", path: ".github/workflows/ci.yml", run_id: `r${t.commit_ci.length}`, status, ...(conclusion ? { conclusion } : {}), started_at: NOW + t.commit_ci.length, updated_at: NOW });
+
+  test("a rollback pauses production first and files the revert of what it took off to the Release Captain", async () => {
+    const { t, ctx, r } = await rolledBack(["api/b.ts"]);
+    expect(r).toMatchObject({ ending: "revert", commits: 1, migrations: [] });
+    const task = t.tasks.find((x) => x.short_id === r.task);
+    expect(task.title).toBe(`Revert what rollback ${r.deploy} took off production`);
+    expect(task.description).toContain(`${sha(2).slice(0, 10)} change 2`);
+    expect(String(task.assignee)).toBe("role_rc");
+    expect(t.deploy_pauses[0]).toMatchObject({ rollback: r.deploy, until: { kind: "revert", shas: [sha(2)] }, by: { kind: "person", name: "Ana" } });
+    await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "production" })).rejects.toThrow(/Production is paused by Ana: Rollback/);
+  });
+
+  test("a range holding a migration is ended by a fix forward, never a revert", async () => {
+    const { t, r } = await rolledBack(["api/b.ts", "backend/drizzle/0007_add_col.sql"]);
+    expect(r).toMatchObject({ ending: "fix_forward", migrations: ["backend/drizzle/0007_add_col.sql"] });
+    expect(t.tasks.find((x) => x.short_id === r.task).title).toBe(`Fix forward what rollback ${r.deploy} took off production`);
+  });
+
+  test("the pause lifts itself once the commit naming its task is green on main, not when it merges", async () => {
+    const { t, ctx, r } = await rolledBack(["api/b.ts"]);
+    const taskId = t.tasks.find((x) => x.short_id === r.task)._id;
+    await pushMain(t, ctx, [{ n: 3, files: ["api/b.ts"], tasks: [taskId] }], NOW + 1_000);
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    ci(t, 3, "in_progress");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    ci(t, 3, "completed", "failure");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    ci(t, 3, "completed", "success");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([REPO]);
+    expect(t.deploy_pauses[0]).toMatchObject({ lifted_by: "green on main", lifted_on: sha(3) });
+  });
+
+  test("a range codecast could not read whole is never a safe revert, and an ending commit past what it reads is not silently missed", async () => {
+    const t = await seed();
+    t.team_memberships[0].role = "admin";
+    t.org_roles.push(CAPTAIN);
+    const ctx = ctxFor(t);
+    await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets: [PROD] });
+    const hex = (n: number) => n.toString(16).padStart(40, "a");
+    const rows = Array.from({ length: 1503 }, (_, i) => ({ _id: `c_${i}`, sha: hex(i), message: `change ${i}`, author_name: "Ana", author_email: "a@x", timestamp: NOW, files_changed: 1, insertions: 0, deletions: 0, repository: REPO, team_id: TEAM, branch: "main", files: [{ filename: "api/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1 }] }));
+    t.commits.push(...rows);
+    await stampMainOrder(ctx, rows.map((r) => r._id as any), NOW - 3_600_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: hex(0), repository: REPO, source: "m", at: NOW - 50_000 });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: hex(1502), repository: REPO, source: "m", at: NOW - 40_000 });
+    const r = await (rollback as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "broken" });
+    expect(r).toMatchObject({ ending: "fix_forward", migrations: [] });
+    // Its task's commit landed right after the rollback, then more than codecast reads at once landed after it.
+    const p = t.deploy_pauses[0];
+    p.until = { ...p.until, from_sha: hex(0) };
+    rows[1].task_ids = [t.tasks.find((x) => x.short_id === r.task)._id];
+    expect(await endingOf(ctx, p)).toBe("unreadable");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    expect(p.lifted_at).toBeUndefined();
+  });
+
+  test("a standing pause reminds whoever lifts it only inside the team's working hours", async () => {
+    const { t, ctx } = await rolledBack(["api/b.ts"]);
+    t.teams[0].timezone = "America/Los_Angeles";
+    const saturdayNoon = Date.parse("2026-11-28T20:00:00Z");
+    const wednesdayNight = Date.parse("2026-11-25T07:00:00Z");
+    t.deploy_pauses[0].created_at = wednesdayNight - 5 * 3_600_000;
+    expect(await remindCore(ctx, saturdayNoon)).toBe(0);
+    expect(await remindCore(ctx, wednesdayNight)).toBe(0);
+    expect(t.deploy_pauses[0].reminded_at).toBeUndefined();
+    const wednesdayMorning = Date.parse("2026-11-25T18:00:00Z");
+    expect(await remindCore(ctx, wednesdayMorning)).toBe(1);
+    expect(t.deploy_pauses[0].reminded_at).toBe(wednesdayMorning);
+    expect(await remindCore(ctx, wednesdayMorning + 3_600_000)).toBe(0);
   });
 });

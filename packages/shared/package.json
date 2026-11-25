@@ -93,6 +93,7 @@
     "./contracts/mainRed": "./contracts/mainRed.ts",
     "./contracts/lineDeploy": "./contracts/lineDeploy.ts",
     "./contracts/deployAuthority": "./contracts/deployAuthority.ts",
+    "./contracts/deployPause": "./contracts/deployPause.ts",
     "./contracts/linePhases": "./contracts/linePhases.ts",
     "./contracts/regretRates": "./contracts/regretRates.ts",
     "./contracts/flowPool": "./contracts/flowPool.ts",

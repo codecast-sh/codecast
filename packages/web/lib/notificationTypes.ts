@@ -83,6 +83,8 @@ export const taskTypes = new Set([
   "cause_reopened",
   // A deploy took off what the person's uncommitted push put live (convex deploys.ts noticeDroppedWork).
   "deploy_dropped_work",
+  // Production is still paused and the person lifts it (convex deployPause.ts remindPauses).
+  "production_paused",
 ]);
 
 export const typeLabels: Record<string, string> = {
@@ -120,6 +122,7 @@ export const typeLabels: Record<string, string> = {
   change_shipped: "change shipped",
   cause_reopened: "problem came back",
   deploy_dropped_work: "dropped your work",
+  production_paused: "production still paused",
   decision_answered_for_you: "answered for you",
   decision_passed: "passed you a decision",
   decision_escalated: "escalated a decision to you",
@@ -169,6 +172,7 @@ export const typeColors: Record<string, string> = {
   change_shipped: "text-sol-green",
   cause_reopened: "text-red-400",
   deploy_dropped_work: "text-sol-orange",
+  production_paused: "text-sol-orange",
   decision_answered_for_you: "text-sol-yellow",
   decision_passed: "text-sol-yellow",
   decision_escalated: "text-sol-orange",

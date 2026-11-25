@@ -293,6 +293,7 @@ function plans() {
     byWorkspace("dev_pushes", "by_workspace_target_live"),
     byWorkspace("ship_passes", "by_workspace_finished"),
     byWorkspace("repo_leases", "by_workspace_repository"),
+    byWorkspace("deploy_pauses", "by_workspace_repository_lifted"),
     byWorkspace("main_ci_runs", "by_scope_seq"),
     byWorkspace("main_reds", "by_scope_status_created"),
     byWorkspace("trial_cards", "by_workspace_created"),

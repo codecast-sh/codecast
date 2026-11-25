@@ -472,6 +472,8 @@ crons.interval("deploy waiting fixes as the line's role", { minutes: 10 }, (inte
 // Deploy targets (deploys.md DP11, DP13): read each json live reader (a release's latest.json), and send the targets that go out by themselves when CI on main is green.
 crons.interval("read deploy targets' live readers", { minutes: 5 }, (internal as any).deployTargets.pollLiveReaders, {});
 crons.interval("deploy targets that go out on green CI", { minutes: 10 }, (internal as any).deployTargets.autoDeployTargets, {});
+crons.interval("codecast's deploy queue: send what waits once nothing is going out", { minutes: 2 }, (internal as any).deployDispatch.sweep, {});
+crons.interval("production pauses: lift what a green commit ended, remind who lifts the rest", { minutes: 5 }, (internal as any).deployRollback.sweep, {});
 
 // Promotions a source's hourly cap held back (ingest.promoteDue): filed as the
 // window has room, so a burst of new groups reaches the line late, never not at all.

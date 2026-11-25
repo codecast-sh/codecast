@@ -266,6 +266,9 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
     live_reader: t.live,
     command: t.command ?? null,
     rollback: t.rollback ?? null,
+    // A target whose deploys run as a workflow rolls back through codecast's own rollback (DP19), with these inputs.
+    workflow: t.workflow ?? null,
+    rollback_inputs: t.rollback_inputs ?? null,
     paths: t.paths,
     can_deploy: t.runs === "here" && !!t.command && !!t.device_id && !!t.root,
     can_redeploy_sha: t.runs === "here" && canRedeploySha(t),

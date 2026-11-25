@@ -21,6 +21,7 @@ import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliAuthRequest } from "./cliAuthHttp";
 import { registerCliPreflight, registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
 import { registerPriorityRoutes } from "./lib/priorityRoutes";
+import { registerDeployPauseRoutes } from "./lib/deployPauseRoutes";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
@@ -3481,6 +3482,7 @@ cliRoute("/cli/pipelines", async (ctx, body) => ctx.runQuery(api.pipelines.forTe
 cliRoute("/cli/checkouts/report", async (ctx, body) => ctx.runMutation(api.checkouts.report, body), { forwardDeviceId: true });
 cliRoute("/cli/checkouts", async (ctx, body) => ctx.runQuery(api.checkouts.forTeam, body));
 cliRoute("/cli/deploys/target/request", async (ctx, body) => ctx.runMutation(api.deployTargets.request, body));
+registerDeployPauseRoutes(http);
 cliRoute("/cli/deploys/target/for-deploy", async (ctx, body) => ctx.runQuery(api.deployTargets.forDeploy, body));
 cliRoute("/cli/deploys/main-commits", async (ctx, body) => ctx.runMutation(api.deployTargets.reportMainCommits, body));
 cliRoute("/cli/deploys/ship-pass", async (ctx, body) => ctx.runMutation(api.deployTargets.recordShipPass, body), { forwardDeviceId: true });

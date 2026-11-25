@@ -1028,7 +1028,24 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "deployTargets" },
     hydration: { phase: "deferred" },
     indexes: "_id, workspace",
-    sync: { isDelta: true, deepFields: ["queue", "paths", "live_reader", "last_read"] },
+    sync: { isDelta: true, deepFields: ["queue", "paths", "live_reader", "last_read", "rollback_inputs"] },
+    feeds: ["deployTargets.view"],
+  },
+  // Each repository's production (deploys.md DP17), one row per repository
+  // keyed by it, fed beside its targets: its standing pause and whether the
+  // viewer may pause, lift and roll back. Every target of the repository reads
+  // its pause from here. localFirst: Pause, Lift and Roll back paint the row
+  // (lineSlice) and `can_lift` holds until its echo, so a refused write puts it
+  // back. `pause` is unprotected: the server stamps when, what lifts it and the
+  // rollback's dp-N and task, so its echo replaces the painted pause rather
+  // than matching it.
+  deployProductions: {
+    persistence: { kind: "collection", key: "deployProductions" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    indexes: "_id, workspace",
+    sync: { isDelta: true, deepFields: ["pause"] },
+    unprotectedFields: ["pause"],
     feeds: ["deployTargets.view"],
   },
   // Every deploy of a team's targets the Deploys page shows: live, going out,
@@ -2347,6 +2364,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineOccurrences: "shared",
   lineDeploys: "shared",
   deployTargets: "shared",
+  deployProductions: "shared",
   pipelines: "shared",
   checkouts: "shared",
   teamDeploys: "shared",

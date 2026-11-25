@@ -7,6 +7,7 @@ import { normalizeRepository } from "./lib/gitRefs";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { commitBySha } from "./deployTargetsState";
 import { recordDeployMarker } from "./deploys";
+import { cancelIfPaused, kickDispatch } from "./deployDispatch";
 import { commitCiState, type CommitCiRun, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
 
 export const teamKey = (teamId: Id<"teams">) => `team:${teamId}`;
@@ -19,6 +20,8 @@ export type CommitCiInput = {
   name: string;
   kind: "workflow" | "suite";
   run_id?: string;
+  /** A workflow run's file (`.github/workflows/ci.yml`). */
+  path?: string;
   status: string;
   conclusion?: string;
   url?: string;
@@ -41,6 +44,7 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
   const same = rows.find((r) => r.name === row.name && r.kind === row.kind);
   const fields = {
     ...(row.run_id ? { run_id: row.run_id } : {}),
+    ...(row.path ? { path: row.path } : {}),
     status: row.status,
     ...(row.conclusion ? { conclusion: row.conclusion } : {}),
     ...(row.url ? { url: row.url } : {}),
@@ -76,6 +80,7 @@ export function workflowRunCi(payload: any): CommitCiInput | null {
     name,
     kind: "workflow",
     ...(run.id != null ? { run_id: String(run.id) } : {}),
+    ...(run.path ? { path: String(run.path) } : {}),
     status: String(run.status ?? "queued"),
     ...(run.conclusion ? { conclusion: String(run.conclusion) } : {}),
     ...(run.html_url ? { url: run.html_url } : {}),
@@ -322,6 +327,9 @@ export async function recordWorkflowRunDeploy(ctx: any, payload: any): Promise<s
       at: r.status === "running" ? r.started_at : r.at,
     });
     if (deploy) out.push(deploy);
+    // A run starting while production is paused stops before its rollout; a finished run frees the queue (DP18).
+    if (r.status === "running" && deploy) await cancelIfPaused(ctx, deploy);
+    if (r.status !== "running") await kickDispatch(ctx, t.workspace, t.name);
   }
   return out;
 }

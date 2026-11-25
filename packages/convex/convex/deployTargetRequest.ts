@@ -7,6 +7,8 @@ import { enqueueConfigCommand } from "./users";
 import { DEPLOY_SHORT_ID_PREFIX, liveDeploys } from "@codecast/shared/contracts/deploys";
 import { canRedeploySha, commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
 import { teamKey } from "./deployTargetsCi";
+import { refuseWhilePaused } from "./deployPause";
+import { kickDispatch, sendsThroughGithub } from "./deployDispatch";
 import { COMMITS_MAX, commitBySha, deployCommitsOf, devPushOver, mainCommitsAfter, repositoryArg, targetDeploys, targetRows } from "./deployTargetsState";
 
 /**
@@ -20,7 +22,7 @@ import { COMMITS_MAX, commitBySha, deployCommitsOf, devPushOver, mainCommitsAfte
 export async function requestTargetDeployCore(
   ctx: any,
   userId: Id<"users">,
-  args: { team_id: Id<"teams">; target: string; repository?: string; action?: "deploy" | "redeploy" | "rollback"; of?: string; sha?: string; here?: boolean; cli?: boolean; client_key?: string; request_id?: string },
+  args: { team_id: Id<"teams">; target: string; repository?: string; action?: "deploy" | "redeploy" | "rollback"; of?: string; sha?: string; here?: boolean; cli?: boolean; client_key?: string; request_id?: string; actor?: string; paused?: boolean },
 ): Promise<{ _id: string; short_id: string; target: string; action: string; sha: string | null; commits: number }> {
   const workspace = teamKey(args.team_id);
   if (!(await workspaceGrantsAccess(ctx, userId, workspace))) throw new Error("Not a member of that team");
@@ -32,10 +34,18 @@ export async function requestTargetDeployCore(
   const action = args.action ?? "deploy";
   if (t.runs === "push") throw new Error(`${name} deploys itself when main moves; there is nothing to send from here`);
   if (!t.command) throw new Error(`${name} names no command`);
-  if (!args.here && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
+  // A pause lets only a rollback through.
+  if (action !== "rollback") await refuseWhilePaused(ctx, workspace, t.repository);
+  // A target whose deploys run as a workflow is sent through codecast's GitHub app (DP18): a rollback always, any other
+  // deploy when no machine publishes the target.
+  const viaGithub = !args.here && sendsThroughGithub(t) && (action === "rollback" || !t.device_id || !t.root);
+  if (!args.here && !viaGithub && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
+  // Codecast's rollback pauses production first and names what ends it (deployRollback.rollbackCore, DP19).
+  if (viaGithub && action === "rollback" && !args.paused) throw new Error(`A rollback of ${name} pauses production first: cast line deploy rollback --reason "<why>", or Roll back on the Deploys page`);
   const deploys = await targetDeploys(ctx, workspace, name);
   const open = deploys.find((d) => (d.status === "requested" || d.status === "running") && (!d.repository || d.repository === t.repository));
-  if (open) throw new Error(`${open.short_id} is already going out to ${name} (${open.status}); wait for it to finish`);
+  // A rollback queues behind what is going out instead of being refused.
+  if (open && !(viaGithub && action === "rollback")) throw new Error(`${open.short_id} is already going out to ${name} (${open.status}); wait for it to finish`);
   // What a deploy goes on from, a rollback goes back from, and "already live" means: the deploy that went live last.
   const lives = liveDeploys(deploys, { repository: t.repository });
   const live = lives[0];
@@ -48,7 +58,8 @@ export async function requestTargetDeployCore(
       : lives.find((d) => d._id !== live?._id && d.sha && d.sha !== live?.sha);
     if (!of?.sha) throw new Error(args.of ? `No deploy ${args.of} of ${name} with a sha` : `No earlier live deploy of ${name} to go back to`);
     if (action === "redeploy" && !canRedeploySha(t)) throw new Error(`${name}'s command sends the tree it runs in, not a sha: it cannot redeploy ${of.short_id}${t.rollback ? "; use its rollback" : ""}`);
-    if (action === "rollback" && !t.rollback) throw new Error(`${name} names no rollback command`);
+    if (action === "rollback" && !viaGithub && !t.rollback) throw new Error(`${name} names no rollback command`);
+    if (action === "rollback" && viaGithub && !t.rollback_inputs) throw new Error(`${name} names no rollback_inputs: a rollback dispatches ${t.workflow} with them (.codecast/deploy.toml)`);
     sha = of.sha;
     rollbackOf = of.short_id;
   }
@@ -81,6 +92,15 @@ export async function requestTargetDeployCore(
   }
   const now = Date.now();
   const user = await ctx.db.get(userId);
+  const by = user?.name ?? user?.github_username ?? user?.email ?? "someone";
+  // Codecast sends an exact commit: main's head as it has read it, when the deploy names none.
+  if (viaGithub && !sha) {
+    sha = (await mainCommitsAfter(ctx, t.repository, live?.sha ?? null)).commits.at(-1)?.sha;
+    if (!sha) throw new Error(`Nothing on ${t.repository}'s default branch after what is live on ${name}`);
+  }
+  const dispatch = viaGithub
+    ? { state: "queued" as const, at: now, inputs: { sha: sha!, actor: args.actor ?? by.split(/\s+/)[0], ...(action === "rollback" ? t.rollback_inputs : {}) } }
+    : undefined;
   const shortId = await nextShortId(ctx.db, DEPLOY_SHORT_ID_PREFIX);
   const id = await ctx.db.insert("deploys", {
     short_id: shortId,
@@ -90,7 +110,7 @@ export async function requestTargetDeployCore(
     target: name,
     status: "requested",
     trigger: "person",
-    started_by: { kind: args.cli ? "cli" : "person", name: user?.name ?? user?.github_username ?? user?.email ?? "someone", user_id: userId },
+    started_by: { kind: args.cli ? "cli" : "person", name: by, user_id: userId },
     source: "codecast",
     event_ids: [],
     repository: t.repository,
@@ -100,10 +120,12 @@ export async function requestTargetDeployCore(
     carries: [],
     action,
     ...(rollbackOf ? { rollback_of: rollbackOf } : {}),
+    ...(dispatch ? { dispatch } : {}),
     created_at: now,
     updated_at: now,
   });
-  if (!args.here) {
+  if (viaGithub) await kickDispatch(ctx, workspace, name);
+  else if (!args.here) {
     try {
       await enqueueConfigCommand(ctx, userId, "line_deploy", JSON.stringify({ deploy: shortId, root: t.root }), t.device_id, args.request_id);
     } catch (err) {
