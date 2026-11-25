@@ -693,3 +693,92 @@ describe("verifying the word a read cited", () => {
     expect(read.cards).toEqual([{ card: "sd-1", on_task: true, question: "Ship?", user_id: String(s.ana), user_name: "Ana", answer: "Revise", note: "fix X first", created_at: new Date(s.now() + 60_000).toISOString() }]);
   });
 });
+
+// A run started from a plain shell on a task alone (`cast flow run change --task ct-N`, its working sessions ended)
+// carries no session of its change: the read and the check both walk up from the sessions tied to the task, which
+// the server reads off the task itself, never off a session the caller names.
+describe("a run on a task alone", () => {
+  async function seedTaskRun(opts: { starter?: "ana" | "eve"; tie?: "bound" | "handoff" | "none" } = {}) {
+    const s = await seed();
+    const { t, ana, eve, conv, echo, post } = s;
+    const starter = opts.starter === "eve" ? eve : ana;
+    const token = opts.starter === "eve" ? EVE_TOKEN : ANA_TOKEN;
+    // Eve co-owns both, so a run of hers reads them; their terminal lines are Ana's, the sessions' user.
+    const lead = await conv({ title: "Fix the deploys page", owner_user_id: eve });
+    await echo(lead, "look at the deploys page");
+    await echo(lead, "Yes, ship this once the tests pass.");
+    // The implementer, killed after it handed off: the run has no live session to take as its subject.
+    const worker = await conv({ spawned_by_conversation_id: lead, owner_user_id: eve, inbox_killed_at: Date.now() });
+    await echo(worker, "on it");
+    const reviewer = await conv({ title: "Review ct-7", owner_user_id: eve });
+    await echo(reviewer, "ship it");
+    const elsewhere = await conv({ title: "Unrelated", owner_user_id: eve });
+    await echo(elsewhere, "ship it");
+    const tie = opts.tie ?? "bound";
+    const ids = await t.run(async (ctx: any) => {
+      const now = Date.now();
+      const task = await ctx.db.insert("tasks", {
+        user_id: starter, workspace: `user:${starter}`, short_id: "ct-7", title: "Fix the deploys page", status: "in_review", source: "agent",
+        ...(tie === "bound" ? { conversation_ids: [worker, reviewer] } : {}), created_at: now, updated_at: now,
+      } as any);
+      await ctx.db.patch(reviewer, { review_of_task_id: task });
+      if (tie === "handoff") {
+        await ctx.db.insert("task_comments", { task_id: task, author: "agent", text: "Handoff: done\n\nran the tests", conversation_id: worker, comment_type: "review", created_at: now } as any);
+      }
+      // Notes from sessions that only commented name no anchor.
+      await ctx.db.insert("task_comments", { task_id: task, author: "agent", text: "looked at it", conversation_id: elsewhere, comment_type: "progress", created_at: now } as any);
+      const run = await ctx.db.insert("workflow_runs", {
+        user_id: starter, task_id: task, status: "running", current_node_id: "intent__clear",
+        node_statuses: [{ node_id: "intent__clear", status: "running" }], created_at: now, updated_at: now,
+      } as any);
+      return { task, run };
+    });
+    const sid = async (c: unknown) => (await t.run((ctx: any) => ctx.db.get(c))).short_id;
+    const read = (task = "ct-7") => post("/cli/sessions/originator", { api_token: token, task, run_id: String(ids.run) });
+    const verify = (cite: { conversation_short_id: string; line: number }, quote: string) =>
+      post("/cli/intent/verify", { api_token: token, run_id: String(ids.run), cite, quote, head: "a".repeat(40) });
+    return { ...s, lead, worker, reviewer, elsewhere, sid, read, verify, ...ids };
+  }
+
+  test("reads the starter's word up the chain of the session bound to the task, and the server clears it", async () => {
+    const { ana, lead, worker, reviewer, elsewhere, sid, read, verify } = await seedTaskRun();
+    const r = await read();
+    expect(r.error).toBeUndefined();
+    expect(r.chain).toEqual([]);
+    expect(r.originator).toBeUndefined();
+    expect(r).toMatchObject({ starter_id: String(ana), starter_name: "Ana" });
+    // The worker and the lead it was spawned by; not the task's reviewer, nor a session that only commented.
+    expect(r.task.chain.map((h: any) => h.conversation_id)).toEqual([String(worker), String(lead)]);
+    expect(r.typed.map((l: any) => l.text)).toContain("Yes, ship this once the tests pass.");
+    expect(r.typed.some((l: any) => [String(reviewer), String(elsewhere)].includes(l.conversation_id))).toBe(false);
+
+    const at = await sid(lead);
+    expect(await verify({ conversation_short_id: at, line: 2 }, "Yes, ship this")).toMatchObject({ starter_id: String(ana), cite: `${at}:2` });
+    // A session the client might name, off every chain the server walks, never clears.
+    expect((await verify({ conversation_short_id: await sid(elsewhere), line: 1 }, "ship it")).error).toMatch(/not a session this change came through/);
+    expect((await verify({ conversation_short_id: await sid(reviewer), line: 1 }, "ship it")).error).toMatch(/not a session this change came through/);
+  });
+
+  test("a session that handed the task off is tied to it by its handoff comment alone", async () => {
+    const { ana, lead, worker, sid, read, verify } = await seedTaskRun({ tie: "handoff" });
+    expect((await read()).task.chain.map((h: any) => h.conversation_id)).toEqual([String(worker), String(lead)]);
+    expect(await verify({ conversation_short_id: await sid(lead), line: 2 }, "Yes, ship this")).toMatchObject({ starter_id: String(ana) });
+  });
+
+  test("refuses a ship that someone other than the run's starter typed", async () => {
+    const { lead, sid, read, verify } = await seedTaskRun({ starter: "eve" });
+    const r = await read();
+    expect(r.starter_name).toBe("Eve");
+    // Eve reads Ana's "ship", and it is not hers to give.
+    expect(r.typed.find((l: any) => l.text === "Yes, ship this once the tests pass.")?.user_name).toBe("Ana");
+    expect((await verify({ conversation_short_id: await sid(lead), line: 2 }, "Yes, ship this")).error).toMatch(/was typed by Ana, not by Eve who started the run/);
+  });
+
+  test("a task no session is tied to has no read, and nothing clears it", async () => {
+    const { lead, elsewhere, sid, read, verify } = await seedTaskRun({ tie: "none" });
+    expect((await read()).error).toMatch(/No session you can read is tied to ct-7/);
+    expect((await read("ct-999")).error).toMatch(/not found/);
+    expect((await verify({ conversation_short_id: await sid(lead), line: 2 }, "Yes, ship this")).error).toMatch(/not a session this change came through/);
+    expect((await verify({ conversation_short_id: await sid(elsewhere), line: 1 }, "ship it")).error).toMatch(/not a session this change came through/);
+  });
+});
