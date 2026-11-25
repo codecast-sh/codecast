@@ -155,7 +155,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   const railMoreOffered = railFocusOffered(focusFacts);
   const railIsFocused = railFocused(focusFacts);
   // Modern focused opens every rail on its daily pages (Inbox, Decisions, Chat,
-  // Calls, Tasks, Docs: navRegistry.keptOnShortRail) with the rest behind
+  // Calls, Activity, Tasks, Docs: navRegistry.keptOnShortRail) with the rest behind
   // More, until the person chooses to see every page. Plain Modern keeps the
   // solo account's rule above.
   const modernFocused = useIsModernFocused();

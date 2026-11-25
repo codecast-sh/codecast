@@ -85,6 +85,18 @@ test("a level opened by hand stays as the person moves, until Back or another se
   await l.done();
 });
 
+test("More opened by hand stays while the person goes from a More page to a root page and back", async () => {
+  const l = await levels();
+  expect(await l.at(null)).toBeNull();
+  expect(await l.press((a) => a.open("more"))).toBe("more");
+  // /projects, then /decisions, then /projects: none is a section of its own.
+  expect(await l.at(null)).toBe("more");
+  expect(await l.at(null)).toBe("more");
+  expect(await l.at(null)).toBe("more");
+  expect(await l.press((a) => a.back())).toBeNull();
+  await l.done();
+});
+
 test("Back always returns to the root, even on a route that belongs to the level", async () => {
   const l = await levels();
   expect(await l.at("chat")).toBe("chat");
