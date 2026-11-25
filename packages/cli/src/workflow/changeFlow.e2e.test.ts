@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { writeFrozenChange } from "./flowChangeFile";
 import { graphHash, parseWorkflowFile, parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
+import type { ResumeRow } from "./runResume";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -28,7 +29,7 @@ let origLog: typeof console.log;
 // rebase chain (rebaseRecord.ts), and records its rebases with the real recorder, as Onto main does. The commits are
 // names, not objects, so the chain's merge-tree check is the one thing left out. origin-head is where origin's
 // branch stands.
-const FAKE_CAST = (verdicts: string, prStation: string, rebaseRecord: string) => `#!/bin/sh
+const FAKE_CAST = (verdicts: string, prStation: string, rebaseRecord: string, mergeStation: string) => `#!/bin/sh
 echo "$*" >> "$FAKE_STATE/calls.log"
 arg() { prev=""; for a in "$@"; do [ "$prev" = "$want" ] && { echo "$a"; return; }; prev="$a"; done; }
 pop() { f="$FAKE_STATE/$1.queue"; head -n 1 "$f"; tail -n +2 "$f" > "$f.tmp"; mv "$f.tmp" "$f"; }
@@ -63,6 +64,9 @@ case "$1 $2" in
     want=--review; review=$(arg "$@")
     bun -e 'import { changeVerdicts } from "${verdicts}"; const [dir, review, st] = process.argv.slice(1); console.log(JSON.stringify(changeVerdicts(dir, review, require("fs").readFileSync(st + "/origin-head", "utf-8").trim())))' "$dir" "$review" "$FAKE_STATE"; exit $? ;;
   "flow merge")
+    # The pull request it merges, as the real station finds it: --pr, else the run's pr.json; with neither, exit 4.
+    want=--pr; pr=$(arg "$@")
+    bun -e 'import { stationPr } from "${mergeStation}"; const [given, d] = process.argv.slice(1); const r = stationPr(given || undefined, d); if (!("pr" in r)) { console.log(r.line); process.exit(r.code); }' "$pr" "$dir" || exit $?
     # As the real station clears a merge: green CI, the review saying ship, and the reviewer having read the head CI
     # tested, or one the recorded chain of station rebases leads from.
     bun -e 'import { chainBetween, readRebaseChain } from "${rebaseRecord}"; const fs = require("fs"); const d = process.argv[1]; const read = (f) => { try { return JSON.parse(fs.readFileSync(d + "/" + f, "utf-8")); } catch { return null; } }; const ci = read("ci.json"), r = read("review.json"); const no = (s) => { console.log(s); process.exit(2); }; if (!ci) no("no ci.json"); if (ci.green !== true) no("ci.json says CI is not green"); if (!r || r.verdict !== "ship") no("review.json does not say ship"); if (!r.head_sha) no("review.json names no head"); if (r.head_sha !== ci.head_sha && !chainBetween(readRebaseChain(d), r.head_sha, ci.head_sha)) no("the reviewer read " + r.head_sha + ", not the head CI tested (" + ci.head_sha + ")");' "$dir" || exit $?
@@ -110,7 +114,7 @@ beforeAll(() => {
   sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cast-change-flow-e2e-")));
   const bin = path.join(sandbox, "bin");
   fs.mkdirSync(bin);
-  fs.writeFileSync(path.join(bin, "cast"), FAKE_CAST(path.join(import.meta.dir, "changeVerdicts.ts"), path.join(import.meta.dir, "prStation.ts"), path.join(import.meta.dir, "rebaseRecord.ts")), { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "cast"), FAKE_CAST(path.join(import.meta.dir, "changeVerdicts.ts"), path.join(import.meta.dir, "prStation.ts"), path.join(import.meta.dir, "rebaseRecord.ts"), path.join(import.meta.dir, "mergeStation.ts")), { mode: 0o755 });
   for (const [k, v] of Object.entries({ ...ENV, HOME: sandbox, CODECAST_DIR: path.join(sandbox, ".codecast"), PATH: `${bin}:${process.env.PATH}` })) {
     saved[k] = process.env[k];
     process.env[k] = v;
@@ -241,13 +245,15 @@ function server(w: ReturnType<typeof world>) {
   };
 }
 
-async function run(w: ReturnType<typeof world>, subject = true) {
+/** `resume`: the row of a run picked up at one of its stations, as a runner on another machine reads it. */
+async function run(w: ReturnType<typeof world>, subject = true, resume?: { current_node_id: string; done: string[] }) {
   const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
   const tip = git(w.root, "rev-parse", "feat");
   writeFrozenChange(w.runDir, { source: "branch", ...(subject ? { session: CONV.slice(0, 7), conversation: CONV } : {}), base: tip, tip, branch: "feat", worktree: "change-ct-9", paths: ["a.txt"], shared: [], held: [] });
+  const row: ResumeRow | undefined = resume && { status: "running", current_node_id: resume.current_node_id, node_statuses: resume.done.map((node_id, i) => ({ node_id, status: "completed", completed_at: i + 1 })) };
   console.log = process.env.SHOW_RUN ? origLog : () => {};
   try {
-    return await runWorkflow(graph, { cwd: w.root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 });
+    return await runWorkflow(graph, { cwd: w.root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...(row ? { resume: row } : {}) });
   } finally {
     console.log = origLog;
   }
@@ -414,6 +420,18 @@ describe("the shipped change flow", () => {
     expect(brief).toContain("feat conflicts with main in a.txt");
     expect(count(w.calls(), "flow pr")).toBe(2);
     expect(count(w.calls(), "flow merge")).toBe(2);
+  }, 120_000);
+
+  test("a run picked up at Merge with no pull request in its directory goes to PR first, and merges once CI and review pass", async () => {
+    // ct-90556 (Nov 25): a run resumed onto a graph past its PR station handed Merge an empty $pr.json.number.
+    const w = world({ ci: [GREEN], review: [SHIP], merge: ["merged"] });
+    const s = server(w);
+    expect(await run(w, true, { current_node_id: "merge", done: ["start"] })).toBe("completed");
+    expect(w.calls()).toEqual(["flow merge", "flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
+    const merges = fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8").split("\n").filter((l) => l.startsWith("flow merge "));
+    expect(merges.every((l) => !l.includes("--pr"))).toBe(true);
+    expect(s.briefs()).toEqual([]);
+    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
   }, 120_000);
 
   test("a merge that crashes is no conflict: it stops at Not merged with the crash, and the session is not briefed", async () => {

@@ -1269,7 +1269,7 @@ async function executeFanout(
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
-    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options));
+    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options), graph.nodes);
     else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
     // A hand is checkpointed when it starts, so a resumed fanout waits on it rather than starting a second (runResume.ts).
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options, () => {
@@ -2250,7 +2250,7 @@ async function driveRun(
     options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hands: resumeAt.hands, finished: resumeAt.finished };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
     // The line's own text is read as it is now (line-versions.md LV4).
-    for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd, {}, stationEnv(options));
+    for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd, {}, stationEnv(options), graph.nodes);
   }
 
   // A person who brought the subject back keeps it, across a resume too: the parker reads that off the run's context.
@@ -2500,7 +2500,7 @@ async function runNodeLoop(
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
-      outcome = await executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options));
+      outcome = await executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options), graph.nodes);
     } else if (current.type === "call") {
       outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {

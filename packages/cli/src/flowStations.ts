@@ -115,12 +115,12 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
 
   flow
     .command("merge")
-    .description("A change flow's Merge station: clears the merge on green CI of the PR's head and a ship review, rebases it onto the default branch, runs the before-merge deploy steps from the rebased tree, then squash-merges that head. Exits 0 merged (the last line is the sha on the default branch, merge.json written), 1 conflict, 2 refused, 3 retest")
-    .requiredOption("--pr <number>", "The pull request")
+    .description("A change flow's Merge station: clears the merge on green CI of the PR's head and a ship review, rebases it onto the default branch, runs the before-merge deploy steps from the rebased tree, then squash-merges that head. Exits 0 merged (the last line is the sha on the default branch, merge.json written), 1 conflict, 2 refused, 3 retest, 4 no pull request yet")
+    .option("--pr <number>", "The pull request (default: the one in --dir's pr.json, which the PR station writes)")
     .requiredOption("--branch <name>", "The change's branch")
-    .requiredOption("--dir <run_dir>", "The run's directory: ci.json and review.json are read from it, merge.json written to it")
+    .requiredOption("--dir <run_dir>", "The run's directory: pr.json, ci.json and review.json are read from it, merge.json written to it")
     .option("--run <id>", "The run whose station this is (default: $run_id from the station's environment)")
-    .action(async (opts: { pr: string; branch: string; dir: string; run?: string }) => {
+    .action(async (opts: { pr?: string; branch: string; dir: string; run?: string }) => {
       // bun exits 1 on an uncaught error, and the graph reads exit 1 as a conflict: a crash refuses instead.
       const crashed = (err: unknown) => { console.log(`station crashed: ${String(err instanceof Error ? `${err.name}: ${err.message}` : err).split("\n")[0]}`); process.exit(2); };
       process.on("uncaughtException", crashed);

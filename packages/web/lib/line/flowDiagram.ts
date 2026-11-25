@@ -188,8 +188,10 @@ function hubOf(passing: FlowStation[], edges: ReadonlyArray<FlowEdgeIn>, byId: M
   };
   for (let i = 0; i < passing.length; i++) {
     const h = passing[i];
-    // Its stages: where it sends work on an outcome, in the order it names them, each coming back to it.
-    const named = outsOf(h.id).filter(({ e, to }) => /outcome\s*=/.test(e.condition ?? "") && !isEnd(to) && to !== h.id);
+    // Its stages: where it sends work on an outcome, in the order it names them, each coming back to it. A way back to
+    // a step before it on the passing path starts the round again (Merge with no pull request goes to PR): no stage.
+    const before = new Set(passing.slice(0, i).map((s) => s.id));
+    const named = outsOf(h.id).filter(({ e, to }) => /outcome\s*=/.test(e.condition ?? "") && !isEnd(to) && to !== h.id && !before.has(to));
     const stages = [...new Set(named.map((x) => x.to))].filter((to) => stationById.has(to) && returns(to, h.id));
     if (stages.length < HUB_MIN_STAGES) continue;
     // Its way out: the first step it names after its last stage that only ends the run (Watch, then the flow's end).

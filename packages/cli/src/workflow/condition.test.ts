@@ -4,6 +4,7 @@ import * as path from "path";
 import { evalCondition, conditionError, extractJsonOutput, lookupContextVar } from "./condition.js";
 import { parseWorkflowFile } from "./parser.js";
 import { recordNodeOutput, expandScriptVars, expandPromptVars } from "./runner.js";
+import { absentStationReads } from "./commandStation";
 
 describe("evalCondition: every condition the shipped workflows use", () => {
   const INTENT_CLEAR = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0";
@@ -250,6 +251,8 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and merge.exit_code = 3 and retest.visits < 3", { outcome: "failure", "merge.exit_code": "3", "retest.visits": "3" }, false],
     ["outcome = failure and merge.exit_code = 3", { outcome: "failure", "merge.exit_code": "3" }, true],
     ["outcome = failure and merge.exit_code = 3", { outcome: "failure", "merge.exit_code": "2" }, false],
+    ["outcome = failure and merge.exit_code = 4", { outcome: "failure", "merge.exit_code": "4" }, true],
+    ["outcome = failure and merge.exit_code = 4", { outcome: "failure", "merge.exit_code": "2" }, false],
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "4" }, true],
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "1" }, false],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "4" }, true],
@@ -461,6 +464,22 @@ describe("$node.json.<path>", () => {
   test("script vars: an unresolved dotted tail stays literal", () => {
     expect(expandScriptVars("cp $file.bak", { file: "x" })).toBe("cp 'x'.bak");
     expect(expandScriptVars("echo $nothing.here", {})).toBe("echo $nothing.here");
+  });
+
+  test("script vars: a name none of whose words resolve is listed, and a read of a station the graph lacks is told apart", () => {
+    const unresolved: string[] = [];
+    const script = `d="$run_dir"; cast flow merge --pr "$pr.json.number" --dir "$d"; echo "$editor.json.founder" '$x.json'`;
+    expect(expandScriptVars(script, { run_dir: "/r" }, unresolved)).toBe(`d="/r"; cast flow merge --pr "$pr.json.number" --dir "$d"; echo "$editor.json.founder" '$x.json'`);
+    expect(unresolved).toEqual(["pr.json.number", "d", "editor.json.founder", "x.json"]);
+    // A graph with no PR station: Merge's read reaches the shell as ".json.number" (ct-90556). The Editor is a
+    // station that has not run, whose placeholder a script may read as no value; $d is the script's own; a bare
+    // $x.json names no field.
+    expect(absentStationReads(unresolved, new Set(["merge", "editor"]))).toEqual(["pr.json.number"]);
+    expect(absentStationReads(unresolved, new Set(["merge", "editor", "pr"]))).toEqual([]);
+    // A partly resolved read is not listed: the station ran.
+    const partly: string[] = [];
+    expandScriptVars(`echo $pr.json.nope`, { "pr.json": JSON.stringify({ number: 7 }) }, partly);
+    expect(partly).toEqual([]);
   });
 
   test("script vars are quoted for where they land: bare, inside double quotes, inside single quotes", () => {

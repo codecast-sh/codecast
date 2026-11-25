@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { stationPr } from "./mergeStation";
 import { BRANCH, PR, PR_URL, T, setup } from "./mergeStation.testkit";
 
 // The change flow's Merge station: what it merges, what it refuses, and what
@@ -320,4 +322,29 @@ describe("cast flow merge", () => {
       expect(r).toEqual({ code: 2, line: "station crashed: TypeError: cannot read properties of undefined" });
     } finally { s.done(); }
   }, T);
+});
+
+describe("the pull request Merge merges", () => {
+  test("is --pr, else the PR station's pr.json, and with neither the run goes to PR (exit 4)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "merge-pr-"));
+    try {
+      expect(stationPr("42", dir)).toEqual({ pr: 42 });
+      expect(stationPr(undefined, dir)).toEqual({ code: 4, line: `no pull request: this run has not opened one (${join(dir, "pr.json")} is missing); the change flow's PR station opens it` });
+      writeFileSync(join(dir, "pr.json"), JSON.stringify({ url: "https://github.com/acme/app/pull/7", number: 7, head_sha: "abc", branch: "feat", round: "r1" }));
+      expect(stationPr(undefined, dir)).toEqual({ pr: 7 });
+      expect(stationPr("42", dir)).toEqual({ pr: 42 });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("a --pr the run had no value for names none, whole or as the shell left it; any other word is refused", () => {
+    const dir = mkdtempSync(join(tmpdir(), "merge-pr-"));
+    try {
+      // ct-90556 (Nov 25): a graph with no PR station on the way to Merge passed "$pr.json.number", which the shell read as ".json.number".
+      for (const given of ["$pr.json.number", ".json.number", ""]) expect(stationPr(given, dir)).toMatchObject({ code: 4 });
+      writeFileSync(join(dir, "pr.json"), JSON.stringify({ url: "", number: 7, head_sha: "abc", branch: "feat", round: "r1" }));
+      expect(stationPr(".json.number", dir)).toEqual({ pr: 7 });
+      expect(stationPr("seven", dir)).toEqual({ code: 2, line: "--pr seven is not a pull request number" });
+      expect(stationPr("0", dir)).toEqual({ code: 2, line: "--pr 0 is not a pull request number" });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });

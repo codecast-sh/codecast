@@ -44,8 +44,9 @@ export function recordNodeOutput(context: Record<string, string>, nodeId: string
 // ref origin/'main', and the line's red check fell back to a stale local
 // main). `$(` and `${` are left to the shell (no \w follows the `$`).
 // A dotted name ($scan.json.count) expands when the whole name resolves;
-// otherwise only its first word does and the rest stays literal text.
-export function expandScriptVars(script: string, context: Record<string, string>): string {
+// otherwise only its first word does and the rest stays literal text. A name
+// none of whose words resolve is left to the shell, and listed in `unresolved`.
+export function expandScriptVars(script: string, context: Record<string, string>, unresolved?: string[]): string {
   const resolve = (key: string): { value: string; rest: string } | null => {
     const parts = key.split(".");
     for (let n = parts.length; n >= 1; n--) {
@@ -99,10 +100,21 @@ export function expandScriptVars(script: string, context: Record<string, string>
         i += name!.length;
         continue;
       }
+      if (name) unresolved?.push(name);
     }
     out += ch;
   }
   return out;
+}
+
+/**
+ * The results a script reads ($pr.json.number) of stations `stations` does not have and the run holds nothing for:
+ * the shell would get them as text (".json.number"). A station of the graph that has not run yet is not among them:
+ * its placeholder still goes through, and a script may read that as no value (Union's onefix intent gate reads
+ * $editor.json.founder for a change the Editor never read).
+ */
+export function absentStationReads(unresolved: string[], stations: { has(id: string): boolean }): string[] {
+  return [...new Set(unresolved.filter((name) => /^\w+\.json\.\w/.test(name) && !stations.has(name.split(".")[0])))];
 }
 
 // The exit code an edge routes on. A script the timeout killed has no status
@@ -184,15 +196,32 @@ const PIPE_CLOSE_GRACE_MS = 2000;
 
 const seconds = (ms: number) => (ms >= 120_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`);
 
-/** `env` is what the runner adds to the script's environment beyond the line's run values: its run's own session (runner.ts stationEnv). */
+/**
+ * `env` is what the runner adds to the script's environment beyond the line's run values: its run's own session
+ * (runner.ts stationEnv). `stations` is the run's graph: a script that reads a station's result the graph does not
+ * have fails here, before it runs, rather than handing the shell the name as text (a Merge on a graph with no PR
+ * station ran `--pr .json.number` and ended Not merged, ct-90556, Nov 25).
+ */
 export async function executeCommand(
   node: WorkflowNode,
   context: Record<string, string>,
   cwd: string,
   watch: StationWatch = {},
   env: Record<string, string> = {},
+  stations?: { has(id: string): boolean },
 ): Promise<NodeOutcome> {
-  const script = expandScriptVars(node.script!, context);
+  const unresolved: string[] = [];
+  const script = expandScriptVars(node.script!, context, unresolved);
+  const absent = stations ? absentStationReads(unresolved, stations) : [];
+  if (absent.length) {
+    const ids = [...new Set(absent.map((name) => name.split(".")[0]))];
+    const why = `${node.label || node.id} reads ${absent.map((name) => `$${name}`).join(", ")}, but this graph has no station ${ids.join(" or ")}, so it did not run`;
+    console.log(`  ${c.red}✗ ${why}${c.reset}`);
+    recordNodeOutput(context, node.id, why);
+    delete context[`${node.id}.exit_code`];
+    context["last_error"] = why;
+    return "failure";
+  }
   console.log(`${c.dim}  $ ${script.split('\n')[0]}${script.includes('\n') ? '...' : ''}${c.reset}`);
   const graceMs = watch.graceMs ?? STATION_KILL_GRACE_MS;
   void reapDeadRunnerStations(undefined, graceMs).catch(() => {});
