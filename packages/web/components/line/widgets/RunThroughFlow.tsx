@@ -33,6 +33,8 @@ import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import { usePressApproval } from "../../../hooks/usePressApproval";
+import { useDeployTargets } from "../../../hooks/useSyncDeployTargets";
+import type { DeployTargetRow } from "../../../lib/deploys/targets";
 import { judgedFileWords } from "../../../lib/ship/judgedEdits";
 import "../../ship/ship.css";
 
@@ -269,6 +271,13 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
   const journey = useMemo(() => (flow ? journeyOf(flow, null) : null), [flow]);
+  // Where the change goes live: the targets published for the session's repository (.codecast/deploy.toml), fed while
+  // the picker is open and read from the store, never guessed from what the thread says.
+  const team = workspace?.startsWith("team:") ? workspace.slice(5) : null;
+  const { targets: teamTargets, ready } = useDeployTargets(team, repository);
+  const targets = useMemo(() => (repository ? teamTargets.filter((t) => t.repository === repository) : []), [teamTargets, repository]);
+  const declare = () => useInboxStore.getState().sendMessage(conversationId, declareTargetMessage(repository));
+  const where = (f: AppFlow) => <Where targets={targets} known={ready || targets.length > 0} deploys={deploysOf(f)} onDeclare={declare} />;
   if (!flow || !journey) return null;
   return (
     <div className="shp" data-ship-picker>
@@ -283,6 +292,7 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
               <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
               <span className="shp-path">{journeyStages(f).map((s) => s.label).join(" → ")}</span>
               <Asks flow={f} />
+              {targets.length && deploysOf(f) ? where(f) : null}
             </label>
           ))}
         </div>
@@ -290,6 +300,7 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
       <div className="shp-preview" data-flow={flow.slug}>
         <JourneyView journey={journey} now_ms={0} />
       </div>
+      {where(flow)}
       <footer className="shp-foot">
         {/* A lone flow has no list row, so its name and whether it asks the person sit here. */}
         <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}<Asks flow={flow} /></>}</span>
@@ -297,4 +308,35 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
       </footer>
     </div>
   );
+}
+
+const deploysOf = (f: AppFlow) => journeyStages(f).some((s) => s.role === "deploy");
+
+/** Who sends a target, when Ship does not: a release target goes out with the change, the rest by their own policy. */
+const POLICY_WORDS: Record<string, string> = { press: "by press", auto: "when CI is green" };
+
+/** Where Ship takes the change live: the repository's published targets, or plainly none, with a way to declare one. */
+function Where({ targets, known, deploys, onDeclare }: { targets: DeployTargetRow[]; known: boolean; deploys: boolean; onDeclare: () => void }) {
+  if (targets.length) {
+    if (!deploys) return null;
+    return (
+      <div className="shp-where" data-ship-targets>
+        <b>Live on</b>
+        {targets.map((t) => <span key={t._id} className="shp-target" data-ship-target={t.name}>{t.name}{t.policy !== "release" ? <i>{POLICY_WORDS[t.policy] ?? t.policy}</i> : null}</span>)}
+      </div>
+    );
+  }
+  // Until the feed answers, nothing is said: "no target" before the answer would be a guess.
+  if (!known) return null;
+  return (
+    <div className="shp-where" data-ship-targets="none">
+      <b>No deploy target</b><span>lands, goes live nowhere</span>
+      <button type="button" className="shp-link" onClick={onDeclare} data-ship-declare-target>Ask agent to declare one</button>
+    </div>
+  );
+}
+
+/** The message the declare control sends the session: its agent records the target where every surface reads it. */
+export function declareTargetMessage(repository: string | null): string {
+  return `Ship found no deploy target for ${repository ?? "this repository"}. Where does it go live? If you already know (from me or this thread), record it as a [[target]] in .codecast/deploy.toml (name, run, policy = "release") and publish it with \`cast line deploy targets --publish\`; if not, ask me.`;
 }
