@@ -275,7 +275,15 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   } catch (error) {
     return unposted(`status not posted: ${error instanceof Error ? error.message : String(error)}`);
   }
-  await ctx.runMutation(internal.changeApprovals.notePosted, { repository, pr_number: args.pr_number, head_sha: read.head_sha, state: verdict.state, description: verdict.description });
+  // Overlapping evaluations can post in either order, so record what GitHub now shows for the context, read back,
+  // not what this one sent; a failed read records nothing and the sweep posts again.
+  try {
+    const shown = await rest(`${GITHUB}/repos/${repository}/commits/${read.head_sha}/statuses?per_page=30`, minted.token);
+    const latest = (Array.isArray(shown.json) ? shown.json : []).find((s: any) => s?.context === verdict.context);
+    if (latest) await ctx.runMutation(internal.changeApprovals.notePosted, { repository, pr_number: args.pr_number, head_sha: read.head_sha, state: String(latest.state), description: String(latest.description ?? "") });
+  } catch {
+    // Nothing recorded: the next sweep posts it again.
+  }
   return { ...done, posted: true };
 }
 
@@ -366,8 +374,8 @@ export function mechanismOf(run: any, head: string): boolean | null {
 
 /**
  * The records half of a status: the run behind the pull request and its review's answer, a Ship press tied to the
- * judged diff of the first head the run pushed, an untied card Ship tied to the diff it now has, the approvals for
- * this diff, and the verdict, stored on the pull request's rows.
+ * judged diff of the first head the run pushed, the approvals for this diff (a card approves only the diff it was
+ * stamped with), and the verdict, stored on the pull request's rows.
  */
 export const settle = internalMutation({
   args: {
@@ -430,7 +438,7 @@ export const settle = internalMutation({
     const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) } : yesRow ? { who: `${await nameOf(ctx, yesRow.user_id)}, ${await refOf(yesRow)} before the build` } : null;
     // Who a card goes to, by name (cards to a person, never a role): the presser for judged files their press did not
     // list; else the work's Requested-by person, the session's owner, the area's owner. A mechanism: an engineer, or
-    // the area's owner. Codecast cannot yet tell an engineer from anyone else, so it names the area's owner beside.
+    // the area's owner (engineers are those main's engineers file lists).
     const presser: any = run?.pressed_approval_id ? await ctx.db.get(run.pressed_approval_id) : null;
     const spawner: any = run?.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
     const presserName = presser ? await nameOf(ctx, presser.user_id) : null;

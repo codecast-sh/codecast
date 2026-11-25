@@ -180,6 +180,19 @@ describe("the status from GitHub", () => {
     expect(db._tables.pull_requests[0].approval.judged_key).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  test("what GitHub shows after the post is what is recorded, so a status another evaluation overwrote is posted again", async () => {
+    github({ statusAfter: "success" });
+    const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
+    const first: any = await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
+    expect(first).toMatchObject({ state: "pending", posted: true });
+    expect(db._tables.pull_requests[0].approval.posted).toMatchObject({ head_sha: HEAD, state: "success" });
+    const posts = () => calls.filter((c) => c.method === "POST" && /statuses/.test(c.url)).length;
+    const before = posts();
+    const again: any = await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
+    expect(again.unchanged).toBeUndefined();
+    expect(posts()).toBe(before + 1);
+  });
+
   test("with the review's answer in, judged files wait on the Requested-by person", async () => {
     github();
     const run = { _id: "run1", user_id: "agent", created_at: 1, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, mechanism: false, at: 3, attempt: 1 }, pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
@@ -325,7 +338,7 @@ describe("the run behind it", () => {
   test("for a change Cam asked for (by codecast's record), an engineer's in-person yes before the build approves its judged files only, bound to that diff", async () => {
     const users = [{ _id: "cam", name: "Cameron Musgrave" }, { _id: "ash", name: "Ashot" }, { _id: "sam", name: "Samvit" }];
     const tasks = [{ _id: "t1", user_id: "cam" }];
-    const yes = (who: string, at: number, over: Record<string, any> = {}) => ({ _id: `sd_${who}_${at}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at, ...over });
+    const yes = (who: string, at: number, over: Record<string, any> = {}) => ({ _id: `sd_${who}_${at}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", station: "pre-build", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at, ...over });
     const engineers = [{ user_id: "ash", name: "Ashot" }];
     const asked = { ...args, area_owner: "Samvit", engineers };
     const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 }, pr: { ...base.pr } };
@@ -336,6 +349,9 @@ describe("the run behind it", () => {
     expect(await (settle as any)._handler(approved, { ...asked, key: "k2", head_sha: "d".repeat(40) })).toMatchObject({ state: "pending" });
     const mech = ctxOf({ workflow_runs: [{ ...later, review_verdict: { ...later.review_verdict, mechanism: true } }], users, tasks, session_decisions: [yes("ash", 50)] });
     expect(await (settle as any)._handler(mech, asked)).toMatchObject({ state: "pending", description: "needs an engineer or Samvit: the review called it a mechanism" });
+    // An engineer's yes to some other question on the task (not asked as the pre-build question) approves nothing.
+    const otherQuestion = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50, { station: undefined })] });
+    expect(await (settle as any)._handler(otherQuestion, asked)).toMatchObject({ state: "pending" });
     // Cam's own yes, one given after the build began, one given through a session, or a non-engineer's: none counts.
     const notYet = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("cam", 50), yes("ash", 150), yes("ash", 40, { answered_by: { kind: "user", id: "ash", via: "c1" } }), yes("sam", 30)] });
     expect(await (settle as any)._handler(notYet, asked)).toMatchObject({ state: "pending", description: "needs Samvit: edits outreach/line/change/land.cast" });

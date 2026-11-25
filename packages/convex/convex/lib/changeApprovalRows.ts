@@ -168,11 +168,15 @@ export async function askerOf(ctx: { db: any }, run: { task_id?: Id<"tasks">; sp
   return null;
 }
 
+/** The station a pre-build question to an engineer is asked under (`cast decide --station pre-build`). */
+export const PRE_BUILD_STATION = "pre-build";
+
 /** A yes to building it: an approval card's Ship or Approve merge, or a plain Yes, Build or Approve. */
 const saysYes = (label: unknown) => optionIsShip(label) || /^(yes|build|approve)\b/i.test(String(label ?? "").trim());
 
 /**
- * The engineer's yes recorded before the run built anything (ct-98540): a card about the run's task, answered yes in
+ * The engineer's yes recorded before the run built anything (ct-98540): a card asked as the pre-build question
+ * (`cast decide --station pre-build` on the run's task, which is what Cam's helpers ask an engineer), answered yes in
  * person (a user's own answer, not given through a session) by someone main's engineers file lists, before the run's
  * attempt began. The newest such answer, or null. It covers judged paths only, never a mechanism, and binds to the
  * judged diff the run first pushed (changeApprovals.settle records it then).
@@ -183,6 +187,7 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
   // The run's attempt began here (orgLineMerge.runAttempt).
   const startedAt = run.visits_reset_at ?? run.created_at;
   for (const d of cards) {
+    if (d.station !== PRE_BUILD_STATION) continue;
     if (d.answered_by?.kind !== "user" || d.answered_by.via || (d.resolved_at ?? Infinity) > startedAt) continue;
     if (!engineers.some((e) => e.user_id === String(d.answered_by.id))) continue;
     if (!saysYes(d.options?.[d.answer_index ?? -1]?.label)) continue;
