@@ -13,6 +13,7 @@ import { repositoryArg } from "./deployTargetsState";
 import { deployTeamFor } from "./changesDeploy";
 import { roleForSession } from "./orgRoles";
 import { resolveAssigneeToUserId } from "./tasks";
+import { cancelForPause } from "./deployDispatch";
 import { PAUSE_AUTHORITY_ID, PAUSE_AUTHORITY_KIND, PAUSE_HOLDERS, type DeployPauseView } from "@codecast/shared/contracts/deployPause";
 
 export type PauseHolder = Doc<"deploy_pauses">["by"];
@@ -120,7 +121,10 @@ export const pause = mutation({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const s = await scopeOf(ctx, userId, args);
     const by = await requirePauseHolder(ctx, userId, s.team_id, args.from_session);
-    return await pauseViewOf(ctx, await pauseCore(ctx, by, { ...s, reason: args.reason }));
+    const p = await pauseCore(ctx, by, { ...s, reason: args.reason });
+    // What the pause catches going out stops: a queued deploy at once, a run before its rollout on GitHub.
+    const cancelled = await cancelForPause(ctx, s.workspace, s.repository, by.name, `production paused: ${p.reason}`);
+    return { ...(await pauseViewOf(ctx, p)), cancelled };
   },
 });
 

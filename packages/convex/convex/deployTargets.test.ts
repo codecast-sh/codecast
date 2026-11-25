@@ -5,6 +5,7 @@ import { publish, recordLiveRead, recordShipPass, reportMainCommits, request, vi
 import { checkSuiteCi, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
+import { cancelForPause, nextCore, send, settle } from "./deployDispatch";
 import { grant as grantPause, lift as liftPause, pause as pausePause, status as pauseStatus } from "./deployPause";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):
@@ -433,5 +434,100 @@ describe("production paused (DP17)", () => {
     expect(await (liftPause as any)._handler(ctx, as(TOKEN))).toEqual({ lifted: true, repository: REPO });
     expect(t.deploy_pauses[0]).toMatchObject({ lifted_by: "Ana" });
     expect(await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).toMatchObject({ action: "deploy" });
+  });
+});
+
+describe("codecast's deploy queue through its GitHub app (DP18)", () => {
+  const PROD = { name: "production", command: "./deploy.sh --sha $sha", runs: "here", live: { kind: "marker" }, policy: "press", paths: [], workflow: "deploy.yml", rollback_inputs: { components: "backend-web" } };
+
+  async function production() {
+    const t = await seed();
+    const scheduled: Array<{ fn: string; args: any }> = [];
+    const ctx = { ...ctxFor(t), scheduler: { runAfter: async (_ms: number, fn: any, args: any) => { scheduled.push({ fn: String(fn?.[Symbol.for("functionName")] ?? fn), args }); return null; } } } as any;
+    // No machine publishes it: only codecast's GitHub app can send it.
+    await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets: [PROD] });
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }, { n: 2, files: ["api/b.ts"] }], NOW - 60_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "m", at: NOW - 50_000 });
+    return { t, ctx, scheduled };
+  }
+  const ask = (ctx: any, more: Record<string, unknown> = {}) => (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "production", ...more });
+
+  test("a deploy with no publishing machine queues with main's exact head and goes out one at a time", async () => {
+    const { t, ctx } = await production();
+    const r = await ask(ctx);
+    expect(r).toMatchObject({ short_id: "dp-2", sha: sha(2) });
+    expect(t.daemon_commands).toEqual([]);
+    const d = t.deploys.find((x) => x.short_id === "dp-2");
+    expect(d.dispatch).toMatchObject({ state: "queued", inputs: { sha: sha(2), actor: "Ana" } });
+    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: "dp-2" });
+    expect(await nextCore(ctx, WS, "production")).toEqual({ waiting: "dp-2 is going out" });
+    await (settle as any)._handler(ctx, { deploy: d._id, outcome: "sent" });
+    expect(d.dispatch.state).toBe("sent");
+    await expect(ask(ctx)).rejects.toThrow(/dp-2 is already going out/);
+    // Its run, named by the sha in its run-name, is the queued deploy, not a deploy of its own.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "77", url: "https://github.com/acme/app/actions/runs/77", status: "running", at: NOW });
+    expect(t.deploys.filter((x) => x.target === "production")).toHaveLength(2);
+    expect(d).toMatchObject({ status: "running", workflow_run: "77" });
+  });
+
+  test("a rollback queues behind the running deploy instead of being refused, and goes out with the rollback inputs once it ends", async () => {
+    const { t, ctx } = await production();
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "80", url: "https://github.com/acme/app/actions/runs/80", status: "running", at: NOW - 30_000 });
+    const running = t.deploys.find((x) => x.workflow_run === "80");
+    const r = await ask(ctx, { action: "rollback" });
+    expect(r).toMatchObject({ action: "rollback", sha: sha(1) });
+    const rb = t.deploys.find((x) => x.short_id === r.short_id);
+    expect(rb.dispatch.inputs).toEqual({ sha: sha(1), actor: "Ana", components: "backend-web" });
+    expect(await nextCore(ctx, WS, "production")).toEqual({ waiting: `${running.short_id} is going out` });
+    running.status = "live";
+    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: r.short_id });
+  });
+
+  test("a pause cancels what waits in the queue and stops a run before rollout; any other cancel is neutral", async () => {
+    const { t, ctx, scheduled } = await production();
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "running", at: NOW - 30_000 });
+    const queued = await ask(ctx, { action: "rollback" });
+    const out = await cancelForPause(ctx, WS, REPO, "Ana", "production paused: errors");
+    expect(out).toHaveLength(2);
+    expect(t.deploys.find((x) => x.short_id === queued.short_id)).toMatchObject({ status: "cancelled", cancel: { by: "Ana", why: "production paused: errors" } });
+    expect(scheduled.some((c) => c.args?.why === "production paused: errors" && c.args?.deploy)).toBe(true);
+    // A run cancelled anywhere else carries no codecast cancel.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "cancelled", at: NOW });
+    expect(t.deploys.find((x) => x.workflow_run === "81")).toMatchObject({ status: "cancelled" });
+    expect(t.deploys.find((x) => x.workflow_run === "81").cancel).toBeUndefined();
+  });
+
+  test("the send dispatches the workflow on the default branch with the exact sha, only when GitHub has no run going", async () => {
+    const calls: Array<{ url: string; method: string; body?: any }> = [];
+    let going = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET", ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      if (String(url).includes("/runs?status=")) return new Response(JSON.stringify({ total_count: String(url).includes("status=in_progress") ? going : 0 }), { status: 200 });
+      if (String(url).endsWith("/dispatches")) return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ default_branch: "main" }), { status: 200 });
+    }) as any;
+    const settled: any[] = [];
+    const actx = {
+      runQuery: async (_fn: any, args: any) => ("deploy" in args ? { repository: REPO, team_id: TEAM, workflow: "deploy.yml", inputs: { sha: sha(2), actor: "Ana" } } : { installation_id: 9 }),
+      runAction: async () => ({ token: "t", permissions: { actions: "write" } }),
+      runMutation: async (_fn: any, args: any) => { settled.push(args); },
+    };
+    try {
+      going = 1;
+      expect(await (send as any)._handler(actx, { deploy: "d1" })).toBe("a run is in_progress");
+      expect(settled.at(-1)).toMatchObject({ outcome: "busy" });
+      expect(calls.some((c) => c.method === "POST")).toBe(false);
+      going = 0;
+      expect(await (send as any)._handler(actx, { deploy: "d1" })).toBe("sent");
+      const post = calls.find((c) => c.method === "POST")!;
+      expect(post.url).toBe(`https://api.github.com/repos/${REPO}/actions/workflows/deploy.yml/dispatches`);
+      expect(post.body).toEqual({ ref: "main", inputs: { sha: sha(2), actor: "Ana" } });
+      expect(settled.at(-1)).toMatchObject({ outcome: "sent" });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

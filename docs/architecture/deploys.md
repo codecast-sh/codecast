@@ -643,3 +643,31 @@ Lifting is for whoever paused, or the Release Captain.
 it before it sends) and the Deploys page, where each target carries its
 repository's pause and whether the viewer may pause (`deployTargets.view`).
 The shared rules are `contracts/deployPause`.
+
+## DP18. Codecast's deploy queue
+
+A target that names its `workflow` is sent by codecast itself: it
+dispatches the workflow through its GitHub app (the installation needs
+`actions: write`) on the default branch with an exact `sha`, the asker's
+first name as `actor`, and for a rollback the target's `rollback_inputs`
+(Union's `{ components = "backend-web" }`), so no publishing machine is
+needed (`deployDispatch.ts`). A rollback always goes this way; a deploy or
+redeploy goes this way when no machine publishes the target. The deploy row
+is the queue entry: `dispatch.state` is queued, sending (claimed by one
+send), then sent, and the run's webhook (DP11) finishes it by its sha, never
+by another commit.
+
+A deploy is sent only when nothing of its target is going out: no deploy
+running or sent without a run yet, and GitHub listing no run of the workflow
+queued, in progress or waiting. A workflow's concurrency group keeps only
+its newest pending run, so a second dispatch would drop the one waiting. So
+a rollback is never refused for a running deploy: it waits in the queue and
+goes out when the run ends (a finished run's webhook runs the queue, and a
+sweep every two minutes is the backstop). While production is paused only
+the rollback that paused it is sent.
+
+A pause stops what it catches: a deploy still queued is cancelled at once,
+and a run that has not reached rollout (no `deploy` or `rollout` job
+started) is cancelled on GitHub. Each carries codecast's `cancel` (who, why,
+when), the only cancel that counts as a pause; a run cancelled anywhere
+else is neutral and is never retried.
