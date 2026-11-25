@@ -55,6 +55,16 @@ export function modelSwitchMessages(
   return out;
 }
 
+/**
+ * True when a model/effort pick on this session restarts the agent: a live
+ * (non-blank) session of an agent whose model config takes them only at launch
+ * (midSession: false). The server applies it by killing and relaunching the
+ * agent, so the pick goes through a confirm first.
+ */
+export function needsRestartConfirm(agentType: string | undefined, blank: boolean): boolean {
+  return !blank && AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.midSession === false;
+}
+
 export async function commitModelChange(opts: {
   conversationId: string;
   agentType: string | undefined;
@@ -62,11 +72,21 @@ export async function commitModelChange(opts: {
   sel: { model?: string; effort?: string };
   blank: boolean;
   notify: (message: string) => void;
+  /** The person confirmed that this change restarts the agent (needsRestartConfirm). */
+  restart?: boolean;
 }): Promise<void> {
-  const { conversationId, agentType, current, sel, blank, notify } = opts;
+  const { conversationId, agentType, current, sel, blank, notify, restart } = opts;
   const store = useInboxStore.getState();
   const agentKey = modelAgentKey(agentType);
   const prev = { model: current.model ?? null, effort: current.effort ?? null };
+
+  // A launch-configured agent applies a live change by a kill and relaunch,
+  // which cuts off a turn in flight. Only the session panel, after its restart
+  // confirm, may start one; every other initiator refuses before stamping.
+  if (needsRestartConfirm(agentType, blank) && !restart) {
+    notify("Changing the model or effort restarts this agent: confirm it from the session panel");
+    return;
+  }
 
   // Optimistic local stamp — the durable confirmation is the transcript echo
   // (live rail) or, for a blank session, the model/effort the create launches
@@ -107,7 +127,7 @@ export async function commitModelChange(opts: {
   if (!isConvexId(conversationId)) return;
 
   try {
-    await store.convCommand(conversationId, blank ? "reconfigureSession" : "switchSessionAgent", sel);
+    await store.convCommand(conversationId, blank ? "reconfigureSession" : "switchSessionAgent", restart && !blank ? { ...sel, restart: true } : sel);
   } catch (err) {
     // Parked-unwired means the write is queued and WILL apply on the next
     // outbox drain — reverting the local stamp here would make the UI disagree

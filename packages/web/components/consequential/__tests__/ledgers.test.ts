@@ -25,6 +25,8 @@ test("every ledger reads at a glance: no sentence, no long value", () => {
     L.featuresAllLedger({ group: "Browser", machine: "MacBook", names: ["Browser", "Computer"] }),
     L.routineActivateLedger({ title: "Ads daily", every: "1d", applies: true, cost }),
     L.killSessionsLedger({ total: 3, working: ["Busy one"] }),
+    L.restartForModelLedger({ agent: "Codex", subject: "Fix the auth race", from: "medium effort", to: "high effort", cutOff: "Unfinished turns" }),
+    L.restartForModelLedger({ agent: "Antigravity", subject: "Fix the auth race", from: "default model", to: "Gemini 3 Pro" }),
     L.openAccountLedger({ email: "claude@almostcandid.com", percent: 7, machines: ["line-1", "line-2"], lineHosts: true, sessions: 26, resumesIn: "3d 2h" }),
     roleOnlineLedger({ handle: "growth", name: "Growth lead", host: "Ashot", startsOnItsOwn: true, sessionsPerDay: 6 }),
   ];

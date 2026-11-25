@@ -28,7 +28,7 @@ const CUT_OFF: Record<InFlightReason, string | null> = {
 
 /** What a kill of this session cuts off, or null. The inbox row's is_idle
  *  false is a live turn too. */
-function cutOffOf(s: InboxSession, now: number): string | null {
+export function cutOffOf(s: InboxSession, now: number): string | null {
   const facts = inFlightFactsOfRow(s as CloseRow, now);
   const reason = closeInFlightReason({ ...facts, turnLive: facts.turnLive || s.is_idle === false });
   return reason ? CUT_OFF[reason] : null;

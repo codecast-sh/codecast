@@ -14,6 +14,7 @@ export function commitModelChange(opts: {
   current: { model?: string | null; effort?: string | null };
   sel: { model?: string; effort?: string };
   blank: boolean;
+  restart?: boolean;
 }): Promise<void> {
   return commitModelChangeCore({ ...opts, notify: notifyModelToast });
 }

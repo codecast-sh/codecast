@@ -359,6 +359,25 @@ export function killSessionsLedger(r: { total: number; working: string[]; lost?:
   };
 }
 
+/** A model or effort change on a live session of an agent that takes them only at launch: codecast kills the agent and
+ *  relaunches it on the new choice, so a turn in flight is cut off (ct-101395). `cutOff` names what is lost, when anything is. */
+export function restartForModelLedger(r: { agent: string; subject: string; from: string; to: string; cutOff?: string | null }): SwitchLedger {
+  return {
+    name: `Restart ${r.agent}`,
+    subject: r.subject,
+    shift: [r.from, r.to],
+    ...(r.cutOff ? { alert: "Working now · turn cut off" } : {}),
+    figures: [],
+    rows: [
+      { k: "Agent", v: "Killed, relaunched", tone: "warn" },
+      ...(r.cutOff ? [{ k: "Lost", v: r.cutOff, tone: "warn" as const }] : []),
+      { k: "History", v: "Kept" },
+    ],
+    confirm: `Restart on ${r.to}`,
+    keep: "Keep running",
+  };
+}
+
 /** A session's change sent through a flow of the pool (docs/architecture/flows.md FL4): the session freezes its own
  *  edits, binds them to a task, and its machine runs each step; an agent step starts a session of its own, a check runs
  *  a command that only looks, an automatic step runs one that acts (a rebase, a ship), and a person's step is a

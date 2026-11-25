@@ -10,7 +10,7 @@ import { useLiveSessionMeta } from "../hooks/useLiveSessionMeta";
 import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
 import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
-import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel } from "../lib/modelSwitch";
+import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel, needsRestartConfirm } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
 import { switchSessionAgent, forkSessionAsAgent, sessionRowFor } from "../lib/sessionAgentActions";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
@@ -31,6 +31,9 @@ import { useCloudAgentOfConversation } from "./cloudAgents/sessionAgent";
 import { BackendRunsInRows } from "./ClaudeBackendControl";
 import { useClaudeBackend } from "../hooks/useSessionCommands";
 import { canSwitchClaudeBackend } from "../lib/claudeBackendControl";
+import { SwitchReview, type SwitchLedger } from "./consequential/ConsequentialSwitch";
+import { restartForModelLedger } from "./consequential/ledgers";
+import { cutOffOf } from "./consequential/killReview";
 
 // The unified session control: one panel behind the conversation-header badge
 // holding everything that moves a session between rails — model and effort
@@ -228,7 +231,8 @@ export interface SessionControlPanelProps {
   effort: string | undefined;
   messageCount: number | undefined;
   ownerDeviceId?: string | null;
-  onModelSelect: (sel: { model?: string; effort?: string }) => void;
+  /** `restart`: the person confirmed that this pick restarts the agent (needsRestartConfirm). */
+  onModelSelect: (sel: { model?: string; effort?: string }, opts?: { restart?: boolean }) => void;
   /** Close the surrounding menu after a move action fires. */
   onClose: () => void;
 }
@@ -288,12 +292,38 @@ export function SessionControlPanel({
   const showBackend = canSwitchClaudeBackend(agentType, sessionId, messageCount);
   const { backend } = useClaudeBackend(conversationId);
 
+  // An agent that takes model and effort only at launch applies a live pick by
+  // killing and relaunching it: the pick waits on a confirm that says so.
+  const restarts = controllable && needsRestartConfirm(agentType, blank);
+  const [review, setReview] = useState<{ sel: { model?: string; effort?: string }; ledger: SwitchLedger } | null>(null);
+  const pick = (sel: { model?: string; effort?: string }) => {
+    if (!restarts) { onModelSelect(sel); return; }
+    const s = useInboxStore.getState();
+    const row = s.sessions[conversationId];
+    const name = (key: string) => (key === "default" ? "default model" : (findModelOption(agentType, key)?.label ?? key));
+    const [from, to] = sel.model !== undefined
+      ? [modelText || "default model", name(sel.model)]
+      : [`${effort ?? "default"} effort`, `${sel.effort} effort`];
+    setReview({
+      sel,
+      ledger: restartForModelLedger({
+        agent: agentLabel,
+        subject: (row as { title?: string } | undefined)?.title || "Untitled session",
+        from,
+        to,
+        cutOff: row ? cutOffOf(row, Date.now()) : null,
+      }),
+    });
+  };
+
   const stateLine = cloudNote
     ?? (!controllable
     ? `${agentLabel} keeps the model it launched with`
     : blank
       ? "Blank session · picks apply at launch"
-      : "Live session · picks apply in place");
+      : restarts
+        ? `Live session · a pick restarts ${agentLabel}`
+        : "Live session · picks apply in place");
 
   const onSwitch = (type: ConvexAgentType) => {
     onClose();
@@ -363,10 +393,19 @@ export function SessionControlPanel({
             effort={effort}
             ownerDeviceId={ownerDeviceId}
             midSession={!blank}
-            onSelect={onModelSelect}
-            onStepEffort={(dir) => stepEffort(conversationId, dir, blank)}
+            onSelect={pick}
+            // A restarting pick holds the menu open behind its review, and ←/→ go through that review too.
+            keepOpen={restarts}
+            onStepEffort={restarts ? undefined : (dir) => stepEffort(conversationId, dir, blank)}
           />
         </div>
+      )}
+      {review && (
+        <SwitchReview
+          ledger={review.ledger}
+          onClose={() => setReview(null)}
+          onConfirm={() => { setReview(null); onModelSelect(review.sel, { restart: true }); onClose(); }}
+        />
       )}
 
       {attempts && (
@@ -557,7 +596,7 @@ export function HeaderModelControl({
             messageCount={messageCount}
             ownerDeviceId={ownerDeviceId}
             onClose={() => setOpen(false)}
-            onModelSelect={(sel) => {
+            onModelSelect={(sel, opts) => {
               setPicked((prev) => ({ ...prev, ...sel }));
               void commitModelChange({
                 conversationId: conversationId!,
@@ -565,6 +604,7 @@ export function HeaderModelControl({
                 current: { model: storeModel, effort: storeEffort },
                 sel,
                 blank,
+                restart: opts?.restart,
               });
             }}
           />

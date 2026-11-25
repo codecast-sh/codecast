@@ -12921,6 +12921,10 @@ export const switchSessionAgent = mutation({
     model: v.optional(v.string()),
     effort: v.optional(v.string()),
     api_token: v.optional(v.string()),
+    // The caller showed the person that this change restarts the agent (and
+    // cuts off any turn in flight) and they confirmed. Required for a model or
+    // effort change on a live session of an agent that takes them only at launch.
+    restart: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = args.api_token
@@ -12962,6 +12966,15 @@ export const switchSessionAgent = mutation({
     if (agentChanged && !canSessionBecomeAgent(args.agent_type, blank ? 0 : Math.max(1, conv.message_count ?? 0))) {
       const label = AGENT_CLIENTS[fromConvexAgentType(args.agent_type)].displayName;
       throw new Error(`${label} cannot take over an existing session's history; start a new ${label} session instead`);
+    }
+
+    // An agent that takes model and effort only at launch (midSession: false)
+    // applies a change on a live session by killing and relaunching it, which
+    // cuts off a turn in flight. Only a caller that confirmed that restart with
+    // the person may start it; refuse before writing anything.
+    if (!blank && !agentChanged && !retryCodexSwitch && AGENT_MODEL_CONFIG[modelAgentKey(prevAgent)]?.midSession === false && args.restart !== true) {
+      const label = AGENT_CLIENTS[fromConvexAgentType(prevAgent)]?.displayName ?? prevAgent;
+      throw new Error(`Changing the model or effort restarts this ${label} session; confirm the restart first`);
     }
 
     const patch: Record<string, any> = { updated_at: Date.now() };
