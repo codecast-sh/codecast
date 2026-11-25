@@ -1,7 +1,7 @@
 import { hostsLineWork } from "./ccSwitchAhead";
 import { peerLinkRowsByDevice } from "./lib/peerLinkRows";
 import { mutation, query, internalQuery } from "./functions";
-import { selfUpdateBlocked } from "./lib/deviceUpdate";
+import { requestedRelease, selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -1719,10 +1719,10 @@ async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId
  * old `force_update` command as well.
  */
 export const requestDeviceUpdate = mutation({
-  args: { api_token: v.optional(v.string()), device_id: v.string() },
+  args: { api_token: v.optional(v.string()), device_id: v.string(), version: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { userId, device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-    return applyDeviceUpdateRequest(ctx, userId, device);
+    return applyDeviceUpdateRequest(ctx, userId, device, requestedRelease(args.version));
   },
 });
 
@@ -1733,12 +1733,12 @@ export async function performRequestDeviceUpdate(ctx: any, userId: Id<"users">, 
   return applyDeviceUpdateRequest(ctx, userId, device);
 }
 
-async function applyDeviceUpdateRequest(ctx: any, userId: Id<"users">, device: any) {
+async function applyDeviceUpdateRequest(ctx: any, userId: Id<"users">, device: any, version?: string) {
   const blocked = selfUpdateBlocked(device);
   if (blocked) throw new Error(`Cannot update this machine from here: ${blocked.toLowerCase()}`);
   const now = Date.now();
   await ctx.db.patch(device._id, {
-    update_requested_version: device.update_available || undefined,
+    update_requested_version: version ?? (device.update_available || undefined),
     update_requested_at: now,
     update_state: "requested" as const,
     update_error: undefined,
