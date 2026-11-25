@@ -13,14 +13,15 @@ import {
 } from "@codecast/shared/contracts";
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
-import { SessionCreatePendingError, defaultNewSessionPath, useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { SessionCreatePendingError, defaultNewSessionPath, isConvexId, useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { withoutUndo } from "../../store/undoStack";
 import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { agentStatusAt } from "../../lib/liveness";
 import { describeRoomLive } from "../../lib/calls/roomLabels";
-import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
+import { agentRoomName, findSessionRow, NEW_AGENT_NAME } from "../../lib/calls/findSessionRow";
+import { useSyncCollection } from "../../hooks/useSyncCollection";
 import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 import { teamHasFeature } from "../../lib/teamFeatures";
 import { characterFor, identitySig } from "../../lib/sessionIdentity";
@@ -410,6 +411,23 @@ export type AgentInRoom = {
   row: any | null;
 };
 
+const sessionsOf = (data: any) => data?.sessions;
+const ROUTED_SESSION_SYNC = { isDelta: true } as const;
+
+/** The routed sessions' rows, fed by id. A window that mounts only the inbox
+ *  feeders (the /call-panel window, a follower replicating them) need not
+ *  hold a session the room routes to: a new agent is not on the inbox list
+ *  until its first prompt, so the room called it "new agent" while a person
+ *  briefed it. The rows land in the one sessions home, live, so its title
+ *  and character follow as they change. `sig` is the targets joined by "|". */
+function useSyncRoutedSessions(sig: string) {
+  const ids = useMemo(() => (sig ? sig.split("|").filter(isConvexId) : []), [sig]);
+  useSyncCollection("sessions", api.conversations.getInboxSessionsByIds, ids.length ? { ids } : "skip", {
+    select: sessionsOf,
+    syncOpts: ROUTED_SESSION_SYNC,
+  });
+}
+
 /** The sessions the live transcript feeds, as participants: name, kind, and
  *  whether one is mid-turn. Read from the store's session rows, subscribed
  *  through a signature of the fields shown so the thread's header and the
@@ -417,6 +435,7 @@ export type AgentInRoom = {
 export function useAgentsInRoom(routes: Array<{ kind: string; target: string; added_by: string }>): AgentInRoom[] {
   const targets = routes.filter((r) => r.kind === "session");
   const sig = targets.map((r) => r.target).join("|");
+  useSyncRoutedSessions(sig);
   const now = useCoarseNow(30_000);
   const s = useTrackedStore([
     (st: any) =>
@@ -435,7 +454,7 @@ export function useAgentsInRoom(routes: Array<{ kind: string; target: string; ad
           id: String(row?._id ?? r.target),
           target: r.target,
           addedBy: r.added_by,
-          name: (row ? agentRoomName(row, identityPrefsNow()) : "new agent").slice(0, 40),
+          name: (row ? agentRoomName(row, identityPrefsNow()) : NEW_AGENT_NAME).slice(0, 40),
           agentType: row?.agent_type ?? "claude_code",
           working: !!row && ACTIVE_AGENT_STATUSES.has(agentStatusAt(row, now) ?? ""),
           row,

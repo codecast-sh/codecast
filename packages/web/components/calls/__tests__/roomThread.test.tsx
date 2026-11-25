@@ -25,15 +25,25 @@ mock.module("../../../lib/calls/callManager", () => ({
 }));
 const realConvexReact = { ...(await import("convex/react")) };
 const mutated: unknown[] = [];
+// What the server answers a subscription, by function name; empty, every
+// query is still loading.
+const served = new Map<string, (args: any) => unknown>();
+const { getFunctionName } = await import("convex/server");
 mock.module("convex/react", () => ({
   ...realConvexReact,
-  useQueries: () => ({}),
+  useQueries: (reqs: Record<string, { query: any; args: any }>) => {
+    const out: Record<string, unknown> = {};
+    for (const [k, r] of Object.entries(reqs)) out[k] = served.get(getFunctionName(r.query))?.(r.args);
+    return out;
+  },
+  useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useQuery: () => undefined,
   useMutation: () => async (args: unknown) => void mutated.push(args),
   useConvex: () => ({ mutation: async () => {} }),
 }));
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { RoomThread } = await import("../RoomThread");
+const { FeedChip } = await import("../FeedChip");
 
 // Names and faces here are characters, which need Characters on (off by default).
 beforeEach(async () => { (await import("../../../test-helpers/characters")).setCharacters(true); });
@@ -626,6 +636,53 @@ test("the stage's placeholder names the agent in a few characters, and the chip 
     } as any);
   });
   expect(r.container.querySelector(".rt-chip")?.textContent).toContain("Sage");
+  await r.unmount();
+});
+
+test("a routed agent this window does not hold is fed by id, and the composer, roster and feed chip all take its name", async () => {
+  // ct-101369: the /call-panel window mounts only the inbox feeders, and a new
+  // agent is not on the inbox list before its first prompt.
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {} } as any);
+  const id = "k57b2c9d8e7f6a5b4c3d2e1f0a9b8c7d";
+  const routes = [{ kind: "session", target: id, mode: "live", added_by: "u-me" }];
+  const names = (r: { container: HTMLElement }) => ({
+    placeholder: r.container.querySelector("textarea")?.getAttribute("placeholder"),
+    roster: r.container.querySelector(".rt-head .rt-chip")?.textContent,
+    chip: r.container.querySelector(".feed-chip-alone")?.textContent,
+  });
+  const tree = () => (
+    <>
+      <RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="page" seated />
+      <div className="feed-chip-alone">
+        <FeedChip route={routes[0]} removable={false} />
+      </div>
+    </>
+  );
+  const r = await render(tree());
+  // Before the row exists, every surface says the same placeholder.
+  expect(names(r)).toEqual({
+    placeholder: "Message the room · new agent hears you",
+    roster: expect.stringContaining("new agent"),
+    chip: "new agent",
+  });
+  // The row arrives through the room's own feeder (no title yet, characters off).
+  (await import("../../../test-helpers/characters")).setCharacters(false);
+  const asked: string[][] = [];
+  served.set("conversations:getInboxSessionsByIds", (args) => {
+    asked.push(args.ids);
+    return { sessions: [{ _id: id, session_id: "sess-new", agent_type: "claude_code", agent_status: "idle" }] };
+  });
+  await act(() => root(r).render(tree()));
+  await act(() => root(r).render(tree()));
+  served.clear();
+  expect(asked[0]).toEqual([id]);
+  const name = characterOf({ _id: id }).name;
+  expect(names(r)).toEqual({
+    placeholder: `Message the room · ${clip(name, 22)} hears you`,
+    roster: expect.stringContaining(name),
+    chip: name,
+  });
+  expect(r.container.textContent).not.toContain("new agent");
   await r.unmount();
 });
 
