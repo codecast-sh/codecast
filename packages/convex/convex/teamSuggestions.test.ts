@@ -582,7 +582,7 @@ describe("an admin of the session's team steers it directly", () => {
     await expect(answer(s, "uAvery", await permission(s))).rejects.toThrow(/Unauthorized/);
   });
 
-  test("they read the runner's prompt rows without the rule data; a member reads the redacted ones", async () => {
+  test("they read the runner's prompt rows without the rule data or secrets; a member reads the redacted ones", async () => {
     const w = world();
     const secret = "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH' x";
     await w.db.insert("pending_permissions", {
@@ -591,8 +591,10 @@ describe("an admin of the session's team steers it directly", () => {
       suggestions: [{ rule: 1 }], rule_request: { permission: "bash", always: ["rm *"] },
     });
     const [admin] = await run(getPendingPermissions)(w.as("uAvery"), { conversation_id: "c1", as_proposer: true });
-    expect([admin.safety_check, admin.removals, admin.intent, admin.subagent_type, admin.arguments_preview])
-      .toEqual([true, [{ path: "dist" }], "clean the build", "builder", secret]);
+    expect([admin.safety_check, admin.removals, admin.intent, admin.subagent_type])
+      .toEqual([true, [{ path: "dist" }], "clean the build", "builder"]);
+    expect(admin.arguments_preview).toContain("curl -H 'Authorization: Bearer");
+    expect(admin.arguments_preview).not.toContain("sk-ant-api03-abcdefghijklmnopqrstuvwxyz");
     expect("suggestions" in admin || "rule_request" in admin).toBe(false);
     const [member] = await run(getPendingPermissions)(w.as("uJordan"), { conversation_id: "c1", as_proposer: true });
     expect([member.safety_check, member.intent]).toEqual([undefined, undefined]);

@@ -385,9 +385,13 @@ export const getPendingPermissions = query({
     if (runner) return live;
     // An admin of the session's team answers, so reads what the runner reads
     // (the safety check, removals, intent, subagent) without the rule data:
-    // keeping a rule is the runner's alone (updatePermissionStatus).
+    // keeping a rule is the runner's alone (updatePermissionStatus). The
+    // command's secrets stay redacted, as in the transcript everyone reads.
     if (await adminAnswersPrompts(ctx, userId, conversation)) {
-      return live.map(({ rule_request: _rules, suggestions: _suggestions, ...row }) => row);
+      return live.map(({ rule_request: _rules, suggestions: _suggestions, ...row }) => ({
+        ...row,
+        arguments_preview: redactSecrets(row.arguments_preview),
+      }));
     }
     // What a proposer needs to pick an answer, with secrets in the command
     // redacted the way the transcript's own tool inputs are.
