@@ -13,6 +13,8 @@ export function usePriorityPinLine(conversationId: string): PriorityPinLine | nu
   // whenever any of them has the feature (the personal workspace has it then);
   // the server answers null where the session's own workspace does not.
   const on = useInboxStore((s) => workspaceFeatureEnabled(s.teams || [], null, "priorities"));
-  const { data } = useQueryNoThrow(api.priorities.pinLine, on && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip");
+  // Remembered per conversation, so switching back to one paints its line at once;
+  // a conversation never asked before shows nothing until its own answer lands.
+  const { data } = useQueryNoThrow(api.priorities.pinLine, on && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip", { remember: true });
   return on ? ((data as PriorityPinLine | null | undefined) ?? null) : null;
 }

@@ -403,6 +403,7 @@ function PriorityBody({ row, history, writes }: { row: PriorityRow; history: Pri
               dragging={dragStep === s.key}
               onDragStart={row.mine ? () => setDragStep(s.key) : undefined}
               onDragEnd={() => { setDragStep(null); setOverTier(null); }}
+              onMoveTier={row.mine ? (to) => writes.setStepTier(row.short_id, s.key, to) : undefined}
             />
           ))}
         </ul>
@@ -439,7 +440,26 @@ function PriorityBody({ row, history, writes }: { row: PriorityRow; history: Pri
 
 const MAX_STEP_SESSIONS = 3;
 
-function StepLine({ row, step, history, detail, days, dragging, onDragStart, onDragEnd }: {
+/** The tier move without a drag, for touch and keyboard. */
+function StepMenu({ step, onMoveTier }: { step: PriorityStep; onMoveTier: (tier: PriorityStepTier) => void }) {
+  const to: PriorityStepTier = step.tier === "critical" ? "polish" : "critical";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" aria-label={`More for ${step.title}`} className="shrink-0 rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text">
+          <MoreHorizontal className="size-3.5" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem data-move-tier={to} onSelect={() => onMoveTier(to)}>
+          {to === "critical" ? "Move to critical path" : "Move to polish"}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function StepLine({ row, step, history, detail, days, dragging, onDragStart, onDragEnd, onMoveTier }: {
   row: PriorityRow;
   step: PriorityStep;
   history: PriorityHistory | undefined;
@@ -448,6 +468,7 @@ function StepLine({ row, step, history, detail, days, dragging, onDragStart, onD
   dragging: boolean;
   onDragStart?: () => void;
   onDragEnd: () => void;
+  onMoveTier?: (tier: PriorityStepTier) => void;
 }) {
   const sessions = stepSessions(row, step, detail);
   const tasks = step.refs.filter((r) => r.kind === "task");
@@ -468,7 +489,10 @@ function StepLine({ row, step, history, detail, days, dragging, onDragStart, onD
         {step.done && <Check className="size-2.5" strokeWidth={3} />}
       </span>
       <div className="min-w-0">
-        <div className={cn("truncate text-ui font-medium", step.done ? "text-sol-text-muted" : "text-sol-text")} title={step.title}>{step.title}</div>
+        <div className="flex min-w-0 items-center gap-1">
+          <div className={cn("min-w-0 truncate text-ui font-medium", step.done ? "text-sol-text-muted" : "text-sol-text")} title={step.title}>{step.title}</div>
+          {onMoveTier && <StepMenu step={step} onMoveTier={onMoveTier} />}
+        </div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {tasks.map((t) => <EntityIdPill key={t.id} shortId={t.id} type="task" />)}
           {sessions.slice(0, MAX_STEP_SESSIONS).map((s) => <EntityIdPill key={s.short_id} shortId={s.short_id} type="session" label={s.title || undefined} />)}

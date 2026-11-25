@@ -90,6 +90,8 @@ export type PassPriority = {
   last_active_at: number;
   /** Sessions mapped to it now, with the step each serves and when it last moved. */
   sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number }>;
+  /** It lost a session that left the workspace or was deleted: the reply must write its title and summary again from what is shown. */
+  needs_rewrite?: boolean;
 };
 
 export type PriorityPassInput = {
@@ -123,7 +125,7 @@ Not every session belongs to a priority. A standing role (a recurring duty, such
 A priority can also come from a call: what the person said they would do, or took on, in a call they were in. Calls are context, never sessions: name only sessions in sessions and refs.
 
 Keeping the list:
-- Return only the priorities that changed or gained sessions: an existing one with its short_id, a new one without. A priority you leave out stays as it is. It is the same priority when it is the same outcome, even if the words changed; rename it freely. When two existing priorities are the same thing, return one of them and list the other's short_id in merges.
+- Return only the priorities that changed or gained sessions: an existing one with its short_id, a new one without. A priority you leave out stays as it is. Always return a priority marked "rewrite": it lost sessions you can no longer see, so write its title and summary again from only what is shown of it now. It is the same priority when it is the same outcome, even if the words changed; rename it freely. When two existing priorities are the same thing, return one of them and list the other's short_id in merges.
 - status: "done" only when every step on its critical path is done. "quiet" when nothing in it moved for about ${QUIET_DAYS} days and it is not done. Otherwise "active". Never set a priority aside; only the person does that, and one they set aside stays set aside whatever you return.
 - rank: your proposed order among the active priorities, 1 first, by where the person is putting their time and attention. The person's own ranks stand; yours fill in after them.
 - serves: the short id of a company goal the priority clearly advances, else null. Most work serves none.
@@ -241,7 +243,7 @@ function sessionBlock(s: PassSession): string {
 function priorityBlock(p: PassPriority, taskStatus: Map<string, string>): string {
   const rank = p.rank == null ? "unranked" : `rank ${p.rank}${p.rank_set_by === "person" ? " (set by the person)" : ""}`;
   const head = `${p.short_id} · "${p.title}" · ${p.status === "set_aside" ? "set aside by the person" : p.status} · ${rank}${p.serves ? ` · serves ${p.serves}` : ""} · last active ${day(p.last_active_at)}`;
-  const lines = [head, `  Where it stands: ${p.summary}`];
+  const lines = [`${head}${p.needs_rewrite ? " · rewrite" : ""}`, `  Where it stands: ${p.summary}`];
   for (const s of p.steps) {
     const refs = s.refs.map((r) => (r.kind === "task" ? `task ${r.id} (${taskStatus.get(r.id) ?? "unknown"})` : `${r.kind} ${r.id}`));
     lines.push(`  - ${p.short_id}/${s.key} [${s.tier}${s.tier_set_by === "person" ? ", set by the person" : ""}] ${s.title}${s.done ? " · done" : ""}${refs.length ? ` · ${refs.join(", ")}` : ""}`);
@@ -281,7 +283,7 @@ export function buildPriorityPassPrompt(input: PriorityPassInput): { system: str
   const taskStatus = taskStatusMap(input);
   const goals = input.initiatives.length ? input.initiatives.map((i) => `- ${i.short_id} ${i.title}`).join("\n") : "(none)";
   const finishedBefore = input.now - PRIORITY_PASS_CAPS.finished_days * DAY;
-  const shown = input.priorities.filter((p) => !((p.status === "done" || p.status === "quiet") && p.last_active_at < finishedBefore));
+  const shown = input.priorities.filter((p) => p.needs_rewrite || !((p.status === "done" || p.status === "quiet") && p.last_active_at < finishedBefore));
   const hidden = input.priorities.length - shown.length;
   const priorities = (shown.length ? shown.map((p) => priorityBlock(p, taskStatus)).join("\n\n") : "(none yet)") +
     (hidden ? `\n\n(${hidden} more done or quiet for over ${PRIORITY_PASS_CAPS.finished_days} days, not shown.)` : "");
@@ -473,6 +475,8 @@ export type MergePlan = {
   unmap: string[];
   /** Where a rule overrode the reply, for the run's record. */
   notes: string[];
+  /** Priorities that needed a rewrite and the reply wrote again: their flag clears. */
+  rewritten: string[];
 };
 
 const words = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1));
@@ -599,7 +603,7 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
 /** The pure apply step of a pass: what the Convex mutation writes. */
 export function mergePriorities(input: PriorityPassInput, output: PriorityPassOutput): MergePlan {
   const now = input.now;
-  const plan: MergePlan = { creates: [], updates: [], merges: [], sessions: [], unmap: [], notes: [] };
+  const plan: MergePlan = { creates: [], updates: [], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] };
   const byId = new Map(input.priorities.map((p) => [p.short_id, p]));
   const taskStatus = taskStatusMap(input);
   const touched = new Map(input.sessions.map((s) => [s.id, s.last_active]));
@@ -748,6 +752,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       if (JSON.stringify(w[k]) !== JSON.stringify((r.prior as unknown as PriorityWrite)[k])) (patch as any)[k] = w[k];
     }
     if (r.proposal || Object.keys(patch).length) plan.updates.push({ short_id: r.prior.short_id, patch });
+    if (r.proposal && r.prior.needs_rewrite) plan.rewritten.push(r.prior.short_id);
   }
 
   for (const [session, m] of sessionMap) {

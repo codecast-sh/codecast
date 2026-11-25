@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Calibrates the priorities pass (packages/convex/convex/lib/priorityPass.ts)
 // against a person's golden set: runs the pass from empty over the set's
-// window in production, writing nothing (priorityPassRun:evalPass through
+// window in production, writing nothing (priorityPassEval:evalPass through
 // packages/convex/run.sh), then scores what it produced. A model judge matches
 // produced priorities to golden ones by meaning, one to one, and aligns the
 // critical steps of each matched pair.
@@ -204,7 +204,7 @@ async function main() {
   const key = evalsApiKey();
   if (!key) throw new Error('no evals API key: set CODECAST_EVALS_ANTHROPIC_KEY or the keychain item (./evals doctor)');
 
-  const targets = convexRun<{ user_id: string; workspaces: Array<{ workspace: string; name: string }> }>('priorityPassRun:evalTargets', { user: arg('user') });
+  const targets = convexRun<{ user_id: string; workspaces: Array<{ workspace: string; name: string }> }>('priorityPassEval:evalTargets', { user: arg('user') });
   const workspaces = scope === 'all'
     ? targets.workspaces
     : scope === 'personal'
@@ -221,7 +221,7 @@ async function main() {
     let resume: unknown;
     do {
       console.error(`${w.name}: pass ${resume ? '(resumed)' : ''}…`);
-      const r = convexRun<EvalResult>('priorityPassRun:evalPass', { user_id: targets.user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}) });
+      const r = convexRun<EvalResult>('priorityPassEval:evalPass', { user_id: targets.user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}) });
       result.outputs.push(...r.outputs);
       result.priorities = r.priorities;
       result.cost_usd += r.cost_usd;

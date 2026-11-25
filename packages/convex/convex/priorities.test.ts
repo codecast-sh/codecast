@@ -9,7 +9,7 @@ import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorities";
-import { nextSweepAt } from "./priorityPassRun";
+import { nextSweepAt } from "./priorityPassSweep";
 import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
 import type { Id } from "./_generated/dataModel";
 
@@ -168,8 +168,8 @@ describe("reads", () => {
   test("turning the feature on starts that team's sweep at once", async () => {
     const { t, off } = await world();
     await t.mutation((internal as any).teamFeatures.setTeamFeatureInternal, { team_id: off, feature: "priorities", enabled: true });
-    const jobs = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((j: any) => j.name.includes("priorityPassRun")));
-    expect(jobs.map((j: any) => [j.name, j.args[0]])).toEqual([["priorityPassRun:sweep", { team_id: off }]]);
+    const jobs = await t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((j: any) => j.name.includes("priorityPass")));
+    expect(jobs.map((j: any) => [j.name, j.args[0]])).toEqual([["priorityPassSweep:sweepTeam", { team_id: off }]]);
     await t.run(async (ctx) => { for (const j of jobs) await ctx.scheduler.cancel(j._id); });
   });
 
@@ -254,6 +254,16 @@ describe("reads", () => {
     expect((await rowsOf(as(bea), {})).map((r: any) => r.short_id)).not.toContain("pri-1");
     expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
     expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
+  });
+
+  test("a priority that needs a rewrite is its owner's alone: no list row, show or pin line for a teammate", async () => {
+    const { t, as, ada, bea, p1, c1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
+    expect((await rowsOf(as(bea), {})).map((r: any) => r.short_id)).not.toContain("pri-1");
+    expect(await as(bea).query(pri.show, { short_id: "pri-1" })).toBeNull();
+    expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
+    expect((await rowsOf(as(ada), {})).map((r: any) => r.short_id)).toContain("pri-1");
+    expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
   });
 
   test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {

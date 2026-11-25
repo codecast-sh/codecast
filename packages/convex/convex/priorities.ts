@@ -1,9 +1,9 @@
 // Priorities (shared/contracts/priorities.ts): the reads behind /priorities,
 // the pin line and `cast priorities`, and the person's own controls over them.
 //
-// Access follows the workspace's sharing settings: a priority is readable by
-// its owner, and by a teammate holding its `workspace` key only while the owner
-// lists their sessions to that team (privacy.listsSessionsToTeam); nothing is
+// Access follows the workspace's sharing settings (lib/priorityAccess.ts): a
+// priority is readable by its owner, and by a teammate holding its `workspace`
+// key only while the owner lists their sessions to that team; nothing is
 // readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority, and every change marks its field set by the person, so
 // the pass (lib/priorityPass.ts) never overrides it.
@@ -13,30 +13,24 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
-import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
-import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
+import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
+import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
-import { hasOkRun, passTiming, runBlocker } from "./priorityPassRun";
+import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
+import { hasOkRun, runBlocker } from "./priorityPassRun";
+import { passTiming } from "./priorityPassSweep";
 import { getOwnerMembership } from "./privacy";
-import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
-import { isSessionOwner } from "./sessionOwners";
+import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import type {
-  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityPinLine, PriorityRef, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
+  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityPinLine, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
 } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 
-const FEATURE = "priorities" as const;
 const DAY = 86_400_000;
 /** Sessions a list shows per priority, and how many of the owner's mapped sessions it reads to count them before the pass stored a count ("50+" past that). */
 const LIST_SESSIONS = 3;
 const LIST_COUNT_CAP = 50;
-/**
- * A teammate's priority: the newest sessions read to decide whether they may
- * read it (none of these listed to the team: hidden, failing closed) and the
- * ones its row counts ("4+" past that).
- */
-const TEAMMATE_SESSIONS = 4;
 /** The most teammates' priorities one list judges, the most recently active first (more with `all` or a status); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
 export const TEAMMATE_ALL_CAP = 200;
@@ -65,119 +59,6 @@ type Result<T> = T | { error: string };
 async function tokenUser(ctx: any, api_token: string): Promise<Id<"users"> | null> {
   const result = await verifyApiToken(ctx, api_token);
   return result ? (result.userId as Id<"users">) : null;
-}
-
-/** Is the feature on for the workspace a key names? Unknown keys are off. Memoized per call. */
-function featureCheck(ctx: Ctx): (key: string) => Promise<boolean> {
-  const seen = new Map<string, Promise<boolean>>();
-  return (key) => {
-    if (!seen.has(key)) {
-      const ws = parseWorkspaceKey(key);
-      seen.set(key, !ws ? Promise.resolve(false)
-        : ws.type === "team" ? teamHasFeature(ctx, ws.teamId, FEATURE)
-        : workspaceHasFeature(ctx, { user_id: ws.userId }, FEATURE));
-    }
-    return seen.get(key)!;
-  };
-}
-
-/**
- * Everything one call decides about who sees what, read once per call. Team
- * questions all go through lib/prioritySessionVisibility (`vis`), the one
- * predicate the pass uses too.
- */
-type Reader = {
-  viewer: Id<"users">;
-  held: Set<string>;
-  vis: SessionVisibility;
-  /** The newest `n` sessions mapped to a priority (by_priority), one read per priority per call. */
-  sessionsOf: (p: Priority, n: number) => Promise<Doc<"conversations">[]>;
-  /**
-   * Whether a session is listed to the viewer (its title, its chip, a count):
-   * their own, one they co-own, or one listed to a team of theirs. Nothing
-   * here opens a transcript, so nothing needs the content level.
-   */
-  listed: (c: Doc<"conversations">) => Promise<boolean>;
-  /**
-   * Who may read a priority (the feature check is the caller's): its owner;
-   * a teammate holding its workspace key only while at least one of its
-   * newest TEAMMATE_SESSIONS sessions is listed to that team.
-   */
-  canRead: (p: Priority) => Promise<boolean>;
-  /** The priority's steps as the viewer may see them (stepsFor). */
-  stepsFor: (p: Priority) => Promise<PriorityStep[]>;
-};
-
-async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> {
-  const held = await heldKeysFor(ctx, viewer);
-  const vis = sessionVisibility(ctx);
-  const reads = new Map<string, { n: number; rows: Promise<Doc<"conversations">[]> }>();
-  const sessionsOf = async (p: Priority, n: number) => {
-    const key = String(p._id);
-    const had = reads.get(key);
-    if (had && had.n >= n) return (await had.rows).slice(0, n);
-    const rows: Promise<Doc<"conversations">[]> = ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(n);
-    reads.set(key, { n, rows });
-    return rows;
-  };
-  const listed = async (c: Doc<"conversations">) => {
-    if (String(c.user_id) === String(viewer) || String(c.owner_user_id ?? "") === String(viewer)) return true;
-    if (c.team_id && held.has(`team:${c.team_id}`) && (await vis.listedTo(c, c.team_id))) return true;
-    return isSessionOwner(ctx, c._id, viewer);
-  };
-  const canRead = async (p: Priority) => {
-    if (String(p.user_id) === String(viewer)) return true;
-    if (!authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
-    const ws = parseWorkspaceKey(p.workspace);
-    if (ws?.type !== "team") return false;
-    for (const c of (await sessionsOf(p, TEAMMATE_SESSIONS + 1)).slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
-    return false;
-  };
-
-  // A step ref shown to a teammate: a session listed to them, a task they can read, a pull request or commit in a repository of the team's.
-  const shown = new Map<string, Promise<boolean>>();
-  const refShown = (ref: PriorityRef, teamId: string | null) => {
-    const key = `${ref.kind}:${ref.id}`;
-    if (!shown.has(key)) {
-      shown.set(key, (async () => {
-        if (ref.kind === "session") {
-          const id = ctx.db.normalizeId("conversations", ref.id);
-          const conv: Doc<"conversations"> | null = id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.id)).first();
-          return !!conv && (await listed(conv));
-        }
-        if (ref.kind === "task") {
-          const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.id)).first();
-          return !!task && authorizedFor(await accessStampFor(ctx, "tasks", task), String(viewer), held);
-        }
-        const repository = ref.id.split(ref.kind === "pr" ? "#" : "@")[0];
-        if (!teamId || !repository) return false;
-        for (const table of ["pull_requests", "commits"]) {
-          if (await ctx.db.query(table).withIndex("by_team_repository", (q: any) => q.eq("team_id", teamId).eq("repository", repository)).first()) return true;
-        }
-        return false;
-      })());
-    }
-    return shown.get(key)!;
-  };
-  /**
-   * The owner sees every step whole. A teammate sees each step's refs they may
-   * read, and not at all a step whose refs were all sessions none of which is
-   * listed to them (its title came from work they cannot see).
-   */
-  const stepsFor = async (p: Priority): Promise<PriorityStep[]> => {
-    if (String(p.user_id) === String(viewer)) return p.steps;
-    const ws = parseWorkspaceKey(p.workspace);
-    const teamId = ws?.type === "team" ? String(ws.teamId) : null;
-    const out: PriorityStep[] = [];
-    for (const step of p.steps) {
-      const refs: PriorityRef[] = [];
-      for (const ref of step.refs) if (await refShown(ref, teamId)) refs.push(ref);
-      if (!refs.length && step.refs.length && step.refs.every((ref) => ref.kind === "session")) continue;
-      out.push({ ...step, refs });
-    }
-    return out;
-  };
-  return { viewer, held, vis, sessionsOf, listed, canRead, stepsFor };
 }
 
 /** The workspace a CLI call names: a team, the personal one, or none (every workspace). */
@@ -654,10 +535,10 @@ export const history = query({
 /**
  * The line under a mapped session's pinned state: for the priority's owner,
  * and for a teammate holding its workspace key when this open session is
- * listed to that team (summary level is enough: the line names the priority,
- * not the transcript). No scan of the priority's other sessions: one
- * conversation read, one priority read, the owner's membership, and the
- * owner's active priorities for its position.
+ * listed to that team and the priority needs no rewrite (summary level is
+ * enough: the line names the priority, not the transcript). No scan of the
+ * priority's other sessions: one conversation read, one priority read, the
+ * owner's membership, and the owner's active priorities for its position.
  */
 export const pinLine = query({
   args: { conversation_id: v.id("conversations") },
@@ -671,7 +552,7 @@ export const pinLine = query({
     // Only the open session is judged: the owner's, or a teammate's listed to the team that holds the priority.
     if (String(p.user_id) !== String(viewer)) {
       const ws = parseWorkspaceKey(p.workspace);
-      if (ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), await heldKeysFor(ctx, viewer))) return null;
+      if (p.needs_rewrite || ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), await heldKeysFor(ctx, viewer))) return null;
       if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
     }
     if (!(await featureCheck(ctx)(p.workspace))) return null;

@@ -326,15 +326,7 @@ mod's folder (cast mod types rewrites it).`,
 Short ids render as live pills wherever codecast shows prose.`,
     load: () => import("./objCommand.js").then((m) => m.registerObjCommand),
   },
-  {
-    token: "priorities",
-    description: `What you are driving at, inferred from your own sessions, and how far along each is
-
-  cast priorities [ls] [--all] | show <pri-N> | history [--days N] | run
-  cast priorities rank <pri-N> <n> | step <pri-N> <key> --critical|--polish
-  cast priorities set-aside <pri-N> | restore <pri-N>`,
-    load: () => import("./prioritiesCommand.js").then((m) => m.registerPrioritiesCommand),
-  },
+  { token: "priorities", description: "What you are driving at, inferred from your own sessions, and how far along each is", load: () => import("./prioritiesCommand.js").then((m) => m.registerPrioritiesCommand) },
   {
     token: "shortcuts",
     aliases: ["hotkeys"],

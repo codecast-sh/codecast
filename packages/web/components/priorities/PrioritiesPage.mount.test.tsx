@@ -4,12 +4,13 @@
 // (done won, quiet and set aside greyed), fed into the store and painted
 // from it; ?open=pri-N opens that row on its
 // steps, chips and "+ new session" on each open step no session works; dragging a row onto another ranks it, and
-// dragging a step across the line changes its tier; a backend without the
+// dragging a step across the line (or its menu) changes its tier; the pin line
+// paints at once for a conversation seen before; a backend without the
 // functions reads as an error state, an empty list as the empty state, and the
 // route shows the feature-off landing while the workspace has Priorities off.
 // Run: cd packages/web && bun test --isolate components/priorities/PrioritiesPage.mount.test.tsx
 import { expect, test } from "bun:test";
-import { describeFailures, installDom, installMissingBackend, seedViewer, TEAM_ID, VIEWER_ID } from "../../test-helpers/missingBackend";
+import { describeFailures, fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID, VIEWER_ID } from "../../test-helpers/missingBackend";
 
 const { mountSurface } = installDom("https://app.test/priorities");
 const answers: Record<string, unknown> = {};
@@ -216,6 +217,65 @@ test("Move to ranks a priority from the row menu, without a drag", async () => {
     expect(calls).toEqual(["rank pri-3 1"]);
   } finally {
     await page.unmount();
+  }
+}, 60_000);
+
+test("a step's menu moves it across the line, without a drag; a teammate's steps have none", async () => {
+  const calls: string[] = [];
+  const writes = { rank: () => {}, setStepTier: (id: string, key: string, tier: string) => calls.push(`tier ${id} ${key} ${tier}`), setAside: () => {}, restore: () => {} };
+  const page = await mount(<PrioritiesView rows={ROWS as any} history={HISTORY as any} openId="pri-1" onToggleOpen={() => {}} writes={writes as any} />);
+  const { act } = React as any;
+  try {
+    const pick = async (stepKey: string) => {
+      const trigger = page.container.querySelector(`[data-step="${stepKey}"] button[aria-label^="More for"]`) as HTMLElement;
+      await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+      const item = document.querySelector("[data-move-tier]") as HTMLElement;
+      const label = item.textContent;
+      await act(async () => { item.click(); });
+      return label;
+    };
+    expect(await pick("s2")).toBe("Move to polish");
+    expect(await pick("s3")).toBe("Move to critical path");
+    expect(calls).toEqual(["tier pri-1 s2 polish", "tier pri-1 s3 critical"]);
+  } finally {
+    await page.unmount();
+  }
+  const theirs = ROWS.map((r) => ({ ...r, mine: false }));
+  const other = await mount(<PrioritiesView rows={theirs as any} history={HISTORY as any} openId="pri-1" onToggleOpen={() => {}} writes={writes as any} />);
+  try {
+    expect(other.container.querySelector('[data-step] button[aria-label^="More for"]')).toBeNull();
+  } finally {
+    await other.unmount();
+  }
+}, 60_000);
+
+test("the pin line paints at once for a conversation seen before, and never shows one conversation's line on another", async () => {
+  const { usePriorityPinLine } = await import("../../hooks/usePriorityPinLine");
+  const { PriorityPinLineView } = await import("./PriorityPinLine");
+  const A = fixtureId("pinconva");
+  const B = fixtureId("pinconvb");
+  const line = (title: string) => ({ short_id: "pri-1", title, rank: 1, critical_done: 1, critical_total: 2, step_title: null });
+  let show: (id: string) => void = () => {};
+  function Probe() {
+    const [id, setId] = React.useState(A);
+    show = setId;
+    return <PriorityPinLineView line={usePriorityPinLine(id)} />;
+  }
+  answers["priorities:pinLine"] = line("Trusted evals");
+  const page = await mount(<Probe />);
+  const { act } = React as any;
+  try {
+    expect(page.text()).toContain("Trusted evals");
+    // B has never answered: nothing, not A's line.
+    answers["priorities:pinLine"] = undefined;
+    await act(async () => { show(B); });
+    expect(page.container.querySelector("[data-priority-pin-line]")).toBeNull();
+    // Back on A while its answer is still on the way: A's line at once.
+    await act(async () => { show(A); });
+    expect(page.text()).toContain("Trusted evals");
+  } finally {
+    await page.unmount();
+    delete answers["priorities:pinLine"];
   }
 }, 60_000);
 

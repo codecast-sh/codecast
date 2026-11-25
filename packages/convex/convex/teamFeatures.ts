@@ -39,7 +39,7 @@ async function afterFeatureChange(ctx: any, teamId: Id<"teams">, before: TeamFea
   await changesFlagChanged(ctx, teamId, before, after);
   // Priorities turned on: the team's first passes start now, not at the next sweep.
   if (!teamFeatureEnabled({ features: before }, "priorities") && teamFeatureEnabled({ features: after }, "priorities")) {
-    await ctx.scheduler.runAfter(0, (internal as any).priorityPassRun.sweep, { team_id: teamId });
+    await ctx.scheduler.runAfter(0, (internal as any).priorityPassSweep.sweepTeam, { team_id: teamId });
   }
   if (teamFeatureEnabled({ features: before }, "calls") && !teamFeatureEnabled({ features: after }, "calls")) {
     await stopTeamRecordings(ctx, teamId, "calls_off");
