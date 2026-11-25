@@ -362,7 +362,7 @@ function PastRow({ row, lane, days, levels, writes }: {
       {/* The title takes the room it needs first; the goal it served gets what is left, clipped, never over the title. */}
       <span className={cn("flex min-w-0 items-center gap-2", !won && "text-sol-text-muted")}>
         <span data-past-title className={cn("max-w-full shrink-0 truncate text-body", won ? "font-semibold text-sol-text" : "font-medium")} title={row.title}>{row.title}</span>
-        {row.serves && <span data-past-serves className="hidden min-w-0 overflow-hidden text-meta [@container(min-width:28rem)]:inline-flex"><EntityIdPill shortId={row.serves} type="initiative" compact /></span>}
+        {row.serves && <span data-past-serves className="hidden min-w-0 overflow-hidden whitespace-nowrap text-meta [&_*]:!whitespace-nowrap [@container(min-width:28rem)]:inline-flex"><EntityIdPill shortId={row.serves} type="initiative" compact /></span>}
       </span>
       <span className="justify-self-end [@container(min-width:28rem)]:col-span-2">
         {won

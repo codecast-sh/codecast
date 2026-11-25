@@ -223,6 +223,8 @@ test("rows share one strip width so titles get the room; a past row puts its tit
     expect(title.compareDocumentPosition(serves) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(serves.className).toContain("min-w-0");
     expect(serves.className).toContain("overflow-hidden");
+    // The pill inside sets its own label to wrap; the slot forces one line so a squeezed goal clips, never grows the row.
+    expect(serves.className).toContain("[&_*]:!whitespace-nowrap");
     expect(title.className).toContain("shrink-0");
     // Whose finished priorities these are.
     expect([...page.container.querySelectorAll("h3")].map((h) => h.textContent)).toContain("Finished and past · Ashot");
