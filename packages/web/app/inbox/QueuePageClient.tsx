@@ -84,6 +84,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   // those renders restarts the deferred mount, so a plain useDeferredValue
   // never lands and the pane stays on the old conversation.
   const sessionId = useBoundedDeferredValue(liveSessionId);
+  // A fresh mount has nothing earlier to defer to, so the deferral above does
+  // nothing for it: arriving from another page (the PR page, a task) mounted
+  // the whole transcript inside the click (ct-101487). The mount commits the
+  // placeholder and draws the body at transition priority, as a switch does.
+  const mounted = useDeferredValue(true, false);
   const {
     conversation,
     hasMoreAbove,
@@ -219,7 +224,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
   </>, [isOwnSession, convId, convSessionId, agentTaskId, activePlanId, workflowRunId]);
 
-  if (!conversation) {
+  if (!conversation || !mounted) {
     return <ConversationPlaceholder id={sessionId} />;
   }
 
