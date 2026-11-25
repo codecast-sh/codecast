@@ -2,18 +2,29 @@
 // While an owner of a session is in it, a teammate's message waits as a
 // suggestion; the roster carries the same two facts the server decides on
 // (the member's view and their derived presence), so the composer can say
-// "Suggest" before the press. The server still decides at send time.
+// "Suggest" before the press. The server still decides at send time. An
+// admin of the session's team never suggests or proposes: they send, and
+// answer its questions and permission prompts, directly.
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { memberPresenceState, viewersOf } from "../components/presence/memberPresence";
 
-type SteeredConversation = { _id: unknown; user_id?: unknown; owner_user_id?: unknown; standing_role_id?: unknown; agent_type?: string };
+type SteeredConversation = { _id: unknown; user_id?: unknown; owner_user_id?: unknown; standing_role_id?: unknown; agent_type?: string; team_id?: unknown };
+
+/** Whether the viewer is an admin of this team, read off their own team list
+ *  (the store's `teams`, teams.getUserTeams). The client's copy of convex
+ *  teamSuggestions.adminOfSessionTeam. */
+export function adminOfTeam(teams: any[] | null | undefined, teamId: unknown): boolean {
+  if (!teamId) return false;
+  return (teams ?? []).some((t) => String(t?._id) === String(teamId) && t?.role === "admin");
+}
 
 /** The id of the owner attending this session right now, or null. */
-export function attendingOwnerId(members: any[] | null | undefined, conversation: SteeredConversation | null | undefined, meId: string | null): string | null {
+export function attendingOwnerId(members: any[] | null | undefined, conversation: SteeredConversation | null | undefined, meId: string | null, teams: any[] | null | undefined): string | null {
   if (!conversation) return null;
   if (conversation.standing_role_id || isHostedAgentType(conversation.agent_type)) return null;
   const owners = new Set([conversation.user_id, conversation.owner_user_id].filter(Boolean).map(String));
   if (meId && owners.has(meId)) return null;
+  if (adminOfTeam(teams, conversation.team_id)) return null;
   for (const m of viewersOf(members, String(conversation._id), meId)) {
     if (owners.has(String(m._id)) && memberPresenceState(m) === "active") return String(m._id);
   }

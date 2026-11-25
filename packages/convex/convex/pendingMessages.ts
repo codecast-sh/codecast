@@ -1047,8 +1047,8 @@ export async function performSessionSend(
 
   // A person typing into a teammate's session from the dashboard while one of
   // its owners is in it: the words wait as a suggestion that owner sends,
-  // edits or dismisses (teamSuggestions.ts). Unattended sessions take them
-  // straight in, below.
+  // edits or dismisses (teamSuggestions.ts). Unattended sessions, and an
+  // admin of the session's team, take them straight in, below.
   if (args.direct && !args.target && !args.raw && !args.image_storage_ids?.length && senderUser && !senderUser.is_bot) {
     const steeringOwner = await steeringOwnerFor(ctx, target, authUserId, Date.now());
     if (steeringOwner) {
