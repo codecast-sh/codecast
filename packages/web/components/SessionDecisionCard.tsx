@@ -129,7 +129,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // agent in the wording.
   const hosted = useIsHostedConversation(item.conversationId);
   const modern = useIsModernStyle();
-  const dockCollapsed = useInboxStore((s) => s.clientState?.ui?.decision_dock_collapsed === true);
+  const dockCollapsed = useInboxStore((s) => s.clientState?.ui?.decision_dock_folded?.includes(item.key) === true);
 
   const [size, setSize] = useState<Size>(() => {
     if (startSize) return startSize;
@@ -250,16 +250,18 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   const answer = useCallback((index: number) => {
     if (held(index)) return;
     const sent = answerItem(index);
+    setDecisionFolded(item.key, false);
     // One that asks for Touch ID moves on once confirmed; cancelled, it stays to be answered.
     if (gated(index)) void Promise.resolve(sent).then((r) => r !== NOT_CONFIRMED && onDone(), () => {});
     else onDone();
-  }, [answerItem, onDone, held, gated]);
+  }, [answerItem, onDone, held, gated, item.key]);
   const answerFreeText = useCallback((text: string) => {
     if (!text.trim()) return;
     answerItemFreeText(text);
+    setDecisionFolded(item.key, false);
     onDone();
-  }, [answerItemFreeText, onDone]);
-  const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
+  }, [answerItemFreeText, onDone, item.key]);
+  const dismiss = useCallback(() => { dismissItem(); setDecisionFolded(item.key, false); onDone(); }, [dismissItem, onDone, item.key]);
   // A `cast decide` row can be handed on; a terminal prompt and a hosted
   // assistant's ask (only its owner answers) cannot. A trial's stays put.
   const canPass = item.source === "decide" && !!item.decisionId && !hosted && !item.trial;
@@ -743,7 +745,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // Modern docks the ask itself (ModernDecisionDock): the question and its options as Buttons, Open for the sheet.
   if (modern) return (
     <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
-      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_collapsed: v })} />
+      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => setDecisionFolded(item.key, v)} />
     </div>
   );
   return (
