@@ -14,6 +14,11 @@ describe("sanitizeForTerminal", () => {
     expect(sanitizeForTerminal("\x1b\x01[201~")).toBe("[201~");
   });
 
+  test("C1 controls go, so a one-character CSI cannot start a sequence", () => {
+    expect(sanitizeForTerminal("a\x9b201~b\x85c\x9dd\x80e\x9ff")).toBe("a201~bcdef");
+    expect(sanitizeForTerminal("\u00a0é")).toBe("\u00a0é");
+  });
+
   test("newlines and tabs survive, carriage returns become newlines, trailing newlines go", () => {
     expect(sanitizeForTerminal("one\ntwo\tthree\r\nfour\rfive\n\n")).toBe("one\ntwo\tthree\nfour\nfive");
   });

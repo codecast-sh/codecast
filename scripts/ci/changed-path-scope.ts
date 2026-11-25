@@ -149,8 +149,11 @@ function isDocsPath(file: string): boolean {
   return DOCS_FILES.has(file) || DOCS_PREFIXES.some((prefix) => file.startsWith(prefix));
 }
 
+const PLUGIN_PREFIXES = [".claude-plugin/", "plugins/"];
+
 /** The area a path belongs to, or null when nothing here claims it. */
 export function areaOf(file: string): Area | null {
+  if (PLUGIN_PREFIXES.some((prefix) => file.startsWith(prefix))) return file.endsWith(".md") ? "docs" : "cli";
   for (const [area, prefixes] of AREA_PREFIXES) {
     if (prefixes.some((prefix) => file.startsWith(prefix))) return area;
   }

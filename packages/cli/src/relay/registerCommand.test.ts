@@ -10,7 +10,7 @@ function deps(over: Partial<RegisterDeps> & { mutation?: (name: string, args: an
   const err: string[] = [];
   const { mutation, ...rest } = over;
   const d: RegisterDeps = {
-    config: { auth_token: "tok", convex_url: "https://x.convex.cloud" },
+    config: { auth_token: "tok", convex_url: "https://x.convex.cloud", messaging_only: true },
     env: { PASEO_AGENT_ID: "agent-7" },
     stdinIsTTY: false,
     stdoutIsTTY: false,
@@ -61,6 +61,26 @@ describe("target detection through register", () => {
     const { d, calls } = deps({ gitRemote: async () => undefined });
     await runRegister({}, d);
     expect("git_remote_url" in calls[0].args).toBe(false);
+  });
+});
+
+describe("only a messaging-only machine registers", () => {
+  test.each([
+    ["no flag", { auth_token: "tok", convex_url: "https://x" }],
+    ["flag off", { auth_token: "tok", convex_url: "https://x", messaging_only: false }],
+    ["no config", null],
+  ])("%s: one stderr line, nothing sent, exit 0", async (_n, config) => {
+    const { d, calls, err } = deps({ config });
+    expect(await runRegister({}, d)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toContain("messaging-only");
+  });
+
+  test("unregister stays ungated: it ends only register_only rows server-side", async () => {
+    const { d, calls } = deps({ config: { auth_token: "tok", convex_url: "https://x" } });
+    await runUnregister({}, d);
+    expect(calls).toHaveLength(1);
   });
 });
 
@@ -200,7 +220,7 @@ describe("hook input", () => {
 
 describe("hook safety: every failure is one stderr line and exit 0", () => {
   test("not logged in", async () => {
-    for (const config of [null, { auth_token: "t" }, { convex_url: "u" }]) {
+    for (const config of [{ messaging_only: true }, { auth_token: "t", messaging_only: true }, { convex_url: "u", messaging_only: true }]) {
       const { d, calls, err } = deps({ config });
       expect(await runRegister({}, d)).toBe(0);
       expect(calls).toEqual([]);

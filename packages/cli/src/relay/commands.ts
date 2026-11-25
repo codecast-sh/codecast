@@ -32,7 +32,8 @@ export function registerRelayCommand(program: Command): void {
     .command("relay")
     .description(commandGroup("relay").description)
     .option("--background", "Start the relay detached unless one is already running")
+    .option("--stop", "Stop the running relay")
     .action(async (options) => {
-      process.exit(await relayMain({ background: options.background }, readConfig));
+      process.exit(await relayMain({ background: options.background, stop: options.stop }, readConfig));
     });
 }

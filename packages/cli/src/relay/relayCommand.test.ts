@@ -12,7 +12,7 @@ afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-const CONFIG: RelayConfig = { auth_token: "tok", convex_url: "https://x" };
+const CONFIG: RelayConfig = { auth_token: "tok", convex_url: "https://x", messaging_only: true };
 
 function harness(over: Partial<RelayRuntimeDeps> = {}, clientOver: Partial<RelayConvexClient> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-test-"));
@@ -42,6 +42,7 @@ function harness(over: Partial<RelayRuntimeDeps> = {}, clientOver: Partial<Relay
     acquire: () => tryAcquirePidFileLock(pidFile, process.pid),
     release: () => void releasePidFileIfOwned(pidFile, process.pid),
     spawnBackground: () => { state.spawned++; },
+    runningRelayPid: () => (state.running ? 4242 : null),
     runningAuthHash: () => { try { return fs.readFileSync(authFile, "utf-8").trim() || null; } catch { return null; } },
     writeAuthHash: (h) => fs.writeFileSync(authFile, `${h}\n`, { mode: 0o600 }),
     clearAuthHash: () => fs.rmSync(authFile, { force: true }),
@@ -88,6 +89,65 @@ describe("relay lock", () => {
   });
 });
 
+describe("only a messaging-only machine runs a relay", () => {
+  const off: RelayConfig = { auth_token: "tok", convex_url: "https://x" };
+
+  test("foreground does nothing: no lock, no subscription, one log line, exit 0", async () => {
+    for (const config of [off, { ...off, messaging_only: false }, null]) {
+      const h = harness({ config });
+      expect(await runRelayCommand({}, h.deps)).toBe(0);
+      expect(fs.existsSync(h.pidFile)).toBe(false);
+      expect(h.subs).toEqual([]);
+      expect(h.mutations).toEqual([]);
+      expect(h.logs).toHaveLength(1);
+      expect(h.logs[0]).toContain("messaging-only");
+    }
+  });
+
+  test("--background does not spawn, replace or signal anything", async () => {
+    const h = harness({ config: off });
+    h.state.running = true;
+    h.deps.writeAuthHash(authHash({ auth_token: "old", convex_url: "https://x" }));
+    expect(await runRelayCommand({ background: true }, h.deps)).toBe(0);
+    expect(h.state.spawned).toBe(0);
+    expect(h.state.signalled).toBe(0);
+    expect(h.logs).toHaveLength(1);
+  });
+});
+
+describe("--stop", () => {
+  test("exits 0 saying none is running when there is no live relay, even on a machine that is not messaging-only", async () => {
+    const h = harness({ config: null });
+    expect(await runRelayCommand({ stop: true }, h.deps)).toBe(0);
+    expect(h.state.signalled).toBe(0);
+    expect(h.logs).toEqual(["no relay is running"]);
+  });
+
+  test("signals the live relay and returns once its lock is free", async () => {
+    const h = harness();
+    h.state.running = true;
+    h.deps.signalRunning = () => { h.state.signalled++; setTimeout(() => { h.state.running = false; }, 0); };
+    h.deps.sleep = (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5)));
+    expect(await runRelayCommand({ stop: true }, h.deps)).toBe(0);
+    expect(h.state.signalled).toBe(1);
+    expect(h.logs).toEqual(["relay stopped"]);
+  });
+
+  test("a relay that will not stop is waited for only up to the bound, and exit is 1", async () => {
+    const h = harness({ intervals: { replaceWait: 300 } });
+    h.state.running = true;
+    expect(await runRelayCommand({ stop: true }, h.deps)).toBe(1);
+    expect(h.state.signalled).toBe(1);
+    expect(h.logs).toEqual(["the relay did not stop in time"]);
+  });
+
+  test("a live pid that is not a relay is left alone", async () => {
+    const h = harness({ runningRelayPid: () => null, isRunning: () => true });
+    expect(await runRelayCommand({ stop: true }, h.deps)).toBe(0);
+    expect(h.state.signalled).toBe(0);
+  });
+});
+
 describe("--background", () => {
   test("spawns when no relay runs, and exits 0 without taking the lock", async () => {
     const h = harness();
@@ -98,7 +158,7 @@ describe("--background", () => {
   });
 
   test("never fails a hook: not logged in or a failed spawn still exits 0 with one log line", async () => {
-    const out = harness({ config: null });
+    const out = harness({ config: { messaging_only: true } });
     expect(await runRelayCommand({ background: true }, out.deps)).toBe(0);
     expect(out.logs).toHaveLength(1);
     const boom = harness({ spawnBackground: () => { throw new Error("spawn ENOENT\nstack"); } });
@@ -226,7 +286,7 @@ describe("running relay", () => {
   });
 
   test("not logged in exits non-zero without taking the lock", async () => {
-    const h = harness({ config: null });
+    const h = harness({ config: { messaging_only: true } });
     expect(await runRelayCommand({}, h.deps)).toBe(1);
     expect(fs.existsSync(h.pidFile)).toBe(false);
   });

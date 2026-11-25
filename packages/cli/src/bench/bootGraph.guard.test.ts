@@ -535,7 +535,8 @@ describe("command groups stay off the boot graph", () => {
     // 4856 the same day (ct-100734): a line station's comments sign as its run, not as the person behind the
     // host's token: the run variable and commentSession in sessionIdentity.ts, used by `cast task comment`,
     // `done -m` and `drop -m` (+1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4856);
+    // 4857 (2026-11-25): the messaging-only onboarding gate and `cast relay --stop` in index.ts (#149) (+1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4857);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

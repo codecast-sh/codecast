@@ -253,7 +253,8 @@ describe.skipIf(process.platform !== "darwin")("production watchdog process", ()
       await prepare(home, `http://127.0.0.1:${server.port}`);
       fs.writeFileSync(path.join(home, ".codecast", "daemon.pid"), String(incumbent.pid));
       fs.writeFileSync(path.join(home, ".codecast", "daemon.version"), "0.0.1");
-      const result = await run(process.execPath, [path.join(import.meta.dir, "main.ts"), "config", "web_url"], home);
+      // Any command that goes through the preAction daemon check; `config` skips it.
+      const result = await run(process.execPath, [path.join(import.meta.dir, "main.ts"), "task", "ls"], home);
       expect(result, result.stderr).toMatchObject({ code: 0 });
       expect(incumbent.exitCode).toBeNull();
       expect(incumbent.signalCode).toBeNull();

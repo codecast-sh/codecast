@@ -32,6 +32,18 @@ describe("areaOf", () => {
     expect(areaOf("packages/mobile/app/index.tsx")).toBe("mobile");
     expect(areaOf("packages/browser-extension/background.js")).toBe("extension");
     expect(areaOf("packages/vscode-extension/src/extension.ts")).toBe("extension");
+    expect(areaOf(".claude-plugin/marketplace.json")).toBe("cli");
+    expect(areaOf("plugins/codecast-messaging/hooks/hooks.json")).toBe("cli");
+    expect(areaOf("plugins/codecast-messaging/scripts/session-start.sh")).toBe("cli");
+    expect(areaOf("plugins/codecast-messaging/.claude-plugin/plugin.json")).toBe("cli");
+  });
+
+  test("a plugin edit is not an unknown path: it runs the cli areas, not the full matrix", () => {
+    const scope = classifyChangedPaths(["plugins/codecast-messaging/hooks/hooks.json", ".claude-plugin/marketplace.json"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(scope.flags.cli).toBe(true);
+    expect(scope.flags.web).toBe(false);
+    expect(classifyChangedPaths(["plugins/codecast-messaging/README.md"]).forcedBy).toEqual([]);
   });
 
   test("maps prose at the repo root to docs", () => {
@@ -41,6 +53,8 @@ describe("areaOf", () => {
     expect(areaOf(".github/ISSUE_TEMPLATE/bug.md")).toBe("docs");
     expect(areaOf("QUARANTINE.md")).toBe("docs");
     expect(areaOf("plans/README.md")).toBe("docs");
+    expect(areaOf("plugins/codecast-messaging/README.md")).toBe("docs");
+    expect(areaOf("plugins/codecast-messaging/skills/codecast-messaging/SKILL.md")).toBe("docs");
   });
 
   test("claims nothing it does not recognise", () => {
