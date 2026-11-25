@@ -133,6 +133,8 @@ import { isStickyEligible, pickStickyFallback, stickyPromptContent, mergeNavigat
 import { isToolResultCarrier, foldNudgeRuns, nudgeLabel, type NudgeRow, type ChatWakePrompt } from "./sessionMessage";
 import { CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { GhostDrafts } from "./conversation/GhostDrafts";
+import { ReplyStreamFeeder, ReplyStreamTail } from "./conversation/ReplyStreamTail";
+import { replyStreamFresh, replyStreamHandedOff, replyStreamOpen } from "../lib/replyStreamHandoff";
 import { SharedQueue } from "./conversation/SharedQueue";
 import { ReaderFaces, ReadingMarks } from "./conversation/ReadingMarks";
 import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
@@ -1404,6 +1406,10 @@ const ConversationViewInner = (
               return `pr-${(i.data as any)._id}` === id;
             });
             if (item?.type === 'message' && (item.data as Message).role === 'user') continue;
+            // A reply that was on screen while it was written takes the live
+            // block's place without sliding in again (ReplyStreamTail).
+            const stream = convexConvId ? useInboxStore.getState().replyStreams[convexConvId] : undefined;
+            if (item?.type === 'message' && stream && replyStreamFresh(stream, Date.now()) && replyStreamHandedOff(stream, [item.data as Message])) continue;
           }
           fresh.add(id);
         }
@@ -3710,12 +3716,11 @@ const ConversationViewInner = (
   // did not change (a new timeline array from an unrelated append must not
   // hand every row a fresh runMessageIds).
   const assistantRowCacheRef = useRef(new WeakMap<Message, { timeline: TimelineItem[]; messageAuthors: typeof messageAuthors; showThinking: boolean; isFirstInSequence: boolean; runMessageIds: string[] }>());
-  const assistantRowDerived = (msg: Message, index: number) => {
-    const cache = assistantRowCacheRef.current;
-    const hit = cache.get(msg);
-    if (hit && hit.timeline === timeline && hit.messageAuthors === messageAuthors && hit.showThinking === showThinking) return hit;
-    // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
-    // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
+  // The message an assistant row at `index` continues: the previous VISIBLE
+  // non-commit item, skipping invisible assistant messages (content only
+  // system tags, no tool calls/thinking/images). Null when that item is not a
+  // message.
+  const previousVisibleMessage = (index: number): Message | null => {
     let prevIdx = index - 1;
     while (prevIdx >= 0) {
       const checkItem = timeline[prevIdx];
@@ -3731,7 +3736,14 @@ const ConversationViewInner = (
       prevIdx--;
     }
     const prevItem = prevIdx >= 0 ? timeline[prevIdx] : null;
-    const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
+    return prevItem?.type === 'message' ? (prevItem.data as Message) : null;
+  };
+  const assistantRowDerived = (msg: Message, index: number) => {
+    const cache = assistantRowCacheRef.current;
+    const hit = cache.get(msg);
+    if (hit && hit.timeline === timeline && hit.messageAuthors === messageAuthors && hit.showThinking === showThinking) return hit;
+    // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
+    const prevMsg = previousVisibleMessage(index);
     const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant" || !sameMessageAuthor(prevMsg, msg, messageAuthors) || msg.timestamp - prevMsg.timestamp > GROUP_WINDOW_MS;
     // Compute all message IDs in the current run (for sharing)
     let runMessageIds: string[] = [];
@@ -3756,6 +3768,30 @@ const ConversationViewInner = (
     cache.set(msg, entry);
     return entry;
   };
+  // Live replies: the reply being written draws after the last row as the
+  // assistant text row it will become (ReplyStreamTail), in the feeds that
+  // draw every reply as its own row. Compact folds a turn to its last reply
+  // and clean shows only what the agent said or its latest reply, so a partial
+  // reply there would draw beside the row it replaces: those wait for the
+  // message. Story and summary have no feed rows.
+  const replyStreamDrawable = !!convexConvId && !foldWorkingTurns && !foldTurns && density !== "story" && density !== "summary";
+  // Flips when a reply starts and when it lands, never per push.
+  const replyStreamShown = useInboxStore((st) => replyStreamDrawable && replyStreamOpen(st as any, convexConvId!));
+  const replyStreamAuthor = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === "assistant") return messages[i];
+    return null;
+  }, [messages]);
+  const replyStreamPrev = replyStreamDrawable ? previousVisibleMessage(timeline.length) : null;
+  const replyStreamTail = replyStreamDrawable ? (
+    <ReplyStreamTail
+      conversationId={convexConvId!}
+      density={feedDensity}
+      prevAssistantAt={replyStreamPrev?.role === "assistant" ? replyStreamPrev.timestamp : null}
+      agentType={replyStreamAuthor ? messageAuthors.get(replyStreamAuthor._id) : conversation?.agent_type}
+      model={replyStreamAuthor?.model}
+      agentNameToChildMap={agentNameToChildMap}
+    />
+  ) : null;
   const toolResultsCacheRef = useRef(new WeakMap<Message, { globalToolResultMap: typeof globalToolResultMap; results: ToolResult[] | undefined }>());
   const relevantToolResultsFor = (msg: Message): ToolResult[] | undefined => {
     const cache = toolResultsCacheRef.current;
@@ -5266,7 +5302,7 @@ const ConversationViewInner = (
               // reply it read as the divider of a message that never came.
               const showIdleGap = isTail && !isHostedConv && shouldShowIdleGap({ lastActivityAt, now, hasMoreBelow: !!hasMoreBelow, agentStatus: managedSession?.agent_status });
               const tailRules = isTail && !hasMoreBelow ? handoffRulesAt(timeline.length) : undefined;
-              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules || (isTail && !hasMoreBelow && !!hostedTailCard);
+              const visible = !!content || showNewRule || !!rulesHere || showIdleGap || !!tailRules || (isTail && !hasMoreBelow && (!!hostedTailCard || replyStreamShown));
               return (
                 <div
                   key={virtualItem.key}
@@ -5295,6 +5331,7 @@ const ConversationViewInner = (
                         </TimelineRule>
                       )}
                       {tailRules}
+                      {isTail && !hasMoreBelow && replyStreamTail}
                       {isTail && !hasMoreBelow && hostedTailCard}
                       {item.type === 'message' && conversation && composerPresenceEnabled(conversation) && (
                         <ReaderFaces conversationId={conversation._id.toString()} messageId={(item.data as Message)._id} />
@@ -5306,6 +5343,7 @@ const ConversationViewInner = (
             })}
           </div>
           )}
+          {replyStreamDrawable && <ReplyStreamFeeder conversationId={convexConvId!} teamId={(conversation as any)?.team_id ?? null} />}
           {/* Other people's drafts, live, where they will land. */}
           {!hasMoreBelow && conversation && composerPresenceEnabled(conversation) && (
             <div style={{ marginTop: -(VIRTUAL_PADDING_END - 16) }}><GhostDrafts conversationId={conversation._id.toString()} populate={effectiveIsOwner ? (t, o) => populateInputRef.current?.(t, o) : undefined} /></div>
