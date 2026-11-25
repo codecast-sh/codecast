@@ -71,19 +71,25 @@ export function judgedPaths(changed: Iterable<string>, entries: ReadonlyArray<st
   return [...new Set([...changed].filter((path) => isJudged(path, entries) || hits.has(path)))].sort(compareBytes);
 }
 
-/** The owners map kept beside the judges file: `path-prefix  person` a line, blank and "#" lines skipped. */
-export function parseOwners(text: string): Array<{ prefix: string; person: string }> {
+export type AreaOwner = { prefix: string; user_id: string; name: string };
+
+/**
+ * The owners map kept beside the judges file: `<path-prefix> <codecast user id> <name>` a line (the engineers file's
+ * `<user id> <name>` with the area in front), `*` the prefix for every path; blank, "#" and short lines skipped.
+ */
+export function parseOwners(text: string): AreaOwner[] {
   return text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).flatMap((l) => {
-    const m = /^(\S+)\s+(.+)$/.exec(l);
-    return m ? [{ prefix: m[1], person: m[2].trim() }] : [];
+    const m = /^(\S+)\s+(\S+)\s+(.+)$/.exec(l);
+    return m ? [{ prefix: m[1], user_id: m[2], name: m[3].trim() }] : [];
   });
 }
 
-/** The person owning the area of these paths: the longest owners prefix that covers one of them, else null. */
-export function ownerOf(paths: ReadonlyArray<string>, owners: ReadonlyArray<{ prefix: string; person: string }>): string | null {
-  let best: { prefix: string; person: string } | null = null;
-  for (const o of owners) if (paths.some((p) => p.startsWith(o.prefix)) && (!best || o.prefix.length > best.prefix.length)) best = o;
-  return best?.person ?? null;
+/** The person owning the area of these paths: the longest owners prefix that covers one of them (`*` the shortest), else null. */
+export function ownerOf(paths: ReadonlyArray<string>, owners: ReadonlyArray<AreaOwner>): { user_id: string; name: string } | null {
+  const len = (o: AreaOwner) => (o.prefix === "*" ? 0 : o.prefix.length);
+  let best: AreaOwner | null = null;
+  for (const o of owners) if (paths.some((p) => o.prefix === "*" || p.startsWith(o.prefix)) && (!best || len(o) > len(best))) best = o;
+  return best ? { user_id: best.user_id, name: best.name } : null;
 }
 
 /** The person a commit names as asking for the work (`Requested-by: <name>`), the newest commit's first. */

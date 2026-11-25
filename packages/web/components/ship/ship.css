@@ -207,6 +207,14 @@
 .sj-in-route[data-state="waiting"]::before { border-color: var(--sj-wait); }
 /* A Ship press the session answered without a run: its answer, quoted. */
 .shp-declined { padding: 9px 14px 10px; border-bottom: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }
+.shp-approve { display: grid; gap: 6px; padding: 9px 14px 10px; border-bottom: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }
+.shp-approve header { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.shp-approve header span { color: var(--sol-text-muted); font-size: 12px; }
+.shp-approve ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.shp-approve li { display: flex; gap: 10px; min-width: 0; font-size: 12.5px; }
+.shp-approve li code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shp-approve li span { color: var(--sol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shp-approve .sj-btn { justify-self: start; }
 .shp-declined header { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .shp-declined header b { font-size: 12.5px; font-weight: 600; flex: none; }
 .shp-declined header span { font-size: 12px; color: var(--sol-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

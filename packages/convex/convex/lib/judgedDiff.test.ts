@@ -75,11 +75,15 @@ describe("name#key entries, as gate.sh reads them", () => {
   });
 });
 
-test("the owners file names the area's person by its longest prefix; Requested-by comes from the newest commit", () => {
-  const owners = parseOwners("# area  person\noutreach/  Ashot\noutreach/line/  Jason\n\nbad-line\n");
-  expect(ownerOf(["outreach/line/change/land.cast"], owners)).toBe("Jason");
-  expect(ownerOf(["outreach/backend/x.ts"], owners)).toBe("Ashot");
+test("the owners file names the area's person by user id and its longest prefix; Requested-by comes from the newest commit", () => {
+  const owners = parseOwners("# prefix  user id  name\noutreach/  u_ashot  Ashot\noutreach/line/  u_jason  Jason Benn\n\nbad-line\nno-id Samvit\n");
+  expect(ownerOf(["outreach/line/change/land.cast"], owners)).toEqual({ user_id: "u_jason", name: "Jason Benn" });
+  expect(ownerOf(["outreach/backend/x.ts"], owners)).toEqual({ user_id: "u_ashot", name: "Ashot" });
   expect(ownerOf(["docs/x"], owners)).toBeNull();
+  // `*` covers every path, and loses to any other prefix that covers one.
+  const all = parseOwners("*  u_samvit  Samvit\noutreach/  u_ashot  Ashot\n");
+  expect(ownerOf(["package.json"], all)?.name).toBe("Samvit");
+  expect(ownerOf(["package.json", "outreach/x"], all)?.name).toBe("Ashot");
   expect(requestedBy(["a\n\nRequested-by: Samvit", "b\n\nRequested-by: Jason", "c"])).toBe("Jason");
   expect(requestedBy(["no trailer"])).toBeNull();
 });

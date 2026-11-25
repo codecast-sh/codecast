@@ -7,6 +7,8 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { normalizeRepository, repositoryOwner } from "@codecast/shared/contracts";
 import { optionIsShip } from "./taskVerdicts";
+import { emitNotification } from "../notificationRouter";
+import { mayBeJudged } from "./judgedDiff";
 
 export type ApprovalGate = {
   installation_id: number;
@@ -15,6 +17,7 @@ export type ApprovalGate = {
   judges_path: string;
   mode: "shadow" | "required";
   judges?: string[];
+  engineers?: Array<{ user_id: string; name: string }>;
 };
 
 /** How long a Ship press waits for the run it asks for: the session starts it within a turn. */
@@ -34,9 +37,68 @@ export async function gateOf(ctx: { db: any }, repository: string): Promise<Appr
   for (const row of rows) {
     if (row.suspended_at) continue;
     const entry = (row.approval_gate ?? []).find((g) => normalizeRepository(g.repository) === repo);
-    if (entry) return { installation_id: row.installation_id, installation_row: row._id, repository: repo, judges_path: entry.judges_path, mode: entry.mode, ...(entry.judges ? { judges: entry.judges } : {}) };
+    if (entry) return { installation_id: row.installation_id, installation_row: row._id, repository: repo, judges_path: entry.judges_path, mode: entry.mode, ...(entry.judges ? { judges: entry.judges } : {}), ...(entry.engineers ? { engineers: entry.engineers } : {}) };
   }
   return null;
+}
+
+/** Whether `userId` may read an opted-in gate: a member of the installation's team, or a personal install's owner. */
+export async function mayReadGate(ctx: { db: any }, userId: Id<"users">, gate: ApprovalGate): Promise<boolean> {
+  const installation = await ctx.db.get(gate.installation_row);
+  if (!installation) return false;
+  return installation.team_id
+    ? !!(await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", installation.team_id)).first())
+    : String(installation.scope_user_id ?? "") === String(userId);
+}
+
+/** At most this many judged files a Ship list names, and pull requests of the session it reads. */
+const SHIP_LIST_MAX = 100;
+const SHIP_LIST_PRS = 20;
+
+/**
+ * The judged files a session's change touches, each with the sessions codecast knows wrote it, for the list beside
+ * Ship: the judged diff of each open pull request the session is linked to (as worked out for its head), by the
+ * linked sessions that edited each file; and the uncommitted judged files its checkout reports, by the session that
+ * wrote each last (none for a file no session wrote). The web adds the session's own edits from its transcript.
+ */
+export async function changeJudgedFiles(
+  ctx: { db: any },
+  conversation: { _id: Id<"conversations">; git_root?: string },
+  gate: ApprovalGate,
+): Promise<Array<{ path: string; writers: string[] }>> {
+  const judges = gate.judges ?? [];
+  const writers = new Map<string, Set<string>>();
+  const add = (path: string, by?: string | null) => {
+    const set = writers.get(path) ?? new Set<string>();
+    if (by) set.add(by);
+    writers.set(path, set);
+  };
+  const links: any[] = await ctx.db.query("pull_request_sessions").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversation._id)).take(SHIP_LIST_PRS);
+  for (const link of links) {
+    const pr: Doc<"pull_requests"> | null = await ctx.db.get(link.pull_request_id);
+    const a = pr?.approval;
+    if (!pr || pr.state !== "open" || normalizeRepository(pr.repository) !== gate.repository || !a?.judged_files || a.head_sha !== pr.head_sha) continue;
+    // Who wrote each: a session linked to the pull request with an edit of the file in its own checkout.
+    const linked: any[] = (await Promise.all((pr.linked_session_ids ?? []).slice(0, 10).map((id) => ctx.db.get(id)))).filter((c: any) => c?.git_root);
+    for (const path of a.judged_files.slice(0, SHIP_LIST_MAX)) {
+      add(path);
+      for (const s of linked) {
+        const edits: any[] = await ctx.db.query("file_changes").withIndex("by_file_path", (q: any) => q.eq("file_path", `${s.git_root.replace(/\/+$/, "")}/${path}`)).order("desc").take(20);
+        if (edits.some((e) => String(e.conversation_id) === String(s._id) && e.change_type !== "commit")) add(path, String(s._id));
+      }
+    }
+  }
+  const installation = await ctx.db.get(gate.installation_row);
+  const root = conversation.git_root?.replace(/\/+$/, "");
+  if (root && installation?.team_id) {
+    const rows: any[] = await ctx.db.query("checkouts").withIndex("by_workspace_repository", (q: any) => q.eq("workspace", `team:${installation.team_id}`).eq("repository", gate.repository)).take(500);
+    for (const row of rows.filter((r) => r.path.replace(/\/+$/, "") === root)) {
+      const uncommitted = row.report?.uncommitted;
+      for (const s of uncommitted?.sessions ?? []) for (const p of s.paths ?? []) if (mayBeJudged(p, judges)) add(p, s.conversation_id);
+      for (const p of uncommitted?.unattributed ?? []) if (mayBeJudged(p, judges)) add(p);
+    }
+  }
+  return [...writers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, SHIP_LIST_MAX).map(([path, by]) => ({ path, writers: [...by] }));
 }
 
 /** Work the pull request's status out again and post it, when its repository is opted in. */
@@ -92,7 +154,7 @@ export async function claimPress(ctx: { db: any }, runId: Id<"workflow_runs">, c
  * What a card a run asks carries for its Ship to approve: the run's pull request and the judged diff as codecast
  * last worked it out for that head. Absent until the run's PR station reported its pull request.
  */
-export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_runs"> | undefined): Promise<{ approval: { repository: string; pr_number: number; judged_key: string; files: string[] } } | {}> {
+export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_runs"> | undefined): Promise<{ approval: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[] } } | {}> {
   const run: any = runId ? await ctx.db.get(runId) : null;
   if (!run?.pr) return {};
   const pr: any = await ctx.db
@@ -101,21 +163,25 @@ export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_run
     .first();
   const a = pr?.approval;
   if (!a?.judged_key || a.head_sha !== pr.head_sha) return {};
-  return { approval: { repository: run.pr.repository, pr_number: run.pr.number, judged_key: a.judged_key, files: a.judged_files ?? [] } };
+  return { approval: { repository: run.pr.repository, pr_number: run.pr.number, judged_key: a.judged_key, ...(a.whole_key ? { whole_key: a.whole_key } : {}), files: a.judged_files ?? [] } };
 }
 
 /**
  * A person settled a run's card. Ship (or Approve merge) inserts the approval of what the card carried; any other
  * answer or a dismissal revokes every approval of the run, the Ship press included, so a Revise or Drop is never
- * outlived by an earlier yes. An agent's, a role's or a policy's answer is no person's and changes nothing.
+ * outlived by an earlier yes. An agent's, a role's or a policy's answer is no person's and changes nothing, and a
+ * withdrawn card (`cast decide cancel`, or codecast taking back a stale approval card) was answered by nobody, so it
+ * approves and revokes nothing: whatever approved before still stands.
  */
 export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; files: string[] }; trial?: boolean },
+  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
   verdict: { status: string; answer_index?: number },
   by: { kind: string; user_id?: Id<"users"> },
   now: number,
 ): Promise<void> {
+  if (verdict.status === "withdrawn") return;
+  if (row.approval_card && row.approval) return settleApprovalCard(ctx, { ...row, approval: row.approval }, verdict, by, now);
   if (!row.workflow_run_id || row.trial || by.kind !== "user" || !by.user_id) return;
   const run: any = await ctx.db.get(row.workflow_run_id);
   if (!run) return;
@@ -124,20 +190,24 @@ export async function settleCardApproval(
   const ship = verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
   if (ship) {
     // Only a card that showed a judged diff ({pr, judged_key, files}) approves, and only that diff: an unstamped card's
-    // Ship approves nothing, and the status asks again.
-    if (row.approval) await ctx.db.insert("change_approvals", {
-      repository: row.approval.repository,
-      pr_number: row.approval.pr_number,
-      judged_key: row.approval.judged_key,
-      files: row.approval.files,
-      user_id: by.user_id,
-      source: "card",
-      conversation_id: row.conversation_id,
-      workflow_run_id: run._id,
-      ...(row.task_id ? { task_id: row.task_id } : {}),
-      decision_id: row._id,
-      created_at: now,
-    });
+    // Ship approves nothing, and the status asks again. The run's card read the change whole, so its Ship also binds to
+    // the whole diff it showed, which covers a mechanism until any code changes.
+    const a = row.approval;
+    if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
+      await ctx.db.insert("change_approvals", {
+        repository: a.repository,
+        pr_number: a.pr_number,
+        judged_key: key,
+        files: a.files,
+        user_id: by.user_id,
+        source: "card",
+        conversation_id: row.conversation_id,
+        workflow_run_id: run._id,
+        ...(row.task_id ? { task_id: row.task_id } : {}),
+        decision_id: row._id,
+        created_at: now,
+      });
+    }
   } else {
     const held: Doc<"change_approvals">[] = await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", run._id)).collect();
     for (const a of held) if (!a.revoked_at) await ctx.db.patch(a._id, { revoked_at: now });
@@ -194,4 +264,58 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
     return { user_id: d.answered_by.id, ref: d.short_id ?? "its card", decision_id: d._id };
   }
   return null;
+}
+
+/**
+ * A person settled an approval card codecast posted for a pull request (changeApprovals.ts): Approve merge is the
+ * approval of the judged diff the card showed; Revise, Drop or a dismissal revokes what approved that pull request's
+ * run (or, with no run, that diff). Anyone else's answer changes nothing. The status is worked out again either way.
+ */
+async function settleApprovalCard(
+  ctx: { db: any; scheduler: any },
+  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs"> } },
+  verdict: { status: string; answer_index?: number },
+  by: { kind: string; user_id?: Id<"users"> },
+  now: number,
+): Promise<void> {
+  if (by.kind !== "user" || !by.user_id) return;
+  const a = row.approval;
+  if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
+    await ctx.db.insert("change_approvals", {
+      repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
+      conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),
+      decision_id: row._id, created_at: now,
+    });
+  } else {
+    const held: Doc<"change_approvals">[] = a.run_id
+      ? await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", a.run_id)).collect()
+      : await ctx.db.query("change_approvals").withIndex("by_pr_key", (q: any) => q.eq("repository", a.repository).eq("pr_number", a.pr_number).eq("judged_key", a.judged_key)).collect();
+    for (const h of held) if (!h.revoked_at) await ctx.db.patch(h._id, { revoked_at: now });
+  }
+  await scheduleApprovalPost(ctx, a.repository, a.pr_number);
+}
+
+/**
+ * A Release Captain's revert merged on CI alone (no review, no card); when it touched a judged file or a mechanism,
+ * the first engineer main's engineers file lists is told, once, by a notification, never a card.
+ */
+export async function noticeCaptainRevertMerged(ctx: { db: any }, pr: Doc<"pull_requests">): Promise<boolean> {
+  const a = pr.approval;
+  if (!a?.captain_revert || a.engineer_told || !(a.judged_files?.length || a.mechanism)) return false;
+  const gate = await gateOf(ctx, pr.repository);
+  const engineer = gate?.engineers?.[0];
+  const id = engineer ? ctx.db.normalizeId("users", engineer.user_id) : null;
+  if (!id || !(await ctx.db.get(id))) return false;
+  const what = a.judged_files?.length ? `touches ${a.judged_files.slice(0, 3).join(", ")}${a.judged_files.length > 3 ? ` (+${a.judged_files.length - 3})` : ""}` : "is a mechanism by its review";
+  await emitNotification(ctx as any, {
+    event_type: "change_shipped",
+    actor_name: "Release Captain",
+    entity_type: "code",
+    entity_id: `${pr.repository}#${pr.number}`,
+    message: `merged a revert, ${pr.repository}#${pr.number}, on CI alone; it ${what}`,
+    link: `https://github.com/${pr.repository}/pull/${pr.number}`,
+    recipient_ids: [id],
+  });
+  await ctx.db.patch(pr._id, { approval: { ...a, engineer_told: true } });
+  return true;
 }

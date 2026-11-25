@@ -5,15 +5,16 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
-import { claimPress, settleCardApproval } from "./lib/changeApprovalRows";
+import { changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
+import { withdrawCore } from "./sessionDecisions";
 
 const REPO = "union-ai/union-mobile";
 const HEAD = "a".repeat(40);
 const MB = "b".repeat(40);
-const needs = { judged: "Jason", mechanism: "an engineer or Ashot" };
-const facts = (over: Partial<Extract<ApprovalFacts, { judged: string[] }>> = {}): ApprovalFacts => ({ opted: true, judged: [], mechanism: false, card: null, press: null, needs, ...over });
+const needs = { judged: "Jason", mechanism: "an engineer or Ashot", review: "Ashot" };
+const facts = (over: Partial<Extract<ApprovalFacts, { judged: string[] }>> = {}): ApprovalFacts => ({ opted: true, judged: [], run: "live", mechanism: false, card: null, press: null, needs, ...over });
 
 describe("decide", () => {
   test("a repository not opted in gets nothing", () => expect(decide({ opted: false })).toBeNull());
@@ -93,7 +94,7 @@ function github(opts: { judges?: string } = {}) {
     { method: "GET", match: /\/pulls\/7$/, reply: () => ({ json: { changed_files: files.length, state: "open", head: { sha: HEAD, ref: "feature" }, base: { ref: "main", repo: { default_branch: "main" } } } }) },
     { method: "GET", match: /\/pulls\/7\/files\?/, reply: (url) => { const page = Number(/[?&]page=(\d+)/.exec(url)![1]); return { json: files.slice((page - 1) * 100, page * 100) }; } },
     { method: "GET", match: /\/contents\/outreach\/line\/change\/judges\.txt\?ref=main/, reply: () => ({ text: opts.judges ?? "# judged\noutreach/line/change/\n" }) },
-    { method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ text: "outreach/line/ Ashot\n" }) },
+    { method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ text: "outreach/line/ ash Ashot\n" }) },
     { method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ text: "# id name\nash Ashot\n" }) },
     { method: "GET", match: /\/compare\/main\.\.\./, reply: () => ({ json: { merge_base_commit: { sha: MB } } }) },
     { method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: [{ commit: { message: "Edit land\n\nRequested-by: Samvit" } }] }) },
@@ -167,19 +168,35 @@ describe("the status from GitHub", () => {
     expect(scheduled).toContain(`changeApprovals:evaluate ${REPO}#7`);
   });
 
-  test("reads all three pages, finds the judged file on the last, and posts pending naming the asker", async () => {
+  test("reads all three pages, finds the judged file on the last, and with no codecast run asks the area's owner to review", async () => {
     github();
     const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
     const { ctx } = actionCtx(db);
-    // No run behind it: the review's answer never came, so the status waits on it first.
+    // No run behind it, so no review gave a mechanism answer: the area's owner by main's owners file reads it.
     const out: any = await (evaluate as any)._handler(ctx, { repository: REPO, pr_number: 7, post: true });
     expect(calls.filter((c) => /\/files\?/.test(c.url)).map((c) => /[?&]page=(\d+)/.exec(c.url)![1])).toEqual(["1", "2", "3"]);
-    expect(out).toMatchObject({ state: "pending", description: "waiting for the review's mechanism answer", posted: true, context: "approval (shadow)" });
+    expect(out).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it", posted: true, context: "approval (shadow)" });
     const post = calls.find((c) => c.method === "POST" && /statuses/.test(c.url))!;
     expect(post.url).toEndWith(`/repos/${REPO}/statuses/${HEAD}`);
-    expect(post.body).toEqual({ state: "pending", description: "waiting for the review's mechanism answer", context: "approval (shadow)" });
+    expect(post.body).toEqual({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it", context: "approval (shadow)" });
     expect(db._tables.pull_requests[0].approval).toMatchObject({ head_sha: HEAD, state: "pending", judged_files: ["outreach/line/change/land.cast"] });
     expect(db._tables.pull_requests[0].approval.judged_key).toMatch(/^[0-9a-f]{40}$/);
+    // The whole diff (all 250 files) has its own patch id.
+    expect(db._tables.pull_requests[0].approval.whole_key).toMatch(/^whole:[0-9a-f]{40}$/);
+    expect(db._tables.pull_requests[0].approval.whole_key).not.toBe(`whole:${db._tables.pull_requests[0].approval.judged_key}`);
+  });
+
+  test("a GitHub read error keeps the engineers the gate last read; a read file replaces them", async () => {
+    const stored = [{ user_id: "ash", name: "Ashot" }, { user_id: "jas", name: "Jason" }];
+    const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], engineers: stored }] };
+    routes.push({ method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ status: 502, text: "bad gateway" }) });
+    github();
+    const db = makeFakeDb({ github_app_installations: [inst], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
+    expect(await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false })).toMatchObject({ state: "pending", description: expect.stringContaining("could not read GitHub") });
+    expect(db._tables.github_app_installations[0].approval_gate[0].engineers).toEqual(stored);
+    routes.shift();
+    await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false });
+    expect(db._tables.github_app_installations[0].approval_gate[0].engineers).toEqual([{ user_id: "ash", name: "Ashot" }]);
   });
 
   test("what GitHub shows decides whether to post: a stale status an overlapping evaluation landed last is posted over", async () => {
@@ -197,7 +214,7 @@ describe("the status from GitHub", () => {
     const swept: any = await evaluateNow();
     expect(swept.unchanged).toBeUndefined();
     expect(posts()).toBe(2);
-    expect(shown[0]).toMatchObject({ state: "pending", description: "waiting for the review's mechanism answer" });
+    expect(shown[0]).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
   });
 
   test("with the review's answer in, judged files wait on the Requested-by person", async () => {
@@ -259,6 +276,20 @@ describe("a person's approvals", () => {
     ] });
     await settleCardApproval({ db, scheduler: { runAfter: async () => {} } }, card("Revise") as any, { status: "answered", answer_index: 1 }, { kind: "user", user_id: "u1" as any }, 10);
     expect(db._tables.change_approvals.map((a: any) => a.revoked_at)).toEqual([10, 10]);
+  });
+
+  test("an agent's `cast decide cancel` on the run's card leaves its approvals standing; only a person's no revokes", async () => {
+    const held = [
+      { _id: "a1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [], user_id: "u1", created_at: 1 },
+      { _id: "a2", repository: REPO, workflow_run_id: "run1", source: "card", files: [], user_id: "u1", created_at: 2 },
+    ];
+    const pending = { ...card("Ship"), status: "pending", user_id: "u1", question: "Ship it?", kind: "single", created_at: 5 };
+    const db = makeFakeDb({ github_app_installations: [installation], workflow_runs: [run], change_approvals: held, session_decisions: [pending], decision_inbox: [] });
+    // The one withdraw every path takes: it settles the card as the conversation's owner, kind "user".
+    await withdrawCore({ db, scheduler: { runAfter: async () => {} } } as any, pending as any, 20, "c1" as any);
+    expect(db._tables.session_decisions[0].status).toBe("withdrawn");
+    expect(db._tables.change_approvals.map((a: any) => a.revoked_at)).toEqual([undefined, undefined]);
+    expect(db._inserted).toEqual([]);
   });
 
   test("a press joins the run its session started, and is tied to the judged diff of the run's first head", async () => {
@@ -347,15 +378,15 @@ describe("the run behind it", () => {
     const tasks = [{ _id: "t1", user_id: "cam" }];
     const yes = (who: string, at: number, over: Record<string, any> = {}) => ({ _id: `sd_${who}_${at}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", station: "pre-build", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at, ...over });
     const engineers = [{ user_id: "ash", name: "Ashot" }];
-    const asked = { ...args, area_owner: "Samvit", engineers };
+    const asked = { ...args, people: { title: "t", area_owner: { user_id: "sam", name: "Samvit" }, engineers } };
     const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 }, pr: { ...base.pr } };
     const approved = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50)] });
-    expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot, sd-ash before the build (Ship press)" });
+    expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot (sd-ash before the build)" });
     expect(approved.db._tables.change_approvals[0]).toMatchObject({ source: "engineer_yes", judged_key: "k1", user_id: "ash" });
     // A later judged diff that differs asks again; a mechanism still needs its own engineer approval.
     expect(await (settle as any)._handler(approved, { ...asked, key: "k2", head_sha: "d".repeat(40) })).toMatchObject({ state: "pending" });
     const mech = ctxOf({ workflow_runs: [{ ...later, review_verdict: { ...later.review_verdict, mechanism: true } }], users, tasks, session_decisions: [yes("ash", 50)] });
-    expect(await (settle as any)._handler(mech, asked)).toMatchObject({ state: "pending", description: "needs an engineer or Samvit: the review called it a mechanism" });
+    expect(await (settle as any)._handler(mech, asked)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
     // An engineer's yes to some other question on the task (not asked as the pre-build question) approves nothing.
     const otherQuestion = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50, { station: undefined })] });
     expect(await (settle as any)._handler(otherQuestion, asked)).toMatchObject({ state: "pending" });
@@ -402,4 +433,271 @@ test("the Release Captain's exemption needs every commit of the pull request to 
   };
   expect(await outcome([revert, revert])).toBe("success");
   expect(await outcome([revert, { commit: { message: "Also change the gate" } }])).toBe("pending");
+});
+
+describe("the approval card", () => {
+  const reviewed = (mechanism?: boolean) => ({ node_statuses: [{ node_id: "review", status: "completed", session_id: "rev", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, ...(mechanism === undefined ? {} : { mechanism }), at: 3, attempt: 1 } });
+  const run = (over: Record<string, any> = {}) => ({ _id: "run1", user_id: "host", team_id: "team1", status: "running", created_at: 1, task_id: "t1", primary_conversation_id: "c_log", pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 }, ...reviewed(false), ...over });
+  const users = [{ _id: "u_jason", name: "Jason Benn" }, { _id: "u_ashot", name: "Ashot" }, { _id: "u_cam", name: "Cameron" }, { _id: "host", name: "Host" }];
+  const memberships = users.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id }));
+  const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" }];
+  const world = (tables: Record<string, any[]> = {}) => {
+    // Every world gets its own copies: the fake db patches rows in place.
+    const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], users, team_memberships: memberships, conversations, anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [{ _id: "tc1", task_id: "t1", comment_type: "review", text: "Verdict: ship. It edits land.cast.", created_at: 5 }], pending_messages: [], workflow_runs: [run()], ...tables }));
+    return { db, ctx: { db, scheduler: { runAfter: async () => {} } } };
+  };
+  const people = { title: "Edit land", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [{ user_id: "u_jason", name: "Jason" }] };
+  const args = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: ["outreach/line/change/land.cast"], key: "k1", people };
+  const cards = (db: any) => db._tables.session_decisions.filter((d: any) => d.approval_card);
+
+  test("judged files a press did not list go to the presser, once per judged diff, with the files and the review's words", async () => {
+    const w = world({ workflow_runs: [run({ pressed_approval_id: "p1" })], change_approvals: [{ _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: ["docs/a.md"], user_id: "u_jason", created_at: 1 }] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs Jason Benn: edits outreach/line/change/land.cast" });
+    expect(cards(w.db)).toEqual([expect.objectContaining({ asked_user_ids: ["u_jason"], holder: { kind: "user", id: "u_jason" }, conversation_id: "c_log", silent: true, approval: expect.objectContaining({ judged_key: "k1", reason: "judged", run_id: "run1" }) })]);
+    expect(cards(w.db)[0].context_md).toContain("outreach/line/change/land.cast");
+    expect(cards(w.db)[0].context_md).toContain("Verdict: ship. It edits land.cast.");
+    expect(cards(w.db)[0].options[0].label).toBe("Approve merge");
+    await (settle as any)._handler(w.ctx, args);
+    expect(cards(w.db)).toHaveLength(1);
+    // A changed judged diff is a new question.
+    await (settle as any)._handler(w.ctx, { ...args, key: "k2" });
+    expect(cards(w.db)).toHaveLength(2);
+  });
+
+  test("a changed judged diff withdraws the open card and asks with a new one; the old one can approve nothing", async () => {
+    const w = world();
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason" });
+    const [first] = cards(w.db);
+    // The review is asked again on a new head of the same diff: the card stands.
+    w.db._tables.workflow_runs[0] = { ...w.db._tables.workflow_runs[0], ...reviewed(undefined) };
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason", head_sha: "c".repeat(40) });
+    expect(cards(w.db).map((c: any) => c.status)).toEqual(["pending"]);
+    // The judged diff changed while the review is still out: the card asks about a diff the pull request no longer has.
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason", key: "k2", head_sha: "c".repeat(40) });
+    expect(cards(w.db).map((c: any) => c.status)).toEqual(["withdrawn"]);
+    expect(w.db._tables.pull_requests[0].approval.card_id).toBeUndefined();
+    // The review answers: one new card, for k2, and only it is open.
+    w.db._tables.workflow_runs[0] = { ...w.db._tables.workflow_runs[0], ...reviewed(false), review_verdict: { ...reviewed(false).review_verdict, head_sha: "c".repeat(40) } };
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason", key: "k2", head_sha: "c".repeat(40) });
+    expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["withdrawn", "k1"], ["pending", "k2"]]);
+    expect(w.db._tables.change_approvals).toEqual([]);
+    // A withdrawn card's settle (the withdrawal itself) neither approves nor revokes.
+    await settleCardApproval(w.ctx as any, first, { status: "withdrawn" }, { kind: "user", user_id: "host" as any }, 40);
+    expect(w.db._tables.change_approvals).toEqual([]);
+  });
+
+  test("an approval that lands another way withdraws the open card", async () => {
+    const w = world();
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason" });
+    w.db._tables.change_approvals.push({ _id: "p9", repository: REPO, pr_number: 7, judged_key: "k1", source: "ship_press", files: args.judged, user_id: "u_jason", created_at: 50 });
+    expect(await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason" })).toMatchObject({ state: "success" });
+    expect(cards(w.db).map((c: any) => c.status)).toEqual(["withdrawn"]);
+  });
+
+  test("the area's owner is the owners file's user id; with no owners file, the pull request's author", async () => {
+    const byId = world({ workflow_runs: [] });
+    await (settle as any)._handler(byId.ctx, args);
+    expect(cards(byId.db)[0].asked_user_ids).toEqual(["u_ashot"]);
+    const author = world({ workflow_runs: [], users: [...users, { _id: "u_gh", name: "Pat", github_username: "pat-gh" }] });
+    expect(await (settle as any)._handler(author.ctx, { ...args, people: { title: "Bump", author_login: "pat-gh", engineers: [] } })).toMatchObject({ description: "needs a review by Pat: no codecast run reviewed it" });
+    expect(cards(author.db)[0].asked_user_ids).toEqual(["u_gh"]);
+    // An id this deployment does not know is named in the status and carded to nobody.
+    const unknown = world({ workflow_runs: [] });
+    expect(await (settle as any)._handler(unknown.ctx, { ...args, people: { ...people, area_owner: { user_id: "not-an-id", name: "Samvit" } } })).toMatchObject({ description: "needs a review by Samvit: no codecast run reviewed it" });
+    expect(cards(unknown.db)).toEqual([]);
+  });
+
+  test("agent work with nobody's press goes to its Requested-by person; a mechanism to an engineer presser, else the area's owner", async () => {
+    const asked = world();
+    await (settle as any)._handler(asked.ctx, { ...args, requested_by: "Jason" });
+    expect(cards(asked.db)[0].asked_user_ids).toEqual(["u_jason"]);
+    const mech = world({ workflow_runs: [run({ ...reviewed(true), pressed_approval_id: "p1" })], change_approvals: [{ _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [], user_id: "u_jason", created_at: 1 }] });
+    expect(await (settle as any)._handler(mech.ctx, { ...args, judged: [] })).toMatchObject({ description: "needs Jason Benn: the review called it a mechanism" });
+    const notEngineer = world({ workflow_runs: [run({ ...reviewed(true) })] });
+    await (settle as any)._handler(notEngineer.ctx, { ...args, judged: [], people: { ...people, engineers: [] } });
+    expect(cards(notEngineer.db)[0].asked_user_ids).toEqual(["u_ashot"]);
+  });
+
+  test("Cam's change: the card goes to the engineer, never to Cam", async () => {
+    // Cam asked, by codecast's record: the task is his.
+    const w = world({ tasks: [{ _id: "t1", user_id: "u_cam" }] });
+    await (settle as any)._handler(w.ctx, { ...args, people: { ...people, area_owner: undefined } });
+    expect(cards(w.db)[0].asked_user_ids).toEqual(["u_jason"]);
+  });
+
+  test("a pull request no codecast run is behind asks the area's owner from the team agent's session", async () => {
+    const w = world({ workflow_runs: [] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
+    expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_anchor", approval: { reason: "review" } });
+  });
+
+  // The answer path marks the card answered, then settles it.
+  const answer = async (w: ReturnType<typeof world>, card: any, at: number) => {
+    w.db._tables.session_decisions.find((d: any) => d._id === card._id).status = "answered";
+    return settleCardApproval(w.ctx as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: card.asked_user_ids[0] as any }, at);
+  };
+
+  test("a no-run card approves the head it showed: a later push, even of unjudged code, asks again", async () => {
+    const w = world({ workflow_runs: [] });
+    await (settle as any)._handler(w.ctx, args);
+    const [card] = cards(w.db);
+    expect(card.approval).toMatchObject({ judged_key: `head:${HEAD}`, reason: "review" });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
+    // Same judged diff (key k1), new head: the judged-diff key no longer carries a no-run approval.
+    const next = "c".repeat(40);
+    expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: next })).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
+    expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["answered", `head:${HEAD}`], ["pending", `head:${next}`]]);
+  });
+
+  test("a no-run pull request with no judged file waits for the automatic review and cards nobody", async () => {
+    const w = world({ workflow_runs: [] });
+    expect(await (settle as any)._handler(w.ctx, { ...args, judged: [], key: "none" })).toEqual({ state: "pending", description: "waiting for an automatic review: no codecast run reviewed it", context: "approval (shadow)" });
+    expect(cards(w.db)).toEqual([]);
+  });
+
+  test("an answered card on a pull request codecast could not read approves that head", async () => {
+    const w = world();
+    const unreadable = { repository: REPO, pr_number: 7, head_sha: HEAD, unreadable: "main's judges.txt", people };
+    expect(await (settle as any)._handler(w.ctx, unreadable)).toMatchObject({ state: "pending", description: "could not read main's judges.txt; a person approves" });
+    const [card] = cards(w.db);
+    expect(card.approval).toMatchObject({ judged_key: `head:${HEAD}`, reason: "unreadable" });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, unreadable)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
+    expect(await (settle as any)._handler(w.ctx, { ...unreadable, head_sha: "c".repeat(40) })).toMatchObject({ state: "pending" });
+  });
+
+  test("a run that ended with no mechanism answer cards whoever reads a mechanism, and asks its reviewer nothing", async () => {
+    const w = world({ workflow_runs: [run({ ...reviewed(undefined), status: "completed" })] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the review gave no mechanism answer" });
+    expect(w.db._tables.pending_messages).toEqual([]);
+    const [card] = cards(w.db);
+    expect(card).toMatchObject({ asked_user_ids: ["u_ashot"], approval: { judged_key: `head:${HEAD}`, reason: "review", run_id: "run1" } });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "success" });
+  });
+
+  // The review read the head given (a new run's review, or the same review after a rebase of its own).
+  const reviewedAt = (w: ReturnType<typeof world>, head: string, mechanism: boolean) => {
+    const r = w.db._tables.workflow_runs[0];
+    r.review_verdict = { ...reviewed(mechanism).review_verdict, head_sha: head };
+  };
+
+  test("a mechanism card approves the whole diff: a rebase that leaves it unchanged carries, an unjudged code change asks again", async () => {
+    const w = world({ workflow_runs: [run(reviewed(true))] });
+    const mech = { ...args, judged: [], key: "none", whole_key: "w1", people: { ...people, engineers: [] } };
+    expect(await (settle as any)._handler(w.ctx, mech)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    const [card] = cards(w.db);
+    // Keyed to the whole diff, never to the judged diff's constant "none".
+    expect(card.approval).toMatchObject({ judged_key: "whole:w1", reason: "mechanism" });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, mech)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
+    // A rebase: new head, the same whole diff.
+    const rebased = "c".repeat(40);
+    reviewedAt(w, rebased, true);
+    expect(await (settle as any)._handler(w.ctx, { ...mech, head_sha: rebased })).toMatchObject({ state: "success" });
+    // A push that changes an unjudged file: the judged diff is still "none", the whole diff is not.
+    const pushed = "d".repeat(40);
+    reviewedAt(w, pushed, true);
+    expect(await (settle as any)._handler(w.ctx, { ...mech, head_sha: pushed, whole_key: "w2" })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["answered", "whole:w1"], ["pending", "whole:w2"]]);
+  });
+
+  test("a card about the judged files covers them only: a mechanism a later push adds asks again", async () => {
+    const w = world();
+    await (settle as any)._handler(w.ctx, { ...args, whole_key: "w1", requested_by: "Jason" });
+    const [card] = cards(w.db);
+    expect(card.approval).toMatchObject({ judged_key: "k1", reason: "judged" });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, { ...args, whole_key: "w1", requested_by: "Jason" })).toMatchObject({ state: "success", description: `approved by Jason Benn (${card.short_id})` });
+    // Same judged diff, and the new code in unjudged files is a mechanism.
+    const pushed = "d".repeat(40);
+    reviewedAt(w, pushed, true);
+    expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: pushed, whole_key: "w2", requested_by: "Jason" })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+  });
+
+  test("every changed file judged: the two patch ids are equal, and a judged-files card's yes still does not cover a mechanism", async () => {
+    const w = world();
+    const allJudged = { ...args, whole_key: "k1", requested_by: "Jason" };
+    await (settle as any)._handler(w.ctx, allJudged);
+    const [card] = cards(w.db);
+    expect(card.approval).toMatchObject({ judged_key: "k1", reason: "judged" });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, allJudged)).toMatchObject({ state: "success" });
+    // The review now calls the same diff a mechanism: the engineer who reads one is carded.
+    reviewedAt(w, HEAD, true);
+    expect(await (settle as any)._handler(w.ctx, allJudged)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    expect(cards(w.db).at(-1)).toMatchObject({ status: "pending", asked_user_ids: ["u_ashot"], approval: { judged_key: "whole:k1", reason: "mechanism" } });
+  });
+
+  test("a Ship on the run's own card approves its judged diff and the whole diff it showed, so it covers a mechanism until code changes", async () => {
+    const gateCard = { _id: "sd_gate", short_id: "sd-7", workflow_run_id: "run1", options: [{ label: "Ship" }, { label: "Revise" }], conversation_id: "c_log", task_id: "t1", approval: { repository: REPO, pr_number: 7, judged_key: "k1", whole_key: "whole:w1", files: args.judged } };
+    const w = world({ workflow_runs: [run(reviewed(true))], session_decisions: [{ ...gateCard, status: "answered" }] });
+    await settleCardApproval(w.ctx as any, gateCard as any, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_jason" as any }, 20);
+    expect(w.db._tables.change_approvals.map((a: any) => a.judged_key)).toEqual(["k1", "whole:w1"]);
+    expect(await (settle as any)._handler(w.ctx, { ...args, whole_key: "w1" })).toMatchObject({ state: "success", description: "approved by Jason Benn (sd-7)" });
+    const pushed = "d".repeat(40);
+    reviewedAt(w, pushed, true);
+    expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: pushed, whole_key: "w2" })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+  });
+
+  test("a review that gave no mechanism answer is asked again in its own session, once per head, and nobody is carded", async () => {
+    const w = world({ workflow_runs: [run(reviewed(undefined))] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ description: "waiting for the review's mechanism answer" });
+    await (settle as any)._handler(w.ctx, args);
+    expect(cards(w.db)).toEqual([]);
+    const asks = w.db._tables.pending_messages.filter((m: any) => m.conversation_id === "c_rev");
+    expect(asks).toHaveLength(1);
+    expect(asks[0].content).toContain("--mechanism true");
+  });
+
+  test("Approve merge on the card approves that judged diff and re-posts; Revise revokes the run's approvals", async () => {
+    const w = world({ workflow_runs: [run({ pressed_approval_id: "p1" })], change_approvals: [{ _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [], user_id: "u_jason", created_at: 1 }] });
+    await (settle as any)._handler(w.ctx, args);
+    const card = cards(w.db)[0];
+    await settleCardApproval(w.ctx as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_jason" as any }, 20);
+    expect(w.db._tables.change_approvals.at(-1)).toMatchObject({ source: "card", judged_key: "k1", pr_number: 7, decision_id: card._id, user_id: "u_jason" });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "success" });
+    await settleCardApproval(w.ctx as any, card, { status: "answered", answer_index: 1 }, { kind: "user", user_id: "u_jason" as any }, 30);
+    expect(w.db._tables.change_approvals.every((a: any) => a.revoked_at === 30)).toBe(true);
+  });
+
+  test("a merged Release Captain revert that touched a judged file tells the first engineer once", async () => {
+    const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], engineers: [{ user_id: "u_jason", name: "Jason" }] }] };
+    const pr = { ...prRow, state: "merged", approval: { head_sha: HEAD, state: "success", description: "x", captain_revert: true, judged_files: ["outreach/line/change/land.cast"] } };
+    const w = world({ github_app_installations: [inst], pull_requests: [pr], notifications: [] });
+    expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(true);
+    expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(false);
+  });
+});
+
+test("Ship's list: the pull request's judged diff and the checkout's uncommitted judged files, each by the sessions that wrote it", async () => {
+  const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], judges: ["outreach/line/change/", "outreach/deploy.sh"] }] };
+  const pr = (id: string, over: Record<string, any>) => ({ ...prRow, _id: id, linked_session_ids: ["c_me", "c_other"], approval: { head_sha: HEAD, state: "pending", description: "x", judged_key: "k", judged_files: ["outreach/line/change/land.cast"] }, ...over });
+  const db = makeFakeDb({
+    github_app_installations: [inst],
+    // An open pull request at the head its judged diff was worked out for; a closed one and a stale one list nothing.
+    pull_requests: [
+      pr("pr1", {}),
+      pr("pr2", { number: 8, state: "closed", approval: { head_sha: HEAD, state: "pending", description: "x", judged_files: ["outreach/line/change/closed.cast"] } }),
+      pr("pr3", { number: 9, head_sha: "e".repeat(40), approval: { head_sha: HEAD, state: "pending", description: "x", judged_files: ["outreach/line/change/stale.cast"] } }),
+    ],
+    pull_request_sessions: ["pr1", "pr2", "pr3"].map((p, i) => ({ _id: `l${i}`, pull_request_id: p, conversation_id: "c_me" })),
+    conversations: [{ _id: "c_me", git_root: "/repo" }, { _id: "c_other", git_root: "/wt" }],
+    // The other linked session edited it in its own checkout; this session only recorded it in a commit.
+    file_changes: [
+      { _id: "f1", conversation_id: "c_other", file_path: "/wt/outreach/line/change/land.cast", change_type: "edit", timestamp: 1 },
+      { _id: "f2", conversation_id: "c_me", file_path: "/repo/outreach/line/change/land.cast", change_type: "commit", timestamp: 2 },
+    ],
+    checkouts: [
+      { _id: "k1", workspace: "team:team1", repository: REPO, path: "/repo/", report: { uncommitted: { sessions: [{ conversation_id: "c_third", paths: ["outreach/line/change/gate.sh", "docs/x.md"] }], unattributed: ["outreach/deploy.sh"] } } },
+      { _id: "k2", workspace: "team:team1", repository: REPO, path: "/elsewhere", report: { uncommitted: { sessions: [{ conversation_id: "c_far", paths: ["outreach/line/change/far.cast"] }], unattributed: [] } } },
+    ],
+  });
+  const gate = (await gateOf({ db }, REPO))!;
+  expect(await changeJudgedFiles({ db }, { _id: "c_me" as any, git_root: "/repo" }, gate)).toEqual([
+    { path: "outreach/deploy.sh", writers: [] },
+    { path: "outreach/line/change/gate.sh", writers: ["c_third"] },
+    { path: "outreach/line/change/land.cast", writers: ["c_other"] },
+  ]);
 });

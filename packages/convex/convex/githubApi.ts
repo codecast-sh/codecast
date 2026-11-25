@@ -783,6 +783,8 @@ export async function fetchPRFiles(repository: string, prNumber: number, token: 
     base_ref: prData.base?.ref,
     head_ref: prData.head?.ref,
     head_sha: prData.head?.sha as string | undefined,
+    title: (prData.title ?? undefined) as string | undefined,
+    author_login: (prData.user?.login ?? undefined) as string | undefined,
     default_branch: prData.base?.repo?.default_branch as string | undefined,
     state: (prData.merged ? "merged" : prData.state === "closed" ? "closed" : "open") as "merged" | "closed" | "open",
     merged_at: prData.merged_at ? new Date(prData.merged_at).getTime() : undefined,
@@ -796,7 +798,7 @@ export const getPRFiles = internalAction({
     github_access_token: v.string(),
   },
   handler: async (_ctx, args) => {
-    const { paths: _paths, complete: _complete, head_sha: _head, default_branch: _default, ...stored } =
+    const { paths: _paths, complete: _complete, head_sha: _head, default_branch: _default, title: _title, author_login: _author, ...stored } =
       await fetchPRFiles(args.repository, args.pr_number, args.github_access_token);
     return stored;
   },
