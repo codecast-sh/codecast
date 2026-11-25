@@ -26,7 +26,7 @@ export function unlandedFix(issue: Pick<LineIssue, "status" | "history">, opts: 
   const fix = { runId: last.runId, at: last.card?.answeredAt ?? last.end, ref: last.card?.ref ?? null, answeredBy: last.card?.answeredBy ?? null };
   // Answered Ship and refused only for being behind: approved, waiting to land (ct-58259), never a failure.
   const terminal = issue.status === "done" || issue.status === "dropped";
-  const behind = !terminal && last.card?.status === "answered" && /^ship\b/i.test(last.card.answer ?? "") ? behindBase(opts.shipOutput) : null;
+  const behind = !terminal && last.card?.status === "answered" && /^(ship|approve merge)\b/i.test(last.card.answer ?? "") ? behindBase(opts.shipOutput) : null;
   if (behind) return { ...fix, behind };
   if (issue.status === "dropped" || h.regressed) return null;
   if (last.ended !== "shipped" || last.unapproved) return null;

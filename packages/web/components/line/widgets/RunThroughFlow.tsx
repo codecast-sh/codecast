@@ -32,7 +32,31 @@ import { JourneyView } from "../../ship/Journey";
 import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
+import { useMutation } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { judgedEdits } from "../../../lib/ship/judgedEdits";
 import "../../ship/ship.css";
+
+/**
+ * The judged files this session edited, which Ship's confirm lists beside the button, and the press that approves
+ * exactly those (convex changeApprovals.recordPress). Null files: the repository is not opted in, nothing is listed.
+ */
+function usePressApproval(conversationId: string, active: boolean): { files: string[] | null; record: () => void } {
+  // Read only while the confirm is open: the header holds this hook and must cost nothing the rest of the time.
+  const remote = useInboxStore((s) => (active ? sessionRemoteOf(s as any, conversationId) : null));
+  const root = useInboxStore((s) => (active ? sessionRootOf(s as any, conversationId) : null));
+  const repository = repositoryOfRemote(remote);
+  const { data: judges } = useQueryNoThrow(api.changeApprovals.judgesFor, active && repository ? { repository } : "skip");
+  const msgs = useInboxStore((s) => (active ? (s.messages as Record<string, Array<{ tool_calls?: Array<{ name?: string; input?: string }> }>>)[conversationId] : undefined));
+  const files = useMemo(() => judgedEdits(msgs ?? [], root, judges), [msgs, root, judges]);
+  const recordPress = useMutation(api.changeApprovals.recordPress);
+  const record = () => {
+    if (!files) return;
+    void recordPress({ conversation_id: conversationId as any, files }).catch((err) => console.warn("[ship] the press was not recorded as an approval:", err));
+  };
+  return { files, record };
+}
 
 /** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
 export function RunThroughFlow(props: { conversationId: string; sessionTitle: string }) {
@@ -87,9 +111,11 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const declined = !!press?.reply && settled && !live;
   const starting = !!press && !declined && !live;
   const chip = starting ? { words: "Starting", tone: "working" } : declined && !run ? { words: "Not run", tone: "idle" } : chipOf(journey, reach, !!landed);
+  const approval = usePressApproval(conversationId, !!reviewing);
   const send = (flow: AppFlow) => {
     setReviewing(null);
     setAgain(false);
+    approval.record();
     useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
   };
   const showRun = !!run && !!runFlow && !again && !starting;
@@ -129,7 +155,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
           </PopoverContent>
         </Popover>
       )}
-      {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle)} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle, 1, { approves: approval.files })} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
     </>
   );
 }
@@ -211,10 +237,11 @@ function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain
 /** Ship again from a run's card in the thread: the same flow, through the same review a first Ship goes through. */
 export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }: { flow: AppFlow; conversationId: string; sessionTitle: string; primary: boolean }) {
   const [reviewing, setReviewing] = useState(false);
+  const approval = usePressApproval(conversationId, reviewing);
   return (
     <>
       <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={() => setReviewing(true)} data-ship-again>Ship again</button>
-      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle)} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow)); }} /> : null}
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: approval.files })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); approval.record(); useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow)); }} /> : null}
     </>
   );
 }

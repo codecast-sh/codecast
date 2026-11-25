@@ -18,7 +18,7 @@ const stops = (s: DiagramStep): boolean => s.side.some((r) => r.tone === "stop")
  * draws the stations as a lane; `labelOf` names a station as that lane does. `from`: the checkout it ships from, when that is a risk ("ip-172-31-42-177, 364
  * behind main, conflicts in 10 files").
  */
-export function shipLedgerFor(flow: ShippedFlow, session: string, count = 1, opts: { drawn?: boolean; from?: string | null; labelOf?: (id: string) => string | undefined } = {}) {
+export function shipLedgerFor(flow: ShippedFlow, session: string, count = 1, opts: { drawn?: boolean; from?: string | null; labelOf?: (id: string) => string | undefined; approves?: ReadonlyArray<string> | null } = {}) {
   // Where a drawn lane names a station its own way ("Wait for release"), the rows say what the lane says.
   const stations = flowStations(flow).map((s) => ({ ...s, label: opts.labelOf?.(s.id) ?? s.label }));
   const d = flowDiagram(flow);
@@ -35,6 +35,6 @@ export function shipLedgerFor(flow: ShippedFlow, session: string, count = 1, opt
     ...(opts.drawn
       ? { stations: stations.map((s) => s.label), stops: [...new Set(stations.filter(stops).map((s) => s.label))] }
       : { stops: stagesHolding(flow, stations.filter(stops).map((s) => s.id)) }),
-    drawn: opts.drawn, from: opts.from ?? null,
+    drawn: opts.drawn, from: opts.from ?? null, approves: opts.approves ?? null,
   });
 }

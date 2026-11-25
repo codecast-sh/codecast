@@ -769,8 +769,12 @@ export const merge = action({
     method: mergeMethod,
     delete_branch: v.optional(v.boolean()),
     bypass: v.optional(v.boolean()),
+    // Merge as codecast's GitHub app, only once codecast's own approval rule holds (changeApprovals.mergeAsApp).
+    as_app: v.optional(v.boolean()),
+    commit_title: v.optional(v.string()),
+    commit_message: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<any> =>
+  handler: async (ctx, args): Promise<any> => args.as_app ? mergeAsApp(ctx, args) :
     pullRequestVerb(ctx, args, { requireState: "open" }, async (actor, acting) => {
       const access: any = await ctx.runAction(internal.githubApi.pullRequestMergeability, {
         repository: actor.pr.repository,
@@ -790,6 +794,8 @@ export const merge = action({
         head_ref: actor.pr.head_ref ?? undefined,
         expected_head_sha: args.expected_head_sha,
         bypass_node_id: held ? access.id : undefined,
+        ...(args.commit_title !== undefined ? { commit_title: args.commit_title } : {}),
+        ...(args.commit_message !== undefined ? { commit_message: args.commit_message } : {}),
       });
       return {
         merged: result.merged,
@@ -800,6 +806,38 @@ export const merge = action({
       };
     }),
 });
+
+/**
+ * `cast pr merge --as-app`: the caller (signed in, in the pull request's team) asks codecast's app to merge. The app's
+ * installation token is the only credential, never the caller's, and never a bypass; the merge goes ahead only when
+ * codecast's approval rule holds on the head the caller named (changeApprovals.mergeAsApp).
+ */
+async function mergeAsApp(ctx: any, args: Locator & { api_token?: string; expected_head_sha?: string; method?: "merge" | "squash" | "rebase"; delete_branch?: boolean; bypass?: boolean; commit_title?: string; commit_message?: string }): Promise<any> {
+  if (args.bypass) return { error: "A merge as codecast's app never bypasses branch protection: drop --admin." };
+  if (!args.expected_head_sha) return { error: "A merge as codecast's app merges only the head you looked at: pass --head <sha>." };
+  const actor: any = await ctx.runQuery(internal.prCli.actorFor, {
+    api_token: args.api_token, ref: args.ref, repository: args.repository, number: args.number, session: args.session, branch: args.branch,
+  });
+  if (!actor) return { error: NO_MATCH };
+  if (actor.pr.state !== "open") return { error: `${actor.pr.repository}#${actor.pr.number} is ${actor.pr.state}, not open.` };
+  const where = { repository: actor.pr.repository, number: actor.pr.number, as: "the codecast app" };
+  try {
+    const result: any = await ctx.runAction(internal.changeApprovals.mergeAsApp, {
+      repository: actor.pr.repository,
+      pr_number: actor.pr.number,
+      expected_head_sha: args.expected_head_sha,
+      method: args.method,
+      delete_branch: args.delete_branch,
+      head_ref: actor.pr.head_ref ?? undefined,
+      ...(args.commit_title !== undefined ? { commit_title: args.commit_title } : {}),
+      ...(args.commit_message !== undefined ? { commit_message: args.commit_message } : {}),
+    });
+    if (result.error) return { ...where, error: result.error };
+    return { ...where, merged: result.merged, sha: result.sha, branch_deleted: result.branch_deleted, head_ref: actor.pr.head_ref, bypassed: false };
+  } catch (error) {
+    return { ...where, error: failureText(error) };
+  }
+}
 
 /**
  * Whether this caller could merge the pull request now, as GitHub answers for

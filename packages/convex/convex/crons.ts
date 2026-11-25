@@ -28,6 +28,9 @@ crons.interval("weekly card sweep", { hours: 1 }, (internal as any).weeklyCards.
 // problems with no score or a newer finding, under a $2 daily cap
 // (problemScores.ts). The 15-minute tick collects a batch soon after it ends.
 crons.interval("score agent-review problems", { minutes: 15 }, internal.problemScores.tick, {});
+// Codecast's approval status on every open pull request of an opted-in repository, worked out again so a dropped
+// webhook never strands one (changeApprovals.sweep); unchanged statuses are not posted again.
+crons.interval("approval status sweep", { minutes: 30 }, (internal as any).changeApprovals.sweep, {});
 // Group the findings that came in while grouping could not compare them (the budget refused, or the embedding failed):
 // they wait held instead of opening a problem each (findingRegroup.ts).
 crons.interval("group findings grouping refused", { minutes: 10 }, internal.findingRegroup.groupAwaiting, {});

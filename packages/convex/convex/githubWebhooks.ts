@@ -58,6 +58,7 @@ import {
   shortSha,
 } from "./lib/gitRefs";
 import { committedSessionIds } from "./lib/prSessions";
+import { postApprovalFromAction, repostOnJudgesPush, scheduleApprovalPost } from "./lib/changeApprovalRows";
 import { anchorFromDiffHunk } from "@codecast/shared/comments";
 
 const MERGE_STATE_DELAY_MS = 15 * 1000;
@@ -439,6 +440,8 @@ export const processPROpenedEvent = internalAction({
       updated_at: new Date(pr.updated_at).getTime(),
     });
 
+    await postApprovalFromAction(ctx, repositoryFullName, prNumber);
+
     let filesSynced = false;
     if (result.pr_id) {
       let token = result.github_access_token;
@@ -537,6 +540,7 @@ export const processPRSynchronizeEvent = internalAction({
       actor_login: payload.sender?.login,
       actor_avatar_url: payload.sender?.avatar_url,
     });
+    await postApprovalFromAction(ctx, repositoryFullName, prNumber);
 
     let token: string | null = null;
 
@@ -757,6 +761,7 @@ export const processPRMetaEvent = internalMutation({
     const result = await patchPullRequest(ctx, existing._id, patch);
     if (!result) return { success: false };
     const pr = result.pr;
+    await scheduleApprovalPost(ctx, pr.repository, pr.number);
 
     const kind =
       action === "reopened" ? "pr_reopened"
@@ -1634,6 +1639,7 @@ export const processPushEvent = internalMutation({
     }
 
     const branch = ref.replace("refs/heads/", "");
+    if (branch === payload.repository?.default_branch) await repostOnJudgesPush(ctx, repository, commits);
     const teamId = await resolveTeamForRepository(ctx, repository);
     if (!teamId) return { success: true, reason: "No installation for this repository", commits_created: 0 };
 
