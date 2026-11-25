@@ -552,6 +552,11 @@ crons.cron(
   {}
 );
 
+// Each person's priorities follow their work: a pass for every (person,
+// workspace) with the feature on and a typed message or pin since its last
+// pass (priorityPassRun.ts).
+crons.interval("priority pass", { hours: 3 }, (internal as any).priorityPassRun.sweep, {});
+
 crons.interval(
   // Pin trail rows older than 30 days (prioritiesSchema.ts): the priorities
   // pass reads only what came after its last run.

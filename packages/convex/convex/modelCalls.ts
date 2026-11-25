@@ -21,7 +21,7 @@ import { readBudget, setBudgetCap, settleBudget, takeBudget, worstCaseCost } fro
 import { recordModelSpend } from "./lib/modelSpend";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { modelCallProblem, parseJsonBlock, type BudgetPurpose, type BudgetSummary, type ModelCallResult, type ModelCallSpec } from "@codecast/shared/contracts/modelCall";
-import { vendorRefusalFor } from "./lib/vendorGuard";
+import { vendorRefusalFor, type VendorGate } from "./lib/vendorGuard";
 
 const purposeValidator = v.union(v.literal("judge"), v.literal("grouping"), v.literal("call"));
 
@@ -128,6 +128,25 @@ export async function runModelCall(ctx: { runQuery: any; runMutation: any; sched
   });
   if (!spent.room) return { ok: false, reason: "budget", error: "the team's model budget for this month has no room", cost_usd: 0, model: spec.model, worst_case_usd: held };
   return spent.value;
+}
+
+/**
+ * A call for codecast's own loops (a goal judge, the priorities pass): a
+ * workspace with a model budget pays for it there (runModelCall); one with
+ * none gets it on codecast's own key, unmetered, like the idle summary.
+ * `gate` is whose content goes on the own-key path.
+ */
+export async function runModelCallOrOwn(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope, budgeted: boolean, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, gate: VendorGate, timeoutMs = 60_000): Promise<ModelCallResult> {
+  if (budgeted) return runModelCall(ctx, scope, purpose, spec, label, timeoutMs);
+  const problem = modelCallProblem(spec);
+  if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
+  const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
+  const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
+  if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model };
+  if (spec.output !== "json") return { ok: true, text: reply.text, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
+  const json = parseJsonBlock(reply.text);
+  if (json === null) return { ok: false, reason: "failed", error: "the answer held no JSON", cost_usd: cost, model: spec.model };
+  return { ok: true, text: reply.text, json, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
 }
 
 const scopeArgs = {

@@ -5,7 +5,7 @@ import { publish } from "./deployTargets";
 import { stampMainOrder } from "./deployTargetsCi";
 import { correctDeploySha } from "./deployTargets";
 import { recordDeployMarker } from "./deploys";
-import { get, many } from "./deployReach";
+import { forUser as forUserQuery, get, many } from "./deployReach";
 
 // How far a merged pull request or a commit on main has gone toward
 // production (deploys.md DP16), read end to end from the tables. Synthetic data only.
@@ -137,6 +137,17 @@ describe("a merged pull request's reach", () => {
     expect(await w.reach("acme/app#12", STRANGER)).toBeNull();
     expect(await w.reach("acme/app#404")).toBeNull();
     expect(await w.reach("not a ref")).toBeNull();
+  });
+});
+
+describe("an owner's refs, read for them by an internal caller (priorities chips)", () => {
+  test("a merged PR and a main commit read as the owner sees them; refs with no reach and a stranger's view are left out", async () => {
+    const w = await world();
+    await w.mark("web", 2, "live");
+    const forUser = (refs: string[], user_id = ME) => (forUserQuery as any)._handler(w.ctx, { user_id, refs });
+    const rows = await forUser(["acme/app#12", ` acme/app@${sha(4)} `, "acme/app#13", "acme/app#12", "not a ref"]);
+    expect(rows.map((r: any) => [r.ref, r.state])).toEqual([["acme/app#12", "live"], [`acme/app@${sha(4)}`, "waiting"]]);
+    expect(await forUser(["acme/app#12"], STRANGER)).toEqual([]);
   });
 });
 

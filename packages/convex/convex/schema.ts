@@ -1647,6 +1647,10 @@ export default defineSchema({
     // running and queued rows for one user (subagentFleet.ts).
     .index("by_user_subagent_slot", ["user_id", "subagent_slot", "subagent_slot_at"])
     .index("by_restored_from", ["restored_from_conversation_id"])
+    // Sparse and written only by the priorities pass: the sessions one
+    // priority holds (priorityPassRun.ts, priorities.ts). No updated_at key,
+    // so a heartbeat never rewrites an entry.
+    .index("by_priority", ["priority_id"])
     // `persistent` and `anchor_id` are plain fields with no index: anchors
     // resolve their conversation via anchors.conversation_id, and no query
     // scans conversations by either field. Indexes on written-to tables are

@@ -21,8 +21,7 @@ import { getAuthenticatedUserId, canSendProductMessage, cancelPendingMessageForU
 import { checkConversationAccess } from "./privacy";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { performSetThreadState } from "./conversations";
-import { runModelCall, type CallScope } from "./modelCalls";
-import { callModelMetered, parseJsonBlock } from "./lib/anthropic";
+import { runModelCallOrOwn, type CallScope } from "./modelCalls";
 import { ACTIVE_AGENT_STATUSES, clearedThreadStateFields } from "@codecast/shared/contracts";
 import {
   GOAL_IDLE_LIMIT_MS,
@@ -217,19 +216,10 @@ type Judged = { verdict: GoalVerdict } | { error: string };
 async function askJudge(ctx: any, input: { objective: string; messages: any[]; scope: CallScope; budgeted: boolean; conversation_id: Id<"conversations"> }): Promise<Judged> {
   const prompt = buildGoalJudgePrompt(input.objective, renderGoalEvidence(input.messages));
   const spec = { model: GOAL_JUDGE_MODEL, max_tokens: 1_000, prompt, output: "json" as const };
-  let json: unknown = null;
-  if (input.budgeted) {
-    // A workspace with a model budget pays for its judges out of it.
-    const r = await runModelCall(ctx, input.scope, "judge", spec, "Goal judge");
-    if (!r.ok) return { error: r.reason === "budget" ? "The team's model budget has no room for the goal review" : `The goal review failed: ${r.error}` };
-    json = r.json;
-  } else {
-    // No budget set: the call is codecast's own, like the idle summary's.
-    const r = await callModelMetered({ ...spec, label: "Goal judge", gate: { ctx, scope: { conversationId: input.conversation_id } }, timeout_ms: 60_000 });
-    if (!r.reply) return { error: `The goal review failed: ${r.error ?? "no answer"}` };
-    json = parseJsonBlock(r.reply.text);
-  }
-  const verdict = parseGoalVerdict(json);
+  // A workspace with a model budget pays for its judges out of it; with none, the call is codecast's own.
+  const r = await runModelCallOrOwn(ctx, input.scope, input.budgeted, "judge", spec, "Goal judge", { ctx, scope: { conversationId: input.conversation_id } });
+  if (!r.ok) return { error: r.reason === "budget" ? "The team's model budget has no room for the goal review" : `The goal review failed: ${r.error}` };
+  const verdict = parseGoalVerdict(r.json);
   return verdict ? { verdict } : { error: "The goal review gave no usable verdict" };
 }
 
