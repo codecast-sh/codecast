@@ -81,13 +81,14 @@ export async function endGroupLeftovers(group: number, graceMs = STATION_KILL_GR
 }
 
 // The KILL a runner on its way out leaves behind: after the grace, each pid
-// that `ps` still prints with the group and start time it had at the TERM
-// (sameProcess, in shell). A pid the kernel gave to another program meanwhile
-// is left alone, and one that ended at the TERM is not there to match.
+// that `ps` still prints with the start time it had at the TERM (sameProcess,
+// in shell). A pid the kernel gave to another program meanwhile is left alone,
+// and one that ended at the TERM is not there to match. Its group may have
+// changed: a helper read just before its own setsid() is still the station's.
 export const KILL_IF_SAME = [
   `sleep "$1"; shift`,
   `while [ $# -ge 2 ]; do`,
-  `  [ "$(ps -o pgid=,lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')" = "$2" ] && kill -KILL "$1" 2>/dev/null`,
+  `  [ "$(ps -o lstart= -p "$1" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')" = "$2" ] && kill -KILL "$1" 2>/dev/null`,
   `  shift 2`,
   `done`,
   `exit 0`,
@@ -114,10 +115,10 @@ export function endStationsOnExit(groups: Iterable<number>, graceMs = STATION_KI
   }
   for (const r of rows) try { process.kill(r.pid, "SIGTERM"); } catch { /* gone */ }
   for (const g of list) try { process.kill(-g, "SIGTERM"); } catch { /* gone */ }
-  const proven = rows.filter((r) => r.pid > 1 && r.pid !== process.pid && r.pgid !== undefined && bornBeforeCaptureSecond(r));
+  const proven = rows.filter((r) => r.pid > 1 && r.pid !== process.pid && bornBeforeCaptureSecond(r));
   if (!proven.length) return;
   try {
-    spawn("sh", ["-c", KILL_IF_SAME, "sh", String(graceMs / 1000), ...proven.flatMap((r) => [String(r.pid), `${r.pgid} ${r.startedAt}`])], {
+    spawn("sh", ["-c", KILL_IF_SAME, "sh", String(graceMs / 1000), ...proven.flatMap((r) => [String(r.pid), r.startedAt!])], {
       detached: true,
       stdio: "ignore",
       // lstart is localized; the rows were read under C (processTable.ts).

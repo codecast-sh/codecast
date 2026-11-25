@@ -120,7 +120,7 @@ describe("bornBeforeCaptureSecond", () => {
 });
 
 describe("sameProcess", () => {
-  test("the same pid, start time and process group is the same process", () => {
+  test("the same pid and start time is the same process", () => {
     expect(sameProcess(row(91001), { ...row(91001) })).toBe(true);
   });
 
@@ -128,8 +128,8 @@ describe("sameProcess", () => {
     expect(sameProcess(row(91001), { ...row(91001), startedAt: "Sat Sep 16 21:45:10 2026" })).toBe(false);
   });
 
-  test("a survivor that changed process group is not the process we signalled", () => {
-    expect(sameProcess(row(91001), { ...row(91001), pgid: 99999 })).toBe(false);
+  test("a survivor that changed process group since the read (its own setsid) is still the process we signalled", () => {
+    expect(sameProcess(row(91001), { ...row(91001), pgid: 99999 })).toBe(true);
   });
 
   test("a table with no identity columns can never license a kill", () => {

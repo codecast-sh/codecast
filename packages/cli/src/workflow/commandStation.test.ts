@@ -111,16 +111,19 @@ describe("a station whose runner goes", () => {
     expect(fs.existsSync(path.join(stationRecordDir(), `${runner.pid}.json`))).toBe(false);
   }, 60_000);
 
-  test("leaves a pid alone once it names another process, and KILLs it while it is the same one", async () => {
-    const proc = Bun.spawn(["sleep", "600"], { stdout: "ignore", stderr: "ignore" });
+  test("leaves a pid alone once it names another process, and KILLs it while it is the same one, whatever group it moved to", async () => {
+    // A helper the runner read just before its own setsid(): its group changed, it did not (CI, Nov 25).
+    const proc = Bun.spawn(["perl", "-MPOSIX", "-e", `$SIG{USR1} = sub { POSIX::setsid() }; sleep 1 while 1`], { stdout: "ignore", stderr: "ignore" });
     strays.push(proc.pid);
     await new Promise((r) => setTimeout(r, 1_100));
     const row = snapshotProcessTable().find((p) => p.pid === proc.pid)!;
+    expect(row.pgid).not.toBe(proc.pid);
+    process.kill(proc.pid, "SIGUSR1");
+    await pollUntil(() => snapshotProcessTable().find((p) => p.pid === proc.pid)?.pgid === proc.pid, "the process moving to a group of its own", { ms: 5_000 });
     const killIfSame = (identity: string) => Bun.spawnSync(["sh", "-c", KILL_IF_SAME, "sh", "0", String(proc.pid), identity], { env: { ...process.env, LANG: "C", LC_ALL: "C" } });
-    killIfSame(`${row.pgid} Thu Jan  1 00:00:00 1970`.replace(/\s+/g, " "));
-    killIfSame(`${Number(row.pgid) + 1} ${row.startedAt}`);
+    killIfSame("Thu Jan 1 00:00:00 1970");
     expect(alive(proc.pid)).toBe(true);
-    killIfSame(`${row.pgid} ${row.startedAt}`);
+    killIfSame(row.startedAt!);
     expect(await proc.exited).toBe(137);
   });
 
