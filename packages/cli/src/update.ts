@@ -168,7 +168,9 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
     console.error(MANAGED_UPDATE_NOTE);
     return { success: false, error: "managed_install" };
   }
-  const result = await updater.performUpdate();
+  // Loaded here, off the boot graph: only an update needs it.
+  const { updateWithRetry } = await import("./updateRetry.js");
+  const result = await updateWithRetry(() => updater.performUpdate());
   // Callers print their own "Update failed" line without the reason, so name it
   // here. Dev mode is a refusal, not a failure, and stays quiet.
   if (!result.success && result.error && result.error !== "dev_mode") {

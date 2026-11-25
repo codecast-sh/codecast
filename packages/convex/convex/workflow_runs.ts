@@ -41,7 +41,6 @@ import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
 import { closeRunningStations, endRunFields } from "./lib/runEnd";
 import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
-import { claimPress, scheduleRunApprovalPost } from "./lib/changeApprovalRows";
 
 export { withAgentSessions };
 
@@ -712,6 +711,8 @@ export async function createRunCore(
     goal_override?: string;
     project_path?: string;
     spawner_conversation_id?: Id<"conversations">;
+    // The spawner is the project lead's standing session standing in for a session that started the run.
+    spawner_stand_in?: boolean;
     // The role whose line starts this run (orgLine.startRoleRun).
     org_role_id?: Id<"org_roles">;
     // The team the primary session routes to when no directory rule names
@@ -745,6 +746,7 @@ export async function createRunCore(
     plan_id: opts.plan?._id,
     ...scope,
     ...(opts.spawner_conversation_id ? { spawner_conversation_id: opts.spawner_conversation_id } : {}),
+    ...(opts.spawner_conversation_id && opts.spawner_stand_in ? { spawner_stand_in: true } : {}),
     ...(opts.org_role_id ? { org_role_id: opts.org_role_id } : {}),
     status: "pending",
     node_statuses: [],
@@ -785,8 +787,6 @@ export async function createRunCore(
   });
 
   await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
-  // A person's Ship press in the session that asked for this run is the run's approval (changeApprovals.ts).
-  await claimPress(ctx, runId, opts.spawner_conversation_id, now);
 
   await ctx.db.insert("messages", {
     conversation_id: primaryConvId,
@@ -946,6 +946,7 @@ export const createFromCli = mutation({
       goal_override: args.goal_override,
       project_path: place?.project_path ?? chosen?.project_path ?? args.project_path,
       spawner_conversation_id: spawner?._id,
+      ...(!args.spawner_session ? { spawner_stand_in: true } : {}),
       ...(place ? { org_role_id: lead._id } : {}),
       force: args.force,
       fresh_branch: args.detach && lineRun,
@@ -1281,9 +1282,6 @@ export const updateProgress = mutation({
       ...(run.station_place && (args.current_node_id !== run.station_place.node_id || args.run_status === "completed" || args.run_status === "failed") ? { station_place: undefined } : {}),
       updated_at: now,
     });
-
-    // The reviewer station finished: its mechanism answer now counts for the approval status (changeApprovals.mechanismOf).
-    if (nodeEntry?.status === "completed" && run.review_verdict?.node_id === args.node_id) await scheduleRunApprovalPost(ctx, run);
 
     // Link the session conversation to this workflow run
     if (args.session_id) {
