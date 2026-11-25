@@ -163,6 +163,10 @@ export type StatusRow = {
   agent_status_updated_at?: number | null;
   daemon_alive_until?: number | null;
   last_role_is_user?: boolean | null;
+  /** The workflow run this session started (store InboxSession): paused, it waits on its gate's card. */
+  workflow_run_id?: string | null;
+  workflow_run_status?: string | null;
+  is_workflow_sub?: boolean | null;
 };
 
 /** Facts a row does not carry, from the store around it. */
@@ -212,6 +216,9 @@ export function statusFailure(row: StatusRow, now: number, live: StatusLive = {}
   // you), not a failure to clear. A pin older than the latest turn (done or
   // dormant) answered an earlier turn, so it exempts nothing.
   const status = agentStatusAt(row, now);
+  // A session whose run is paused at a gate handed the work to that run, which waits on a person's card: its agent
+  // exiting is how it hands over, not a failure (ct-101446). The row's Gate chip says where the work stands.
+  if (row.workflow_run_id && !row.is_workflow_sub && row.workflow_run_status === "paused") return null;
   if (
     status && DEAD_AGENT_STATUSES.has(status) && (row.message_count ?? 0) > 0 &&
     (row.thread_state_status !== "dormant" || rowPinPredatesTurn(row)) &&
