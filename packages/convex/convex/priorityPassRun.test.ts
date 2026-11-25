@@ -434,9 +434,9 @@ describe("what a pass may read, and how far", () => {
 });
 
 describe("what the model is told about sessions and calls", () => {
-  test("a standing role's seat reads as a role, a session another started as a worker of its parent", async () => {
+  test("a standing role's seat reads as a role, a session another started as a worker of its parent; a fork and a session filed under a role are the person's own", async () => {
     const w = await world();
-    const { role, worker } = await w.t.run(async (ctx) => {
+    await w.t.run(async (ctx) => {
       const orgRole = await ctx.db.insert("org_roles", {
         short_id: "or-1", scope_type: "user", scope_user_id: w.ana, host_user_id: w.ana, name: "Infrastructure", handle: "infra",
         scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: w.ana }, status: "active", trust: "direct",
@@ -446,34 +446,43 @@ describe("what the model is told about sessions and calls", () => {
         user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full", agent_type: "claude_code", session_id: short_id, short_id,
         title: `Session ${short_id}`, started_at: 1, updated_at: 1, message_count: 1, status: "active", ...fields,
       } as any);
-      return { role: await conv("jx7role", { standing_role_id: orgRole }), worker: await conv("jx7work", { parent_conversation_id: w.teamConv }) };
+      for (const c of [
+        await conv("jx7role", { standing_role_id: orgRole }),
+        await conv("jx7work", { parent_conversation_id: w.teamConv }),
+        await conv("jx7fork", { parent_conversation_id: w.teamConv, parent_message_uuid: "m-1" }),
+        await conv("jx7file", { org_role_id: orgRole }),
+      ]) {
+        const message = await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "x", timestamp: w.now - H } as any);
+        await ctx.db.insert("user_sends", { user_id: w.ana, conversation_id: c, message_id: message, timestamp: w.now - H, words: 1, text: "work", clipped: false } as any);
+      }
     });
-    for (const c of [role, worker, w.teamConv]) await w.send(w.ana, c, w.now - H, "work");
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
     const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
-    const byId = Object.fromEntries(input.sessions.map((s: any) => [s.id, s]));
-    expect(byId.jx7role).toMatchObject({ kind: "role" });
-    expect(byId.jx7work).toMatchObject({ kind: "worker", parent: "jx7team" });
-    expect(byId.jx7team).toMatchObject({ kind: "session" });
+    const kinds = Object.fromEntries(input.sessions.map((s: any) => [s.id, s.parent ? `${s.kind} of ${s.parent}` : s.kind]));
+    expect(kinds).toEqual({ jx7role: "role", jx7work: "worker of jx7team", jx7fork: "session", jx7file: "session", jx7team: "session" });
     await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
     expect(prompts[0]).toContain('## Session jx7role · "Session jx7role" · role ·');
     expect(prompts[0]).toContain('## Session jx7work · "Session jx7work" · worker of jx7team ·');
+    expect(prompts[0]).toContain('## Session jx7fork · "Session jx7fork" · last active');
   });
 
-  test("calls the person was in, ended since the cursor, come with their summary and action items; others' calls and older ones do not", async () => {
+  /** Calls in a room on Ana's team-visible session, which every teammate may read. */
+  async function callWorld() {
     const w = await world();
-    await w.t.run(async (ctx) => {
-      await ctx.db.patch(w.acme, { features: { priorities: true, calls: true } } as any);
-      // A room both are members of: Ana may read every call in it, but was in only the ones she spoke in.
-      const room = `dm:${[String(w.ana), String(w.ben)].sort().join(":")}`;
-      const call = (short_id: string, speaker: Id<"users">, ended_at: number) => ctx.db.insert("transcripts", {
-        room_key: room, team_id: w.acme, started_by: w.ben, status: "ended", started_at: ended_at - 30 * 60_000, ended_at,
-        routes: [], last_seq: 0, short_id, title: `Call ${short_id}`, participants: [{ id: String(speaker), name: "someone" }],
-        summary: `We agreed the grader ships (${short_id}).`, action_items: [`Ana ships the grader (${short_id})`],
-      } as any);
-      await call("cl-1", w.ana, w.now - 2 * H);
-      await call("cl-2", w.ben, w.now - 2 * H);
-      await call("cl-3", w.ana, w.now - 20 * DAY);
-    });
+    await w.t.run((ctx) => ctx.db.patch(w.acme, { features: { priorities: true, calls: true } } as any));
+    const call = (short_id: string, speaker: Id<"users">, landed: number, fields: Record<string, unknown> = {}) => w.t.run((ctx) => ctx.db.insert("transcripts", {
+      room_key: `session:${w.teamConv}`, team_id: w.acme, started_by: w.ben, status: "ended", started_at: landed - 30 * 60_000, ended_at: landed - 60_000, summary_at: landed,
+      routes: [], last_seq: 0, short_id, title: `Call ${short_id}`, participants: [{ id: String(speaker), name: "someone" }],
+      summary: `We agreed the grader ships (${short_id}).`, action_items: [`Ana ships the grader (${short_id})`], ...fields,
+    } as any));
+    return { w, call };
+  }
+
+  test("calls the person was in whose summary landed since the cursor come with their summary and action items; others' calls and older ones do not", async () => {
+    const { w, call } = await callWorld();
+    await call("cl-1", w.ana, w.now - 2 * H);
+    await call("cl-2", w.ben, w.now - 2 * H);
+    await call("cl-3", w.ana, w.now - 20 * DAY);
     await w.send(w.ana, w.teamConv, w.now - H, "work");
     const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
     expect(input.calls).toEqual([{ id: "cl-1", title: "Call cl-1", at: w.now - 2 * H, summary: "We agreed the grader ships (cl-1).", action_items: ["Ana ships the grader (cl-1)"] }]);
@@ -482,6 +491,67 @@ describe("what the model is told about sessions and calls", () => {
     expect(prompts[0]).toContain("# Calls they were in since the last pass\n## Call cl-1 · \"Call cl-1\"");
     expect(prompts[0]).toContain("- Ana ships the grader (cl-1)");
     expect(prompts[0]).not.toContain("cl-2");
+  });
+
+  test("only calls the whole team may read: not a private huddle, not a people room, a recording only once shared", async () => {
+    const { w, call } = await callWorld();
+    const people = `dm:${[String(w.ana), String(w.ben)].sort().join(":")}`;
+    const rec = (n: number) => `rec:9f8e7d6c-1234-4abc-9def-0123456789a${n}`;
+    await call("cl-open", w.ana, w.now - 2 * H);
+    await call("cl-priv", w.ana, w.now - 2 * H, { private: true });
+    await call("cl-dm", w.ana, w.now - 2 * H, { room_key: people });
+    await call("cl-rec", w.ana, w.now - 2 * H, { room_key: rec(1), started_by: w.ana });
+    await call("cl-recsh", w.ana, w.now - 2 * H, { room_key: rec(2), started_by: w.ana, rec_shared: true });
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    expect(input.calls.map((c: any) => c.id).sort()).toEqual(["cl-open", "cl-recsh"]);
+  });
+
+  test("a call alone is enough for a pass", async () => {
+    const { w, call } = await callWorld();
+    await call("cl-only", w.ana, w.now - 2 * H);
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(prompts[0]).toContain("## Call cl-only ");
+  });
+
+  test("in a chunked first pass each call reaches exactly one prompt, the one whose window holds it", async () => {
+    const { w, call } = await callWorld();
+    const N = 70;
+    const at = (i: number) => w.now - 10 * DAY + i * 60 * 60_000;
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < N; i++) {
+        const short_id = `jx7c${String(i).padStart(3, "0")}`;
+        const conv = await ctx.db.insert("conversations", {
+          user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full", agent_type: "claude_code", session_id: short_id, short_id,
+          title: `Chunk ${short_id}`, first_prompt: "p".repeat(1_500), idle_summary: "s".repeat(600), started_at: 1, updated_at: 1, message_count: 3, status: "active",
+        } as any);
+        for (let j = 0; j < 7; j++) {
+          const timestamp = at(i) - (7 - j) * 1_000;
+          const message = await ctx.db.insert("messages", { conversation_id: conv, role: "user", content: "x", timestamp } as any);
+          await ctx.db.insert("user_sends", { user_id: w.ana, conversation_id: conv, message_id: message, timestamp, words: 100, text: `${short_id} ${"t".repeat(590)}`, clipped: false } as any);
+        }
+      }
+    });
+    const calls = [5, 35, 65].map((i) => `cl-at${i}`);
+    for (const [k, i] of [5, 35, 65].entries()) await call(calls[k], w.ana, at(i) + 30_000);
+    let r = await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    for (let guard = 0; r.chained && guard < 6; guard++) {
+      const jobs = (await w.t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).filter((j: any) => j.name.includes("runPass"));
+      r = await w.t.action(pass.runPass, jobs[jobs.length - 1].args[0]);
+    }
+    expect(prompts.length).toBeGreaterThan(1);
+    for (const id of calls) expect(prompts.filter((p) => p.includes(`## Call ${id} `))).toHaveLength(1);
+  });
+
+  test("a calibration replay shows each call once, in the chunk whose window holds it", async () => {
+    const { w, call } = await callWorld();
+    await w.send(w.ana, w.oldConv, w.now - 3 * DAY, "first");
+    await w.send(w.ana, w.teamConv, w.now - 2 * DAY, "second");
+    await call("cl-early", w.ana, w.now - 2.5 * DAY);
+    await call("cl-late", w.ana, w.now - DAY);
+    await w.t.action(pass.evalPass, { user_id: w.ana, workspace: w.team, window_start: w.now - 3.5 * DAY, window_end: w.now, chunk: 1 });
+    expect(prompts).toHaveLength(2);
+    expect(prompts.map((p) => ["cl-early", "cl-late"].filter((id) => p.includes(`## Call ${id} `)))).toEqual([["cl-early"], ["cl-late"]]);
   });
 });
 
@@ -511,6 +581,22 @@ describe("session counts", () => {
     // Unmapping a session counts down.
     await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: Date.now() + 1, from_cursor: 1, cursor_at: 1, model: "m", plan: { creates: [], updates: [], merges: [], sessions: [], unmap: ["jx7old"], notes: [] } });
     expect((await w.t.run((ctx) => ctx.db.get(a._id)))?.session_count).toBe(1);
+  });
+
+  test("a count that drifted is counted again when a pass touches the priority, and deleting a mapped session counts it down", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [a] = await w.priorities();
+    await w.t.run((ctx) => ctx.db.patch(a._id, { session_count: 9 }));
+    await w.t.run((ctx) => ctx.db.patch(w.oldConv, { priority_id: a._id }));
+    // The pass moves one session off it: the count is read from the index, not 9 − 1.
+    await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: Date.now() + 1, from_cursor: 1, cursor_at: 1, model: "m", plan: { creates: [], updates: [], merges: [], sessions: [], unmap: ["jx7old"], notes: [] } });
+    expect(await w.t.run((ctx) => ctx.db.get(a._id))).toMatchObject({ session_count: 1 });
+
+    await w.t.mutation(internal.sessionDelete.adminDeleteSession, { conversation_id: w.teamConv });
+    expect((await w.t.run((ctx) => ctx.db.get(a._id)))?.session_count).toBe(0);
   });
 });
 

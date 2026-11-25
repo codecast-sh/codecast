@@ -117,7 +117,8 @@ describe("reads", () => {
     expect(first).toMatchObject({ session_count: 50, session_count_more: true });
     expect(first.sessions.map((s: any) => s.short_id)).toEqual(["jx7mor49", "jx7mor48", "jx7mor47"]);
     const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
-    expect(shown).toMatchObject({ session_count: 52, session_count_more: false });
+    // show reads every session but counts as the list does, so the two agree.
+    expect(shown).toMatchObject({ session_count: 50, session_count_more: true });
     expect(shown.other_sessions).toHaveLength(50);
     const ids = async (args: any) => (await as(ada).query(pri.list, { workspace: ws, ...args })).map((r: any) => r.short_id);
     expect(await ids({})).not.toContain("pri-7");
@@ -125,12 +126,17 @@ describe("reads", () => {
     expect(await ids({ status: "done" })).toEqual(["pri-4", "pri-7"]);
   });
 
-  test("a list takes the pass's stored session count and reads only four sessions", async () => {
-    const { t, as, ada, ws, p1 } = await world();
+  test("the owner reads the pass's stored session count; a teammate, the sessions they can open; list and show agree", async () => {
+    const { t, as, ada, bea, ws, p1 } = await world();
     await t.run(async (ctx) => ctx.db.patch(p1, { session_count: 120 }));
-    const [first] = await as(ada).query(pri.list, { workspace: ws });
-    expect(first).toMatchObject({ session_count: 120, session_count_more: false });
-    expect(first.sessions.map((s: any) => s.short_id)).toEqual(["jx7pvt3", "jx7one1"]);
+    const counts = async (who: Id<"users">) => {
+      const [row] = await as(who).query(pri.list, { workspace: ws });
+      const shown = await as(who).query(pri.show, { short_id: "pri-1" });
+      return [row.session_count, shown.session_count, row.sessions.map((s: any) => s.short_id)];
+    };
+    expect(await counts(ada)).toEqual([120, 120, ["jx7pvt3", "jx7one1"]]);
+    // Bea cannot open Ada's private session: she counts the one she can.
+    expect(await counts(bea)).toEqual([1, 1, ["jx7one1"]]);
   });
 
   test("show groups the mapped sessions under their steps", async () => {
@@ -155,30 +161,52 @@ describe("reads", () => {
     expect(Object.keys(res.sessions)).toEqual(["jx7one1"]);
     expect(res.sessions.jx7one1).toHaveLength(15);
     expect(sum(res.sessions.jx7one1)).toBe(2);
-    expect(res.truncated).toBeUndefined();
+    expect(res.lanes.some((l: any) => l.truncated)).toBe(false);
   });
 
-  test("history: a teammate's priority counts its owner's typing while they share activity, and is hidden below that", async () => {
+  const membershipOf = (t: any, user: Id<"users">, team: Id<"teams">) =>
+    t.run(async (ctx: any) => (await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", user)).collect()).find((m: any) => m.team_id === team)!._id);
+
+  test("a teammate reads another's priorities only while the owner lists their sessions to the team", async () => {
+    const { t, as, ada, bea, acme, c1 } = await world();
+    const membership = await membershipOf(t, ada, acme);
+    const seen = async () => ({
+      list: (await as(bea).query(pri.list, {})).map((r: any) => r.short_id),
+      show: (await as(bea).query(pri.show, { short_id: "pri-1" }))?.short_id ?? null,
+      pin: (await as(bea).query(pri.pinLine, { conversation_id: c1 }))?.short_id ?? null,
+      history: (await as(bea).query(pri.history, {})).lanes.map((l: any) => l.key),
+    });
+    expect(await seen()).toEqual({ list: ["pri-1", "pri-2", "pri-3", "pri-4"], show: "pri-1", pin: "pri-1", history: ["pri-1"] });
+    await t.run(async (ctx) => ctx.db.patch(membership, { visibility: "summary" }));
+    expect((await seen()).show).toBe("pri-1");
+    // Sharing only activity, or nothing, lists no session, so no priority either.
+    for (const visibility of ["activity", "hidden"] as const) {
+      await t.run(async (ctx) => ctx.db.patch(membership, { visibility }));
+      expect(await seen()).toEqual({ list: [], show: null, pin: null, history: [] });
+    }
+    // The legacy account-wide setting hides them too.
+    await t.run(async (ctx) => { await ctx.db.patch(membership, { visibility: "full" }); await ctx.db.patch(ada, { activity_visibility: "hidden" } as any); });
+    expect(await seen()).toEqual({ list: [], show: null, pin: null, history: [] });
+    // The owner always reads their own.
+    expect((await as(ada).query(pri.list, { workspace: `team:${acme}` })).map((r: any) => r.short_id)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4"]);
+  });
+
+  test("history: a teammate's lane counts the owner's typing, each message only if they shared activity when they typed it", async () => {
     const { t, as, ada, bea, acme } = await world();
     // Bea typed 3 times in Ada's session; Ada's lane shows Ada's 2, never Bea's.
     const theirs = await as(bea).query(pri.history, { days: 15 });
-    expect(theirs.lanes.map((l: any) => [l.key, l.total, l.counts_hidden])).toEqual([["pri-1", 2, undefined]]);
+    expect(theirs.lanes.map((l: any) => [l.key, l.total, l.owner])).toEqual([["pri-1", 2, "Ada"]]);
     expect(Object.keys(theirs.sessions)).toEqual(["jx7one1"]);
-
-    const membership = await t.run(async (ctx) => (await ctx.db.query("team_memberships").withIndex("by_user_id", (q) => q.eq("user_id", ada)).collect()).find((m) => m.team_id === acme)!._id);
-    await t.run(async (ctx) => ctx.db.patch(membership, { visibility: "activity" } as any));
-    expect((await as(bea).query(pri.history, { days: 15 })).lanes.find((l: any) => l.key === "pri-1").total).toBe(2);
-
-    await t.run(async (ctx) => ctx.db.patch(membership, { visibility: "hidden" } as any));
-    const hidden = await as(bea).query(pri.history, { days: 15 });
-    const lane = hidden.lanes.find((l: any) => l.key === "pri-1");
-    expect(lane).toMatchObject({ total: 0, counts_hidden: true });
-    expect(lane.counts.every((n: number) => n === 0)).toBe(true);
-    expect(hidden.sessions).toEqual({});
+    // Ada was hidden until an hour ago: her message from a day ago is not counted.
+    const membership = await membershipOf(t, ada, acme);
+    await t.run(async (ctx) => ctx.db.patch(membership, { visibility: "full", visibility_history: [{ before: NOW - 3_600_000, visibility: "hidden" }] } as any));
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes.map((l: any) => [l.key, l.total])).toEqual([["pri-1", 1]]);
+    // Ada's own view is unchanged.
+    expect((await as(ada).query(pri.history, { days: 15 })).lanes.find((l: any) => l.key === "pri-1").total).toBe(2);
   });
 
-  test("history stops at HISTORY_SENDS_CAP sends and says it was truncated", async () => {
-    const { t, as, ada, acme, c2 } = await world();
+  test("history caps each person's read separately and marks only their lanes truncated", async () => {
+    const { t, as, ada, bea, acme, c2 } = await world();
     await t.run(async (ctx) => {
       const message = await ctx.db.insert("messages", { conversation_id: c2, role: "user", content: "x", timestamp: NOW } as any);
       for (let i = 0; i < HISTORY_SENDS_CAP; i++) {
@@ -186,10 +214,11 @@ describe("reads", () => {
       }
     });
     const res = await as(ada).query(pri.history, { days: 15 });
-    expect(res.truncated).toBe(true);
     // Newest first: the 3,000 just typed, none of the older ones.
-    expect(res.lanes.find((l: any) => l.key === "unassigned").total).toBe(HISTORY_SENDS_CAP);
-    expect(res.lanes.find((l: any) => l.key === "pri-1")).toBeUndefined();
+    expect(res.lanes.map((l: any) => [l.key, l.total, l.truncated])).toEqual([["unassigned", HISTORY_SENDS_CAP, true]]);
+    // Bea's own read is not cut by Ada's: her lanes for Ada's priorities say Ada's read was.
+    const theirs = await as(bea).query(pri.history, { days: 15 });
+    expect(theirs.lanes.map((l: any) => [l.key, l.total, l.truncated])).toEqual([["pri-1", 0, true], ["pri-2", 0, true], ["pri-3", 0, true], ["pri-4", 0, true]]);
   });
 
   test("the pin line names the priority, its critical path and the session's step; null where the viewer cannot see the priority", async () => {

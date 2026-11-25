@@ -28,6 +28,17 @@ describe("HistoryStrip", () => {
     expect(renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} muted />)).toContain("var(--sol-text-muted) 100%");
   });
 
+  test("a hidden lane shades nothing; a truncated one marks its oldest cell and says so on hover", () => {
+    const counts = DAYS.map(() => 5);
+    const hidden = renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} hidden />);
+    expect(hidden).toContain('title="Activity hidden"');
+    expect(hidden).not.toContain("--sol-green");
+    const cut = renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} truncated />);
+    expect(cut).toContain('title="Older activity not counted"');
+    expect(cut.match(/outline-dashed/g)?.length).toBe(1);
+    expect(renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} />)).not.toContain("outline-dashed");
+  });
+
   test("a priority with no typing draws empty cells; shared levels compare strips", () => {
     expect(renderToStaticMarkup(<HistoryStrip days={DAYS} counts={undefined} />)).not.toContain("--sol-green");
     const levels = stripLevels([[0, 40], [1, 1]]);

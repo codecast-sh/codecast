@@ -55,6 +55,8 @@ export const priorityTables = {
     pass_at: v.number(),
     /** How many sessions it holds (conversations.priority_id), kept by the pass as it maps them. */
     session_count: v.optional(v.number()),
+    /** The count passed SESSION_COUNT_CAP: it is kept by the moves, not counted. */
+    session_count_capped: v.optional(v.boolean()),
     created_at: v.number(),
     updated_at: v.number(),
   })

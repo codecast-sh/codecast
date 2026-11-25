@@ -71,14 +71,24 @@ export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): strin
   return out;
 }
 
+/**
+ * One line per lane: id, title, its owner (a teammate's lane), a sparkline and
+ * the total typed. A hidden lane says so instead of a count, and a lane whose
+ * read was cut marks its total with "+".
+ */
 export function formatHistory(res: PriorityHistory): string[] {
   if (!res.lanes.length) return [`Nothing typed in the last ${res.days.length} days.`];
   const keyWidth = Math.max(0, ...res.lanes.map((l) => (l.key === "unassigned" ? 0 : l.key.length)));
   const titleWidth = Math.min(40, Math.max(0, ...res.lanes.map((l) => l.title.length)));
-  const head = `${"".padEnd(keyWidth)}  ${"".padEnd(titleWidth)}  ${res.days[0]?.slice(5) ?? ""} → ${res.days.at(-1)?.slice(5) ?? ""}`;
+  const ownerWidth = Math.max(0, ...res.lanes.map((l) => l.owner?.length ?? 0));
+  const ownerCol = (owner: string | undefined) => (ownerWidth ? `  ${(owner ?? "").padEnd(ownerWidth)}` : "");
+  const head = `${"".padEnd(keyWidth)}  ${"".padEnd(titleWidth)}${ownerCol(undefined)}  ${res.days[0]?.slice(5) ?? ""} → ${res.days.at(-1)?.slice(5) ?? ""}`;
   return [
     head,
-    ...res.lanes.map((l) => `${(l.key === "unassigned" ? "" : l.key).padEnd(keyWidth)}  ${clip(l.title, titleWidth).padEnd(titleWidth)}  ${sparkline(l.counts).padEnd(res.days.length)}  ${l.total} typed`),
+    ...res.lanes.map((l) => {
+      const tail = l.counts_hidden ? `${"".padEnd(res.days.length)}  hidden` : `${sparkline(l.counts).padEnd(res.days.length)}  ${l.total}${l.truncated ? "+" : ""} typed`;
+      return `${(l.key === "unassigned" ? "" : l.key).padEnd(keyWidth)}  ${clip(l.title, titleWidth).padEnd(titleWidth)}${ownerCol(l.owner)}  ${tail}`;
+    }),
   ];
 }
 
@@ -166,7 +176,7 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
 
   pri
     .command("history")
-    .description("What you typed per day, per priority, over the last days")
+    .description("Typing per day on each priority you can see, its owner's, and on your sessions no priority holds")
     .option("--days <n>", "How many days (up to 30)", "15")
     .option("--team <name|id|personal>", TEAM_HELP)
     .option("--json", "As JSON")

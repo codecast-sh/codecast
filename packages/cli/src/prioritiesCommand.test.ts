@@ -72,6 +72,19 @@ describe("output", () => {
     expect(formatHistory({ days: ["2026-11-24"], lanes: [] })).toEqual(["Nothing typed in the last 1 days."]);
   });
 
+  test("history: a teammate's lane names its owner, a hidden lane says hidden, a cut read marks its total", () => {
+    expect(formatHistory({ days: ["2026-11-23", "2026-11-24"], lanes: [
+      { key: "pri-1", short_id: "pri-1", title: "Trusted evals", status: "active", counts: [3, 1], total: 4, truncated: true },
+      { key: "pri-9", short_id: "pri-9", title: "Eval loop", status: "active", counts: [0, 2], total: 2, owner: "Bea" },
+      { key: "pri-8", short_id: "pri-8", title: "Hidden", status: "active", counts: [0, 0], total: 0, owner: "Cy", counts_hidden: true },
+    ] })).toEqual([
+      "                           11-23 → 11-24",
+      "pri-1  Trusted evals       █▃  4+ typed",
+      "pri-9  Eval loop      Bea  ▁█  2 typed",
+      "pri-8  Hidden         Cy       hidden",
+    ]);
+  });
+
   test("ids: pri-N in any case, or a bare number", () => {
     expect(priorityId("PRI-3")).toBe("pri-3");
     expect(priorityId("3")).toBe("pri-3");

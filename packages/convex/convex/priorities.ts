@@ -1,9 +1,10 @@
 // Priorities (shared/contracts/priorities.ts): the reads behind /priorities,
 // the pin line and `cast priorities`, and the person's own controls over them.
 //
-// Access is the work-item rule: a priority is readable by its owner and by
-// whoever holds its `workspace` key, and nothing is readable, writable or run
-// while the `priorities` feature is off for that workspace. Only the owner
+// Access follows the workspace's sharing settings: a priority is readable by
+// its owner, and by a teammate holding its `workspace` key only while the owner
+// lists their sessions to that team (privacy.listsSessionsToTeam); nothing is
+// readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority, and every change marks its field set by the person, so
 // the pass (lib/priorityPass.ts) never overrides it.
 
@@ -17,7 +18,7 @@ import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } fro
 import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
 import { runBlocker } from "./priorityPassRun";
-import { getOwnerMembership, teamReadLevelSync } from "./privacy";
+import { getOwnerMembership, listsSessionsToTeam, teamReadLevelSync } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
 import type {
@@ -33,7 +34,7 @@ const LIST_COUNT_CAP = 50;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
 const MAX_HISTORY_DAYS = 30;
-/** The most typed messages one history reads (newest first, across the people it covers), and the most sessions. */
+/** The most typed messages, and the most sessions, one history reads per person it covers (newest first). */
 export const HISTORY_SENDS_CAP = 3_000;
 export const HISTORY_CONVERSATION_CAP = 500;
 /** Without --all or a status, a list leaves out what finished or went quiet longer ago than this. */
@@ -62,11 +63,34 @@ function featureCheck(ctx: Ctx): (key: string) => Promise<boolean> {
   };
 }
 
-/** May the viewer read this priority: owner or key holder, and the feature on where it lives. */
-async function canSee(ctx: Ctx, viewer: Id<"users">, p: Priority, held?: Set<string>, featureOn = featureCheck(ctx)): Promise<boolean> {
-  const mine = String(p.user_id) === String(viewer);
-  if (!mine && !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held ?? (await heldKeysFor(ctx, viewer)))) return false;
-  return featureOn(p.workspace);
+type Judge = (p: Priority) => Promise<boolean>;
+
+/**
+ * May the viewer read a priority: their own; a teammate's only while its
+ * owner, still on the team its workspace names, lists their sessions to that
+ * team (privacy.listsSessionsToTeam, the team session list's rule); and only
+ * with the feature on there. Each owner's account and membership are read once
+ * per judge.
+ */
+function priorityJudge(ctx: Ctx, viewer: Id<"users">, held: Set<string>): Judge {
+  const featureOn = featureCheck(ctx);
+  const shares = new Map<string, Promise<boolean>>();
+  return async (p) => {
+    if (String(p.user_id) !== String(viewer)) {
+      if (!authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
+      const ws = parseWorkspaceKey(p.workspace);
+      if (ws?.type !== "team") return false;
+      const key = `${p.user_id}|${ws.teamId}`;
+      if (!shares.has(key)) {
+        shares.set(key, (async () => {
+          const membership = await getOwnerMembership(ctx, p.user_id, ws.teamId);
+          return !!membership && listsSessionsToTeam(await ctx.db.get(p.user_id), currentMembershipVisibility(membership));
+        })());
+      }
+      if (!(await shares.get(key))) return false;
+    }
+    return featureOn(p.workspace);
+  };
 }
 
 /** The workspace a CLI call names: a team, the personal one, or none (every workspace). */
@@ -129,38 +153,36 @@ function sessionAccess(ctx: Ctx, viewer: Id<"users">, held: Set<string>): (c: Do
   };
 }
 
-/** `count` is the pass's stored count of the priority's sessions, when it has one. */
-type SessionsRead = { sessions: PrioritySession[]; more: boolean; count?: number };
+/** Mapped sessions, newest started first (by_priority); null where the viewer cannot open one. */
+type Mapped = Array<PrioritySession | null>;
 
-/**
- * Of the newest `read` sessions mapped to a priority (by_priority, newest
- * started first; cap + 1 by default), those among the first `cap` the viewer
- * can open, and whether more than `cap` were mapped.
- */
-async function sessionsOf(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>, cap: number, read = cap + 1): Promise<SessionsRead> {
+async function mappedSessions(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>, read: number): Promise<Mapped> {
   const convs: Doc<"conversations">[] = await ctx.db
     .query("conversations")
     .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
     .order("desc")
     .take(read);
-  const sessions: PrioritySession[] = [];
-  for (const c of convs.slice(0, cap)) {
-    if (await canOpen(c)) sessions.push({ short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at });
+  const out: Mapped = [];
+  for (const c of convs) {
+    out.push((await canOpen(c)) ? { short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at } : null);
   }
-  return { sessions, more: convs.length > cap };
+  return out;
 }
 
+/** The owner reads the pass's stored count, so a list reads only four sessions; anyone else counts what they can open. */
+const usesStoredCount = (viewer: Id<"users">, p: Priority) => String(p.user_id) === String(viewer) && p.session_count !== undefined;
+
+/** How many of the newest sessions a list reads: enough for its three, or to count up to LIST_COUNT_CAP. */
+const listRead = (viewer: Id<"users">, p: Priority) => (usesStoredCount(viewer, p) ? LIST_SESSIONS + 1 : LIST_COUNT_CAP + 1);
+
 /**
- * A list row's sessions: the three newest the viewer can open, and the count.
- * The count is the pass's stored one when the priority has it (then only four
- * sessions are read), else counted over the newest LIST_COUNT_CAP.
+ * The session count a reader sees, the same in a list and in `show`: the
+ * owner, the pass's stored count; anyone else (or before the pass stored one),
+ * the sessions they can open among the newest LIST_COUNT_CAP, "50+" past that.
  */
-async function listSessions(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>): Promise<SessionsRead> {
-  const stored = p.session_count;
-  if (stored === undefined) return sessionsOf(ctx, p, canOpen, LIST_COUNT_CAP);
-  // One spare, so a session the viewer cannot open still leaves three.
-  const read = await sessionsOf(ctx, p, canOpen, LIST_SESSIONS + 1, LIST_SESSIONS + 1);
-  return { sessions: read.sessions.slice(0, LIST_SESSIONS), more: false, count: stored };
+function sessionCount(viewer: Id<"users">, p: Priority, mapped: Mapped): { count: number; more: boolean } {
+  if (usesStoredCount(viewer, p)) return { count: p.session_count!, more: false };
+  return { count: mapped.slice(0, LIST_COUNT_CAP).filter(Boolean).length, more: mapped.length > LIST_COUNT_CAP };
 }
 
 async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, string>> {
@@ -173,7 +195,8 @@ async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, strin
 }
 
 /** `position` is where it shows among the owner's active priorities (null when not active); the row lists at most `limit` sessions. */
-function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, read: SessionsRead, limit = Infinity): PriorityRow {
+function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, mapped: Mapped, limit = Infinity): PriorityRow {
+  const { count, more } = sessionCount(viewer, p, mapped);
   return {
     _id: p._id,
     short_id: p.short_id,
@@ -192,9 +215,9 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     first_seen_at: p.first_seen_at,
     last_active_at: p.last_active_at,
     done_at: p.done_at ?? null,
-    session_count: read.count ?? read.sessions.length,
-    session_count_more: read.more,
-    sessions: read.sessions.slice(0, limit),
+    session_count: count,
+    session_count_more: more,
+    sessions: mapped.filter((c): c is PrioritySession => c !== null).slice(0, limit),
   };
 }
 
@@ -202,8 +225,8 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
 async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promise<PriorityRow> {
   const p: Priority = await ctx.db.get(id);
   const names = await ownerNames(ctx, [p]);
-  const read = await listSessions(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)));
-  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), read, LIST_SESSIONS);
+  const mapped = await mappedSessions(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)), listRead(viewer, p));
+  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), mapped, LIST_SESSIONS);
 }
 
 /**
@@ -215,6 +238,7 @@ async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, held: Set<string
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
   const recent = (r: Priority) => all || (r.status !== "done" && r.status !== "quiet") || (r.done_at ?? r.last_active_at) >= since;
   const featureOn = featureCheck(ctx);
+  const canRead = priorityJudge(ctx, viewer, held);
   const keys = workspace ? (held.has(workspace) ? [workspace] : []) : [...held];
   const out: Priority[] = [];
   for (const key of keys) {
@@ -223,7 +247,7 @@ async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, held: Set<string
       .query("priorities")
       .withIndex("by_workspace_status", (q: any) => (status ? q.eq("workspace", key).eq("status", status) : q.eq("workspace", key)))
       .collect();
-    for (const r of rows) if (status || (r.status !== "merged" && recent(r))) out.push(r);
+    for (const r of rows) if ((status || (r.status !== "merged" && recent(r))) && (await canRead(r))) out.push(r);
   }
   return out;
 }
@@ -249,7 +273,7 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || b.last_active_at - a.last_active_at);
   const canOpen = sessionAccess(ctx, viewer, held);
   const out: PriorityRow[] = [];
-  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await listSessions(ctx, p, canOpen), LIST_SESSIONS));
+  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await mappedSessions(ctx, p, canOpen, listRead(viewer, p)), LIST_SESSIONS));
   return out;
 }
 
@@ -261,9 +285,8 @@ async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
 async function readable(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Result<Priority>> {
   const p = await byShortId(ctx, shortId);
   if (!p || p.status === "merged") return { error: `no priority ${shortId} you can see` };
-  const mine = String(p.user_id) === String(viewer);
-  if (!mine && !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), await heldKeysFor(ctx, viewer))) return { error: `no priority ${shortId} you can see` };
   if (!(await featureCheck(ctx)(p.workspace))) return { error: teamFeatureOffMessage(FEATURE) };
+  if (!(await priorityJudge(ctx, viewer, await heldKeysFor(ctx, viewer))(p))) return { error: `no priority ${shortId} you can see` };
   return p;
 }
 
@@ -271,9 +294,9 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
   const p = await readable(ctx, viewer, shortId);
   if ("error" in p) return p;
   const names = await ownerNames(ctx, [p]);
-  const read = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)), SHOW_SESSIONS);
-  const { sessions } = read;
-  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), read);
+  const mapped = await mappedSessions(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)), SHOW_SESSIONS);
+  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), mapped);
+  const sessions = row.sessions;
   return {
     ...row,
     steps: p.steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
@@ -282,14 +305,15 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
 }
 
 /**
- * Typed messages per local day: one lane per priority and one ("unassigned")
- * for the viewer's sessions no priority holds. A lane counts its owner's
- * typing: the viewer's own for their priorities, and a teammate's for theirs
- * when that teammate shares at least their activity with the team (otherwise
- * the lane comes back empty, `counts_hidden`). Option picks on a decision card
- * are not typing. `sessions` splits the same counts by session, for sessions
- * the viewer can open. Reads stop at HISTORY_SENDS_CAP sends and
- * HISTORY_CONVERSATION_CAP sessions, newest first, and say `truncated`.
+ * Typed messages per local day: one lane per priority the viewer can read and
+ * one ("unassigned") for the viewer's sessions no priority holds. A lane counts
+ * its owner's typing: the viewer's own for their priorities; a teammate's for
+ * theirs, each message only if the teammate shared at least their activity
+ * with that team when they typed it (effectiveMembershipVisibility). Option
+ * picks on a decision card are not typing. `sessions` splits the same counts
+ * by session, for sessions the viewer can open. Each person's reads stop at
+ * HISTORY_SENDS_CAP messages and HISTORY_CONVERSATION_CAP sessions, newest
+ * first, and their lanes then say `truncated`.
  */
 async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; workspace?: string; tz_offset_minutes?: number }): Promise<PriorityHistory> {
   const days = Math.min(MAX_HISTORY_DAYS, Math.max(1, Math.floor(args.days ?? 15)));
@@ -301,50 +325,51 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
   const held = await heldKeysFor(ctx, viewer);
   const featureOn = featureCheck(ctx);
   const canOpen = sessionAccess(ctx, viewer, held);
-  let truncated = false;
-  let sendsLeft = HISTORY_SENDS_CAP;
-  const readSends = async (user: Id<"users">): Promise<Doc<"user_sends">[]> => {
-    if (sendsLeft <= 0) { truncated = true; return []; }
+  const convs = new Map<string, Promise<Doc<"conversations"> | null>>();
+  const opens = new Map<string, Promise<boolean>>();
+  const sessions: Record<string, number[]> = {};
+  const lanes = new Map<string, { p: Priority | null; owner: string | null; counts: number[]; truncated: boolean }>();
+  const laneFor = (key: string, p: Priority | null, owner: string | null) => {
+    if (!lanes.has(key)) lanes.set(key, { p, owner, counts: new Array(days).fill(0), truncated: false });
+    return lanes.get(key)!;
+  };
+
+  /** One person's typed messages in the window, newest first, each with its session, within that person's caps. */
+  const typedBy = async (user: Id<"users">) => {
     const rows: Doc<"user_sends">[] = await ctx.db
       .query("user_sends")
       .withIndex("by_user_timestamp", (q: any) => q.eq("user_id", user).gte("timestamp", firstLocal + shift))
       .order("desc")
-      .take(sendsLeft);
-    if (rows.length === sendsLeft) truncated = true;
-    sendsLeft -= rows.length;
-    return rows;
-  };
-  const convs = new Map<string, Promise<Doc<"conversations"> | null>>();
-  const convOf = (id: Id<"conversations">) => {
-    const key = String(id);
-    if (!convs.has(key)) {
-      if (convs.size >= HISTORY_CONVERSATION_CAP) { truncated = true; return Promise.resolve(null); }
-      convs.set(key, ctx.db.get(id));
+      .take(HISTORY_SENDS_CAP);
+    let truncated = rows.length === HISTORY_SENDS_CAP;
+    const read = new Set<string>();
+    const out: Array<{ send: Doc<"user_sends">; day: number; conv: Doc<"conversations"> }> = [];
+    for (const send of rows) {
+      const day = dayOf(send.timestamp);
+      if (send.decision?.picked || day < 0 || day >= days) continue;
+      const cid = String(send.conversation_id);
+      if (!read.has(cid)) {
+        if (read.size >= HISTORY_CONVERSATION_CAP) { truncated = true; continue; }
+        read.add(cid);
+      }
+      if (!convs.has(cid)) convs.set(cid, ctx.db.get(send.conversation_id));
+      const conv = await convs.get(cid);
+      if (conv) out.push({ send, day, conv });
     }
-    return convs.get(key)!;
+    return { typed: out, truncated };
   };
-  const opens = new Map<string, Promise<boolean>>();
-  const sessions: Record<string, number[]> = {};
-  const lanes = new Map<string, { p: Priority | null; counts: number[]; hidden: boolean }>();
-  const laneFor = (key: string, p: Priority | null) => {
-    if (!lanes.has(key)) lanes.set(key, { p, counts: new Array(days).fill(0), hidden: false });
-    return lanes.get(key)!;
-  };
-  /** One send into a priority's lane, and into its session's row when the viewer can open the session. */
-  const countInto = async (p: Priority, conv: Doc<"conversations">, i: number) => {
-    laneFor(p.short_id, p).counts[i]++;
+  /** One message into a priority's lane, and into its session's row when the viewer can open the session. */
+  const countInto = async (p: Priority, owner: string | null, conv: Doc<"conversations">, day: number) => {
+    laneFor(p.short_id, p, owner).counts[day]++;
     const cid = String(conv._id);
     if (!opens.has(cid)) opens.set(cid, canOpen(conv));
-    if (await opens.get(cid)) (sessions[conv.short_id ?? cid] ??= new Array(days).fill(0))[i]++;
+    if (await opens.get(cid)) (sessions[conv.short_id ?? cid] ??= new Array(days).fill(0))[day]++;
   };
 
   // The viewer's own typing: their priorities' lanes, and unassigned.
+  const mine = await typedBy(viewer);
   const prios = new Map<string, Promise<Priority | null>>();
-  for (const s of await readSends(viewer)) {
-    const i = dayOf(s.timestamp);
-    if (s.decision?.picked || i < 0 || i >= days) continue;
-    const conv = await convOf(s.conversation_id);
-    if (!conv) continue;
+  for (const { send, day, conv } of mine.typed) {
     if (conv.priority_id) {
       const pid = String(conv.priority_id);
       if (!prios.has(pid)) {
@@ -355,55 +380,60 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
         })());
       }
       const p = await prios.get(pid);
-      if (p) await countInto(p, conv, i);
+      if (p) await countInto(p, null, conv, day);
       continue;
     }
-    const key = s.team_id ? `team:${s.team_id}` : `user:${viewer}`;
+    const key = send.team_id ? `team:${send.team_id}` : `user:${viewer}`;
     if (args.workspace && key !== args.workspace) continue;
     if (!(await featureOn(key))) continue;
-    laneFor("unassigned", null).counts[i]++;
+    laneFor("unassigned", null, null).counts[day]++;
   }
+  if (mine.truncated) for (const lane of lanes.values()) lane.truncated = true;
 
-  // Teammates' priorities: each owner's own typing, where they share activity with that team.
+  // Teammates' priorities they let the viewer read: each owner's own typing,
+  // a message counted only if they shared activity with that team when they typed it.
   const theirs = (await visiblePriorities(ctx, viewer, held, args.workspace, undefined, false)).filter((p) => String(p.user_id) !== String(viewer));
   const byOwner = new Map<string, Priority[]>();
   for (const p of theirs) byOwner.set(String(p.user_id), [...(byOwner.get(String(p.user_id)) ?? []), p]);
-  for (const owned of byOwner.values()) {
-    const shown = new Map<string, Priority>();
-    for (const p of owned) {
+  const names = await ownerNames(ctx, theirs);
+  for (const [ownerId, owned] of byOwner) {
+    const owner = names.get(ownerId) ?? "";
+    const byId = new Map(owned.map((p) => [String(p._id), p]));
+    const memberships = new Map<string, Promise<any>>();
+    const membershipFor = (p: Priority) => {
       const ws = parseWorkspaceKey(p.workspace);
-      const membership = ws?.type === "team" ? await getOwnerMembership(ctx, p.user_id, ws.teamId) : null;
-      if (membership && TEAM_VISIBILITY_RANK[currentMembershipVisibility(membership)] >= TEAM_VISIBILITY_RANK.activity) shown.set(String(p._id), p);
-      else laneFor(p.short_id, p).hidden = true;
+      if (ws?.type !== "team") return Promise.resolve(null);
+      if (!memberships.has(ws.teamId)) memberships.set(ws.teamId, getOwnerMembership(ctx, p.user_id, ws.teamId));
+      return memberships.get(ws.teamId)!;
+    };
+    const typed = await typedBy(owned[0].user_id);
+    for (const { send, day, conv } of typed.typed) {
+      const p = conv.priority_id ? byId.get(String(conv.priority_id)) : undefined;
+      if (!p) continue;
+      const level = effectiveMembershipVisibility(await membershipFor(p), send.timestamp);
+      if (TEAM_VISIBILITY_RANK[level] >= TEAM_VISIBILITY_RANK.activity) await countInto(p, owner, conv, day);
     }
-    if (!shown.size) continue;
-    for (const s of await readSends(owned[0].user_id)) {
-      const i = dayOf(s.timestamp);
-      if (s.decision?.picked || i < 0 || i >= days) continue;
-      const conv = await convOf(s.conversation_id);
-      const p = conv?.priority_id ? shown.get(String(conv.priority_id)) : undefined;
-      if (conv && p) await countInto(p, conv, i);
-    }
+    if (typed.truncated) for (const p of owned) laneFor(p.short_id, p, owner).truncated = true;
   }
 
   const ordered = [...lanes.entries()].sort(([ka, a], [kb, b]) => {
     if (!a.p || !b.p) return a.p ? -1 : b.p ? 1 : 0;
-    const mine = (p: Priority) => (String(p.user_id) === String(viewer) ? 0 : 1);
-    return mine(a.p) - mine(b.p) || STATUS_ORDER[a.p.status] - STATUS_ORDER[b.p.status] || b.p.last_active_at - a.p.last_active_at || ka.localeCompare(kb);
+    const own = (p: Priority) => (String(p.user_id) === String(viewer) ? 0 : 1);
+    return own(a.p) - own(b.p) || STATUS_ORDER[a.p.status] - STATUS_ORDER[b.p.status] || b.p.last_active_at - a.p.last_active_at || ka.localeCompare(kb);
   });
   return {
     days: dayKeys,
-    lanes: ordered.map(([key, { p, counts, hidden }]): PriorityHistoryLane => ({
+    lanes: ordered.map(([key, { p, owner, counts, truncated }]): PriorityHistoryLane => ({
       key,
       short_id: p?.short_id ?? null,
       title: p?.title ?? "Unassigned",
       status: p?.status ?? null,
       counts,
       total: counts.reduce((a, b) => a + b, 0),
-      ...(hidden ? { counts_hidden: true } : {}),
+      ...(owner !== null ? { owner } : {}),
+      ...(truncated ? { truncated: true } : {}),
     })),
     sessions,
-    ...(truncated ? { truncated: true } : {}),
   };
 }
 
@@ -526,7 +556,7 @@ export const pinLine = query({
     if (!conv?.priority_id) return null;
     const p = await ctx.db.get(conv.priority_id);
     if (!p || p.status === "merged") return null;
-    if (!(await canAccessConversation(ctx, viewer, conv)) || !(await canSee(ctx, viewer, p))) return null;
+    if (!(await canAccessConversation(ctx, viewer, conv)) || !(await priorityJudge(ctx, viewer, await heldKeysFor(ctx, viewer))(p))) return null;
     const step = p.steps.find((s) => s.key === conv.priority_step_key);
     return {
       short_id: p.short_id,

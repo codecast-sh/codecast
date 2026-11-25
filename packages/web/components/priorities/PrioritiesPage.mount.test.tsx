@@ -123,6 +123,19 @@ test("dragging a row onto another ranks it there; a step across the line changes
   }
 }, 60_000);
 
+test("a teammate's open priority offers no new session on its empty steps", async () => {
+  answers["priorities:show"] = DETAIL;
+  const theirs = ROWS.map((r) => ({ ...r, mine: false, user_id: "teammate", owner: "Bea" }));
+  const page = await mount(<PrioritiesView rows={theirs as any} history={HISTORY as any} openId="pri-1" onToggleOpen={() => {}} writes={{} as any} />);
+  try {
+    const body = page.container.querySelector("[data-priority-body]")!;
+    expect(body.textContent).toContain("Judge dashboard");
+    expect([...body.querySelectorAll("a")].filter((a) => a.getAttribute("href")?.startsWith("/inbox?"))).toEqual([]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
 test("Move to ranks a priority from the row menu, without a drag", async () => {
   const calls: string[] = [];
   const writes = { rank: (id: string, n: number) => calls.push(`rank ${id} ${n}`), setStepTier: () => {}, setAside: () => {}, restore: () => {} };

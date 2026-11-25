@@ -13,6 +13,7 @@ export function HistoryStrip({
   levels,
   muted = false,
   hidden = false,
+  truncated = false,
   size = "row",
 }: {
   days: readonly string[];
@@ -22,6 +23,8 @@ export function HistoryStrip({
   muted?: boolean;
   /** The owner hid their activity: the days show, none shaded. */
   hidden?: boolean;
+  /** The read stopped at its cap: the oldest days may be short. Marked on the oldest cell, said in the tooltip. */
+  truncated?: boolean;
   /** row: a priority's row; step: a step's or a session's line, shorter. */
   size?: "row" | "step";
 }) {
@@ -32,15 +35,16 @@ export function HistoryStrip({
     <span
       data-history-strip
       data-hidden={hidden || undefined}
-      title={hidden ? "Activity hidden" : undefined}
+      data-truncated={truncated || undefined}
+      title={hidden ? "Activity hidden" : truncated ? "Older activity not counted" : undefined}
       className="grid gap-[3px]"
       style={{ gridTemplateColumns: `repeat(${Math.max(1, days.length)}, minmax(0, 1fr))` }}
     >
-      {cells.map((c) => (
+      {cells.map((c, i) => (
         <i
           key={c.day}
           title={hidden ? undefined : c.title}
-          className={size === "row" ? "block h-3.5 rounded-[3px]" : "block h-2 rounded-[2px]"}
+          className={`${size === "row" ? "block h-3.5 rounded-[3px]" : "block h-2 rounded-[2px]"}${truncated && i === 0 ? " outline-dashed outline-1 -outline-offset-1 outline-sol-text-dim/60" : ""}`}
           style={{ background: heatColor(c.count, cuts, colors) }}
         />
       ))}

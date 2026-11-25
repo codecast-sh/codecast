@@ -118,14 +118,16 @@ export type PriorityHistoryLane = {
   /** The priority owner's typing per day (the reader's own lanes: theirs). */
   counts: number[];
   total: number;
-  /** A teammate's priority whose owner shares less than their activity with the team: no counts. */
+  /** The owner's name, on a teammate's lane. */
+  owner?: string;
+  /** No counts to show for this lane (the API returns none such since teammates' priorities follow the session list's sharing rule). */
   counts_hidden?: boolean;
+  /** The owner's read stopped at its cap; the oldest days may be short. */
+  truncated?: boolean;
 };
 export type PriorityHistory = {
   days: string[];
   lanes: PriorityHistoryLane[];
   /** Per session short id, the same daily counts: only sessions a priority lane above holds, and the reader can open. */
   sessions?: Record<string, number[]>;
-  /** The read stopped at its cap; the oldest days may be short. */
-  truncated?: boolean;
 };

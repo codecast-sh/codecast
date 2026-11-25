@@ -24,7 +24,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { HistoryStrip } from "./HistoryStrip";
 import {
   mostActiveSessions, newSessionHref, ownerGroups, pastBadge, rankAtDrop, stepCounts, stepNeedsSession, stepSessions, stripLevels,
-  type HistoryLaneView, type OwnerGroup, type PriorityDetail, type PriorityHistory, type PriorityRow, type PriorityWrites,
+  type PriorityHistoryLane, type OwnerGroup, type PriorityDetail, type PriorityHistory, type PriorityRow, type PriorityWrites,
 } from "../../lib/priorities";
 
 const api = _api as any;
@@ -105,7 +105,7 @@ export function PrioritiesView({
   writes: PriorityWrites;
 }) {
   const groups = ownerGroups(rows);
-  const lanes = useMemo(() => new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l as HistoryLaneView])), [history]);
+  const lanes = useMemo(() => new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l as PriorityHistoryLane])), [history]);
   const levels = useMemo(() => stripLevels([...lanes.values()].filter((l) => !l.counts_hidden).map((l) => l.counts)), [lanes]);
   const days = history?.days ?? [];
   const showOwners = groups.length > 1 || (groups[0] && !groups[0].mine);
@@ -150,7 +150,7 @@ function DayHeader({ days }: { days: string[] }) {
 /** An owner's active priorities; the owner drags a row to give it that rank. */
 function ActiveList({ group, lanes, levels, history, openId, onToggleOpen, writes }: {
   group: OwnerGroup;
-  lanes: Map<string, HistoryLaneView>;
+  lanes: Map<string, PriorityHistoryLane>;
   levels: number[];
   history: PriorityHistory | undefined;
   openId: string | null;
@@ -211,7 +211,7 @@ function ActiveRow({ row, position, total, lane, days, levels, open, onToggle, w
   position: number;
   /** How many active priorities the owner has: the positions "Move to" offers. */
   total: number;
-  lane: HistoryLaneView | undefined;
+  lane: PriorityHistoryLane | undefined;
   days: string[];
   levels: number[];
   open: boolean;
@@ -232,7 +232,7 @@ function ActiveRow({ row, position, total, lane, days, levels, open, onToggle, w
       <span className="text-right text-ui tabular-nums text-sol-text-muted" title={`${row.counts.critical_done} of ${row.counts.critical_total} critical-path steps done`}>
         {row.counts.critical_done}/{row.counts.critical_total}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} levels={levels} /></span>}
+      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} truncated={lane?.truncated} levels={levels} /></span>}
       <RowMenu row={row} position={position} total={total} writes={writes} />
     </div>
   );
@@ -269,7 +269,7 @@ function RowMenu({ row, writes, position, total = 0 }: { row: PriorityRow; write
 
 function PastRow({ row, lane, days, levels, writes }: {
   row: PriorityRow;
-  lane: HistoryLaneView | undefined;
+  lane: PriorityHistoryLane | undefined;
   days: string[];
   levels: number[];
   writes: PriorityWrites;
@@ -295,7 +295,7 @@ function PastRow({ row, lane, days, levels, writes }: {
           ? <span className="inline-flex items-center rounded-full bg-sol-green px-2.5 py-0.5 text-meta font-semibold text-sol-bg">{pastBadge(row)}</span>
           : <span className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} levels={levels} muted={!won} /></span>}
+      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
       <RowMenu row={row} writes={writes} />
     </div>
   );
@@ -416,7 +416,7 @@ function StepLine({ row, step, history, detail, days, dragging, onDragStart, onD
           {sessions.slice(0, MAX_STEP_SESSIONS).map((s) => <EntityIdPill key={s.short_id} shortId={s.short_id} type="session" label={s.title || undefined} />)}
           {sessions.length > MAX_STEP_SESSIONS && <span className="text-meta text-sol-text-dim">+{sessions.length - MAX_STEP_SESSIONS}</span>}
           {code.map((c) => <EntityIdPill key={c.id} shortId={c.id} type={c.kind as "pr" | "commit"} certain />)}
-          {stepNeedsSession(step, sessions, detail) && (
+          {stepNeedsSession(row, step, sessions, detail) && (
             <Link
               href={newSessionHref(row, step)}
               className="inline-flex items-center gap-1 rounded-control border border-dashed border-sol-border px-1.5 py-px text-meta text-sol-blue hover:border-sol-blue/50"

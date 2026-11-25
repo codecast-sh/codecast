@@ -138,9 +138,11 @@ describe("steps", () => {
     expect(stepSessions(r, s, detail).map((x) => x.short_id)).toEqual(["jx9", "jx2"]);
     const bare = step("s5", "critical");
     // The list's newest few cannot say a step has no session; show can.
-    expect(stepNeedsSession(bare, stepSessions(r, bare), undefined)).toBe(false);
-    expect(stepNeedsSession(bare, stepSessions(r, bare, detail), detail)).toBe(true);
-    expect(stepNeedsSession({ ...bare, done: true }, [], detail)).toBe(false);
+    expect(stepNeedsSession(r, bare, stepSessions(r, bare), undefined)).toBe(false);
+    expect(stepNeedsSession(r, bare, stepSessions(r, bare, detail), detail)).toBe(true);
+    expect(stepNeedsSession(r, { ...bare, done: true }, [], detail)).toBe(false);
+    // Never on a teammate's priority: starting their work is theirs to do.
+    expect(stepNeedsSession({ mine: false }, bare, [], detail)).toBe(false);
     expect(mostActiveSessions(r, undefined, { ...detail, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 99 }] }).map((x) => x.short_id)).toEqual(["jx9"]);
   });
 

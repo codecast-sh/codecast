@@ -21,8 +21,11 @@ import { runModelCallOrOwn, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
 import { workspaceForConversation } from "./lib/access";
 import { parseWorkspaceKey, workspaceKey } from "./lib/accessKeys";
-import { isTeamMember } from "./privacy";
+import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { canReadCall } from "./transcripts";
+import { isRestricted } from "./chatAccess";
+import { isStandingSession } from "./lib/orgOwnership";
+import { parseRoomKey } from "@codecast/shared/contracts";
 import { teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import {
@@ -74,8 +77,8 @@ const PRIORITIES_READ = 200;
 const CALLS_READ = 30;
 /** A call started this long before the cursor can still have ended after it. */
 const CALL_LONGEST_MS = DAY;
-/** The sessions a priority's count is read from when it has none stored yet. */
-const SESSION_COUNT_READ = 500;
+/** A priority's sessions are counted from the index up to this many; past it the stored count goes on by the moves and is flagged. */
+export const SESSION_COUNT_CAP = 500;
 const INITIATIVES_READ = 200;
 /** How long the model may take: a full prompt and a long reply run minutes. */
 const PASS_TIMEOUT_MS = 5 * 60_000;
@@ -224,19 +227,43 @@ async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: 
 
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
 async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">): Promise<Pick<PassSession, "kind" | "parent">> {
-  if (conv.org_role_id || conv.standing_role_id) return { kind: "role" };
-  if (!conv.parent_conversation_id) return { kind: "session" };
+  if (isStandingSession(conv)) return { kind: "role" };
+  // A fork (parent_message_uuid) is the person's own session from that point on, not a worker.
+  if (!conv.parent_conversation_id || conv.parent_message_uuid) return { kind: "session" };
   const parent: Doc<"conversations"> | null = await ctx.db.get(conv.parent_conversation_id);
   return { kind: "worker", parent: parent ? sessionId(parent) : String(conv.parent_conversation_id) };
 }
 
 /**
- * The team's calls that ended in (since, until] which the person was in
- * (spoke, was filmed, or ran the scribe) and may still read, oldest first,
- * with their summary and action items. A call is a team's record: a personal
- * workspace has none.
+ * Whether the whole team may read a call's record: not a private huddle, not
+ * a people room, a channel room only for an open channel, a session room only
+ * for a team-visible session, and a recording or meeting bot's call only once
+ * its creator shared it with the team.
  */
-async function callsIn(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">, since: number, until: number): Promise<PassCall[]> {
+async function teamWideCall(ctx: { db: any }, t: Doc<"transcripts">): Promise<boolean> {
+  if (t.private) return false;
+  const room = parseRoomKey(t.room_key);
+  if (!room) return false;
+  if (room.kind === "rec" || room.kind === "meet") return !!t.rec_shared && !t.screen_recording;
+  if (room.kind === "channel") {
+    const channel: Doc<"chat_channels"> | null = await ctx.db.get(room.channelId as Id<"chat_channels">);
+    return !!channel && !channel.archived_at && !isRestricted(channel);
+  }
+  if (room.kind === "session") {
+    const conv: Doc<"conversations"> | null = await ctx.db.get(room.conversationId as Id<"conversations">);
+    return !!conv && String(teamVisibleConvTeam(conv)) === String(t.team_id);
+  }
+  return false;
+}
+
+/**
+ * The team's calls whose summary landed in (since, until] and that `fresh`
+ * keeps (a summary below the cursor counts only if it landed after the run
+ * that set it), which the person was in (spoke, was filmed, or ran the scribe)
+ * and the whole team may read, oldest first. A call is a team's record: a
+ * personal workspace has none.
+ */
+async function callsIn(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">, since: number, until: number, fresh: (landed: number) => boolean = () => true): Promise<PassCall[]> {
   const rows: Doc<"transcripts">[] = await ctx.db
     .query("transcripts")
     .withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gt("started_at", since - CALL_LONGEST_MS).lte("started_at", until))
@@ -245,10 +272,11 @@ async function callsIn(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams"
   const me = String(userId);
   const out: PassCall[] = [];
   for (const t of rows) {
-    if (!t.ended_at || t.ended_at <= since || t.ended_at > until || !(t.summary?.trim() || t.action_items?.length)) continue;
+    const landed = t.summary_at ?? t.ended_at;
+    if (!t.ended_at || !landed || landed <= since || landed > until || !fresh(landed) || !(t.summary?.trim() || t.action_items?.length)) continue;
     const joined = (t.participants ?? []).some((p) => String(p.id) === me) || (t.recorded_people ?? []).some((id) => String(id) === me) || String(t.started_by) === me;
-    if (!joined || !(await canReadCall(ctx, userId, t))) continue;
-    out.push({ id: t.short_id ?? String(t._id), title: t.title ?? "Call", at: t.ended_at, summary: t.summary ?? "", action_items: t.action_items ?? [] });
+    if (!joined || !(await teamWideCall(ctx, t)) || !(await canReadCall(ctx, userId, t))) continue;
+    out.push({ id: t.short_id ?? String(t._id), title: t.title ?? "Call", at: landed, summary: t.summary ?? "", action_items: t.action_items ?? [] });
   }
   return out.sort((a, b) => a.at - b.at);
 }
@@ -375,7 +403,7 @@ export const passInputs = internalQuery({
     const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
     const ws = parseWorkspaceKey(args.workspace);
     const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
-    const calls = team ? await callsIn(ctx, args.user_id, team._id, cursor_at, until) : [];
+    const calls = team ? await callsIn(ctx, args.user_id, team._id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until, (landed) => fresh(landed, landed)) : [];
     return {
       input: {
         person: user?.name ?? "this person",
@@ -634,18 +662,20 @@ export const applyPlan = internalMutation({
     }
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
     for (const [from, into] of mergedInto) {
-      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_READ);
+      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
       for (const conv of left) if (inWorkspace(conv, args.user_id, args.workspace)) await move(conv, into, undefined);
     }
 
-    // Counts follow the moves; a priority with no count yet is counted once.
+    // Every priority a session moved to or from is counted again from the index, so a count that drifted heals.
     for (const [id, delta] of moved) {
       const row: Doc<"priorities"> | null = await ctx.db.get(id);
       if (!row || String(row.user_id) !== String(args.user_id) || row.workspace !== args.workspace) continue;
-      const session_count = row.session_count !== undefined
-        ? Math.max(0, row.session_count + delta)
-        : (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_READ)).length;
-      if (session_count !== row.session_count) await ctx.db.patch(id, { session_count });
+      const held = (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP + 1)).length;
+      const capped = held > SESSION_COUNT_CAP;
+      const session_count = capped ? Math.max(SESSION_COUNT_CAP, (row.session_count ?? 0) + delta) : held;
+      if (session_count !== row.session_count || capped !== !!row.session_count_capped) {
+        await ctx.db.patch(id, { session_count, session_count_capped: capped || undefined });
+      }
     }
 
     await settleRun(ctx, { ...run, status: "ok", counts });
@@ -668,6 +698,18 @@ function fittingPrefix(input: PriorityPassInput): number {
     else hi = mid - 1;
   }
   return Math.min(input.sessions.length, Math.max(1, lo));
+}
+
+/**
+ * One run's share of what it read: the first `included` sessions, the calls
+ * up to where its cursor goes (a call goes to the one run whose window holds
+ * it), and that cursor: read_to when every session fit, else just before the
+ * first session left out, which the next run reads from its start.
+ */
+function runShare(read: PassInputs, input: PriorityPassInput, included: number): { input: PriorityPassInput; readTo: number; left: boolean } {
+  const cut = included < input.sessions.length;
+  const readTo = cut ? Math.max(read.cursor_at, firstAfter(input.sessions[included], read.cursor_at) - 1) : read.read_to;
+  return { input: { ...input, sessions: input.sessions.slice(0, included), calls: input.calls.filter((c) => c.at <= readTo) }, readTo, left: read.more || cut };
 }
 
 type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chain?: number; now?: boolean };
@@ -698,18 +740,14 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "error", reason: error };
   }
   const { cursor_at } = read;
-  if (!read.input.sessions.length && !args.force) {
+  if (!read.input.sessions.length && !read.input.calls.length && !args.force) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
     const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
     if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1 });
     return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
-  const included = fittingPrefix(read.input);
-  const input: PriorityPassInput = { ...read.input, sessions: read.input.sessions.slice(0, included) };
-  const left = read.more || included < read.input.sessions.length;
-  // Read whole to read_to; else to just before the first session left out, which the next run reads from its start.
-  const readTo = included < read.input.sessions.length ? Math.max(cursor_at, firstAfter(read.input.sessions[included], cursor_at) - 1) : read.read_to;
+  const { input, readTo, left } = runShare(read, read.input, fittingPrefix(read.input));
   const { req } = priorityPassRequest(input);
   const spec = { model: req.model, max_tokens: req.max_tokens, system: req.system, prompt: req.prompt, output: "json" as const, output_schema: req.output_schema };
   const reply = await runModelCallOrOwn(
@@ -905,7 +943,7 @@ export const evalPass = internalAction({
     for (;;) {
       if (outputs.length && Date.now() - started > EVAL_CALLS_START_WITHIN_MS) return done(state);
       const read: PassInputs = await ctx.runQuery(self.passInputs, { user_id: args.user_id, workspace: args.workspace, now, window_start: state.cursor_at });
-      if (!read.input.sessions.length) {
+      if (!read.input.sessions.length && !read.input.calls.length) {
         if (!read.more || read.read_to <= state.cursor_at) return done();
         state = { ...state, cursor_at: read.read_to };
         continue;
@@ -914,11 +952,7 @@ export const evalPass = internalAction({
       for (const s of read.input.sessions) for (const t of s.tasks) tasks.set(t.short_id, t);
       const stepTaskIds = new Set(state.priorities.flatMap((p) => p.steps.flatMap((s) => s.refs.filter((r) => r.kind === "task").map((r) => r.id))));
       const full: PriorityPassInput = { ...read.input, priorities: state.priorities, step_tasks: [...stepTaskIds].flatMap((id) => tasks.get(id) ?? []) };
-      const included = Math.max(1, Math.min(fittingPrefix(full), args.chunk ?? Infinity));
-      const input: PriorityPassInput = { ...full, sessions: full.sessions.slice(0, included) };
-      const left = read.more || included < full.sessions.length;
-      // As pass() moves its cursor: to read_to when every session fit, else to just before the first one left out.
-      const readTo = included < full.sessions.length ? Math.max(state.cursor_at, firstAfter(full.sessions[included], state.cursor_at) - 1) : read.read_to;
+      const { input, readTo, left } = runShare(read, full, Math.min(fittingPrefix(full), args.chunk ?? Infinity));
       if (left && readTo <= state.cursor_at) throw new Error(`calibration stuck at cursor ${state.cursor_at}: the next chunk would read the same sessions`);
       for (const s of input.sessions) readIds.set(s.id, s.title);
       const { req, omitted: cut } = priorityPassRequest(input);

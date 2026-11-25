@@ -103,9 +103,12 @@ export type HoldChange =
   | { kind: "file" | "move"; role: any }
   | { kind: "release"; from: any };
 
+/** A role's standing session: its seat (an anchor's or a standing role's), not work it was handed. */
+export const isStandingSession = (c: { standing_role_id?: unknown; anchor_id?: unknown }): boolean => !!(c.standing_role_id || c.anchor_id);
+
 export async function holdChangeFor(ctx: Ctx, c: any): Promise<HoldChange> {
   if (!c) return { kind: "keep", why: "no session" };
-  if (c.standing_role_id || c.anchor_id) return { kind: "keep", why: "standing session" };
+  if (isStandingSession(c)) return { kind: "keep", why: "standing session" };
   if (c.inbox_killed_at || c.status === "done" || c.status === "killed") return { kind: "keep", why: "done" };
   if (c.org_role_id && c.org_role_hold !== "bound") return { kind: "keep", why: "filed" };
   const roles = await rolesInBoundary(ctx, c.team_id ? { team_id: c.team_id } : { scope_user_id: c.user_id });

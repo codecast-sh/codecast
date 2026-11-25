@@ -36,10 +36,9 @@ export function stripLevels(lanes: Iterable<readonly number[]>): number[] {
   return heatLevels(all);
 }
 
-export type { PriorityDetail, PriorityHistory };
+export type { PriorityDetail, PriorityHistory, PriorityHistoryLane };
 
-/** A history lane as the page reads it: a teammate may hide their activity (no counts to shade). */
-export type HistoryLaneView = PriorityHistoryLane & { counts_hidden?: boolean };
+
 
 const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === String(b.user_id) && a.workspace === b.workspace;
 const byRank = (a: PriorityRow, b: PriorityRow) => (a.rank ?? Infinity) - (b.rank ?? Infinity);
@@ -130,9 +129,9 @@ export function stepSessions(row: PriorityRow, step: PriorityStep, detail?: Prio
   return out;
 }
 
-/** "+ new session" only on an open step that `show` says no session works: the list's few sessions cannot say so. */
-export function stepNeedsSession(step: PriorityStep, sessions: readonly StepSession[], detail: PriorityDetail | null | undefined): boolean {
-  return !!detail && !step.done && sessions.length === 0;
+/** "+ new session" only on the viewer's own open step that `show` says no session works: the list's few sessions cannot say so. */
+export function stepNeedsSession(row: Pick<PriorityRow, "mine">, step: PriorityStep, sessions: readonly StepSession[], detail: PriorityDetail | null | undefined): boolean {
+  return row.mine && !!detail && !step.done && sessions.length === 0;
 }
 
 export function stepTask(step: PriorityStep): string | undefined {
