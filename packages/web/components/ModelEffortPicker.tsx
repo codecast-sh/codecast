@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -257,18 +258,20 @@ export function ModelEffortRows({
               /effort auto one-shot rewrites the user's GLOBAL config). */}
           {rail.efforts.map((level: string) => {
             const active = level === "default" ? !effort : level === effort;
+            // A menu item (a pick closes the menu, as a model pick does), drawn
+            // as a chip: asChild keeps the button's own look.
             return (
-              <button
-                key={level}
-                onClick={() => { if (!active) onSelect({ effort: level }); }}
-                className={`grow whitespace-nowrap px-2 py-1 rounded text-meta border transition-colors ${
-                  active
-                    ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
-                    : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
-                }`}
-              >
-                {level}
-              </button>
+              <DropdownMenuPrimitive.Item key={level} asChild onSelect={(e) => { if (keepOpen) e.preventDefault(); if (!active) onSelect({ effort: level }); }}>
+                <button
+                  className={`grow whitespace-nowrap outline-none px-2 py-1 rounded text-meta border transition-colors ${
+                    active
+                      ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
+                      : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border data-[highlighted]:text-sol-text data-[highlighted]:border-sol-border"
+                  }`}
+                >
+                  {level}
+                </button>
+              </DropdownMenuPrimitive.Item>
             );
           })}
         </div>
