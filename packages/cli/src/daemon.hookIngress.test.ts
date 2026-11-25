@@ -184,9 +184,12 @@ describe("hook ingress admission", () => {
       const res = { status: null as number | null, body: "", ended: false, writeHead(s: number) { res.status = s; return res; }, end(chunk?: string) { if (chunk) res.body += chunk; res.ended = true; return res; } };
       return res;
     }
-    function withDisplay(onBody: (body: string) => void) {
-      const h = harness();
-      return { ...h, deps: { ...h.deps, messageDisplay: onBody } };
+    function withDisplay(onBody: (body: string) => void, opts: { legacy?: boolean; token?: string } = {}) {
+      const h = harness({ legacy: opts.legacy });
+      // `admit` throws: this route must not take the shared admission, whose
+      // legacy grace believes a tokenless post and reads files to decide.
+      const admit = () => { throw new Error("the message-display route called the shared admission"); };
+      return { ...h, deps: { ...h.deps, admit, messageDisplay: onBody, hookToken: () => opts.token ?? TOKEN } };
     }
 
     test("refused without the token, and the body is never read", async () => {
@@ -199,6 +202,27 @@ describe("hook ingress admission", () => {
       expect(seen).toEqual([]);
     });
 
+    test("a tokenless post is refused even while the legacy grace believes tokenless status posts", async () => {
+      const seen: string[] = [];
+      const h = withDisplay((b) => seen.push(b), { legacy: true });
+      const res = endRes();
+      handleHookIngressHttp(postReq({}, '{"x":1}'), res as unknown as http.ServerResponse, h.deps);
+      expect(res.status).toBe(401);
+      expect(h.refused).toEqual(["no-token"]);
+      const wrong = endRes();
+      handleHookIngressHttp(postReq({ authorization: `Bearer ${"b".repeat(64)}` }, '{"x":1}'), wrong as unknown as http.ServerResponse, h.deps);
+      expect(wrong.status).toBe(401);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(seen).toEqual([]);
+    });
+
+    test("no token loaded admits nobody", () => {
+      const h = withDisplay(() => {}, { token: "" });
+      const res = endRes();
+      handleHookIngressHttp(postReq({ authorization: "Bearer " }, "{}"), res as unknown as http.ServerResponse, h.deps);
+      expect(res.status).toBe(401);
+    });
+
     test("answers 200 with an empty body before the batch is handed over", async () => {
       const res = endRes();
       const atHandover: Array<{ status: number | null; ended: boolean; body: string; got: string }> = [];
@@ -208,15 +232,23 @@ describe("hook ingress admission", () => {
       expect(atHandover[0]).toEqual({ status: 200, ended: true, body: "", got: '{"hook_event_name":"MessageDisplay"}' });
     });
 
-    test("an oversized body is refused and never handed over", async () => {
+    test("an oversized body still answers 200, empty, and is never handed over", async () => {
       const seen: string[] = [];
       const h = withDisplay((b) => seen.push(b));
       const res = endRes();
       handleHookIngressHttp(postReq({ authorization: `Bearer ${TOKEN}` }, "x".repeat(256 * 1024 + 1)), res as unknown as http.ServerResponse, h.deps);
-      await pollUntil(() => res.ended, "413 answer");
+      await pollUntil(() => res.ended, "oversized answer");
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(res.status).toBe(413);
+      expect({ status: res.status, body: res.body }).toEqual({ status: 200, body: "" });
       expect(seen).toEqual([]);
+    });
+
+    test("a tracker that throws still leaves a 200 behind", async () => {
+      const h = withDisplay(() => { throw new Error("tracker broke"); });
+      const res = endRes();
+      handleHookIngressHttp(postReq({ authorization: `Bearer ${TOKEN}` }, "not json"), res as unknown as http.ServerResponse, h.deps);
+      await pollUntil(() => res.ended, "answer");
+      expect({ status: res.status, body: res.body }).toEqual({ status: 200, body: "" });
     });
   });
 
