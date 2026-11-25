@@ -9,15 +9,17 @@ import { useDeployReach, type DeployReachRow } from "./useDeployReach";
 import { repoObjectRefOf } from "../lib/repoObjects";
 import { changeLifecycle, type ChangeFacts, type Lifecycle } from "../lib/changes/lifecycle";
 import { isMerged, pullRequestFacts } from "../lib/changes/pullRequest";
+import { prPillLook, type PrPillLook } from "../lib/changes/prPill";
 
 /**
  * The lifecycle of a `pr` or `commit` entity row, or null when there is nothing to say yet: a commit says only where it
- * stands in production, so it draws nothing until its reach is read, and nothing when no target deploys it.
+ * stands in production, so it draws nothing until its reach is read, and nothing when no target deploys it. With
+ * `reach: false` (a bare pill on a card) nothing reads deploys, and a merged pull request reads as landed.
  */
-export function useRefLifecycle(type: string | null | undefined, entity: any): Lifecycle | null {
+export function useRefLifecycle(type: string | null | undefined, entity: any, { reach: readReach = true } = {}): Lifecycle | null {
   const isPr = type === "pr" && !!entity;
   const isCommit = type === "commit" && !!entity;
-  const reachRef = isPr ? (isMerged(entity) ? repoObjectRefOf("pr", entity, 40) : null) : isCommit ? repoObjectRefOf("commit", entity, 40) : null;
+  const reachRef = !readReach ? null : isPr ? (isMerged(entity) ? repoObjectRefOf("pr", entity, 40) : null) : isCommit ? repoObjectRefOf("commit", entity, 40) : null;
   useDeployReach(reachRef);
   // The row itself, so a question not answered yet tells apart from an answer of "no target".
   const row = useInboxStore((s) => (reachRef ? (s.deployReach?.[reachRef] as DeployReachRow | undefined) : undefined));
@@ -41,4 +43,10 @@ export function useRefLifecycle(type: string | null | undefined, entity: any): L
     }
     return null;
   }, [isPr, isCommit, entity, reachRef, row]);
+}
+
+/** A pull request pill's look (lib/changes/prPill): its glyph, whether it has settled, and whether something broke. */
+export function usePrPillLook(entity: any, { reach = true } = {}): PrPillLook | null {
+  const lifecycle = useRefLifecycle("pr", entity, { reach });
+  return entity ? prPillLook(entity, lifecycle) : null;
 }

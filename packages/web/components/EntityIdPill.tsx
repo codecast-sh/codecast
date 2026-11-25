@@ -29,6 +29,9 @@ import {
   CircleQuestionMark,
   Zap,
   GitPullRequest,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  GitMerge,
   GitCommitHorizontal,
   ChevronDown,
   Radio,
@@ -119,12 +122,15 @@ import { actionsRunKey } from "@codecast/shared/contracts/deploys";
 import { DeployPillSuffix } from "./deploys/deployRefLook";
 import { DeployHoverContent, ProductionReach } from "./deploys/DeployHoverContent";
 import { RefChangeSegment } from "./changes/RefChangeSegment";
+import { usePrPillLook } from "../hooks/useRefLifecycle";
+import type { PrGlyph } from "../lib/changes/prPill";
 import { CommitHoverContent, PullRequestHoverContent, RepoObjectUnknownHoverContent } from "./RepoObjectHoverContent";
 import { deployLook } from "../lib/deploys/deployLook";
 import { deployPillSuffix, runRefKey } from "../lib/deploys/deployPill";
-import { prStateKey } from "../lib/prView";
 
 export { SessionHoverContent };
+
+const PR_GLYPH_ICON: Record<PrGlyph, typeof GitPullRequest> = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed };
 
 // `date:<iso>` optionally trailed by `|<label>` — the payload remarkEntityIds
 // writes for a serialized date pill (`@[<label> date:<iso>]`).
@@ -1141,13 +1147,14 @@ export function EntityIdPill({
   const decisionSettled = type === "decision" && (status ?? "pending") !== "pending";
   // A deploy wears its state: glyph and chrome say live, going out or failed before a word is read.
   const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
-  // A merged pull request or a commit carries how far it has gone toward production.
+  // A merged pull request or a commit carries how far it has gone toward production, on its hover card.
   const cardReach = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
-  // A bare pill keeps its reach for the hover card only.
-  const reachRef = bare ? null : cardReach;
-  // Every other pull request says its state: open, draft or closed (a bare pill says none).
-  const prState = !bare && isPr && entity && !reachRef ? prStateKey(entity) : null;
-  const saysState = !!reachRef || !!prState;
+  // A pull request says its state in one color: the glyph, a dim once settled, a red dot when something broke.
+  const prLook = usePrPillLook(isPr ? entity : null, { reach: !bare });
+  // A commit says where it stands in words after its name; a bare one keeps its whole title.
+  const saysState = !bare && isCommit && !!entity;
+  // An answered decision and a finished pull request dim alike.
+  const settled = decisionSettled || !!prLook?.settled;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1189,7 +1196,7 @@ export function EntityIdPill({
             : deployV
               ? deployV.Icon
             : isPr
-              ? GitPullRequest
+              ? PR_GLYPH_ICON[prLook?.glyph ?? "open"]
               : isCommit
                 ? GitCommitHorizontal
                 : taskV.icon;
@@ -1232,9 +1239,8 @@ export function EntityIdPill({
               ? "bg-sol-cyan/[0.08] text-sol-cyan hover:bg-sol-cyan/[0.16]"
             : deployV
               ? deployV.chrome
-            // Merged is violet, as the pull request's own card and chip say it.
             : isPr
-              ? entity?.state === "merged" ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
@@ -1315,7 +1321,7 @@ export function EntityIdPill({
   // instead of a box that jumps to a line of its own or stacks two lines
   // tall inside the sentence (ct-87448). `.entity-ref--flow` in globals.css.
   const flows = !wide && !saysState && !deployV;
-  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
+  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : prLook?.word ? `${fullLabel} · ${prLook.word}` : wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
     <>
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
@@ -1330,9 +1336,9 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""}${flows ? " entity-ref--flow" : " whitespace-normal inline-flex items-center gap-[0.2em] leading-none"} px-[0.2em] rounded-[0.2em] text-[1em] font-medium ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""}${flows ? " entity-ref--flow" : " whitespace-normal inline-flex items-center gap-[0.2em] leading-none"} px-[0.2em] rounded-[0.2em] text-[1em] font-medium ${revealOpen ? "underline" : "no-underline"} ${colors}${settled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={linkTitle}
-          aria-label={deployV ? linkTitle : undefined}
+          aria-label={deployV || prLook?.word ? linkTitle : undefined}
         >
           <span className="entity-ref__icon relative flex-shrink-0 opacity-80 inline-flex items-center">
             {persona && entity ? (
@@ -1349,14 +1355,15 @@ export function EntityIdPill({
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
             )}
+            {prLook?.alert && <span data-pr-alert className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-red" />}
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
           {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
           <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? "entity-ref__label" : "self-baseline"}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
-          {/* A pull request or commit says where it stands as its change: the Branches page's track and word. */}
-          {(isPr || isCommit) && entity ? <RefChangeSegment type={isPr ? "pr" : "commit"} entity={entity} /> : null}
+          {/* A commit says where it stands as its change: the Branches page's track and word. */}
+          {isCommit && entity ? <RefChangeSegment type="commit" entity={entity} /> : null}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band
@@ -1369,7 +1376,7 @@ export function EntityIdPill({
           aria-expanded={revealOpen}
           aria-label={revealOpen ? "Hide full page" : "Show full page here"}
           title={revealOpen ? "Hide full page" : "Show full page here"}
-          className={`not-prose entity-ref__expand ${colors.split(" ").filter((c) => c.startsWith("text-")).join(" ")}${decisionSettled ? " opacity-60" : ""}`}
+          className={`not-prose entity-ref__expand ${colors.split(" ").filter((c) => c.startsWith("text-")).join(" ")}${settled ? " opacity-60" : ""}`}
         >
           <ChevronDown aria-hidden className="entity-ref__caret" />
         </button>

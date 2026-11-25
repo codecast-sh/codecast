@@ -8,6 +8,7 @@ import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEnti
 import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
+import Octicons from '@expo/vector-icons/Octicons';
 import { Theme, useTheme, type Palette } from '@/constants/Theme';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -20,7 +21,8 @@ import { useMessageLongPress } from '@/components/MessageLongPress';
 import { deployTitle } from '@codecast/web/lib/line/deployWords';
 import { repoObjectTitle } from '@codecast/web/lib/repoObjects';
 import { deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
-import { useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
+import { usePrPillLook, useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
+import type { PrGlyph } from '@codecast/web/lib/changes/prPill';
 import { ChangeWords } from '@/components/ChangeText';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 import type { ReachState } from '@codecast/shared/contracts/deployReach';
@@ -123,6 +125,8 @@ const DEPLOY_ICON: Record<DeployPillState, FeatherName> = {
   failed: 'x-circle',
   cancelled: 'minus-circle',
 };
+const PR_GLYPH_ICON: Record<PrGlyph, React.ComponentProps<typeof Octicons>['name']> = { open: 'git-pull-request', draft: 'git-pull-request-draft', merged: 'git-merge', closed: 'git-pull-request-closed' };
+
 export const REACH_ICON: Record<ReachState, FeatherName> = {
   live: 'check-circle',
   going_out: 'upload-cloud',
@@ -223,8 +227,10 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;
   const ticks = deployState === 'waiting' || deployState === 'going_out';
   const now = useNowWhen((t) => (ticks ? deployPillSuffix(entity, t) : ''), 15_000);
-  // A pull request or commit says where it stands as its change: the web's track and word (changes.md CH4).
-  const change = useRefLifecycle(type === 'pr' || type === 'commit' ? type : null, entity);
+  // A commit says where it stands as its change: the web's track and word (changes.md CH4).
+  const change = useRefLifecycle(type === 'commit' ? type : null, entity);
+  // A pull request says its state in one color, as on the web: the glyph, a dim once settled, a red dot when something broke.
+  const prLook = usePrPillLook(type === 'pr' ? entity : null);
 
   // Unknown id shape, a Convex id resolving to no entity table, or the
   // transient state while resolveIdType is in flight.
@@ -232,8 +238,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
   if (type === 'deploy' && !entity && runRefKey(rawId)) return <>{fallback}</>;
 
-  // A merged pull request is violet, as on the web.
-  const color = deployState ? toneColor(Theme, deployTone(entity, Date.now())) : type === 'pr' && entity?.state === 'merged' ? Theme.violet : TYPE_COLOR[type];
+  const color = deployState ? toneColor(Theme, deployTone(entity, Date.now())) : TYPE_COLOR[type];
 
   // One label rule for every type, shared with web: the pill reads as the
   // object's NAME.
@@ -267,8 +272,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
 
   return (
     <RNText
-      style={[styles.pill, { backgroundColor: color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }]}
-      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : undefined}
+      style={[styles.pill, { backgroundColor: color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }, prLook?.settled && styles.settled]}
+      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : undefined}
       onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : undefined}
       onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
@@ -278,12 +283,15 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
           const s = TASK_STATUS_ICON[entity?.status || 'open'] ?? TASK_STATUS_ICON.open;
           return <Feather name={s.icon} size={10} color={s.color} />;
         })()
+      ) : prLook ? (
+        <Octicons name={PR_GLYPH_ICON[prLook.glyph]} size={10} color={color} />
       ) : deployState ? (
         <Feather name={isRollback(entity) ? 'rotate-ccw' : DEPLOY_ICON[deployState]} size={10} color={color} style={deployState === 'replaced' ? { opacity: 0.5 } : undefined} />
       ) : (
         <MobileIdentityFace row={identityRow} size={12} fallback={<Feather name={TYPE_ICON[type]} size={10} color={color} />} />
       )}
       {isSession && entity?.status === 'active' && <RNText style={{ color: Theme.greenBright, fontSize: 8 }}>{' '}●</RNText>}
+      {prLook?.alert && <RNText style={{ color: Theme.red, fontSize: 8 }}>{' '}●</RNText>}
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
       {' '}{label}
       {deployState && ` · ${deployPillSuffix(entity, now)}`}
@@ -302,4 +310,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: 'hidden',
   },
+  // A finished pull request dims, as on the web.
+  settled: { opacity: 0.6 },
 });

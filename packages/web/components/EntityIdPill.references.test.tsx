@@ -654,9 +654,10 @@ describe("pull request references", () => {
   test("#N in a repository bound conversation reads as the title once the row is in hand", () => {
     const html = renderIn("codecast-sh/codecast", "landed PR #482 this morning");
     expect(pillText(html)).toBe("#482 Fix the auth race");
-    // An open pull request says where it stands as its change, the track and word the Branches page gives it.
-    expect(html).toMatch(/<span class="chg-seg" data-tone="muted" data-change-segment="check">/);
-    expect(html).toContain('<span class="chg-word">not checked');
+    // An open pull request says its state in its glyph, in one color; the word is only in its label.
+    expect(html).toContain("lucide-git-pull-request ");
+    expect(html).not.toContain("chg-seg");
+    expect(html).toContain('aria-label="#482 Fix the auth race · not checked"');
     expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
   });
 

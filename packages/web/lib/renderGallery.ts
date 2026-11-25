@@ -89,7 +89,7 @@ export const GALLERY_DEPLOYS = {
   ciRunId: "44822599999",
   ciRun: "https://github.com/gallery/deploys/actions/runs/44822599999",
   /** Merged pull requests, one per reach state, then one that deploys nothing, an open, a draft and a closed one. */
-  prs: { live: 4341, going_out: 4342, failed: 4343, rolled_back: 4344, waiting: 4345, open: 4346, queued: 4347, shipsNothing: 4348, closed: 4349, draft: 4350 },
+  prs: { live: 4341, going_out: 4342, failed: 4343, rolled_back: 4344, waiting: 4345, open: 4346, queued: 4347, shipsNothing: 4348, closed: 4349, draft: 4350, conflicts: 4351 },
   commit: "4a6e413b2c7d9e0f1a2b3c4d5e6f708192a3b4c5",
 } as const;
 
@@ -147,6 +147,7 @@ function deployRecords(now: number, workspace: string) {
       pr(D.prs.shipsNothing, "Note the eval brief", "merged", 40 * min),
       pr(D.prs.closed, "Check every new ruling", "closed", 3 * hour),
       pr(D.prs.draft, "Sketch the deploy queue", "open", 10 * min, true),
+      { ...pr(D.prs.conflicts, "Split the sync log by scope", "open", 15 * min), mergeable_state: "dirty" },
     ],
     // On main before backend's dp-90003 went live (128m ago) and before web's dp-90002 was asked for (82m ago).
     commits: [{ _id: "gallerycommit0000000001", repository: D.repository, sha: D.commit, message: "fix(convex): page the Pages gallery read\n\nLarge accounts timed out listing every page.", author_name: "Ashot", branch: "main", timestamp: now - 150 * min, insertions: 18, deletions: 4, files_changed: 2 }],
@@ -486,7 +487,7 @@ export function renderGalleryMessages(now: number): Row[] {
     asst(`Each deploy wears its state: ${D.waiting}, ${D.queued}, ${D.goingOut}, ${D.live}, ${D.replaced} (then ${D.liveWeb}), ${D.failed} and ${D.cancelled}. A rollback: ${D.rollback} (it replaced ${D.rolledBackOn}). Named again, one is its id: ${D.goingOut}.`);
     asst(`The Actions run carrying a deploy reads as the deploy: ${D.deployRun}. A CI run stays its link: ${D.ciRun}. By its bare id too: Deploy ${D.runId} is going out, and run ${D.ciRunId} is only CI.`);
     const p = (n: number) => `${D.repository}#${n}`;
-    asst(`A merged change says how far it got: ${p(D.prs.live)}, ${p(D.prs.going_out)}, ${p(D.prs.queued)}, ${p(D.prs.failed)}, ${p(D.prs.rolled_back)} and ${p(D.prs.waiting)}. One that deploys nothing says merged: ${p(D.prs.shipsNothing)}. Every other one says its state: ${p(D.prs.open)}, ${p(D.prs.draft)}, ${p(D.prs.closed)}. A commit on main says it too: ${D.repository}@${D.commit.slice(0, 10)}.`);
+    asst(`A pull request says its state in its glyph. Open ${p(D.prs.open)}, draft ${p(D.prs.draft)}, and one that conflicts ${p(D.prs.conflicts)}. Merged and still going out: ${p(D.prs.going_out)}, ${p(D.prs.queued)}, ${p(D.prs.waiting)}; broken after merging: ${p(D.prs.failed)}, ${p(D.prs.rolled_back)}. Settled: live ${p(D.prs.live)}, deploys nothing ${p(D.prs.shipsNothing)}, closed ${p(D.prs.closed)}. A commit on main says it too: ${D.repository}@${D.commit.slice(0, 10)}.`);
   }
 
   section("People and sessions");
