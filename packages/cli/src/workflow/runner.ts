@@ -467,10 +467,14 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     return "failure";
   }
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
-  await waiting({ node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) });
+  const on = { node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) };
+  await waiting(on);
   // It answers only with a turn after the brief reached it: a detached run's caller can still be mid-turn when a fast
   // check fails, and that turn's end is no answer. Where the delivery cannot be read, the send is when it arrived.
-  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS });
+  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, {
+    ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS,
+    onPerson: (pin) => waiting(pin === null ? on : { ...on, since: Date.now(), note: pin.slice(0, 600), blocked: true }),
+  });
   await waiting(null);
   if (outcome !== "success") return outcome;
   try {
@@ -506,8 +510,8 @@ function lastSaid(state: WorkflowRunState): string | undefined {
 // failing ones. Files the finding names that no session wrote go to the run's subject (the session that ran the pass)
 // in the same way; with no subject, the station says nobody heard about them. Every writer's row is read before any
 // brief goes, and a send that fails partway tells the writers already briefed that the run stopped. The run waits on
-// them all at once, each wait on a copy of the run's context: the first to block or die stops the others, and only
-// its words reach the run (a block before a death, a death before success). Once all have answered it freezes the
+// them all at once, each wait on a copy of the run's context: the first to die stops the others, and only its words
+// reach the run; one that pins blocked waits for a person and stops nobody (waitOnStation). Once all have answered it freezes the
 // checkout's change again. The writers are other people's sessions in a shared checkout: nothing here parks or
 // retires them.
 async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, named: Writer[], unclaimed: string[]): Promise<NodeOutcome> {
@@ -551,27 +555,24 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     context["last_error"] = unheard;
   }
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
-  await waiting({ node_id: node.id, conversation_id: writers[0].conversationId, since: Date.now(), note: `${names}: ${context["stop_reason"] || brief}`.slice(0, 600) });
+  const on = { node_id: node.id, conversation_id: writers[0].conversationId, since: Date.now(), note: `${names}: ${context["stop_reason"] || brief}`.slice(0, 600) };
+  await waiting(on);
   const abort = { stopped: false };
   const results = await Promise.all(waits.map(async (w) => {
     const own = { ...context };
-    const outcome = await waitOnStation(node, graph, own, cwd, options, undefined, { ...w, abort });
+    const onPerson = (pin: string | null) => waiting(pin === null ? on : { node_id: node.id, conversation_id: w.conversationId, since: Date.now(), note: `${w.shortId}: ${pin}`.slice(0, 600), blocked: true });
+    // A cancel read during one writer's wait ends the others' too.
+    const outcome = await waitOnStation(node, graph, own, cwd, options, undefined, { ...w, abort, onPerson }).catch((err) => { abort.stopped = true; throw err; });
     const stopped = own["wait_aborted"] === "1";
     if (outcome !== "success" && !stopped) abort.stopped = true;
     return { w, own, outcome, stopped };
   }));
   await waiting(null);
   const answered = results.filter((r) => !r.stopped);
-  const winner = answered.find((r) => r.outcome !== "success" && r.own["station_blocked"]) ?? answered.find((r) => r.outcome !== "success");
+  const winner = answered.find((r) => r.outcome !== "success");
   if (winner) {
     for (const [k, v] of Object.entries(winner.own)) if (context[k] !== v) context[k] = v;
-    // A writer's ask reaches a person who must know which session to answer, and about which files.
-    if (context["station_blocked"]) {
-      const asks = `${winner.w.shortId} (writer of ${[...winner.w.files, ...(winner.w.unclaimed ?? [])].join(", ")}) asks: `;
-      context["blocked_note"] = `${asks}${context["blocked_note"] ?? ""}`;
-      context["last_error"] = `${asks}${context["last_error"] ?? ""}`.slice(0, 2000);
-    }
-    await callOff(results.filter((r) => r.stopped).map((r) => r.w), `${winner.w.shortId} ${winner.own["station_blocked"] ? "is waiting on a person" : "could not finish"}`);
+    await callOff(results.filter((r) => r.stopped).map((r) => r.w), `${winner.w.shortId} could not finish`);
     return winner.outcome;
   }
   try {
@@ -674,8 +675,9 @@ async function waitOnStation(
   // Its brief can queue behind a turn of its own, so it answers only with a turn after the brief reached it
   // (`awaitDelivery`); where that cannot be read, the subject's brief counts as arriving at `unreadDeliveryAt`, and a
   // checkout's writer's as never read (below). A writer's wait ends early once `abort` says another writer's has
-  // stopped the station.
-  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; unreadDeliveryAt?: number; abort?: { stopped: boolean } },
+  // stopped the station. `onPerson` reports a blocked pin the station waits under (its text), and null once the
+  // session is back at work.
+  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; unreadDeliveryAt?: number; abort?: { stopped: boolean }; onPerson?: (pin: string | null) => Promise<unknown> },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -804,6 +806,12 @@ async function waitOnStation(
   let briefAt: number | null | undefined = subject?.awaitDelivery ? undefined : subject?.sentAt;
   // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
   let restampedAt = -1;
+  // The blocked pin a subject's station waits under for a person (below): when it was pinned, the transcript length
+  // it was last read at, and whether the run's row says so now.
+  let person: { at: unknown; count: number; shown: boolean } | null = null;
+  const endIfCancelled = async () => {
+    if (await stationWatch(options).ended?.()) throw new RunEndedOnServer(options.endedOnServer!);
+  };
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts), and
   // the wait ends when the hand shows no work for a while, not when it has worked long (handWatch.ts).
   const clock = new ParkedClock(startMs);
@@ -845,6 +853,21 @@ async function waitOnStation(
     if (moved && lastCount >= 0) heldDormant = false;
     if (moved || heldDormant || state === "working" || HAND_AT_WORK.has(row.agent_status ?? "")) watch.active();
     lastCount = row.message_count ?? 0;
+    // A subject waiting for a person whose transcript has not moved has pinned nothing new: one read of its row and
+    // one of the run's status a poll, its clock stopped. Back at work, the run's row says it is fixing again.
+    if (person) {
+      const atWork = state === "working" || AGENT_AT_WORK.has(row.agent_status ?? "");
+      if (atWork && person.shown) {
+        person.shown = false;
+        await subject?.onPerson?.(null);
+      }
+      if (!atWork && (row.message_count ?? 0) === person.count) {
+        clock.park();
+        watch.active();
+        await endIfCancelled();
+        continue;
+      }
+    }
     // A hand whose start failed (its machine refused it, or a cloud host's
     // preparation failed) reads idle, never live and never killed: nothing
     // would settle it before its quiet window ends, 30 minutes on. Once
@@ -1020,13 +1043,30 @@ async function waitOnStation(
       context["station_dead"] = node.id;
       return "failure";
     }
+    // A session the work was handed back to (the subject, a checkout's writer) that pinned blocked asks a person, for
+    // the run or for anything else it holds (its own card, a CI outage). The run waits for that person, with no
+    // clock running, and the session's next turn that ends otherwise answers the station as any turn would. Read as
+    // the station's stop, such a pin ended 8 of 164 Land runs and each took a person's Ship again (ct-101065).
+    // Only a cancel ends the wait.
+    if (pinnedStatus === "blocked" && subject) {
+      if (!person || person.at !== pinned?.at || !person.shown) {
+        console.log(`  ${c.yellow}waiting for a person${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}; the run goes on when ${shortId} next ends a turn`);
+        await subject.onPerson?.(pinnedText);
+      }
+      person = { at: pinned?.at, count: row.message_count ?? 0, shown: true };
+      clock.park();
+      watch.active();
+      askedOnce = false;
+      await endIfCancelled();
+      continue;
+    }
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
       context["last_error"] = pinnedText.slice(0, 2000);
       // What it pinned is the question its ask gate puts to a person: kept whole.
       context["blocked_note"] = pinnedText;
-      // A station that pinned blocked waits on a person: the run stops here,
-      // whatever its json says: the loop checks this before any edge.
+      // A hand of the run's own that pinned blocked waits on a person: the run
+      // stops here, whatever its json says: the loop checks this before any edge.
       context["station_blocked"] = node.id;
       return "failure";
     }

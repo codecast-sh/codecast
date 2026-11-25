@@ -10,6 +10,8 @@ describe("runShip", () => {
   test("each place a run stands reads as a card's words, from the station's own label", () => {
     expect(runShip(run("r", "c", { current_node_id: "review", current_node_label: "Review" }))).toMatchObject({ words: "Review", tone: "working" });
     expect(runShip(run("r", "c", { current_node_id: "brief", current_node_label: "Fix findings", waiting_on_session: { node_id: "brief" } }))).toMatchObject({ words: "Fixing", tone: "session" });
+    // The session pinned blocked: the run waits for a person, never a stop.
+    expect(runShip(run("r", "c", { current_node_id: "brief", current_node_label: "Fix findings", waiting_on_session: { node_id: "brief", blocked: true } }))).toMatchObject({ words: "Waiting for a person", tone: "wait" });
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", node_statuses: [{ node_id: "deploy__wait", status: "completed" }] }))).toMatchObject({ words: "Live", tone: "ok" });
     // A flow that ends at Land leaves its change on main: finishing it is not going live.
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] }))).toMatchObject({ words: "Merged", tone: "ok" });

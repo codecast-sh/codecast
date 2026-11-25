@@ -9053,8 +9053,9 @@ export default defineSchema({
     // the intent check (flows.md FL11) reads such a run as one no session started.
     spawner_stand_in: v.optional(v.boolean()),
     // The run is waiting on the session its change came from (flows.md FL4): the station that sent it work, since
-    // when, and what it sent, cut short. Cleared when the session settles and when the run ends.
-    waiting_on_session: v.optional(v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string() })),
+    // when, and what it sent, cut short. Cleared when the session settles and when the run ends. `blocked`: the session
+    // pinned blocked and the run waits for a person, the note then its pin.
+    waiting_on_session: v.optional(v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string(), blocked: v.optional(v.boolean()) })),
     // The role whose line started the run (the sweep, LE6). Its open cards
     // count by this, so a role with no standing session, or one whose
     // standing session changed, still holds its slots (learning-loop.md LL5).

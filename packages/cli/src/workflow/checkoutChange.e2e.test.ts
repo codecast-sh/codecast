@@ -550,21 +550,26 @@ describe("writers answer for themselves", () => {
     expect(git(root, "show", "codecast/change-ct-9:src/a.ts")).toBe("export const a = 'good';");
   }, 1_200_000);
 
-  test("a writer that blocks stops the run with its ask, without waiting out a writer that never answers", async () => {
-    const { root } = checkoutWorld();
+  test("a writer that pins blocked waits for a person, and its next turn's end answers the station (ct-101065)", async () => {
+    const { root, edit } = checkoutWorld();
+    edit(B, "src/b.ts", "export const b = 'good';\n");
     const ask = "Which config should src/a.ts read, the old one or the new one?";
     const s = scripted({
-      [A]: (ctl) => { ctl.deliver(A); ctl.row(A).work_state = "working"; setTimeout(() => ctl.settle(A, { status: "blocked", state: ask }), 200); },
-      // B takes its brief and works on, never answering.
-      [B]: (ctl) => { ctl.deliver(B); ctl.row(B).work_state = "working"; },
+      [A]: (ctl) => {
+        ctl.deliver(A);
+        ctl.row(A).work_state = "working";
+        setTimeout(() => ctl.settle(A, { status: "blocked", state: ask }), 200);
+        // A person answers: it works again, fixes a.ts and ends its turn.
+        setTimeout(() => { ctl.row(A).work_state = "working"; ctl.row(A).message_count += 2; }, 900);
+        setTimeout(() => { edit(A, "src/a.ts", "export const a = 'good';\n"); ctl.settle(A, { status: "done", state: "fixed a.ts" }); }, 1200);
+      },
     });
-    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
-    expect(progressSaid(s)).toContain("fix_check is waiting on a person");
-    expect(JSON.stringify(s.calls)).toContain(`jx7aaaa (writer of src/a.ts) asks: ${ask}`);
-    expect(progressSaid(s)).not.toContain("killed after");
-    // B hears the run no longer waits on it; A, who asked, is not told so.
-    expect(s.sent(B).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(1);
-    expect(s.sent(A).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(0);
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("completed");
+    expect(s.briefs(A)).toHaveLength(1);
+    expect(git(root, "show", "codecast/change-ct-9:src/a.ts")).toBe("export const a = 'good';");
+    const waits = s.calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.waiting_on_session).map((c) => c.body.waiting_on_session);
+    expect(waits.find((w) => w.blocked)).toMatchObject({ node_id: "fix_check", conversation_id: A, note: `jx7aaaa: ${ask}` });
+    expect(progressSaid(s)).not.toContain("waiting on a person");
   }, 1_200_000);
 
   test("files no session wrote go to the session that ran the pass, beside the writer's own", async () => {

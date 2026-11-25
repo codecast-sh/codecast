@@ -95,6 +95,11 @@ describe("journeyStages", () => {
     expect(j.stages[1].state).toBe("back");
     expect(j.now).toMatchObject({ kind: "session", stage: "CI + Review", round: 2, max: 3 });
     expect(journeyWords(j).words).toBe("Fixing");
+    // The session pinned blocked at that station: the run waits for a person, its pin the note.
+    const asks = journeyOf(g, run({ current_node_id: "fix", waiting_on_session: { node_id: "fix", since: 30, note: "CI cannot start: GitHub billing stopped the runners", blocked: true }, node_statuses: [...done("pr", "checks", "ci", "review", "joined", "brief"), st("fix", "running", 20, { visits: 2 })] }));
+    expect(asks.now).toMatchObject({ kind: "session", blocked: true, note: "CI cannot start: GitHub billing stopped the runners", since: 30 });
+    expect(journeyWords(asks)).toEqual({ words: "Waiting for a person", tone: "wait" });
+    expect(sentBackWords(asks.now as any)).toBe("Waiting for a person");
   });
   test("among the shipped flows only change goes back to the session, from the stages it always did", () => {
     const read = (f: (typeof SHIPPED_FLOWS)[number]) => journeyStages(f as any).map((x) => (x.loops.length ? `${x.label} ↺ ${x.loops.map((l) => l.id).join(",")}` : x.label));

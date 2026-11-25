@@ -8,4 +8,4 @@ What the reviewer found, as JSON (verdict `ship` with no findings means the revi
 
 $verdicts.json.review_result
 
-Fix each failure and each finding here, in this session's checkout: fix what is right, and where you disagree with a finding, say why in your reply. When there is nothing of yours to fix, end your turn without changing anything. $change_return, pushes the change to the pull request again and runs CI and a fresh review on it. The run is waiting on you: do not start it again. If you cannot go on without a person, pin `cast state --status blocked "<why>"` and the run stops.
+Fix each failure and each finding here, in this session's checkout: fix what is right, and where you disagree with a finding, say why in your reply. When there is nothing of yours to fix, end your turn without changing anything. $change_return, pushes the change to the pull request again and runs CI and a fresh review on it. The run is waiting on you: do not start it again. If a person must act before you can go on, pin `cast state --status blocked "<why>"`: the run waits, and goes on when you next end your turn.

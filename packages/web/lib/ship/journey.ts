@@ -59,8 +59,9 @@ export type JourneyNow =
   | { kind: "idle" }
   | { kind: "starting" }
   | { kind: "working"; stage: string; verb: string | null; role: StageRole; who: StageWho; waits: JourneyWait[]; session: { id: string; title: string | null } | null }
-  /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). */
-  | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null }
+  /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). `blocked`: the session
+   *  pinned blocked, so the run waits for a person, `note` then that pin. */
+  | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null; blocked: boolean }
   | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; who: string | null; decisionId: string | null; prompt: string | null; since: number | null }
   /** Merged, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
   | { kind: "landed"; sha: string; at: number | null; line: string | null; hold: DeployHold; waits: JourneyWait[] }
@@ -111,7 +112,7 @@ export type JourneyRun = {
   created_at?: number;
   updated_at?: number;
   merge?: { sha: string; at?: number } | null;
-  waiting_on_session?: { node_id: string; since: number; note: string } | null;
+  waiting_on_session?: { node_id: string; since: number; note: string; blocked?: boolean } | null;
   node_statuses?: ReadonlyArray<NodeStatus> | null;
 };
 
@@ -574,7 +575,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   else if (live && backStage) {
     const loop = plan.find((s) => s.id === backStage)!.loops.find((l) => l.id === segmentTopOf(waitingOn?.node_id ?? at ?? ""));
     const node = statusOf(waitingOn?.node_id ?? at);
-    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null };
+    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null, blocked: !!waitingOn?.blocked };
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.
     const onStage = gateNode ? stageOf(gateNode) : null;
@@ -696,7 +697,7 @@ export function stopWords(n: { stage: string | null; end: string | null }): stri
 }
 
 /** Who sent the work back, in the bar's words. */
-export const sentBackWords = (n: { stage: string; by: string | null }) => (n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
+export const sentBackWords = (n: { stage: string; by: string | null; blocked?: boolean }) => (n.blocked ? "Waiting for a person" : n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
 
 /** A landed change's Deploy in a pill's words: "Deploying" only while a deploy carries it. */
 export function holdWords(hold: DeployHold, roles?: ReadonlyArray<{ handle?: string; name?: string }>): { words: string; tone: "working" | "wait" } {
@@ -719,7 +720,7 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
       return { words: n.stage, tone };
     }
     case "starting": return { words: "Starting", tone: "working" };
-    case "session": return { words: "Fixing", tone: "session" };
+    case "session": return n.blocked ? { words: "Waiting for a person", tone: "wait" } : { words: "Fixing", tone: "session" };
     case "gate": return n.mine ? { words: "Your call", tone: "you" } : { words: gateWaitWords(n.holder, n.who), tone: "wait" };
     case "landed": return holdWords(n.hold);
     case "deploying": return { words: "Deploying", tone: "working" };

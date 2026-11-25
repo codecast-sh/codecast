@@ -252,9 +252,9 @@ parked, so its brief can queue behind a turn of its own: it has answered only
 when a turn after the brief reached it has ended (a pin after the brief's
 delivery, read from `/cli/messages/status`, or quiet reads after it; where
 delivery cannot be read, the transcript growing past the brief, going quiet,
-and a pin since the brief went out). The first writer to block or die stops the other waits, which hear
-the run no longer waits on them, and only its words reach the run: a block
-before a death, a death before success. Once every writer has answered the run
+and a pin since the brief went out). A writer that pins blocked waits for a
+person as the subject does. The first writer to die stops the other waits,
+which hear the run no longer waits on them, and only its words reach the run. Once every writer has answered the run
 freezes the pass again and goes on; the station's output names who was
 briefed. A finding that names no file of the change goes to the subject, and
 a run with none stops with it, as any run with no subject does. The writers
@@ -273,10 +273,17 @@ is the run's spawner, since the session runs `cast flow run` itself (the Ship
 button asks its agent to). A station with `backend=subject` is work for that
 session: the runner sends its brief, which names what a stage found, as a
 message in the session's own thread, waits for the session to work and settle
-(the station wait every session node uses, `waitOnStation`, which holds
-through a dormant pin and stops on a blocked one), then freezes the session's
+(the station wait every session node uses, `waitOnStation`), then freezes the session's
 change again on the same branch and resets the run's worktree to it
-(`refreezeSessionChange`). The session is never reported as a hand of the run,
+(`refreezeSessionChange`). A session that pins blocked asks a person, for the
+run or for anything else it holds (its own card, a CI outage), so the run
+waits for that person rather than stopping: the run's row says so
+(`waiting_on_session.blocked`, its note the pin), and the Ship bar reads
+"Waiting for a person". The station's clock stops meanwhile, the wait reads
+only the session's row and the run's status until its transcript moves, and
+the session's next turn that ends otherwise answers the station as any turn
+would. Only a cancel ends the wait (ct-101065: read as the station's stop,
+such pins ended 8 of 164 Land runs, each needing a person to Ship again). The session is never reported as a hand of the run,
 so the run's end does not stop it as it stops hands. The runner reads the
 subject's row with `include_killed` (`/cli/inbox`), so a killed subject is
 still read, and sent the brief all the same: the send restarts it, and the
