@@ -3,8 +3,9 @@
 // callback renders after paint, so a transcript row painted at full height,
 // the virtualizer measured it, then it clamped, and near the tail of a
 // conversation the swing remounted rows in a loop that shook the view.
-// The observer here never answers, so only the commit's own first answer can
-// clamp the body.
+// The observer here never answers, so only the first answer, read at the
+// start of the frame after the commit (before that frame paints), can clamp
+// the body.
 import { test, expect, afterAll } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
@@ -24,9 +25,13 @@ const { act } = React;
 const { createRoot } = await import("react-dom/client");
 const { CollapsibleBody } = await import("../../components/CollapsibleBody");
 
-test("a long body is clamped by the end of its mount commit, without an observer callback", async () => {
+// The frame after the commit: its animation frame callbacks run before it paints.
+const nextFrame = () => act(async () => { await new Promise((r) => requestAnimationFrame(() => r(null))); });
+
+test("a long body is clamped in the frame after its mount commit, before paint, without an observer callback", async () => {
   const root = createRoot(document.getElementById("root")!);
   await act(async () => { root.render(React.createElement(CollapsibleBody, null, "x".repeat(90 * 30))); });
+  await nextFrame();
   const clip = document.querySelector("[data-collapsible-body]")!.parentElement as HTMLElement;
   expect(clip.style.maxHeight).toBe("180px");
   expect(document.body.textContent).toContain("Expand");
@@ -36,6 +41,7 @@ test("a long body is clamped by the end of its mount commit, without an observer
 test("a short body stays open", async () => {
   const root = createRoot(document.getElementById("root")!);
   await act(async () => { root.render(React.createElement(CollapsibleBody, null, "short")); });
+  await nextFrame();
   const clip = document.querySelector("[data-collapsible-body]")!.parentElement as HTMLElement;
   expect(clip.style.maxHeight).toBe("");
   await act(async () => root.unmount());
