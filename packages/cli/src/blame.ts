@@ -14,6 +14,7 @@ import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
 import { contentLinesToMatch as selectContentLines, extractSessionTrailer, overlapLinesBySha, type ContentLine } from "@codecast/shared/blame";
+import { git } from "./code/codeGit.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { webBaseUrl } from "./config/readLocalConfig.js";
 
@@ -159,10 +160,14 @@ export function sessionLabel(ref: SessionRef): string {
   return label.length > MAX_WHO_LABEL ? label.slice(0, MAX_WHO_LABEL - 2) + ".." : label;
 }
 
+/** The session behind one blamed line: the authoring session (content match)
+ *  beats the committing session (sha match). */
+export function sessionForLine(line: BlameLine, resolution: BlameResolution): SessionRef | undefined {
+  return resolution.byLine.get(line.content.trim()) ?? resolution.bySha.get(line.sha);
+}
+
 function whoFor(line: BlameLine, meta: BlameCommitMeta, resolution: BlameResolution): string {
-  // Authoring session (content match) beats committing session (sha match)
-  // beats the git author.
-  const ref = resolution.byLine.get(line.content.trim()) ?? resolution.bySha.get(line.sha);
+  const ref = sessionForLine(line, resolution);
   return ref ? sessionLabel(ref) : meta.author;
 }
 
@@ -299,7 +304,7 @@ export async function readSessionTrailers(shas: string[], cwd: string): Promise<
   if (wanted.length === 0) return found;
   let out: Buffer;
   try {
-    out = await execGitBuffer(["cat-file", "--batch"], cwd, `${wanted.join("\n")}\n`);
+    out = await git(cwd, ["cat-file", "--batch"], { buffer: true, input: `${wanted.join("\n")}\n`, maxBuffer: 256 * 1024 * 1024, timeoutMs: 120_000 });
   } catch {
     return found; // Attribution falls back to the server's other evidence.
   }
@@ -320,16 +325,6 @@ export async function readSessionTrailers(shas: string[], cwd: string): Promise<
     if (session) found.set(sha, session);
   }
   return found;
-}
-
-function execGitBuffer(args: string[], cwd: string, input: string): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const child = execFile("git", args, { cwd, maxBuffer: 256 * 1024 * 1024, encoding: "buffer" }, (error, stdout, stderr) => {
-      if (error) reject(new Error(String(stderr).trim() || error.message));
-      else resolve(stdout as Buffer);
-    });
-    child.stdin?.end(input);
-  });
 }
 
 async function resolveSessions(
