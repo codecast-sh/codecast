@@ -68,7 +68,11 @@ for (const mode of ["pass", "command"] as const) {
       ["unknown attachment", f => { f.io.tmuxSessions = async () => new Map([[f.tmux, NaN]]); }],
       ["failed sidecar read", f => { f.io.askSidecarMtimeMs = async () => { throw new Error("EACCES"); }; }],
       ["unknown target identity", f => { f.io.inspectTarget = async () => null; }],
-      ["silent known child", f => { f.io.subagentActiveAgoMs = () => 30 * 60_000; }],
+      // A child silent past the quiet window is refused by the real target
+      // inspection (transcript scan, agent-has-children), which this stub
+      // skips: daemon.hibernation.adversarial.e2e's "silent live child" rows.
+      ["recently active child", f => { f.io.subagentActiveAgoMs = () => 9 * 60_000; }],
+      ["lost subagent coverage", f => { f.io.subagentActiveAgoMs = () => NaN; }],
       ["status changes during lifecycle", f => { f.io.lifecycle = async () => { trackSessionPaneForTests(f.id, f.tmux, { status: "waiting" }); return life(); }; }],
       ["identity mapping changes during lifecycle", f => { f.io.lifecycle = async () => { trackSessionPaneForTests(f.id, "different-tmux"); return life(); }; }],
       ["pin appears on recheck", f => { let calls = 0; f.io.lifecycle = async () => ({ ...life(), inboxPinnedAt: ++calls > 1 ? 123 : null }); }],

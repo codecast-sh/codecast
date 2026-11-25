@@ -78,13 +78,25 @@ describe("hibernationBlockReason", () => {
     expect(hibernationBlockReason(candidate({ sharedPane: true }))).toBe("shared-pane");
   });
 
-  test("a parent whose subagent is still writing blocks", () => {
+  test("a parent whose subagent wrote inside the quiet window blocks", () => {
     // The child has no pane of its own: it is a process inside this pane's
     // tree, so the teardown would kill it mid-turn.
+    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: 9 * 60_000 }))).toBe("live-subagents");
     expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: HIBERNATE_SUBAGENT_QUIET_MS - 1 })))
       .toBe("live-subagents");
-    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: HIBERNATE_SUBAGENT_QUIET_MS }))).toBe("live-subagents");
     expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: 0 }))).toBe("live-subagents");
+  });
+
+  test("a subagent quiet past the window no longer protects its parent", () => {
+    // The regression (2026-11-24): any subagent the daemon ever saw write kept
+    // its parent awake forever, and 14 of 48 live sessions could never park.
+    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: 11 * 60_000 }))).toBeNull();
+    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: HIBERNATE_SUBAGENT_QUIET_MS }))).toBeNull();
+    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: Infinity }))).toBeNull();
+  });
+
+  test("lost subagent coverage blocks: the teardown kills the whole tree", () => {
+    expect(hibernationBlockReason(candidate({ subagentActiveAgoMs: NaN }))).toBe("live-subagents");
   });
 
   test("a resume inside the grace window blocks", () => {
@@ -170,14 +182,21 @@ describe("selectHibernationCandidates: a refused head does not starve the pass",
   test("the first pass picks the longest idle, and the next pass moves past the ones it refused", () => {
     const first = selectHibernationCandidates(fleetPastBar, policy({ idleMs: bar }));
     expect(first.picked.map((c) => c.sessionId)).toEqual(["s00", "s01", "s02", "s03", "s04"]);
-    const refused = new Set(first.picked.map((c) => c.sessionId));
+    const refused = new Map(first.picked.map((c) => [c.sessionId, "open-background-work"]));
     const second = selectHibernationCandidates(fleetPastBar, policy({ idleMs: bar }), refused);
     expect(second.picked.map((c) => c.sessionId)).toEqual(["s05", "s06", "s07", "s08", "s09"]);
-    expect(second.skips.filter((r) => r === "refused-recently")).toHaveLength(5);
+    expect(second.skips.filter((r) => r === "refused-recently(open-background-work)")).toHaveLength(5);
+  });
+
+  test("each backing-off session's skip names the reason it was refused", () => {
+    const refused = new Map([["s00", "pending-question"], ["s01", "pinned"]]);
+    const { skips } = selectHibernationCandidates(fleetPastBar, policy({ idleMs: bar }), refused);
+    expect(skips).toContain("refused-recently(pending-question)");
+    expect(skips).toContain("refused-recently(pinned)");
   });
 
   test("a refused session still counts toward the fleet size for the cap", () => {
-    const refused = new Set(["s00"]);
+    const refused = new Map([["s00", "pinned"]]);
     const { picked } = selectHibernationCandidates(fleetPastBar, policy({ maxLive: 10 }), refused);
     expect(picked.map((c) => c.sessionId)).toEqual(["s01", "s02"]);
   });

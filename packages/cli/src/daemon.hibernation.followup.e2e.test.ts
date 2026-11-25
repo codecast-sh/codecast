@@ -12,7 +12,7 @@ import {
   hibernationConcurrencyForTests as internals, inspectHibernationTarget,
   noteSubagentActivity, publishHookStatus, resetSubagentActivityForTests,
   runHibernationPass, sessionParkStateForTests, acquireSessionProcessOwnership, setSyncServiceForTests,
-  trackSessionPaneForTests, type HibernationPassIo,
+  awaitRecentSessionFile, takeTargetRefusal, trackSessionPaneForTests, type HibernationPassIo,
 } from "./daemon.js";
 import { buildShimScript } from "./test-helpers/fakeClaudeShim.js";
 import { spawnHarness, waitFor, type Harness } from "./test-helpers/messagingHarness.js";
@@ -128,7 +128,9 @@ for (const mode of ["pass", "manual"] as const) describe.skipIf(!hasTmux())(`${m
     const childPath = `/fake/${f.id}/subagents/sidecar.jsonl`;
     if (evidence === "old-overflow" || evidence === "recent-overflow") {
       noteSubagentActivity(childPath, Date.now() - (evidence === "old-overflow" ? 3600_000 : 0));
-      await refused(f);
+      // An hour-old write protects nobody on its own; the overflow below is
+      // what this row is about.
+      if (evidence === "recent-overflow") await refused(f);
     }
     if (evidence.includes("overflow") || evidence === "already-full") {
       for (let i = 0; i < 1000; i++) noteSubagentActivity(`/fake/parent-${i}/subagents/child.jsonl`);
@@ -152,6 +154,72 @@ for (const mode of ["pass", "manual"] as const) describe.skipIf(!hasTmux())(`${m
   }, 15000);
 
   test("a genuine leaf with cold empty evidence still parks", async () => { await parked(await fixture()); }, 15000);
+
+  // 2026-11-24: of 16 sessions past the idle bar, 7 refused has-subagent-history
+  // (finished agents and a workflows/ folder the transcript did not account for)
+  // and 4 background-work-unproven (teammate spawns answered hours before), on
+  // every pass. Those run inside the agent's process and write under
+  // subagents/, so the folder's newest write is the evidence, read from disk
+  // because the recorder empties on every daemon restart.
+  const spawned = "Spawned successfully. (This tool result is internal metadata.)\nagent_id: areviewer-0a1b2c3d\nname: reviewer\nThe agent is now running and will receive instructions via mailbox.";
+  const shutdown = 'Another Claude session sent a message:\n<teammate-message teammate_id="reviewer" color="blue">\n{"type":"shutdown_response","request_id":"r1","approve":true}\n</teammate-message>';
+  const histories = {
+    "a teammate that shut down": { call: { name: "Agent", input: { name: "reviewer", team_name: "t", run_in_background: true } }, answer: spawned, after: shutdown, file: "agent-areviewer-0a1b2c3d.jsonl" },
+    "a finished foreground agent": { call: { name: "Agent", input: { prompt: "go" } }, answer: "Here is what I found.\nagentId: a0a1b2c3d4e5f6789 (use SendMessage with to: 'a0a1b2c3d4e5f6789' to continue this agent)\n<usage>subagent_tokens: 4450\ntool_uses: 1\nduration_ms: 5451</usage>", file: "agent-a0a1b2c3d4e5f6789.jsonl" },
+    "a finished workflow run": { file: "workflows/run-1/agent-a1.jsonl" },
+  } as const;
+  // The gate under test must be the one that refuses: inspect first, by name,
+  // once the daemon's index holds the pane's transcript.
+  const refusedFor = async (f: Awaited<ReturnType<typeof fixture>>, reason: string) => {
+    expect((await awaitRecentSessionFile(f.id))?.path).toBe(f.h.jsonlPath);
+    expect(await inspectHibernationTarget(f.id, f.h.tmuxSession, f.conv, f.registry)).toBeNull();
+    expect(takeTargetRefusal(f.id)).toBe(reason);
+    await refused(f);
+  };
+  for (const [name, h] of Object.entries(histories)) {
+    const seed = (f: Awaited<ReturnType<typeof fixture>>, agoMs: number) => {
+      if ("call" in h) {
+        fs.appendFileSync(f.h.jsonlPath, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "hist", ...h.call }] } }) + "\n");
+        fs.appendFileSync(f.h.jsonlPath, JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "hist", content: h.answer }] } }) + "\n");
+        if ("after" in h) fs.appendFileSync(f.h.jsonlPath, JSON.stringify({ type: "user", message: { role: "user", content: h.after } }) + "\n");
+      }
+      const parentDir = path.join(path.dirname(f.h.jsonlPath), f.id); roots.push(parentDir);
+      const file = path.join(parentDir, "subagents", h.file);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "{}\n");
+      const at = new Date(Date.now() - agoMs);
+      fs.utimesSync(file, at, at);
+    };
+    test(`${name} quiet past the window no longer holds its parent`, async () => {
+      const f = await fixture();
+      seed(f, 60 * 60_000);
+      await parked(f);
+    }, 15000);
+    test(`${name} that wrote inside the window keeps its parent`, async () => {
+      const f = await fixture();
+      seed(f, 5 * 60_000);
+      await refusedFor(f, "live-subagents");
+    }, 15000);
+  }
+
+  test("a teammate that never shut down keeps its lead, however quiet", async () => {
+    const f = await fixture();
+    fs.appendFileSync(f.h.jsonlPath, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "hist", name: "Agent", input: { name: "reviewer", team_name: "t" } }] } }) + "\n");
+    fs.appendFileSync(f.h.jsonlPath, JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "hist", content: spawned }] } }) + "\n");
+    await refusedFor(f, "team-active");
+  }, 15000);
+
+  test("a subagent the recorder last saw an hour ago, with nothing on disk, no longer holds its parent", async () => {
+    const f = await fixture();
+    noteSubagentActivity(`/fake/${f.id}/subagents/agent-a1.jsonl`, Date.now() - 60 * 60_000);
+    await parked(f);
+  }, 15000);
+
+  test("one the recorder saw inside the quiet window does", async () => {
+    const f = await fixture();
+    noteSubagentActivity(`/fake/${f.id}/subagents/agent-a1.jsonl`, Date.now() - 60_000);
+    await refused(f);
+  }, 15000);
 
   test("parking the last pane tolerates the tmux server exiting", async () => {
     const f = await fixture();

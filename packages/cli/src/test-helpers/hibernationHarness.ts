@@ -13,7 +13,7 @@ const names = [
   "wakeStatusAfterPark", "clearHibernationPark", "forgetHibernationPark", "clearSessionTrackingForKill",
   "subagentParentSessionFromPath", "noteSubagentActivity", "subagentActiveAgoMs", "resetSubagentActivityForTests",
   "sendAgentStatus", "markTurnStarted", "statusFlipStartsTurn", "statusFlipEndsTurn", "reapOneTerminal", "withTmuxLock", "injectViaTmux",
-  "knownAgentStatus",
+  "knownAgentStatus", "liveHibernationRefusals", "noteHibernationRefusal",
 ] as const;
 
 type PublicNames = Extract<typeof names[number], keyof typeof import("../daemon.js")>;
@@ -67,7 +67,7 @@ export function createHibernationHarness() {
     "sessionProcessCache", "resumeInFlight", "resumeInFlightStarted", "lastWorkingStatusSent", "turnStartedAt",
     "lastAgentStatusSentAt", "turnCompletedAtBySession",
     "pendingOpenTaskReports", "lastOpenTasksSentJson", "tmuxTargetLocks",
-    "hibernationInFlight", "hibernationEvidenceJobs", "hibernationRefusedAt", "expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared", "lastTargetRefusal",
+    "hibernationInFlight", "hibernationEvidenceJobs", "hibernationRefusals","expectedHibernationExits", "pendingHibernationStamps", "hibernationStampCleared", "lastTargetRefusal",
   ].map((name) => `const ${name} = new Map();`).join("\n");
   const sets = ["managedHeartbeatSessions", "hibernatedSessions", "restartingSessionIds", "abandonedEvidenceJobs"]
     .map((name) => `const ${name} = new Set();`).join("\n");
@@ -77,6 +77,7 @@ export function createHibernationHarness() {
     ${sets}
     let syncServiceRef = null;
     const SUBAGENT_ACTIVITY_MAX_ENTRIES = 500;
+    let subagentCoverageLostAt = -Infinity;
     const WORKING_STATUS_THROTTLE_MS = 10_000;
     const TMUX_LOCK_WAIT_MS = 60_000;
     const HIBERNATION_ATTEMPT_TIMEOUT_MS = 15_000;

@@ -19,7 +19,9 @@ import {
   registerManagedStartedSession,
   clearSessionTrackingForKill,
   hibernateSessionNow,
+  inProcessWorkRefusal,
   noteSubagentActivity,
+  resetHibernationRefusalsForTests,
   resetSubagentActivityForTests,
   runHibernationPass,
   subagentActiveAgoMs,
@@ -329,6 +331,95 @@ describe("a live session is refused by both the pass and the command", () => {
   }
 });
 
+describe("a subagent quiet past the window", () => {
+  const target = "hib-test-002";
+  beforeEach(resetHibernationRefusalsForTests);
+
+  test("does not hold its parent from the pass or the command", async () => {
+    const opts = { count: 3, maxLive: 1, awakeIdleMs: (i: number) => i * 1000, subagentActiveAgoMs: (id: string) => (id === target ? 11 * 60_000 : Infinity) };
+    const pass = fixture(opts);
+    await runHibernationPass(pass.io);
+    expect(pass.parked).toContain(target);
+    for (const id of tracked.splice(0)) trackSessionPaneForTests(id, null);
+    const command = fixture(opts);
+    expect(await command.hibernate(target)).toEqual({ result: "hibernated" });
+  });
+});
+
+// A refused session backs off for an hour, so without its own line the reason
+// it stays awake was invisible: the pass line only said "refused-recently".
+describe("a refusal is named once and carried by the pass line", () => {
+  const REAPER_LOG = path.join(process.env.TMPDIR || "/tmp", "codecast-test-reaper.log");
+  const target = "hib-test-002";
+  const logSize = () => (fs.existsSync(REAPER_LOG) ? fs.statSync(REAPER_LOG).size : 0);
+  // Other test runs on this machine append to the same file, so read only what
+  // came after `from`, and look for lines rather than count the file.
+  const logSince = (from: number) => {
+    const all = fs.existsSync(REAPER_LOG) ? fs.readFileSync(REAPER_LOG) : Buffer.alloc(0);
+    return (all.length >= from ? all.subarray(from) : all).toString("utf8");
+  };
+  beforeEach(resetHibernationRefusalsForTests);
+  afterEach(resetHibernationRefusalsForTests);
+
+  test("the refusal writes one line naming the session, and the next pass buckets it by reason", async () => {
+    // Only the target is past the idle bar, and a question is still open in it.
+    const f = fixture({
+      count: 3,
+      idleMs: 1000,
+      awakeIdleMs: (i) => (i === 2 ? 5000 : 0),
+      sidecarMtimeMs: (id) => (id === target ? 2000 : null),
+      transcriptLastRealMs: () => 1000,
+    });
+    const refusalLine = `hibernation refused ${target.slice(0, 8)} tmux=cc-resume-${target} conv=conv-2: pending-question`;
+
+    const first = logSize();
+    await runHibernationPass(f.io);
+    const firstLog = logSince(first);
+    expect(f.parked).toEqual([]);
+    expect(firstLog).toContain(refusalLine);
+    expect(firstLog).toMatch(/hibernation pass: 3 live, cap=0, hibernated 0, skipped: .*pending-question×1/);
+
+    const second = logSize();
+    await runHibernationPass(f.io);
+    const secondLog = logSince(second);
+    expect(secondLog).not.toContain(refusalLine);
+    expect(secondLog).toMatch(/hibernation pass: 3 live, cap=0, hibernated 0, skipped: .*refused-recently\(pending-question\)×1/);
+  });
+});
+
+// The verdict the park and the idle reaper share on work running inside the
+// agent's process, read from a real transcript on disk.
+describe("inProcessWorkRefusal", () => {
+  const dirs: string[] = [];
+  afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+  const lead = (spawnedAt: number) => {
+    const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "in-process-work-"));
+    dirs.push(dir);
+    const sessionId = "lead-session";
+    const file = path.join(dir, `${sessionId}.jsonl`);
+    const timestamp = new Date(spawnedAt).toISOString();
+    fs.writeFileSync(file, [
+      { type: "assistant", sessionId, timestamp, message: { content: [{ type: "tool_use", id: "t1", name: "Agent", input: { name: "reviewer", team_name: "t" } }] } },
+      { type: "user", sessionId, timestamp, message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "Spawned successfully.\nagent_id: areviewer-0a1b\nname: reviewer\n" }] } },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n");
+    return { sessionId, file };
+  };
+
+  test("a lead whose current process spawned a teammate that never shut down is team-active", async () => {
+    resetSubagentActivityForTests();
+    const now = Date.now();
+    const { sessionId, file } = lead(now - 5 * 3600_000);
+    expect(await inProcessWorkRefusal(sessionId, file, now - 6 * 3600_000)).toBe("team-active");
+  });
+
+  test("a teammate an earlier process spawned is not", async () => {
+    resetSubagentActivityForTests();
+    const now = Date.now();
+    const { sessionId, file } = lead(now - 5 * 3600_000);
+    expect(await inProcessWorkRefusal(sessionId, file, now - 3600_000)).toBeNull();
+  });
+});
+
 // The "a parent with a live subagent is never parked" rule reads one recorder,
 // and the rule's own tests drive that recorder through a stub. These cover the
 // real one: the paths it understands, the prune that keeps it bounded, and the
@@ -362,16 +453,33 @@ describe("the subagent activity recorder", () => {
     expect(subagentActiveAgoMs(parent, NOW)).toBe(Infinity);
   });
 
-  test("bounded recorder never interprets lost or old facts as no children", () => {
+  test("a full recorder reads a dropped write as unknown, never as no children", () => {
+    resetSubagentActivityForTests();
+    for (let i = 0; i < 600; i++) noteSubagentActivity(`${PROJ}/busy-${i}/subagents/c.jsonl`, NOW);
+    expect(subagentActiveAgoMs("busy-0", NOW)).toBe(0);
+    expect(subagentActiveAgoMs("busy-599", NOW)).toBeNaN();
+    expect(subagentActiveAgoMs("unrecorded", NOW)).toBeNaN();
+    resetSubagentActivityForTests();
+  });
+
+  test("a full recorder makes room from writes past the quiet window instead of latching", () => {
+    // It used to latch: after 500 parents every unseen session read NaN, and
+    // hibernation refused it, until the daemon restarted.
     resetSubagentActivityForTests();
     const old = NOW - HIBERNATE_SUBAGENT_QUIET_MS * 2;
-    for (let i = 0; i < 600; i++) noteSubagentActivity(`${PROJ}/old-${i}/subagents/c.jsonl`, old);
-    expect(subagentActiveAgoMs("old-0", NOW)).toBe(NOW - old);
-    expect(subagentActiveAgoMs("old-599", NOW)).toBeNaN();
+    for (let i = 0; i < 500; i++) noteSubagentActivity(`${PROJ}/old-${i}/subagents/c.jsonl`, old);
     noteSubagentActivity(`${PROJ}/${parent}/subagents/c.jsonl`, NOW);
-    expect(subagentActiveAgoMs("old-0", NOW)).toBe(NOW - old);
-    expect(subagentActiveAgoMs(parent, NOW)).toBeNaN();
-    expect(subagentActiveAgoMs("unrecorded", NOW)).toBeNaN();
+    expect(subagentActiveAgoMs(parent, NOW)).toBe(0);
+    expect(subagentActiveAgoMs("old-0", NOW)).toBe(Infinity);
+    expect(subagentActiveAgoMs("unrecorded", NOW)).toBe(Infinity);
+    resetSubagentActivityForTests();
+  });
+
+  test("a dropped write stops reading unknown once it is past the quiet window", () => {
+    resetSubagentActivityForTests();
+    for (let i = 0; i < 501; i++) noteSubagentActivity(`${PROJ}/busy-${i}/subagents/c.jsonl`, NOW);
+    expect(subagentActiveAgoMs("busy-500", NOW + HIBERNATE_SUBAGENT_QUIET_MS - 1)).toBeNaN();
+    expect(subagentActiveAgoMs("busy-500", NOW + HIBERNATE_SUBAGENT_QUIET_MS)).toBe(Infinity);
     resetSubagentActivityForTests();
   });
 });
@@ -394,6 +502,28 @@ describe("the wiring that has no other witness", () => {
     // The other route by which a parked session gets a pane back: transcript
     // driven pane adoption and the warm restart scan both land here.
     expect(functionBlock(src, "registerManagedStartedSession").text).toContain("clearHibernationPark(");
+  });
+
+  test("the idle reaper reads the park's verdict on in-process work", () => {
+    // It used to check only the subagent recorder, so a lead idle five hours
+    // had its live in-process team reaped with it.
+    const reaper = functionBlock(src, "reapIdleOrphanTerminals").text;
+    expect(reaper).toContain("await inProcessWorkRefusal(sessionId, transcript.path, startMs)");
+    // And backs off like the park, so a refused pane's transcript is not
+    // scanned again every pass, while the pass line still names the reason.
+    expect(reaper).toContain("if (recent && now - recent.at < HIBERNATE_REFUSAL_BACKOFF_MS) { skips.push(refusedRecentlySkip(recent.reason)); continue; }");
+    expect(reaper).toContain(`if (work) { skips.push(work); noteHibernationRefusal("reaper",`);
+    expect(functionBlock(src, "hibernationChildHistoryIsClear").text).toContain("await inProcessWorkRefusal(sessionId, file.path, processStartMs)");
+  });
+
+  test("the reaper and the park's child-history gate read the policy's subagent verdict", () => {
+    // Both once tested `!== Infinity`, which holds a parent forever once any
+    // subagent has run. The same window as hibernationBlockReason, or the
+    // policy picks a session the gate then refuses every hour.
+    const verdict = "subagentRecentlyActive(subagentActiveAgoMs(sessionId))";
+    expect(functionBlock(src, "reapIdleOrphanTerminals").text).toContain(`subagentsLive: ${verdict}`);
+    expect(functionBlock(src, "hibernationChildHistoryIsClear").text).toContain(`if (${verdict}) { refuseTarget(sessionId, "live-subagents")`);
+    expect(functionBlock(src, "inProcessWorkRefusal").text).toContain(`if (${verdict}) return "live-subagents";`);
   });
 
   test("the ingest path records subagent appends", () => {
