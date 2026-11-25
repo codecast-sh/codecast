@@ -11,9 +11,9 @@
 // never B's.
 //
 // It also holds the lease that makes the server write pushes at all: while
-// this feeder is live and the page is visible, it renews replyStreams.watch
-// for the conversation (createReplyStreamWatcher).
-import { useMemo } from "react";
+// this feeder is live and its pane and the page are visible, it renews
+// replyStreamLease.watch for the conversation (createReplyStreamWatcher).
+import { useContext, useMemo } from "react";
 import { useMutation } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -21,6 +21,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { REPLY_STREAM_WATCH_RENEW_MS, type ReplyStreamRow } from "@codecast/shared/contracts";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { replyStreamReceivedAt } from "../lib/replyStreamHandoff";
+import { TabParamsCtx } from "../lib/tabParams";
 import { useConvexSync } from "./useConvexSync";
 import { useFeederError } from "./useSyncCollection";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -48,7 +49,7 @@ export function applyReplyStreamAnswer({ conversationId, row }: TaggedAnswer, no
 
 export type ReplyStreamWatcherDeps = {
   now: () => number;
-  /** One renewal (replyStreams.watch). Its failure is swallowed here. */
+  /** One renewal (replyStreamLease.watch). Its failure is swallowed here. */
   send: () => Promise<unknown>;
   /** Whether the page is on screen; a hidden page renews nothing. */
   visible: () => boolean;
@@ -56,11 +57,17 @@ export type ReplyStreamWatcherDeps = {
   clearTimer: (handle: unknown) => void;
 };
 
+/** How long a conversation stays on screen before its first lease, so
+ *  flicking through conversations (j/k) takes none for those passed. */
+export const REPLY_STREAM_WATCH_DWELL_MS = 1_000;
+
 /**
  * The lease that tells the server this conversation is on screen, so the
- * daemon's pushes are written (replyStreams.watch): renewed at once, then
- * every REPLY_STREAM_WATCH_RENEW_MS while the page is visible. Becoming
- * visible renews at once when the last renewal is that old. Each renewal
+ * daemon's pushes are written (replyStreamLease.watch): taken after
+ * REPLY_STREAM_WATCH_DWELL_MS, then renewed every REPLY_STREAM_WATCH_RENEW_MS
+ * while the page is visible. `recheck` (the page shown again, or a wake from
+ * sleep: focus, online, pageshow) renews at once when the last renewal is that
+ * old by the wall clock, since timers stop while a laptop sleeps. Each renewal
  * restarts the clock. A heartbeat, not a user action: no store write, and a
  * failed call (a backend without the function yet) is silent and the clock
  * carries on. Free of React and the DOM so its timing runs under bun.
@@ -69,6 +76,7 @@ export function createReplyStreamWatcher(deps: ReplyStreamWatcherDeps) {
   let lastSent = Number.NEGATIVE_INFINITY;
   let timer: unknown = null;
   let stopped = false;
+  let dwelling = false;
   const schedule = () => {
     if (timer !== null) deps.clearTimer(timer);
     timer = deps.setTimer(() => {
@@ -89,11 +97,17 @@ export function createReplyStreamWatcher(deps: ReplyStreamWatcherDeps) {
   };
   return {
     start() {
-      if (deps.visible()) renew();
-      else schedule();
+      dwelling = true;
+      timer = deps.setTimer(() => {
+        timer = null;
+        dwelling = false;
+        if (stopped) return;
+        if (deps.visible()) renew();
+        else schedule();
+      }, REPLY_STREAM_WATCH_DWELL_MS);
     },
-    visibilityChanged() {
-      if (stopped || !deps.visible()) return;
+    recheck() {
+      if (stopped || dwelling || !deps.visible()) return;
       if (deps.now() - lastSent >= REPLY_STREAM_WATCH_RENEW_MS) renew();
     },
     stop() {
@@ -107,10 +121,18 @@ export function createReplyStreamWatcher(deps: ReplyStreamWatcherDeps) {
 export function useSyncReplyStream(conversationId: string, on: boolean): void {
   // Held at "skip" until the server has confirmed the caller (useSyncCollection).
   const authSettled = useServerAuthSettled();
-  const args = on && authSettled && isConvexId(conversationId) ? { conversation_id: conversationId as Id<"conversations"> } : "skip";
-  // The lease, under the same conditions as the subscription; a new
-  // conversation starts its own at once, and the old one's stops.
-  const watch = useMutation(api.replyStreams.watch);
+  // A visited in-app tab, or a folded pane of a split, stays mounted hidden.
+  // It neither subscribes nor holds the lease: ten open tabs would otherwise
+  // keep ten conversations' pushes flowing. When it shows again the row the
+  // store kept is judged by when it was received, so a reply that went quiet
+  // meanwhile reads as stale rather than drawn afresh.
+  const tab = useContext(TabParamsCtx);
+  const paneVisible = tab ? tab.isVisible ?? tab.isActive : true;
+  const args = on && authSettled && paneVisible && isConvexId(conversationId) ? { conversation_id: conversationId as Id<"conversations"> } : "skip";
+  // The lease, under the same conditions as the subscription, while the
+  // document is visible too; a new conversation (or a pane shown again) starts
+  // its own after the dwell, and the old one's stops.
+  const watch = useMutation(api.replyStreamLease.watch);
   const watching = args === "skip" ? null : conversationId;
   useWatchEffect(() => {
     if (!watching || typeof document === "undefined") return;
@@ -121,12 +143,17 @@ export function useSyncReplyStream(conversationId: string, on: boolean): void {
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
     });
-    const onVisibility = () => watcher.visibilityChanged();
-    document.addEventListener("visibilitychange", onVisibility);
+    const recheck = () => watcher.recheck();
+    document.addEventListener("visibilitychange", recheck);
+    // A wake from sleep: timers were paused, the lease may have lapsed, and
+    // no visibilitychange is promised.
+    const WAKE = ["focus", "online", "pageshow"] as const;
+    for (const e of WAKE) window.addEventListener(e, recheck);
     watcher.start();
     return () => {
       watcher.stop();
-      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("visibilitychange", recheck);
+      for (const e of WAKE) window.removeEventListener(e, recheck);
     };
   }, [watching, watch]);
   const { data, error } = useQueryNoThrow(api.replyStreams.get, args);

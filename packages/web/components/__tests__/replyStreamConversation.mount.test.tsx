@@ -209,7 +209,7 @@ for (const full of [false, true]) test(`its own row, after the tool result, boxe
   expect(v.feed().getAttribute("data-cc-density")).toBe(full ? "full" : "condensed");
   expect(subscribed).toContain("replyStreams:get");
   // The lease that lets the server write pushes, taken once on open.
-  expect(mutated.filter((m) => m === "replyStreams:watch").length).toBe(1);
+  expect(mutated.filter((m) => m === "replyStreamLease:watch").length).toBe(1);
   const drawnBefore = rowLooks(v);
   await push(1, "The jump comes from two writes in one frame.");
   const keys = v.rowKeys();
@@ -407,6 +407,6 @@ test("with the flag off the feeder never subscribes", async () => {
   seed(false);
   const v = await mount();
   expect(subscribed).not.toContain("replyStreams:get");
-  expect(mutated).not.toContain("replyStreams:watch");
+  expect(mutated).not.toContain("replyStreamLease:watch");
   await v.unmount();
 });
