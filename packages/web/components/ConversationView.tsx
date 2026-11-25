@@ -221,6 +221,7 @@ import { pickFeatureMoment, type MomentFeature } from "../lib/featureMoments";
 import { Button } from "./ui/button";
 import { attributeMeasurementsByKey } from "../lib/virtualList/attributeByKey";
 import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold";
+import { measureInFrame } from "../lib/frameMeasure";
 import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
 import { useScrollSeek } from "../hooks/useScrollSeek";
 import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
@@ -2672,8 +2673,25 @@ const ConversationViewInner = (
     const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
 
-    const handleScroll = () => {
+    // The geometry is read at the next frame's start, beside every other
+    // layout read queued there, and acted on after them. Read in the event,
+    // it laid out the page again after every write that scrolled it: a scroll
+    // hold's re-aim, a send's tail follow, a diff toggle (ct-101461). Chrome
+    // delivers scroll events once a frame anyway, so this costs no frame.
+    let readQueued = false;
+    const readGeometry = () => {
+      readQueued = false;
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      const inFlight = pageAnchorRef.current;
+      if (clientHeight > 0 && inFlight && Date.now() <= inFlight.until) capturePageAnchor(scrollContainer, inFlight.dir, inFlight.until);
+      return { scrollTop, scrollHeight, clientHeight };
+    };
+    const handleScroll = () => {
+      if (readQueued) return;
+      readQueued = true;
+      measureInFrame(readGeometry, onGeometry);
+    };
+    const onGeometry = ({ scrollTop, scrollHeight, clientHeight }: { scrollTop: number; scrollHeight: number; clientHeight: number }) => {
       // A hidden tab pane (display:none ancestor) has zero geometry: every
       // metric reads 0, which computes as "at the bottom" and would overwrite
       // the latches that remember the real reading position. Those events are
@@ -2687,9 +2705,6 @@ const ConversationViewInner = (
       // 200px edge bands hiding the jump buttons; wider than the 100px pin band.
       setIsNearTop(scrollTop < 200);
       setIsNearBottom(distanceFromBottom < 200);
-
-      const inFlight = pageAnchorRef.current;
-      if (inFlight && Date.now() <= inFlight.until) capturePageAnchor(scrollContainer, inFlight.dir, inFlight.until);
 
       const scrolledDown = scrollTop > lastScrollTopRef.current + 2;
       const scrolledUp = scrollTop < lastScrollTopRef.current - 2;
@@ -2739,7 +2754,7 @@ const ConversationViewInner = (
     };
 
     scrollContainer.addEventListener("scroll", handleScroll);
-    requestAnimationFrame(handleScroll);
+    handleScroll();
 
     return () => {
       scrollContainer.removeEventListener("scroll", handleScroll);
@@ -2757,9 +2772,13 @@ const ConversationViewInner = (
   useMountEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
-    let lastHeight = sc.clientHeight;
-    const ro = new ResizeObserver(() => {
-      const h = sc.clientHeight;
+    // The observer reports the height itself (its first report is the
+    // starting height), so reading it costs no layout: read off the scroller,
+    // it laid out the page a diff panel toggle had just rewritten.
+    let lastHeight = -1;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[entries.length - 1]?.contentRect.height ?? 0;
+      if (lastHeight < 0) { lastHeight = h; return; }
       if (h === 0 && lastHeight > 0) {
         hiddenFreezeRef.current = { scrollTop: lastScrollTopRef.current, pinned: isNearBottomRef.current };
       } else if (h > 0 && lastHeight === 0 && hiddenFreezeRef.current) {
