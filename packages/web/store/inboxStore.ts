@@ -2204,6 +2204,12 @@ export type ClientUI = {
   // The floating faces' circle size (lib/faces/layout FLOAT_FACE_SIZES).
   // Unstamped: the size that suits a laptop is a stamp on an ultrawide.
   float_face_size?: number;
+  // How the call stage was laid out for the room it last showed: its view and
+  // whether the thread rail is open (CallStage). The stage unmounts whenever
+  // the call window folds to faces, so this is what brings the layout back on
+  // expand. One room only: another call opens on auto with the rail closed.
+  // Per-device, like the other layout toggles.
+  call_stage_layout?: { room: string; view: "auto" | "speaker" | "grid"; thread: boolean };
   // Which microphone, speaker and camera a join opens: each a ranking of
   // device names, best first (lib/calls/deviceRank). Stamped, because the
   // same headphones are the same headphones on every machine.
@@ -8074,7 +8080,7 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style", "modern_style", "mobile_modern_style", "mobile_text_size",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "decision_dock_collapsed", "calls_list_open", "people_view", "float_face_size",
+  "trigger_prompt_height", "thread_state_collapsed", "decision_dock_collapsed", "calls_list_open", "people_view", "float_face_size", "call_stage_layout",
   "call_mic_device_id", "call_camera_device_id",
   "call_speaker_device_id",
 ]);
