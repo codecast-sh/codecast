@@ -14,6 +14,7 @@ setDefaultTimeout(60_000);
 
 const pri = (api as any).priorities;
 const TOKEN = "cc_test_priorities_ada";
+const CY_TOKEN = "cc_test_priorities_cy";
 const DAY = 86_400_000;
 const NOW = Date.now();
 
@@ -35,7 +36,9 @@ async function world() {
     for (const [u, team] of [[ada, acme], [bea, acme], [cy, other], [ada, off]] as const) {
       await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 } as any);
     }
-    await ctx.db.insert("api_tokens", { user_id: ada, token_hash: await hashToken(TOKEN), name: "cli", created_at: NOW, last_used_at: NOW } as any);
+    for (const [u, token] of [[ada, TOKEN], [cy, CY_TOKEN]] as const) {
+      await ctx.db.insert("api_tokens", { user_id: u, token_hash: await hashToken(token), name: "cli", created_at: NOW, last_used_at: NOW } as any);
+    }
 
     const ws = `team:${acme}`;
     const insertPriority = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("priorities", {
@@ -94,6 +97,30 @@ describe("reads", () => {
     expect(await as(bea).query(pri.show, { short_id: "pri-5" })).toBeNull();
   });
 
+  test("a list counts a priority's sessions and shows the three most recently active; old finished ones only with all or a status", async () => {
+    const { t, as, ada, ws, p1, acme } = await world();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 4; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: ada, team_id: acme, agent_type: "claude_code", session_id: `more${i}`, short_id: `jx7mor${i}`, title: "more",
+          started_at: NOW, updated_at: NOW - (i + 1) * DAY, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1,
+        } as any);
+      }
+      await ctx.db.insert("priorities", {
+        user_id: ada, workspace: ws, short_id: "pri-7", title: "Long done", summary: "", status: "done", rank_set_by: "pass", steps: [],
+        first_seen_at: NOW - 200 * DAY, last_active_at: NOW - 90 * DAY, done_at: NOW - 90 * DAY, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      } as any);
+    });
+    const [first] = await as(ada).query(pri.list, { workspace: ws });
+    expect(first.session_count).toBe(6);
+    expect(first.sessions.map((s: any) => s.short_id)).toEqual(["jx7one1", "jx7pvt3", "jx7mor0"]);
+    expect((await as(ada).query(pri.show, { short_id: "pri-1" })).other_sessions).toHaveLength(4);
+    const ids = async (args: any) => (await as(ada).query(pri.list, { workspace: ws, ...args })).map((r: any) => r.short_id);
+    expect(await ids({})).not.toContain("pri-7");
+    expect(await ids({ all: true })).toContain("pri-7");
+    expect(await ids({ status: "done" })).toEqual(["pri-4", "pri-7"]);
+  });
+
   test("show groups the mapped sessions under their steps", async () => {
     const { as, ada } = await world();
     const p = await as(ada).query(pri.show, { short_id: "PRI-1" });
@@ -150,14 +177,28 @@ describe("writes", () => {
 
   test("rank pins one priority to a slot and moves nothing else; the list and the pin line show the effective positions", async () => {
     const { t, as, ada, p1, p2, p3, c1 } = await world();
-    expect(await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 1 })).toEqual({ short_id: "pri-3", rank: 1 });
+    expect(await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 1 })).toMatchObject({ short_id: "pri-3", rank: 1, rank_set_by: "person" });
     expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 1, "pass"], ["pri-2", 2, "pass"], ["pri-3", 1, "person"]]);
     expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-1", "3:pri-2"]);
     expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1", rank: 2 });
     // A slot past the end shows as the last position.
-    expect(await t.mutation(pri.cliRank, { api_token: TOKEN, short_id: "pri-1", rank: 99 })).toEqual({ short_id: "pri-1", rank: 3 });
+    expect(await t.mutation(pri.cliRank, { api_token: TOKEN, short_id: "pri-1", rank: 99 })).toMatchObject({ short_id: "pri-1", rank: 3 });
     expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
     expect(await t.mutation(pri.cliRank, { api_token: TOKEN, short_id: "pri-4", rank: 1 })).toEqual({ error: expect.stringContaining("only active priorities are ranked") });
+  });
+
+  test("a person's slot taken by a later drag pushes the earlier one down, and a pass's write changes neither", async () => {
+    const { t, as, ada, p1, p2, p3 } = await world();
+    await as(ada).mutation(pri.rank, { short_id: "pri-1", rank: 2 });
+    await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 2 });
+    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 3, "person"], ["pri-2", 2, "pass"], ["pri-3", 2, "person"]]);
+    expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3", "3:pri-1"]);
+    // A pass touches the pushed one last; the slots hold.
+    await t.run(async (ctx) => ctx.db.patch(p1, { updated_at: Date.now() + 60_000, summary: "pass wrote" }));
+    expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3", "3:pri-1"]);
+    // A chain: pri-2 to #2 pushes pri-3 to 3, which pushes pri-1 to 4.
+    await as(ada).mutation(pri.rank, { short_id: "pri-2", rank: 2 });
+    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 4, "person"], ["pri-2", 2, "person"], ["pri-3", 3, "person"]]);
   });
 
   test("a step's tier is the person's once set", async () => {
@@ -175,9 +216,11 @@ describe("writes", () => {
     expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", null, "pass"], ["pri-2", 2, "pass"], ["pri-3", null, "pass"]]);
     expect((await t.run(async (ctx) => ctx.db.get(p1)))!.status).toBe("set_aside");
     expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3"]);
-    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-1" })).toEqual({ short_id: "pri-1", status: "active" });
+    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-1" })).toMatchObject({ short_id: "pri-1", status: "active", rank: 2 });
     expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 3, "pass"], ["pri-2", 2, "pass"], ["pri-3", null, "pass"]]);
     expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-1", "3:pri-3"]);
+    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-4" })).toEqual({ error: "pri-4 is done, not set aside; only a set-aside priority is restored" });
+    await expect(as(ada).mutation(pri.restore, { short_id: "pri-1" })).rejects.toThrow("only a set-aside priority is restored");
   });
 
   test("only the owner changes a priority", async () => {
@@ -193,6 +236,12 @@ describe("writes", () => {
     await expect(as(ada).mutation(pri.rank, { short_id: "pri-6", rank: 1 })).rejects.toThrow(offMessage);
     expect(await t.mutation(pri.cliSetAside, { api_token: TOKEN, short_id: "pri-6" })).toEqual({ error: offMessage });
     expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: off })).toEqual({ error: offMessage });
+  });
+
+  test("run refuses a team the caller is not in, and schedules nothing", async () => {
+    const { t, acme } = await world();
+    expect(await t.mutation(pri.cliRun, { api_token: CY_TOKEN, team_id: acme })).toEqual({ error: "you are not a member of that team" });
+    expect(await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
   });
 
   test("run schedules one pass for the caller in the workspace", async () => {

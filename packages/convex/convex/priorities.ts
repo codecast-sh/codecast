@@ -16,15 +16,21 @@ import { canAccessConversation } from "./lib/access";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
-import type { PriorityPinLine, PriorityStatus } from "@codecast/shared/contracts/priorities";
+import { getOwnerMembership, teamReadLevelSync } from "./privacy";
+import { isSessionOwner } from "./sessionOwners";
+import { effectiveMembershipVisibility } from "./teamVisibility";
+import type {
+  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityPinLine, PriorityRow, PrioritySession, PriorityStatus,
+} from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 
 const FEATURE = "priorities" as const;
 const DAY = 86_400_000;
-/** Sessions listed per priority in a list; `show` lists more. */
-const LIST_SESSIONS = 20;
-const SHOW_SESSIONS = 100;
+/** Sessions a list shows per priority (it counts them all); `show` lists every one. */
+const LIST_SESSIONS = 3;
 const MAX_HISTORY_DAYS = 30;
+/** Without --all or a status, a list leaves out what finished or went quiet longer ago than this. */
+const FINISHED_WINDOW_DAYS = 60;
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -97,21 +103,33 @@ function criticalCounts(p: Priority): { critical_done: number; critical_total: n
   return { critical_done: critical.filter((s) => s.done).length, critical_total: critical.length };
 }
 
-type SessionRef = { short_id: string; title: string; step_key: string | null; updated_at: number };
+/**
+ * Whether the viewer may open a session, for one call over many sessions. The
+ * same rule as canAccessConversation (owner, session owner, or a teammate the
+ * session's content is shared with), with the owner's team membership read
+ * once per owner and team instead of once per session.
+ */
+function sessionAccess(ctx: Ctx, viewer: Id<"users">, held: Set<string>): (c: Doc<"conversations">) => Promise<boolean> {
+  const memberships = new Map<string, Promise<any>>();
+  return async (c) => {
+    if (String(c.user_id) === String(viewer) || String(c.owner_user_id ?? "") === String(viewer)) return true;
+    if (c.team_id && held.has(`team:${c.team_id}`)) {
+      const k = `${c.user_id}|${c.team_id}`;
+      if (!memberships.has(k)) memberships.set(k, getOwnerMembership(ctx, c.user_id, c.team_id));
+      if (teamReadLevelSync(c, effectiveMembershipVisibility(await memberships.get(k), c.started_at)) === "content") return true;
+    }
+    return isSessionOwner(ctx, c._id, viewer);
+  };
+}
 
-/** The sessions mapped to a priority that the viewer can open, newest started first. */
-async function sessionsOf(ctx: Ctx, viewer: Id<"users">, p: Priority, limit: number): Promise<SessionRef[]> {
-  const convs = await ctx.db
-    .query("conversations")
-    .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
-    .order("desc")
-    .take(limit);
-  const out: SessionRef[] = [];
+/** The sessions mapped to a priority that the viewer can open, the most recently active first. */
+async function sessionsOf(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>): Promise<PrioritySession[]> {
+  const convs: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).collect();
+  const out: PrioritySession[] = [];
   for (const c of convs) {
-    if (!(await canAccessConversation(ctx, viewer, c))) continue;
-    out.push({ short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at });
+    if (await canOpen(c)) out.push({ short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at });
   }
-  return out;
+  return out.sort((a, b) => b.updated_at - a.updated_at);
 }
 
 async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, string>> {
@@ -123,8 +141,8 @@ async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, strin
   return names;
 }
 
-/** `position` is where it shows among the owner's active priorities (null when not active). */
-async function rowFor(ctx: Ctx, viewer: Id<"users">, p: Priority, owner: string, position: number | null, sessionLimit: number) {
+/** `position` is where it shows among the owner's active priorities (null when not active); `sessions` lists at most `limit`. */
+function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, sessions: PrioritySession[], limit = Infinity): PriorityRow {
   return {
     _id: p._id,
     short_id: p.short_id,
@@ -143,15 +161,27 @@ async function rowFor(ctx: Ctx, viewer: Id<"users">, p: Priority, owner: string,
     first_seen_at: p.first_seen_at,
     last_active_at: p.last_active_at,
     done_at: p.done_at ?? null,
-    sessions: await sessionsOf(ctx, viewer, p, sessionLimit),
+    session_count: sessions.length,
+    sessions: sessions.slice(0, limit),
   };
 }
 
-export type PriorityRow = Awaited<ReturnType<typeof rowFor>>;
+/** One priority's row as a write echoes it. */
+async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promise<PriorityRow> {
+  const p: Priority = await ctx.db.get(id);
+  const names = await ownerNames(ctx, [p]);
+  const sessions = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)));
+  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), sessions, LIST_SESSIONS);
+}
 
-/** The priorities the viewer can read in one workspace (or all of theirs), never merged ones unless asked. */
-async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, workspace: string | undefined, status: PriorityStatus | undefined): Promise<Priority[]> {
-  const held = await heldKeysFor(ctx, viewer);
+/**
+ * The priorities the viewer can read in one workspace (or all of theirs).
+ * Merged ones only when asked for by status; without a status or `all`, done
+ * and quiet ones only from the last FINISHED_WINDOW_DAYS.
+ */
+async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, held: Set<string>, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<Priority[]> {
+  const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
+  const recent = (r: Priority) => all || (r.status !== "done" && r.status !== "quiet") || (r.done_at ?? r.last_active_at) >= since;
   const featureOn = featureCheck(ctx);
   const keys = workspace ? (held.has(workspace) ? [workspace] : []) : [...held];
   const out: Priority[] = [];
@@ -161,7 +191,7 @@ async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, workspace: strin
       .query("priorities")
       .withIndex("by_workspace_status", (q: any) => (status ? q.eq("workspace", key).eq("status", status) : q.eq("workspace", key)))
       .collect();
-    for (const r of rows) if (status || r.status !== "merged") out.push(r);
+    for (const r of rows) if (status || (r.status !== "merged" && recent(r))) out.push(r);
   }
   return out;
 }
@@ -170,8 +200,9 @@ async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, workspace: strin
  * The viewer's own first, then each teammate's; within a person, active
  * before done, quiet and set aside, each in rank order.
  */
-async function listFor(ctx: Ctx, viewer: Id<"users">, workspace: string | undefined, status: PriorityStatus | undefined): Promise<PriorityRow[]> {
-  const rows = await visiblePriorities(ctx, viewer, workspace, status);
+async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<PriorityRow[]> {
+  const held = await heldKeysFor(ctx, viewer);
+  const rows = await visiblePriorities(ctx, viewer, held, args.workspace, args.status, !!args.all);
   const names = await ownerNames(ctx, rows);
   const positions = positionsOf(rows);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
@@ -184,7 +215,10 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, workspace: string | undefi
     || STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
     || at(a) - at(b)
     || b.last_active_at - a.last_active_at);
-  return Promise.all(rows.map((p) => rowFor(ctx, viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, LIST_SESSIONS)));
+  const canOpen = sessionAccess(ctx, viewer, held);
+  const out: PriorityRow[] = [];
+  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await sessionsOf(ctx, p, canOpen), LIST_SESSIONS));
+  return out;
 }
 
 async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
@@ -201,20 +235,18 @@ async function readable(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise
   return p;
 }
 
-async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string) {
+async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Result<PriorityDetail>> {
   const p = await readable(ctx, viewer, shortId);
   if ("error" in p) return p;
   const names = await ownerNames(ctx, [p]);
-  const row = await rowFor(ctx, viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), SHOW_SESSIONS);
+  const sessions = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)));
+  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), sessions);
   return {
     ...row,
-    steps: p.steps.map((s) => ({ ...s, sessions: row.sessions.filter((c) => c.step_key === s.key) })),
-    /** Mapped sessions whose step is unknown or gone. */
-    other_sessions: row.sessions.filter((c) => !p.steps.some((s) => s.key === c.step_key)),
+    steps: p.steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
+    other_sessions: sessions.filter((c) => !p.steps.some((s) => s.key === c.step_key)),
   };
 }
-
-export type HistoryLane = { key: string; short_id: string | null; title: string; status: PriorityStatus | null; counts: number[]; total: number };
 
 /**
  * Typed messages per local day, one lane per priority and one for sessions no
@@ -222,7 +254,7 @@ export type HistoryLane = { key: string; short_id: string | null; title: string;
  * keyed by the person who typed), in sessions whose priority they can read.
  * Option picks on a decision card are not typing.
  */
-async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; workspace?: string; tz_offset_minutes?: number }) {
+async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; workspace?: string; tz_offset_minutes?: number }): Promise<PriorityHistory> {
   const days = Math.min(MAX_HISTORY_DAYS, Math.max(1, Math.floor(args.days ?? 15)));
   const shift = (args.tz_offset_minutes ?? 0) * 60_000;
   const firstLocal = Math.floor((Date.now() - shift) / DAY) * DAY - (days - 1) * DAY;
@@ -276,7 +308,7 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
   });
   return {
     days: dayKeys,
-    lanes: ordered.map(([key, { p, counts }]): HistoryLane => ({
+    lanes: ordered.map(([key, { p, counts }]): PriorityHistoryLane => ({
       key,
       short_id: p?.short_id ?? null,
       title: p?.title ?? "Unassigned",
@@ -300,44 +332,58 @@ async function owned(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Re
   return p;
 }
 
-async function doRank(ctx: Ctx, viewer: Id<"users">, shortId: string, rank: number) {
+async function doRank(ctx: Ctx, viewer: Id<"users">, shortId: string, rank: number): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   if (p.status !== "active") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only active priorities are ranked (restore it first)` };
   if (!Number.isInteger(rank) || rank < 1) return { error: "a rank is a whole number from 1" };
-  // The person's rank is a fixed slot; nothing else moves (orderPriorities fits the rest around it).
-  await ctx.db.patch(p._id, { rank, rank_set_by: "person", updated_at: Date.now() });
-  return { short_id: p.short_id, rank: await positionOf(ctx, (await ctx.db.get(p._id))!) };
+  // The person's rank is a fixed slot (orderPriorities fits the pass's around it). A slot
+  // the person already gave another priority is taken over: that one, and any it then
+  // lands on, moves down one, so the person's slots never collide.
+  const now = Date.now();
+  const pinned: Priority[] = (await ctx.db
+    .query("priorities")
+    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
+    .collect())
+    .filter((r: Priority) => String(r._id) !== String(p._id) && r.rank_set_by === "person" && r.rank != null && r.rank >= rank)
+    .sort((a: Priority, b: Priority) => a.rank! - b.rank! || b.updated_at - a.updated_at);
+  let taken = rank;
+  for (const r of pinned) {
+    if (r.rank! > taken) break;
+    taken++;
+    await ctx.db.patch(r._id, { rank: taken, updated_at: now });
+  }
+  await ctx.db.patch(p._id, { rank, rank_set_by: "person", updated_at: now });
+  return echo(ctx, viewer, p._id);
 }
 
-async function doStepTier(ctx: Ctx, viewer: Id<"users">, shortId: string, stepKey: string, tier: "critical" | "polish") {
+async function doStepTier(ctx: Ctx, viewer: Id<"users">, shortId: string, stepKey: string, tier: "critical" | "polish"): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const key = stepKey.trim().toLowerCase();
   if (!p.steps.some((s) => s.key === key)) return { error: `${p.short_id} has no step ${stepKey}; its steps: ${p.steps.map((s) => s.key).join(", ") || "none"}` };
   const steps = p.steps.map((s) => (s.key === key ? { ...s, tier, tier_set_by: "person" as const } : s));
   await ctx.db.patch(p._id, { steps, updated_at: Date.now() });
-  return { short_id: p.short_id, step_key: key, tier };
+  return echo(ctx, viewer, p._id);
 }
 
-/** Set aside leaves the ranking; restore brings it back active, last among the pass-ranked. */
-async function doSetAside(ctx: Ctx, viewer: Id<"users">, shortId: string, aside: boolean) {
+/** Set aside leaves the ranking; restore brings a set-aside priority back active, last among the pass-ranked. */
+async function doSetAside(ctx: Ctx, viewer: Id<"users">, shortId: string, aside: boolean): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const now = Date.now();
   if (aside) {
-    if (p.status === "set_aside") return { short_id: p.short_id, status: p.status };
-    await ctx.db.patch(p._id, { status: "set_aside", rank: undefined, rank_set_by: "pass", updated_at: now });
-    return { short_id: p.short_id, status: "set_aside" as const };
+    if (p.status !== "set_aside") await ctx.db.patch(p._id, { status: "set_aside", rank: undefined, rank_set_by: "pass", updated_at: now });
+    return echo(ctx, viewer, p._id);
   }
-  if (p.status === "active") return { short_id: p.short_id, status: p.status };
+  if (p.status !== "set_aside") return { error: `${p.short_id} is ${p.status.replace("_", " ")}, not set aside; only a set-aside priority is restored` };
   const active: Priority[] = await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
     .collect();
   const last = Math.max(0, ...active.filter((r) => r.rank_set_by === "pass").map((r) => r.rank ?? 0));
-  await ctx.db.patch(p._id, { status: "active", rank: last + 1, rank_set_by: "pass", done_at: undefined, updated_at: now });
-  return { short_id: p.short_id, status: "active" as const };
+  await ctx.db.patch(p._id, { status: "active", rank: last + 1, rank_set_by: "pass", updated_at: now });
+  return echo(ctx, viewer, p._id);
 }
 
 function orThrow<T>(res: Result<T>): T {
@@ -352,17 +398,17 @@ const cliScope = { team_id: v.optional(v.id("teams")), personal: v.optional(v.bo
 // ── Web (signed-in user) ─────────────────────────────────────────────────
 
 export const list = query({
-  args: { workspace: v.optional(v.string()), status: statusArg },
+  args: { workspace: v.optional(v.string()), status: statusArg, all: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<PriorityRow[]> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return [];
-    return listFor(ctx, viewer, args.workspace, args.status);
+    return listFor(ctx, viewer, args);
   },
 });
 
 export const show = query({
   args: { short_id: v.string() },
-  handler: async (ctx, { short_id }) => {
+  handler: async (ctx, { short_id }): Promise<PriorityDetail | null> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return null;
     const res = await showFor(ctx, viewer, short_id);
@@ -372,7 +418,7 @@ export const show = query({
 
 export const history = query({
   args: { days: v.optional(v.number()), workspace: v.optional(v.string()), tz_offset_minutes: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<PriorityHistory> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return { days: [], lanes: [] };
     return historyFor(ctx, viewer, args);
@@ -430,11 +476,11 @@ export const restore = mutation({
 // ── CLI (api token) ──────────────────────────────────────────────────────
 
 export const cliList = query({
-  args: { api_token: v.string(), status: statusArg, ...cliScope },
+  args: { api_token: v.string(), status: statusArg, all: v.optional(v.boolean()), ...cliScope },
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    return { priorities: await listFor(ctx, viewer, cliWorkspace(viewer, args), args.status) };
+    return { priorities: await listFor(ctx, viewer, { workspace: cliWorkspace(viewer, args), status: args.status, all: args.all }) };
   },
 });
 
@@ -502,10 +548,12 @@ export const cliRun = mutation({
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
     const named = cliWorkspace(viewer, args);
+    const held = await heldKeysFor(ctx, viewer);
+    if (named && !held.has(named)) return { error: "you are not a member of that team" };
     const featureOn = featureCheck(ctx);
     if (named && !(await featureOn(named))) return { error: teamFeatureOffMessage(FEATURE) };
     const workspaces: string[] = [];
-    for (const key of named ? [named] : await heldKeysFor(ctx, viewer)) if (await featureOn(key)) workspaces.push(key);
+    for (const key of named ? [named] : held) if (await featureOn(key)) workspaces.push(key);
     if (!workspaces.length) return { error: teamFeatureOffMessage(FEATURE) };
     for (const workspace of workspaces) {
       await ctx.scheduler.runAfter(0, (internal as any).priorityPassRun.runNow, { user_id: viewer, workspace });

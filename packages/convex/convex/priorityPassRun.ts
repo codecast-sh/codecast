@@ -4,12 +4,13 @@
 // writes atomically. A cron sweeps every few hours; `cast priorities run`
 // calls runNow.
 //
-// Every run leaves one priority_pass_runs row. Its cursor_at is the newest
-// input an ok run read; a skipped or failed run copies the cursor already
-// there, so the latest row is always where the next run starts. Sessions are
-// read oldest first: when more moved than one prompt holds, the run reads as
-// many as fit, moves the cursor to the last of them, and chains another run
-// for the rest.
+// Every run leaves one priority_pass_runs row, and the furthest cursor_at
+// among the recent rows is where the next run starts (runs finish out of
+// order). Sessions are read oldest first: when more moved than one prompt
+// holds, the run reads as many as fit, moves the cursor to the last of them,
+// and chains another run for the rest. A run that finds nothing of this
+// workspace's moves the cursor past what it read; one that keeps failing on a
+// cursor steps past it. Each pair spends at most PRIORITY_PASS_DAILY_USD a day.
 
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
@@ -19,8 +20,11 @@ import { nextShortId } from "./counters";
 import { runModelCallOrOwn, type CallScope } from "./modelCalls";
 import { workspaceForConversation } from "./lib/access";
 import { parseWorkspaceKey, workspaceKey } from "./lib/accessKeys";
+import { isTeamMember } from "./privacy";
 import { teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
+import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import {
+  PRIORITY_PASS_CAPS,
   PRIORITY_PASS_MODEL,
   mergePriorities,
   parsePriorityPassOutput,
@@ -34,21 +38,34 @@ import {
 } from "./lib/priorityPass";
 
 const DAY = 86_400_000;
+const MINUTE = 60_000;
 /** A first pass reads this far back. */
 export const FIRST_PASS_WINDOW_MS = 14 * DAY;
-/** The oldest typed messages and pin events one pass reads (each): about two weeks of a busy person. */
-const ACTIVITY_READ = 3_000;
+/**
+ * A typed message is stamped with its client time and can land minutes later
+ * (or hours, after an offline sync): a pass reads only up to this long ago, and
+ * re-reads this far below its cursor for rows that landed since.
+ */
+export const LATE_MARGIN_MS = 5 * MINUTE;
+export const OVERLAP_MS = 10 * MINUTE;
+/** The oldest typed messages and pin events one pass reads (each). A typed message holds up to 8 KB: this keeps a pass far under the read limit. */
+const ACTIVITY_READ = 1_000;
 /** The sessions touched earliest that one pass reads; the prompt may fit fewer. */
 const SESSIONS_READ = 120;
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next sweep. */
 export const MAX_CHAINED_RUNS = 6;
 const CHAIN_DELAY_MS = 2_000;
+/** After this many failed runs in a row on one cursor, the last one steps the cursor past what failed. */
+export const FAILURES_BEFORE_STEP = 3;
+/** What one (person, workspace) may spend on passes in a day; past it, passes skip until older runs age out. */
+export const PRIORITY_PASS_DAILY_USD = 1.5;
+/** `cast priorities run` runs at most once in this long per (person, workspace). */
+export const RUN_NOW_EVERY_MS = 10 * MINUTE;
 const TASKS_PER_SESSION = 12;
 const PR_LINKS_PER_SESSION = 10;
-/** Pull request rows one pass loads, across its sessions: a row carries its files and can reach 1 MB. */
-const PR_ROWS_READ = 40;
+/** Pull request rows one pass loads beyond what sessions fold: a row carries its files and can reach 1 MB. */
+const PR_ROWS_READ = 8;
 const PRIORITIES_READ = 200;
-const SESSIONS_PER_PRIORITY_READ = 500;
 const INITIATIVES_READ = 200;
 /** How long the model may take: a full prompt and a long reply run minutes. */
 const PASS_TIMEOUT_MS = 5 * 60_000;
@@ -58,6 +75,8 @@ const SWEEP_STAGGER_MS = 5_000;
 
 /** Typed messages and pins a sweep reads per pair to see whether anything moved there. */
 const SWEEP_ACTIVITY_READ = 300;
+/** The newest runs read for the cursor, failures and the day's spend's recent end. */
+const RECENT_RUNS = 30;
 // Codegen catches up on the next push.
 const self = (internal as any).priorityPassRun;
 
@@ -72,6 +91,8 @@ export type PassInputs = {
   cursor_at: number;
   /** More moved since the cursor than was read: another run picks it up. */
   more: boolean;
+  /** Where the cursor goes when every returned session is read. */
+  read_to: number;
 };
 
 export type PassResult = {
@@ -90,21 +111,36 @@ const sessionId = (conv: Doc<"conversations">) => conv.short_id ?? String(conv._
 const inWorkspace = (conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
   String(conv.user_id) === String(userId) && workspaceKey(workspaceForConversation(conv)) === workspace;
 
-const lastRun = (ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<Doc<"priority_pass_runs"> | null> =>
+/** The pair's newest runs by start, newest first. */
+const recentRuns = (ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<Doc<"priority_pass_runs">[]> =>
   ctx.db
     .query("priority_pass_runs")
     .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
     .order("desc")
-    .first();
+    .take(RECENT_RUNS);
+
+/**
+ * The pair's cursor: the furthest any recent run read (runs finish out of
+ * order, so the newest started is not always the furthest), and when the
+ * first run to reach it started: rows that landed before then were read.
+ */
+async function cursorState(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<{ cursor_at: number; set_at: number } | null> {
+  let best: { cursor_at: number; set_at: number } | null = null;
+  for (const r of await recentRuns(ctx, userId, workspace)) {
+    if (!best || r.cursor_at > best.cursor_at) best = { cursor_at: r.cursor_at, set_at: r.started_at };
+    else if (r.cursor_at === best.cursor_at) best.set_at = Math.min(best.set_at, r.started_at);
+  }
+  return best;
+}
 
 async function cursorFor(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<number> {
-  return (await lastRun(ctx, userId, workspace))?.cursor_at ?? now - FIRST_PASS_WINDOW_MS;
+  return (await cursorState(ctx, userId, workspace))?.cursor_at ?? now - FIRST_PASS_WINDOW_MS;
 }
 
 /**
- * The person's typed messages and pin events in (since, until], oldest first.
- * When either list fills its limit, both stop short of where it stopped, so
- * everything up to `more`'s line was read in full.
+ * The person's typed messages and pin events in (since, until], oldest first,
+ * and how far that read is complete (`read_to`). When either list fills its
+ * limit, both stop short of where it stopped.
  */
 async function activitySince(ctx: { db: any }, userId: Id<"users">, since: number, until: number, limit = ACTIVITY_READ) {
   let sends: Doc<"user_sends">[] = await ctx.db
@@ -120,7 +156,7 @@ async function activitySince(ctx: { db: any }, userId: Id<"users">, since: numbe
     sends = sends.filter((s) => s.timestamp < horizon);
     pins = pins.filter((p) => p.at < horizon);
   }
-  return { sends, pins, more: horizon !== Infinity };
+  return { sends, pins, more: horizon !== Infinity, read_to: horizon !== Infinity ? horizon - 1 : until };
 }
 
 /** The tasks a session links (the association rail, the tasks it filed, its active task), in this workspace. */
@@ -142,8 +178,9 @@ async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, worksp
 }
 
 /**
- * The pull requests a session links: the one it shepherds (folded on the row),
- * then its linked rows, its own commits first, while the pass's row budget lasts.
+ * The pull requests a session links: the one it shepherds (folded on the row,
+ * no read), then its linked rows, its own commits first, while the pass's
+ * row budget lasts.
  */
 async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: { left: number; seen: Map<string, { ref: string; merged: boolean }> }) {
   const out = new Map<string, { ref: string; merged: boolean }>();
@@ -167,13 +204,33 @@ async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: 
   return [...out.values()];
 }
 
-/** Assembles the pass's input for one person in one workspace: what they touched since the cursor, and their priorities now. */
+/**
+ * Assembles the pass's input for one person in one workspace: what they
+ * touched since the cursor, and their priorities now. A session filed under a
+ * team whose data may not go to the model vendor is left out, whichever
+ * workspace it reads in.
+ */
 export const passInputs = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string(), now: v.optional(v.number()), window_start: v.optional(v.number()) },
   handler: async (ctx, args): Promise<PassInputs> => {
     const now = args.now ?? Date.now();
-    const cursor_at = args.window_start ?? (await cursorFor(ctx, args.user_id, args.workspace, now));
-    const { sends, pins, more: activityLeft } = await activitySince(ctx, args.user_id, cursor_at, now);
+    const state = await cursorState(ctx, args.user_id, args.workspace);
+    const cursor_at = args.window_start ?? state?.cursor_at ?? now - FIRST_PASS_WINDOW_MS;
+    // Below a run's cursor, only rows that landed after that run started are new.
+    const overlap = state && state.cursor_at === cursor_at ? state : null;
+    const until = Math.max(cursor_at, now - LATE_MARGIN_MS);
+    const read = await activitySince(ctx, args.user_id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until);
+    const fresh = (at: number, landed: number) => !overlap || at > cursor_at || landed > overlap.set_at;
+    const sends = read.sends.filter((s) => fresh(s.timestamp, s._creationTime));
+    const pins = read.pins.filter((p) => fresh(p.at, p._creationTime));
+
+    // A session may go to the model unless its team's data may not; one read per team.
+    const refusals = new Map<string, boolean>();
+    const mayRead = async (conv: Doc<"conversations">) => {
+      const key = String(conv.team_id ?? "");
+      if (!refusals.has(key)) refusals.set(key, (await vendorRefusalFromDb(ctx, { workspace: args.workspace, conversationId: conv._id }, "anthropic")) !== null);
+      return !refusals.get(key);
+    };
 
     // Touched sessions: the person's own, in this workspace.
     const convs = new Map<string, Doc<"conversations"> | null>();
@@ -181,7 +238,7 @@ export const passInputs = internalQuery({
       const key = String(id);
       if (!convs.has(key)) {
         const conv: Doc<"conversations"> | null = await ctx.db.get(id);
-        convs.set(key, conv && inWorkspace(conv, args.user_id, args.workspace) ? conv : null);
+        convs.set(key, conv && inWorkspace(conv, args.user_id, args.workspace) && (await mayRead(conv)) ? conv : null);
       }
       return convs.get(key)!;
     };
@@ -201,6 +258,7 @@ export const passInputs = internalQuery({
     // Oldest last activity first: a run that cannot read them all reads the earliest and leaves the rest past its cursor.
     const byLast = [...touched.values()].sort((a, b) => a.last - b.last);
     const oldestFirst = byLast.slice(0, SESSIONS_READ);
+    const truncated = byLast.length > oldestFirst.length;
     const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
     const sessions: PassSession[] = [];
     for (const t of oldestFirst) {
@@ -219,18 +277,27 @@ export const passInputs = internalQuery({
       });
     }
 
-    // The person's priorities in this workspace, with the sessions each holds now.
+    // The person's priorities in this workspace, with their newest sessions;
+    // one the prompt hides (done or quiet for a month) is left out whole.
+    const hiddenBefore = now - PRIORITY_PASS_CAPS.finished_days * DAY;
     const rows: Doc<"priorities">[] = [];
     for (const status of LIVE_STATUSES) {
-      rows.push(...(await ctx.db
+      const found: Doc<"priorities">[] = await ctx.db
         .query("priorities")
         .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", args.user_id).eq("workspace", args.workspace).eq("status", status))
-        .take(PRIORITIES_READ)));
+        .take(PRIORITIES_READ);
+      rows.push(...found.filter((p) => !((p.status === "done" || p.status === "quiet") && p.last_active_at < hiddenBefore)));
     }
     const priorities: PassPriority[] = [];
     const stepTaskIds = new Set<string>();
     for (const p of rows) {
-      const held: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).take(SESSIONS_PER_PRIORITY_READ);
+      const held: Doc<"conversations">[] = await ctx.db
+        .query("conversations")
+        .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
+        .order("desc")
+        .take(PRIORITY_PASS_CAPS.sessions_per_priority);
+      const readable: Doc<"conversations">[] = [];
+      for (const c of held) if (inWorkspace(c, args.user_id, args.workspace) && (await mayRead(c))) readable.push(c);
       priorities.push({
         short_id: p.short_id,
         title: p.title,
@@ -241,9 +308,7 @@ export const passInputs = internalQuery({
         serves: p.serves ?? null,
         steps: p.steps,
         last_active_at: p.last_active_at,
-        sessions: held
-          .filter((c) => inWorkspace(c, args.user_id, args.workspace))
-          .map((c) => ({ id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at })),
+        sessions: readable.map((c) => ({ id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at })),
       });
       for (const s of p.steps) for (const r of s.refs) if (r.kind === "task") stepTaskIds.add(r.id);
     }
@@ -271,14 +336,32 @@ export const passInputs = internalQuery({
         sessions,
       },
       cursor_at,
-      more: activityLeft || byLast.length > oldestFirst.length,
+      more: read.more || truncated,
+      read_to: truncated ? oldestFirst[oldestFirst.length - 1].last : read.read_to,
+    };
+  },
+});
+
+/** The pair's spend over the last day, and when its last paid run (ok or failed) started. */
+export const passLimits = internalQuery({
+  args: { user_id: v.id("users"), workspace: v.string() },
+  handler: async (ctx, args): Promise<{ spent_usd: number; last_paid_at: number | null }> => {
+    const since = Date.now() - DAY;
+    const day: Doc<"priority_pass_runs">[] = await ctx.db
+      .query("priority_pass_runs")
+      .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", args.user_id).eq("workspace", args.workspace).gte("started_at", since))
+      .collect();
+    const paid = day.filter((r) => r.status !== "skipped" || (r.cost_usd ?? 0) > 0);
+    return {
+      spent_usd: day.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0),
+      last_paid_at: paid.length ? Math.max(...paid.map((r) => r.started_at)) : null,
     };
   },
 });
 
 type Gate = { on: boolean; cursor_at: number; budgeted: boolean };
 
-/** Whether the priorities feature is on where the pass would write (a personal key only for its own person), the cursor, and whether the workspace pays for model calls. */
+/** Whether the priorities feature is on where the pass would write (a team key only for a member, a personal key only for its own person), the cursor, and whether the workspace pays for model calls. */
 export const passGate = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string() },
   handler: async (ctx, args): Promise<Gate> => {
@@ -286,7 +369,7 @@ export const passGate = internalQuery({
     const on = !ws
       ? false
       : ws.type === "team"
-        ? await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities")
+        ? (await isTeamMember(ctx, args.user_id, ws.teamId)) && (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities"))
         : String(ws.userId) === String(args.user_id) && (await workspaceHasFeature(ctx, { user_id: args.user_id }, "priorities"));
     const budget = await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first();
     return { on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0 };
@@ -302,19 +385,33 @@ const runRowArgs = {
   cost_usd: v.optional(v.number()),
 };
 
-/** A run that wrote nothing: skipped or failed. Its cursor is the newer of the one it started from and one a run that finished meanwhile left. */
-async function insertNothingRun(ctx: { db: any }, args: { user_id: Id<"users">; workspace: string; started_at: number; cursor_at: number; model: string; cost_usd?: number; status: "error" | "skipped"; error?: string }) {
-  const last = await lastRun(ctx, args.user_id, args.workspace);
-  return ctx.db.insert("priority_pass_runs", { ...args, cursor_at: Math.max(args.cursor_at, last?.cursor_at ?? -Infinity), finished_at: Date.now(), counts: NO_COUNTS });
-}
+type NothingRun = { user_id: Id<"users">; workspace: string; started_at: number; cursor_at: number; model: string; cost_usd?: number; status: "error" | "skipped"; error?: string };
 
+const insertNothingRun = (ctx: { db: any }, args: NothingRun) =>
+  ctx.db.insert("priority_pass_runs", { ...args, finished_at: Date.now(), counts: NO_COUNTS });
+
+/**
+ * A run that wrote no plan: skipped or failed, at the cursor it started from
+ * (a skip that read everything up to `step_to` and found nothing here moves
+ * it there). A failure that is the FAILURES_BEFORE_STEP-th in a row on one
+ * cursor steps it to `step_to`, past what keeps failing, and says so.
+ */
 export const recordRun = internalMutation({
-  args: { ...runRowArgs, status: v.union(v.literal("error"), v.literal("skipped")), error: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<Id<"priority_pass_runs">> => insertNothingRun(ctx, args),
+  args: { ...runRowArgs, status: v.union(v.literal("error"), v.literal("skipped")), error: v.optional(v.string()), step_to: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<Id<"priority_pass_runs">> => {
+    const { step_to, ...run } = args;
+    if (step_to === undefined || step_to <= run.cursor_at) return insertNothingRun(ctx, run);
+    if (run.status === "skipped") return insertNothingRun(ctx, { ...run, cursor_at: step_to });
+    let failures = 1;
+    for (const r of await recentRuns(ctx, run.user_id, run.workspace)) {
+      if (r.status === "skipped") continue;
+      if (r.status !== "error" || r.cursor_at !== run.cursor_at) break;
+      failures++;
+    }
+    if (failures < FAILURES_BEFORE_STEP) return insertNothingRun(ctx, run);
+    return insertNothingRun(ctx, { ...run, cursor_at: step_to, error: `${run.error ?? "failed"} (failed ${failures} times here: stepped past)` });
+  },
 });
-
-/** Runs a newer pass may have finished under this one (a run that started earlier can finish later). */
-const SUPERSEDE_LOOKBACK = 20;
 
 /** Plan fields as row fields: null clears a field on a patch and is left out of an insert. */
 function rowFields(w: Record<string, unknown>, insert = false): Record<string, unknown> {
@@ -327,27 +424,24 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
 }
 
 /**
- * Writes one pass's plan, atomically, with its run row. Re-checks what the
- * plan cannot know: a priority belongs to this person and workspace, a session
- * is theirs and in this workspace, and anything the person set while the
- * model was reading (a rank, a step's tier, a set-aside) still stands. A run
- * that another ok run finished under since it started writes nothing (null):
- * its plan was made from what that run has since changed.
+ * Writes one pass's plan, atomically, with its run row at `cursor_at`. Re-checks
+ * what the plan cannot know: a priority belongs to this person and workspace,
+ * a session is theirs and in this workspace, and anything the person set while
+ * the model was reading (a rank, a step's tier, a set-aside) still stands. A
+ * run that another ok run finished under since it started writes nothing
+ * (null) and records the cursor it started from: its plan was made from what
+ * that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, plan: v.any() },
+  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any() },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const recent: Doc<"priority_pass_runs">[] = await ctx.db
-      .query("priority_pass_runs")
-      .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", args.user_id).eq("workspace", args.workspace))
-      .order("desc")
-      .take(SUPERSEDE_LOOKBACK);
+    const { plan: raw, from_cursor, ...run } = args;
+    const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
-      const { plan: _, ...run } = args;
-      await insertNothingRun(ctx, { ...run, status: "skipped", error: "superseded" });
+      await insertNothingRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
       return null;
     }
-    const plan = args.plan as MergePlan;
+    const plan = raw as MergePlan;
     const now = Date.now();
     const counts: Counts = { ...NO_COUNTS };
     const ids = new Map<string, Id<"priorities">>();
@@ -419,17 +513,7 @@ export const applyPlan = internalMutation({
       await ctx.db.patch(conv._id, { priority_id: undefined, priority_step_key: undefined });
     }
 
-    await ctx.db.insert("priority_pass_runs", {
-      user_id: args.user_id,
-      workspace: args.workspace,
-      started_at: args.started_at,
-      finished_at: now,
-      status: "ok",
-      cursor_at: args.cursor_at,
-      model: args.model,
-      ...(args.cost_usd !== undefined ? { cost_usd: args.cost_usd } : {}),
-      counts,
-    });
+    await ctx.db.insert("priority_pass_runs", { ...run, finished_at: now, status: "ok", counts });
     return counts;
   },
 });
@@ -451,25 +535,51 @@ function fittingPrefix(input: PriorityPassInput): number {
   return Math.min(input.sessions.length, Math.max(1, lo));
 }
 
-type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chain?: number };
+type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chain?: number; now?: boolean };
+
+const minutes = (ms: number) => Math.max(1, Math.ceil(ms / MINUTE));
 
 async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const started_at = Date.now();
-  const base = { user_id: args.user_id, workspace: args.workspace, started_at, model: PRIORITY_PASS_MODEL };
-  const gate: Gate = await ctx.runQuery(self.passGate, { user_id: args.user_id, workspace: args.workspace });
+  const pair = { user_id: args.user_id, workspace: args.workspace };
+  const base = { ...pair, started_at, model: PRIORITY_PASS_MODEL };
+  const gate: Gate = await ctx.runQuery(self.passGate, pair);
   if (!gate.on) {
     await ctx.runMutation(self.recordRun, { ...base, cursor_at: gate.cursor_at, status: "skipped", error: "the priorities feature is off here" });
     return { status: "skipped", reason: "feature_off" };
   }
-  const read: PassInputs = await ctx.runQuery(self.passInputs, { user_id: args.user_id, workspace: args.workspace, window_start: gate.cursor_at });
+  const limits: { spent_usd: number; last_paid_at: number | null } = await ctx.runQuery(self.passLimits, pair);
+  if (args.now && limits.last_paid_at !== null && started_at - limits.last_paid_at < RUN_NOW_EVERY_MS) {
+    const ago = minutes(started_at - limits.last_paid_at), wait = minutes(limits.last_paid_at + RUN_NOW_EVERY_MS - started_at);
+    return { status: "skipped", reason: `A pass ran here ${ago} minute${ago === 1 ? "" : "s"} ago; run it again in ${wait} minute${wait === 1 ? "" : "s"}.` };
+  }
+  if (limits.spent_usd >= PRIORITY_PASS_DAILY_USD) {
+    await ctx.runMutation(self.recordRun, { ...base, cursor_at: gate.cursor_at, status: "skipped", error: "daily ceiling" });
+    return { status: "skipped", reason: "daily_ceiling" };
+  }
+
+  let read: PassInputs;
+  try {
+    read = await ctx.runQuery(self.passInputs, { ...pair, window_start: gate.cursor_at });
+  } catch (e) {
+    // A read that keeps failing (a read limit) steps past a day of activity after FAILURES_BEFORE_STEP tries.
+    const error = `reading the inputs failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
+    await ctx.runMutation(self.recordRun, { ...base, cursor_at: gate.cursor_at, status: "error", error, step_to: Math.min(gate.cursor_at + DAY, started_at - LATE_MARGIN_MS) });
+    return { status: "error", reason: error };
+  }
   const { cursor_at } = read;
   if (!read.input.sessions.length && !args.force) {
-    await ctx.runMutation(self.recordRun, { ...base, cursor_at, status: "skipped", error: "nothing touched since the last pass" });
-    return { status: "skipped", reason: "nothing_new" };
+    // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
+    await ctx.runMutation(self.recordRun, { ...base, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
+    const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
+    if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1 });
+    return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   const included = fittingPrefix(read.input);
   const input: PriorityPassInput = { ...read.input, sessions: read.input.sessions.slice(0, included) };
   const left = read.more || included < read.input.sessions.length;
+  // Read whole to read_to; else to the last session read, whose later sessions the next run reads.
+  const readTo = Math.max(cursor_at, included < read.input.sessions.length ? input.sessions[included - 1].last_active : read.read_to);
   const { req } = priorityPassRequest(input);
   const reply = await runModelCallOrOwn(
     ctx,
@@ -482,42 +592,43 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     PASS_TIMEOUT_MS,
   );
   const fail = async (error: string): Promise<PassResult> => {
-    await ctx.runMutation(self.recordRun, { ...base, cursor_at, cost_usd: reply.cost_usd, status: "error", error });
+    await ctx.runMutation(self.recordRun, { ...base, cursor_at, cost_usd: reply.cost_usd, status: "error", error, step_to: readTo });
     return { status: "error", reason: error, cost_usd: reply.cost_usd };
   };
   if (!reply.ok) return fail(reply.reason === "budget" ? `budget: ${reply.error}` : reply.error);
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`);
   const plan = mergePriorities(input, output);
-  const readTo = input.sessions.length ? input.sessions[input.sessions.length - 1].last_active : cursor_at;
-  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, cursor_at: readTo, cost_usd: reply.cost_usd, plan });
+  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan });
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;
-  if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { user_id: args.user_id, workspace: args.workspace, chain });
+  if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain });
   return { status: "ok", counts, cost_usd: reply.cost_usd, dropped, notes: plan.notes, ...(chained ? { chained } : {}) };
 }
 
 /**
  * One pass for one person in one workspace. Skips (and records why) when the
- * feature is off, or nothing moved and it is not forced. `chain` counts the
- * runs before it in one chain (MAX_CHAINED_RUNS).
+ * feature is off, the pair spent its day's ceiling, or nothing moved and it is
+ * not forced. `chain` counts the runs before it in one chain (MAX_CHAINED_RUNS).
  */
 export const runPass = internalAction({
   args: { user_id: v.id("users"), workspace: v.string(), force: v.optional(v.boolean()), chain: v.optional(v.number()) },
   handler: async (ctx, args): Promise<PassResult> => pass(ctx, args),
 });
 
-/** `cast priorities run`: a pass now, even when nothing moved since the last one. */
+/** `cast priorities run`: a pass now, even when nothing moved since the last one; at most once in RUN_NOW_EVERY_MS, refused with a plain reason. */
 export const runNow = internalAction({
   args: { user_id: v.id("users"), workspace: v.string() },
-  handler: async (ctx, args): Promise<PassResult> => pass(ctx, { ...args, force: true }),
+  handler: async (ctx, args): Promise<PassResult> => pass(ctx, { ...args, force: true, now: true }),
 });
 
 /**
  * The (person, workspace) pairs a sweep runs: every member of a team with the
  * feature on, in that team and in their personal workspace, that has a typed
- * message or a pin in it since its cursor. At most SWEEP_MAX_PAIRS.
+ * message or a pin in it since its cursor, or more activity since then than
+ * the probe reads (the pass moves the cursor past what is not its own). At
+ * most SWEEP_MAX_PAIRS.
  */
 export const sweepCandidates = internalQuery({
   args: {},
@@ -537,7 +648,11 @@ export const sweepCandidates = internalQuery({
     const out: Array<{ user_id: Id<"users">; workspace: string }> = [];
     for (const { cursor, ...pair } of waiting) {
       if (out.length >= SWEEP_MAX_PAIRS) break;
-      const { sends, pins } = await activitySince(ctx, pair.user_id, cursor, now, SWEEP_ACTIVITY_READ);
+      const { sends, pins, more } = await activitySince(ctx, pair.user_id, cursor, Math.max(cursor, now - LATE_MARGIN_MS), SWEEP_ACTIVITY_READ);
+      if (more) {
+        out.push(pair);
+        continue;
+      }
       const seen = new Set<string>();
       for (const id of [...pins.map((p) => p.conversation_id), ...sends.map((s) => s.conversation_id)]) {
         if (seen.has(String(id))) continue;

@@ -6,31 +6,12 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { ago, sparkline } from "./externalDataCli.js";
-import type { PriorityStep } from "@codecast/shared/contracts/priorities";
+import type { PriorityDetail, PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
 
 function fail(message: string): never {
   console.error(`Error: ${message}`);
   process.exit(1);
 }
-
-export type PriorityRow = {
-  short_id: string;
-  title: string;
-  summary: string;
-  status: string;
-  rank: number | null;
-  serves: string | null;
-  steps: Array<PriorityStep & { sessions?: SessionRef[] }>;
-  counts: { critical_done: number; critical_total: number };
-  owner: string;
-  mine: boolean;
-  last_active_at: number;
-  done_at: number | null;
-  sessions: SessionRef[];
-  other_sessions?: SessionRef[];
-};
-type SessionRef = { short_id: string; title: string; step_key: string | null };
-type HistoryLane = { key: string; title: string; counts: number[]; total: number };
 
 /** "pri-3", "PRI-3" or "3". */
 export function priorityId(raw: string): string {
@@ -63,7 +44,7 @@ export function formatPriorityLines(rows: PriorityRow[], now = Date.now()): stri
 }
 
 /** One priority: its line of facts, its summary, and its steps under Critical path and Polish. */
-export function formatPriorityDetail(p: PriorityRow, now = Date.now()): string[] {
+export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): string[] {
   const facts = [
     p.status === "done" && p.done_at ? `✓ done ${day(p.done_at)}` : STATUS_WORD[p.status] ?? p.status,
     p.rank != null && p.status === "active" ? `#${p.rank}` : null,
@@ -81,15 +62,15 @@ export function formatPriorityDetail(p: PriorityRow, now = Date.now()): string[]
     out.push("", heading);
     for (const s of steps) {
       const refs = [...s.refs.map((r) => r.id)];
-      for (const c of s.sessions ?? []) if (!refs.includes(c.short_id)) refs.push(c.short_id);
+      for (const c of s.sessions) if (!refs.includes(c.short_id)) refs.push(c.short_id);
       out.push(`  ${s.done ? "✓" : " "} ${s.key.padEnd(keyWidth)}  ${s.title}${s.tier_set_by === "person" ? "  (yours)" : ""}${refs.length ? `  ${refs.join(" · ")}` : ""}`);
     }
   }
-  if (p.other_sessions?.length) out.push("", `Other sessions  ${p.other_sessions.map((c) => c.short_id).join(" · ")}`);
+  if (p.other_sessions.length) out.push("", `Other sessions  ${p.other_sessions.map((c) => c.short_id).join(" · ")}`);
   return out;
 }
 
-export function formatHistory(res: { days: string[]; lanes: HistoryLane[] }): string[] {
+export function formatHistory(res: PriorityHistory): string[] {
   if (!res.lanes.length) return [`Nothing typed in the last ${res.days.length} days.`];
   const keyWidth = Math.max(0, ...res.lanes.map((l) => (l.key === "unassigned" ? 0 : l.key.length)));
   const titleWidth = Math.min(40, Math.max(0, ...res.lanes.map((l) => l.title.length)));
@@ -124,7 +105,7 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
     .option("--team <name|id|personal>", TEAM_HELP)
     .option("--json", "As JSON")
     .action(async (options: { all?: boolean; team?: string; json?: boolean }) => {
-      const res = await apiPost(deps, "/cli/priorities/list", { ...(options.all ? {} : { status: "active" }), ...(await scope(deps, options.team)) }, { read: true });
+      const res = await apiPost(deps, "/cli/priorities/list", { ...(options.all ? { all: true } : { status: "active" }), ...(await scope(deps, options.team)) }, { read: true });
       const rows: PriorityRow[] = res.priorities ?? [];
       if (options.json) return console.log(JSON.stringify(rows, null, 2));
       if (!rows.length) return console.log(options.all ? "No priorities yet." : "No active priorities. cast priorities ls --all shows the rest.");
@@ -143,12 +124,14 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
 
   pri
     .command("rank <id> <n>")
-    .description("Move a priority to position n among your active ones; the pass keeps your order")
-    .action(async (id: string, n: string) => {
+    .description("Pin a priority at position n among your active ones; the pass keeps it there")
+    .option("--json", "The updated priority as JSON")
+    .action(async (id: string, n: string, options: { json?: boolean }) => {
       const rank = Number(n);
       if (!Number.isInteger(rank) || rank < 1) fail(`a rank is a whole number from 1, got "${n}"`);
-      const res = await apiPost(deps, "/cli/priorities/rank", { short_id: priorityId(id), rank });
-      console.log(`ok ${res.short_id} now #${res.rank}`);
+      const row: PriorityRow = await apiPost(deps, "/cli/priorities/rank", { short_id: priorityId(id), rank });
+      if (options.json) return console.log(JSON.stringify(row, null, 2));
+      console.log(`ok ${row.short_id} now #${row.rank}`);
     });
 
   pri
@@ -156,23 +139,27 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
     .description("Move a step onto the critical path or into polish; the pass keeps your choice")
     .option("--critical", "On the critical path")
     .option("--polish", "Polish")
-    .action(async (id: string, key: string, options: { critical?: boolean; polish?: boolean }) => {
+    .option("--json", "The updated priority as JSON")
+    .action(async (id: string, key: string, options: { critical?: boolean; polish?: boolean; json?: boolean }) => {
       if (!!options.critical === !!options.polish) fail("pass exactly one of --critical or --polish");
       const tier = options.critical ? "critical" : "polish";
-      const res = await apiPost(deps, "/cli/priorities/step", { short_id: priorityId(id), step_key: key, tier });
-      console.log(`ok ${res.short_id} ${res.step_key} -> ${tier === "critical" ? "critical path" : "polish"}`);
+      const row: PriorityRow = await apiPost(deps, "/cli/priorities/step", { short_id: priorityId(id), step_key: key, tier });
+      if (options.json) return console.log(JSON.stringify(row, null, 2));
+      console.log(`ok ${row.short_id} ${key.toLowerCase()} -> ${tier === "critical" ? "critical path" : "polish"}`);
     });
 
   for (const [verb, path, said, description] of [
     ["set-aside", "/cli/priorities/set-aside", "set aside", "Set a priority aside; the pass leaves it there until you restore it"],
-    ["restore", "/cli/priorities/restore", "active", "Bring a set-aside, quiet or done priority back to active"],
+    ["restore", "/cli/priorities/restore", "active", "Bring a set-aside priority back to active"],
   ] as const) {
     pri
       .command(`${verb} <id>`)
       .description(description)
-      .action(async (id: string) => {
-        const res = await apiPost(deps, path, { short_id: priorityId(id) });
-        console.log(`ok ${res.short_id} ${said}`);
+      .option("--json", "The updated priority as JSON")
+      .action(async (id: string, options: { json?: boolean }) => {
+        const row: PriorityRow = await apiPost(deps, path, { short_id: priorityId(id) });
+        if (options.json) return console.log(JSON.stringify(row, null, 2));
+        console.log(`ok ${row.short_id} ${said}`);
       });
   }
 

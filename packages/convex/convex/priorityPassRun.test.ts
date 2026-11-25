@@ -12,6 +12,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { budgetMonth } from "@codecast/shared/contracts/modelCall";
 import type { MergePlan } from "./lib/priorityPass";
+import { LATE_MARGIN_MS, PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
 
 setDefaultTimeout(60_000);
 
@@ -150,6 +151,17 @@ describe("runPass", () => {
     expect(await w.priorities()).toEqual([]);
   });
 
+  test("a team workspace the person is not a member of records a skipped run and asks no model, forced or not", async () => {
+    const w = await world();
+    // Carl is in Other, not Acme; Acme has the feature on.
+    await w.send(w.carl, w.carlConv, w.now - H, "carl's work");
+    expect(await w.t.action(pass.runPass, { user_id: w.carl, workspace: w.team })).toEqual({ status: "skipped", reason: "feature_off" });
+    expect(await w.t.action(pass.runNow, { user_id: w.carl, workspace: w.team })).toEqual({ status: "skipped", reason: "feature_off" });
+    expect(prompts).toHaveLength(0);
+    expect((await w.runs(w.team, w.carl)).map((x: any) => x.status)).toEqual(["skipped", "skipped"]);
+    expect(await w.priorities()).toEqual([]);
+  });
+
   test("with nothing touched it skips unless forced", async () => {
     const w = await world();
     expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "nothing_new" });
@@ -174,7 +186,10 @@ describe("runPass", () => {
     replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
     expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
     expect(prompts.at(-1)).toContain("get grader faults under ten percent");
-    expect((await w.runs()).at(-1)).toMatchObject({ status: "ok", cursor_at: w.now - H, counts: { created: 1, mapped_sessions: 1 } });
+    const last = (await w.runs()).at(-1)!;
+    expect(last).toMatchObject({ status: "ok", counts: { created: 1, mapped_sessions: 1 } });
+    // Everything was read: the cursor moves to a few minutes ago, where late rows can still land.
+    expect(last.cursor_at).toBeGreaterThan(w.now - LATE_MARGIN_MS - 60_000);
   });
 
   test("creates pri-N rows and maps the session; the person's rank and tier survive the next pass", async () => {
@@ -190,7 +205,8 @@ describe("runPass", () => {
 
     // The person ranks it third and moves its step to polish.
     await w.t.run((ctx) => ctx.db.patch(created._id, { rank: 3, rank_set_by: "person", steps: [{ ...created.steps[0], tier: "polish", tier_set_by: "person" }] }));
-    await w.send(w.ana, w.teamConv, w.now - H, "grader faults at nine percent");
+    // Stamped below the cursor but landing after the first pass: the overlap reads it.
+    await w.send(w.ana, w.teamConv, w.now - 8 * 60_000, "grader faults at nine percent");
     replyText = (prompt) => {
       expect(prompt).toContain("pri-1");
       return JSON.stringify({ priorities: [proposal({ short_id: "pri-1", rank: 1, summary: "Under ten percent" })], unassigned: [] });
@@ -258,7 +274,7 @@ describe("runPass, harder cases", () => {
     for (const id of ids) expect(prompts.some((p) => p.includes(`## Session ${id} `))).toBe(true);
     const runs = await w.runs();
     expect(runs.every((x: any) => x.status === "ok")).toBe(true);
-    expect(runs.at(-1)!.cursor_at).toBe(at(N - 1) - 1_000);
+    expect(runs.at(-1)!.cursor_at).toBeGreaterThanOrEqual(at(N - 1) - 1_000);
     // The cursor moved forward chunk by chunk.
     for (let i = 1; i < runs.length; i++) expect(runs[i].cursor_at).toBeGreaterThan(runs[i - 1].cursor_at);
     expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "nothing_new" });
@@ -270,22 +286,107 @@ describe("runPass, harder cases", () => {
       creates: [{ ref: "new-1", first_seen_at: 1, title, summary: "", status: "active", rank: 1, rank_set_by: "pass", serves: null, steps: [], last_active_at: 1, done_at: null, pass_at: 1 }],
       updates: [], merges: [], sessions: [{ session: "jx7team", priority: "new-1", step_key: null }], unmap: [], notes: [],
     });
-    const apply = (title: string, started_at: number, cursor_at: number) =>
-      w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at, cursor_at, model: "m", plan: plan(title) });
+    const apply = (title: string, started_at: number, from_cursor: number, cursor_at: number) =>
+      w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at, from_cursor, cursor_at, model: "m", plan: plan(title) });
 
-    // A starts, B starts and finishes, then A tries to write.
-    const aStarted = Date.now() - 1_000;
-    expect(await apply("B", Date.now() - 500, 200)).toMatchObject({ created: 1 });
-    expect(await apply("A", aStarted, 100)).toBeNull();
+    // B starts, A starts and reads further, B finishes, then A tries to write.
+    const bStarted = Date.now() - 1_000;
+    const aStarted = Date.now() - 500;
+    expect(await apply("B", bStarted, 50, 200)).toMatchObject({ created: 1 });
+    expect(await apply("A", aStarted, 50, 400)).toBeNull();
 
     expect((await w.priorities()).map((p: any) => p.title)).toEqual(["B"]);
     const b = (await w.priorities())[0];
     expect((await w.conversation(w.teamConv))?.priority_id).toBe(b._id);
     const runs = await w.runs();
-    expect(runs.map((x: any) => [x.status, x.error ?? null, x.cursor_at])).toEqual([["skipped", "superseded", 200], ["ok", null, 200]]);
+    // A records where it started, so nothing past B's cursor is skipped; the cursor is B's.
+    expect(runs.map((x: any) => [x.status, x.error ?? null, x.cursor_at])).toEqual([["ok", null, 200], ["skipped", "superseded", 50]]);
+    expect((await w.t.query(pass.passGate, { user_id: w.ana, workspace: w.team })).cursor_at).toBe(200);
 
     // A run that starts after B finished applies as usual.
-    expect(await apply("C", Date.now() + 1, 300)).toMatchObject({ created: 1 });
+    expect(await apply("C", Date.now() + 1, 200, 300)).toMatchObject({ created: 1 });
+  });
+});
+
+describe("what a pass may read, and how far", () => {
+  test("a session filed under a team whose data may not go to the model vendor is never read, in either workspace", async () => {
+    const w = await world();
+    const clinicConv = await w.t.run(async (ctx) => {
+      const clinic = await ctx.db.insert("teams", { name: "Clinic", invite_code: "clinic", created_at: 1, policy: { regulated_data: true } } as any);
+      return ctx.db.insert("conversations", {
+        user_id: w.ana, team_id: clinic, is_private: true, agent_type: "claude_code", session_id: "jx7clin", short_id: "jx7clin", title: "Patient intake",
+        started_at: 1, updated_at: 1, message_count: 1, status: "active",
+      } as any);
+    });
+    await w.send(w.ana, clinicConv, w.now - H, "patient notes");
+    await w.send(w.ana, w.personalConv, w.now - H, "personal work");
+    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: `user:${w.ana}` });
+    expect(input.sessions.map((s: any) => s.id)).toEqual(["jx7mine"]);
+  });
+
+  test("a message that lands late, below the cursor, is read by the next pass; one read already is not read again", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 8 * 60_000, "already read once");
+    // Landed before the pass started, not in the same millisecond (which reads it again: a repeat, never a loss).
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(prompts[0]).toContain("already read once");
+    // A client that was offline syncs a message stamped before the pass.
+    await w.send(w.ana, w.teamConv, w.now - 7 * 60_000, "synced late");
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(prompts[1]).toContain("synced late");
+    expect(prompts[1]).not.toContain("already read once");
+  });
+
+  test("a pair whose window is full of another workspace's activity is swept, and its pass moves the cursor past it", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++) {
+        const timestamp = w.now - 2 * H + i * 1_000;
+        const message = await ctx.db.insert("messages", { conversation_id: w.teamConv, role: "user", content: "x", timestamp } as any);
+        await ctx.db.insert("user_sends", { user_id: w.ana, conversation_id: w.teamConv, message_id: message, timestamp, words: 1, text: `team ${i}`, clipped: false } as any);
+      }
+    });
+    const personal = `user:${w.ana}`;
+    expect(await w.t.query(pass.sweepCandidates, {})).toContainEqual({ user_id: w.ana, workspace: personal });
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: personal })).toEqual({ status: "skipped", reason: "nothing_new" });
+    expect(prompts).toHaveLength(0);
+    expect((await w.runs(personal)).at(-1)!.cursor_at).toBeGreaterThan(w.now - 2 * H + 299_000);
+    expect(await w.t.query(pass.sweepCandidates, {})).not.toContainEqual({ user_id: w.ana, workspace: personal });
+  });
+
+  test("the third failure in a row on one cursor steps past what failed, and says so", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    replyText = () => "no JSON here";
+    for (let i = 0; i < 3; i++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    const runs = await w.runs();
+    expect(runs[0].cursor_at).toBe(runs[1].cursor_at);
+    expect(runs[2].cursor_at).toBeGreaterThan(w.now - H);
+    expect(runs[2].error).toContain("stepped past");
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "nothing_new" });
+    expect(prompts).toHaveLength(3);
+  });
+
+  test("a pair that spent its daily ceiling skips without asking the model", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 2 * H, finished_at: w.now - 2 * H, status: "ok", cursor_at: w.now - 2 * H, model: "m", cost_usd: PRIORITY_PASS_DAILY_USD, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "daily_ceiling" });
+    expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "daily_ceiling" });
+    expect(prompts).toHaveLength(0);
+    expect((await w.runs()).at(-1)).toMatchObject({ status: "skipped", error: "daily ceiling" });
+  });
+
+  test("runNow runs once in ten minutes per pair and says when it can run again", async () => {
+    const w = await world();
+    expect((await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const again = await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team });
+    expect(again.status).toBe("skipped");
+    expect(again.reason).toMatch(/^A pass ran here \d+ minutes? ago; run it again in 10 minutes\.$/);
+    expect(prompts).toHaveLength(1);
+    // Another person's pass is their own.
+    expect((await w.t.action(pass.runNow, { user_id: w.ana, workspace: `user:${w.ana}` })).status).toBe("ok");
   });
 });
 
@@ -307,7 +408,7 @@ describe("applyPlan", () => {
       unmap: [],
       notes: [],
     };
-    const counts = await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: 1, cursor_at: 5, model: "m", plan });
+    const counts = await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: 1, from_cursor: 1, cursor_at: 5, model: "m", plan });
     expect(counts).toEqual({ created: 1, updated: 1, merged: 0, mapped_sessions: 1 });
 
     const created = (await w.priorities()).find((p: any) => p.title === "Mine")!;

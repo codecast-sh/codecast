@@ -68,3 +68,45 @@ export type PriorityPinLine = {
   critical_total: number;
   step_title?: string;
 };
+
+// ── What the priorities API returns (convex/priorities.ts) ──
+
+/** A session mapped to a priority, as the reader may open it. */
+export type PrioritySession = { short_id: string; title: string; step_key: string | null; updated_at: number };
+
+/** One priority as a list, a write's echo and `cast priorities --json` return it. */
+export type PriorityRow = {
+  _id: string;
+  short_id: string;
+  title: string;
+  summary: string;
+  status: PriorityStatus;
+  /** Its position among the owner's active priorities in its workspace (null unless active). */
+  rank: number | null;
+  rank_set_by: PrioritySetBy;
+  serves: string | null;
+  steps: PriorityStep[];
+  counts: { critical_done: number; critical_total: number };
+  workspace: string;
+  user_id: string;
+  owner: string;
+  mine: boolean;
+  first_seen_at: number;
+  last_active_at: number;
+  done_at: number | null;
+  /** Mapped sessions the reader can open. */
+  session_count: number;
+  /** The most recently active of them: a few in a list, all of them in `show`. */
+  sessions: PrioritySession[];
+};
+
+/** One priority with every step's sessions (`show`). */
+export type PriorityDetail = Omit<PriorityRow, "steps"> & {
+  steps: Array<PriorityStep & { sessions: PrioritySession[] }>;
+  /** Mapped sessions whose step is unknown or gone. */
+  other_sessions: PrioritySession[];
+};
+
+/** Typed messages per local day: one lane per priority, and "unassigned" for sessions no priority holds. */
+export type PriorityHistoryLane = { key: string; short_id: string | null; title: string; status: PriorityStatus | null; counts: number[]; total: number };
+export type PriorityHistory = { days: string[]; lanes: PriorityHistoryLane[] };
