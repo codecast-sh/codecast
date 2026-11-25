@@ -88,9 +88,9 @@ export function applyPlanInMemory(state: EvalState, plan: MergePlan, input: Prio
   return { priorities: [...byId.values()], next_id };
 }
 
-/** The pass from empty over [window_start, window_end] for one person in one workspace, written nowhere. `chunk` caps the sessions one model call reads. */
+/** The pass from empty over [window_start, window_end] for one person in one workspace, written nowhere. `chunk` caps the sessions one model call reads; `system` replaces the pass's system prompt for this replay, to try a prompt before it ships. */
 export const evalPass = internalAction({
-  args: { user_id: v.id("users"), workspace: v.string(), window_start: v.number(), window_end: v.number(), chunk: v.optional(v.number()), resume: v.optional(v.any()) },
+  args: { user_id: v.id("users"), workspace: v.string(), window_start: v.number(), window_end: v.number(), chunk: v.optional(v.number()), resume: v.optional(v.any()), system: v.optional(v.string()) },
   handler: async (ctx, args): Promise<EvalResult> => {
     const started = Date.now();
     const now = Math.min(args.window_end + LATE_MARGIN_MS, started);
@@ -124,7 +124,7 @@ export const evalPass = internalAction({
         callScope(args.workspace),
         false,
         "grouping",
-        { model: req.model, max_tokens: req.max_tokens, system: req.system, prompt: req.prompt, output: "json", output_schema: req.output_schema },
+        { model: req.model, max_tokens: req.max_tokens, system: args.system ?? req.system, prompt: req.prompt, output: "json", output_schema: req.output_schema },
         "Priority pass calibration",
         { ctx, scope: { workspace: args.workspace } },
         PASS_TIMEOUT_MS,

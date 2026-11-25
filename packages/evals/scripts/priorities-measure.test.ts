@@ -1,10 +1,12 @@
 // The calibration scorer (priorities-measure.ts) on synthetic data with a
-// scripted judge: recall over active golden priorities, precision over active
-// produced ones (mostly-standing ones count against it), session mapping over
-// the labeled sessions the window read, and false "done" over aligned steps.
+// scripted judge and task statuses: recall over active golden priorities,
+// precision over active produced ones in the golden set's scope (mostly-standing
+// ones count against it, unlabeled ones are set apart), a golden priority
+// matched once per workspace, session mapping over the labeled sessions the
+// window read, and false "done" split into real and stale-golden.
 import { describe, expect, test } from 'bun:test';
 
-import { score, type Golden, type Judge, type Match, type Produced, type StepPair } from './priorities-measure';
+import { score, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
 
 const golden: Golden = {
   person: 'Ana',
@@ -45,6 +47,9 @@ function scripted(matches: Match[], steps: Record<string, StepPair[]>) {
   return { judge, offered, aligned };
 }
 
+/** Task statuses as `cast task show` would report them now. */
+const tasksNow = (statuses: Record<string, string> = {}): TaskStatus => async (ids) => new Map(ids.flatMap((id) => (statuses[id] ? [[id, statuses[id]!] as [string, string]] : [])));
+
 describe('score', () => {
   test('recall, precision, session mapping, step-done and false done', async () => {
     const { judge, offered, aligned } = scripted(
@@ -60,22 +65,23 @@ describe('score', () => {
         'a:2~g2': [{ produced: 0, golden: 0, reason: '' }],
       },
     );
-    const s = await score(golden, produced, read, judge);
+    const s = await score(golden, produced, read, judge, tasksNow());
 
     expect(s.standing_like).toEqual(['a:3']);
+    // a:4 and p:1 hold no sessions at all: still in scope, offered and scored.
     expect(offered).toEqual([['a:1', 'a:2', 'a:4', 'p:1']]);
     expect(s.matches.map((m) => `${m.produced}=${m.golden}`)).toEqual(['a:1=g1', 'a:2=g2', 'p:1=g3']);
-    // Every active golden priority is matched; a quiet produced one counts for recall.
     expect(s.recall).toEqual({ matched: 3, of: 3, missed: [] });
-    // Active produced: a:1, a:2 matched; a:3 (mostly standing) and a:4 not.
+    // Active produced in scope: a:1, a:2 matched; a:3 (mostly standing) and a:4 (sessionless, g1's slot taken) not.
     expect(s.precision).toEqual({ matched: 2, of: 4, unmatched: ['a:3', 'a:4'] });
+    expect(s.unlabeled).toEqual([]);
     // s1, s2, s3 right; s4 sits under g2's match; s5 under an unmatched one; st1 and st2 should be unassigned. s9 was not read.
     expect(Object.fromEntries(s.sessions.results.map((r) => [r.session, r.correct]))).toEqual({ s1: true, s2: true, s3: true, s4: false, s5: false, st1: false, st2: false });
     expect(s.sessions.not_read).toEqual(['s9']);
     // No critical steps on p:1: no alignment asked.
     expect(aligned.sort()).toEqual(['a:1~g1', 'a:2~g2']);
     expect(s.steps.false_done.map((f) => `${f.produced_step}~${f.golden_step}`)).toEqual(['Faults under 10%~Grader faults']);
-    expect(s.metrics).toEqual({ recall: 1, precision: 0.5, sessions: 3 / 7, step_done: 2 / 3, false_done: 1 });
+    expect(s.metrics).toEqual({ recall: 1, precision: 2 / 4, sessions: 3 / 7, step_done: 2 / 3, false_done: 1 });
     expect(s.pass).toBe(false);
   });
 
@@ -86,9 +92,68 @@ describe('score', () => {
       [{ produced: 'a:1', golden: 'g1', reason: '' }, { produced: 'a:2', golden: 'g2', reason: '' }, { produced: 'p:1', golden: 'g3', reason: '' }],
       { 'a:1~g1': [{ produced: 0, golden: 0, reason: '' }, { produced: 1, golden: 1, reason: '' }] },
     );
-    const s = await score(golden, all, read, judge);
+    const s = await score(golden, all, read, judge, tasksNow());
     // s5 (golden g4, held by nobody) is the one miss: 6 of 7.
     expect(s.metrics).toEqual({ recall: 1, precision: 1, sessions: 6 / 7, step_done: 1, false_done: 0 });
     expect(s.pass).toBe(true);
+  });
+
+  test('a golden priority spanning workspaces matches one produced priority in each: recall counts it once, precision each match', async () => {
+    const spread: Produced[] = [
+      { key: 'acme:1', workspace: 'acme', title: 'Evals at work', summary: '', status: 'active', steps: [], sessions: ['s1'] },
+      { key: 'acme:2', workspace: 'acme', title: 'Evals again', summary: '', status: 'active', steps: [], sessions: ['s3'] },
+      { key: 'me:1', workspace: 'personal', title: 'Evals at home', summary: '', status: 'active', steps: [], sessions: ['s2'] },
+    ];
+    const { judge } = scripted(
+      [{ produced: 'acme:1', golden: 'g1', reason: '' }, { produced: 'me:1', golden: 'g1', reason: '' }, { produced: 'acme:2', golden: 'g1', reason: 'second in acme' }],
+      {},
+    );
+    const s = await score(golden, spread, new Map([['s1', ''], ['s2', ''], ['s3', '']]), judge, tasksNow());
+    expect(s.matches.map((m) => `${m.produced}=${m.golden}`)).toEqual(['acme:1=g1', 'me:1=g1']);
+    expect(s.recall).toMatchObject({ matched: 1, of: 3 });
+    expect(s.precision).toEqual({ matched: 2, of: 3, unmatched: ['acme:2'] });
+    // s2 sits under the personal match of g1: right. s3 (golden g2) sits under an unmatched one.
+    expect(Object.fromEntries(s.sessions.results.map((r) => [r.session, r.correct]))).toEqual({ s1: true, s2: true, s3: false });
+  });
+
+  test('a produced priority with no labeled session is unlabeled, outside precision', async () => {
+    const extra: Produced[] = [
+      { key: 'a:1', workspace: 'acme', title: 'Evals', summary: '', status: 'active', steps: [], sessions: ['s1'] },
+      { key: 'p:9', workspace: 'personal', title: 'Wardrobe', summary: '', status: 'active', steps: [], sessions: ['x1', 'x2'] },
+    ];
+    const { judge } = scripted([{ produced: 'a:1', golden: 'g1', reason: '' }], {});
+    const s = await score(golden, extra, new Map([['s1', ''], ['x1', ''], ['x2', '']]), judge, tasksNow());
+    expect(s.unlabeled).toEqual(['p:9']);
+    expect(s.precision).toEqual({ matched: 1, of: 1, unmatched: [] });
+    expect(s.metrics.precision).toBe(1);
+  });
+
+  test('an unlabeled priority is never offered to the judge, so it cannot take a labeled one\'s slot', async () => {
+    const extra: Produced[] = [
+      { key: 'p:9', workspace: 'acme', title: 'Evals too', summary: '', status: 'active', steps: [], sessions: ['x1'] },
+      { key: 'a:1', workspace: 'acme', title: 'Evals', summary: '', status: 'active', steps: [], sessions: ['s1'] },
+    ];
+    // The judge would hand the acme slot to the unlabeled one first; it is never offered it.
+    const { judge, offered } = scripted([{ produced: 'p:9', golden: 'g1', reason: '' }, { produced: 'a:1', golden: 'g1', reason: '' }], {});
+    const s = await score(golden, extra, new Map([['s1', ''], ['x1', '']]), judge, tasksNow());
+    expect(offered[0]).toEqual(['a:1']);
+    expect(s.unlabeled).toEqual(['p:9']);
+    expect(s.precision).toEqual({ matched: 1, of: 1, unmatched: [] });
+  });
+
+  test('a step falsely done is stale when its golden task is done now, real when it has no task or the task is open', async () => {
+    const tasked: Golden = {
+      ...golden,
+      priorities: [{ ...golden.priorities[0]!, critical: [{ title: 'Cases', done: false, task: 'ct-1' }, { title: 'Grader faults', done: false, task: 'ct-2' }, { title: 'Requests path', done: false, task: null }] }, ...golden.priorities.slice(1)],
+    };
+    const p: Produced[] = [{ key: 'a:1', workspace: 'acme', title: 'Evals', summary: '', status: 'active', steps: [step('Cases', true), step('Faults', true), step('Requests', true)], sessions: ['s1'] }];
+    const { judge } = scripted([{ produced: 'a:1', golden: 'g1', reason: '' }], { 'a:1~g1': [0, 1, 2].map((i) => ({ produced: i, golden: i, reason: '' })) });
+    const s = await score(tasked, p, new Map([['s1', '']]), judge, tasksNow({ 'ct-1': 'done', 'ct-2': 'in_progress' }));
+    expect(s.steps.stale_done.map((f) => [f.golden_step, f.golden_task, f.task_status, f.verdict])).toEqual([['Cases', 'ct-1', 'done', 'task done now (golden stale)']]);
+    expect(s.steps.false_done.map((f) => [f.golden_step, f.golden_task, f.task_status, f.verdict])).toEqual([
+      ['Grader faults', 'ct-2', 'in_progress', 'no task / task open (real)'],
+      ['Requests path', null, null, 'no task / task open (real)'],
+    ]);
+    expect(s.metrics.false_done).toBe(2);
   });
 });
