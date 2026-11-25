@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useLayoutEffect, useMemo, useRef, useState } from "react";
 // The real conversation pane the inbox uses — same component, same data hooks,
 // so the queue IS the session view: the decision card renders inside it
 // (SessionDecisionCard, mounted by ConversationView), and the queue only adds
 // the stepper through DecisionStepperContext.
 import { InboxConversation } from "../app/inbox/QueuePageClient";
 import { useDecisionQueue, DecisionStepperContext, type DecisionStepper } from "../hooks/useDecisionQueue";
+import type { QueueItem } from "../lib/decisionQueue";
 import { useInboxStore } from "../store/inboxStore";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
@@ -64,6 +65,19 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
     setAnchorKey(queue[(position - 1 + queue.length) % queue.length]?.key ?? null);
   }, [queue, position]);
 
+  // Moving to another session's decision rebuilds the whole conversation pane
+  // (InboxConversation is keyed by conversation id, so nothing of one session
+  // carries into the next). That rebuild must not run inside the answer's own
+  // click: the press commits with the pane it already has, minus the answered
+  // card, and the next session's pane mounts in a deferred render React does
+  // after the click's task (ct-101302). The same holds for a skip, a previous,
+  // or the store removing the answered item before the re-anchor lands.
+  const deferredConvId = useDeferredValue(current?.conversationId ?? null);
+  const paneItemRef = useRef<QueueItem | null>(null);
+  const switching = !!current && !!deferredConvId && deferredConvId !== current.conversationId && paneItemRef.current?.conversationId === deferredConvId;
+  const paneItem = switching ? paneItemRef.current! : current;
+  useLayoutEffect(() => { if (!switching && current) paneItemRef.current = current; });
+
   const stepper = useMemo<DecisionStepper | null>(() => current ? {
     position: position + 1,
     total: queue.length,
@@ -71,8 +85,11 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
     onSkip,
     onPrev,
     onExit,
-    item: current,
-  } : null, [current, position, queue.length, advance, onSkip, onPrev, onExit]);
+    // While the old pane stands in, it carries no queue item: the answered card
+    // leaves at once, and the next session's question never draws in the
+    // previous session's pane.
+    item: switching ? undefined : current,
+  } : null, [current, switching, position, queue.length, advance, onSkip, onPrev, onExit]);
 
   // Keep the rail's highlight on the question you are reading. Off the inbox
   // the rail highlights sidePanelSessionId (sessionFocusKind → "panel"), and
@@ -106,9 +123,9 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
       {next?.reportSlug && next.source === "decide" && <PreloadPublishedPage slug={next.reportSlug} decision={next.key.replace(/^decide:/, "")} />}
       <div className="h-full">
         <InboxConversation
-          key={current.conversationId}
-          sessionId={current.conversationId}
-          isIdle={!!current.session?.is_idle}
+          key={paneItem!.conversationId}
+          sessionId={paneItem!.conversationId}
+          isIdle={!!paneItem!.session?.is_idle}
           onSendAndAdvance={onSkip}
         />
       </div>
