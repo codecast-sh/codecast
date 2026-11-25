@@ -196,6 +196,7 @@ export const DATA_SCOPE = {
   mySends: "viewer",
   mySendSearch: "viewer",
   mySendText: "entity",
+  replyStreams: "entity",
   machineRoster: "viewer",
   // Team machines on every team the viewer is in, each row naming its team.
   teamMachines: "viewer",

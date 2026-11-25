@@ -1095,9 +1095,13 @@ function AssistantBlockImpl({
   globalImageMap,
   globalFileMap,
   bubble,
+  live,
 }: {
   /** Clean mode's chat bubble: the agent's words in a left-aligned bubble under its name, shown whole. */
   bubble?: boolean;
+  /** A reply still being written (ReplyStreamTail): drawn the same, but its
+   *  messageId names no message yet, so the per-message actions stay off. */
+  live?: boolean;
   content?: string;
   timestamp: number;
   thinking?: string;
@@ -1311,7 +1315,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div data-cc-message="assistant" id={`msg-${messageId}`} data-cc-bubble={bubble ? "" : undefined} data-cc-tools-only={onlyToolCalls ? "" : undefined} className={`group relative scroll-mt-20 ${bubble ? "mb-2" : onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={live ? undefined : `msg-${messageId}`} data-cc-bubble={bubble ? "" : undefined} data-cc-tools-only={onlyToolCalls ? "" : undefined} className={`group relative scroll-mt-20 ${bubble ? "mb-2" : onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode || live ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>
@@ -1345,7 +1349,7 @@ function AssistantBlockImpl({
           <ChevronUp className="w-3 h-3" /> Collapse turn
         </button>
       )}
-      {(hasContent || visibleThinking || hasToolCalls) && (
+      {(hasContent || visibleThinking || hasToolCalls) && !live && (
         <div data-cc-assistant-message-toolbar className={`absolute ${toolbarTop} right-0 transition-opacity duration-150 ${TOOLBAR_SHELL} ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
               gutter — see MessageReview. This corner is META only: a plain row
@@ -1469,7 +1473,11 @@ function AssistantBlockImpl({
                   className="relative"
                   style={!bubble && !contentExpanded && isOverflowing ? clippedStyle(CONTENT_MAX_HEIGHT) : undefined}
                 >
-                  {conversationId ? (
+                  {live ? (
+                    // MessageReview's own wrappers, without its quote and
+                    // comment handles, so the hand-off moves nothing.
+                    <div className="cc-msg-review"><div className="cc-content">{renderAssistantBody(displayContent)}</div></div>
+                  ) : conversationId ? (
                     <MessageIdentityProvider conversationId={String(conversationId)} messageId={messageId}>
                       <MessageReview
                         conversationId={conversationId}
