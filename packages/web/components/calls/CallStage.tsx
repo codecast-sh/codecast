@@ -285,8 +285,30 @@ export function CallStage({
   // transcribing once a client claims the scribe seat.
   const transcribing = !!live && !!live.started_by && !transcribeOff;
 
-  const [view, setView] = useState<StageView>("auto");
-  const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
+  // The view and the thread rail live in the store (clientState.ui), not in
+  // this component: both call windows unmount the stage whenever they fold to
+  // faces, and the layout the person chose must be there on expand
+  // (ct-101326). Kept for one room; another room opens on auto, rail closed.
+  const savedLayout = useInboxStore((st) => st.clientState.ui?.call_stage_layout);
+  const layout = savedLayout && savedLayout.room === call.roomKey ? savedLayout : undefined;
+  const view: StageView = layout?.view ?? "auto";
+  const writeLayout = (patch: { view?: StageView; thread?: boolean }) => {
+    const room = call.roomKey;
+    if (!room) return;
+    const cur = useInboxStore.getState().clientState.ui?.call_stage_layout;
+    const base = cur && cur.room === room ? cur : { room, view: "auto" as StageView, thread: false };
+    useInboxStore.getState().updateClientUI({ call_stage_layout: { ...base, ...patch } });
+  };
+  const setView = (v: StageView) => writeLayout({ view: v });
+  // A request to open the thread (a door showing unread chat) is held until
+  // it is written to the room's layout, so the rail is open from first paint.
+  const [threadAsked, setThreadAsked] = useState(takeCallThreadRequest);
+  const threadOpen = threadAsked || (layout?.thread ?? false);
+  useWatchEffect(() => {
+    if (!threadAsked || !call.roomKey) return;
+    writeLayout({ thread: true });
+    setThreadAsked(false);
+  }, [threadAsked, call.roomKey]);
   // The rail leaves with motion: it stays mounted through a 150ms exit and
   // goes on the animation's end. Exits are shorter than entrances (200ms in).
   const [railClosing, setRailClosing] = useState(false);
@@ -298,13 +320,13 @@ export function CallStage({
     () =>
       onCallThreadRequest(() => {
         takeCallThreadRequest();
-        setThreadOpen(true);
+        setThreadAsked(true);
       }),
     [],
   );
   const toggleThread = () => {
     if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
-    setThreadOpen((o) => !o);
+    writeLayout({ thread: !threadOpen });
   };
   const onRailClosed = useCallback(() => setRailClosing(false), []);
   // The agents in the room, for the button: while the rail is closed, the
