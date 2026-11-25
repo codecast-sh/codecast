@@ -4,7 +4,7 @@
 // binding moves instead of piling up.
 //
 // The one fact lives on the conversation (active_task_id). Ownership is read
-// from the sessions the task links, so a task never stores a second copy that
+// from it (the by_active_task index), so a task never stores a second copy that
 // could disagree with the binding.
 
 import type { Id } from "../_generated/dataModel";
@@ -26,31 +26,36 @@ export interface TaskOwnerRef {
 /** Sessions bound to `task` (active_task_id), newest first. A session started
  *  to review the task judges the work and never owns it. */
 export async function boundSessionsOf(ctx: { db: any }, task: any): Promise<any[]> {
+  const bound = await ctx.db.query("conversations").withIndex("by_active_task", (q: any) => q.eq("active_task_id", task._id)).collect();
+  return bound
+    .filter((conv: any) => String(conv.review_of_task_id ?? "") !== String(task._id))
+    .sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+}
+
+type TaskComment = { conversation_id?: Id<"conversations">; comment_type: string; text: string; created_at: number };
+
+/** Sessions that handed `task` off (a HANDOFF_COMMENT review comment among `comments`), newest handoff first, each
+ *  once. A session reviewing the task is none of them. */
+export async function handoffSessionsOf(ctx: { db: any }, task: any, comments: TaskComment[]): Promise<any[]> {
+  const handoffs = comments
+    .filter((c) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text))
+    .sort((a, b) => b.created_at - a.created_at);
   const out: any[] = [];
   const seen = new Set<string>();
-  for (const id of task.conversation_ids ?? []) {
-    if (seen.has(String(id))) continue;
-    seen.add(String(id));
-    const conv = await ctx.db.get(id);
-    if (!conv || String(conv.active_task_id) !== String(task._id)) continue;
-    if (String(conv.review_of_task_id ?? "") === String(task._id)) continue;
-    out.push(conv);
+  for (const h of handoffs) {
+    if (seen.has(String(h.conversation_id))) continue;
+    seen.add(String(h.conversation_id));
+    const conv = await ctx.db.get(h.conversation_id);
+    if (conv && String(conv.review_of_task_id ?? "") !== String(task._id)) out.push(conv);
   }
-  return out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  return out;
 }
 
 /** The session a change on `task` came from: the live session bound to it, else the newest live session that
- *  handed it off (its HANDOFF_COMMENT review comment), since an implementer often moves to other work once it does.
- *  A session reviewing the task is neither. */
-export async function changeSessionOf(ctx: { db: any }, task: any, comments: { conversation_id?: Id<"conversations">; comment_type: string; text: string; created_at: number }[]): Promise<any | null> {
-  const [bound] = (await boundSessionsOf(ctx, task)).filter((c) => !c.inbox_killed_at);
-  if (bound) return bound;
-  const handoffs = comments.filter((c) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text));
-  for (const h of handoffs.sort((a, b) => b.created_at - a.created_at)) {
-    const conv = await ctx.db.get(h.conversation_id);
-    if (conv && !conv.inbox_killed_at && String(conv.review_of_task_id ?? "") !== String(task._id)) return conv;
-  }
-  return null;
+ *  handed it off, since an implementer often moves to other work once it does. */
+export async function changeSessionOf(ctx: { db: any }, task: any, comments: TaskComment[]): Promise<any | null> {
+  const live = (c: any) => !c.inbox_killed_at;
+  return (await boundSessionsOf(ctx, task)).find(live) ?? (await handoffSessionsOf(ctx, task, comments)).find(live) ?? null;
 }
 
 /** Is the session still doing work: a fresh daemon heartbeat, or recent
