@@ -4,10 +4,10 @@ import { getFunctionName } from "convex/server";
 import { MintTokenButton, type MintFlow } from "../../MintTokenDialog";
 
 export const mintCalls: Array<{ name: string; args: any }> = [];
-export function MintTokenHarness({ publicKey = "", initiallyPending = true, startGate }: { publicKey?: string; initiallyPending?: boolean; startGate?: Promise<void> }) {
-  const [flow, setFlow] = useState<MintFlow | null>(initiallyPending ? {
+export function MintTokenHarness({ publicKey = "", initiallyPending = true, startGate, initialFlow }: { publicKey?: string; initiallyPending?: boolean; startGate?: Promise<void>; initialFlow?: MintFlow }) {
+  const [flow, setFlow] = useState<MintFlow | null>(initialFlow ?? (initiallyPending ? {
     status: "pending", profile: "work", email: "work@example.com", started_at: Date.now(), url: "https://claude.ai/oauth/authorize?fixture=1",
-  } : null);
+  } : null));
   // The machine's heartbeat: which profiles have a minted token on file.
   const [onFile, setOnFile] = useState<Record<string, number>>({});
   const profiles = [{ name: "work", email: "work@example.com" }, { name: "home", email: "home@example.com" }]
