@@ -5643,7 +5643,8 @@ program
 Projects are named in the tree's ${CHECK_CONFIG_REL_PATH} ([projects] name = "path/tsconfig.json");
 with no project given, all of them. Without that file, the tsconfig nearest this directory.
 A project can also be a directory or a tsconfig path. One watcher serves every session on the
-tree and re-checks only what changed, so an answer takes seconds.
+tree and re-checks only what changed, so an answer takes seconds. checker = "bun" at its top
+runs one \`bun check\` per ask instead (\`cast guide check\`).
 
   cast check                            every project
   cast check cli web                    two projects by name
@@ -5660,7 +5661,8 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
   .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
   .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string }) => {
-    const { checkProject, gitLines, projectsTouching, repoRoot, resolveProjects, watchDir } = await import("./check.js");
+    const { gitLines, projectsTouching, repoRoot, resolveProjects, watchDir } = await import("./check.js");
+    const { askCheck } = await import("./checkBun.js");
     const root = repoRoot();
     let wanted;
     try {
@@ -5691,7 +5693,7 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
     for (const target of wanted) {
       const project = target.name;
       try {
-        const r = await checkProject(target, root, { fresh: o.fresh, protect, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
+        const r = await askCheck(target, root, { fresh: o.fresh, protect, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
         results.push(r);
         // A watcher's first pass (whoever started it) was built from the tree as it is, so errors
         // that look phantom there are real: suggesting --fresh again would only restart it in a loop.
@@ -5702,7 +5704,8 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
           if (r.diagnostics.trim()) console.log(r.diagnostics.trimEnd());
           const age = r.passAgeMs < 60_000 ? `${Math.round(r.passAgeMs / 1000)}s` : `${Math.round(r.passAgeMs / 60_000)}m`;
           const phantom = phantomCount ? `, ${phantomCount} name${phantomCount === 1 ? "s" : ""} what exists on disk` : "";
-          console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(pass ${age} old${r.started ? ", watcher started by this call" : ""}${phantom})`)}`);
+          const how = r.checker ? `bun check ${(r.runMs! / 1000).toFixed(1)}s${r.started ? "" : ", shared"}` : `pass ${age} old${r.started ? ", watcher started by this call" : ""}${phantom}`;
+          console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(${how})`)}`);
         }
       } catch (err) {
         const failure = err instanceof CheckFailure ? err : new CheckFailure((err as Error).message, "infra");
@@ -5720,9 +5723,11 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
 program
   .command("check-watch <root> <project> <tsconfig>", { hidden: true })
   .description("Run one typecheck watcher in the foreground (internal; `cast check` starts these detached)")
-  .action(async (root: string, project: string, tsconfig: string) => {
-    const { runWatcher } = await import("./check.js");
-    await runWatcher(root, project, tsconfig);
+  .option("--bun <bin>", "One bun check run instead")
+  .option("--run <id>", "Its id")
+  .action(async (root: string, project: string, tsconfig: string, o: { bun?: string; run?: string }) => {
+    const { runCheckProcess } = await import("./checkBun.js");
+    await runCheckProcess(root, project, tsconfig, o);
   });
 
 program

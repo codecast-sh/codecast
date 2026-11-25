@@ -8,7 +8,7 @@
  *   0    every project checked clean
  *   1    type errors (some may come with a tool failure elsewhere; the hint names it)
  *   2    the projects asked for could not be resolved
- *   70   a watcher died, was killed for memory, or did not start: no verdict
+ *   70   a watcher or bun check run died, was killed for memory, or did not start, or bun is missing or too old: no verdict
  *   75   no verdict yet, retry: the queue stayed full, or the watcher's answer was stale
  *   124  the pass outlived the wait; it keeps running and the next ask picks it up
  */
@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT_BUSY, EXIT_INFRA, EXIT_WAIT_ELAPSED } from "./infraExit.js";
 
-export type FailureKind = "oom" | "heap" | "no-tsc" | "died" | "stuck" | "infra" | "stale" | "wait-elapsed" | "busy" | "locked";
+export type FailureKind = "oom" | "heap" | "no-tsc" | "no-bun" | "died" | "stuck" | "infra" | "stale" | "wait-elapsed" | "busy" | "locked";
 export type FailureDetail = { log?: string; command?: string; pid?: number; pgid?: number; lock?: string };
 
 export class CheckFailure extends Error {
@@ -27,7 +27,7 @@ export class CheckFailure extends Error {
 }
 
 const EXIT: Record<FailureKind, number> = {
-  oom: EXIT_INFRA, heap: EXIT_INFRA, "no-tsc": EXIT_INFRA, died: EXIT_INFRA, stuck: EXIT_INFRA, infra: EXIT_INFRA,
+  oom: EXIT_INFRA, heap: EXIT_INFRA, "no-tsc": EXIT_INFRA, "no-bun": EXIT_INFRA, died: EXIT_INFRA, stuck: EXIT_INFRA, infra: EXIT_INFRA,
   stale: EXIT_BUSY, busy: EXIT_BUSY, locked: EXIT_BUSY, "wait-elapsed": EXIT_WAIT_ELAPSED,
 };
 
@@ -115,7 +115,7 @@ export type ProjectOutcome =
   | { project: string; errors: number; phantom?: number; globalTsc?: boolean }
   | { project: string; failure: CheckFailure };
 
-const ORDER: Array<FailureKind | "phantom" | "global-tsc"> = ["oom", "heap", "no-tsc", "died", "stuck", "infra", "stale", "phantom", "wait-elapsed", "busy", "locked", "global-tsc"];
+const ORDER: Array<FailureKind | "phantom" | "global-tsc"> = ["oom", "heap", "no-tsc", "no-bun", "died", "stuck", "infra", "stale", "phantom", "wait-elapsed", "busy", "locked", "global-tsc"];
 
 function hintFor(kind: FailureKind | "phantom" | "global-tsc", projects: string[], details: FailureDetail[], examples: string[]): string {
   const names = projects.join(" ");
@@ -131,6 +131,8 @@ function hintFor(kind: FailureKind | "phantom" | "global-tsc", projects: string[
       return `raise tsc's heap and restart the watchers: \`NODE_OPTIONS=--max-old-space-size=${Math.max(12288, ...details.map((d) => Number(/max-old-space-size=(\d+)/.exec(d.command ?? "")?.[1]) || 0))} cast check --fresh ${names}\``;
     case "no-tsc":
       return `install this tree's dependencies (\`bun install\`, or the setup install in .codecast/workspace.toml), then run \`cast check ${names}\``;
+    case "no-bun":
+      return `install bun 1.4.4 or newer (\`bun upgrade\`), or point CAST_CHECK_BUN at one, then run \`cast check ${names}\`: this tree sets checker = "bun" in .codecast/check.toml`;
     case "died":
       return `run \`cast check ${names}\` again to start a new watcher${one && detail.log ? `; if it dies again, read ${detail.log}` : ""}`;
     case "stuck":

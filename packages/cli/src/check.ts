@@ -55,36 +55,9 @@ import { peakOfPids, recordPeak, type Peak } from "./watcherMemory.js";
 import { repoOf, startWhenSlotFrees } from "./checkCapacity.js";
 import { tscFileVersion } from "./tscFileVersion.js";
 export * from "./checkCapacity.js";
+import { readCheckConfig, type CheckProject } from "./checkConfig.js";
 
-/** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
-export interface CheckProject {
-  name: string;
-  tsconfig: string;
-}
-
-
-/** The `[projects]` table of `.codecast/check.toml`, or null when the tree has none. */
-export function readCheckConfig(root: string): CheckProject[] | null {
-  const file = path.join(root, CHECK_CONFIG_REL_PATH);
-  if (!fs.existsSync(file)) return null;
-  let raw: unknown;
-  try {
-    raw = Bun.TOML.parse(fs.readFileSync(file, "utf-8"));
-  } catch (err) {
-    throw new Error(`${CHECK_CONFIG_REL_PATH}: invalid TOML: ${(err as Error).message}`);
-  }
-  const projects = (raw as { projects?: unknown })?.projects;
-  if (!projects || typeof projects !== "object" || Array.isArray(projects)) {
-    throw new Error(`${CHECK_CONFIG_REL_PATH}: expected a [projects] table of name = "path/to/tsconfig.json"`);
-  }
-  const out: CheckProject[] = [];
-  for (const [name, tsconfig] of Object.entries(projects as Record<string, unknown>)) {
-    if (typeof tsconfig !== "string" || !tsconfig.trim()) throw new Error(`${CHECK_CONFIG_REL_PATH}: projects.${name} must be a tsconfig path`);
-    if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error(`${CHECK_CONFIG_REL_PATH}: project name '${name}' may use letters, digits, dot, dash and underscore only`);
-    out.push({ name, tsconfig });
-  }
-  return out;
-}
+export * from "./checkConfig.js";
 
 /** A project name for a tree relative directory: "packages/cli" → "packages-cli", the root → "root". */
 export function slugOf(relDir: string): string {
@@ -383,6 +356,11 @@ export interface WatchState {
   repo?: string;
   /** The most memory the watcher and its tsc have held, as of its last pass. */
   peakRssBytes?: number;
+  /** A one-shot `bun check` run (checkBun.ts), not a watcher: the ask that started it knows it by runId. */
+  checker?: "bun";
+  runId?: string;
+  /** The tree the run checks (treeSignature), so an ask on the same tree shares it. */
+  tree?: string;
 }
 
 export const IDLE_EXIT_MS = 45 * 60_000;
@@ -423,7 +401,7 @@ export function watcherExit(state: Pick<WatchState, "inProgress" | "askedAt" | "
  */
 export const UNSEEN_GRACE_MS = 15_000;
 /** How long a watcher's recorded pid may be dead before an ask stops waiting on it. */
-const DEAD_GRACE_MS = 5_000;
+export const DEAD_GRACE_MS = 5_000;
 
 export function repoRoot(cwd = process.cwd()): string {
   const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf-8", timeout: 10_000 });
@@ -554,7 +532,7 @@ function watcherPids(pids: number[]): Set<number> | null {
 }
 
 /** The pid runs `cast check-watch`, not some program that inherited a dead watcher's pid. */
-function isWatcherProcess(pid: number): boolean {
+export function isWatcherProcess(pid: number): boolean {
   const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf-8", timeout: 5_000 });
   // ps itself failing (timed out, not run) says nothing either way, so the pid is still treated as the watcher.
   if (r.error || (r.status !== 0 && r.status !== 1)) return true;
@@ -837,6 +815,9 @@ export interface CheckResult {
   phantomExamples: string[];
   /** The tsc on PATH checked it: the tree installs none. */
   globalTsc: boolean;
+  /** Answered by a `bun check` run, which took runMs. */
+  checker?: "bun";
+  runMs?: number;
 }
 
 export type WatcherStarter = (root: string, project: CheckProject) => void;
@@ -846,12 +827,15 @@ export type WatcherStarter = (root: string, project: CheckProject) => void;
  * Interactive launchd job where launchd takes one, so the build does not
  * inherit the agent tree's utility clamp (launchdJob.ts), else detached.
  */
-export const startDetachedWatcher: WatcherStarter = (root, { name, tsconfig }) => {
+export const startDetachedWatcher: WatcherStarter = (root, project) => startCheckProcess(root, project);
+
+/** Start `cast check-watch` for a project, detached as above; `extra` turns it into a bun run (checkBun.ts). */
+export function startCheckProcess(root: string, { name, tsconfig }: CheckProject, extra: string[] = []): void {
   const dir = watchDir(root, name);
   fs.mkdirSync(dir, { recursive: true });
   const base = path.basename(process.execPath).toLowerCase();
   const viaRuntime = base.includes("bun") || base.includes("node");
-  const args = viaRuntime ? [process.argv[1], "check-watch", root, name, tsconfig] : ["check-watch", root, name, tsconfig];
+  const args = [...(viaRuntime ? [process.argv[1]] : []), "check-watch", root, name, tsconfig, ...extra];
   const label = watcherLabel(dir);
   // A cap the asker raised in NODE_OPTIONS reaches the watcher under launchd only by this name.
   const asked = heapCapMb(process.env.NODE_OPTIONS);
@@ -900,8 +884,8 @@ export async function checkProject(
     // the running watcher was built on (an entry corrected in
     // .codecast/check.toml). The old program would keep answering, so it is
     // replaced rather than trusted.
-    if (state && state.tsconfig !== target.tsconfig) {
-      note(`the ${project} project now names ${target.tsconfig}, not ${state.tsconfig}; restarting its watcher`);
+    if (state && (state.tsconfig !== target.tsconfig || state.checker)) {
+      note(state.checker ? `${project} now checks with a tsc watcher; stopping its bun check run` : `the ${project} project now names ${target.tsconfig}, not ${state.tsconfig}; restarting its watcher`);
       await stopWatcher(dir, state.pid, kill);
       state = null;
     }
