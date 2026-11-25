@@ -1629,9 +1629,13 @@ export const CLIENT_SYNC_REGISTRY = {
   // (replyStreams.get), keyed by conversation id, with the browser's receipt
   // time as `received_at` (hooks/useSyncReplyStream). Never persisted: a
   // reload asks again, and a cached partial reply is a lie once it lands.
+  // No `feeds` entry, as livePresence: its one feeder is
+  // hooks/useSyncReplyStream.ts, which also renews the watch lease
+  // (replyStreams.watch), and a feed would mark the replyStreams module a
+  // synced writer whose every mutation must ride a store action. The lease is
+  // a heartbeat that writes nothing this key holds: no draft, no undo.
   replyStreams: {
     sync: { isDelta: true },
-    feeds: ["replyStreams.get"],
   },
   // The viewer's device roster (listDevices), keyed by device_id. Persisted so
   // /capabilities, device chips and the terminal picker paint at boot. The

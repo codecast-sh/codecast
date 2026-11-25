@@ -104,6 +104,7 @@ const { InboxConversation } = await import("../../app/inbox/QueuePageClient");
 // A Convex client that confirms the caller, answers nothing and records each
 // subscription opened.
 let subscribed: string[] = [];
+let mutated: string[] = [];
 const convex = {
   clearAuth() {},
   setAuth(_fetch: unknown, onChange?: (authenticated: boolean) => void) { queueMicrotask(() => onChange?.(true)); },
@@ -112,7 +113,7 @@ const convex = {
     return { onUpdate: () => { subscribed.push(name); return () => {}; }, localQueryResult: () => undefined, localQueryLogs: () => undefined, journal: () => undefined };
   },
   query: () => new Promise(() => {}),
-  mutation: () => Promise.resolve(null),
+  mutation: (m: any) => { mutated.push(typeof m === "string" ? m : getFunctionName(m)); return Promise.resolve(null); },
   action: () => Promise.resolve(null),
   connectionState: () => ({ isWebSocketConnected: true, hasInflightRequests: false, hasEverConnected: true, connectionCount: 1 }),
   subscribeToConnectionState: () => () => {},
@@ -199,6 +200,7 @@ const rowLooks = (v: { host: HTMLElement }) =>
 
 beforeEach(() => {
   subscribed = [];
+  mutated = [];
 });
 
 for (const full of [false, true]) test(`its own row, after the tool result, boxed like the message that replaces it, which keeps the row (${full ? "full" : "condensed"})`, async () => {
@@ -206,6 +208,8 @@ for (const full of [false, true]) test(`its own row, after the tool result, boxe
   const v = await mount();
   expect(v.feed().getAttribute("data-cc-density")).toBe(full ? "full" : "condensed");
   expect(subscribed).toContain("replyStreams:get");
+  // The lease that lets the server write pushes, taken once on open.
+  expect(mutated.filter((m) => m === "replyStreams:watch").length).toBe(1);
   const drawnBefore = rowLooks(v);
   await push(1, "The jump comes from two writes in one frame.");
   const keys = v.rowKeys();
@@ -403,5 +407,6 @@ test("with the flag off the feeder never subscribes", async () => {
   seed(false);
   const v = await mount();
   expect(subscribed).not.toContain("replyStreams:get");
+  expect(mutated).not.toContain("replyStreams:watch");
   await v.unmount();
 });

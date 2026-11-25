@@ -55,6 +55,7 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   opsReplayTimelines: "a replay's timeline, fed per view by useSyncOpsReplay, which the sim does not mount",
   liveHeads: "an artifact's head revision and draft, fanned out of the same liveArtifacts.elementsSince answer as liveElements, which INV-fixpoint compares; the sim's feed table holds one key per query, so it feeds liveElements only",
   livePresence: "who is in an artifact now, fed per view by useSyncLiveArtifact (no registered feed, never persisted), which the sim does not mount",
+  replyStreams: "the reply being written in an open conversation, fed per view by useSyncReplyStream (no registered feed, never persisted), which the sim does not mount",
 };
 
 /**
