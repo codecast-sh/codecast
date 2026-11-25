@@ -302,3 +302,36 @@ test("a refused switch says why under the rows; a blank or non-Claude session sh
     storeState.sessionCommands = {};
   }
 });
+
+// ct-101395: Codex (and every agent whose model config has midSession: false)
+// takes a model or effort pick on a live session by killing and relaunching the
+// agent (switchSessionAgent -> enqueueKillAndResume), even mid-turn. The panel
+// must not tell the person such a pick "applies in place".
+test("a live codex session's state line does not claim a pick applies in place (ct-101395)", () => {
+  storeState.sessions.conv1.agent_type = "codex";
+  try {
+    mount({ agentType: "codex", model: "gpt-5.5", effort: "medium", messageCount: 12 });
+    const state = q("[data-session-state]")!.textContent ?? "";
+    expect(state).toContain("Live session");
+    expect(state).not.toContain("in place");
+  } finally {
+    storeState.sessions.conv1.agent_type = "claude_code";
+  }
+});
+
+// ct-101395: on that same live codex session an effort chip commits the
+// kill-and-relaunch in one bare click, with nothing telling the person the
+// running agent (and any turn it is working on) is about to be restarted.
+// A press that restarts a working agent goes through a confirm first.
+test("one click on a live codex session's effort chip does not restart the agent unannounced (ct-101395)", () => {
+  storeState.sessions.conv1.agent_type = "codex";
+  try {
+    const { modelPicks } = mount({ agentType: "codex", model: "gpt-5.5", effort: "medium", messageCount: 12 });
+    const chip = qa("[data-session-control-panel] button").find((b) => b.textContent?.trim() === "high")!;
+    expect(chip).toBeTruthy();
+    click(chip);
+    expect(modelPicks).toEqual([]);
+  } finally {
+    storeState.sessions.conv1.agent_type = "claude_code";
+  }
+});
