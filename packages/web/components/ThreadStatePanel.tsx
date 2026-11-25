@@ -15,6 +15,9 @@ import { sessionPullRequestsSig, titledSessionPullRequests, type LinkedPr } from
 import { TextWithMentions } from "./EntityIdPill";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
 import { copyText } from "../lib/copyText";
+import { PriorityPinLineView } from "./priorities/PriorityPinLine";
+import { usePriorityPinLine } from "../hooks/usePriorityPinLine";
+import type { PriorityPinLine } from "@codecast/shared/contracts/priorities";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The pinned thread state, rendered directly above the composer: the agent's own
@@ -69,6 +72,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // The decision docked under this panel, when there is one: the `You` line
   // usually names it ("answer the card…"), so pressing the line opens it.
   const openDecision = useDecisionOpener(conversationId);
+  const priorityLine = usePriorityPinLine(conversationId);
 
   const toggle = () =>
     useInboxStore.getState().updateClientUI({ thread_state_collapsed: !collapsed });
@@ -113,6 +117,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
       onOpenDecision={openDecision ?? undefined}
       prStatus={prStatus}
       linkedPrs={linkedPrs}
+      priorityLine={priorityLine}
       onToggle={toggle}
       onClear={canClear ? clear : undefined}
     />
@@ -134,6 +139,7 @@ export function ThreadStatePanelView({
   collapsed,
   prStatus,
   linkedPrs = [],
+  priorityLine = null,
   onToggle,
   onClear,
   onOpenDecision,
@@ -148,6 +154,8 @@ export function ThreadStatePanelView({
   collapsed: boolean;
   prStatus: React.ComponentProps<typeof PrStatusChip>["status"];
   linkedPrs?: readonly LinkedPr[];
+  /** The priority this session serves: Codecast's line under the header, shown folded or open. */
+  priorityLine?: PriorityPinLine | null;
   onToggle: () => void;
   onClear?: (headline: string) => void;
   /** Opens the decision docked below, when the thread has one open. */
@@ -267,6 +275,7 @@ export function ThreadStatePanelView({
               </button>
             </div>
           </div>
+          <PriorityPinLineView line={priorityLine} />
           {!collapsed && view.rows.length > 0 && (
             <div className="px-3 pb-2.5">
               <div

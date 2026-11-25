@@ -176,6 +176,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   const flowsOn = useWorkspaceFeature("line");
   const flowsOffer = useWorkspaceFeatureState("line") === "offer";
   const changesOn = useTeamFeature("changes");
+  const prioritiesOn = useWorkspaceFeature("priorities");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -682,6 +683,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
             ops: pathname === "/ops" || pathname?.startsWith("/ops/"),
             triggers: isTriggers,
             ...orgRows,
+            priorities: pathname === "/priorities",
             changes: pathname === "/changes",
             deploys: pathname === "/deploys",
             windows: !!isWindows,
@@ -691,6 +693,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
           orgOn={orgOn}
           offers={{ org: orgOffer, line: flowsOffer }}
           changesOn={changesOn}
+          prioritiesOn={prioritiesOn}
           // A person in no team has one workspace and nothing to switch: no block.
           workspaceHeader={teams && teams.length > 0 ? (
             <ErrorBoundary name="TeamSwitcher" level="inline">

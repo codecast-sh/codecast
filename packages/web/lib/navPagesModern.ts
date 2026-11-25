@@ -14,7 +14,7 @@ import { NAV_REGISTRY, type NavGate, type NavId, type NavRow } from "./navRegist
 /** The registry's gates the palette keeps: the team features. A row behind
  *  any other gate (an active team, staff, the org feature) stays listed, as
  *  it always was; its page says what it needs. */
-const PALETTE_FEATURES: Partial<Record<NavGate, TeamFeatureKey>> = { chat: "chat", calls: "calls", changes: "changes", line: "line" };
+const PALETTE_FEATURES: Partial<Record<NavGate, TeamFeatureKey>> = { chat: "chat", calls: "calls", changes: "changes", line: "line", priorities: "priorities" };
 
 /** What Modern changes about a page's row, or the whole row for a page the
  *  classic palette does not list. */

@@ -186,6 +186,7 @@ const Docs = lazy(() => import("@/app/docs/page"));
 const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
 const Week = lazy(() => import("@/app/week/page"));
+const Priorities = lazy(() => import("@/app/priorities/page"));
 const Files = lazy(() => import("@/app/files/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
@@ -429,6 +430,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "agent-features", component: cast(AgentFeatures), layout: "dashboardShell", tab: "/agent-features" },
   // The weekly card (components/weeklyCard): staff only until it is reviewed.
   { path: "week", component: cast(Week), layout: "dashboardShell", tab: "/week" },
+  // Each person's priorities (components/priorities), behind the priorities team feature.
+  { path: "priorities", component: cast(Priorities), layout: "dashboardShell", tab: "/priorities" },
   { path: "files", component: cast(Files), layout: "dashboardShell", tab: "/files", fullWidth: true },
   { path: "vault", component: cast(Vault), layout: "dashboardShell", tab: "/vault", fullWidth: true }, // the team Vault; old /vault?f=… Files links redirect to /files
   { path: "pages", component: cast(Artifacts), layout: "dashboardShell", tab: "/pages" },

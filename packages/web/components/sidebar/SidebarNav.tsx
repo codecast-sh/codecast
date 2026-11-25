@@ -10,7 +10,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Radar, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper, Rocket } from "lucide-react";
+import { ChevronsDown, ChevronsUp, Flag, FolderGit2, FolderKanban, Globe, KeyRound, Network, Radar, Target, Waypoints, Zap, MessageSquare, MessagesSquare, Newspaper, Rocket } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
 import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
@@ -187,6 +187,8 @@ export type SidebarNavActive = {
   org: boolean;
   /** The goals list and a goal (/goals…). */
   goals?: boolean;
+  /** Each person's priorities (/priorities). */
+  priorities?: boolean;
   /** The projects list and a project's board (/projects…). */
   projects?: boolean;
   /** Absent where the rail never shows Changes (the marketing hero). */
@@ -225,6 +227,7 @@ export function SidebarNavView({
   orgBadge,
   offers,
   changesOn,
+  prioritiesOn,
   flowsOn = true,
   railMore,
   workspaceHeader,
@@ -250,6 +253,8 @@ export function SidebarNavView({
   offers?: { org?: boolean; line?: boolean };
   /** The active team has Changes on (teams.features.changes): its row sits under Feed. */
   changesOn?: boolean;
+  /** The workspace has Priorities on (teams.features.priorities): its row sits under Goals. */
+  prioritiesOn?: boolean;
   /** The workspace has the Flows feature on (teams.features.line). */
   flowsOn?: boolean;
   /** A solo account's More/Fewer row (lib/railFocus.ts): `focused` while the
@@ -342,6 +347,16 @@ export function SidebarNavView({
           onMobileClose={onMobileClose}
           title="Goals: what the company is trying to move"
           icon={<Flag className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
+        />}
+        {prioritiesOn && shown("/priorities") && <NavSection
+          label="Priorities"
+          href="/priorities"
+          isActive={!!active.priorities}
+          popped="work"
+          isNarrow={isNarrow}
+          onMobileClose={onMobileClose}
+          title="Priorities: what each person is driving at, and how far along"
+          icon={<Target className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {shown("/projects") && <NavSection
           label="Projects"

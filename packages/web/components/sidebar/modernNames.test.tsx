@@ -36,7 +36,7 @@ function inStyle<T>(modern: boolean, read: () => T): T {
 }
 
 const shut = { items: [], expanded: false, onToggle: () => {} };
-const ALL = { chat: true, calls: true, changes: true, org: true, line: true, team: true, staff: true } as const;
+const ALL = { chat: true, calls: true, changes: true, org: true, line: true, priorities: true, team: true, staff: true } as const;
 const live = Object.fromEntries((["inbox", "decisions", "threads", "chat", "calls", "activity"] as const).map((id) => [id, <RegistryNavSection key={id} id={id} isActive={false} isNarrow={false} />]));
 
 const rail = renderToStaticMarkup(

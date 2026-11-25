@@ -143,6 +143,12 @@ describe("reads", () => {
 
     const theirs = await as(bea).query(pri.history, { days: 15 });
     expect(theirs.lanes.map((l: any) => [l.key, l.total])).toEqual([["pri-1", 3]]);
+    // Per session: the viewer's own typing only, in sessions a lane they see holds (the unassigned session is not listed).
+    const sum = (c: number[]) => c.reduce((a, b) => a + b, 0);
+    expect(Object.keys(res.sessions)).toEqual(["jx7one1"]);
+    expect(res.sessions.jx7one1).toHaveLength(15);
+    expect(sum(res.sessions.jx7one1)).toBe(2);
+    expect(Object.fromEntries(Object.entries(theirs.sessions).map(([k, c]) => [k, sum(c as number[])]))).toEqual({ jx7one1: 3 });
   });
 
   test("the pin line names the priority, its critical path and the session's step; null where the viewer cannot see the priority", async () => {
@@ -166,7 +172,9 @@ describe("reads", () => {
     expect(await t.query(pri.cliShow, { api_token: TOKEN, short_id: "pri-6" })).toEqual({ error: teamFeatureOffMessage("priorities") });
     await t.run(async (ctx) => ctx.db.patch(c1, { priority_id: dark }));
     expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
-    expect((await as(ada).query(pri.history, {})).lanes.map((l: any) => l.key)).toEqual(["unassigned"]);
+    const offHistory = await as(ada).query(pri.history, {});
+    expect(offHistory.lanes.map((l: any) => l.key)).toEqual(["unassigned"]);
+    expect(offHistory.sessions).toEqual({});
   });
 });
 

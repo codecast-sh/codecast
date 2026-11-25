@@ -288,6 +288,10 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
     if (!lanes.has(key)) lanes.set(key, { p, counts: new Array(days).fill(0) });
     return lanes.get(key)!;
   };
+  // Per session, only in sessions a lane the viewer sees holds and that they can still open.
+  const canOpen = sessionAccess(ctx, viewer, held);
+  const opens = new Map<string, Promise<boolean>>();
+  const sessions: Record<string, number[]> = {};
 
   for (const s of sends) {
     if (s.decision?.picked) continue;
@@ -308,7 +312,10 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
       }
       const p = await prios.get(pid);
       // A send in a session whose priority the viewer cannot read belongs to no lane they see.
-      if (p) laneFor(p.short_id, p).counts[i]++;
+      if (!p) continue;
+      laneFor(p.short_id, p).counts[i]++;
+      if (!opens.has(cid)) opens.set(cid, canOpen(conv));
+      if (await opens.get(cid)) (sessions[conv.short_id ?? cid] ??= new Array(days).fill(0))[i]++;
       continue;
     }
     const key = s.team_id ? `team:${s.team_id}` : `user:${viewer}`;
@@ -331,6 +338,7 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
       counts,
       total: counts.reduce((a, b) => a + b, 0),
     })),
+    sessions,
   };
 }
 

@@ -19,6 +19,7 @@ const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
 const Capabilities = lazyPage("@/app/capabilities/page", () => import("@/app/capabilities/page"));
 const AgentFeatures = lazyPage("@/app/agent-features/page", () => import("@/app/agent-features/page"));
 const Week = lazyPage("@/app/week/page", () => import("@/app/week/page"));
+const Priorities = lazyPage("@/app/priorities/page", () => import("@/app/priorities/page"));
 const DocDetail = lazyPage("@/app/docs/[id]/page", () => import("@/app/docs/[id]/page"));
 const Plans = lazyPage("@/app/plans/page", () => import("@/app/plans/page"));
 const Calls = lazyPage("@/app/calls/page", () => import("@/app/calls/page"));
@@ -172,6 +173,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/capabilities$/, paramNames: [], component: Capabilities },
   { pattern: /^\/agent-features$/, paramNames: [], component: AgentFeatures },
   { pattern: /^\/week$/, paramNames: [], component: Week },
+  { pattern: /^\/priorities$/, paramNames: [], component: Priorities },
   { pattern: /^\/plans$/, paramNames: [], component: Plans },
   { pattern: /^\/goals$/, paramNames: [], component: Goals },
   { pattern: /^\/goals\/([^/]+)$/, paramNames: ["id"], component: Goal },

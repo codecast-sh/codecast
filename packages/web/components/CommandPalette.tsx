@@ -1651,7 +1651,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Flows among them where the workspace has it, as the Modern rail does.
   const modernStyle = useIsModernStyle();
   const flowsOn = useWorkspaceFeature("line");
-  const featuresOn: Partial<Record<TeamFeatureKey, boolean>> = { chat: chatOn, calls: callsOn, org: orgOn, changes: changesOn, line: modernStyle && flowsOn };
+  const prioritiesOn = useWorkspaceFeature("priorities");
+  const featuresOn: Partial<Record<TeamFeatureKey, boolean>> = { chat: chatOn, calls: callsOn, org: orgOn, changes: changesOn, line: modernStyle && flowsOn, priorities: prioritiesOn };
   const featureOn = (f: TeamFeatureKey | undefined) => !f || featuresOn[f];
 
   // Merge locally-loaded inbox sessions (own, instant) with the server list (own +

@@ -65,6 +65,7 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Session Map", path: "/map", icon: "map", aliases: ["Board", "Desk"], keywords: "canvas zoom piles arrange sessions board desk spatial roles reporting org overview all sessions" },
   { label: "Org", path: "/org", icon: "network", aliases: ["Team", "Company"], keywords: "people mission roles organization org chart reporting structure members canvas" },
   { label: "Goals", path: "/goals", icon: "map", aliases: ["Roadmap"], keywords: "goal initiatives objectives strategy mission health progress owner" },
+  { label: "Priorities", path: "/priorities", icon: "map", keywords: "priorities driving at focus goals progress critical path steps sessions mine", feature: "priorities" },
   { label: "Projects", path: "/projects", icon: "grid", keywords: "project leads progress status active planning paused" },
   { label: "Deploys", path: "/deploys", icon: "rocket", aliases: ["Releases"], keywords: "deploy ship release live waiting rollback roll back ci backend web cli mobile desktop" },
   { label: "Changes", path: "/changes", icon: "newspaper", keywords: "open changes edition shipped released landed today commits stories what changed changelog", feature: "changes" },

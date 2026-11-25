@@ -111,4 +111,9 @@ export type PriorityDetail = Omit<PriorityRow, "steps"> & {
 
 /** Typed messages per local day: one lane per priority, and "unassigned" for sessions no priority holds. */
 export type PriorityHistoryLane = { key: string; short_id: string | null; title: string; status: PriorityStatus | null; counts: number[]; total: number };
-export type PriorityHistory = { days: string[]; lanes: PriorityHistoryLane[] };
+export type PriorityHistory = {
+  days: string[];
+  lanes: PriorityHistoryLane[];
+  /** Per session short id, the same daily counts: only sessions a priority lane above holds, and the reader can open. */
+  sessions?: Record<string, number[]>;
+};
