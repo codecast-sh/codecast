@@ -221,7 +221,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
         <div className="sj-now" data-kind="session">
           <CornerDownLeft className="w-3.5 h-3.5" aria-hidden />
           <b>{sentBackWords(now)}</b>
-          <span className="sj-what">this session is fixing it{now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}</span>
+          <span className="sj-what">{now.blocked ? "this session asks; the run goes on when it next ends a turn" : `this session is fixing it${now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}`}</span>
           {since(now.since)}
           {children}
           {now.note ? <p className="sj-note" data-journey-note>{now.note}</p> : null}

@@ -1228,7 +1228,7 @@ export const updateProgress = mutation({
     // How many times the run has entered the node (its limit is the graph's max_visits).
     visits: v.optional(v.number()),
     // The run waits on the session its change came from (flows.md FL4); null once it settled.
-    waiting_on_session: v.optional(v.union(v.null(), v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string() }))),
+    waiting_on_session: v.optional(v.union(v.null(), v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string(), blocked: v.optional(v.boolean()) }))),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
