@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "pr-switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -277,7 +277,7 @@ let host: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 let render: (node: React.ReactNode) => Promise<void>;
 
-function mount(initialEntries?: string[]) {
+function mount() {
   host = w.document.createElement("div");
   w.document.body.appendChild(host);
   root = createRoot(host);
@@ -285,7 +285,7 @@ function mount(initialEntries?: string[]) {
     await act(async () => {
       root.render(
         <ConvexProviderWithAuth client={convex} useAuth={useAuth}>
-          <MemoryRouter initialEntries={initialEntries}>
+          <MemoryRouter>
             <Profiler id="perf" onRender={(_id, _phase, actualDuration) => { commits++; renderMs += actualDuration; }}>{node}</Profiler>
           </MemoryRouter>
         </ConvexProviderWithAuth>,
@@ -388,89 +388,6 @@ async function setupSwitch(): Promise<Bench> {
   return {
     run: () => measure(async () => { await show(current === a ? b : a); await settle(); }),
     reset: async () => { await settle(); },
-  };
-}
-
-// Opening a conversation from a pull request's page, the back-and-forth of
-// reading an agent's PR and talking to the agent (ct-101487). The real tab
-// shell (TabContent: the tab's pane, the stage, the route pane) under the
-// nesting context DashboardLayout gives it in the app, so pages step aside
-// for the chrome that stays put, over the same cache as the warm switch. The
-// click is the one the rail makes: a button beside the shell, as the rail
-// sits beside it, calling useOpenSession. On the PR page that leaves for the
-// inbox carrying the session (tabNavigate rewrites the tab's path); on the
-// inbox it switches in place. Both conversations hold their full window of
-// 200 messages and were opened once before anything is measured.
-//
-// What a click costs the person is what runs before the browser can paint:
-// the event's own handler and the microtasks after it, where React flushes
-// the sync-lane work the click scheduled. A switch between conversations
-// leaves the old one painted and mounts the next at transition priority
-// (useBoundedDeferredValue in InboxConversation), so none of the next
-// transcript is drawn inside the click. `syncRows` counts the destination's
-// rows on screen when the click's task ends; `syncRowsBetweenConversations`
-// is the same count for a click between two conversations on the inbox.
-const PR_PATH = "/pr/codecast-sh/codecast/186";
-async function setupPrSwitch(): Promise<Bench> {
-  const { TabContent } = await import("../components/TabContent");
-  const { useOpenSession } = await import("../hooks/useOpenSession");
-  const { AUTH_JWT_STORAGE_KEY } = await import("../lib/localAuth");
-  await import("../components/DashboardLayout");
-  const Nest = (globalThis as any).__DashboardNestCtx as React.Context<boolean>;
-  // The pages sit behind AuthGuard, which draws for a device holding a token.
-  w.localStorage.setItem(AUTH_JWT_STORAGE_KEY, "perf");
-  seedStore(2000);
-  const [a, b] = [convId(1), convId(2)];
-  for (const id of [a, b]) useInboxStore.getState().setMessages(id, messages(id, 200), { hasMoreAbove: true, initialized: true });
-  const tab = { id: "tab-perf", path: PR_PATH, title: "Pull request" } as any;
-  useInboxStore.setState({ tabs: [tab], activeTabId: tab.id } as any);
-  w.history.replaceState(null, "", PR_PATH);
-  mount([PR_PATH]);
-
-  function Opener() {
-    const open = useOpenSession();
-    return <>{[a, b].map((id) => <button key={id} data-perf-open={id} onClick={() => open(id)} />)}</>;
-  }
-  const rowsOf = (id: string) => host.textContent!.split(`in ${id.slice(-6)}.`).length - 1;
-  const painted = (id: string) => host.textContent!.includes(`Last line of answer 199 in ${id.slice(-6)}`);
-  // The click and what runs before the browser could paint: the handler,
-  // then the microtasks React flushes sync work in. No macrotask runs, so
-  // transition work the click scheduled has not started.
-  const clickMs: string[] = [];
-  const click = async (id: string) => {
-    const t0 = performance.now();
-    host.querySelector(`[data-perf-open="${id}"]`)!.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-    clickMs.push((performance.now() - t0).toFixed(0));
-    return rowsOf(id);
-  };
-  const land = async (id: string) => { await until(() => painted(id), `conversation ${id} to paint`); await settle(); };
-  // Back to the pull request: what the tab does on Back.
-  const toPr = async () => {
-    await act(async () => { useInboxStore.getState().updateTab(tab.id, { path: PR_PATH }); w.history.pushState({ tabNav: true, tabId: tab.id }, "", PR_PATH); });
-    await until(() => !painted(a) && !painted(b), "the pull request page to show");
-    await settle();
-  };
-
-  await render(<Nest.Provider value={true}><Opener /><TabContent /></Nest.Provider>);
-  await settle();
-  await click(a); await land(a);
-  await click(b); await land(b);
-  await toPr();
-  return {
-    run: async () => {
-      clickMs.length = 0;
-      let syncRows = 0;
-      const report = await measure(async () => { syncRows = await click(a); await land(a); });
-      report.counts.syncRows = syncRows;
-      report.counts.syncRowsBetweenConversations = await click(b);
-      await land(b);
-      // Wall time of each click's task (PR page, then between conversations):
-      // for reading, never asserted.
-      report.detail.clickMs = clickMs.splice(0);
-      return report;
-    },
-    reset: toPr,
   };
 }
 
@@ -647,7 +564,6 @@ async function setupDiff(): Promise<Bench> {
 
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
-  "pr-switch": setupPrSwitch,
   append: setupAppend,
   "inbox-load": () => setupInboxLoad(),
   "inbox-heartbeat": () => setupInboxHeartbeat(),

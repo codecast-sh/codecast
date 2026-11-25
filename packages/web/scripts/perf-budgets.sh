@@ -6,4 +6,6 @@
 # fast one; it only takes longer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec bun perf/budgets.ts
+bun perf/budgets.ts
+# Standalone, so it runs unchanged on a tree from before its fix (ct-101487).
+exec bun perf/prSwitch.budget.tsx
