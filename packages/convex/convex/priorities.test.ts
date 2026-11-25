@@ -211,6 +211,25 @@ describe("reads", () => {
     expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
   });
 
+  test("an auto-shared session locked private: a teammate no longer lists it, counts it, or reads the priority through it", async () => {
+    const { t, as, bea, c1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(c1, { auto_shared: true }));
+    const before = await as(bea).query(pri.list, {});
+    expect(before.find((r: any) => r.short_id === "pri-1").sessions.map((s: any) => s.short_id)).toEqual(["jx7one1"]);
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes.map((l: any) => [l.key, l.total])).toEqual([["pri-1", 2]]);
+    // The policy team still names Acme (auto_shared), but the team may not read it now.
+    await t.run(async (ctx) => ctx.db.patch(c1, { is_private: true, team_visibility: "private" }));
+    expect((await as(bea).query(pri.list, {})).map((r: any) => r.short_id)).not.toContain("pri-1");
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
+    expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
+  });
+
+  test("the pin line shows to a teammate the session is listed to at summary level", async () => {
+    const { t, as, bea, c1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(c1, { team_visibility: "summary" }));
+    expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
+  });
+
   test("history: a teammate's lane skips messages in a session no longer visible to the team", async () => {
     const { t, as, bea, c1, p1, ada, acme } = await world();
     await t.run(async (ctx) => {
@@ -225,7 +244,7 @@ describe("reads", () => {
     expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
   });
 
-  test("history: the viewer's own read takes at most half the budget, and a cut marks every visible lane of theirs", async () => {
+  test("history: with no teammates' lanes the viewer's read takes the whole budget, and a cut marks every visible lane of theirs", async () => {
     const { t, as, ada, bea, acme, c2 } = await world();
     await t.run(async (ctx) => {
       const message = await ctx.db.insert("messages", { conversation_id: c2, role: "user", content: "x", timestamp: NOW } as any);
@@ -234,9 +253,9 @@ describe("reads", () => {
       }
     });
     const res = await as(ada).query(pri.history, { days: 15, workspace: `team:${acme}` });
-    // Newest first: half the budget of what she just typed, none of the older ones.
+    // Newest first: the whole budget of what she just typed (nobody else's lanes share it), none of the older ones.
     expect(res.lanes.map((l: any) => [l.key, l.total, l.truncated])).toEqual([
-      ["pri-1", 0, true], ["pri-2", 0, true], ["pri-3", 0, true], ["pri-4", 0, true], ["unassigned", HISTORY_SENDS_CAP / 2, true],
+      ["pri-1", 0, true], ["pri-2", 0, true], ["pri-3", 0, true], ["pri-4", 0, true], ["unassigned", HISTORY_SENDS_CAP, true],
     ]);
     // Bea, who typed nothing, gives Ada's share the whole budget: still cut, and only Ada's lanes say so.
     const theirs = await as(bea).query(pri.history, { days: 15 });

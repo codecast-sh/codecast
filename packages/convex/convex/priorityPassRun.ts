@@ -19,9 +19,9 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { runModelCallOrOwn, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
-import { workspaceForConversation } from "./lib/access";
-import { parseWorkspaceKey, workspaceKey } from "./lib/accessKeys";
-import { isTeamMember, teamVisibleConvTeam } from "./privacy";
+import { parseWorkspaceKey } from "./lib/accessKeys";
+import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
+import { isTeamMember } from "./privacy";
 import { canReadCall } from "./transcripts";
 import { isRestricted } from "./chatAccess";
 import { isStandingSession } from "./lib/orgOwnership";
@@ -125,8 +125,9 @@ export type PassResult = {
 };
 
 const sessionId = (conv: Doc<"conversations">) => conv.short_id ?? String(conv._id);
-const inWorkspace = (conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
-  String(conv.user_id) === String(userId) && workspaceKey(workspaceForConversation(conv)) === workspace;
+/** The person's own session, counting in this workspace (lib/prioritySessionVisibility: its team's only while listed there). */
+const inWorkspace = async (vis: SessionVisibility, conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
+  String(conv.user_id) === String(userId) && (await vis.workspaceOf(conv)) === workspace;
 
 /** The pair's newest runs by start, newest first. */
 const recentRuns = (ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<Doc<"priority_pass_runs">[]> =>
@@ -242,7 +243,7 @@ async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">): Promis
  * for a team-visible session, and a recording or meeting bot's call only once
  * its creator shared it with the team.
  */
-async function teamWideCall(ctx: { db: any }, t: Doc<"transcripts">): Promise<boolean> {
+async function teamWideCall(ctx: { db: any }, vis: SessionVisibility, t: Doc<"transcripts">): Promise<boolean> {
   if (t.private) return false;
   const room = parseRoomKey(t.room_key);
   if (!room) return false;
@@ -253,7 +254,7 @@ async function teamWideCall(ctx: { db: any }, t: Doc<"transcripts">): Promise<bo
   }
   if (room.kind === "session") {
     const conv: Doc<"conversations"> | null = await ctx.db.get(room.conversationId as Id<"conversations">);
-    return !!conv && String(teamVisibleConvTeam(conv)) === String(t.team_id);
+    return !!conv && (await vis.listedTo(conv, t.team_id));
   }
   return false;
 }
@@ -265,7 +266,7 @@ async function teamWideCall(ctx: { db: any }, t: Doc<"transcripts">): Promise<bo
  * and the whole team may read, oldest first. A call is a team's record: a
  * personal workspace has none.
  */
-async function callsIn(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">, since: number, until: number, fresh: (landed: number) => boolean = () => true): Promise<PassCall[]> {
+async function callsIn(ctx: { db: any }, vis: SessionVisibility, userId: Id<"users">, teamId: Id<"teams">, since: number, until: number, fresh: (landed: number) => boolean = () => true): Promise<PassCall[]> {
   const rows: Doc<"transcripts">[] = await ctx.db
     .query("transcripts")
     .withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gt("started_at", since - CALL_LONGEST_MS).lte("started_at", until))
@@ -277,7 +278,7 @@ async function callsIn(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams"
     const landed = t.summary_at ?? t.ended_at;
     if (!t.ended_at || !landed || landed <= since || landed > until || !fresh(landed) || !(t.summary?.trim() || t.action_items?.length)) continue;
     const joined = (t.participants ?? []).some((p) => String(p.id) === me) || (t.recorded_people ?? []).some((id) => String(id) === me) || String(t.started_by) === me;
-    if (!joined || !(await teamWideCall(ctx, t)) || !(await canReadCall(ctx, userId, t))) continue;
+    if (!joined || !(await teamWideCall(ctx, vis, t)) || !(await canReadCall(ctx, userId, t))) continue;
     out.push({ id: t.short_id ?? String(t._id), title: t.title ?? "Call", at: landed, summary: t.summary ?? "", action_items: t.action_items ?? [] });
   }
   return out.sort((a, b) => a.at - b.at);
@@ -293,6 +294,7 @@ export const passInputs = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string(), now: v.optional(v.number()), window_start: v.optional(v.number()) },
   handler: async (ctx, args): Promise<PassInputs> => {
     const now = args.now ?? Date.now();
+    const vis = sessionVisibility(ctx);
     const state = await cursorState(ctx, args.user_id, args.workspace);
     const cursor_at = args.window_start ?? state?.cursor_at ?? now - FIRST_PASS_WINDOW_MS;
     // Below a run's cursor, only rows that landed after that run started are new.
@@ -317,7 +319,7 @@ export const passInputs = internalQuery({
       const key = String(id);
       if (!convs.has(key)) {
         const conv: Doc<"conversations"> | null = await ctx.db.get(id);
-        convs.set(key, conv && inWorkspace(conv, args.user_id, args.workspace) && (await mayRead(conv)) ? conv : null);
+        convs.set(key, conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) && (await mayRead(conv)) ? conv : null);
       }
       return convs.get(key)!;
     };
@@ -380,7 +382,7 @@ export const passInputs = internalQuery({
         .take(PRIORITY_PASS_CAPS.sessions_per_priority);
       const readable: Doc<"conversations">[] = [];
       for (const c of held) {
-        if (!inWorkspace(c, args.user_id, args.workspace)) strays.push(c._id);
+        if (!(await inWorkspace(vis, c, args.user_id, args.workspace))) strays.push(c._id);
         else if (await mayRead(c)) readable.push(c);
       }
       priorities.push({
@@ -409,7 +411,7 @@ export const passInputs = internalQuery({
     const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
     const ws = parseWorkspaceKey(args.workspace);
     const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
-    const calls = team ? await callsIn(ctx, args.user_id, team._id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until, (landed) => fresh(landed, landed)) : [];
+    const calls = team ? await callsIn(ctx, vis, args.user_id, team._id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until, (landed) => fresh(landed, landed)) : [];
     return {
       input: {
         person: user?.name ?? "this person",
@@ -580,6 +582,7 @@ export const applyPlan = internalMutation({
   args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))) },
   handler: async (ctx, args): Promise<Counts | null> => {
     const { plan: raw, from_cursor, strays, ...run } = args;
+    const vis = sessionVisibility(ctx);
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
       await settleRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
@@ -652,7 +655,7 @@ export const applyPlan = internalMutation({
       const conv: Doc<"conversations"> | null = id
         ? await ctx.db.get(id)
         : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
-      return conv && inWorkspace(conv, args.user_id, args.workspace) ? conv : null;
+      return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
     };
     for (const s of plan.sessions) {
       const conv = await conversationOf(s.session);
@@ -671,13 +674,13 @@ export const applyPlan = internalMutation({
     for (const id of strays ?? []) {
       const conv: Doc<"conversations"> | null = await ctx.db.get(id);
       const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
-      if (!conv || !held || inWorkspace(conv, args.user_id, args.workspace) || String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace) continue;
+      if (!conv || !held || (await inWorkspace(vis, conv, args.user_id, args.workspace)) || String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace) continue;
       await move(conv, undefined, undefined);
     }
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
     for (const [from, into] of mergedInto) {
       const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
-      for (const conv of left) if (inWorkspace(conv, args.user_id, args.workspace)) await move(conv, into, undefined);
+      for (const conv of left) if (await inWorkspace(vis, conv, args.user_id, args.workspace)) await move(conv, into, undefined);
     }
 
     // Every priority a session moved to or from is counted again from the index, so a count that drifted heals:
@@ -821,6 +824,7 @@ export const sweepCandidates = internalQuery({
   args: {},
   handler: async (ctx): Promise<Array<{ user_id: Id<"users">; workspace: string }>> => {
     const now = Date.now();
+    const vis = sessionVisibility(ctx);
     const pairs = new Map<string, { user_id: Id<"users">; workspace: string }>();
     for (const team of await ctx.db.query("teams").collect()) {
       if (!team.features?.priorities || !(await teamHasFeature(ctx, team._id, "priorities"))) continue;
@@ -845,7 +849,7 @@ export const sweepCandidates = internalQuery({
         if (seen.has(String(id))) continue;
         seen.add(String(id));
         const conv: Doc<"conversations"> | null = await ctx.db.get(id);
-        if (conv && inWorkspace(conv, pair.user_id, pair.workspace)) {
+        if (conv && (await inWorkspace(vis, conv, pair.user_id, pair.workspace))) {
           out.push(pair);
           break;
         }

@@ -599,6 +599,26 @@ describe("session counts", () => {
     expect((await w.t.run((ctx) => ctx.db.get(p._id)))?.session_count).toBe(0);
   });
 
+  test("an auto-shared session later locked private leaves the team pass and reads as personal work", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { auto_shared: true }));
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [p] = await w.priorities();
+    expect((await w.conversation(w.teamConv))?.priority_id).toBe(p._id);
+    // Locked private: the policy team (auto_shared) still names Acme, but the team may not read it.
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { is_private: true, team_visibility: "private" }));
+    await w.send(w.ana, w.teamConv, w.now - 9 * 60_000, "now private work");
+    const ids = async (workspace: string) => (await w.t.query(pass.passInputs, { user_id: w.ana, workspace, window_start: w.now - 3 * H })).input.sessions.map((s: any) => s.id);
+    expect(await ids(w.team)).not.toContain("jx7team");
+    expect(await ids(`user:${w.ana}`)).toContain("jx7team");
+    await w.send(w.ana, w.oldConv, w.now - 8 * 60_000, "other team work");
+    replyText = () => JSON.stringify({ priorities: [], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
+  });
+
   test("a session made private and mapped by the personal pass leaves the team priority's count true", async () => {
     const w = await world();
     await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");

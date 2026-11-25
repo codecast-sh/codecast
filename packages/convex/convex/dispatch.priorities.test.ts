@@ -23,7 +23,14 @@ async function world() {
       user_id: ada, workspace: `team:${acme}`, short_id, title: short_id, summary: "", status: "active", rank, rank_set_by: "pass",
       steps, first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
     } as any);
-    return { ada, bea, p1: await insert("pri-1", 1, [step("s1", "critical")]), p2: await insert("pri-2", 2) };
+    const p1 = await insert("pri-1", 1, [step("s1", "critical")]);
+    const p2 = await insert("pri-2", 2);
+    // A teammate reads a priority through a session of it shared with the team.
+    await ctx.db.insert("conversations", {
+      user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "shared", short_id: "jx7sh01", title: "shared",
+      started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p2,
+    } as any);
+    return { ada, bea, p1, p2 };
   });
   return { t, ...ids };
 }

@@ -13,14 +13,14 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
-import { canAccessConversation } from "./lib/access";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
 import { runBlocker } from "./priorityPassRun";
-import { getOwnerMembership, listsSessionsToTeam, teamReadLevelSync, teamVisibleConvTeam } from "./privacy";
+import { getOwnerMembership } from "./privacy";
+import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { isSessionOwner } from "./sessionOwners";
-import { TEAM_VISIBILITY_RANK, currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
+import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import type {
   PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityPinLine, PriorityRow, PrioritySession, PriorityStatus,
 } from "@codecast/shared/contracts/priorities";
@@ -36,13 +36,12 @@ const SHOW_SESSIONS = 200;
 const MAX_HISTORY_DAYS = 30;
 /**
  * The most typed messages, and the most sessions, one history reads in all
- * (newest first). The viewer's own read takes at most half; the teammates it
- * covers split the rest evenly.
+ * (newest first). The viewer's own read takes at most half when teammates'
+ * lanes share it (all of it otherwise); the teammates covered split the rest
+ * evenly.
  */
 export const HISTORY_SENDS_CAP = 3_000;
 export const HISTORY_CONVERSATION_CAP = 500;
-/** The sessions of a teammate's priority read to find one they list to the viewer. */
-const JUDGE_SESSIONS = 20;
 /** Without --all or a status, a list leaves out what finished or went quiet longer ago than this. */
 const FINISHED_WINDOW_DAYS = 60;
 
@@ -69,39 +68,60 @@ function featureCheck(ctx: Ctx): (key: string) => Promise<boolean> {
   };
 }
 
-type Judge = (p: Priority) => Promise<boolean>;
-
 /**
- * Who may read a priority, the workspace's sharing settings (the feature check
- * is the caller's): its owner; a teammate holding its workspace key only while
- * the owner, still on that team, lists their sessions to it
- * (privacy.listsSessionsToTeam, the team session list's rule) and at least one
- * of its newest JUDGE_SESSIONS sessions is listed to that team at the level it
- * started under. Each owner's account and membership are read once per judge.
+ * Everything one call decides about who sees what, read once per call. Team
+ * questions all go through lib/prioritySessionVisibility (`vis`), the one
+ * predicate the pass uses too.
  */
-function priorityJudge(ctx: Ctx, viewer: Id<"users">, held: Set<string>): Judge {
-  const shares = new Map<string, Promise<any | null>>();
-  return async (p) => {
+type Reader = {
+  viewer: Id<"users">;
+  held: Set<string>;
+  vis: SessionVisibility;
+  /** The newest `n` sessions mapped to a priority (by_priority), one read per priority per call. */
+  sessionsOf: (p: Priority, n: number) => Promise<Doc<"conversations">[]>;
+  /**
+   * Whether a session is listed to the viewer (its title, its chip, a count):
+   * their own, one they co-own, or one listed to a team of theirs. Nothing
+   * here opens a transcript, so nothing needs the content level.
+   */
+  listed: (c: Doc<"conversations">) => Promise<boolean>;
+  /**
+   * Who may read a priority (the feature check is the caller's): its owner;
+   * a teammate holding its workspace key only while at least one of its
+   * newest TEAMMATE_READ sessions is listed to that team.
+   */
+  canRead: (p: Priority) => Promise<boolean>;
+};
+
+/** A teammate's priority: the sessions read to judge it, the same ones its row lists and counts. */
+const TEAMMATE_READ = LIST_COUNT_CAP + 1;
+
+async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> {
+  const held = await heldKeysFor(ctx, viewer);
+  const vis = sessionVisibility(ctx);
+  const reads = new Map<string, { n: number; rows: Promise<Doc<"conversations">[]> }>();
+  const sessionsOf = async (p: Priority, n: number) => {
+    const key = String(p._id);
+    const had = reads.get(key);
+    if (had && had.n >= n) return (await had.rows).slice(0, n);
+    const rows: Promise<Doc<"conversations">[]> = ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(n);
+    reads.set(key, { n, rows });
+    return rows;
+  };
+  const listed = async (c: Doc<"conversations">) => {
+    if (String(c.user_id) === String(viewer) || String(c.owner_user_id ?? "") === String(viewer)) return true;
+    if (c.team_id && held.has(`team:${c.team_id}`) && (await vis.listedTo(c, c.team_id))) return true;
+    return isSessionOwner(ctx, c._id, viewer);
+  };
+  const canRead = async (p: Priority) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (!authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    const key = `${p.user_id}|${ws.teamId}`;
-    if (!shares.has(key)) {
-      shares.set(key, (async () => {
-        const membership = await getOwnerMembership(ctx, p.user_id, ws.teamId);
-        return membership && listsSessionsToTeam(await ctx.db.get(p.user_id), currentMembershipVisibility(membership)) ? membership : null;
-      })());
-    }
-    const membership = await shares.get(key);
-    if (!membership) return false;
-    const convs: Doc<"conversations">[] = await ctx.db
-      .query("conversations")
-      .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
-      .order("desc")
-      .take(JUDGE_SESSIONS);
-    return convs.some((c) => String(c.team_id) === String(ws.teamId) && teamReadLevelSync(c, effectiveMembershipVisibility(membership, c.started_at)) !== "none");
+    for (const c of await sessionsOf(p, TEAMMATE_READ)) if (await vis.listedTo(c, ws.teamId)) return true;
+    return false;
   };
+  return { viewer, held, vis, sessionsOf, listed, canRead };
 }
 
 /** The workspace a CLI call names: a team, the personal one, or none (every workspace). */
@@ -112,6 +132,8 @@ function cliWorkspace(viewer: Id<"users">, args: { team_id?: Id<"teams">; person
 }
 
 const STATUS_ORDER: Record<PriorityStatus, number> = { active: 0, done: 1, quiet: 2, set_aside: 3, merged: 4 };
+/** What a list shows without a status: everything but merged, read status by status so merged rows are never read. */
+const LISTED_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside"];
 
 /**
  * Each active priority's position among its owner's active ones in its
@@ -145,38 +167,13 @@ function criticalCounts(p: Priority): { critical_done: number; critical_total: n
   return { critical_done: critical.filter((s) => s.done).length, critical_total: critical.length };
 }
 
-/**
- * Whether a session is listed to the viewer (its title, its chip, a count),
- * for one call over many sessions: their own, one they co-own, or a teammate's
- * the team may read at least the summary of (privacy.canTeamMemberReadSummary's
- * rule, `!== "none"`), with the owner's membership read once per owner and
- * team. Nothing here opens a transcript, so no read needs the content level.
- */
-function sessionListed(ctx: Ctx, viewer: Id<"users">, held: Set<string>): (c: Doc<"conversations">) => Promise<boolean> {
-  const memberships = new Map<string, Promise<any>>();
-  return async (c) => {
-    if (String(c.user_id) === String(viewer) || String(c.owner_user_id ?? "") === String(viewer)) return true;
-    if (c.team_id && held.has(`team:${c.team_id}`)) {
-      const k = `${c.user_id}|${c.team_id}`;
-      if (!memberships.has(k)) memberships.set(k, getOwnerMembership(ctx, c.user_id, c.team_id));
-      if (teamReadLevelSync(c, effectiveMembershipVisibility(await memberships.get(k), c.started_at)) !== "none") return true;
-    }
-    return isSessionOwner(ctx, c._id, viewer);
-  };
-}
-
 /** Mapped sessions, newest started first (by_priority); null where one is not listed to the viewer. */
 type Mapped = Array<PrioritySession | null>;
 
-async function mappedSessions(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>, read: number): Promise<Mapped> {
-  const convs: Doc<"conversations">[] = await ctx.db
-    .query("conversations")
-    .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
-    .order("desc")
-    .take(read);
+async function mappedSessions(r: Reader, p: Priority, read: number): Promise<Mapped> {
   const out: Mapped = [];
-  for (const c of convs) {
-    out.push((await canOpen(c)) ? { short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at } : null);
+  for (const c of await r.sessionsOf(p, read)) {
+    out.push((await r.listed(c)) ? { short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at } : null);
   }
   return out;
 }
@@ -237,7 +234,7 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
 async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promise<PriorityRow> {
   const p: Priority = await ctx.db.get(id);
   const names = await ownerNames(ctx, [p]);
-  const mapped = await mappedSessions(ctx, p, sessionListed(ctx, viewer, await heldKeysFor(ctx, viewer)), listRead(viewer, p));
+  const mapped = await mappedSessions(await readerFor(ctx, viewer), p, listRead(viewer, p));
   return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), mapped, LIST_SESSIONS);
 }
 
@@ -246,20 +243,21 @@ async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promis
  * Merged ones only when asked for by status; without a status or `all`, done
  * and quiet ones only from the last FINISHED_WINDOW_DAYS.
  */
-async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, held: Set<string>, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<Priority[]> {
+async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<Priority[]> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
-  const recent = (r: Priority) => all || (r.status !== "done" && r.status !== "quiet") || (r.done_at ?? r.last_active_at) >= since;
+  const recent = (p: Priority) => all || (p.status !== "done" && p.status !== "quiet") || (p.done_at ?? p.last_active_at) >= since;
   const featureOn = featureCheck(ctx);
-  const canRead = priorityJudge(ctx, viewer, held);
-  const keys = workspace ? (held.has(workspace) ? [workspace] : []) : [...held];
+  const keys = workspace ? (r.held.has(workspace) ? [workspace] : []) : [...r.held];
   const out: Priority[] = [];
   for (const key of keys) {
     if (!(await featureOn(key))) continue;
-    const rows: Priority[] = await ctx.db
-      .query("priorities")
-      .withIndex("by_workspace_status", (q: any) => (status ? q.eq("workspace", key).eq("status", status) : q.eq("workspace", key)))
-      .collect();
-    for (const r of rows) if ((status || (r.status !== "merged" && recent(r))) && (await canRead(r))) out.push(r);
+    for (const st of status ? [status] : LISTED_STATUSES) {
+      const rows: Priority[] = await ctx.db
+        .query("priorities")
+        .withIndex("by_workspace_status", (q: any) => q.eq("workspace", key).eq("status", st))
+        .collect();
+      for (const p of rows) if ((status || recent(p)) && (await r.canRead(p))) out.push(p);
+    }
   }
   return out;
 }
@@ -269,8 +267,8 @@ async function visiblePriorities(ctx: Ctx, viewer: Id<"users">, held: Set<string
  * before done, quiet and set aside, each in rank order.
  */
 async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<PriorityRow[]> {
-  const held = await heldKeysFor(ctx, viewer);
-  const rows = await visiblePriorities(ctx, viewer, held, args.workspace, args.status, !!args.all);
+  const r = await readerFor(ctx, viewer);
+  const rows = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const names = await ownerNames(ctx, rows);
   const positions = positionsOf(rows);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
@@ -283,9 +281,8 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
     || at(a) - at(b)
     || b.last_active_at - a.last_active_at);
-  const canOpen = sessionListed(ctx, viewer, held);
   const out: PriorityRow[] = [];
-  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await mappedSessions(ctx, p, canOpen, listRead(viewer, p)), LIST_SESSIONS));
+  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await mappedSessions(r, p, listRead(viewer, p)), LIST_SESSIONS));
   return out;
 }
 
@@ -294,19 +291,20 @@ async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
 }
 
 /** A priority the viewer can read, or the plain reason they cannot. */
-async function readable(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Result<Priority>> {
+async function readable(ctx: Ctx, r: Reader, shortId: string): Promise<Result<Priority>> {
   const p = await byShortId(ctx, shortId);
   // Access first, so the feature message never tells someone a priority exists.
-  if (!p || p.status === "merged" || !(await priorityJudge(ctx, viewer, await heldKeysFor(ctx, viewer))(p))) return { error: `no priority ${shortId} you can see` };
+  if (!p || p.status === "merged" || !(await r.canRead(p))) return { error: `no priority ${shortId} you can see` };
   if (!(await featureCheck(ctx)(p.workspace))) return { error: teamFeatureOffMessage(FEATURE) };
   return p;
 }
 
 async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Result<PriorityDetail>> {
-  const p = await readable(ctx, viewer, shortId);
+  const r = await readerFor(ctx, viewer);
+  const p = await readable(ctx, r, shortId);
   if ("error" in p) return p;
   const names = await ownerNames(ctx, [p]);
-  const mapped = await mappedSessions(ctx, p, sessionListed(ctx, viewer, await heldKeysFor(ctx, viewer)), SHOW_SESSIONS);
+  const mapped = await mappedSessions(r, p, SHOW_SESSIONS);
   const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), mapped);
   const sessions = row.sessions;
   return {
@@ -320,14 +318,15 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
  * Typed messages per local day: one lane per priority the viewer can read and
  * one ("unassigned") for the viewer's sessions no priority holds. A lane counts
  * its owner's typing: the viewer's own for their priorities; a teammate's for
- * theirs, each message only in a session still visible to that team and only
- * if the teammate shared at least their activity with the team when they typed
- * it (effectiveMembershipVisibility). Option picks on a decision card are not
- * typing. `sessions` splits the same counts by session, for sessions listed to
- * the viewer. The reads share one budget (HISTORY_SENDS_CAP messages,
- * HISTORY_CONVERSATION_CAP sessions): the viewer's own takes at most half, the
- * teammates covered split the rest evenly. When a person's share runs out,
- * every visible lane of theirs (and the viewer's unassigned) says `truncated`.
+ * theirs, each message only in a session listed to that team
+ * (lib/prioritySessionVisibility) and only if the teammate shared at least
+ * their activity with the team when they typed it. Option picks on a decision
+ * card are not typing. `sessions` splits the same counts by session, for
+ * sessions listed to the viewer. The reads share one budget (HISTORY_SENDS_CAP
+ * messages, HISTORY_CONVERSATION_CAP sessions): the viewer's own takes at most
+ * half when there are teammates' lanes, all of it when not; the teammates
+ * split the rest. When a person's share runs out, every visible lane of theirs
+ * (and the viewer's unassigned) says `truncated`.
  */
 async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; workspace?: string; tz_offset_minutes?: number }): Promise<PriorityHistory> {
   const days = Math.min(MAX_HISTORY_DAYS, Math.max(1, Math.floor(args.days ?? 15)));
@@ -336,10 +335,9 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
   const dayKeys = Array.from({ length: days }, (_, i) => new Date(firstLocal + i * DAY).toISOString().slice(0, 10));
   const dayOf = (ts: number) => Math.floor((ts - shift - firstLocal) / DAY);
 
-  const held = await heldKeysFor(ctx, viewer);
+  const r = await readerFor(ctx, viewer);
   const featureOn = featureCheck(ctx);
-  const listed = sessionListed(ctx, viewer, held);
-  const visible = await visiblePriorities(ctx, viewer, held, args.workspace, undefined, false);
+  const visible = await visiblePriorities(ctx, r, args.workspace, undefined, false);
   const own = new Map(visible.filter((p) => String(p.user_id) === String(viewer)).map((p) => [String(p._id), p]));
   const byOwner = new Map<string, Priority[]>();
   for (const p of visible) if (String(p.user_id) !== String(viewer)) byOwner.set(String(p.user_id), [...(byOwner.get(String(p.user_id)) ?? []), p]);
@@ -385,12 +383,13 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
   const countInto = async (p: Priority, owner: string | null, conv: Doc<"conversations">, day: number) => {
     laneFor(p.short_id, p, owner).counts[day]++;
     const cid = String(conv._id);
-    if (!shown.has(cid)) shown.set(cid, listed(conv));
+    if (!shown.has(cid)) shown.set(cid, r.listed(conv));
     if (await shown.get(cid)) (sessions[conv.short_id ?? cid] ??= new Array(days).fill(0))[day]++;
   };
 
-  // The viewer's own typing, at most half the budget: their priorities' lanes, and unassigned.
-  const mine = await typedBy(viewer, { sends: HISTORY_SENDS_CAP / 2, convs: HISTORY_CONVERSATION_CAP / 2 });
+  // The viewer's own typing, at most half the budget when teammates' lanes share it: their priorities' lanes, and unassigned.
+  const half = byOwner.size ? 2 : 1;
+  const mine = await typedBy(viewer, { sends: HISTORY_SENDS_CAP / half, convs: HISTORY_CONVERSATION_CAP / half });
   for (const { send, day, conv } of mine.typed) {
     if (conv.priority_id) {
       const p = own.get(String(conv.priority_id));
@@ -418,7 +417,7 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
     for (const { send, day, conv } of typed.typed) {
       const p = conv.priority_id ? byId.get(String(conv.priority_id)) : undefined;
       const ws = p && parseWorkspaceKey(p.workspace);
-      if (!p || ws?.type !== "team" || String(teamVisibleConvTeam(conv)) !== String(ws.teamId)) continue;
+      if (!p || ws?.type !== "team" || !(await r.vis.listedTo(conv, ws.teamId))) continue;
       if (!memberships.has(ws.teamId)) memberships.set(ws.teamId, getOwnerMembership(ctx, p.user_id, ws.teamId));
       const level = effectiveMembershipVisibility(await memberships.get(ws.teamId), send.timestamp);
       if (TEAM_VISIBILITY_RANK[level] >= TEAM_VISIBILITY_RANK.activity) await countInto(p, owner, conv, day);
@@ -451,7 +450,7 @@ async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: number; 
 
 /** A priority the viewer owns, or the plain reason they cannot change it. */
 async function owned(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Result<Priority>> {
-  const p = await readable(ctx, viewer, shortId);
+  const p = await readable(ctx, await readerFor(ctx, viewer), shortId);
   if ("error" in p) return p;
   if (String(p.user_id) !== String(viewer)) {
     const name = ((await ctx.db.get(p.user_id)) as any)?.name;
@@ -556,7 +555,12 @@ export const history = query({
   },
 });
 
-/** The line under a mapped session's pinned state: one conversation read, one priority read, the access checks, and the owner's active priorities for its position. */
+/**
+ * The line under a mapped session's pinned state, for a reader the session is
+ * listed to (summary level is enough: the line names the priority, not the
+ * transcript) who can read its priority: one conversation read, one priority
+ * read, the access checks, and the owner's active priorities for its position.
+ */
 export const pinLine = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, { conversation_id }): Promise<PriorityPinLine | null> => {
@@ -566,7 +570,8 @@ export const pinLine = query({
     if (!conv?.priority_id) return null;
     const p = await ctx.db.get(conv.priority_id);
     if (!p || p.status === "merged") return null;
-    if (!(await canAccessConversation(ctx, viewer, conv)) || !(await priorityJudge(ctx, viewer, await heldKeysFor(ctx, viewer))(p)) || !(await featureCheck(ctx)(p.workspace))) return null;
+    const r = await readerFor(ctx, viewer);
+    if (!(await r.listed(conv)) || !(await r.canRead(p)) || !(await featureCheck(ctx)(p.workspace))) return null;
     const step = p.steps.find((s) => s.key === conv.priority_step_key);
     return {
       short_id: p.short_id,
