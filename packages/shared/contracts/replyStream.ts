@@ -54,6 +54,18 @@ export const REPLY_STREAM_HANDOFF_STAMP_SLACK_MS = 1_000;
  *  less this, so a reply that stopped long ago is not drawn afresh on reload. */
 export const REPLY_STREAM_CLOCK_ALLOWANCE_MS = 5_000;
 
+// A key block whose END line the stream has not reached. Redaction matches a
+// key block whole, so until it closes its body would read as plain text.
+const OPEN_KEY_BLOCK = /-----BEGIN [A-Z0-9 ]*KEY-----(?![\s\S]*-----END [A-Z0-9 ]*KEY-----)[\s\S]*$/;
+
+/** `text` (already redacted) cut before a key block still being written. The
+ *  stream stops there until the block closes and redacts whole, as it will in
+ *  the message. The daemon applies it before a push leaves the machine and
+ *  the server before it stores one. */
+export function withoutOpenKeyBlock(text: string): string {
+  return text.replace(OPEN_KEY_BLOCK, "");
+}
+
 /** What a push answers: written; nobody has the conversation open, so nothing
  *  was written; or the feature is off for the conversation's workspace. */
 export type ReplyStreamPushResult = { state: "written" | "unwatched" | "off" };

@@ -28,7 +28,7 @@
 import { randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { REPLY_STREAM_MAX_CHARS, type ReplyStreamPushResult } from "@codecast/shared/contracts";
+import { REPLY_STREAM_MAX_CHARS, withoutOpenKeyBlock, type ReplyStreamPushResult } from "@codecast/shared/contracts";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
 
 export const REPLY_STREAM_HOOK_PATH = "/hook/message-display";
@@ -271,7 +271,11 @@ export class ReplyStreamTracker {
     if (!c) return;
     let m = c.message;
     if (m?.id !== batch.message_id) {
+      for (const h of c.held) if (now - h.at > HOLD_MS) this.retire(c, h.id);
       c.held = c.held.filter((h) => now - h.at <= HOLD_MS);
+      // An id this conversation moved past never comes back, whichever of
+      // its lines turns up late.
+      if (c.past.includes(batch.message_id)) return;
       if (batch.index > 0) {
         this.hold(c, batch, now);
         return;
@@ -279,16 +283,17 @@ export class ReplyStreamTracker {
       // A whole message in one batch gains nothing over the transcript and
       // makes the hand-off ambiguous: it is never published, so it never
       // displaces the current message either.
-      if (batch.final) return;
-      // A first line can only come late from a call in flight across a
-      // sleep; the ids this conversation moved past keep one from restarting.
-      if (c.past.includes(batch.message_id)) return;
-      if (m) {
-        c.past.push(m.id);
-        if (c.past.length > MAX_PAST_IDS) c.past.shift();
+      if (batch.final) {
+        this.retire(c, batch.message_id);
+        return;
       }
+      // A reply's messages come one after another, so a message starting now
+      // is newer than everything else this conversation knows of: the one it
+      // replaces, and any whose later lines were waiting for a first line.
       const held = c.held.find((h) => h.id === batch.message_id);
-      c.held = c.held.filter((h) => h !== held);
+      if (m) this.retire(c, m.id);
+      for (const h of c.held) if (h !== held) this.retire(c, h.id);
+      c.held = [];
       m = c.message = { id: batch.message_id, parts: held?.parts ?? new Map(), startedAt: now, seq: 0, sawFinal: held?.sawFinal ?? false, changed: false, written: "" };
     }
     m.parts.set(batch.index, batch.delta);
@@ -300,12 +305,19 @@ export class ReplyStreamTracker {
   private hold(c: Conversation, batch: MessageDisplayBatch, now: number): void {
     let h = c.held.find((x) => x.id === batch.message_id);
     if (!h) {
-      if (c.held.length >= MAX_HELD_MESSAGES) c.held.shift();
+      if (c.held.length >= MAX_HELD_MESSAGES) this.retire(c, c.held.shift()!.id);
       h = { id: batch.message_id, at: now, parts: new Map(), sawFinal: false };
       c.held.push(h);
     }
     if (h.parts.size < MAX_HELD_PARTS) h.parts.set(batch.index, batch.delta);
     if (batch.final) h.sawFinal = true;
+  }
+
+  /** The conversation has moved past this message: no line of it is taken again. */
+  private retire(c: Conversation, id: string): void {
+    if (c.past.includes(id)) return;
+    c.past.push(id);
+    if (c.past.length > MAX_PAST_IDS) c.past.shift();
   }
 
   /** The conversation's state, created or moved to the newest end; null when
@@ -363,7 +375,9 @@ export class ReplyStreamTracker {
     m.changed = false;
     // Redaction reads a bounded slice: a secret that straddles the cap is
     // still whole in it, and a runaway reply costs no more than that.
-    const text = this.deps.redact(joined(m, REPLY_STREAM_MAX_CHARS + SECRET_PAYLOAD_MAX)).slice(0, REPLY_STREAM_MAX_CHARS);
+    // A key block still open is cut here too, so its body never leaves the
+    // machine: redaction only knows the block once its END line is in.
+    const text = withoutOpenKeyBlock(this.deps.redact(joined(m, REPLY_STREAM_MAX_CHARS + SECRET_PAYLOAD_MAX))).slice(0, REPLY_STREAM_MAX_CHARS);
     if (!text || text === m.written) return;
     if (c.timer !== undefined) {
       this.clearTimer(c.timer);
@@ -382,11 +396,14 @@ export class ReplyStreamTracker {
       .then(
         (r) => r?.state ?? null,
         (err: unknown) => {
-          const at = this.deps.now();
-          if (at - c.failureLoggedAt >= FAILURE_LOG_EVERY_MS) {
-            c.failureLoggedAt = at;
-            this.deps.log(`[REPLY-STREAM] push for ${conversationId.slice(0, 12)} failed: ${pushFailureReason(err)}`);
-          }
+          // Nothing here may throw: the next step is what clears inFlight.
+          try {
+            const at = this.deps.now();
+            if (at - c.failureLoggedAt >= FAILURE_LOG_EVERY_MS) {
+              c.failureLoggedAt = at;
+              this.deps.log(`[REPLY-STREAM] push for ${conversationId.slice(0, 12)} failed: ${pushFailureReason(err)}`);
+            }
+          } catch {}
           return null;
         },
       )

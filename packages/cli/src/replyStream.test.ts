@@ -282,12 +282,56 @@ describe("which message is current", () => {
     expect(r.pushes.at(-1)!.args).toMatchObject({ message_id: "NEXT", seq: 1, text: "A\nB\nC\n" });
   });
 
-  test("one held past 2 s is let go: the message shows its first line until the next fills in", async () => {
+  test("one held past 2 s is let go for good: its first line, arriving later still, starts nothing", async () => {
     const r = rig();
     r.batch(1, "B\n", false, "NEXT");
     await r.advance(2001);
     r.batch(0, "A\n", false, "NEXT");
-    expect(r.texts()).toEqual(["A\n"]);
+    expect(r.pushes.length).toBe(0);
+  });
+
+  test("the first line of an older message, arriving after a newer one began, does not displace it", async () => {
+    const r = rig();
+    // OLD's last line overtakes its first; NEW begins before OLD's first line lands.
+    r.batch(1, "old tail\n", true, "OLD");
+    r.batch(0, "new one\n", false, "NEW");
+    await r.answer(WRITTEN);
+    r.batch(0, "old head\n", false, "OLD");
+    await r.advance(400);
+    r.batch(1, "new two\n", false, "NEW");
+    r.batch(2, "new three", true, "NEW");
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    expect(r.pushes.every((p) => p.args.message_id === "NEW")).toBe(true);
+    expect(r.texts().at(-1)).toBe("new one\nnew two\nnew three");
+  });
+
+  test("a whole message in one batch is never taken up later, whichever line of it comes again", async () => {
+    const r = rig();
+    r.batch(0, "cur one\n", false, "CUR");
+    await r.answer(WRITTEN);
+    r.batch(0, "whole", true, "ONE");
+    r.batch(0, "whole again\n", false, "ONE");
+    await r.advance(400);
+    r.batch(1, "cur two", true, "CUR");
+    await r.answer(WRITTEN);
+    expect(r.pushes.every((p) => p.args.message_id === "CUR")).toBe(true);
+    expect(r.texts().at(-1)).toBe("cur one\ncur two");
+  });
+
+  test("a key block still being written is cut before the push leaves the machine", async () => {
+    const r = rig();
+    // Built at runtime: push protection rejects credential-shaped literals.
+    const begin = "-----BEGIN " + "RSA PRIVATE KEY-----";
+    r.batch(0, "Here it is:\n");
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    r.batch(1, `${begin}\n`);
+    r.batch(2, "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo\n");
+    await r.advance(400);
+    // Nothing new to send: the text is still what was written.
+    expect(r.texts()).toEqual(["Here it is:\n"]);
+    expect(r.pushes.every((p) => !p.args.text.includes("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo"))).toBe(true);
   });
 });
 
