@@ -408,7 +408,7 @@ function runOutcomeWords(run: any, report?: string | null): AttemptOutcome {
   const why = typeof run.fail_reason === "string" ? run.fail_reason.trim().replace(/\.$/, "") : "";
   if (run.status === "failed") return { end, text: why ? `Stopped: ${clipWords(why, 200)}.`.replace(/\.\.$/, ".") : "Stopped." };
   // A run that finished without an end of its own: its card went unanswered, or a step failed on the way out.
-  if (passedUnansweredCard(run.node_statuses) || run.node_statuses?.some((n: any) => n.node_id === CARD_GATE_NODE_ID && n.outcome === "failure")) return { end, text: "Not shipped: its card was never answered." };
+  if (passedUnansweredCard(run.node_statuses) || run.node_statuses?.some((n: any) => n.node_id === CARD_GATE_NODE_ID && n.outcome === "failure")) return { end, text: "Not merged: its card was never answered." };
   const gaveUp = failedAtStation(run.node_statuses);
   if (gaveUp) return { end, text: `Stopped at ${gaveUp.replace(/_/g, " ")}${report?.trim() ? `. Its report: ${stopReportWords(report)}` : "."}` };
   const failed = [...(run.node_statuses ?? [])].reverse().find((n: any) => n.status === "failed");
