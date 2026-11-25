@@ -5668,12 +5668,15 @@ program
     "after",
     `
 Projects are named in the tree's ${CHECK_CONFIG_REL_PATH} ([projects] name = "path/tsconfig.json");
-with no project given, all of them. Without that file, the tsconfig nearest this directory.
-A project can also be a directory or a tsconfig path. One watcher serves every session on the
-tree and re-checks only what changed, so an answer takes seconds. checker = "bun" at its top
-runs one \`bun check\` per ask instead (\`cast guide check\`).
+with no project given, the ones this tree's changes reach: those whose program holds a file
+changed since the fork point from origin's default branch (committed, staged, unstaged or
+untracked), or one in the same folder, and every one when nothing changed. Without that file, the tsconfig nearest this
+directory. A project can also be a directory or a tsconfig path. One watcher serves every
+session on the tree and re-checks only what changed, so an answer takes seconds. checker = "bun"
+at its top runs one \`bun check\` per ask instead (\`cast guide check\`).
 
-  cast check                            every project
+  cast check                            the projects this tree's changes reach
+  cast check --all                      every project
   cast check cli web                    two projects by name
   cast check cli --fresh                restart the watcher first (it reports errors not on disk)
   cast check --changed-since origin/main
@@ -5686,65 +5689,11 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
   )
   .option("--fresh", "Restart the watcher before asking (the escape hatch for a watcher that lost track)")
   .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
+  .option("--all", "Every project, whatever this tree changed")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
-  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string }) => {
-    const { gitLines, projectsTouching, repoRoot, resolveProjects, watchDir } = await import("./check.js");
-    const { askCheck } = await import("./checkBun.js");
-    const root = repoRoot();
-    let wanted;
-    try {
-      wanted = resolveProjects(root, projects);
-      if (o.changedSince) {
-        const changed = [
-          ...gitLines(root, ["diff", "--name-only", o.changedSince, "--"]),
-          ...gitLines(root, ["ls-files", "--others", "--exclude-standard"]),
-        ].filter(Boolean);
-        wanted = projectsTouching(root, wanted, changed);
-        if (!wanted.length) {
-          if (o.json) console.log("[]");
-          else console.log(`${fmt.success("✓")} no project's program changed since ${o.changedSince}`);
-          return;
-        }
-      }
-    } catch (err) {
-      console.error(`${fmt.error("✗")} ${(err as Error).message}`);
-      process.exit(2);
-    }
-    const { CheckFailure, summarize } = await import("./checkOutcome.js");
-    const { printHint } = await import("./infraExit.js");
-    const results = [];
-    const outcomes: import("./checkOutcome.js").ProjectOutcome[] = [];
-    const phantomExamples: string[] = [];
-    // This run needs all of these programs: making room for one never stops another.
-    const protect = new Set(wanted.map((t) => watchDir(root, t.name)));
-    for (const target of wanted) {
-      const project = target.name;
-      try {
-        const r = await askCheck(target, root, { fresh: o.fresh, protect, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
-        results.push(r);
-        // A watcher's first pass (whoever started it) was built from the tree as it is, so errors
-        // that look phantom there are real: suggesting --fresh again would only restart it in a loop.
-        const phantomCount = r.started || o.fresh || r.firstPass ? 0 : r.phantom;
-        outcomes.push({ project, errors: r.errors, phantom: phantomCount, globalTsc: r.globalTsc });
-        if (phantomCount) phantomExamples.push(...r.phantomExamples);
-        if (!o.json) {
-          if (r.diagnostics.trim()) console.log(r.diagnostics.trimEnd());
-          const age = r.passAgeMs < 60_000 ? `${Math.round(r.passAgeMs / 1000)}s` : `${Math.round(r.passAgeMs / 60_000)}m`;
-          const phantom = phantomCount ? `, ${phantomCount} name${phantomCount === 1 ? "s" : ""} what exists on disk` : "";
-          const how = r.checker ? `bun check ${(r.runMs! / 1000).toFixed(1)}s${r.started ? "" : ", shared"}` : `pass ${age} old${r.started ? ", watcher started by this call" : ""}${phantom}`;
-          console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(${how})`)}`);
-        }
-      } catch (err) {
-        const failure = err instanceof CheckFailure ? err : new CheckFailure((err as Error).message, "infra");
-        outcomes.push({ project, failure });
-        if (o.json) results.push({ project, error: failure.message, kind: failure.kind });
-        else console.error(`${fmt.error("✗")} ${project}: ${failure.message}`);
-      }
-    }
-    const { exit, hint } = summarize(outcomes, phantomExamples);
-    if (o.json) console.log(JSON.stringify(results, null, 2));
-    if (hint) printHint(hint);
-    process.exit(exit);
+  .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string; all?: boolean }) => {
+    const { runCheckCommand } = await import("./checkCommand.js");
+    await runCheckCommand(projects, o);
   });
 
 program

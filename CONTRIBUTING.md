@@ -101,7 +101,8 @@ All data mutations go through `inboxStore` actions (optimistic local-first updat
 ## Checks
 
 ```bash
-cast check                 # typecheck every program in .codecast/check.toml through shared tsc watchers
+cast check                 # typecheck the programs in .codecast/check.toml your changes reach, through shared tsc watchers
+cast check --all           # every program
 bun test path/to/file.test.ts
 ```
 

@@ -10,7 +10,8 @@ import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/cod
 import { machineMemoryProbe, parseVmStat, type MachineMemory, type Peak } from "./watcherMemory.js";
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { BIG_BUILD_BYTES, capacityFor, checkProject, coldBuildCap, coldBuildsFit, COLD_BUILDS_ENV, eventsPath, lastLogLine, listQueue, listWatchers, machineCapacity, makeRoom, readWatchState, statePath, WANTED_MS, watchDir, watcherIdentity, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { pollUntil } from "./test-helpers/pollUntil.js";
+import { BIG_BUILD_BYTES, capacityFor, checkProject, coldBuildCap, coldBuildsFit, COLD_BUILDS_ENV, eventsPath, lastLogLine, listQueue, listWatchers, machineCapacity, HEAD_PATIENCE_MS, makeRoom, readWatchState, RECENT_ASK_MS, statePath, watchDir, watcherIdentity, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 const realIdentity = watcherIdentity.matches;
@@ -50,7 +51,7 @@ describe("the machine wide watcher cap", () => {
     expect(makeRoom(2, () => {}, Date.now(), protect)?.map((w) => w.project)).toEqual(["theirs"]);
     // Only protected programs left: the oldest still gives way rather than deadlocking the run.
     expect(makeRoom(1, () => {}, Date.now(), protect)?.map((w) => w.project)).toEqual(["mine"]);
-    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/ evict theirs \/other .*cap 2\n.* evict mine \/tree /);
+    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/ evict theirs \/other .*cap 2 \[asked_s=\d+ frees_bytes=0\]\n.* evict mine \/tree /);
   });
 
   test("an ask waits in the queue while every slot holds a wanted pass, and gives up at its budget without killing any", async () => {
@@ -69,22 +70,29 @@ describe("the machine wide watcher cap", () => {
     expect(listQueue()).toEqual([]);
   });
 
-  test("a queued ask starts its watcher as soon as the slot's pass finishes", async () => {
+  test("a queued ask waits past the slot's finished pass while its watcher was asked recently, and starts once that ask is old", async () => {
     const busyDir = watchDir("/tree", "busy");
     const busy: WatchState = { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: Date.now() };
     writeWatchState(busyDir, busy);
     const killed: number[] = [];
     const start = (root: string, project: { name: string; tsconfig: string }) =>
       writeWatchState(watchDir(root, project.name), { pid: process.pid, project: project.name, tsconfig: project.tsconfig, root, startedAt: Date.now(), inProgress: false, finishedAt: Date.now(), errors: 0 });
-    const ask = checkProject({ name: "next", tsconfig: "x" }, "/tree", { maxWatchers: 1, kill: (pid) => killed.push(pid), start });
-    await new Promise((r) => setTimeout(r, 1_500));
+    const notes: string[] = [];
+    const ask = checkProject({ name: "next", tsconfig: "x" }, "/tree", { maxWatchers: 1, kill: (pid) => killed.push(pid), start, note: (l) => notes.push(l) });
+    await pollUntil(() => notes.some((l) => l.startsWith("queued for the 1 typecheck slot:")), "the ask joining the queue");
     expect(killed).toEqual([]);
+    // Its pass done, but asked a moment ago: whoever asked will ask again, so it keeps its slot. The queue asks makeRoom
+    // the same question every second; asked directly, it answers without waiting on the queue's clock.
     writeWatchState(busyDir, { ...busy, inProgress: false, finishedAt: Date.now(), errors: 0 });
+    expect(makeRoom(1, () => { throw new Error("a recently asked watcher was stopped"); })).toBeNull();
+    expect(killed).toEqual([]);
+    // As a watcher last asked long ago (writeWatchState keeps the newer ask of the same watcher, so a later one).
+    writeWatchState(busyDir, { ...busy, startedAt: 2, inProgress: false, finishedAt: Date.now(), errors: 0, askedAt: Date.now() - RECENT_ASK_MS - 1 });
     const r = await ask;
     expect(r).toMatchObject({ project: "next", errors: 0, started: true });
     expect(killed).toEqual([process.pid]);
     expect(readWatchState(busyDir)).toBeNull();
-  });
+  }, 20_000);
 
   test("a program that gave up and asked again keeps its place ahead of later asks", async () => {
     writeWatchState(watchDir("/tree", "busy"), { pid: process.pid, project: "busy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt: Date.now() });
@@ -104,7 +112,7 @@ describe("the machine wide watcher cap", () => {
       writeWatchState(watchDir("/tree", project), { pid: process.pid, project, tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, askedAt });
     seed("wanted", now);
     expect(makeRoom(1, () => {}, now)).toBeNull();
-    seed("abandoned", now - WANTED_MS - 1);
+    seed("abandoned", now - RECENT_ASK_MS - 1);
     expect(makeRoom(2, () => {}, now)?.map((w) => w.project)).toEqual(["abandoned"]);
     expect(readWatchState(watchDir("/tree", "wanted"))).not.toBeNull();
   });
@@ -127,9 +135,9 @@ describe("the machine wide watcher cap", () => {
     const now = Date.now();
     const seed = (root: string, project: string, askedAt: number) =>
       writeWatchState(watchDir(root, project), { pid: process.pid, project, tsconfig: "x", root, startedAt: 1, inProgress: false, finishedAt: now, errors: 0, askedAt });
-    seed("/t1", "a", now - 3_000);
-    seed("/t1", "b", now - 1_000);
-    seed("/t2", "a", now - 2_000);
+    seed("/t1", "a", now - RECENT_ASK_MS - 3_000);
+    seed("/t1", "b", now - RECENT_ASK_MS - 1_000);
+    seed("/t2", "a", now - RECENT_ASK_MS - 2_000);
     const killed: number[] = [];
     const evicted = makeRoom(2, (pid) => killed.push(pid));
     expect(evicted?.map((w) => `${w.root}/${w.project}`)).toEqual(["/t1/a", "/t2/a"]);
@@ -160,11 +168,12 @@ describe("admission by memory", () => {
     seed("web", { askedAt: 3 });
     seed("cli", { askedAt: 1 });
     seed("convex", { askedAt: 2 });
+    // 3 GB short: convex alone frees that, so it goes instead of cli (asked longer ago) and convex both.
     const evicted = makeRoom(capacity(4 * GB), () => {});
-    expect(evicted?.map((w) => w.project)).toEqual(["cli", "convex"]);
-    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/evict cli \/tree .*11\.0 GB reserved of 12\.0 GB, need 4\.0 GB, frees 2\.0 GB/);
+    expect(evicted?.map((w) => w.project)).toEqual(["convex"]);
+    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/evict convex \/tree .*11\.0 GB reserved of 12\.0 GB, need 4\.0 GB, frees 3\.0 GB \[asked_s=\d+ frees_bytes=3221225472\]/);
     // The victim's log ends saying so, so an asker still waiting on it retries instead of reporting a death.
-    expect(lastLogLine(watchDir("/tree", "cli"))).toMatch(/^stopped to make room for another watcher \(cap 16, 11\.0 GB reserved/);
+    expect(lastLogLine(watchDir("/tree", "convex"))).toMatch(/^stopped to make room for another watcher \(cap 16, 11\.0 GB reserved/);
   });
 
   test("an ask behind the first gets no empty-machine pass: it must fit beside the first's need", () => {
@@ -218,7 +227,7 @@ describe("admission by memory", () => {
       const err = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { budgetMs: 1, start: () => { throw new Error("must not start"); }, note: (l) => notes.push(l) }).catch((e) => e);
       expect(err).toBeInstanceOf(CheckFailure);
       expect(err.kind).toBe("busy");
-      expect(notes.some((l) => /^queued for typecheck memory \(needs 0\.\d GB of 0\.3 GB\): the live watchers hold passes someone is waiting on \(busy/.test(l))).toBe(true);
+      expect(notes.some((l) => /^queued for typecheck memory \(needs 0\.\d GB of 0\.3 GB\): the live watchers hold passes someone is waiting on or were asked in the last 15 min \(busy/.test(l))).toBe(true);
     });
 
     test("a queued ask answers 75 within the queue's own wait, however long the caller would have waited", async () => {
@@ -239,7 +248,7 @@ describe("admission by memory", () => {
       const r = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { kill: (pid) => killed.push(pid), start, note: (l) => notes.push(l) });
       expect(r).toMatchObject({ project: "next", started: true, firstPass: true });
       expect(killed).toEqual([process.pid]);
-      expect(notes).toContain("stopped the idle0 watcher for /tree (idle longest) to stay within the 0.3 GB typecheck watchers share on this machine");
+      expect(notes.some((l) => /^stopped the idle0 watcher for \/tree \(idle, asked \d+m ago\) to stay within the 0\.3 GB typecheck watchers share on this machine$/.test(l))).toBe(true);
     });
   });
 
@@ -463,4 +472,106 @@ describe("cold builds: first passes run a few at a time", () => {
     for (const w of cold()) finish(w);
     await Promise.all(asks);
   }, 400_000);
+});
+
+describe("eviction without thrash (ct-100924)", () => {
+  const GB = 2 ** 30;
+  const MIN = 60_000;
+  const seed = (project: string, extra: Partial<WatchState> = {}) => {
+    const root = `/wt/${project}`;
+    writeWatchState(watchDir(root, project), { pid: process.pid, project, tsconfig: "x", root, startedAt: 1, inProgress: false, finishedAt: 1, firstFinishedAt: 1, errors: 0, askedAt: Date.now() - 60 * MIN, ...extra });
+  };
+
+  test("a watcher asked 5 minutes ago is never stopped, whatever the cap or the memory says", () => {
+    seed("fresh", { askedAt: Date.now() - 5 * MIN });
+    const stop = () => { throw new Error("a recently asked watcher was stopped"); };
+    expect(makeRoom(1, stop)).toBeNull();
+    expect(makeRoom({ maxWatchers: 16, budgetBytes: 10 * GB, needBytes: 6 * GB, holdOf: () => 8 * GB }, stop)).toBeNull();
+    expect(readWatchState(watchDir("/wt/fresh", "fresh"))).not.toBeNull();
+    // Past the window it gives way like any idle watcher.
+    // A later watcher (writeWatchState keeps the newer ask of the same watcher).
+    seed("fresh", { startedAt: 2, askedAt: Date.now() - RECENT_ASK_MS - 1 });
+    expect(makeRoom(1, () => {})?.map((w) => w.project)).toEqual(["fresh"]);
+  });
+
+  test("an ask that would need it waits in the queue and stops nothing", async () => {
+    seed("fresh", { askedAt: Date.now() - 5 * MIN });
+    const killed: number[] = [];
+    let starts = 0;
+    const err = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { maxWatchers: 1, budgetMs: 60_000, queueWaitMs: 1_500, kill: (pid) => killed.push(pid), start: () => { starts++; } }).catch((e) => e);
+    expect(err).toBeInstanceOf(CheckFailure);
+    expect(err.kind).toBe("busy");
+    expect(err.message).toMatch(/asked in the last 15 min/);
+    expect(killed).toEqual([]);
+    expect(starts).toBe(0);
+  });
+
+  test("one large idle watcher goes instead of five small ones when it alone frees enough", () => {
+    for (let i = 0; i < 5; i++) seed(`small${i}`, { askedAt: Date.now() - (90 - i) * MIN });
+    seed("large", { askedAt: Date.now() - 30 * MIN });
+    const hold = (w: WatchState) => (w.project === "large" ? 8 * GB : 1.5 * GB);
+    // 15.5 GB held of 16 GB: a 7 GB need is 6.5 GB short. Oldest first would stop all five small ones (7.5 GB).
+    const evicted = makeRoom({ maxWatchers: 16, budgetBytes: 16 * GB, needBytes: 7 * GB, holdOf: hold }, () => {});
+    expect(evicted?.map((w) => w.project)).toEqual(["large"]);
+    expect(listWatchers()).toHaveLength(5);
+  });
+
+  test("with nothing alone enough, the largest goes first, and it stops as soon as the need fits", () => {
+    seed("a", { askedAt: Date.now() - 90 * MIN });
+    seed("b", { askedAt: Date.now() - 80 * MIN });
+    seed("c", { askedAt: Date.now() - 70 * MIN });
+    seed("d", { askedAt: Date.now() - 60 * MIN });
+    const gb: Record<string, number> = { a: 1, b: 4, c: 3, d: 2 };
+    // 10 GB held of 10 GB, need 6: b (4) first, then the oldest that closes the last 2 GB alone (a frees 1, so c).
+    const evicted = makeRoom({ maxWatchers: 16, budgetBytes: 10 * GB, needBytes: 6 * GB, holdOf: (w) => gb[w.project]! * GB }, () => {});
+    expect(evicted?.map((w) => w.project)).toEqual(["b", "c"]);
+  });
+
+  test("an idle watcher holds its peak, not its compressed RSS, and the budget, the fit and what stopping it frees agree", () => {
+    seed("web", { askedAt: Date.now() - 60 * MIN, peakRssBytes: 6 * GB });
+    seed("cli", { askedAt: Date.now() - 50 * MIN, peakRssBytes: 2 * GB });
+    const warm = (gb: number): Peak[] => [1, 2, 3].map((at) => ({ at, bytes: gb * GB, outcome: "clean" as const }));
+    const cap = capacityFor({
+      totalBytes: 128 * GB, maxWatchers: 16, env: {},
+      needPeaks: () => warm(6), peaksOf: () => warm(4), learnedP95s: [4 * GB],
+      // What ps says of idle watchers macOS has compressed.
+      measure: () => 0.1 * GB,
+      watchers: listWatchers, memory: () => ({ availableBytes: 10 * GB, swapUsedBytes: 0, swapTotalBytes: 0, pressureLevel: 1 }),
+    });
+    const held = (p: string) => cap.holdOf!(listWatchers().find((w) => w.project === p)!);
+    expect(held("web")).toBe(6 * GB);
+    expect(held("cli")).toBe(2 * GB);
+    // The budget counts the watchers by those same holds: 8 GB, plus 10 GB available less the 6.4 GB margin.
+    const margin = Math.round(128 * GB * 0.05);
+    expect(cap.budgetBytes).toBe(8 * GB + 10 * GB - margin);
+    // A 7.5 GB need is 3.9 GB short; web alone frees 6 GB, so it alone goes. By RSS every watcher freed 0.1 GB and both went.
+    expect(cap.needBytes).toBe(7.5 * GB);
+    expect(makeRoom(cap, () => {})!.map((w) => w.project)).toEqual(["web"]);
+    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(new RegExp(`evict web .*frees 6\\.0 GB \\[asked_s=\\d+ frees_bytes=${6 * GB}\\]`));
+  });
+
+  test("the first in line waits on recent asks only HEAD_PATIENCE_MS, then stops the least recently asked watcher that predates it", () => {
+    const now = Date.now();
+    for (let i = 0; i < 16; i++) seed(`w${String(i).padStart(2, "0")}`, { askedAt: now - (10 - i / 2) * MIN });
+    const stop = () => { throw new Error("stopped before the head had waited"); };
+    // Just joined: all 16 were asked in the last 15 minutes.
+    expect(makeRoom(16, stop, now, new Set(), true, now)).toBeNull();
+    // Waited past its patience: the oldest that predates it goes; one asked since it joined never does.
+    seed("w00", { startedAt: 2, askedAt: now - 30_000 });
+    expect(makeRoom(16, () => {}, now, new Set(), true, now - HEAD_PATIENCE_MS)?.map((w) => w.project)).toEqual(["w01"]);
+  });
+
+  test("16 recently asked watchers and a queued head: the head starts once it has waited, no livelock", async () => {
+    for (let i = 0; i < 16; i++) seed(`w${String(i).padStart(2, "0")}`, { askedAt: Date.now() - 5 * MIN });
+    // The head has been in line (across asks that gave up and asked again) for longer than its patience.
+    const dir = watchDir("/tree", "head");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(`${dir}/queued_at`, String(Date.now() - HEAD_PATIENCE_MS - 1));
+    const killed: number[] = [];
+    const start = (root: string, project: { name: string; tsconfig: string }) =>
+      writeWatchState(watchDir(root, project.name), { pid: process.pid, project: project.name, tsconfig: project.tsconfig, root, startedAt: Date.now(), inProgress: false, finishedAt: Date.now(), errors: 0 });
+    const r = await checkProject({ name: "head", tsconfig: "x" }, "/tree", { maxWatchers: 16, queueWaitMs: 5_000, kill: (pid) => killed.push(pid), start });
+    expect(r).toMatchObject({ project: "head", started: true });
+    expect(killed).toHaveLength(1);
+  });
 });

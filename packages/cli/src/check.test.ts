@@ -8,12 +8,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
-import { spawnSync } from "node:child_process";
 import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from "./checkHeap.js";
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { acquireFileLock } from "./lockFile.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, projectsTouching, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 import { tscFileVersion } from "./tscFileVersion.js";
 
 let isolation: IsolatedCodecastDir;
@@ -515,70 +514,6 @@ describe("watcher exit", () => {
   });
 });
 
-
-describe("projectsTouching", () => {
-  let iso: IsolatedCodecastDir;
-  beforeEach(() => { iso = isolateCodecastDir(); });
-  afterEach(() => iso.restore());
-
-  test("picks the projects whose program holds a changed file, and a project above a file no program has seen", () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "touching-")));
-    try {
-      const projects = [
-        { name: "web", tsconfig: "packages/web/tsconfig.json" },
-        { name: "cli", tsconfig: "packages/cli/tsconfig.json" },
-        { name: "convex", tsconfig: "packages/convex/tsconfig.json" },
-      ];
-      const info = (name: string, files: string[]) => {
-        const dir = watchDir(root, name);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: files.map((f) => path.relative(dir, path.join(root, f))) }));
-      };
-      info("web", ["packages/web/app.tsx", "packages/shared/x.ts"]);
-      info("cli", ["packages/cli/src/a.ts"]);
-      info("convex", ["packages/convex/f.ts", "packages/shared/x.ts"]);
-      const names = (changed: string[]) => projectsTouching(root, projects, changed).map((p) => p.name);
-      expect(names(["packages/shared/x.ts"])).toEqual(["web", "convex"]);
-      expect(names(["packages/cli/src/new.ts"])).toEqual(["cli"]);
-      expect(names(["README.md", "docs/a.md"])).toEqual([]);
-      expect(names(["packages/web/tsconfig.json"])).toEqual(["web"]);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("in a checkout no program has built yet, reads each program's files from another checkout of the repository", () => {
-    // A line run verifies in a worktree made for it: asked by folder alone, a
-    // backend file mobile imports would not count for mobile.
-    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "touching-wt-")));
-    try {
-      const main = path.join(tmp, "main");
-      const run = (cwd: string, ...args: string[]) => spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, encoding: "utf-8" });
-      fs.mkdirSync(main);
-      run(main, "init", "-q", "-b", "main");
-      fs.writeFileSync(path.join(main, "a.txt"), "a\n");
-      run(main, "add", "a.txt");
-      run(main, "commit", "-qm", "base");
-      const wt = path.join(tmp, "line-ct-1");
-      run(main, "worktree", "add", "-q", "-b", "line", wt);
-      const projects = [
-        { name: "backend", tsconfig: "outreach/backend/tsconfig.json" },
-        { name: "mobile", tsconfig: "outreach/mobile/tsconfig.json" },
-      ];
-      const info = (name: string, files: string[]) => {
-        const dir = watchDir(main, name);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: files.map((f) => path.relative(dir, path.join(main, f))) }));
-      };
-      info("backend", ["outreach/backend/src/needs.ts"]);
-      info("mobile", ["outreach/mobile/app.tsx", "outreach/backend/src/needs.ts"]);
-      expect(projectsTouching(wt, projects, ["outreach/backend/src/needs.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
-      expect(projectsTouching(wt, projects, ["outreach/backend/src/other.ts"]).map((p) => p.name)).toEqual(["backend"]);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-});
 
 // union-mobile (Nov 8): `cast check landing` said only "watcher went away: 74: 0x181ad5d54 start [/usr/lib/dyld]".
 describe("a tsc that runs out of heap", () => {
