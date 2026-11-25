@@ -328,7 +328,7 @@ import {
   PERMISSION_HOOK_MAX_BODY,
   type PermissionHookInput,
 } from "./permissionHookWait.js";
-import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel } from "./update.js";
+import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater } from "./update.js";
 import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import {
@@ -5609,8 +5609,9 @@ async function refreshUpdateAvailable(force = false): Promise<void> {
 // request this run answers, so the server takes this run's outcome for that
 // request only and an old failure never overwrites a newer press.
 let updateRun: { state: "installing" | "failed"; error?: string; at?: number } | null = null;
-// The update request whose manifest check already ran (see the heartbeat).
-let updateAskChecked: number | undefined;
+// The device row's request as this daemon answers it (deviceUpdateRequest.ts),
+// loaded with the first request.
+let updateRequestAnswer: import("./deviceUpdateRequest.js").UpdateRequestAnswerer | null = null;
 async function runSelfUpdate(why: string, at?: number): Promise<void> {
   if (updateRun?.state === "installing") return;
   const currentVersion = daemonVersion || "unknown";
@@ -5883,6 +5884,9 @@ async function sendHeartbeat(): Promise<void> {
         // page: "" once checked and none is newer, absent until the first check.
         // From the updater's cached manifest check, refreshed off the beat.
         update_available: updateChecked ? (updateAvailable ?? "") : undefined,
+        // The newest device-row request that answer covers: the server clears
+        // a request on "" only from a read made for it (lib/deviceUpdate.ts).
+        update_checked_for: updateRequestAnswer?.checkedFor ?? 0,
         // Whether this install can replace its own binary, and how it got here,
         // so the device page disables Update with the reason (update.ts).
         ...installChannel(),
@@ -5936,19 +5940,23 @@ async function sendHeartbeat(): Promise<void> {
     // The device row asks for an update (Settings > Daemon). Taken only when
     // this daemon's own check says a newer release exists, so a daemon that
     // just restarted on the new version never reinstalls it before the row clears.
-    // The cached check is up to a day old, so each new request asks the
-    // manifest once: a hotfix published after the last check was otherwise
+    // The cached check is up to a day old, so each new request reads the
+    // manifest itself: a hotfix published after the last check was otherwise
     // invisible to the request until the next day (MacBook-Pro-2, 2026-11-14).
     const ask = data.update_request as { at?: number } | undefined;
     if (typeof ask?.at === "number" && updateRun?.at !== ask.at) {
-      const at = ask.at;
-      if (updateAvailable) void runSelfUpdate("update requested on the device page", at);
-      else if (updateAskChecked !== at) {
-        updateAskChecked = at;
-        void refreshUpdateAvailable(true).then(() => {
-          if (updateAvailable && updateRun?.at !== at) void runSelfUpdate("update requested on the device page", at);
-        });
-      }
+      updateRequestAnswer ??= new (await import("./deviceUpdateRequest.js")).UpdateRequestAnswerer({
+        available: () => updateAvailable,
+        // Read only when the updater stamped lastCheck at or after the ask:
+        // it stamps nothing when the fetch fails or no check ran.
+        checkNow: async () => {
+          const asked = Date.now();
+          await refreshUpdateAvailable(true);
+          return (Date.parse(updater.readState().lastCheck ?? "") || 0) >= asked;
+        },
+        update: (at) => { if (updateRun?.at !== at) void runSelfUpdate("update requested on the device page", at); },
+      });
+      void updateRequestAnswer.ask(ask.at);
     }
     if (data.commands && data.commands.length > 0) {
       log(`Received ${data.commands.length} remote command(s)`);
