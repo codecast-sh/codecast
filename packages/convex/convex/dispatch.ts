@@ -1741,6 +1741,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     ctx.runMutation!((api as any).priorities.setStepTier, { short_id: shortId, step_key: stepKey, tier }),
   setPriorityAside: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.setAside, { short_id: shortId }),
   restorePriority: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.restore, { short_id: shortId }),
+  runPriorities: async (ctx, _userId, [workspace]: [string]) => ctx.runMutation!((api as any).priorities.run, { workspace }),
 
   // A member's level for a whole team (settings, the share-in-full nudge).
   // Distinct from setTeamVisibility below, which is one conversation's override.

@@ -6,11 +6,27 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { ago, sparkline } from "./externalDataCli.js";
-import type { PriorityDetail, PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
+import type { PriorityDetail, PriorityHistory, PriorityList, PriorityRow } from "@codecast/shared/contracts/priorities";
 
 function fail(message: string): never {
   console.error(`Error: ${message}`);
   process.exit(1);
+}
+
+/** Under this the pass is on time and `ls` says nothing. */
+const BEHIND_SHOWN_MS = 6 * 3_600_000;
+
+/** "Behind by 8h" once the pass lags more than six hours, else null. */
+export function behindLine(ms: number | null | undefined): string | null {
+  return ms != null && ms > BEHIND_SHOWN_MS ? `Behind by ${Math.floor(ms / 3_600_000)}h: the pass has not caught up with your newest work.` : null;
+}
+
+/** When a pass runs, said plainly: "now", "in 40m", "in 2h". */
+export function whenLabel(at: number | null | undefined, now = Date.now()): string {
+  if (at == null) return "at the next sweep";
+  const ms = at - now;
+  if (ms <= 60_000) return "now";
+  return ms < 3_600_000 ? `in ${Math.ceil(ms / 60_000)}m` : `in ${Math.round(ms / 3_600_000)}h`;
 }
 
 /** "pri-3", "PRI-3" or "3". */
@@ -115,9 +131,14 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
     .option("--json", "As JSON")
     .action(async (options: { all?: boolean; team?: string; json?: boolean }) => {
       const res = await apiPost(deps, "/cli/priorities/list", { ...(options.all ? { all: true } : { status: "active" }), ...(await scope(deps, options.team)) }, { read: true });
-      const rows: PriorityRow[] = res.priorities ?? [];
+      const list = res as PriorityList;
+      const rows: PriorityRow[] = list.priorities ?? [];
       if (options.json) return console.log(JSON.stringify(rows, null, 2));
-      if (!rows.length) return console.log(options.all ? "No priorities yet." : "No active priorities. cast priorities ls --all shows the rest.");
+      // No pass has settled here yet: say when the first one runs.
+      if (!rows.length && list.behind_by_ms == null) return console.log(`No priorities yet — the first pass runs ${whenLabel(list.next_pass_at)}.`);
+      const behind = behindLine(list.behind_by_ms);
+      if (behind) console.log(behind);
+      if (!rows.length) return console.log(options.all ? "No priorities here." : "No active priorities. cast priorities ls --all shows the rest.");
       for (const line of formatPriorityLines(rows)) console.log(line);
       if (res.own_truncated) console.log("Your priorities past the most recently active ones are not listed.");
       if (res.teammates_truncated) console.log("Teammates' priorities past the most recently active ones are not listed.");

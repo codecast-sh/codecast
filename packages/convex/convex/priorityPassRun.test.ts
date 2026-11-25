@@ -12,7 +12,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { budgetMonth } from "@codecast/shared/contracts/modelCall";
 import type { MergePlan } from "./lib/priorityPass";
-import { LATE_MARGIN_MS, PRIORITY_PASS_DAILY_USD, SWEEP_STRAY_BUDGET } from "./priorityPassRun";
+import { LATE_MARGIN_MS, PRIORITY_PASS_DAILY_USD, SWEEP_EVERY_MS, SWEEP_STRAY_BUDGET } from "./priorityPassRun";
 
 setDefaultTimeout(60_000);
 
@@ -421,6 +421,43 @@ describe("what a pass may read, and how far", () => {
     expect((await w.runs()).at(-1)).toMatchObject({ status: "skipped", error: "daily ceiling" });
   });
 
+  test("the first catch-up spends from its own allowance, outside the daily ceiling, and its chained runs too; after it the ceiling applies", async () => {
+    const w = await world();
+    // Earlier catch-up attempts already cost more than a day's ceiling.
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 2 * H, finished_at: w.now - 2 * H, status: "error", cursor_at: w.now - 14 * DAY, model: "m", cost_usd: 3, catch_up: true, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toMatchObject({ status: "ok" });
+    expect(prompts).toHaveLength(1);
+    const latest = async () => (await w.runs()).sort((a: any, b: any) => b.started_at - a.started_at)[0];
+    expect(await latest()).toMatchObject({ status: "ok", catch_up: true });
+    // A chained run of the catch-up keeps its allowance.
+    await w.send(w.ana, w.oldConv, w.now - 30 * 60_000, "more");
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, catch_up: true, force: true })).toMatchObject({ status: "ok" });
+    expect(await latest()).toMatchObject({ catch_up: true });
+    // After it, a pass is an ordinary one: the catch-up's spend never counts toward the day's ceiling.
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true })).toMatchObject({ status: "ok" });
+    expect((await latest()).catch_up).toBeUndefined();
+    // And the ceiling applies to ordinary passes.
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 15 * 60_000, finished_at: w.now - 15 * 60_000, status: "ok", cursor_at: w.now - 15 * 60_000, model: "m", cost_usd: PRIORITY_PASS_DAILY_USD, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true })).toMatchObject({ status: "skipped", reason: expect.stringContaining("spent today") });
+  });
+
+  test("a pass reads activity by session, not by row: many messages in one session are read whole, and a session keeps its newest eight pins", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      const message = await ctx.db.insert("messages", { conversation_id: w.teamConv, role: "user", content: "x", timestamp: w.now - 2 * H } as any);
+      for (let i = 0; i < 1_200; i++) {
+        await ctx.db.insert("user_sends", { user_id: w.ana, conversation_id: w.teamConv, message_id: message, timestamp: w.now - 2 * H + i, words: 1, text: `m${i}`, clipped: false } as any);
+      }
+      for (let i = 0; i < 20; i++) await ctx.db.insert("thread_state_events", { conversation_id: w.teamConv, user_id: w.ana, at: w.now - H + i, text: `pin ${i}`, status: "working" });
+    });
+    const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    expect(read.more).toBe(false);
+    const session = read.input.sessions.find((s: any) => s.id === "jx7team");
+    expect(session.typed).toHaveLength(1_200);
+    expect(session.pin_events.map((p: any) => p.text)).toEqual(Array.from({ length: 8 }, (_, i) => `pin ${12 + i}`));
+  });
+
   test("runNow runs once in ten minutes per pair and says when it can run again", async () => {
     const w = await world();
     expect((await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
@@ -705,6 +742,57 @@ describe("session counts", () => {
     });
     expect(7 * 30).toBeGreaterThan(SWEEP_STRAY_BUDGET);
     expect(await w.t.query(pass.sweepCandidates, {})).toContainEqual({ user_id: w.ana, workspace: w.team });
+  });
+
+  test("the sweep's stray probe reads a pair's newest active priorities first too", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      const priority = (short_id: string, last_active_at: number) => ctx.db.insert("priorities", {
+        user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", rank_set_by: "pass", steps: [],
+        first_seen_at: 1, last_active_at, pass_at: 1, created_at: 1, updated_at: 1,
+      } as any);
+      for (let i = 0; i < 31; i++) await priority(`pri-${i + 1}`, w.now - 60 * DAY);
+      const recent = await priority("pri-99", w.now - H);
+      await ctx.db.patch(w.teamConv, { priority_id: recent, is_private: true, team_visibility: "private" });
+      for (const workspace of [w.team, `user:${w.ana}`]) {
+        await ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace, started_at: w.now, finished_at: w.now, status: "ok", cursor_at: w.now, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+      }
+    });
+    expect(await w.t.query(pass.sweepCandidates, {})).toEqual([{ user_id: w.ana, workspace: w.team }]);
+  });
+
+  test("the stray probe starts from a different quiet pair each sweep, so one sweep's budget skips a pair another reaches", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      let n = 0;
+      for (let u = 0; u < 5; u++) {
+        const user = await ctx.db.insert("users", { name: `D${u}` } as any);
+        await ctx.db.insert("team_memberships", { user_id: user, team_id: w.acme, role: "member", joined_at: 1 } as any);
+        for (const workspace of [w.team, `user:${user}`]) {
+          if (++n > 9) continue;
+          for (let i = 0; i < 25; i++) {
+            await ctx.db.insert("priorities", {
+              user_id: user, workspace, short_id: `pri-${n}-${i}`, title: "quiet", summary: "", status: "done", rank_set_by: "pass", steps: [],
+              first_seen_at: 1, last_active_at: w.now - 2 * DAY, pass_at: 1, created_at: 1, updated_at: 1,
+            } as any);
+          }
+        }
+      }
+      const p = await ctx.db.insert("priorities", {
+        user_id: w.ana, workspace: w.team, short_id: "pri-999", title: "held", summary: "", status: "active", rank_set_by: "pass", steps: [],
+        first_seen_at: 1, last_active_at: w.now - H, pass_at: 1, created_at: 1, updated_at: 1,
+      } as any);
+      await ctx.db.patch(w.teamConv, { priority_id: p, is_private: true, team_visibility: "private" });
+      await ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now, finished_at: w.now, status: "ok", cursor_at: w.now, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    });
+    const found: boolean[] = [];
+    const base = Math.floor(w.now / SWEEP_EVERY_MS) * SWEEP_EVERY_MS;
+    for (let k = 0; k < 16; k++) {
+      const pairs = await w.t.query(pass.sweepCandidates, { now: base + k * SWEEP_EVERY_MS + 60_000 });
+      found.push(pairs.some((p: any) => String(p.user_id) === String(w.ana) && p.workspace === w.team));
+    }
+    expect(found).toContain(true);
+    expect(found).toContain(false);
   });
 
   test("the sweep's stray probe reads a pair's newest priorities first", async () => {

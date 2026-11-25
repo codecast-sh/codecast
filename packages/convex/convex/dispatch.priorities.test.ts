@@ -30,7 +30,7 @@ async function world() {
       user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "shared", short_id: "jx7sh01", title: "shared",
       started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p2,
     } as any);
-    return { ada, bea, p1, p2 };
+    return { ada, bea, acme, p1, p2 };
   });
   return { t, ...ids };
 }
@@ -52,6 +52,14 @@ describe("priority controls ride dispatch", () => {
     await dispatch(t, ada, "restorePriority", ["pri-1"]);
     [one] = await t.run(async (ctx: any) => [await ctx.db.get(p1)]);
     expect(one.status).toBe("active");
+  });
+
+  test("Run now schedules one pass for the presser in the workspace", async () => {
+    const { t, ada, acme } = await world();
+    await dispatch(t, ada, "runPriorities", [`team:${acme}`]);
+    const jobs = await t.run(async (ctx: any) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((j: any) => j.name.includes("priorityPassRun")));
+    expect(jobs.map((j: any) => [j.name, j.args[0]])).toEqual([["priorityPassRun:runNow", { user_id: ada, workspace: `team:${acme}` }]]);
+    await t.run(async (ctx: any) => { for (const j of jobs) await ctx.scheduler.cancel(j._id); });
   });
 
   test("a teammate's press is refused and changes nothing", async () => {

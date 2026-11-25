@@ -102,6 +102,19 @@ export type PriorityRow = {
   sessions: PrioritySession[];
 };
 
+/** A list answer: the rows, what it left out, and when the viewer's pass in the listed workspace runs. */
+export type PriorityList = {
+  priorities: PriorityRow[];
+  /** The viewer's own past the newest read were left out. */
+  own_truncated: boolean;
+  /** Teammates' past the most recently active judged were left out. */
+  teammates_truncated: boolean;
+  /** How far the viewer's pass here lags now (now − its cursor); null before its first run or with no workspace named. */
+  behind_by_ms: number | null;
+  /** When the next pass here runs: now while one runs, else the next scheduled sweep; null with no workspace named. */
+  next_pass_at: number | null;
+};
+
 /** One priority with every step's sessions (`show`). */
 export type PriorityDetail = Omit<PriorityRow, "steps"> & {
   steps: Array<PriorityStep & { sessions: PrioritySession[] }>;

@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  mostActiveSessions, newSessionHref, ownerGroups, stepNeedsSession, paintRank, paintStatus, paintTier, pastBadge, rankAtDrop, stepCounts, stepSessions, writeOrRestore,
+  behindLabel, listMeta, listRows, mostActiveSessions, passDue, newSessionHref, nextPassLabel, ownerGroups, stepNeedsSession, paintRank, paintStatus, paintTier, pastBadge, rankAtDrop, stepCounts, stepSessions, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -169,4 +169,33 @@ test("finished reads won, quiet and set aside say so", () => {
   expect(pastBadge({ status: "done", done_at: day, last_active_at: 0 })).toBe("✓ Done Nov 19");
   expect(pastBadge({ status: "quiet", done_at: null, last_active_at: day })).toBe("Quiet since Nov 19");
   expect(pastBadge({ status: "set_aside", done_at: null, last_active_at: day })).toBe("Set aside");
+});
+
+describe("the pass's timing", () => {
+  test("a list answer's rows feed the store; its timing reads beside them", () => {
+    const rows = [row("pri-1")];
+    const answer = { priorities: rows, own_truncated: false, teammates_truncated: false, next_pass_at: 5, behind_by_ms: 7 };
+    expect(listRows(answer)).toBe(rows);
+    expect(listRows(null)).toBeUndefined();
+    expect(listMeta(answer)).toEqual({ next_pass_at: 5, behind_by_ms: 7 });
+    expect(listMeta(undefined)).toEqual({ next_pass_at: null, behind_by_ms: null });
+    // A next pass that is due is a pass running now.
+    expect(passDue({ next_pass_at: 5, behind_by_ms: null }, 5)).toBe(true);
+    expect(passDue({ next_pass_at: 6, behind_by_ms: null }, 5)).toBe(false);
+    expect(passDue({ next_pass_at: null, behind_by_ms: null }, 5)).toBe(false);
+  });
+
+  test("the header says behind only past six hours", () => {
+    expect(behindLabel(undefined)).toBeNull();
+    expect(behindLabel(6 * 3_600_000)).toBeNull();
+    expect(behindLabel(8.5 * 3_600_000)).toBe("Behind by 8h");
+  });
+
+  test("the next pass reads as a time today, with its weekday on another day, and not once it has passed", () => {
+    const now = new Date(2026, 10, 25, 10, 0).getTime();
+    expect(nextPassLabel(new Date(2026, 10, 25, 15, 0).getTime(), now)).toBe("Next pass 3:00 PM");
+    expect(nextPassLabel(new Date(2026, 10, 26, 1, 5).getTime(), now)).toBe("Next pass Thu 1:05 AM");
+    expect(nextPassLabel(now - 1, now)).toBeNull();
+    expect(nextPassLabel(null, now)).toBeNull();
+  });
 });

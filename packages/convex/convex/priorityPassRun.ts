@@ -55,10 +55,12 @@ export const FIRST_PASS_WINDOW_MS = 14 * DAY;
  */
 export const LATE_MARGIN_MS = 5 * MINUTE;
 export const OVERLAP_MS = 10 * MINUTE;
-/** The oldest typed messages and pin events one pass reads (each). A typed message holds up to 8 KB: this keeps a pass far under the read limit. */
+/** The oldest typed messages and pin events a probe reads (each). A typed message holds up to 8 KB: this keeps it far under the read limit. */
 const ACTIVITY_READ = 1_000;
-/** The sessions touched earliest that one pass reads; the prompt may fit fewer. */
+/** The sessions touched earliest that one pass reads; the prompt may fit fewer. A pass reads activity until this many sessions, not a count of rows. */
 const SESSIONS_READ = 120;
+/** The most typed messages and pin events one pass scans, together, while it collects its sessions: a guard on the read limit. */
+const ACTIVITY_SCAN = 2_000;
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next sweep. */
 export const MAX_CHAINED_RUNS = 6;
 const CHAIN_DELAY_MS = 2_000;
@@ -66,6 +68,14 @@ const CHAIN_DELAY_MS = 2_000;
 export const FAILURES_BEFORE_STEP = 3;
 /** What one (person, workspace) may spend on passes in a day; past it, passes skip until older runs age out. */
 export const PRIORITY_PASS_DAILY_USD = 1.5;
+/**
+ * A pair's first catch-up (its runs before any ok run, and the runs that run
+ * chains) reads up to FIRST_PASS_WINDOW_MS of work at once: it spends from
+ * this one-time allowance instead of the daily ceiling, which applies after.
+ */
+export const PRIORITY_PASS_FIRST_USD = 5;
+/** The most of a pair's runs the catch-up allowance reads, oldest first (the catch-up is its first runs). */
+const CATCH_UP_RUNS_READ = 200;
 /** `cast priorities run` runs at most once in this long per (person, workspace). */
 export const RUN_NOW_EVERY_MS = 10 * MINUTE;
 const TASKS_PER_SESSION = 12;
@@ -84,6 +94,9 @@ const INITIATIVES_READ = 200;
 const PASS_TIMEOUT_MS = 5 * 60_000;
 /** (person, workspace) pairs one sweep runs; the rest wait for the next sweep. */
 export const SWEEP_MAX_PAIRS = 40;
+/** The sweep runs on the hour every three hours UTC (crons.ts), so when the next one runs is known. */
+export const SWEEP_EVERY_MS = 3 * 60 * 60_000;
+export const nextSweepAt = (now: number) => Math.floor(now / SWEEP_EVERY_MS) * SWEEP_EVERY_MS + SWEEP_EVERY_MS;
 /**
  * A sweep looks for strays among a pair's newest SWEEP_STRAY_PER_PAIR
  * priorities, a few sessions each (the pass reads as many), and among
@@ -170,6 +183,22 @@ const firstAfter = (s: { typed: Array<{ at: number }>; pin_events: Array<{ at: n
 
 async function cursorFor(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<number> {
   return (await cursorState(ctx, userId, workspace))?.cursor_at ?? now - FIRST_PASS_WINDOW_MS;
+}
+
+/**
+ * When a person's pass in a workspace runs, for the list: how far its cursor
+ * lags now (null before any run settled), and the next pass (now while one is
+ * running, else the next sweep).
+ */
+export async function passTiming(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<{ behind_by_ms: number | null; next_pass_at: number }> {
+  const state = await cursorState(ctx, userId, workspace);
+  const latest: Doc<"priority_pass_runs"> | null = await ctx.db
+    .query("priority_pass_runs")
+    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+    .order("desc")
+    .first();
+  const running = latest?.status === "running" && latest.started_at > now - RESERVATION_TTL_MS;
+  return { behind_by_ms: state ? Math.max(0, now - state.cursor_at) : null, next_pass_at: running ? now : nextSweepAt(now) };
 }
 
 /**
@@ -296,28 +325,21 @@ async function callsIn(ctx: { db: any }, vis: SessionVisibility, userId: Id<"use
 }
 
 /**
- * One person's priorities in one workspace the pass reads, newest first: every
- * active and set-aside one, and the done or quiet ones that moved within
- * PRIORITY_PASS_CAPS.finished_days (older ones the prompt hides are left out
- * whole), at most `limit` of each.
+ * One person's priorities in one workspace the pass reads, newest first (one
+ * read of their newest 4 × `limit`): the active and set-aside ones, and the
+ * done or quiet ones that moved within PRIORITY_PASS_CAPS.finished_days
+ * (older ones the prompt hides are left out whole), at most `limit` of each.
  */
 async function livePriorities(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number, limit: number): Promise<Doc<"priorities">[]> {
-  const open: Doc<"priorities">[] = [];
-  for (const status of ["active", "set_aside"] as const) {
-    open.push(...(await ctx.db
-      .query("priorities")
-      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", status))
-      .take(limit)));
-  }
-  const recent: Doc<"priorities">[] = await ctx.db
+  const rows: Doc<"priorities">[] = await ctx.db
     .query("priorities")
-    .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).gte("last_active_at", now - PRIORITY_PASS_CAPS.finished_days * DAY))
+    .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
     .order("desc")
-    .take(open.length + 2 * limit);
-  const finished = recent.filter((p) => p.status === "done" || p.status === "quiet");
-  const done = finished.filter((p) => p.status === "done").slice(0, limit);
-  const quiet = finished.filter((p) => p.status === "quiet").slice(0, limit);
-  return [...open, ...done, ...quiet].sort((a, b) => b.last_active_at - a.last_active_at);
+    .take(4 * limit);
+  const hiddenBefore = now - PRIORITY_PASS_CAPS.finished_days * DAY;
+  const of = (status: Doc<"priorities">["status"]) =>
+    rows.filter((p) => p.status === status && (status === "active" || status === "set_aside" || p.last_active_at >= hiddenBefore)).slice(0, limit);
+  return [...of("active"), ...of("set_aside"), ...of("done"), ...of("quiet")].sort((a, b) => b.last_active_at - a.last_active_at);
 }
 
 /**
@@ -336,10 +358,8 @@ export const passInputs = internalQuery({
     // Below a run's cursor, only rows that landed after that run started are new.
     const overlap = state && state.cursor_at === cursor_at ? state : null;
     const until = Math.max(cursor_at, now - LATE_MARGIN_MS);
-    const read = await activitySince(ctx, args.user_id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until);
+    const since = overlap ? cursor_at - OVERLAP_MS : cursor_at;
     const fresh = (at: number, landed: number) => !overlap || at > cursor_at || landed > overlap.set_at;
-    const sends = read.sends.filter((s) => fresh(s.timestamp, s._creationTime));
-    const pins = read.pins.filter((p) => fresh(p.at, p._creationTime));
 
     // A session may go to the model unless its team's data may not; one read per team.
     const refusals = new Map<string, boolean>();
@@ -360,24 +380,43 @@ export const passInputs = internalQuery({
       }
       return convs.get(key)!;
     };
+    // The person's typed messages and pin events, oldest first, collapsed into
+    // the sessions they touched: the read stops at the SESSIONS_READ-th session
+    // (or ACTIVITY_SCAN rows) and the cursor moves to just before the first
+    // session it left out. Each session keeps its newest pin events only.
     const touched = new Map<string, { conv: Doc<"conversations">; last: number; typed: PassSession["typed"]; pin_events: PassSession["pin_events"] }>();
-    const touch = async (id: Id<"conversations">, at: number) => {
-      const conv = await convOf(id);
-      if (!conv) return null;
-      const key = String(id);
-      const t = touched.get(key) ?? { conv, last: 0, typed: [], pin_events: [] };
-      t.last = Math.max(t.last, at);
-      touched.set(key, t);
-      return t;
-    };
-    for (const s of sends) (await touch(s.conversation_id, s.timestamp))?.typed.push({ at: s.timestamp, text: s.text });
-    for (const p of pins) (await touch(p.conversation_id, p.at))?.pin_events.push({ at: p.at, text: p.text });
+    const sendRows = ctx.db.query("user_sends").withIndex("by_user_timestamp", (q: any) => q.eq("user_id", args.user_id).gt("timestamp", since).lte("timestamp", until))[Symbol.asyncIterator]();
+    const pinRows = ctx.db.query("thread_state_events").withIndex("by_user_at", (q: any) => q.eq("user_id", args.user_id).gt("at", since).lte("at", until))[Symbol.asyncIterator]();
+    let send = await sendRows.next();
+    let pin = await pinRows.next();
+    let scanned = 0;
+    let stopAt: number | null = null;
+    while (!send.done || !pin.done) {
+      const isSend = !send.done && (pin.done || send.value.timestamp <= pin.value.at);
+      const row = isSend ? send.value : pin.value;
+      const at: number = isSend ? row.timestamp : row.at;
+      if (++scanned > ACTIVITY_SCAN) { stopAt = at; break; }
+      if (fresh(at, row._creationTime)) {
+        const conv = await convOf(row.conversation_id);
+        if (conv) {
+          const key = String(conv._id);
+          if (!touched.has(key) && touched.size >= SESSIONS_READ) { stopAt = at; break; }
+          const t = touched.get(key) ?? { conv, last: 0, typed: [], pin_events: [] };
+          t.last = Math.max(t.last, at);
+          if (isSend) t.typed.push({ at, text: row.text });
+          else {
+            t.pin_events.push({ at, text: row.text });
+            if (t.pin_events.length > PRIORITY_PASS_CAPS.pin_events) t.pin_events.shift();
+          }
+          touched.set(key, t);
+        }
+      }
+      if (isSend) send = await sendRows.next();
+      else pin = await pinRows.next();
+    }
 
-    // Earliest first activity first: a run that cannot read them all reads the
-    // earliest and moves its cursor to just before the first it left out.
-    const byFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
-    const oldestFirst = byFirst.slice(0, SESSIONS_READ);
-    const truncated = byFirst.length > oldestFirst.length;
+    // Earliest first activity first, as they were read.
+    const oldestFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
     const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
     const sessions: PassSession[] = [];
     for (const t of oldestFirst) {
@@ -453,8 +492,8 @@ export const passInputs = internalQuery({
         calls,
       },
       cursor_at,
-      more: read.more || truncated,
-      read_to: truncated ? Math.max(cursor_at, firstAfter(byFirst[SESSIONS_READ], cursor_at) - 1) : read.read_to,
+      more: stopAt !== null,
+      read_to: stopAt !== null ? Math.max(cursor_at, Math.max(stopAt, cursor_at) - 1) : until,
       strays,
     };
   },
@@ -464,7 +503,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const minutes = (ms: number) => Math.max(1, Math.ceil(ms / MINUTE));
 
 type BlockerKind = "busy" | "daily_ceiling" | "throttled";
-type Reservation = { run_id: Id<"priority_pass_runs"> } | { refused: BlockerKind; reason: string };
+type Reservation = { run_id: Id<"priority_pass_runs">; catch_up: boolean } | { refused: BlockerKind; reason: string };
 
 const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<Doc<"priority_pass_runs">[]> =>
   ctx.db
@@ -480,7 +519,30 @@ const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now
  * under RUN_NOW_EVERY_MS ago, or the day's runs cost PRIORITY_PASS_DAILY_USD.
  * Reads only: reserve acts on it, and the CLI asks it before scheduling.
  */
-export async function runBlocker(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number, runNow: boolean): Promise<{ kind: BlockerKind; reason: string } | null> {
+/** Whether the pair has finished a run that wrote a plan: before one, a run is its first catch-up. */
+export async function hasOkRun(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
+  return !!(await ctx.db
+    .query("priority_pass_runs")
+    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+    .filter((q: any) => q.eq(q.field("status"), "ok"))
+    .first());
+}
+
+/** What the pair's first catch-up has spent of PRIORITY_PASS_FIRST_USD. */
+async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<number> {
+  const runs: Doc<"priority_pass_runs">[] = await ctx.db
+    .query("priority_pass_runs")
+    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+    .take(CATCH_UP_RUNS_READ);
+  return runs.filter((r) => r.catch_up).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
+}
+
+/**
+ * Why a run of the pair may not start now, or null; `catch_up` true when it
+ * runs on the first catch-up's allowance. The daily ceiling counts only runs
+ * outside the catch-up.
+ */
+export async function runBlocker(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number, runNow: boolean, catchUp = false): Promise<{ kind: BlockerKind; reason: string } | { catch_up: boolean } | null> {
   const day = await runsOfDay(ctx, userId, workspace, now);
   if (day.some((r) => r.status === "running" && r.started_at > now - RESERVATION_TTL_MS)) return { kind: "busy", reason: "A pass is already running here." };
   const paid = day.filter((r) => r.status === "ok" || r.status === "error" || (r.cost_usd ?? 0) > 0).map((r) => r.started_at);
@@ -488,7 +550,8 @@ export async function runBlocker(ctx: { db: any }, userId: Id<"users">, workspac
   if (runNow && last !== null && now - last < RUN_NOW_EVERY_MS) {
     return { kind: "throttled", reason: `A pass ran here ${plural(minutes(now - last), "minute")} ago; run it again in ${plural(minutes(last + RUN_NOW_EVERY_MS - now), "minute")}.` };
   }
-  if (day.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0) >= PRIORITY_PASS_DAILY_USD) {
+  if (catchUp && (await catchUpSpent(ctx, userId, workspace)) < PRIORITY_PASS_FIRST_USD) return { catch_up: true };
+  if (day.filter((r) => !r.catch_up).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0) >= PRIORITY_PASS_DAILY_USD) {
     return { kind: "daily_ceiling", reason: `Passes here spent today's $${PRIORITY_PASS_DAILY_USD.toFixed(2)}; the next one can run tomorrow.` };
   }
   return null;
@@ -502,7 +565,7 @@ export async function runBlocker(ctx: { db: any }, userId: Id<"users">, workspac
  * runs cost PRIORITY_PASS_DAILY_USD in the last day (that refusal is recorded).
  */
 export const reserve = internalMutation({
-  args: { user_id: v.id("users"), workspace: v.string(), started_at: v.number(), cursor_at: v.number(), model: v.string(), run_now: v.boolean() },
+  args: { user_id: v.id("users"), workspace: v.string(), started_at: v.number(), cursor_at: v.number(), model: v.string(), run_now: v.boolean(), catch_up: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Reservation> => {
     const now = args.started_at;
     for (const r of await runsOfDay(ctx, args.user_id, args.workspace, now)) {
@@ -510,13 +573,16 @@ export const reserve = internalMutation({
         await ctx.db.patch(r._id, { status: "error", error: "abandoned: the run stopped before it settled", finished_at: now });
       }
     }
-    const { run_now, ...run } = args;
-    const blocked = await runBlocker(ctx, args.user_id, args.workspace, now, run_now);
-    if (blocked?.kind === "daily_ceiling") {
-      await ctx.db.insert("priority_pass_runs", { ...run, finished_at: now, status: "skipped", error: "daily ceiling", counts: NO_COUNTS });
+    const { run_now, catch_up: firstCatchUp, ...run } = args;
+    // A run is the first catch-up's when the chain says so, or when the pair has never finished one.
+    const catchUp = firstCatchUp ?? !(await hasOkRun(ctx, args.user_id, args.workspace));
+    const blocked = await runBlocker(ctx, args.user_id, args.workspace, now, run_now, catchUp);
+    if (blocked && "kind" in blocked) {
+      if (blocked.kind === "daily_ceiling") await ctx.db.insert("priority_pass_runs", { ...run, finished_at: now, status: "skipped", error: "daily ceiling", counts: NO_COUNTS });
+      return { refused: blocked.kind, reason: blocked.reason };
     }
-    if (blocked) return { refused: blocked.kind, reason: blocked.reason };
-    return { run_id: await ctx.db.insert("priority_pass_runs", { ...run, finished_at: now, status: "running", counts: NO_COUNTS }) };
+    const catch_up = !!blocked?.catch_up;
+    return { run_id: await ctx.db.insert("priority_pass_runs", { ...run, finished_at: now, status: "running", counts: NO_COUNTS, ...(catch_up ? { catch_up } : {}) }), catch_up };
   },
 });
 
@@ -802,7 +868,7 @@ function runShare(read: PassInputs, input: PriorityPassInput, included: number):
   return { input: { ...input, sessions: input.sessions.slice(0, included), calls: input.calls.filter((c) => c.at <= readTo) }, readTo, left: read.more || cut };
 }
 
-type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chain?: number; now?: boolean };
+type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chain?: number; now?: boolean; catch_up?: boolean };
 
 /** Model-call failures that come back the same on the same input: a reply with no whole JSON, or a call the spec check refuses. */
 const REPEATING_CALL_ERRORS = /^the answer (held no JSON|ran past max_tokens)/;
@@ -816,7 +882,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     await ctx.runMutation(self.recordRun, { ...base, cursor_at: gate.cursor_at, status: "skipped", error: "the priorities feature is off here" });
     return { status: "skipped", reason: "feature_off" };
   }
-  const held: Reservation = await ctx.runMutation(self.reserve, { ...base, cursor_at: gate.cursor_at, run_now: !!args.now });
+  const held: Reservation = await ctx.runMutation(self.reserve, { ...base, cursor_at: gate.cursor_at, run_now: !!args.now, ...(args.catch_up !== undefined ? { catch_up: args.catch_up } : {}) });
   if ("refused" in held) {
     // The day's ceiling holds back the model, not letting go of sessions that left: that costs nothing.
     if (held.refused === "daily_ceiling") {
@@ -846,14 +912,14 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     // Nothing new, but sessions a priority here holds have left the workspace: let them go without asking the model.
     await ctx.runMutation(self.releaseStrays, { ...base, run_id, cursor_at, strays: read.strays, step_to: read.read_to, record: true });
     const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
-    if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1 });
+    if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1, catch_up: held.catch_up });
     return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   if (!read.input.sessions.length && !read.input.calls.length && !args.force) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
     const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
-    if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1 });
+    if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1, catch_up: held.catch_up });
     return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   const { input, readTo, left } = runShare(read, read.input, fittingPrefix(read.input));
@@ -884,7 +950,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;
-  if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain });
+  if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain, catch_up: held.catch_up });
   return { status: "ok", counts, cost_usd: reply.cost_usd, dropped, notes: plan.notes, ...(chained ? { chained } : {}) };
 }
 
@@ -894,7 +960,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
  * not forced. `chain` counts the runs before it in one chain (MAX_CHAINED_RUNS).
  */
 export const runPass = internalAction({
-  args: { user_id: v.id("users"), workspace: v.string(), force: v.optional(v.boolean()), chain: v.optional(v.number()) },
+  args: { user_id: v.id("users"), workspace: v.string(), force: v.optional(v.boolean()), chain: v.optional(v.number()), catch_up: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<PassResult> => pass(ctx, args),
 });
 
@@ -913,12 +979,14 @@ export const runNow = internalAction({
  * lets it go). At most SWEEP_MAX_PAIRS.
  */
 export const sweepCandidates = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<Array<{ user_id: Id<"users">; workspace: string }>> => {
-    const now = Date.now();
+  args: { team_id: v.optional(v.id("teams")), now: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<Array<{ user_id: Id<"users">; workspace: string }>> => {
+    const now = args.now ?? Date.now();
     const vis = sessionVisibility(ctx);
     const pairs = new Map<string, { user_id: Id<"users">; workspace: string }>();
-    for (const team of await ctx.db.query("teams").take(SWEEP_TEAMS_READ)) {
+    const one: Doc<"teams"> | null = args.team_id ? await ctx.db.get(args.team_id) : null;
+    const teams: Doc<"teams">[] = args.team_id ? (one ? [one] : []) : await ctx.db.query("teams").take(SWEEP_TEAMS_READ);
+    for (const team of teams) {
       if (!team.features?.priorities || !(await teamHasFeature(ctx, team._id, "priorities"))) continue;
       const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", team._id)).take(SWEEP_MEMBERS_READ);
       for (const m of members) {
@@ -930,6 +998,7 @@ export const sweepCandidates = internalQuery({
     const strayBudget = { left: SWEEP_STRAY_BUDGET };
     waiting.sort((a, b) => a.cursor - b.cursor);
     const out: Array<{ user_id: Id<"users">; workspace: string }> = [];
+    const quiet: Array<{ user_id: Id<"users">; workspace: string }> = [];
     for (const { cursor, ...pair } of waiting) {
       if (out.length >= SWEEP_MAX_PAIRS) break;
       const { sends, pins, more } = await activitySince(ctx, pair.user_id, cursor, Math.max(cursor, now - LATE_MARGIN_MS), SWEEP_ACTIVITY_READ);
@@ -948,7 +1017,13 @@ export const sweepCandidates = internalQuery({
           break;
         }
       }
-      if (picked || (await holdsStray(ctx, vis, pair, now, strayBudget))) out.push(pair);
+      (picked ? out : quiet).push(pair);
+    }
+    // Pairs with nothing new are probed for strays from a different one each sweep, so the probe's budget reaches them all in turn.
+    const start = quiet.length ? Math.floor(now / SWEEP_EVERY_MS) % quiet.length : 0;
+    for (const pair of [...quiet.slice(start), ...quiet.slice(0, start)]) {
+      if (out.length >= SWEEP_MAX_PAIRS || strayBudget.left <= 0) break;
+      if (await holdsStray(ctx, vis, pair, now, strayBudget)) out.push(pair);
     }
     return out;
   },
@@ -970,11 +1045,15 @@ async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: { user
   return false;
 }
 
-/** Every few hours: a pass for each pair with new work, a few seconds apart. */
+/**
+ * Every SWEEP_EVERY_MS (crons.ts): a pass for each pair with new work, a few
+ * seconds apart. With `team_id`, that team's pairs only: the sweep a team gets
+ * the moment the feature turns on (teamFeatures afterFeatureChange).
+ */
 export const sweep = internalAction({
-  args: {},
-  handler: async (ctx): Promise<number> => {
-    const pairs: Array<{ user_id: Id<"users">; workspace: string }> = await ctx.runQuery(self.sweepCandidates, {});
+  args: { team_id: v.optional(v.id("teams")) },
+  handler: async (ctx, args): Promise<number> => {
+    const pairs: Array<{ user_id: Id<"users">; workspace: string }> = await ctx.runQuery(self.sweepCandidates, args.team_id ? { team_id: args.team_id } : {});
     for (const [i, pair] of pairs.entries()) await ctx.scheduler.runAfter(i * SWEEP_STAGGER_MS, self.runPass, pair);
     return pairs.length;
   },

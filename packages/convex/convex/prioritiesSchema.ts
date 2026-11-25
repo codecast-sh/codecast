@@ -85,6 +85,8 @@ export const priorityTables = {
     error: v.optional(v.string()),
     /** An error that will happen again on the same input (an unreadable reply, a prompt the call refuses): enough of them step the cursor past it. */
     repeats: v.optional(v.boolean()),
+    /** A run of the pair's first catch-up: spent from PRIORITY_PASS_FIRST_USD, never from the daily ceiling. */
+    catch_up: v.optional(v.boolean()),
   }).index("by_user_workspace_started", ["user_id", "workspace", "started_at"]),
 
   // Every `cast state` write (conversations.performSetThreadState), kept

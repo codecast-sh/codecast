@@ -14,6 +14,8 @@ export type PrioritiesSliceActions = {
   setPriorityStepTier: (shortId: string, stepKey: string, tier: PriorityStepTier) => Promise<unknown>;
   setPriorityAside: (shortId: string) => Promise<unknown>;
   restorePriority: (shortId: string) => Promise<unknown>;
+  /** One pass now in a workspace (priorities.run). Paints nothing: the pass writes its rows in a minute. */
+  runPriorities: (workspace: string) => Promise<unknown>;
 };
 
 type Rows = { priorities: Record<string, PriorityRow> };
@@ -34,5 +36,6 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     restorePriority: asyncAction(function (this: Rows, shortId: string) {
       paintStatus(rowsOf(this), shortId, "active");
     }) as PrioritiesSliceActions["restorePriority"],
+    runPriorities: asyncAction(function (this: Rows, _workspace: string) {}) as PrioritiesSliceActions["runPriorities"],
   };
 }

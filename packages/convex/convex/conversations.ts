@@ -12267,8 +12267,11 @@ export async function performSetThreadState(
     thread_state_result: result ?? undefined,
     thread_state_result_at: result ? at : undefined,
   });
-  // The pin keeps only the latest; this keeps the trail the priorities pass reads.
-  await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status });
+  // The pin keeps only the latest; this keeps the trail the priorities pass reads,
+  // one row per change (an agent re-pinning the same words adds nothing).
+  if (text !== conv.thread_state || status !== conv.thread_state_status) {
+    await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status });
+  }
   // A `blocked` declaration from a HIDDEN session is a claim on the user's
   // eyes — the same claim `cast trigger complete --needs-attention` makes,
   // cleared the same way (agentTasks.completeTaskRun). If the session is

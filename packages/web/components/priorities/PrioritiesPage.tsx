@@ -9,12 +9,15 @@
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, Check, ChevronRight, GripVertical, MoreHorizontal, Plus, Target } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, GripVertical, Loader2, MoreHorizontal, Play, Plus, Target } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
-import { usePriorities, usePriorityWrites, useSyncPriorities } from "../../hooks/usePriorities";
+import { usePriorities, usePriorityListMeta, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { Button } from "../ui/button";
+import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { cn } from "../../lib/utils";
 import { EntityIdPill } from "../EntityIdPill";
 import { EmptyState } from "../ui/empty-state";
@@ -23,7 +26,7 @@ import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { HistoryStrip } from "./HistoryStrip";
 import {
-  mostActiveSessions, newSessionHref, ownerGroups, pastBadge, rankAtDrop, stepCounts, stepNeedsSession, stepSessions, stripLevels,
+  behindLabel, mostActiveSessions, newSessionHref, nextPassLabel, passDue, ownerGroups, pastBadge, rankAtDrop, stepCounts, stepNeedsSession, stepSessions, stripLevels,
   type PriorityHistoryLane, type OwnerGroup, type PriorityDetail, type PriorityHistory, type PriorityRow, type PriorityWrites,
 } from "../../lib/priorities";
 
@@ -43,6 +46,10 @@ export default function PrioritiesPage() {
     { remember: true },
   );
   const writes = usePriorityWrites(rows);
+  const meta = usePriorityListMeta();
+  const pass = useRunPriorities(rows.length);
+  const now = useCoarseNow(30_000);
+  const behind = behindLabel(meta.behind_by_ms);
 
   const router = useRouter();
   const params = useSearchParams();
@@ -55,7 +62,8 @@ export default function PrioritiesPage() {
     router.replace(qs ? `/priorities?${qs}` : "/priorities");
   };
 
-  const legacy = <h1 className="px-4 pt-6 text-title font-semibold text-sol-text">Priorities</h1>;
+  const behindChip = behind ? <BehindChip label={behind} /> : undefined;
+  const legacy = <h1 className="flex items-center gap-2 px-4 pt-6 text-title font-semibold text-sol-text">Priorities{behindChip}</h1>;
   const active = rows.filter((r) => r.status === "active").length;
 
   let body: ReactNode;
@@ -71,19 +79,69 @@ export default function PrioritiesPage() {
   } else if (rows.length === 0 && !feed.ready) {
     body = <SkeletonRows rows={5} className="pt-2" rowClassName="h-9" />;
   } else if (rows.length === 0) {
-    body = <EmptyState icon={Target} title="No priorities yet" />;
+    body = <NoPrioritiesYet nextPass={nextPassLabel(meta.next_pass_at, now)} running={pass.running || passDue(meta, now)} onRun={pass.run} />;
   } else {
     body = <PrioritiesView rows={rows} history={history.data as PriorityHistory | undefined} openId={openId} onToggleOpen={toggleOpen} writes={writes} />;
   }
 
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? active : null} />}
+      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? active : null} status={behindChip} />}
       legacyColumn="mx-auto w-full max-w-[1080px]"
       column="mx-auto w-full max-w-[1080px] px-4 pb-16 pt-3"
     >
       {body}
     </PageFrame>
+  );
+}
+
+/** The pass has fallen behind its schedule: priorities may miss the newest sessions. */
+export function BehindChip({ label }: { label: string }) {
+  return (
+    <span
+      data-priorities-behind
+      title="The priorities pass has run late: the newest sessions may not be in these priorities yet."
+      className="inline-flex shrink-0 items-center rounded-full border border-sol-yellow/40 bg-sol-yellow/10 px-2 py-0.5 text-meta font-medium text-sol-yellow"
+    >
+      {label}
+    </span>
+  );
+}
+
+/** A one-time act that starts a model run: reviewed before it starts (components/consequential). */
+const RUN_LEDGER: SwitchLedger = {
+  name: "Run a pass now",
+  subject: "Your priorities in this workspace",
+  shift: null,
+  figures: [{ value: "1", label: "model run" }],
+  rows: [
+    { k: "Reads", v: "Your sessions and typed messages" },
+    { k: "Writes", v: "Your priorities here" },
+    { k: "Keeps", v: "Your ranks, tiers and set-asides" },
+  ],
+  confirm: "Run now",
+  keep: "Not now",
+};
+
+/** No priorities yet: when the next pass runs, and a pass now. */
+export function NoPrioritiesYet({ nextPass, running, onRun }: { nextPass: string | null; running: boolean; onRun: (() => void) | null }) {
+  const [reviewing, setReviewing] = useState(false);
+  const action = running ? (
+    <Button size="sm" variant="secondary" disabled data-priorities-running>
+      <Loader2 className="animate-spin" /> Running
+    </Button>
+  ) : onRun ? (
+    <Button size="sm" variant="primary" onClick={() => setReviewing(true)}>
+      <Play /> Run now
+    </Button>
+  ) : undefined;
+  return (
+    <EmptyState icon={Target} title="No priorities yet" action={action}>
+      {nextPass && !running && <p data-next-pass className="text-meta tabular-nums text-sol-text-dim">{nextPass}</p>}
+      {reviewing && onRun && (
+        <SwitchReview ledger={RUN_LEDGER} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); onRun(); }} />
+      )}
+    </EmptyState>
   );
 }
 

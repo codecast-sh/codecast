@@ -3,12 +3,47 @@
 // past ones after, a step's sessions and chips, the paints the store's
 // priority actions make and the restore when the server refuses one, and the
 // history strip's day cells.
-import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityRow, PrioritySession, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PrioritySession, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import { heatLevels } from "../components/ActivityHeatmap";
 import { composeLinkHref } from "./composeLink";
 import { serverErrorText } from "./errorCause";
 
 export type { PriorityRow };
+
+/** When the viewer's pass here runs, beside the list's rows (shared/contracts PriorityList). */
+export type PriorityListMeta = Pick<PriorityList, "next_pass_at" | "behind_by_ms">;
+
+/** The rows the store mirrors, out of a list answer. */
+export function listRows(payload: PriorityList | null | undefined): PriorityRow[] | undefined {
+  return payload?.priorities;
+}
+
+export function listMeta(payload: PriorityList | null | undefined): PriorityListMeta {
+  return { next_pass_at: payload?.next_pass_at ?? null, behind_by_ms: payload?.behind_by_ms ?? null };
+}
+
+/** The list says a pass runs now: its next pass is due. */
+export function passDue(meta: PriorityListMeta, now: number): boolean {
+  return meta.next_pass_at != null && meta.next_pass_at <= now;
+}
+
+/** Under this the pass is on time and the header says nothing. */
+export const BEHIND_SHOWN_MS = 6 * 3_600_000;
+
+/** "Behind by 8h" once the pass is more than six hours late, else null. */
+export function behindLabel(ms: number | null | undefined): string | null {
+  if (ms == null || ms <= BEHIND_SHOWN_MS) return null;
+  return `Behind by ${Math.floor(ms / 3_600_000)}h`;
+}
+
+/** "Next pass 3:00 PM" today, "Next pass Wed 3:00 PM" on another day; null with no time or one already past. */
+export function nextPassLabel(at: number | null | undefined, now: number): string | null {
+  if (at == null || at <= now) return null;
+  const when = new Date(at);
+  const time = when.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const sameDay = when.toDateString() === new Date(now).toDateString();
+  return `Next pass ${sameDay ? time : `${when.toLocaleDateString("en-US", { weekday: "short" })} ${time}`}`;
+}
 
 /** Where a priority opens: its row on /priorities, expanded. */
 export function priorityHref(shortId: string): string {

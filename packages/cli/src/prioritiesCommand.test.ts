@@ -106,6 +106,22 @@ describe("cast priorities on the wire", () => {
     expect(JSON.parse(h.out()).map((r: any) => r.short_id)).toEqual(["pri-1", "pri-4"]);
   });
 
+  test("before any pass it says when the first runs; a pass far behind says so above the list", async () => {
+    clearWorkspaceCache();
+    const now = Date.now();
+    h.answer = (p) => (p === "/cli/teams" ? roster : { priorities: [], own_truncated: false, teammates_truncated: false, behind_by_ms: null, next_pass_at: now + 2 * HOUR + 60_000 });
+    await h.run();
+    expect(h.logs).toEqual(["No priorities yet — the first pass runs in 2h."]);
+    h.logs.length = 0;
+    h.answer = (p) => (p === "/cli/teams" ? roster : { priorities: FIXTURE.slice(0, 1), own_truncated: false, teammates_truncated: false, behind_by_ms: 8 * HOUR + 5 * 60_000, next_pass_at: now });
+    await h.run();
+    expect(h.logs[0]).toBe("Behind by 8h: the pass has not caught up with your newest work.");
+    h.logs.length = 0;
+    h.answer = (p) => (p === "/cli/teams" ? roster : { priorities: [], own_truncated: false, teammates_truncated: false, behind_by_ms: HOUR, next_pass_at: now });
+    await h.run();
+    expect(h.logs).toEqual(["No active priorities. cast priorities ls --all shows the rest."]);
+  });
+
   test("the person's controls post what they name", async () => {
     clearWorkspaceCache();
     h.answer = (p, body) => (p === "/cli/teams" ? roster : p === "/cli/priorities/run" ? { scheduled: ["team:t1"], note: "A pass is running." } : row({ short_id: body.short_id, rank: body.rank ?? 1 }));

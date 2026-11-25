@@ -20,7 +20,7 @@ const React = await import("react");
 const { MemoryRouter } = await import("react-router");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { default: PrioritiesPage } = await import("./PrioritiesPage");
-const { PrioritiesView } = await import("./PrioritiesPage");
+const { PrioritiesView, NoPrioritiesYet } = await import("./PrioritiesPage");
 const { default: PrioritiesRoute } = await import("../../app/priorities/page");
 
 const DAY = 86_400_000;
@@ -45,6 +45,8 @@ const HISTORY = { days, lanes: [
 // What the open row's show answers: s2 is worked by a session older than the list's newest three.
 const DETAIL = { ...ROWS[0], steps: ROWS[0].steps.map((st) => ({ ...st, sessions: st.key === "s2" ? [{ short_id: "jx7deep", title: "Re-measure run", step_key: "s2", updated_at: 1 }] : [] })), other_sessions: [] };
 
+const listOf = (priorities: unknown[], timing: { next_pass_at?: number | null; behind_by_ms?: number | null } = {}) =>
+  ({ priorities, own_truncated: false, teammates_truncated: false, next_pass_at: null, behind_by_ms: null, ...timing });
 const mount = (node: React.ReactNode, path = "/priorities") => mountSurface(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>);
 const order = (el: HTMLElement) => [...el.querySelectorAll("[data-priority]")].map((n) => n.getAttribute("data-priority"));
 
@@ -56,7 +58,7 @@ function drag(el: Element, type: string) {
 }
 
 test("priorities read in rank order, finished and past after them, and ?open opens a row on its steps", async () => {
-  answers["priorities:list"] = ROWS;
+  answers["priorities:list"] = listOf(ROWS);
   answers["priorities:history"] = HISTORY;
   answers["priorities:show"] = DETAIL;
   const page = await mount(<PrioritiesPage />, "/priorities?open=pri-1");
@@ -153,6 +155,53 @@ test("a teammate's priority with sessions but no history counts draws its sessio
   }
 }, 60_000);
 
+test("no priorities yet: the next pass's time, Run now through its review, and the running state", async () => {
+  const runs: string[] = [];
+  const idle = await mount(<NoPrioritiesYet nextPass="Next pass 3:00 PM" running={false} onRun={() => runs.push("run")} />);
+  const { act } = React as any;
+  try {
+    expect(idle.container.querySelector("[data-next-pass]")!.textContent).toBe("Next pass 3:00 PM");
+    const press = [...idle.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Run now"))!;
+    await act(async () => { press.click(); });
+    // The run starts only from the review's confirm.
+    expect(runs).toEqual([]);
+    const confirm = document.querySelector("[data-switch-confirm]") as HTMLElement;
+    expect(confirm.textContent).toContain("Run now");
+    await act(async () => { confirm.click(); });
+    expect(runs).toEqual(["run"]);
+  } finally {
+    await idle.unmount();
+  }
+  const running = await mount(<NoPrioritiesYet nextPass="Next pass 3:00 PM" running onRun={() => {}} />);
+  try {
+    expect(running.container.querySelector("[data-priorities-running]")).not.toBeNull();
+    expect(running.container.querySelector("[data-next-pass]")).toBeNull();
+    expect(running.text()).not.toContain("Run now");
+  } finally {
+    await running.unmount();
+  }
+}, 60_000);
+
+test("the header says how far behind only past six hours, read off the list's answer", async () => {
+  answers["priorities:history"] = HISTORY;
+  answers["priorities:list"] = listOf(ROWS, { behind_by_ms: 8 * 3_600_000 });
+  const late = await mount(<PrioritiesPage />);
+  try {
+    expect(order(late.container)[0]).toBe("pri-1");
+    expect(late.container.querySelector("[data-priorities-behind]")!.textContent).toBe("Behind by 8h");
+  } finally {
+    await late.unmount();
+  }
+  answers["priorities:list"] = listOf(ROWS, { behind_by_ms: 2 * 3_600_000 });
+  const onTime = await mount(<PrioritiesPage />);
+  try {
+    expect(onTime.container.querySelector("[data-priorities-behind]")).toBeNull();
+  } finally {
+    await onTime.unmount();
+  }
+  answers["priorities:list"] = listOf(ROWS);
+}, 60_000);
+
 test("Move to ranks a priority from the row menu, without a drag", async () => {
   const calls: string[] = [];
   const writes = { rank: (id: string, n: number) => calls.push(`rank ${id} ${n}`), setStepTier: () => {}, setAside: () => {}, restore: () => {} };
@@ -204,12 +253,22 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
   } finally {
     await missing.unmount();
   }
-  answers["priorities:list"] = [];
+  answers["priorities:list"] = listOf([], { next_pass_at: Date.now() + 3 * 3_600_000 });
   const empty = await mount(<PrioritiesPage />);
   try {
     expect(empty.text()).toContain("No priorities yet");
+    expect(empty.container.querySelector("[data-next-pass]")!.textContent).toMatch(/^Next pass /);
+    expect(empty.text()).toContain("Run now");
   } finally {
     await empty.unmount();
+  }
+  // A next pass that is due is one running now.
+  answers["priorities:list"] = listOf([], { next_pass_at: Date.now() - 1000 });
+  const due = await mount(<PrioritiesPage />);
+  try {
+    expect(due.container.querySelector("[data-priorities-running]")).not.toBeNull();
+  } finally {
+    await due.unmount();
   }
 }, 60_000);
 

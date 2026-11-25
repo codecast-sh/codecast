@@ -16,13 +16,13 @@ import { verifyApiToken } from "./apiTokens";
 import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
-import { runBlocker } from "./priorityPassRun";
+import { hasOkRun, passTiming, runBlocker } from "./priorityPassRun";
 import { getOwnerMembership } from "./privacy";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { isSessionOwner } from "./sessionOwners";
 import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import type {
-  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityPinLine, PriorityRef, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
+  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityPinLine, PriorityRef, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
 } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -361,7 +361,7 @@ async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefi
  * The viewer's own first, then each teammate's; within a person, active
  * before done, quiet and set aside, each in rank order.
  */
-async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<{ priorities: PriorityRow[]; own_truncated: boolean; teammates_truncated: boolean }> {
+async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<PriorityList> {
   const r = await readerFor(ctx, viewer);
   const { rows, own_truncated, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const names = await ownerNames(ctx, rows);
@@ -378,7 +378,7 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || b.last_active_at - a.last_active_at);
   const out: PriorityRow[] = [];
   for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await r.stepsFor(p), await mappedSessions(r, p, listRead(viewer, p)), LIST_SESSIONS));
-  return { priorities: out, own_truncated, teammates_truncated };
+  return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
 }
 
 async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
@@ -625,11 +625,10 @@ const cliScope = { team_id: v.optional(v.id("teams")), personal: v.optional(v.bo
 
 export const list = query({
   args: { workspace: v.optional(v.string()), status: statusArg, all: v.optional(v.boolean()) },
-  handler: async (ctx, args): Promise<PriorityRow[]> => {
+  handler: async (ctx, args): Promise<PriorityList | null> => {
     const viewer = await getAuthUserId(ctx);
-    if (!viewer) return [];
-    // The web reads the rows; own_truncated and teammates_truncated reach the CLI (cliList).
-    return (await listFor(ctx, viewer, args)).priorities;
+    if (!viewer) return null;
+    return listFor(ctx, viewer, args);
   },
 });
 
@@ -781,30 +780,45 @@ export const cliRestore = mutation({
 /**
  * One pass now, for the caller, in the named workspace (one they belong to)
  * or in every workspace of theirs with the feature on. Returns at once with
- * what was scheduled and the plain reason runNow would refuse any other; the
- * pass writes in about a minute.
+ * what was scheduled and the plain reason runNow would refuse any other.
  */
+async function runFor(ctx: any, viewer: Id<"users">, named: string | undefined): Promise<Result<{ scheduled: string[]; skipped: Array<{ workspace: string; reason: string }>; note: string }>> {
+  const held = await heldKeysFor(ctx, viewer);
+  if (named && !held.has(named)) return { error: "you are not a member of that team" };
+  const featureOn = featureCheck(ctx);
+  const now = Date.now();
+  const scheduled: string[] = [];
+  const skipped: Array<{ workspace: string; reason: string }> = [];
+  let first = false;
+  for (const workspace of named ? [named] : held) {
+    if (!(await featureOn(workspace))) continue;
+    // runNow's own checks, read-only: reserve decides for real when the pass starts.
+    const catchUp = !(await hasOkRun(ctx, viewer, workspace));
+    const blocked = await runBlocker(ctx, viewer, workspace, now, true, catchUp);
+    if (blocked && "kind" in blocked) { skipped.push({ workspace, reason: blocked.reason }); continue; }
+    first ||= catchUp;
+    await ctx.scheduler.runAfter(0, (internal as any).priorityPassRun.runNow, { user_id: viewer, workspace });
+    scheduled.push(workspace);
+  }
+  if (!scheduled.length) return { error: skipped.length ? skipped.map((s) => s.reason).join(" ") : teamFeatureOffMessage(FEATURE) };
+  const note = first
+    ? "A pass is running; results land in a few minutes. This first catch-up reads your last two weeks, oldest work first, over a few runs."
+    : "A pass is running; results land in a few minutes.";
+  return { scheduled, skipped, note };
+}
+
+/** `cast priorities run`. */
 export const cliRun = mutation({
   args: { api_token: v.string(), ...cliScope },
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    const named = cliWorkspace(viewer, args);
-    const held = await heldKeysFor(ctx, viewer);
-    if (named && !held.has(named)) return { error: "you are not a member of that team" };
-    const featureOn = featureCheck(ctx);
-    const now = Date.now();
-    const scheduled: string[] = [];
-    const skipped: Array<{ workspace: string; reason: string }> = [];
-    for (const workspace of named ? [named] : held) {
-      if (!(await featureOn(workspace))) continue;
-      // runNow's own checks, read-only: reserve decides for real when the pass starts.
-      const blocked = await runBlocker(ctx, viewer, workspace, now, true);
-      if (blocked) { skipped.push({ workspace, reason: blocked.reason }); continue; }
-      await ctx.scheduler.runAfter(0, (internal as any).priorityPassRun.runNow, { user_id: viewer, workspace });
-      scheduled.push(workspace);
-    }
-    if (!scheduled.length) return { error: skipped.length ? skipped.map((s) => s.reason).join(" ") : teamFeatureOffMessage(FEATURE) };
-    return { scheduled, skipped, note: "A pass is running; its priorities land in about a minute (cast priorities)." };
+    return runFor(ctx, viewer, cliWorkspace(viewer, args));
   },
+});
+
+/** The web's Run now (dispatch runPriorities): one pass in a workspace, refused with the same plain reasons. */
+export const run = mutation({
+  args: { workspace: v.string() },
+  handler: async (ctx, args) => orThrow(await runFor(ctx, await authed(ctx), args.workspace)),
 });

@@ -5,6 +5,7 @@
 // re-exported here so existing importers keep one path.
 import { v } from "convex/values";
 import { mutation, internalMutation } from "./functions";
+import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { TEAM_FEATURE_KEYS, TEAM_FEATURES, teamFeatureEnabled, type TeamFeatures } from "@codecast/shared/contracts";
 import { isStaff } from "./lib/staff";
@@ -36,6 +37,10 @@ const teamFeatureKeyValidator = v.union(
  *  thread, rather than filming people who can no longer see it or end it. */
 async function afterFeatureChange(ctx: any, teamId: Id<"teams">, before: TeamFeatures | undefined, after: TeamFeatures) {
   await changesFlagChanged(ctx, teamId, before, after);
+  // Priorities turned on: the team's first passes start now, not at the next sweep.
+  if (!teamFeatureEnabled({ features: before }, "priorities") && teamFeatureEnabled({ features: after }, "priorities")) {
+    await ctx.scheduler.runAfter(0, (internal as any).priorityPassRun.sweep, { team_id: teamId });
+  }
   if (teamFeatureEnabled({ features: before }, "calls") && !teamFeatureEnabled({ features: after }, "calls")) {
     await stopTeamRecordings(ctx, teamId, "calls_off");
   }

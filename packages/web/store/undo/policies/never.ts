@@ -276,6 +276,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setPriorityStepTier: PRIORITY,
   setPriorityAside: PRIORITY,
   restorePriority: PRIORITY,
+  runPriorities: MACHINE,
   snoozeWalkie: SETTINGS,
   updateNotificationSettings: SETTINGS,
   updateIssueSyncSource: SETTINGS,
