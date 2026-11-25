@@ -194,4 +194,42 @@ describe("evalPass", () => {
     expect(sent.map((s) => s.system)).toEqual(["Candidate prompt v2.", PRIORITY_PASS_SYSTEM]);
     expect(sent[0]!.prompt).toBe(sent[1]!.prompt);
   });
+
+  test("a replay sees each session's pin as it stood at the window's end, with its status; a live pass sees the pin as it is", async () => {
+    const w = await world();
+    const end = w.now - 2 * DAY;
+    const pinAt = (conversation: Id<"conversations">, at: number, text: string, status: string) =>
+      w.t.run((ctx) => ctx.db.insert("thread_state_events", { conversation_id: conversation, user_id: w.ana, at, text, status } as any));
+    await w.send(w.ana, w.teamConv, end - 2 * H, "get grader faults under ten percent");
+    await w.send(w.ana, w.oldConv, end - 2 * H, "start the deploy work");
+    await w.send(w.ana, w.personalConv, end - 2 * H, "tidy the notes");
+    // teamConv: pinned inside the window, re-pinned after it.
+    await pinAt(w.teamConv, end - H, "Grader faults at 20%", "blocked");
+    // oldConv: pinned before the window opened, re-pinned after it.
+    await pinAt(w.oldConv, end - 10 * DAY, "Deploy plan written", "done");
+    await pinAt(w.oldConv, w.now - H, "Deploys live", "done");
+    // personalConv: pinned before the window, cleared from the web after it (no event, no time).
+    await pinAt(w.personalConv, end - 10 * DAY, "Notes half tidied", "working");
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { thread_state: "Grader faults shipped, done", thread_state_status: "done", thread_state_at: w.now - H } as any);
+      await ctx.db.patch(w.oldConv, { thread_state: "Deploys live", thread_state_status: "done", thread_state_at: w.now - H } as any);
+      await ctx.db.patch(w.personalConv, { thread_state: undefined, thread_state_status: undefined, thread_state_at: undefined } as any);
+    });
+    const pins = async (workspace: string, now?: number) => {
+      const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace, window_start: end - 3 * DAY, ...(now ? { now } : {}) });
+      return Object.fromEntries(input.sessions.map((s: any) => [s.id, s.pin]));
+    };
+    expect(await pins(w.team, end)).toMatchObject({
+      jx7team: { text: "Grader faults at 20%", status: "blocked" },
+      jx7old: { text: "Deploy plan written", status: "done" },
+    });
+    expect((await pins(`user:${w.ana}`, end)).jx7mine).toEqual({ text: "Notes half tidied", status: "working" });
+
+    // A live pass sees each pin as it is now; a cleared one is gone.
+    expect(await pins(w.team)).toMatchObject({
+      jx7team: { text: "Grader faults shipped, done", status: "done" },
+      jx7old: { text: "Deploys live", status: "done" },
+    });
+    expect((await pins(`user:${w.ana}`)).jx7mine).toBeNull();
+  });
 });
