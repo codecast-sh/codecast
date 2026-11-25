@@ -265,7 +265,6 @@
   border: 0;
   background: transparent;
   text-align: left;
-  cursor: pointer;
   border-radius: 12px;
   position: relative;
   display: flex;
@@ -274,13 +273,6 @@
   max-width: 88%;
   font-size: 12px;
   line-height: 1.5;
-}
-.fc-msg:hover .fc-text {
-  box-shadow: inset 0 0 0 1px var(--sol-border);
-}
-.fc-msg:focus-visible {
-  outline: 2px solid var(--sol-blue);
-  outline-offset: 3px;
 }
 .fc-row[data-me] .fc-msg {
   flex-direction: row-reverse;
@@ -346,6 +338,22 @@
   font-size: 12px;
   outline: none;
   transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.fc-send {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.fc-send:hover kbd {
+  color: var(--sol-text);
+}
+.fc-send:focus-visible {
+  outline: 2px solid var(--sol-blue);
+  outline-offset: 2px;
 }
 .fc-reply-thread {
   flex: 1;
