@@ -364,6 +364,9 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
+  // The stepper's one label for where a question comes from: the live title, else the
+  // title recorded on the decision (the session may not be in the store), else the project.
+  const askerName = session?.title || item.sessionTitle || project || "Untitled session";
   // A decision posted from a role's own standing thread is the role's ask
   // (org-staffing.md S28): the header reads as that role, its face and
   // handle, the way the inbox card draws it.
@@ -461,12 +464,12 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSession(); } }}
           className="cursor-pointer text-sm text-sol-text hover:text-sol-blue transition-colors [overflow-wrap:anywhere] focus-visible:outline focus-visible:outline-1 focus-visible:outline-sol-blue"
         >
-          {session?.title || "Session"}
+          {askerName}
         </span>
       ) : (
         <span className="text-sm text-sol-text">{item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
       )}
-      {stepper && project && <span className="decision-head-wide whitespace-nowrap text-meta text-sol-text-dim">{project}</span>}
+      {stepper && project && project !== askerName && <span className="decision-head-wide whitespace-nowrap text-meta text-sol-text-dim">{project}</span>}
       {badges}
     </div>
   );
@@ -743,7 +746,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // Modern docks the ask itself (ModernDecisionDock): the question and its options as Buttons, Open for the sheet.
   if (modern) return (
     <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
-      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_collapsed: v })} />
+      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? askerName : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_collapsed: v })} />
     </div>
   );
   return (
