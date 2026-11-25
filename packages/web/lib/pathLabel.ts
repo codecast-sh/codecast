@@ -180,6 +180,7 @@ export function pathLabel(path: string): string {
     "/org": "Org",
     "/map": "Session Map",
     "/goals": "Goals",
+    "/priorities": "Priorities",
     "/projects": "Projects",
     "/chat": "Chat",
     "/community": "Community",

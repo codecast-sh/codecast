@@ -20,6 +20,7 @@ import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMi
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliAuthRequest } from "./cliAuthHttp";
 import { registerCliPreflight, registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
+import { registerPriorityRoutes } from "./lib/priorityRoutes";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
@@ -4226,6 +4227,7 @@ cliRoute("/cli/objects/update", async (ctx, body) => ctx.runMutation((api as any
 cliRoute("/cli/objects/get", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliGet, body));
 cliRoute("/cli/objects/list", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliList, body));
 cliRoute("/cli/objects/kinds", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliKinds, body));
+registerPriorityRoutes(http);
 
 // Mods' local halves (convex/modLocal.ts): the daemon's side of the bridge
 cliRoute("/cli/mods/local", async (ctx, body) => ctx.runQuery((api as any).modLocal.cliLocalMods, body));

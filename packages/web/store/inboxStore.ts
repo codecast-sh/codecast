@@ -361,6 +361,7 @@ import { attachProjectStubDraft, createInitiativeSlice, detachProjectStubDraft, 
 import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
 import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
 import { createLineSlice, type LineSliceActions } from "./lineSlice";
+import { createPrioritiesSlice, type PrioritiesSliceActions } from "./prioritiesSlice";
 import { createTrialSlice, type TrialSliceActions } from "./trialSlice";
 import { taskCreateStub, taskStubId } from "./taskStub";
 import { createExpectationsSlice, type ExpectationsSliceActions } from "./expectationsSlice";
@@ -6224,7 +6225,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -16396,6 +16397,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // Line profile edits (store/lineSlice.ts): paint projects.line_profile, ride to the daemon.
   ...createLineSlice(),
+  // A person's priorities (store/prioritiesSlice.ts): rank, tier, set aside, restore.
+  ...createPrioritiesSlice(),
   // Trial cards (store/trialSlice.ts): a trial run's gate, answered on /trial.
   ...createTrialSlice(),
   ...createExpectationsSlice(answerDecisionDraft),

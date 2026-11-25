@@ -45,6 +45,7 @@ export const DATA_SCOPE = {
   composerSuggestions: "entity",
   decisionStacks: "viewer",
   weeklyCards: "viewer",
+  priorities: "workspace",
   handledDecisions: "viewer",
   decisionDetails: "entity",
   decisionThreads: "entity",

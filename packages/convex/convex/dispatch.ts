@@ -1733,6 +1733,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await setWeeklyCardEnabledFor(ctx, userId, enabled === true);
   },
 
+  // A person's controls over their priorities (priorities.ts; web store/prioritiesSlice).
+  // The API's own mutations, so the owner, feature and step checks are theirs.
+  rankPriority: async (ctx, _userId, [shortId, rank]: [string, number]) =>
+    ctx.runMutation!((api as any).priorities.rank, { short_id: shortId, rank }),
+  setPriorityStepTier: async (ctx, _userId, [shortId, stepKey, tier]: [string, string, "critical" | "polish"]) =>
+    ctx.runMutation!((api as any).priorities.setStepTier, { short_id: shortId, step_key: stepKey, tier }),
+  setPriorityAside: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.setAside, { short_id: shortId }),
+  restorePriority: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.restore, { short_id: shortId }),
+  runPriorities: async (ctx, _userId, [workspace]: [string]) => ctx.runMutation!((api as any).priorities.run, { workspace }),
+
   // A member's level for a whole team (settings, the share-in-full nudge).
   // Distinct from setTeamVisibility below, which is one conversation's override.
   setTeamMembershipVisibility: async (ctx, userId, [teamId, visibility, mode]: [string, string, "everything" | "going_forward" | undefined]) => {

@@ -53,6 +53,7 @@ const SESSION_CROSS_TEAM = new Map<string, string>([
   ["calls.ts:getLiveRooms", "reads a session only for its room title, after the per-room membership check"],
   ["anchors.ts:listAnchors", "reads each anchor's own seat session for its place, not team content"],
   ["sessionOwners.ts:teamOwnerRowsForUser", "the team sessions the caller owns as a member of each team (an owner's inbox spans workspaces, as person owner rows do); each row carries team_owner_team_id"],
+  ["priorityPassSweep.ts:sweepCandidates", "internal cron, returns no content: walks a member's teams only to pick the one flagged team that sweeps their personal pair, and reads only that member's own activity"],
 ]);
 
 function convexSources(): Array<{ file: string; src: string }> {

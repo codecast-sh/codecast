@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { killConversation } from "./conversations";
 import { CONVERSATION_ROW_TABLES, conversationRowEffects } from "./lib/conversationRows";
+import { dropPrioritySession } from "./lib/prioritySessionCount";
 import { isRegulatedTeam } from "./lib/accessLog";
 import { mayDeleteRegulated, startDeletion } from "./regulatedDeletion";
 
@@ -75,6 +76,7 @@ export async function deleteSessionAsOwner(ctx: any, userId: Id<"users">, conver
         deleted_at: Date.now(),
       });
     }
+    await dropPrioritySession(ctx, row);
     await ctx.db.delete(row._id);
     purged.push(String(row._id));
   }

@@ -407,6 +407,20 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     feeds: ["weeklyCards.listMine"],
   },
+  // Each person's priorities in the active workspace (convex priorities.list,
+  // shared/contracts/priorities PriorityRow). A snapshot: list returns the
+  // workspace's complete visible set. Not localFirst: a rank paints new
+  // positions on the owner's other rows, which the server's own ordering may
+  // place differently, so a field lock could never retire; the server's push
+  // settles the paint, and a refused write is put back by its caller
+  // (store/prioritiesSlice). steps, counts and sessions are joined objects.
+  priorities: {
+    persistence: { kind: "collection", key: "priorities" },
+    indexes: "_id, workspace",
+    hydration: { phase: "deferred" },
+    sync: { deepFields: ["steps", "counts", "sessions"] },
+    feeds: ["priorities.list"],
+  },
   // "Handled without you": decisions a role answered under a grant in the
   // last 14 days, with the role and grant for disagree / reopen. Snapshot.
   handledDecisions: {
@@ -2326,6 +2340,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   runGraphs: "shared",
   workflowRuns: "shared",
   weeklyCards: "shared",
+  priorities: "shared",
   signals: "shared",
   lineLabels: "shared",
   stationInputs: "shared",

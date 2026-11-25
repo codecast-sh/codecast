@@ -47,7 +47,7 @@ afterAll(() => {
 });
 
 const shut = { items: [], expanded: false, onToggle: () => {} };
-const ALL = { chat: true, calls: true, changes: true, org: true, line: true, team: true, staff: true } as const;
+const ALL = { chat: true, calls: true, changes: true, org: true, line: true, priorities: true, team: true, staff: true } as const;
 
 async function clicks(render: (close: () => void, more: () => void) => ReactNode) {
   let closed = 0;
@@ -81,8 +81,8 @@ test("every page row of the rail closes the drawer; More opens its level and kee
       />
     );
   });
-  // Inbox, Decisions, Threads, Activity, five Work rows, three Automation, four Code & Ops.
-  expect(r.rows).toBe(16);
+  // Inbox, Decisions, Threads, Activity, six Work rows, three Automation, four Code & Ops.
+  expect(r.rows).toBe(17);
   expect(r.closed).toBe(r.rows);
   expect(r.mores).toBe(1);
 });

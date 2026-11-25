@@ -326,6 +326,7 @@ mod's folder (cast mod types rewrites it).`,
 Short ids render as live pills wherever codecast shows prose.`,
     load: () => import("./objCommand.js").then((m) => m.registerObjCommand),
   },
+  { token: "priorities", description: "What you are driving at, inferred from your own sessions, and how far along each is", load: () => import("./prioritiesCommand.js").then((m) => m.registerPrioritiesCommand) },
   {
     token: "shortcuts",
     aliases: ["hotkeys"],

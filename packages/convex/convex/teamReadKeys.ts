@@ -17,7 +17,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireTeamAdmin } from "./lib/access";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { sha256Hex } from "./lib/hash";
-import { isVisibilityShareable, teamFloorScope } from "./privacy";
+import { listsSessionsToTeam, teamFloorScope } from "./privacy";
 import { needsHostedTitle } from "./assistant/backfills";
 import { isAfter, pageNewestFirst, type StreamPosition } from "./feedPagination";
 import { windowSpent } from "./ipRateLimit";
@@ -242,7 +242,7 @@ export const sessionsForKey = internalQuery({
     // The members who can list a session, as cast feed reads them: sharing above
     // activity with the team, and not hidden for the whole account (the legacy setting).
     const sharing = floor.members.filter(
-      (u) => u.activity_visibility !== "hidden" && isVisibilityShareable(floor.filter.getVisibility(String(u._id))),
+      (u) => listsSessionsToTeam(u, floor.filter.getVisibility(String(u._id))),
     );
     const { after } = args;
     const team = key.team_id;

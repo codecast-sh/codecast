@@ -552,6 +552,21 @@ crons.cron(
   {}
 );
 
+// Each person's priorities follow their work: a pass for every (person,
+// workspace) with the feature on and a typed message or pin since its last
+// pass (priorityPassSweep.ts).
+// On the hour every three hours UTC, so the list can say when the next one runs (SWEEP_EVERY_MS).
+crons.cron("priority pass", "0 */3 * * *", (internal as any).priorityPassSweep.sweep, {});
+
+crons.interval(
+  // Pin trail rows older than 30 days (prioritiesSchema.ts): the priorities
+  // pass reads only what came after its last run.
+  "prune old thread state events",
+  { hours: 24 },
+  (internal as any).threadStateEvents.prune,
+  {}
+);
+
 crons.interval(
   // Event samples older than 30 days (external-data.md X3, X11).
   "prune old event samples",

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "./composeLink";
+import { composeLinkHref, parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "./composeLink";
 import { PREFILL_MAX_LENGTH } from "./composerPrefill";
 
 const parse = (qs: string) => parseComposeLink(new URLSearchParams(qs));
@@ -243,5 +243,14 @@ describe("stripComposeLink", () => {
   test("takes out only the link's parameters", () => {
     expect(stripComposeLink("/inbox", "?compose=x&task=ct-1&agent=codex&project=a&s=abc")).toBe("/inbox?s=abc");
     expect(stripComposeLink("/inbox", "?compose=x&compose=y")).toBe("/inbox");
+  });
+});
+
+describe("composeLinkHref", () => {
+  test("round-trips through parseComposeLink, the task attached only when given", () => {
+    const href = composeLinkHref("Trusted evals: Grader faults & 10% #2", "ct-123");
+    expect(href.startsWith("/inbox?")).toBe(true);
+    expect(parse(href.slice("/inbox?".length))).toEqual({ draft: "Trusted evals: Grader faults & 10% #2", task: "ct-123" });
+    expect(parse(composeLinkHref("A: b").slice("/inbox?".length))).toEqual({ draft: "A: b" });
   });
 });

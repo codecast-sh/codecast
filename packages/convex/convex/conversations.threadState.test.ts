@@ -67,6 +67,19 @@ describe("setThreadState", () => {
     expect((tables.conversations[0] as any).thread_state_msg_count).toBe(42);
   });
 
+  test("the trail the priorities pass reads keeps one row per change: the same words and status again add none", async () => {
+    const tables = tablesWith();
+    tables.thread_state_events = [];
+    const db = makeFakeDb(tables);
+    const write = (text: string, status?: string) => (setThreadState as any)._handler(ctxAs(db, RUNNER), { session: "abc1234", text, ...(status ? { status } : {}) });
+    await write("Waiting on CI", "dormant");
+    await write("Waiting on CI", "dormant");
+    expect(tables.thread_state_events).toHaveLength(1);
+    await write("Waiting on CI", "blocked");
+    await write("CI green", "blocked");
+    expect(tables.thread_state_events.map((e: any) => [e.text, e.status])).toEqual([["Waiting on CI", "dormant"], ["Waiting on CI", "blocked"], ["CI green", "blocked"]]);
+  });
+
   test("a station's result is kept whole beside the capped text, and a later write without one drops it", async () => {
     // The line routes on the result; the pin text is display and is capped.
     const tables = tablesWith();

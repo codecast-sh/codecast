@@ -119,6 +119,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "plans.webMentionList": listArgs,
   // One standing per env a goal names, keyed workspace|env.
   "envs.workspaceStandings": listArgs,
+  // Every workspace a placement names and each identity's own, then all of the viewer's at once.
+  "priorities.list": (ids) => [{}, ...[`team:${ids.T}`, `team:${ids.O}`, ...WHO.map((w) => `user:${ids[w]}`)].map((workspace) => ({ workspace }))],
 };
 
 // Feeds outside the registry: the table whose seeded rows they return.
@@ -163,8 +165,8 @@ async function seed(t: ReturnType<typeof convexTest>) {
     const stranger = await user("Stranger");
     const removed = await user("Removed");
     const outsider = await user("Outsider");
-    const T = await db.insert("teams", { name: "T", created_at: now, invite_code: "t" });
-    const O = await db.insert("teams", { name: "O", created_at: now, invite_code: "o" });
+    const T = await db.insert("teams", { name: "T", created_at: now, invite_code: "t", features: { priorities: true } });
+    const O = await db.insert("teams", { name: "O", created_at: now, invite_code: "o", features: { priorities: true } });
     const join = (user_id: any, team_id: any, role = "member") => db.insert("team_memberships", { user_id, team_id, role, joined_at: now });
     await join(owner, T, "admin");
     await join(teammate, T);
@@ -180,7 +182,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {}, priorities: {} };
     const groupRefs: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
@@ -203,9 +205,16 @@ async function seed(t: ReturnType<typeof convexTest>) {
     }
     // A session per placement, each with one typed prompt: the message feed's rows.
     // Sessions keep their own visibility axis, so private is a team-routed, unshared one.
+    // Each holds a priority of its owner's: a teammate reads one only through a session
+    // listed to the team, so the private placement's is the team's, held by the unshared session.
     for (const [place, p] of Object.entries(placements)) {
+      const priority_id = await db.insert("priorities", {
+        user_id: p.user_id, workspace: place === "private" ? `team:${T}` : p.workspace, short_id: `pri-${++n}`, title: `${place} row`, summary: "",
+        status: "active", rank_set_by: "pass", steps: [], first_seen_at: now, last_active_at: now, pass_at: now, created_at: now, updated_at: now,
+      } as any);
+      rows.priorities[place] = priority_id;
       const conversation_id = await db.insert("conversations", {
-        user_id: p.user_id, ...(p.team_id ? { team_id: p.team_id } : {}), is_private: place === "private" || place === "personal",
+        priority_id, user_id: p.user_id, ...(p.team_id ? { team_id: p.team_id } : {}), is_private: place === "private" || place === "personal",
         agent_type: "claude_code", session_id: `s-${place}`, started_at: now, updated_at: now, message_count: 1, status: "active",
       } as any);
       rows.messageFeed[place] = await db.insert("messages", { conversation_id, message_uuid: `m-${place}`, role: "user", content: `${place} prompt`, timestamp: now } as any);

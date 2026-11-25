@@ -12,6 +12,7 @@
 import { isTeamOwnedConversation, keepTeamSessionVisible } from "./viewerTriage";
 import type { Scheduler } from "convex/server";
 import { Id } from "../_generated/dataModel";
+import { flagPriorityRewrite } from "./prioritySessionCount";
 import { roleDropForVisibility } from "./sessionTell";
 import { recomputeWorkspaceForConversation } from "./access";
 import { recordAuthorityEvent } from "./authorityEvents";
@@ -62,6 +63,7 @@ export async function patchConversationVisibility(
   const drop = await roleDropForVisibility(ctx, { ...conversation, ...updates });
   await ctx.db.patch(conversation._id, drop ? { ...updates, ...drop.patch } : updates);
   if (drop) await drop.tell();
+  await flagPriorityRewrite(ctx, conversation as { priority_id?: Id<"priorities"> });
   const after = { ...conversation, ...updates };
   const VIS = ["is_private", "team_visibility", "team_id", "auto_shared"] as const;
   const pick = (row: Record<string, any>) => Object.fromEntries(VIS.filter((k) => k in updates).map((k) => [k, row[k]]));

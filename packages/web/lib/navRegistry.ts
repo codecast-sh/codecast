@@ -18,7 +18,7 @@ export type NavGroup = "top" | "team" | "work" | "automation" | "code" | "more" 
 
 /** A condition a row is shown under, besides the person's focus: a team
  *  feature, the calls deployment, an active team, or staff. */
-export type NavGate = "chat" | "calls" | "changes" | "org" | "line" | "team" | "staff";
+export type NavGate = "chat" | "calls" | "changes" | "org" | "line" | "priorities" | "team" | "staff";
 
 /** The gates as the viewer has them. "offer" is a feature the workspace never
  *  decided on: its row stays, marked new, and opens the feature's landing. */
@@ -32,7 +32,7 @@ export type NavIconName =
   | "Ellipsis" | "FileText" | "Flag" | "FlaskConical" | "FolderGit2" | "FolderKanban" | "Gauge" | "GitBranch"
   | "Globe" | "Inbox" | "KeyRound" | "Library" | "ListChecks" | "Map" | "MessageSquare" | "MessageSquareText"
   | "MessagesSquare" | "Network" | "Newspaper" | "NotebookText" | "Phone" | "Puzzle" | "Radar" | "Radio"
-  | "Rocket" | "Rss" | "ScrollText" | "Search" | "Settings" | "Signpost" | "SlidersHorizontal" | "SquareTerminal"
+  | "Rocket" | "Rss" | "ScrollText" | "Search" | "Settings" | "Signpost" | "SlidersHorizontal" | "SquareTerminal" | "Target"
   | "Users" | "Waypoints" | "Workflow" | "Zap";
 
 type NavRowSpec = {
@@ -75,6 +75,7 @@ const ROWS = [
   { id: "docs", label: "Docs", path: "/docs", icon: "FileText", group: "work", focus: "keep", match: ["/docs", "/plans"] },
   { id: "projects", label: "Projects", path: "/projects", icon: "FolderKanban", group: "work", focus: "more", title: "Projects: the work that moves the goals" },
   { id: "goals", label: "Goals", path: "/goals", icon: "Flag", group: "work", focus: "more", title: "Goals: what the company is trying to move" },
+  { id: "priorities", label: "Priorities", path: "/priorities", icon: "Target", group: "work", feature: "priorities", focus: "more", title: "Priorities: what each person is driving at, and how far along" },
   { id: "org", label: "Org", path: "/org", icon: "Network", group: "work", feature: "org", focus: "more", badge: "org", title: "Org: who carries the work, people and agent roles" },
   // Automation: the standing things that set agents running.
   { id: "triggers", label: "Triggers", path: "/triggers", icon: "Zap", group: "automation", focus: "more", match: ["/triggers", "/schedules"] },

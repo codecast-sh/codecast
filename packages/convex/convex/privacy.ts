@@ -353,6 +353,16 @@ export type TeamFloor = {
   contentVisible: (conversation: ConversationForFeed & RunLogIdentity) => boolean;
 };
 
+/**
+ * Whether a member lists their sessions to a team at all: sharing more than
+ * activity with it (their membership level) and not hidden for the whole
+ * account (the legacy users.activity_visibility). The team session list's
+ * rule (teamReadKeys, priorities); each session then passes the floor.
+ */
+export function listsSessionsToTeam(user: { activity_visibility?: string | null } | null | undefined, membershipVisibility: string): boolean {
+  return !!user && user.activity_visibility !== "hidden" && isVisibilityShareable(membershipVisibility);
+}
+
 export async function teamFloorScope(ctx: DbCtx, teamId: Id<"teams">): Promise<TeamFloor> {
   const filter = await createTeamFeedFilter(ctx, teamId);
   const members: Doc<"users">[] = (await Promise.all(filter.memberships.map((m) => ctx.db.get(m.user_id)))).filter(Boolean);

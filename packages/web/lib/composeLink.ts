@@ -192,6 +192,14 @@ export function resolveLinkProject(
   }) ? path : undefined;
 }
 
+/** The address that opens a new session's composer with `draft` typed, and
+ *  the task attached when there is one: the link parseComposeLink reads. */
+export function composeLinkHref(draft: string, task?: string): string {
+  const sp = new URLSearchParams({ compose: draft });
+  if (task) sp.set("task", task);
+  return `/inbox?${sp.toString()}`;
+}
+
 /** The address with the link's parameters taken out, so a reload or Back
  *  never opens a second composer. */
 export function stripComposeLink(pathname: string, search: string): string {

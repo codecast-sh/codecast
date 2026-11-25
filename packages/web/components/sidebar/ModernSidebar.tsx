@@ -170,9 +170,10 @@ export function ModernSidebar({
   const orgOffer = useWorkspaceFeatureState("org") === "offer";
   const flowsOn = useWorkspaceFeature("line");
   const flowsOffer = useWorkspaceFeatureState("line") === "offer";
+  const prioritiesOn = useWorkspaceFeature("priorities");
   const staff = useInboxStore((s) => (s.currentUser as { staff?: boolean } | null | undefined)?.staff === true);
   const gates: NavGates = {
-    chat: chatOn, calls: callsOn, changes: changesOn, team: hasTeam, staff,
+    chat: chatOn, calls: callsOn, changes: changesOn, priorities: prioritiesOn, team: hasTeam, staff,
     org: orgOn || (orgOffer ? "offer" : false), line: flowsOn || (flowsOffer ? "offer" : false),
   };
   // Saving the first layout is the palette's; the rail lists them once there is one.

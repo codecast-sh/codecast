@@ -13,7 +13,7 @@ import { NAV_REGISTRY, navActiveId, navRowsIn, type NavGates, type NavId } from 
 // as elements; the rest are drawn from the registry under the gate each had
 // in the classic rail.
 const shut = { items: [], expanded: false, onToggle: () => {} };
-const ALL: NavGates = { chat: true, calls: true, changes: true, org: true, line: true, team: true, staff: true };
+const ALL: NavGates = { chat: true, calls: true, changes: true, org: true, line: true, priorities: true, team: true, staff: true };
 
 function rail(over: Partial<React.ComponentProps<typeof ModernNavView>> = {}) {
   return renderToStaticMarkup(

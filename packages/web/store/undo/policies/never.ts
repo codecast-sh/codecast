@@ -19,6 +19,9 @@ const MACHINE = never("machine control: it acts on a running agent or host, whic
 const SHARING = never("sharing: links and membership visibility change who can see something; set them back explicitly");
 const INTERNAL = never("internal: engine or sync plumbing, never a user gesture");
 const DRAFT = never("draft: unsent text or a pick on an unsent session, changed back in the same field");
+// The person's own call on a priority (store/prioritiesSlice): the server marks
+// the field as theirs, and no verb hands it back to the pass that set it before.
+const PRIORITY = never("priority control: a rank, tier or set aside becomes the person's own, and the server has no verb to give it back to the pass; the same control sets it again");
 const LOCAL_ECHO = never("local echo: the store's copy of a send or an answer, which the server's reply settles");
 
 export const NEVER_UNDO_POLICY: UndoPolicy = {
@@ -269,6 +272,11 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setWalkiePref: SETTINGS,
   setWeeklyCardEnabled: SETTINGS,
   setWeeklyCardOptions: SETTINGS,
+  rankPriority: PRIORITY,
+  setPriorityStepTier: PRIORITY,
+  setPriorityAside: PRIORITY,
+  restorePriority: PRIORITY,
+  runPriorities: MACHINE,
   snoozeWalkie: SETTINGS,
   updateNotificationSettings: SETTINGS,
   updateIssueSyncSource: SETTINGS,

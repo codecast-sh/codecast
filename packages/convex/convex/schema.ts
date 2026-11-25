@@ -60,6 +60,7 @@ import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { liveFlowTables } from "./liveFlowsSchema";
 import { flowMapTables } from "./flowMapSchema";
 import { sessionFlowTables } from "./sessionFlowsSchema";
+import { priorityTables } from "./prioritiesSchema";
 import { landedChangeTables } from "./landedChangesSchema";
 import { slackTables } from "./slackSchema";
 import { callRoomTables } from "./callRoomSchema";
@@ -161,6 +162,7 @@ export default defineSchema({
   ...liveFlowTables,
   ...flowMapTables,
   ...sessionFlowTables,
+  ...priorityTables,
   ...landedChangeTables,
   ...slackTables,
   ...passkeyTables,
@@ -1021,6 +1023,11 @@ export default defineSchema({
     // message takes the pin down and leaves the report and its time standing.
     thread_state_result: v.optional(v.string()),
     thread_state_result_at: v.optional(v.number()),
+    // The priority the priorities pass mapped this session to, and the step of
+    // it the session serves (prioritiesSchema.ts). Written only by the pass;
+    // drives the priority line under the pinned state.
+    priority_id: v.optional(v.id("priorities")),
+    priority_step_key: v.optional(v.string()),
     // The page an agent offered as a pane (`cast browser pane <url>`). One
     // latest offer, never a list: an agent that started three dev servers is
     // telling the reader about the newest, and a queue of dead addresses reads
@@ -1640,6 +1647,10 @@ export default defineSchema({
     // running and queued rows for one user (subagentFleet.ts).
     .index("by_user_subagent_slot", ["user_id", "subagent_slot", "subagent_slot_at"])
     .index("by_restored_from", ["restored_from_conversation_id"])
+    // Sparse and written only by the priorities pass: the sessions one
+    // priority holds (priorityPassRun.ts, priorities.ts). No updated_at key,
+    // so a heartbeat never rewrites an entry.
+    .index("by_priority", ["priority_id"])
     // `persistent` and `anchor_id` are plain fields with no index: anchors
     // resolve their conversation via anchors.conversation_id, and no query
     // scans conversations by either field. Indexes on written-to tables are

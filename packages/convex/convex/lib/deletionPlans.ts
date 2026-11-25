@@ -263,6 +263,7 @@ function plans() {
     byWorkspace("live_flows", "by_workspace"),
     byWorkspace("flow_map_rollups", "by_workspace"),
     byWorkspace("session_flows", "by_workspace_hash"),
+    byWorkspace("priorities", "by_workspace_status"),
     byWorkspace("landed_changes", "by_workspace_landed"),
     byWorkspace("project_memory", "by_workspace_project"),
     byWorkspace("project_expectations", "by_workspace_prefix"),
@@ -355,6 +356,7 @@ export const LEFT_OUT: Record<string, string> = {
   user_activity_daily: "per-person counts, no content",
   project_task_counts: "counts, no content",
   ci_workflows: "which workflow files of a repository are CI, read from GitHub: paths, no content",
+  priority_pass_runs: "a run's counts and error line, no content; indexed by person first",
   // Per-person pointers, indexed by person first: no index reaches them from the conversation.
   inbox_hides: "per-person pointer, no conversation-leading index",
   bookmarks: "per-person pointer, no conversation-leading index",
