@@ -72,7 +72,8 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   const unlabeled = produced.filter((p) => !p.sessions.some((s) => labeled.has(s))).map((p) => p.key);
   const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(s)).length / p.sessions.length > 0.5).map((p) => p.key);
-  const candidates = produced.filter((p) => !standingLike.includes(p.key));
+  // Out of the golden set's scope: never offered to the judge, so one cannot take a labeled priority's slot.
+  const candidates = produced.filter((p) => !standingLike.includes(p.key) && !unlabeled.includes(p.key));
 
   const goldenById = new Map(golden.priorities.map((g) => [g.id, g]));
   const producedByKey = new Map(candidates.map((p) => [p.key, p]));
