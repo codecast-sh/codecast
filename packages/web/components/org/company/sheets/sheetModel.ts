@@ -2,7 +2,7 @@
 // crumb that says where an object sits, the names a Serves line links, whom
 // a role reports to, and what a role is doing this minute.
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
-import { personRefOf } from "@codecast/shared/entities";
+import { bareEntityIdRegex, personRefOf } from "@codecast/shared/entities";
 import type { OrgRole, OrgSession, OrgTree } from "../../orgTypes";
 import { sessionsLine } from "../nowModel";
 import { roleWords } from "../../orgStaffingTypes";
@@ -56,4 +56,27 @@ export function roleNow(role: OrgRole): { words: string; current: OrgSession | n
   if (!live) return line ? { words: line, current: null, live: false, at } : null;
   const current = newest(role.sessions, "working") ?? newest(role.sessions, "needs_input") ?? null;
   return { words: line || live.line, current, live: true, at };
+}
+
+/** The objects a role's Now words name by id (a task, plan, pull request,
+ *  session), in the order written. Each is the work the line is about. */
+export function roleNowRefs(words: string): string[] {
+  return [...words.matchAll(bareEntityIdRegex())].map((m) => m[0]);
+}
+
+export type RoleNowSession = { _id: string; short_id?: string; title: string };
+
+/** The session a role's Now words open when they name no object: the work
+ *  it is on (the newest of its sessions at work, else waiting, that is not
+ *  its standing agent), else the standing agent whose state line the words
+ *  are. Never the conversation already on screen (`onScreen`), since opening
+ *  it changes nothing. Null when nothing is left to open. */
+export function roleNowSession(role: OrgRole, onScreen: string | null): RoleNowSession | null {
+  const standingId = role.standing?.conversation_id;
+  const others = role.sessions.filter((s) => s._id !== standingId);
+  const work = newest(others, "working") ?? newest(others, "needs_input");
+  const line = role.standing?.state_line?.trim();
+  const standing = line && standingId ? { _id: standingId, short_id: role.standing?.short_id, title: roleWords(role).title } : null;
+  const current = roleNow(role)?.current ?? null;
+  return [work, standing, current].find((s): s is RoleNowSession => !!s && s._id !== onScreen) ?? null;
 }

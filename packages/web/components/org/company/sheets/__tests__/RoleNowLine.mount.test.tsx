@@ -1,6 +1,7 @@
 // ct-97956: a role's current-work line names the work it is on. The words
 // must open that work when clicked, not sit as a plain span beside the one
-// small session pill that does.
+// small session pill that does: an object the words name, else the session at
+// work, and never the conversation the person is already reading.
 // Run: bun test components/org/company/sheets/__tests__/RoleNowLine.mount.test.tsx
 import { test, expect, afterAll, mock } from "bun:test";
 import { closeDomWindow } from "../../../../../test-helpers/domGlobals";
@@ -29,6 +30,8 @@ mock.module("../../../../../hooks/useOpenLinkedSession", () => ({ ...realOpen, u
 const { createRoot } = await import("react-dom/client");
 const { act } = await import("react");
 const { RoleNowLine } = await import("../sheetParts");
+const { useInboxStore } = await import("../../../../../store/inboxStore");
+const { declareViewNav } = await import("../../../../../store/viewNav");
 type OrgRole = import("../../../orgTypes").OrgRole;
 
 const WORDS = "Fixing a live leak: the broker's new sharing wording can pass a person's health on in an introduction";
@@ -60,19 +63,61 @@ test("the words naming a role's current work open that work", async () => {
   await unmount();
 });
 
-test("a state line opens the role's standing session, even beside a live one", async () => {
-  const { words, unmount } = await mount({ ...role, standing: { ...role.standing, conversation_id: "standing-1", short_id: "jx7stand" } } as OrgRole);
+const withStanding = (r: OrgRole, extra: object = {}) => ({ ...r, standing: { ...r.standing, conversation_id: "standing-1", short_id: "jx7stand" }, ...extra } as OrgRole);
+const setOnScreen = (id: string | null) => { declareViewNav("gesture"); useInboxStore.setState({ currentSessionId: id } as any); };
+
+test("a state line beside live work opens that work, not the role's own standing session", async () => {
+  const { words, unmount } = await mount(withStanding(role));
+  expect(words.tagName).toBe("BUTTON");
+  await click(words);
+  expect(opened).toEqual(["sess-1"]);
+  await unmount();
+});
+
+test("the standing session working as the newest live row still yields to the work session", async () => {
+  const standingRow = { ...role.sessions[0], _id: "standing-1", short_id: "jx7stand", updated_at: Date.now() + 1000 };
+  const { words, unmount } = await mount(withStanding(role, { sessions: [standingRow, role.sessions[0]] }));
+  await click(words);
+  expect(opened).toEqual(["sess-1"]);
+  await unmount();
+});
+
+test("a state line with nothing else live opens the standing session", async () => {
+  const { words, unmount } = await mount(withStanding(role, { sessions: [] }));
   expect(words.tagName).toBe("BUTTON");
   await click(words);
   expect(opened).toEqual(["standing-1"]);
   await unmount();
 });
 
-test("a state line with a standing session and nothing live still opens the standing session", async () => {
-  const { words, unmount } = await mount({ ...role, sessions: [], standing: { ...role.standing, conversation_id: "standing-1" } } as OrgRole);
-  expect(words.tagName).toBe("BUTTON");
+test("the line never opens the conversation already on screen", async () => {
+  setOnScreen("standing-1");
+  try {
+    const plain = await mount(withStanding(role, { sessions: [] }));
+    expect(plain.words.closest("a[href], button, [role=button], [role=link]")).toBeNull();
+    await click(plain.words);
+    expect(opened).toEqual([]);
+    await plain.unmount();
+    setOnScreen("sess-1");
+    const other = await mount(withStanding(role));
+    await click(other.words);
+    expect(opened).toEqual(["standing-1"]);
+    await other.unmount();
+  } finally {
+    setOnScreen(null);
+  }
+});
+
+test("words that name an object link that object instead of a session", async () => {
+  const line = "Landing ct-99041 under pl-1064";
+  const { words, unmount } = await mount(withStanding(role, { standing: { state_line: line, conversation_id: "standing-1" } }));
+  expect(words.tagName).not.toBe("BUTTON");
+  expect(words.textContent).toContain("ct-99041");
+  const links = [...words.querySelectorAll("a[href], button, [role=button], [role=link]")];
+  expect(links.length, "each object the line names is a link to it").toBeGreaterThanOrEqual(2);
+  expect(links.map((l) => l.getAttribute("href"))).toEqual(["/tasks/ct-99041", expect.stringContaining("pl-1064")]);
   await click(words);
-  expect(opened).toEqual(["standing-1"]);
+  expect(opened).toEqual([]);
   await unmount();
 });
 
