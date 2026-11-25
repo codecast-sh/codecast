@@ -60,20 +60,23 @@ export const priorityTables = {
     .index("by_workspace_status", ["workspace", "status"])
     .index("by_short_id", ["short_id"]),
 
-  // One run of the pass for one (person, workspace), written once when it ends.
-  // `cursor_at` is the newest input it read, so the next run reads only what
-  // came after.
+  // One run of the pass for one (person, workspace). A run reserves its row as
+  // "running" before it asks the model (one at a time per pair; a reservation
+  // older than 15 minutes is dead) and settles it when it ends. `cursor_at` is
+  // the newest input it read, so the next run reads only what came after.
   priority_pass_runs: defineTable({
     user_id: v.id("users"),
     workspace: v.string(),
     started_at: v.number(),
     finished_at: v.number(),
-    status: v.union(v.literal("ok"), v.literal("error"), v.literal("skipped")),
+    status: v.union(v.literal("ok"), v.literal("error"), v.literal("skipped"), v.literal("running")),
     cursor_at: v.number(),
     model: v.string(),
     cost_usd: v.optional(v.number()),
     counts: v.object({ created: v.number(), updated: v.number(), merged: v.number(), mapped_sessions: v.number() }),
     error: v.optional(v.string()),
+    /** An error that will happen again on the same input (an unreadable reply, a prompt the call refuses): enough of them step the cursor past it. */
+    repeats: v.optional(v.boolean()),
   }).index("by_user_workspace_started", ["user_id", "workspace", "started_at"]),
 
   // Every `cast state` write (conversations.performSetThreadState), kept

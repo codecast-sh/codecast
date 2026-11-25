@@ -50,6 +50,7 @@ export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): strin
     p.rank != null && p.status === "active" ? `#${p.rank}` : null,
     `critical ${p.counts.critical_done}/${p.counts.critical_total}`,
     p.serves ? `serves ${p.serves}` : null,
+    p.session_count ? `${p.session_count}${p.session_count_more ? "+" : ""} session${p.session_count === 1 && !p.session_count_more ? "" : "s"}` : null,
     `last active ${ago(p.last_active_at, now)}`,
     p.mine ? null : p.owner,
   ].filter(Boolean);
@@ -186,5 +187,6 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
       const res = await apiPost(deps, "/cli/priorities/run", await scope(deps, options.team));
       if (options.json) return console.log(JSON.stringify(res, null, 2));
       console.log(res.note);
+      for (const s of res.skipped ?? []) console.log(`not run in ${s.workspace}: ${s.reason}`);
     });
 }

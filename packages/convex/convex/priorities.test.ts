@@ -97,10 +97,10 @@ describe("reads", () => {
     expect(await as(bea).query(pri.show, { short_id: "pri-5" })).toBeNull();
   });
 
-  test("a list counts a priority's sessions and shows the three most recently active; old finished ones only with all or a status", async () => {
+  test("a list counts up to 50 of a priority's sessions and shows the three newest; old finished ones only with all or a status", async () => {
     const { t, as, ada, ws, p1, acme } = await world();
     await t.run(async (ctx) => {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 50; i++) {
         await ctx.db.insert("conversations", {
           user_id: ada, team_id: acme, agent_type: "claude_code", session_id: `more${i}`, short_id: `jx7mor${i}`, title: "more",
           started_at: NOW, updated_at: NOW - (i + 1) * DAY, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1,
@@ -111,10 +111,13 @@ describe("reads", () => {
         first_seen_at: NOW - 200 * DAY, last_active_at: NOW - 90 * DAY, done_at: NOW - 90 * DAY, pass_at: NOW, created_at: NOW, updated_at: NOW,
       } as any);
     });
+    // 52 mapped: a list reads the newest 51, counts 50 of them and says there are more.
     const [first] = await as(ada).query(pri.list, { workspace: ws });
-    expect(first.session_count).toBe(6);
-    expect(first.sessions.map((s: any) => s.short_id)).toEqual(["jx7one1", "jx7pvt3", "jx7mor0"]);
-    expect((await as(ada).query(pri.show, { short_id: "pri-1" })).other_sessions).toHaveLength(4);
+    expect(first).toMatchObject({ session_count: 50, session_count_more: true });
+    expect(first.sessions.map((s: any) => s.short_id)).toEqual(["jx7mor49", "jx7mor48", "jx7mor47"]);
+    const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
+    expect(shown).toMatchObject({ session_count: 52, session_count_more: false });
+    expect(shown.other_sessions).toHaveLength(50);
     const ids = async (args: any) => (await as(ada).query(pri.list, { workspace: ws, ...args })).map((r: any) => r.short_id);
     expect(await ids({})).not.toContain("pri-7");
     expect(await ids({ all: true })).toContain("pri-7");
@@ -196,9 +199,23 @@ describe("writes", () => {
     // A pass touches the pushed one last; the slots hold.
     await t.run(async (ctx) => ctx.db.patch(p1, { updated_at: Date.now() + 60_000, summary: "pass wrote" }));
     expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3", "3:pri-1"]);
-    // A chain: pri-2 to #2 pushes pri-3 to 3, which pushes pri-1 to 4.
-    await as(ada).mutation(pri.rank, { short_id: "pri-2", rank: 2 });
-    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 4, "person"], ["pri-2", 2, "person"], ["pri-3", 3, "person"]]);
+    // A chain: pri-2 to #2 pushes pri-3 to 3, which pushes pri-1 to 4; pri-3 first takes the
+    // slot it shows at (#1 once pri-2 leaves the order), so pri-3 ends #1 and pri-1 #3.
+    expect(await as(ada).mutation(pri.rank, { short_id: "pri-2", rank: 2 })).toMatchObject({ rank: 2 });
+    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
+  });
+
+  test("rank is the position the person sees: a slot past the end counts as where it shows", async () => {
+    const { t, as, ada, p1, p2, p3 } = await world();
+    await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 1 });
+    await t.run(async (ctx) => ctx.db.patch(p1, { rank: 99, rank_set_by: "person" }));
+    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
+    expect(await as(ada).mutation(pri.rank, { short_id: "pri-2", rank: 3 })).toMatchObject({ short_id: "pri-2", rank: 3 });
+    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-1", "3:pri-2"]);
+    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 2, "person"], ["pri-2", 3, "person"], ["pri-3", 1, "person"]]);
+    // Past the end is the last position.
+    expect(await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 10 })).toMatchObject({ rank: 3 });
+    expect(await positions(as(ada))).toEqual(["1:pri-1", "2:pri-2", "3:pri-3"]);
   });
 
   test("a step's tier is the person's once set", async () => {
@@ -241,6 +258,22 @@ describe("writes", () => {
   test("run refuses a team the caller is not in, and schedules nothing", async () => {
     const { t, acme } = await world();
     expect(await t.mutation(pri.cliRun, { api_token: CY_TOKEN, team_id: acme })).toEqual({ error: "you are not a member of that team" });
+    expect(await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
+  });
+
+  test("run says why runNow would refuse, and schedules nothing", async () => {
+    const { t, ada, acme, ws } = await world();
+    await t.run(async (ctx) => ctx.db.insert("priority_pass_runs", {
+      user_id: ada, workspace: ws, started_at: Date.now() - 90_000, finished_at: Date.now(), status: "ok", cursor_at: 0, model: "m", cost_usd: 0.1,
+      counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 },
+    }));
+    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: "A pass ran here 2 minutes ago; run it again in 9 minutes." });
+    await t.run(async (ctx) => ctx.db.insert("priority_pass_runs", {
+      user_id: ada, workspace: ws, started_at: Date.now() - 60 * 60_000, finished_at: Date.now(), status: "ok", cursor_at: 0, model: "m", cost_usd: 2,
+      counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 },
+    }));
+    await t.run(async (ctx) => { for (const r of await ctx.db.query("priority_pass_runs").collect()) if (r.cost_usd === 0.1) await ctx.db.delete(r._id); });
+    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: "Passes here spent today's $1.50; the next one can run tomorrow." });
     expect(await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
   });
 

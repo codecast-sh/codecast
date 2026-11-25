@@ -22,17 +22,21 @@ const DAY = 24 * H;
 
 let prompts: string[];
 let replyText: (prompt: string) => string;
+/** A status other than 200 answers as the model API would when overloaded. */
+let replyStatus: number;
 const realFetch = globalThis.fetch;
 const realKey = process.env.ANTHROPIC_API_KEY;
 
 beforeEach(() => {
   prompts = [];
   replyText = () => JSON.stringify({ priorities: [], unassigned: [] });
+  replyStatus = 200;
   process.env.ANTHROPIC_API_KEY = "test-key";
   globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
     const body = JSON.parse(init.body);
     const prompt = body.messages[0].content as string;
     prompts.push(prompt);
+    if (replyStatus !== 200) return new Response(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }), { status: replyStatus });
     return new Response(JSON.stringify({ content: [{ type: "text", text: replyText(prompt) }], usage: { input_tokens: 1_000, output_tokens: 200 }, stop_reason: "end_turn" }));
   }) as unknown as typeof fetch;
 });
@@ -246,10 +250,15 @@ describe("runPass, harder cases", () => {
           user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full", agent_type: "claude_code", session_id: short_id, short_id,
           title: `Chunk ${short_id}`, first_prompt: "p".repeat(1_500), idle_summary: "s".repeat(600), started_at: 1, updated_at: 1, message_count: 3, status: "active",
         } as any);
-        for (let j = 0; j < 7; j++) {
+        // The last session types less, so its early ask fits its typed-text budget in the prompt.
+        for (let j = 0; j < (i === N - 1 ? 5 : 7); j++) {
           const timestamp = at(i) - (7 - j) * 1_000;
           const message = await ctx.db.insert("messages", { conversation_id: conv, role: "user", content: "x", timestamp } as any);
           await ctx.db.insert("user_sends", { user_id: w.ana, conversation_id: conv, message_id: message, timestamp, words: 100, text: `${short_id} ${"t".repeat(590)}`, clipped: false } as any);
+        }
+        if (i === N - 1) {
+          const message = await ctx.db.insert("messages", { conversation_id: conv, role: "user", content: "x", timestamp: at(0) - 30_000 } as any);
+          await ctx.db.insert("user_sends", { user_id: w.ana, conversation_id: conv, message_id: message, timestamp: at(0) - 30_000, words: 3, text: "early ask of the last session", clipped: false } as any);
         }
         out.push(short_id);
       }
@@ -259,9 +268,10 @@ describe("runPass, harder cases", () => {
 
     let r = await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
     expect(r).toMatchObject({ status: "ok", chained: true });
-    // The first chunk holds the oldest sessions only.
+    // The first chunk holds the sessions that started earliest: the last session's early ask is read there.
     expect(prompts[0]).toContain(`## Session ${ids[0]} `);
-    expect(prompts[0]).not.toContain(`## Session ${ids[N - 1]} `);
+    expect(prompts[0]).toContain("early ask of the last session");
+    expect(prompts[0]).not.toContain(`## Session ${ids[N - 2]} `);
     for (let guard = 0; r.chained && guard < 6; guard++) {
       const jobs = await scheduledRuns();
       const next = jobs[jobs.length - 1].args[0];
@@ -368,12 +378,45 @@ describe("what a pass may read, and how far", () => {
     expect(prompts).toHaveLength(3);
   });
 
+  test("an overloaded model three times in a row loses no work: the cursor stays until a pass goes through", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "the work that must not be lost");
+    replyStatus = 529;
+    for (let i = 0; i < 3; i++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    const failed = await w.runs();
+    expect(failed.map((x: any) => [x.status, x.repeats ?? false])).toEqual([["error", false], ["error", false], ["error", false]]);
+    expect(new Set(failed.map((x: any) => x.cursor_at)).size).toBe(1);
+    expect(failed.every((x: any) => !x.error.includes("stepped past"))).toBe(true);
+    replyStatus = 200;
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(prompts.at(-1)).toContain("the work that must not be lost");
+  });
+
+  test("four runNow at once make one model call; the others are told a pass is running", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    const results = await Promise.all([0, 1, 2, 3].map(() => w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })));
+    expect(prompts).toHaveLength(1);
+    expect(results.filter((r: any) => r.status === "ok")).toHaveLength(1);
+    expect(results.filter((r: any) => r.status === "skipped").map((r: any) => r.reason)).toEqual(Array(3).fill("A pass is already running here."));
+    // One row, settled: no reservation is left running.
+    expect((await w.runs()).map((x: any) => x.status)).toEqual(["ok"]);
+  });
+
+  test("a reservation older than its time to live is dead: the next run settles it as abandoned and goes ahead", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 20 * 60_000, finished_at: w.now - 20 * 60_000, status: "running", cursor_at: w.now - 2 * DAY, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect((await w.runs()).map((x: any) => [x.status, x.error ?? null])).toEqual([["error", "abandoned: the run stopped before it settled"], ["ok", null]]);
+  });
+
   test("a pair that spent its daily ceiling skips without asking the model", async () => {
     const w = await world();
     await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 2 * H, finished_at: w.now - 2 * H, status: "ok", cursor_at: w.now - 2 * H, model: "m", cost_usd: PRIORITY_PASS_DAILY_USD, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     await w.send(w.ana, w.teamConv, w.now - H, "work");
-    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "daily_ceiling" });
-    expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "daily_ceiling" });
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "Passes here spent today's $1.50; the next one can run tomorrow." });
+    expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "Passes here spent today's $1.50; the next one can run tomorrow." });
     expect(prompts).toHaveLength(0);
     expect((await w.runs()).at(-1)).toMatchObject({ status: "skipped", error: "daily ceiling" });
   });
@@ -437,5 +480,52 @@ describe("sweep", () => {
     expect(await w.t.action(pass.sweep, {})).toBe(1);
     const jobs = await w.t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((j: any) => j.name.includes("runPass")));
     expect(jobs.map((j: any) => j.args[0])).toEqual([{ user_id: w.ana, workspace: w.team }]);
+  });
+});
+
+describe("evalPass", () => {
+  test("runs from empty over the window and writes nothing: no priority, no mapping, no run row", async () => {
+    const w = await world();
+    // A priority the person already has is not part of a calibration pass.
+    await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-60", title: "Already here", summary: "", status: "active", rank: 1, rank_set_by: "pass", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "get grader faults under ten percent");
+    await w.send(w.ana, w.oldConv, w.now - 30 * DAY, "before the window");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+
+    const r = await w.t.action(pass.evalPass, { user_id: w.ana, workspace: w.team, window_start: w.now - 3 * DAY, window_end: w.now });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("(none yet)");
+    expect(prompts[0]).not.toContain("before the window");
+    expect(r.sessions_read).toEqual([{ id: "jx7team", title: "Session jx7team" }]);
+    expect(r.cost_usd).toBeGreaterThan(0);
+    expect(r.resume).toBeUndefined();
+    expect(r.priorities).toHaveLength(1);
+    expect(r.priorities[0]).toMatchObject({ short_id: "pri-1", title: "Trusted evals", status: "active", sessions: [{ id: "jx7team", step_key: "s1" }] });
+
+    expect((await w.priorities()).map((p: any) => p.short_id)).toEqual(["pri-60"]);
+    expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
+    expect(await w.runs()).toEqual([]);
+  });
+
+  test("chunks chain oldest first: each chunk's priorities are the next chunk's existing ones", async () => {
+    const w = await world();
+    await w.send(w.ana, w.oldConv, w.now - 2 * DAY, "start the grader work");
+    await w.send(w.ana, w.teamConv, w.now - H, "get grader faults under ten percent");
+    replyText = () => prompts.length === 1
+      ? JSON.stringify({ priorities: [proposal({ steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "s1" }] })], unassigned: [] })
+      : JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], sessions: [{ session: "jx7team", step: "s1" }] })], unassigned: [] });
+
+    const r = await w.t.action(pass.evalPass, { user_id: w.ana, workspace: w.team, window_start: w.now - 3 * DAY, window_end: w.now, chunk: 1 });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("start the grader work");
+    expect(prompts[0]).not.toContain("get grader faults under ten percent");
+    expect(prompts[1]).toContain('pri-1 · "Trusted evals"');
+    expect(prompts[1]).toContain("get grader faults under ten percent");
+    expect(prompts[1]).not.toContain("start the grader work");
+    expect(r.outputs.map((o: any) => o.sessions)).toEqual([["jx7old"], ["jx7team"]]);
+    expect(r.priorities).toHaveLength(1);
+    expect(r.priorities[0].sessions.map((s: any) => s.id).sort()).toEqual(["jx7old", "jx7team"]);
+    expect(await w.priorities()).toEqual([]);
+    expect(await w.runs()).toEqual([]);
   });
 });

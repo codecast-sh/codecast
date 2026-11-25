@@ -535,6 +535,26 @@ describe("orderPriorities", () => {
     expect(order(after)).toEqual(["1:pri-6", "2:pri-4", "3:pri-5", "4:pri-3", "5:pri-2", "6:pri-1"]);
   });
 
+  test("a priority that leaves active gives up the person's slot, so coming back never collides with a slot set meanwhile", () => {
+    const quiet = mergePriorities(input({ priorities: [priority("pri-1", { rank: 1, rank_set_by: "person" }), priority("pri-2", { rank: 1 })] }), out([
+      proposal({ short_id: "pri-1", title: "Priority pri-1", status: "quiet", rank: 1 }),
+      proposal({ short_id: "pri-2", title: "Priority pri-2", rank: 1 }),
+    ]));
+    expect(quiet.updates.find((u) => u.short_id === "pri-1")!.patch).toMatchObject({ status: "quiet", rank: null, rank_set_by: "pass" });
+    // Meanwhile the person pins pri-2 at #1; then pri-1 moves again.
+    const back = mergePriorities(input({ priorities: [
+      priority("pri-1", { status: "quiet", rank: null, sessions: [held("a")] }),
+      priority("pri-2", { rank: 1, rank_set_by: "person" }),
+    ] }), out([proposal({ short_id: "pri-1", title: "Priority pri-1", rank: 1, sessions: [{ session: "a" }] }), proposal({ short_id: "pri-2", title: "Priority pri-2", rank: 2 })]));
+    const p1 = back.updates.find((u) => u.short_id === "pri-1")!.patch;
+    expect(p1).toMatchObject({ status: "active", rank: 1 });
+    const rows = [
+      row("pri-1", p1.rank!, { rank_set_by: "pass" }),
+      row("pri-2", 1, { rank_set_by: "person", updated_at: 0 }),
+    ];
+    expect(order(rows)).toEqual(["1:pri-2", "2:pri-1"]);
+  });
+
   test("two person slots colliding: the more recently set wins, the other moves to the next free slot", () => {
     const rows = [
       row("pri-1", 2, { rank_set_by: "person", updated_at: 100 }),

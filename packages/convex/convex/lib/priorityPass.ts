@@ -698,7 +698,9 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
   });
   for (const r of passRanked) r.write.rank = ++rank;
-  for (const r of rows) if (r.write.rank_set_by !== "person" && r.write.status !== "active") r.write.rank = null;
+  // Leaving active ends any rank, the person's too: a slot kept through done or quiet would
+  // collide with the slots they set meanwhile once the priority comes back.
+  for (const r of rows) if (r.write.status !== "active") { r.write.rank = null; r.write.rank_set_by = "pass"; }
 
   for (const r of rows) {
     const w = r.write;

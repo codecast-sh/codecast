@@ -16,6 +16,7 @@ import { canAccessConversation } from "./lib/access";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage, teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
+import { runBlocker } from "./priorityPassRun";
 import { getOwnerMembership, teamReadLevelSync } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { effectiveMembershipVisibility } from "./teamVisibility";
@@ -26,8 +27,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 
 const FEATURE = "priorities" as const;
 const DAY = 86_400_000;
-/** Sessions a list shows per priority (it counts them all); `show` lists every one. */
+/** Sessions a list shows per priority, and how many mapped sessions it reads to count them ("50+" past that). */
 const LIST_SESSIONS = 3;
+const LIST_COUNT_CAP = 50;
+/** The most mapped sessions `show` reads. */
+const SHOW_SESSIONS = 200;
 const MAX_HISTORY_DAYS = 30;
 /** Without --all or a status, a list leaves out what finished or went quiet longer ago than this. */
 const FINISHED_WINDOW_DAYS = 60;
@@ -122,14 +126,23 @@ function sessionAccess(ctx: Ctx, viewer: Id<"users">, held: Set<string>): (c: Do
   };
 }
 
-/** The sessions mapped to a priority that the viewer can open, the most recently active first. */
-async function sessionsOf(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>): Promise<PrioritySession[]> {
-  const convs: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).collect();
-  const out: PrioritySession[] = [];
-  for (const c of convs) {
-    if (await canOpen(c)) out.push({ short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at });
+type SessionsRead = { sessions: PrioritySession[]; more: boolean };
+
+/**
+ * The newest `cap` sessions mapped to a priority (by_priority, newest started
+ * first) that the viewer can open, and whether more were left unread.
+ */
+async function sessionsOf(ctx: Ctx, p: Priority, canOpen: (c: Doc<"conversations">) => Promise<boolean>, cap: number): Promise<SessionsRead> {
+  const convs: Doc<"conversations">[] = await ctx.db
+    .query("conversations")
+    .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
+    .order("desc")
+    .take(cap + 1);
+  const sessions: PrioritySession[] = [];
+  for (const c of convs.slice(0, cap)) {
+    if (await canOpen(c)) sessions.push({ short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at });
   }
-  return out.sort((a, b) => b.updated_at - a.updated_at);
+  return { sessions, more: convs.length > cap };
 }
 
 async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, string>> {
@@ -141,8 +154,8 @@ async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, strin
   return names;
 }
 
-/** `position` is where it shows among the owner's active priorities (null when not active); `sessions` lists at most `limit`. */
-function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, sessions: PrioritySession[], limit = Infinity): PriorityRow {
+/** `position` is where it shows among the owner's active priorities (null when not active); the row lists at most `limit` sessions. */
+function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, read: SessionsRead, limit = Infinity): PriorityRow {
   return {
     _id: p._id,
     short_id: p.short_id,
@@ -161,8 +174,9 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     first_seen_at: p.first_seen_at,
     last_active_at: p.last_active_at,
     done_at: p.done_at ?? null,
-    session_count: sessions.length,
-    sessions: sessions.slice(0, limit),
+    session_count: read.sessions.length,
+    session_count_more: read.more,
+    sessions: read.sessions.slice(0, limit),
   };
 }
 
@@ -170,8 +184,8 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
 async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promise<PriorityRow> {
   const p: Priority = await ctx.db.get(id);
   const names = await ownerNames(ctx, [p]);
-  const sessions = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)));
-  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), sessions, LIST_SESSIONS);
+  const read = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)), LIST_COUNT_CAP);
+  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), read, LIST_SESSIONS);
 }
 
 /**
@@ -217,7 +231,7 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || b.last_active_at - a.last_active_at);
   const canOpen = sessionAccess(ctx, viewer, held);
   const out: PriorityRow[] = [];
-  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await sessionsOf(ctx, p, canOpen), LIST_SESSIONS));
+  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await sessionsOf(ctx, p, canOpen, LIST_COUNT_CAP), LIST_SESSIONS));
   return out;
 }
 
@@ -239,8 +253,9 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
   const p = await readable(ctx, viewer, shortId);
   if ("error" in p) return p;
   const names = await ownerNames(ctx, [p]);
-  const sessions = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)));
-  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), sessions);
+  const read = await sessionsOf(ctx, p, sessionAccess(ctx, viewer, await heldKeysFor(ctx, viewer)), SHOW_SESSIONS);
+  const { sessions } = read;
+  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), read);
   return {
     ...row,
     steps: p.steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
@@ -337,23 +352,26 @@ async function doRank(ctx: Ctx, viewer: Id<"users">, shortId: string, rank: numb
   if ("error" in p) return p;
   if (p.status !== "active") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only active priorities are ranked (restore it first)` };
   if (!Number.isInteger(rank) || rank < 1) return { error: "a rank is a whole number from 1" };
-  // The person's rank is a fixed slot (orderPriorities fits the pass's around it). A slot
-  // the person already gave another priority is taken over: that one, and any it then
-  // lands on, moves down one, so the person's slots never collide.
+  // `rank` is the position the person wants it shown at; it is stored as a slot
+  // (orderPriorities fits the pass's priorities around the person's). First every
+  // other slot the person set moves to where it shows now, so a slot past the end
+  // or across a gap reads as its position; then the one at the wanted slot, and
+  // any it lands on, moves down one, so the person's slots never collide.
   const now = Date.now();
-  const pinned: Priority[] = (await ctx.db
+  const active: Priority[] = await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
-    .collect())
-    .filter((r: Priority) => String(r._id) !== String(p._id) && r.rank_set_by === "person" && r.rank != null && r.rank >= rank)
-    .sort((a: Priority, b: Priority) => a.rank! - b.rank! || b.updated_at - a.updated_at);
-  let taken = rank;
-  for (const r of pinned) {
-    if (r.rank! > taken) break;
-    taken++;
-    await ctx.db.patch(r._id, { rank: taken, updated_at: now });
+    .collect();
+  const others = active.filter((r) => String(r._id) !== String(p._id));
+  const to = Math.min(rank, active.length);
+  let next = to;
+  for (const { row, position } of orderPriorities(others)) {
+    if (row.rank_set_by !== "person") continue;
+    let slot = position;
+    if (slot === next) slot = ++next;
+    if (slot !== row.rank) await ctx.db.patch(row._id, { rank: slot, updated_at: now });
   }
-  await ctx.db.patch(p._id, { rank, rank_set_by: "person", updated_at: now });
+  await ctx.db.patch(p._id, { rank: to, rank_set_by: "person", updated_at: now });
   return echo(ctx, viewer, p._id);
 }
 
@@ -539,8 +557,10 @@ export const cliRestore = mutation({
 });
 
 /**
- * One pass now, for the caller, in the named workspace or in every workspace
- * of theirs with the feature on. Returns at once; the pass writes in a minute.
+ * One pass now, for the caller, in the named workspace (one they belong to)
+ * or in every workspace of theirs with the feature on. Returns at once with
+ * what was scheduled and the plain reason runNow would refuse any other; the
+ * pass writes in about a minute.
  */
 export const cliRun = mutation({
   args: { api_token: v.string(), ...cliScope },
@@ -551,13 +571,18 @@ export const cliRun = mutation({
     const held = await heldKeysFor(ctx, viewer);
     if (named && !held.has(named)) return { error: "you are not a member of that team" };
     const featureOn = featureCheck(ctx);
-    if (named && !(await featureOn(named))) return { error: teamFeatureOffMessage(FEATURE) };
-    const workspaces: string[] = [];
-    for (const key of named ? [named] : held) if (await featureOn(key)) workspaces.push(key);
-    if (!workspaces.length) return { error: teamFeatureOffMessage(FEATURE) };
-    for (const workspace of workspaces) {
+    const now = Date.now();
+    const scheduled: string[] = [];
+    const skipped: Array<{ workspace: string; reason: string }> = [];
+    for (const workspace of named ? [named] : held) {
+      if (!(await featureOn(workspace))) continue;
+      // runNow's own checks, read-only: reserve decides for real when the pass starts.
+      const blocked = await runBlocker(ctx, viewer, workspace, now, true);
+      if (blocked) { skipped.push({ workspace, reason: blocked.reason }); continue; }
       await ctx.scheduler.runAfter(0, (internal as any).priorityPassRun.runNow, { user_id: viewer, workspace });
+      scheduled.push(workspace);
     }
-    return { scheduled: workspaces, note: "A pass is running; its priorities land in about a minute (cast priorities)." };
+    if (!scheduled.length) return { error: skipped.length ? skipped.map((s) => s.reason).join(" ") : teamFeatureOffMessage(FEATURE) };
+    return { scheduled, skipped, note: "A pass is running; its priorities land in about a minute (cast priorities)." };
   },
 });

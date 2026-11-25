@@ -94,9 +94,11 @@ export type PriorityRow = {
   first_seen_at: number;
   last_active_at: number;
   done_at: number | null;
-  /** Mapped sessions the reader can open. */
+  /** Mapped sessions the reader can open, counted among the newest read (50 in a list, 200 in `show`). */
   session_count: number;
-  /** The most recently active of them: a few in a list, all of them in `show`. */
+  /** More sessions were mapped than were read: show the count as "50+". */
+  session_count_more: boolean;
+  /** The newest of them: three in a list, every one read in `show`. */
   sessions: PrioritySession[];
 };
 
