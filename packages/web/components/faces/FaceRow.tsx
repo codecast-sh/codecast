@@ -343,6 +343,7 @@ export function FaceRow({
   onDragStart,
   onDragEnd,
   onOpenProfile,
+  onStripPress,
   chrome,
   holdCard = false,
   faceSize,
@@ -378,6 +379,9 @@ export function FaceRow({
   onDragEnd?: (e: React.PointerEvent) => void;
   /** The card's profile door. Absent: the card names the person, and that is all. */
   onOpenProfile?: (member: any) => void;
+  /** A still press on the strip (not on a control inside it): the float's
+   *  way back to the full call, there whether or not its toolbar is. */
+  onStripPress?: () => void;
   /** The float's controls: the footer of the card under the row, there
    *  while the pointer is in the window. */
   chrome?: ReactNode;
@@ -633,7 +637,16 @@ export function FaceRow({
       ref={stripEl}
       className="face-row-strip"
       data-chrome-hit
+      data-press={onStripPress ? "" : undefined}
       data-track={lastCallId ? "1" : undefined}
+      onClick={
+        onStripPress
+          ? (e) => {
+              if ((e.target as Element).closest?.(DRAG_EXEMPT)) return;
+              onStripPress();
+            }
+          : undefined
+      }
     >
       {children}
     </div>
@@ -921,6 +934,10 @@ export function FloatingFaceRow({
       onDragStart={startDrag}
       onDragEnd={endDrag}
       onOpenProfile={onOpenProfile}
+      // A still press on the call's strip opens the call: the one way back
+      // that is not a hover-only button. A press that moved the window was a
+      // drag, and its click never arrives (useFloatingCircles).
+      onStripPress={callRoomOf(row) ? chrome?.onExpand : undefined}
       holdCard={hovered}
       chrome={
         chrome && hovered ? (

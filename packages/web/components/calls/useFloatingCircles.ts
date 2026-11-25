@@ -217,7 +217,8 @@ export function useFloatingCircles(opts: {
     hideTimer.current = null;
     // Held on the face pressed, not the row the handler sits on: the release's
     // click then still lands on the face, and a still press stays its click.
-    const handle = (e.target as Element).closest?.("[data-face-hit]") ?? e.currentTarget;
+    // The same for a strip that takes a press (`data-press`).
+    const handle = (e.target as Element).closest?.("[data-face-hit], [data-press]") ?? e.currentTarget;
     handle.setPointerCapture(e.pointerId);
     bridge.setDragging(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the bridge is a per-window constant
@@ -240,9 +241,12 @@ export function useFloatingCircles(opts: {
       pendingSize.current = false;
       bridge.setContentSize(sizeForRef.current(true));
     }
-    // The pointer may be off the glass by now, and no mousemove will come to
-    // say so: the chrome goes on its way out the same as after any hover.
-    hideLater();
+    // A drag that moved the window may have left the pointer off the glass,
+    // and no mousemove will come to say so: the chrome goes on its way out
+    // the same as after any hover. A still press left the pointer where it
+    // was, on the content, so the chrome stays: hiding it then took Expand
+    // away under a hand that never left the row.
+    if (dragMoved.current) hideLater();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the bridge is a per-window constant
   }, [hideLater]);
   const endDrag = useCallback(
