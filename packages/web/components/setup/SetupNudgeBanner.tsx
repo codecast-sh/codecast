@@ -10,6 +10,9 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useSetupProgress } from "../../hooks/useSetupProgress";
 import { nudgeCountKey, nudgeSnoozeKey, pickSetupNudge, type SetupStep } from "../../lib/setupProgress";
+import { openSharingAgentId } from "../../lib/sharingAgent";
+import { openConversationBeside } from "../../hooks/useOpenLinkedSession";
+import { Button } from "../ui/button";
 import { SetupStepAction } from "./SetupStepAction";
 
 const ICON = { team: Users, invite: UserPlus, share_repo: FolderGit2, agents: Bot } as const;
@@ -30,6 +33,7 @@ function copyFor(step: SetupStep, team: any | null): { lead: string; rest: strin
 export function SetupNudgeBanner() {
   const { steps, team, ready } = useSetupProgress();
   const dismissed = useInboxStore((s) => s.clientState.dismissed);
+  const agentId = useInboxStore(openSharingAgentId);
   const [mounted, setMounted] = useState(false);
   useMountEffect(() => { setMounted(true); });
 
@@ -44,7 +48,12 @@ export function SetupNudgeBanner() {
     st.updateClientDismissed(nudgeSnoozeKey(step.key), Date.now());
   };
   const Icon = ICON[step.key as keyof typeof ICON] ?? Users;
-  const { lead, rest } = copyFor(step, team);
+  // A sharing agent is already on this step: send the person to it, not
+  // back to the manual route they left.
+  const agent = step.key === "share_repo" ? agentId : null;
+  const { lead, rest } = agent
+    ? { lead: "An agent is setting up sharing.", rest: "Answer it in its conversation." }
+    : copyFor(step, team);
 
   return (
     <div data-cc-banner data-nudge data-setup-nudge={step.key} className="border-b border-sol-cyan/30 bg-gradient-to-r from-sol-cyan/10 via-sol-cyan/5 to-sol-cyan/10">
@@ -56,7 +65,13 @@ export function SetupNudgeBanner() {
           </span>
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
-          <SetupStepAction step={step} team={team} look="strip" />
+          {agent ? (
+            <Button variant="cyan" size="xs" data-setup-action={step.key} onClick={() => openConversationBeside(agent)}>
+              Open agent
+            </Button>
+          ) : (
+            <SetupStepAction step={step} team={team} look="strip" />
+          )}
           <button
             type="button"
             onClick={later}
