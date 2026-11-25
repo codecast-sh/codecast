@@ -12,7 +12,7 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye, Users } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, selectDockShown } from "../../store/inboxStore";
 import { DEFAULT_TERMINAL_HEIGHT } from "../../lib/terminal/panelPrefs";
 import {
   getTerminalEndpoint,
@@ -68,7 +68,7 @@ type EndpointState =
 export function TerminalPanel() {
   // Open state and height are the dock slot's — one layout model, and
   // SLOT_PERSISTENCE keeps this region device-local without its own store.
-  const open = useInboxStore((st) => st.workspace.dock.pane != null);
+  const open = useInboxStore(selectDockShown);
   const storedHeight = useInboxStore((st) => st.workspace.dock.size) ?? DEFAULT_TERMINAL_HEIGHT;
 
   const convex = useConvex();
@@ -79,6 +79,8 @@ export function TerminalPanel() {
   const island = useTerminalIsland();
   const started = useRef(false);
   const restoredOnce = useRef(false);
+  // Open before anyone touched it this visit: the saved arrangement reopened it.
+  const restoredOpen = useRef(open);
 
   const tabCtxMenu = useContextMenu<TermTabState>();
   const tabsVersion = useSyncExternalStore(subscribeTerminals, getTerminalsVersion, getTerminalsVersion);
@@ -109,22 +111,33 @@ export function TerminalPanel() {
 
   // Resolve the endpoint on first open (and on retry). On success, restore
   // tabs for tmux sessions that survived a reload; if none, open a fresh one.
+  // A dock the saved arrangement reopened, finding nothing to connect to on
+  // its first try, folds away for this visit instead of holding its height
+  // over the conversation; its saved open state stays for the next visit. A
+  // dock the person opened keeps the reason and Retry in view.
+  const unavailable = useCallback((reason: string) => {
+    setEp({ phase: "unavailable", reason });
+    if (restoredOpen.current) useInboxStore.getState().foldDock();
+    restoredOpen.current = false;
+  }, []);
+
   const resolve = useCallback(
     async (force?: boolean) => {
       setEp({ phase: "resolving" });
       const endpoint = await getTerminalEndpoint(convex, { force });
       if (!endpoint) {
-        setEp({ phase: "unavailable", reason: unreachableReason(lastDiscoveryFailure()) });
+        unavailable(unreachableReason(lastDiscoveryFailure()));
         return;
       }
       setEp({ phase: "ready", endpoint });
       if (!restoredOnce.current) {
         const existing = await probeEndpoint(endpoint);
         if (existing === null) {
-          setEp({ phase: "unavailable", reason: "Terminal sessions are temporarily unavailable. Retry in a moment." });
+          unavailable("Terminal sessions are temporarily unavailable. Retry in a moment.");
           return;
         }
         restoredOnce.current = true;
+        restoredOpen.current = false;
         const openNames = new Set(listTabs().map((t) => t.sessionName));
         for (const sess of existing) {
           // Belt-and-braces: never try to restore a name the daemon would
@@ -139,7 +152,7 @@ export function TerminalPanel() {
         openShellTab(endpoint);
       }
     },
-    [convex, openShellTab],
+    [convex, openShellTab, unavailable],
   );
 
   // Connect as soon as the panel mounts (TerminalDock warms it while closed),
@@ -149,7 +162,11 @@ export function TerminalPanel() {
     if (!started.current) {
       started.current = true;
       void resolve();
-    } else if (open && ep.phase === "unavailable") {
+      return;
+    }
+    // The person moved the dock this visit: from here on it is theirs.
+    restoredOpen.current = false;
+    if (open && ep.phase === "unavailable") {
       void resolve(true);
     }
   }, [open, resolve]);

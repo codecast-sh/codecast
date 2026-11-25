@@ -498,6 +498,11 @@ export const selectNavCollapsed = (s: { workspace: WorkspaceState }) => s.worksp
  *  rail) show exactly when this holds. */
 export const selectNavHidden = (s: { workspace: WorkspaceState; zenNavOpen: boolean; clientState: { ui?: { zen_mode?: boolean } | null } }) =>
   s.clientState.ui?.zen_mode ? !s.zenNavOpen : selectNavCollapsed(s);
+/** The terminal dock is on screen: saved open, and not folded away for this
+ *  visit because no local daemon answered (see dockFolded). The toggles read
+ *  this, so one press always shows a folded dock. */
+export const selectDockShown = (s: { workspace: WorkspaceState; dockFolded: boolean }) =>
+  s.workspace.dock.pane != null && !s.dockFolded;
 
 export const selectSessionRailOpen = (s: { workspace: WorkspaceState }) => isSessionRailOpen(s.workspace);
 export const selectCommentRailOpen = (s: { workspace: WorkspaceState }) => isCommentRailOpen(s.workspace);
@@ -7447,6 +7452,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   zenNavOpen: boolean;
   setZenNavOpen: (open: boolean) => void;
   setDockOpen: (open: boolean) => void;
+  /** A dock restored open found no local daemon, so it is folded for this
+   *  visit while its saved open state stays for the next one. Ephemeral. */
+  dockFolded: boolean;
+  foldDock: () => void;
   wsSetSize: (slot: SlotId, size: number) => void;
 
 
@@ -15702,10 +15711,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // The dock is a slot like any other; SLOT_PERSISTENCE says its arrangement
   // stays on this device, so no component needs its own storage to say so.
   setDockOpen: (open: boolean) => {
+    if (get().dockFolded) set({ dockFolded: false });
     const st = get();
     if (open) st.wsShow("dock", TERMINAL_PANE);
     else st.wsHide("dock", { remember: true });
   },
+
+  dockFolded: false,
+  foldDock: () => set({ dockFolded: true }),
 
   zenNavOpen: false,
   setZenNavOpen: (open: boolean) => set({ zenNavOpen: open }),

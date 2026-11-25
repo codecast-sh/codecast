@@ -68,5 +68,14 @@ test("a dock restored open on a machine with no reachable daemon stops taking sp
   const occupied = hidden ? 0 : height;
   expect(occupied).toBeLessThan(MIN_HEIGHT);
 
+  // The saved choice survives for a later visit with a reachable daemon.
+  expect(useInboxStore.getState().workspace.dock.pane).not.toBeNull();
+  // One press of the toggle shows the folded dock again, reason and Retry in view.
+  const { selectDockShown } = await import("../../../store/inboxStore");
+  await act(async () => { const st = useInboxStore.getState(); st.setDockOpen(!selectDockShown(st)); });
+  for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(panel!.classList.contains("hidden")).toBe(false);
+  expect(panel!.textContent ?? "").toContain("Retry");
+
   await act(async () => root.unmount());
 });

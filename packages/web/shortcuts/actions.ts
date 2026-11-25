@@ -12,7 +12,7 @@ import { useOpenSession } from "../hooks/useOpenSession";
 import { goBackInTrail } from "../hooks/useNavTrail";
 import { isModernStyle } from "../lib/visualStyle";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, type InboxWalk } from "../store/inboxStore";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, selectDockShown, type InboxWalk } from "../store/inboxStore";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
@@ -363,7 +363,7 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('terminal.toggle', useCallback(() => {
     const store = useInboxStore.getState();
-    store.setDockOpen(store.workspace.dock.pane == null);
+    store.setDockOpen(!selectDockShown(store));
   }, []));
 
   useShortcutAction('anchor.toggle', useCallback(() => {
