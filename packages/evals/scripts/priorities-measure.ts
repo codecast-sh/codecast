@@ -7,7 +7,8 @@
 // critical steps of each matched pair.
 //
 //   bun packages/evals/scripts/priorities-measure.ts --golden ~/.codecast/emergent-goals/golden/jason.json \
-//     --user <email|user id> [--workspace all|personal|team:<id>] [--from 2026-11-10 --to 2026-11-24] [--chunk N] [--out <dir>]
+//     --user <email|user id> [--workspace all|personal|team:<id>] [--from 2026-11-10 --to 2026-11-24] [--chunk N] [--system-file <path>] [--out <dir>]
+//     --system-file replays the pass under a candidate system prompt (its sha goes in the result).
 //   bun packages/evals/scripts/priorities-measure.ts --rescore <result.json> [--golden <path>] [--out <dir>]
 //     scores a saved run's produced priorities again, without running the pass.
 //
@@ -16,12 +17,13 @@
 // content: results go to --out (default ~/.codecast/emergent-goals/calibration/<timestamp>/),
 // never inside the repo. Judge calls go out on the evals' API key.
 
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { STRONG_MODEL, modelCost, parseJsonBlock, postMessages, replyText } from '../../convex/convex/lib/anthropic';
-import { PRIORITY_PASS_MODEL, type PassPriority } from '../../convex/convex/lib/priorityPass';
+import { PRIORITY_PASS_MODEL, PRIORITY_PASS_SYSTEM, type PassPriority } from '../../convex/convex/lib/priorityPass';
 import { evalsApiKey } from '../src/adapters/apiCall';
 import { REPO_ROOT } from '../src/paths';
 
@@ -231,7 +233,7 @@ const castTaskStatus: TaskStatus = async (ids) => {
 };
 
 /** What a run read and produced: from a fresh pass in production, or from a saved result.json (--rescore). */
-type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null } };
+type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string } };
 
 async function main() {
   const arg = (name: string, fallback?: string) => {
@@ -273,7 +275,7 @@ async function main() {
   const doneLine = (label: string) => (f: Score['steps']['false_done'][number]) =>
     `  ${label} ${f.produced} "${f.produced_step}" ~ ${f.golden} "${f.golden_step}" · task ${f.golden_task ?? 'none'}${f.golden_task ? ` (${f.task_status ?? 'not found'} now)` : ''}`;
   const lines = [
-    `window ${args.from}..${args.to} · ${run.scoredNames.join(', ')} · pass ${PRIORITY_PASS_MODEL} · judge ${JUDGE_MODEL}${rescore ? ' · rescored' : ''}`,
+    `window ${args.from}..${args.to} · ${run.scoredNames.join(', ')} · pass ${PRIORITY_PASS_MODEL} · prompt ${args.system_file ? `${args.system_file} ` : ''}${args.system_sha ?? '(not recorded)'} · judge ${JUDGE_MODEL}${rescore ? ' · rescored' : ''}`,
     `recall          ${fmt(s.metrics.recall)}  ${s.recall.matched} of ${s.recall.of} active golden priorities matched   bar ≥ ${BAR.recall}`,
     `precision       ${fmt(s.metrics.precision)}  ${s.precision.matched} of ${s.precision.of} active produced priorities in the golden set's scope matched (${s.unlabeled.length} unlabeled)   bar ≥ ${BAR.precision}`,
     `session mapping ${fmt(s.metrics.sessions)}  ${s.sessions.results.filter((r) => r.correct).length} of ${s.sessions.results.length} labeled sessions in the window (${s.sessions.not_read.length} not read)   bar ≥ ${BAR.sessions}`,
@@ -309,6 +311,10 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
   const from = arg('from', golden.window[0]);
   const to = arg('to', golden.window[1]);
   const chunk = process.argv.includes('--chunk') ? Number(arg('chunk')) : null;
+  // A candidate system prompt replaces the pass's for this replay; the sha says which prompt a result came from.
+  const systemFile = process.argv.includes('--system-file') ? resolve(arg('system-file').replace(/^~/, homedir())) : null;
+  const system = systemFile ? readFileSync(systemFile, 'utf8') : PRIORITY_PASS_SYSTEM;
+  const system_sha = createHash('sha256').update(system).digest('hex').slice(0, 12);
   const targets = convexRun<{ user_id: string; workspaces: Array<{ workspace: string; name: string }> }>('priorityPassEval:evalTargets', { user: arg('user') });
   const workspaces = scope === 'all'
     ? targets.workspaces
@@ -326,7 +332,7 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
     let resume: unknown;
     do {
       console.error(`${w.name}: pass ${resume ? '(resumed)' : ''}…`);
-      const r = convexRun<EvalResult>('priorityPassEval:evalPass', { user_id: targets.user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}) });
+      const r = convexRun<EvalResult>('priorityPassEval:evalPass', { user_id: targets.user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}), ...(systemFile ? { system } : {}) });
       result.outputs.push(...r.outputs);
       result.priorities = r.priorities;
       result.cost_usd += r.cost_usd;
@@ -355,7 +361,7 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
     scoredNames: scoredRuns.map((r) => r.name),
     workspaces: runs.map((r) => ({ workspace: r.workspace, name: r.name, scored: r.scored, sessions_read: r.result.sessions_read, omitted: r.result.omitted, cost_usd: r.result.cost_usd, outputs: r.result.outputs })),
     passUsd: runs.reduce((sum, r) => sum + r.result.cost_usd, 0),
-    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk },
+    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk, system_file: systemFile, system_sha },
   };
 }
 

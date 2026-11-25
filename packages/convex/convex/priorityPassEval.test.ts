@@ -3,6 +3,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { Id } from "./_generated/dataModel";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
+import { PRIORITY_PASS_SYSTEM } from "./lib/priorityPass";
 
 setDefaultTimeout(60_000);
 
@@ -175,5 +176,22 @@ describe("evalPass", () => {
     expect(r.priorities[0].sessions.map((s: any) => s.id).sort()).toEqual(["jx7old", "jx7team"]);
     expect(await w.priorities()).toEqual([]);
     expect(await w.runs()).toEqual([]);
+  });
+
+  test("a given system prompt replaces the pass's for that replay alone; the user turn is unchanged", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "get grader faults under ten percent");
+    const sent: Array<{ system: string; prompt: string }> = [];
+    const stub = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init: { body: string }) => {
+      const body = JSON.parse(init.body);
+      sent.push({ system: body.system, prompt: body.messages[0].content });
+      return stub(url as any, init as any);
+    }) as unknown as typeof fetch;
+    const args = { user_id: w.ana, workspace: w.team, window_start: w.now - 3 * DAY, window_end: w.now };
+    await w.t.action(pass.evalPass, { ...args, system: "Candidate prompt v2." });
+    await w.t.action(pass.evalPass, args);
+    expect(sent.map((s) => s.system)).toEqual(["Candidate prompt v2.", PRIORITY_PASS_SYSTEM]);
+    expect(sent[0]!.prompt).toBe(sent[1]!.prompt);
   });
 });
