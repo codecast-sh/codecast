@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { decide, evaluate, mechanismOf, mergeAsApp, notePosted, settle, sweep, type ApprovalFacts } from "./changeApprovals";
+import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
 import { claimPress, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
@@ -80,8 +80,11 @@ beforeEach(() => {
 afterEach(() => { globalThis.fetch = realFetch; });
 
 const LAND_PATCH = "@@ -1,2 +1,2 @@\n a\n-b\n+c";
+/** The statuses GitHub shows on the head, newest first: every POST lands on top. */
+let shown: Array<{ context: string; state: string; description: string }> = [];
 /** A pull request of 250 files: the judged one is on GitHub's third page. */
-function github(opts: { judges?: string; statusAfter?: string } = {}) {
+function github(opts: { judges?: string } = {}) {
+  shown = [];
   const files = [
     ...Array.from({ length: 249 }, (_, i) => ({ filename: `docs/f${i}.md`, status: "modified", patch: "@@ -1 +1 @@\n-x\n+y", additions: 1, deletions: 1 })),
     { filename: "outreach/line/change/land.cast", status: "modified", patch: LAND_PATCH, additions: 1, deletions: 1 },
@@ -105,8 +108,8 @@ function github(opts: { judges?: string; statusAfter?: string } = {}) {
       }
       return { json: { data: { repository: data } } };
     } },
-    { method: "POST", match: /\/statuses\//, reply: () => ({ status: 201, json: {} }) },
-    { method: "GET", match: /\/commits\/[0-9a-f]{40}\/statuses/, reply: () => ({ json: [{ context: "approval (shadow)", state: opts.statusAfter ?? "success" }] }) },
+    { method: "POST", match: /\/statuses\//, reply: (_u, body) => { shown.unshift(body); return { status: 201, json: {} }; } },
+    { method: "GET", match: /\/commits\/[0-9a-f]{40}\/statuses/, reply: () => ({ json: shown }) },
     { method: "PUT", match: /\/pulls\/7\/merge$/, reply: () => ({ json: { merged: true, sha: "f".repeat(40) } }) },
   );
 }
@@ -130,7 +133,6 @@ function actionCtx(db: any) {
       const mod: any = await import("./changeApprovals");
       if (name === "changeApprovals:settle") return mod.settle._handler(mutCtx, args);
       if (name === "changeApprovals:noteUnposted") return mod.noteUnposted._handler(mutCtx, args);
-      if (name === "changeApprovals:notePosted") return mod.notePosted._handler(mutCtx, args);
       throw new Error(`unexpected mutation ${name}`);
     },
     runAction: async (ref: any, args: any) => {
@@ -180,17 +182,22 @@ describe("the status from GitHub", () => {
     expect(db._tables.pull_requests[0].approval.judged_key).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  test("what GitHub shows after the post is what is recorded, so a status another evaluation overwrote is posted again", async () => {
-    github({ statusAfter: "success" });
+  test("what GitHub shows decides whether to post: a stale status an overlapping evaluation landed last is posted over", async () => {
+    github();
     const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
-    const first: any = await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
-    expect(first).toMatchObject({ state: "pending", posted: true });
-    expect(db._tables.pull_requests[0].approval.posted).toMatchObject({ head_sha: HEAD, state: "success" });
     const posts = () => calls.filter((c) => c.method === "POST" && /statuses/.test(c.url)).length;
-    const before = posts();
-    const again: any = await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
-    expect(again.unchanged).toBeUndefined();
-    expect(posts()).toBe(before + 1);
+    const evaluateNow = async () => (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
+    expect(await evaluateNow()).toMatchObject({ state: "pending", posted: true });
+    expect(posts()).toBe(1);
+    // GitHub already shows these words on the head: not posted again.
+    expect((await evaluateNow()).unchanged).toBe(true);
+    expect(posts()).toBe(1);
+    // Two evaluations of one head overlapped and the older one's success reached GitHub last.
+    shown.unshift({ context: "approval (shadow)", state: "success", description: "approved by Ashot (card sd-1)" });
+    const swept: any = await evaluateNow();
+    expect(swept.unchanged).toBeUndefined();
+    expect(posts()).toBe(2);
+    expect(shown[0]).toMatchObject({ state: "pending", description: "waiting for the review's mechanism answer" });
   });
 
   test("with the review's answer in, judged files wait on the Requested-by person", async () => {
@@ -365,17 +372,6 @@ describe("the run behind it", () => {
     const unstamped = { _id: "sd1", workflow_run_id: "run1", options: [{ label: "Ship" }], conversation_id: "c1" };
     await settleCardApproval(c as any, unstamped as any, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u1" as any }, 10);
     expect(c.db._tables.change_approvals).toEqual([]);
-  });
-
-  test("only what GitHub accepted counts as posted: an unconfirmed status is posted again, a confirmed one is not", async () => {
-    const c = ctxOf({ workflow_runs: [base], users: [] });
-    const first = await (settle as any)._handler(c, args);
-    expect(first.unchanged).toBe(false);
-    // Not yet confirmed (the POST failed or never ran): the sweep posts it again.
-    expect((await (settle as any)._handler(c, args)).unchanged).toBe(false);
-    await (notePosted as any)._handler(c, { repository: REPO, pr_number: 7, head_sha: HEAD, state: first.state, description: first.description });
-    expect((await (settle as any)._handler(c, args)).unchanged).toBe(true);
-    expect((await (settle as any)._handler(c, { ...args, head_sha: "d".repeat(40) })).unchanged).toBe(false);
   });
 
   test("the sweep works out every open pull request of each opted-in repository, a few seconds apart", async () => {

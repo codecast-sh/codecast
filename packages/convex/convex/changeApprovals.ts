@@ -110,6 +110,12 @@ async function rest(url: string, token: string, init: { method?: string; body?: 
   return init.accept?.includes("raw") ? { status: response.status, text: await response.text() } : { status: response.status, json: await response.json() };
 }
 
+/** The newest status GitHub shows on a commit under one context (its list is newest first), or undefined. */
+async function shownStatus(repository: string, sha: string, context: string, token: string): Promise<{ state?: string; description?: string } | undefined> {
+  const statuses = await rest(`${GITHUB}/repos/${repository}/commits/${sha}/statuses?per_page=100`, token);
+  return (Array.isArray(statuses.json) ? statuses.json : []).find((s: any) => s?.context === context);
+}
+
 const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 const dirOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
 const baseOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -249,7 +255,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   const minted: { token: string; permissions?: Record<string, string> } = await ctx.runAction(internal.githubApp.getInstallationToken, { installation_id: gate.installation_id });
   const read = await readPull(repository, args.pr_number, minted.token, gate.judges_path);
   if (!read.open) return { opted: true, open: false };
-  const { unchanged, ...verdict }: ApprovalVerdict & { context: string; unchanged: boolean } = await ctx.runMutation(internal.changeApprovals.settle, {
+  const verdict: ApprovalVerdict & { context: string } = await ctx.runMutation(internal.changeApprovals.settle, {
     repository, pr_number: args.pr_number, head_sha: read.head_sha,
     ...("unreadable" in read ? { unreadable: read.unreadable } : {
       judged: read.judged, key: read.key,
@@ -268,21 +274,14 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
     return { ...done, posted: false, reason };
   };
   if (refusal) return unposted(refusal);
-  // Idempotent: a head whose status already reads this way is not posted again.
-  if (unchanged) return { ...done, posted: true, unchanged: true };
   try {
+    // Idempotent against what GitHub shows now, never a record of an earlier post: overlapping evaluations can post
+    // in either order, and whichever landed last, the next evaluation (the sweep at the latest) reads it and corrects it.
+    const shown = await shownStatus(repository, read.head_sha, verdict.context, minted.token);
+    if (shown?.state === verdict.state && shown.description === verdict.description) return { ...done, posted: true, unchanged: true };
     await rest(`${GITHUB}/repos/${repository}/statuses/${read.head_sha}`, minted.token, { method: "POST", body: { state: verdict.state, description: verdict.description, context: verdict.context } });
   } catch (error) {
     return unposted(`status not posted: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  // Overlapping evaluations can post in either order, so record what GitHub now shows for the context, read back,
-  // not what this one sent; a failed read records nothing and the sweep posts again.
-  try {
-    const shown = await rest(`${GITHUB}/repos/${repository}/commits/${read.head_sha}/statuses?per_page=30`, minted.token);
-    const latest = (Array.isArray(shown.json) ? shown.json : []).find((s: any) => s?.context === verdict.context);
-    if (latest) await ctx.runMutation(internal.changeApprovals.notePosted, { repository, pr_number: args.pr_number, head_sha: read.head_sha, state: String(latest.state), description: String(latest.description ?? "") });
-  } catch {
-    // Nothing recorded: the next sweep posts it again.
   }
   return { ...done, posted: true };
 }
@@ -303,7 +302,7 @@ const SWEEP_SPACING_MS = 3_000;
 /**
  * The periodic sweep (crons.ts): every opted-in repository's open pull requests are worked out again, so a dropped
  * webhook or a deploy mid-event never leaves one pending with nobody told. Reads start a few seconds apart, and a
- * status that already reads the same on its head is not posted again.
+ * status GitHub already shows the same on its head is not posted again.
  */
 export const sweep = internalAction({
   args: {},
@@ -391,7 +390,7 @@ export const settle = internalMutation({
     engineers: v.optional(v.array(v.object({ user_id: v.string(), name: v.string() }))),
     judges: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args): Promise<ApprovalVerdict & { context: string; unchanged: boolean }> => {
+  handler: async (ctx, args): Promise<ApprovalVerdict & { context: string }> => {
     const repository = normalizeRepository(args.repository);
     const gate = await gateOf(ctx, repository);
     if (!gate) throw new Error(`${repository} is not opted in to the approval status`);
@@ -455,33 +454,16 @@ export const settle = internalMutation({
     const verdict = decide(facts)!;
 
     const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
-    // The same words GitHub already accepted on this head: posting them again changes nothing (the sweep's case).
-    // `posted` is written only after a POST succeeds (notePosted), so anything not confirmed is posted again.
-    const before = rows[0]?.approval;
-    const unchanged = !!before?.posted && before.posted.head_sha === args.head_sha && before.posted.state === verdict.state && before.posted.description === verdict.description;
     for (const pr of rows) {
       await patchPullRequest(ctx, pr._id, {
         approval: {
           head_sha: args.head_sha, state: verdict.state, description: verdict.description,
           ...(key !== undefined ? { judged_key: key, judged_files: judged } : {}),
           ...(run ? { run_id: run._id } : {}),
-          ...(pr.approval?.posted ? { posted: pr.approval.posted } : {}),
         },
       });
     }
-    return { ...verdict, context: approvalContext(gate.mode), unchanged };
-  },
-});
-
-/** GitHub accepted the status: what it now shows, so an identical one is not posted again. */
-export const notePosted = internalMutation({
-  args: { repository: v.string(), pr_number: v.number(), head_sha: v.string(), state: v.string(), description: v.string() },
-  handler: async (ctx, args) => {
-    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", args.repository).eq("number", args.pr_number)).collect();
-    for (const pr of rows) {
-      if (!pr.approval) continue;
-      await patchPullRequest(ctx, pr._id, { approval: { ...pr.approval, posted: { head_sha: args.head_sha, state: args.state, description: args.description } } });
-    }
+    return { ...verdict, context: approvalContext(gate.mode) };
   },
 });
 
@@ -522,8 +504,7 @@ export const mergeAsApp = internalAction({
     if (!out.open) return { merged: false, error: `${repository}#${args.pr_number} is not open` };
     if (out.head_sha !== args.expected_head_sha) return { merged: false, error: `the head is ${out.head_sha.slice(0, 10)}, not ${args.expected_head_sha.slice(0, 10)}: look again before merging` };
     if (out.state !== "success") return { merged: false, error: `not approved: ${out.description}` };
-    const statuses = await rest(`${GITHUB}/repos/${repository}/commits/${args.expected_head_sha}/statuses?per_page=100`, out.token);
-    const latest = (statuses.json ?? []).find((s: any) => s.context === out.context);
+    const latest = await shownStatus(repository, args.expected_head_sha, out.context, out.token);
     if (latest?.state !== "success") return { merged: false, error: `GitHub's ${out.context} status on ${args.expected_head_sha.slice(0, 10)} is ${latest?.state ?? "missing"}${out.reason ? ` (${out.reason})` : ""}` };
     const result: any = await ctx.runAction(internal.githubApi.mergePullRequest, {
       repository, pr_number: args.pr_number, method: args.method ?? "squash", github_access_token: out.token,

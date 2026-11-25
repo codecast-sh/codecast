@@ -3941,8 +3941,6 @@ export default defineSchema({
       judged_key: v.optional(v.string()),
       judged_files: v.optional(v.array(v.string())),
       run_id: v.optional(v.id("workflow_runs")),
-      // What GitHub accepted last: written only after the POST succeeded, so the sweep retries anything unconfirmed.
-      posted: v.optional(v.object({ head_sha: v.string(), state: v.string(), description: v.string() })),
     })),
   })
     .index("by_team_id", ["team_id"])
