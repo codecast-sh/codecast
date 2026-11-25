@@ -4,7 +4,9 @@
 //                  session's owner; else the area's owner by main's owners file (judgedDiff parseOwners); else the
 //                  pull request's author.
 //   a mechanism    the presser when main's engineers file lists them; else the area's owner; else the author.
-//   no review      (no codecast run behind it) the area's owner, else the author.
+//   no review      no codecast run behind it and judged files: the area's owner, else the author (with no judged file
+//                  it waits for the automatic review and nobody is carded); a run that ended with no mechanism
+//                  answer: whoever a mechanism goes to.
 //   Cam's changes  the engineer whose yes came before the build; else the area's owner, else the first engineer;
 //                  never Cam.
 // A review that gave no mechanism answer is asked again, never carded. One card per judged diff and question, and at
@@ -79,7 +81,8 @@ export async function cardPeople(ctx: { db: any }, a: {
   const asker = a.requested_by ? (await memberNamed(ctx, a.teamId, a.requested_by)) ?? { user_id: null, name: a.requested_by } : null;
   const judged = presser ?? asker ?? (spawner ? await personOf(ctx, spawner.user_id) : null) ?? area;
   const mechanism = engineer(presser) ? presser! : area;
-  return { judged, mechanism, review: area, unreadable: area };
+  // The change read whole: with no run, the area's owner; a run whose review never answered, whoever reads a mechanism.
+  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area };
 }
 
 /** The review's own words on the run's task, newest first, cut to fit a card. */
@@ -105,7 +108,7 @@ async function askingConversation(ctx: { db: any }, run: any | null, pr: any | n
 const WHY: Record<CardReason, string> = {
   judged: "It edits files that judge changes, so nothing it touches can vouch for it.",
   mechanism: "The review called it a mechanism: a mistake here reaches many people and cannot be undone.",
-  review: "No codecast run reviewed it, so nothing has said whether it is a mechanism; you read it.",
+  review: "No review said whether it is a mechanism (a mistake that reaches many people and cannot be undone), and none can now; you read the change whole.",
   unreadable: "Codecast could not read enough of it to tell, so a person approves.",
 };
 

@@ -45,14 +45,17 @@ const DESCRIPTION_MAX = 140;
 
 export type ApprovalFacts =
   | { opted: false }
-  | { opted: true; unreadable: string }
+  | { opted: true; unreadable: string; card?: { who: string; ref: string } | null }
   | {
       opted: true;
       judged: string[];
       /** A revert the Release Captain's run made: CI's required checks alone decide it. */
       captain_revert?: boolean;
-      /** Whether a codecast run is behind the pull request: only a run has a review to give the mechanism answer. */
-      run: boolean;
+      /**
+       * The codecast run behind the pull request, whose review gives the mechanism answer: "live" while its reviewer can
+       * still record one (the run is pending or running), "ended" once it cannot; false with no run behind it.
+       */
+      run: "live" | "ended" | false;
       /** The review's answer: true a mechanism, false not, null not said (or not yet seen finished). */
       mechanism: boolean | null;
       /** A person's Ship on the run's card, for this judged diff. */
@@ -86,13 +89,22 @@ function pathList(paths: string[], room: number): string {
  */
 export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (!f.opted) return null;
-  if ("unreadable" in f) return { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
+  const approved = (c: { who: string; ref: string }): ApprovalVerdict => ({ state: "success", description: fit(`approved by ${c.who} (${c.ref})`) });
+  if ("unreadable" in f) return f.card ? approved(f.card) : { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
   if (f.captain_revert) return { state: "success", description: "the Release Captain's revert: CI's required checks decide" };
-  // No codecast run, so no review gave a mechanism answer: a person reads it (the card), until then it waits.
-  if (!f.run) return f.card ? { state: "success", description: fit(`approved by ${f.card.who} (${f.card.ref})`) } : { state: "pending", description: fit(`needs a review by ${f.needs.review}: no codecast run reviewed it`) };
-  if (f.mechanism === null) return { state: "pending", description: "waiting for the review's mechanism answer" };
+  // No codecast run, so no review gave a mechanism answer. Judged files: the area's owner reads it whole (the card).
+  // Otherwise it waits for the automatic review, and nobody is asked.
+  if (!f.run) {
+    if (f.card) return approved(f.card);
+    return { state: "pending", description: f.judged.length ? fit(`needs a review by ${f.needs.review}: no codecast run reviewed it`) : "waiting for an automatic review: no codecast run reviewed it" };
+  }
+  if (f.mechanism === null) {
+    if (f.run === "live") return { state: "pending", description: "waiting for the review's mechanism answer" };
+    // The run ended with no answer, so its reviewer can no longer give one: a person reads it whole (the card).
+    return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.review}: the review gave no mechanism answer`) };
+  }
   if (!f.judged.length && !f.mechanism) return { state: "success", description: "no judged paths; the review: not a mechanism" };
-  if (f.card) return { state: "success", description: fit(`approved by ${f.card.who} (${f.card.ref})`) };
+  if (f.card) return approved(f.card);
   if (f.mechanism) return { state: "pending", description: fit(`needs ${f.needs.mechanism}: the review called it a mechanism`) };
   if (f.press) return { state: "success", description: fit(`approved by ${f.press.who} (Ship press)`) };
   const head = `needs ${f.needs.judged}: edits `;
@@ -101,15 +113,16 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
 
 
 /**
- * The question a pending status puts to a person, which their approval card asks, or null when it waits on nobody
- * (a review still to give its mechanism answer goes back to the review, never to a person).
+ * The question a pending status puts to a person, which their approval card asks, or null when it waits on nobody: a
+ * review that can still give its mechanism answer is asked again, never a person, and a pull request no run is behind
+ * waits for the automatic review unless it edits judged files. A review that can no longer answer is a person's card.
  */
 export function cardReason(f: ApprovalFacts): CardReason | null {
-  if (!f.opted) return null;
+  if (!f.opted || f.card) return null;
   if ("unreadable" in f) return "unreadable";
-  if (f.captain_revert || f.card) return null;
-  if (!f.run) return "review";
-  if (f.mechanism === null) return null;
+  if (f.captain_revert) return null;
+  if (!f.run) return f.judged.length ? "review" : null;
+  if (f.mechanism === null) return f.run === "ended" ? "review" : null;
   if (f.mechanism) return "mechanism";
   return f.judged.length && !f.press ? "judged" : null;
 }
@@ -215,8 +228,8 @@ export type PullPeople = {
   author_login: string | null;
   /** The area's owner by main's owners file (lib/judgedDiff parseOwners), or null when the file or its area is missing. */
   area_owner: { user_id: string; name: string } | null;
-  /** Main's engineers file: one `<codecast user id> <name>` a line. */
-  engineers: Array<{ user_id: string; name: string }>;
+  /** Main's engineers file: one `<codecast user id> <name>` a line; null when GitHub could not be read (none is not []). */
+  engineers: Array<{ user_id: string; name: string }> | null;
 };
 
 export type PullRead =
@@ -244,7 +257,7 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const r = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(path)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
     return r.status === 404 ? null : r.text ?? "";
   };
-  const people: PullPeople = { title: pr.title ?? "", author_login: pr.author_login ?? null, area_owner: null, engineers: [] };
+  const people: PullPeople = { title: pr.title ?? "", author_login: pr.author_login ?? null, area_owner: null, engineers: null };
   try {
     const [ownersText, engineersText] = await Promise.all([onMain(beside("owners.txt")), onMain(beside("engineers.txt"))]);
     const owners = ownersText === null ? [] : parseOwners(ownersText);
@@ -301,7 +314,13 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
       ...(read.requested_by ? { requested_by: read.requested_by } : {}),
     }),
     ...(read.judges ? { judges: read.judges } : {}),
-    people: { ...read.people, area_owner: read.people.area_owner ?? undefined, author_login: read.people.author_login ?? undefined },
+    people: {
+      title: read.people.title,
+      ...(read.people.author_login ? { author_login: read.people.author_login } : {}),
+      ...(read.people.area_owner ? { area_owner: read.people.area_owner } : {}),
+      // Not read is not "no engineers": the gate keeps the list it last read.
+      ...(read.people.engineers ? { engineers: read.people.engineers } : {}),
+    },
   });
   const done = { opted: true as const, open: true as const, head_sha: read.head_sha, token: minted.token, ...verdict };
   if (!args.post) return { ...done, posted: false };
@@ -428,7 +447,7 @@ export const settle = internalMutation({
       title: v.string(),
       author_login: v.optional(v.string()),
       area_owner: v.optional(v.object({ user_id: v.string(), name: v.string() })),
-      engineers: v.array(v.object({ user_id: v.string(), name: v.string() })),
+      engineers: v.optional(v.array(v.object({ user_id: v.string(), name: v.string() }))),
     })),
   },
   handler: async (ctx, args): Promise<ApprovalVerdict & { context: string }> => {
@@ -466,13 +485,17 @@ export const settle = internalMutation({
       }
     }
 
-    // An approval is keyed to the judged diff; with none readable, to the head a person was shown (an unreadable card).
-    const lookupKey = key ?? `head:${args.head_sha}`;
-    const approvals: Doc<"change_approvals">[] = (await ctx.db
+    // An approval is keyed to the judged diff. A card that asked about the change whole (no review could say whether it
+    // is a mechanism, or codecast could not read it) is keyed to the head it showed, so any later push asks again.
+    const headKey = `head:${args.head_sha}`;
+    const keyed = async (k: string): Promise<Doc<"change_approvals">[]> => (await ctx.db
       .query("change_approvals")
-      .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", lookupKey))
+      .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
       .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at);
-    const cardRow = approvals.find((a) => a.source === "card");
+    const approvals = key === undefined ? [] : await keyed(key);
+    const wholeCards = (await keyed(headKey)).filter((a) => a.source === "card");
+    // With no run behind it, only a card on this head counts: a judged-diff card would outlive a push of unjudged code.
+    const cardRow = (run ? approvals.find((a) => a.source === "card") : undefined) ?? wholeCards[0];
     const pressRow = approvals.find((a) => a.source === "ship_press");
     const yesRow = approvals.find((a) => a.source === "engineer_yes");
     const refOf = async (a: Doc<"change_approvals">) => (a.decision_id ? ((await ctx.db.get(a.decision_id))?.short_id ?? "its card") : "its card");
@@ -491,22 +514,25 @@ export const settle = internalMutation({
     const role: any = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
     const captainRevert = !!args.reverts && isReleaseCaptain(role);
     const mechanism = run ? mechanismOf(run, args.head_sha) : null;
+    // A reviewer records its answer only while its run is pending or running (orgLineMerge.recordReviewVerdictCore).
+    const runState = !run ? false : run.status === "pending" || run.status === "running" ? "live" : "ended";
 
     const facts: ApprovalFacts = args.unreadable !== undefined
-      ? { opted: true, unreadable: args.unreadable }
-      : { opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), run: !!run, mechanism, card, press, needs };
+      ? { opted: true, unreadable: args.unreadable, card }
+      : { opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), run: runState, mechanism, card, press, needs };
     const verdict = decide(facts)!;
     const now = Date.now();
 
-    // A review that finished without a mechanism answer is asked again, once per head.
-    const askedReview = run && mechanism === null && before?.review_asked !== args.head_sha
+    // A review that finished without a mechanism answer is asked again, once per head, while it can still answer.
+    const askedReview = run && runState === "live" && mechanism === null && before?.review_asked !== args.head_sha
       && (await askReviewForMechanism(ctx, run, args.head_sha, `${repository}#${args.pr_number}`, runAttempt(run)));
     // The one card a person is asked, per judged diff and question; the one it replaces is taken back first.
     const reason: CardReason | null = cardReason(facts);
-    const stale = cardStale(before?.card_key, { diff: key ?? args.head_sha, reason, success: verdict.state === "success" });
+    const cardKey = reason === "review" || reason === "unreadable" ? undefined : key;
+    const stale = cardStale(before?.card_key, { diff: (reason ? cardKey : key) ?? args.head_sha, reason, success: verdict.state === "success" });
     if (stale && before?.card_id) await withdrawApprovalCard(ctx, before.card_id, now, "The pull request's judged diff or what it waits on changed; a new card asks if anything is needed.");
     const posted = reason ? await postApprovalCard(ctx, {
-      repository, pr_number: args.pr_number, head_sha: args.head_sha, key, judged, reason, to: to[reason], run, pr,
+      repository, pr_number: args.pr_number, head_sha: args.head_sha, key: cardKey, judged, reason, to: to[reason], run, pr,
       title: args.people?.title ?? pr?.title ?? "", before_key: before?.card_key, now,
     }) : null;
 
