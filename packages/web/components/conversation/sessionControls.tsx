@@ -360,6 +360,10 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   // (so plain filtering — "co" → codecast — stays clean). The daemon's
   // start_session takes the cwd verbatim, so the fully-resolved path is all it
   // needs, and the chip shows that path so a wrong base guess is visible first.
+  // The collapsed browse would list nothing when no current folder is set and
+  // no folder has person-started sessions (a first-time account): open it
+  // already expanded rather than hide every folder behind the expander.
+  const expanded = showSuggested || (!currentPath && visibleProjects.length === 0);
   const pickList = useMemo<(ProjectPathOption & { extra?: boolean })[]>(() => {
     if (filter.trim()) {
       return buildProjectPathOptions({
@@ -378,13 +382,15 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
     // still searches all of them regardless.
     const base: { path: string; extra?: boolean }[] = currentPath ? [{ path: currentPath }] : [];
     const head = visibleProjects.map((p) => ({ path: p.path }));
-    if (!showSuggested) return base.concat(head);
+    if (!expanded) return base.concat(head);
     const shown = new Set(head.map((p) => p.path));
+    // With nothing above them, the folders need no "more folders" divider.
+    const extra = base.length + head.length > 0;
     const rest = browseProjectOrder(otherProjects)
       .filter((p) => !shown.has(p.path))
-      .map((p) => ({ path: p.path, extra: true }));
+      .map((p) => ({ path: p.path, extra }));
     return base.concat(head, rest);
-  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, showSuggested, diskListing]);
+  }, [filter, dedupedRecents, currentPath, otherProjects, visibleProjects, homeDir, projectBase, expanded, diskListing]);
 
   // How many folders the collapsed picker is holding back (rarely-used ones
   // plus the machine's never-used roots) — the expander's count.
@@ -769,7 +775,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
           <>
           {pickList.length === 0 ? (
             <span className="text-xs text-sol-text-dim px-2.5 py-1">
-              {filterIsCurrent ? "already in this folder" : <>no match for &ldquo;{filter}&rdquo;</>}
+              {filterIsCurrent ? "already in this folder" : filter.trim() ? <>no match for &ldquo;{filter}&rdquo;</> : "no folders yet: type or paste a path"}
             </span>
           ) : (
             pickList.map((p, i) => {
@@ -815,7 +821,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
               );
             })
           )}
-          {!filter.trim() && !showSuggested && hiddenCount > 0 && (
+          {!filter.trim() && !expanded && hiddenCount > 0 && (
             <button
               // onMouseDown + preventDefault, same as the chips: keep the
               // filter input focused so expanding doesn't blur-close the picker.
