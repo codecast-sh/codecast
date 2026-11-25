@@ -263,6 +263,7 @@ export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_st
       body: undefined,
       why_source: undefined,
       risk_lines: undefined,
+      screens: undefined,
       // Prose replaced layer 0's text and layer 0's is not stored, so the
       // interim text is built from the row's own facts.
       ...(story.why_source !== undefined

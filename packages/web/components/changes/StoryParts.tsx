@@ -1,5 +1,5 @@
-// The small pieces a story is drawn from, shared by the lead, the section rows,
-// In brief and the drawer, so a story reads the same wherever it sits: its area
+// The small pieces a story is drawn from, shared by the feed entry and the work
+// in progress, so a story reads the same wherever it sits: its area
 // tag, kind glyph, risk texture, the release that carried it, the people and
 // sessions behind it, and the line that says where its "why" came from.
 import { useRef, useState, type ReactNode } from "react";
@@ -16,7 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { areaColor, areaLabel, KIND_COLOR, RISK_HATCH } from "./areaColor";
 import { peopleOf, riskText } from "./editionModel";
 import { glueUnits } from "./format";
-import { useAreaColors, useStoryCtx } from "./storyContext";
+import { useAreaColors } from "./storyContext";
 
 /** A wall-clock time, "15:27" in the reader's locale. */
 export const clockOf = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -82,13 +82,6 @@ export function KindGlyph({ kind }: { kind: string }) {
   );
 }
 
-/** The story's risks for a screen reader, inside the control that names the story. */
-export function RiskSrText({ story }: { story: Pick<StoryRow, "risks" | "risk_lines"> }) {
-  if (!story.risks.length) return null;
-  return <span className="sr-only">Risk: {riskText(story)}</span>;
-}
-
-
 /** A stored risk line cut short ends in an ellipsis; on the page it reads as a closed sentence. */
 const closeLine = (line: string) => line.replace(/\s*(?:…|\.\.\.)$/, ".");
 
@@ -116,38 +109,26 @@ const LONG_PATH = /(?:[\w.@-]+\/){2,}([\w.@-]+)/g;
 /** Risk text with every long file path cut to its last segment; the full text is the line's tip. */
 const shortPaths = (text: string) => text.replace(LONG_PATH, "$1");
 
-/** Risks a row shows before "+N more": the rest are in its open drawer. */
-const ROW_RISKS = 2;
-
 /**
- * A story's risks in words under its prose (spec 4.4): the hatch swatch, then
- * one line per worded risk with long paths cut to their file names. `full`
- * (the lead card, the week's biggest story) shows every risk whole. Without
- * it (a row) each risk is clamped at two lines and the first two show, then
- * "+N more"; the row's open drawer lifts the clamp and shows the rest
- * (globals.css), so the whole of every risk is a keypress away. A row's
- * RiskSrText speaks every risk inside its control, so the clamped line is
- * for the eye only. A line's tip holds it in full, paths included, and opens
- * when a path was cut or the clamp cut the line.
+ * A story's risks in words (spec 4.4): the hatch swatch, then one line per
+ * worded risk with long paths cut to their file names. A line's tip holds it
+ * in full, paths included, and opens only when a path was cut.
  */
-export function RiskLine({ story, full = false, className = "" }: { story: Pick<StoryRow, "risks" | "risk_lines">; full?: boolean; className?: string }) {
+export function RiskLine({ story, className = "" }: { story: Pick<StoryRow, "risks" | "risk_lines">; className?: string }) {
   const risks = riskLines(story);
   if (!risks.length) return null;
-  const more = full ? 0 : risks.length - ROW_RISKS;
   return (
-    <span aria-hidden={full ? undefined : true} className={`chg-ui flex items-start gap-2 text-[13px] leading-[1.55] text-sol-text/70 ${className}`}>
+    <span className={`chg-ui flex items-start gap-2 text-[13px] leading-[1.55] text-sol-text/70 ${className}`}>
       <span aria-hidden className="mt-[0.45em] h-2.5 w-3.5 shrink-0 rounded-[2px]" style={{ background: RISK_HATCH }} />
       <span className="min-w-0 flex-1">
         {risks.map((r, i) => {
           const short = shortPaths(r.text);
-          const cls = full ? "" : `chg-risk-clamp line-clamp-2${i >= ROW_RISKS ? " chg-risk-extra" : ""}`;
           return (
-            <Tip key={r.code} text={<span className="whitespace-pre-line [overflow-wrap:anywhere]">{r.tip}</span>} whenClipped={short === r.tip}>
-              <span className={`block [overflow-wrap:anywhere] ${i ? "mt-1" : ""} ${cls}`}>{short}</span>
+            <Tip key={r.code} text={short === r.tip ? null : <span className="whitespace-pre-line [overflow-wrap:anywhere]">{r.tip}</span>}>
+              <span className={`block [overflow-wrap:anywhere] ${i ? "mt-1" : ""}`}>{short}</span>
             </Tip>
           );
         })}
-        {more > 0 && <span className="chg-risk-more mt-0.5 block font-mono text-meta text-sol-text-muted">+{more} more</span>}
       </span>
     </span>
   );
@@ -235,40 +216,6 @@ export function FadeText({ text, className = "" }: { text: string; className?: s
   );
 }
 
-const WHY: Record<string, string> = { commit: "from commit message", pr: "from PR", none: "not stated" };
-
-type WhyFacts = Pick<StoryRow, "why_source" | "conversation_ids" | "pr_ids" | "prose_status">;
-
-/**
- * Whether a story has a "why" line to show. "not stated" accuses a session or
- * PR that existed and gave no reason; a story with neither had nowhere to
- * state one, so it says nothing.
- */
-const hasProvenance = (story: WhyFacts) =>
-  story.why_source !== "none" || story.conversation_ids.length > 0 || story.pr_ids.length > 0;
-
-/** Where the story's "why" came from: the page's trust mechanism (spec 4.4). */
-export function Provenance({ story, className = "" }: { story: WhyFacts; className?: string }) {
-  const { proseLive } = useStoryCtx();
-  if (!hasProvenance(story)) return null;
-  const src = story.why_source;
-  const session = story.conversation_ids[0];
-  let body: ReactNode;
-  if (src === "session" && session) {
-    body = (
-      <>
-        why: from session <EntityIdPill type="session" id={String(session)} compact />
-      </>
-    );
-  } else if (src && WHY[src]) {
-    body = <>why: {WHY[src]}</>;
-  } else {
-    // "notes pending" only while notes can still come (StoryContext.proseLive): never on a capped, failed or old day.
-    body = <>{story.prose_status === "pending" && proseLive ? "written from commit subjects; notes pending" : "written from commit subjects"}</>;
-  }
-  return <span className={`inline-flex min-w-0 flex-wrap items-center gap-1 font-mono text-meta text-sol-text-muted ${className}`}>{body}</span>;
-}
-
 type StoryPeople = Pick<StoryRow, "actor_user_ids" | "author_names">;
 type Face = { key: string; name: string; image?: string; role?: RoleLike };
 
@@ -312,13 +259,13 @@ const namesLine = (names: string[]) =>
   : `${names.slice(0, 2).join(", ")} and ${names.length - 2} others`;
 
 /** The story's byline: faces, then the names written out. */
-export function Byline({ story }: { story: StoryPeople }) {
+export function Byline({ story, size = 22 }: { story: StoryPeople; size?: number }) {
   const people = useStoryPeople(story);
   if (!people.length) return null;
   const names = people.map((p) => p.name);
   return (
     <span className="inline-flex min-w-0 items-center gap-2" title={names.length > 3 ? names.join(", ") : undefined}>
-      <Faces people={people} size={22} max={3} />
+      <Faces people={people} size={size} max={3} />
       <span className="chg-ui truncate text-[13px] font-medium text-sol-text/85">{namesLine(names)}</span>
     </span>
   );

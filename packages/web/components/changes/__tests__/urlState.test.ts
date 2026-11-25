@@ -26,7 +26,6 @@ const FULL = {
   risk: true,
   q: "fix sync",
   story: "s_9f3a1c0e7b2d",
-  zoom: "weeks",
 } satisfies Required<ChangesUrl>;
 
 /** One view per field: the default view with just that field set as in FULL. */

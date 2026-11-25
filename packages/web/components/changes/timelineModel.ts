@@ -2,10 +2,10 @@
 // first, with a finished week's notes where the timeline enters that week.
 // The week in progress has none: its notes only restate its newest day.
 // Pure, so the page and its tests share it.
-import { isoWeekOf, topWeekStories, weekDates } from "@codecast/shared/changes";
+import { isoWeekOf } from "@codecast/shared/changes";
 import type { EditionRow, StoryRow } from "../../hooks/useSyncChanges";
 import { byWeight, hasProse, inFocus, survives, type Person, type Ship } from "./editionModel";
-import type { ChangesUrl, Zoom } from "./useChangesUrlState";
+import type { ChangesUrl } from "./useChangesUrlState";
 
 export type TimelineDay = {
   kind: "day";
@@ -16,7 +16,7 @@ export type TimelineDay = {
   standfirst: string | null;
   /** The day's stories that read as news, heaviest first. */
   stories: StoryRow[];
-  /** Housekeeping (the edition's brief list, else importance 1), folded under one line. */
+  /** Housekeeping (the edition's brief list, else importance 1), after the day's news. */
   small: StoryRow[];
   releases: Ship[];
   /** Stories on the day before the filters: the filtered count reads against it. */
@@ -29,8 +29,6 @@ export type TimelineWeek = {
   headline: string;
   /** The week told in a few sentences: what shipped and what it adds up to. */
   summary: string | null;
-  /** The week's stories a teammate most needs to read, heaviest first. */
-  top: string[];
 };
 
 export type TimelineItem = TimelineDay | TimelineWeek;
@@ -100,17 +98,8 @@ export function finishedWeeks(weeks: readonly EditionRow[], today: string): Time
   return weeks
     .filter((w) => hasProse(w) && w.date < thisWeek)
     .sort((a, b) => b.date.localeCompare(a.date))
-    .map((w) => ({ kind: "week", week: w.date, headline: w.headline!, summary: w.narrative?.trim() || null, top: w.top_story_keys ?? [] }));
+    .map((w) => ({ kind: "week", week: w.date, headline: w.headline!, summary: w.narrative?.trim() || null}));
 }
-
-/** The week's picks that are still on the page, else (keys move when a day is rebuilt) its heaviest stories. */
-export function weekTop(week: TimelineWeek, byKey: ReadonlyMap<string, StoryRow>): StoryRow[] {
-  const picked = week.top.map((k) => byKey.get(k)).filter((s): s is StoryRow => !!s);
-  if (picked.length) return picked;
-  const days = new Set(weekDates(week.week) ?? []);
-  return topWeekStories([...byKey.values()].filter((s) => days.has(s.date)));
-}
-
 
 /** One week of the timeline: its notes when written, and its days newest first. */
 export type TimelineWeekGroup = { week: string; notes: TimelineWeek | null; days: TimelineDay[] };
@@ -130,25 +119,3 @@ export function groupWeeks(items: readonly TimelineItem[]): TimelineWeekGroup[] 
   }
   return out;
 }
-
-const dayMs = (d: string) => Date.parse(`${d}T12:00:00Z`);
-/** Whole days from `day` to `today`. */
-export const ageOf = (day: string, today: string) => Math.round((dayMs(today) - dayMs(day)) / 86_400_000);
-
-/**
- * How far out a day reads when the reader has not picked a zoom: the last two
- * days story by story, the rest of the past week a day at a time, and older
- * days folded into their week's notes.
- */
-export function dayZoom(day: string, today: string, zoom: Zoom | undefined): Zoom {
-  if (zoom) return zoom;
-  const age = ageOf(day, today);
-  return age <= 1 ? "changes" : age <= 6 ? "days" : "weeks";
-}
-
-/**
- * Whether a week reads as one summary: every day in it is that far out, and
- * its notes are written. A week without notes reads day by day.
- */
-export const weekFolds = (group: TimelineWeekGroup, today: string, zoom: Zoom | undefined) =>
-  !!group.notes && group.days.every((d) => dayZoom(d.date, today, zoom) === "weeks");

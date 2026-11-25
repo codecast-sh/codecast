@@ -662,6 +662,26 @@ describe("runProse through rebuildDay", () => {
     expect(after.cost_usd).toBeCloseTo(0.5, 10);
   });
 
+  test("a story keeps the screens its sessions made, and loses them with its prose when a session goes private", async () => {
+    const s = await setup();
+    await s.day(PAST);
+    await s.t.action(internal.changes.buildDay, { team_id: s.ids.team, repository: REPO, date: PAST });
+    const web = await s.byShas("a1");
+    const screens = [{ kind: "image" as const, url: "https://convex.example/shot.png", at: 1, caption: "the line page" }];
+    expect(await s.t.mutation(internal.changesProse.writeStoryProse, {
+      story_id: web._id, inputs_hash: web.inputs_hash, used: [], screens,
+      outcome: { status: "skipped", headline: "Line pages" },
+    })).toBe("written");
+    expect((await s.t.run(async (ctx) => ctx.db.get(web._id)))!.screens).toEqual(screens);
+
+    await s.t.run(async (ctx) => ctx.db.patch(s.ids.vis, { is_private: true }));
+    await s.t.action(internal.changes.buildDay, { team_id: s.ids.team, repository: REPO, date: PAST });
+    // The rebuild may narrow the row or replace it: either way the story for these commits shows none.
+    const after = await s.byShas("a1");
+    expect(after.conversation_ids.map(String)).not.toContain(String(s.ids.vis));
+    expect(after.screens).toBeUndefined();
+  });
+
   test("an edition written over stories that changed meanwhile is dropped", async () => {
     const s = await setup();
     await s.day(PAST);

@@ -38,6 +38,7 @@ import {
 import { callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
 import { PROSE_MODEL } from "./lib/changesProseModel";
 import { teamVisibleInputs, teamVisibleMedia, type ChangesInputMode, type ChangesMedia, type TeamVisibleInput } from "./lib/changesAccess";
+import { screensOf, storyScreenValidator } from "./lib/storyScreens";
 import { changesZone, markDayDirty } from "./lib/changesDirty";
 import { teamDayBounds } from "./lib/teamDay";
 import { normalizeRepository } from "./lib/gitRefs";
@@ -790,6 +791,31 @@ export const readStory = internalQuery({
   },
 });
 
+/**
+ * Fill `screens` on a team's stories from `from_date` on: rows written before
+ * stories carried them. Reads through the same gate as the prose
+ * (gatedSessions), so a story shows only what its article could have placed.
+ * Idempotent; each batch schedules the next.
+ */
+export const backfillStoryScreens = internalMutation({
+  args: { team_id: v.id("teams"), from_date: v.string(), cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ seen: number; filled: number; done: boolean }> => {
+    const page = await ctx.db
+      .query("change_stories")
+      .withIndex("by_team_date", (q) => q.eq("team_id", args.team_id).gte("date", args.from_date))
+      .paginate({ cursor: args.cursor ?? null, numItems: 10 });
+    let filled = 0;
+    for (const story of page.page) {
+      const screens = screensOf(await gatedSessions(ctx, story.team_id, story.conversation_ids, story));
+      if (!screens.length) continue;
+      await ctx.db.patch(story._id, { screens });
+      filled += 1;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.changesProse.backfillStoryScreens, { ...args, cursor: page.continueCursor });
+    return { seen: page.page.length, filled, done: page.isDone };
+  },
+});
+
 /** The prompt input any story would be written from now, written or not. Read-only, for replaying real stories in prompt ablations. */
 export const storyInputAudit = internalQuery({
   args: { story_key: v.string() },
@@ -983,6 +1009,8 @@ export const writeStoryProse = internalMutation({
     used: v.array(v.object({ conversation_id: v.id("conversations"), mode: v.union(v.literal("summary"), v.literal("full")) })),
     outcome: storyOutcome,
     usage: v.optional(usageArg),
+    /** The screens its sessions made, read with the prose inputs; stored whatever the outcome. */
+    screens: v.optional(v.array(storyScreenValidator)),
   },
   handler: async (ctx, args): Promise<"written" | "stale" | "gone"> => {
     const row = await ctx.db.get(args.story_id);
@@ -1005,8 +1033,10 @@ export const writeStoryProse = internalMutation({
 
     const o = args.outcome;
     const at = Date.now();
+    const screens = { screens: args.screens?.length ? args.screens : undefined };
     if (o.status === "written") {
       await ctx.db.patch(row._id, {
+        ...screens,
         headline: o.headline,
         dek: o.dek,
         body: o.body,
@@ -1020,11 +1050,11 @@ export const writeStoryProse = internalMutation({
         ...cost,
       });
     } else if (o.status === "skipped") {
-      await ctx.db.patch(row._id, { headline: o.headline, why_source: "commit", prose_status: "skipped", prose_attempts: undefined, generated_at: at });
+      await ctx.db.patch(row._id, { ...screens, headline: o.headline, why_source: "commit", prose_status: "skipped", prose_attempts: undefined, generated_at: at });
     } else if (o.status === "branch") {
-      await ctx.db.patch(row._id, { prose_status: "skipped" });
+      await ctx.db.patch(row._id, { ...screens, prose_status: "skipped" });
     } else {
-      await ctx.db.patch(row._id, { prose_status: "failed", prose_attempts: (row.prose_attempts ?? 0) + 1, ...cost });
+      await ctx.db.patch(row._id, { ...screens, prose_status: "failed", prose_attempts: (row.prose_attempts ?? 0) + 1, ...cost });
     }
     return "written";
   },
@@ -1172,9 +1202,10 @@ async function proseForStory(ctx: ActionCtx, storyId: Id<"change_stories">, dayE
   if (!read) return "gone";
   const { story, sessions, prs } = read;
   const used = sessions.map((s) => ({ conversation_id: s.conversation_id, mode: s.mode }));
+  const screens = screensOf(sessions);
   const write = async (outcome: typeof storyOutcome.type, usage?: Usage): Promise<StoryStep> => {
     const r: "written" | "stale" | "gone" = await ctx.runMutation(internal.changesProse.writeStoryProse, {
-      story_id: storyId, inputs_hash: story.inputs_hash, used, outcome, ...(usage ? { usage } : {}),
+      story_id: storyId, inputs_hash: story.inputs_hash, used, outcome, screens, ...(usage ? { usage } : {}),
     });
     if (r !== "written") return r;
     return outcome.status === "branch" ? "skipped" : outcome.status;
