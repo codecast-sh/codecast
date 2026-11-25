@@ -7,6 +7,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import { normalizeRepository, repositoryOwner } from "@codecast/shared/contracts";
 import { optionIsShip } from "./taskVerdicts";
+import { emitNotification } from "../notificationRouter";
 
 export type ApprovalGate = {
   installation_id: number;
@@ -15,6 +16,7 @@ export type ApprovalGate = {
   judges_path: string;
   mode: "shadow" | "required";
   judges?: string[];
+  engineers?: Array<{ user_id: string; name: string }>;
 };
 
 /** How long a Ship press waits for the run it asks for: the session starts it within a turn. */
@@ -34,7 +36,7 @@ export async function gateOf(ctx: { db: any }, repository: string): Promise<Appr
   for (const row of rows) {
     if (row.suspended_at) continue;
     const entry = (row.approval_gate ?? []).find((g) => normalizeRepository(g.repository) === repo);
-    if (entry) return { installation_id: row.installation_id, installation_row: row._id, repository: repo, judges_path: entry.judges_path, mode: entry.mode, ...(entry.judges ? { judges: entry.judges } : {}) };
+    if (entry) return { installation_id: row.installation_id, installation_row: row._id, repository: repo, judges_path: entry.judges_path, mode: entry.mode, ...(entry.judges ? { judges: entry.judges } : {}), ...(entry.engineers ? { engineers: entry.engineers } : {}) };
   }
   return null;
 }
@@ -111,11 +113,12 @@ export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_run
  */
 export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; files: string[] }; trial?: boolean },
+  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
   verdict: { status: string; answer_index?: number },
   by: { kind: string; user_id?: Id<"users"> },
   now: number,
 ): Promise<void> {
+  if (row.approval_card && row.approval) return settleApprovalCard(ctx, { ...row, approval: row.approval }, verdict, by, now);
   if (!row.workflow_run_id || row.trial || by.kind !== "user" || !by.user_id) return;
   const run: any = await ctx.db.get(row.workflow_run_id);
   if (!run) return;
@@ -194,4 +197,58 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
     return { user_id: d.answered_by.id, ref: d.short_id ?? "its card", decision_id: d._id };
   }
   return null;
+}
+
+/**
+ * A person settled an approval card codecast posted for a pull request (changeApprovals.ts): Approve merge is the
+ * approval of the judged diff the card showed; Revise, Drop or a dismissal revokes what approved that pull request's
+ * run (or, with no run, that diff). Anyone else's answer changes nothing. The status is worked out again either way.
+ */
+async function settleApprovalCard(
+  ctx: { db: any; scheduler: any },
+  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs"> } },
+  verdict: { status: string; answer_index?: number },
+  by: { kind: string; user_id?: Id<"users"> },
+  now: number,
+): Promise<void> {
+  if (by.kind !== "user" || !by.user_id) return;
+  const a = row.approval;
+  if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
+    await ctx.db.insert("change_approvals", {
+      repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
+      conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),
+      decision_id: row._id, created_at: now,
+    });
+  } else {
+    const held: Doc<"change_approvals">[] = a.run_id
+      ? await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", a.run_id)).collect()
+      : await ctx.db.query("change_approvals").withIndex("by_pr_key", (q: any) => q.eq("repository", a.repository).eq("pr_number", a.pr_number).eq("judged_key", a.judged_key)).collect();
+    for (const h of held) if (!h.revoked_at) await ctx.db.patch(h._id, { revoked_at: now });
+  }
+  await scheduleApprovalPost(ctx, a.repository, a.pr_number);
+}
+
+/**
+ * A Release Captain's revert merged on CI alone (no review, no card); when it touched a judged file or a mechanism,
+ * the first engineer main's engineers file lists is told, once, by a notification, never a card.
+ */
+export async function noticeCaptainRevertMerged(ctx: { db: any }, pr: Doc<"pull_requests">): Promise<boolean> {
+  const a = pr.approval;
+  if (!a?.captain_revert || a.engineer_told || !(a.judged_files?.length || a.mechanism)) return false;
+  const gate = await gateOf(ctx, pr.repository);
+  const engineer = gate?.engineers?.[0];
+  const id = engineer ? ctx.db.normalizeId?.("users", engineer.user_id) ?? engineer.user_id : null;
+  if (!id || !(await ctx.db.get(id))) return false;
+  const what = a.judged_files?.length ? `touches ${a.judged_files.slice(0, 3).join(", ")}${a.judged_files.length > 3 ? ` (+${a.judged_files.length - 3})` : ""}` : "is a mechanism by its review";
+  await emitNotification(ctx as any, {
+    event_type: "change_shipped",
+    actor_name: "Release Captain",
+    entity_type: "code",
+    entity_id: `${pr.repository}#${pr.number}`,
+    message: `merged a revert, ${pr.repository}#${pr.number}, on CI alone; it ${what}`,
+    link: `https://github.com/${pr.repository}/pull/${pr.number}`,
+    recipient_ids: [id],
+  });
+  await ctx.db.patch(pr._id, { approval: { ...a, engineer_told: true } });
+  return true;
 }

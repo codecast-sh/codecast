@@ -35,3 +35,18 @@ export function judgedEdits(messages: ReadonlyArray<Message>, root: string | nul
   if (!judges) return null;
   return editedPaths(messages, root).filter((p) => mayBeJudged(p, judges));
 }
+
+/** Whether a typed line asks for the work to ship: "ship", "ship it", "ship this", "yes, ship it", alone on the line. */
+export function saysShip(text: string | null | undefined): boolean {
+  return /^\s*(yes[,.!]?\s+)?ship(\s+(it|this|that))?\s*[.!]*\s*$/i.test(String(text ?? ""));
+}
+
+/** The newest message a person typed in the thread, when it says ship: its id, else null. */
+export function typedShip(messages: ReadonlyArray<{ _id?: string; role?: string; content?: string | null }>): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "user") continue;
+    return saysShip(m.content) && m._id ? String(m._id) : null;
+  }
+  return null;
+}

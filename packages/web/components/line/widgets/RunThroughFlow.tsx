@@ -32,31 +32,8 @@ import { JourneyView } from "../../ship/Journey";
 import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
-import { judgedEdits } from "../../../lib/ship/judgedEdits";
+import { usePressApproval } from "../../../hooks/usePressApproval";
 import "../../ship/ship.css";
-
-/**
- * The judged files this session edited, which Ship's confirm lists beside the button, and the press that approves
- * exactly those (convex changeApprovals.recordPress). Null files: the repository is not opted in, nothing is listed.
- */
-function usePressApproval(conversationId: string, active: boolean): { files: string[] | null; record: () => void } {
-  // Read only while the confirm is open: the header holds this hook and must cost nothing the rest of the time.
-  const remote = useInboxStore((s) => (active ? sessionRemoteOf(s as any, conversationId) : null));
-  const root = useInboxStore((s) => (active ? sessionRootOf(s as any, conversationId) : null));
-  const repository = repositoryOfRemote(remote);
-  const { data: judges } = useQueryNoThrow(api.changeApprovals.judgesFor, active && repository ? { repository } : "skip");
-  const msgs = useInboxStore((s) => (active ? (s.messages as Record<string, Array<{ tool_calls?: Array<{ name?: string; input?: string }> }>>)[conversationId] : undefined));
-  const files = useMemo(() => judgedEdits(msgs ?? [], root, judges), [msgs, root, judges]);
-  const recordPress = useMutation(api.changeApprovals.recordPress);
-  const record = () => {
-    if (!files) return;
-    void recordPress({ conversation_id: conversationId as any, files }).catch((err) => console.warn("[ship] the press was not recorded as an approval:", err));
-  };
-  return { files, record };
-}
 
 /** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
 export function RunThroughFlow(props: { conversationId: string; sessionTitle: string }) {
@@ -115,7 +92,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const send = (flow: AppFlow) => {
     setReviewing(null);
     setAgain(false);
-    approval.record();
+    void approval.record();
     useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
   };
   // One click starts the run (pl-1075, shipConfirms): a card a run may ask later arrives as its own card.
@@ -254,7 +231,7 @@ export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }:
     const at: SentPress = { run: newest?._id ?? null, press: press?.id ?? null };
     setMine(at);
     setTimeout(() => setMine((m) => (m === at ? null : m)), PRESS_WAIT_MS);
-    approval.record();
+    void approval.record();
     useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
   };
   return (

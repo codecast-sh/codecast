@@ -5,15 +5,15 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
-import { claimPress, settleCardApproval } from "./lib/changeApprovalRows";
+import { claimPress, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
 
 const REPO = "union-ai/union-mobile";
 const HEAD = "a".repeat(40);
 const MB = "b".repeat(40);
-const needs = { judged: "Jason", mechanism: "an engineer or Ashot" };
-const facts = (over: Partial<Extract<ApprovalFacts, { judged: string[] }>> = {}): ApprovalFacts => ({ opted: true, judged: [], mechanism: false, card: null, press: null, needs, ...over });
+const needs = { judged: "Jason", mechanism: "an engineer or Ashot", review: "Ashot" };
+const facts = (over: Partial<Extract<ApprovalFacts, { judged: string[] }>> = {}): ApprovalFacts => ({ opted: true, judged: [], run: true, mechanism: false, card: null, press: null, needs, ...over });
 
 describe("decide", () => {
   test("a repository not opted in gets nothing", () => expect(decide({ opted: false })).toBeNull());
@@ -167,17 +167,17 @@ describe("the status from GitHub", () => {
     expect(scheduled).toContain(`changeApprovals:evaluate ${REPO}#7`);
   });
 
-  test("reads all three pages, finds the judged file on the last, and posts pending naming the asker", async () => {
+  test("reads all three pages, finds the judged file on the last, and with no codecast run asks the area's owner to review", async () => {
     github();
     const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
     const { ctx } = actionCtx(db);
-    // No run behind it: the review's answer never came, so the status waits on it first.
+    // No run behind it, so no review gave a mechanism answer: the area's owner by main's owners file reads it.
     const out: any = await (evaluate as any)._handler(ctx, { repository: REPO, pr_number: 7, post: true });
     expect(calls.filter((c) => /\/files\?/.test(c.url)).map((c) => /[?&]page=(\d+)/.exec(c.url)![1])).toEqual(["1", "2", "3"]);
-    expect(out).toMatchObject({ state: "pending", description: "waiting for the review's mechanism answer", posted: true, context: "approval (shadow)" });
+    expect(out).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it", posted: true, context: "approval (shadow)" });
     const post = calls.find((c) => c.method === "POST" && /statuses/.test(c.url))!;
     expect(post.url).toEndWith(`/repos/${REPO}/statuses/${HEAD}`);
-    expect(post.body).toEqual({ state: "pending", description: "waiting for the review's mechanism answer", context: "approval (shadow)" });
+    expect(post.body).toEqual({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it", context: "approval (shadow)" });
     expect(db._tables.pull_requests[0].approval).toMatchObject({ head_sha: HEAD, state: "pending", judged_files: ["outreach/line/change/land.cast"] });
     expect(db._tables.pull_requests[0].approval.judged_key).toMatch(/^[0-9a-f]{40}$/);
   });
@@ -197,7 +197,7 @@ describe("the status from GitHub", () => {
     const swept: any = await evaluateNow();
     expect(swept.unchanged).toBeUndefined();
     expect(posts()).toBe(2);
-    expect(shown[0]).toMatchObject({ state: "pending", description: "waiting for the review's mechanism answer" });
+    expect(shown[0]).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
   });
 
   test("with the review's answer in, judged files wait on the Requested-by person", async () => {
@@ -347,7 +347,7 @@ describe("the run behind it", () => {
     const tasks = [{ _id: "t1", user_id: "cam" }];
     const yes = (who: string, at: number, over: Record<string, any> = {}) => ({ _id: `sd_${who}_${at}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", station: "pre-build", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at, ...over });
     const engineers = [{ user_id: "ash", name: "Ashot" }];
-    const asked = { ...args, area_owner: "Samvit", engineers };
+    const asked = { ...args, people: { title: "t", area_owner: "Samvit", engineers } };
     const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 }, pr: { ...base.pr } };
     const approved = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50)] });
     expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot, sd-ash before the build (Ship press)" });
@@ -355,7 +355,7 @@ describe("the run behind it", () => {
     // A later judged diff that differs asks again; a mechanism still needs its own engineer approval.
     expect(await (settle as any)._handler(approved, { ...asked, key: "k2", head_sha: "d".repeat(40) })).toMatchObject({ state: "pending" });
     const mech = ctxOf({ workflow_runs: [{ ...later, review_verdict: { ...later.review_verdict, mechanism: true } }], users, tasks, session_decisions: [yes("ash", 50)] });
-    expect(await (settle as any)._handler(mech, asked)).toMatchObject({ state: "pending", description: "needs an engineer or Samvit: the review called it a mechanism" });
+    expect(await (settle as any)._handler(mech, asked)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
     // An engineer's yes to some other question on the task (not asked as the pre-build question) approves nothing.
     const otherQuestion = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50, { station: undefined })] });
     expect(await (settle as any)._handler(otherQuestion, asked)).toMatchObject({ state: "pending" });
@@ -402,4 +402,87 @@ test("the Release Captain's exemption needs every commit of the pull request to 
   };
   expect(await outcome([revert, revert])).toBe("success");
   expect(await outcome([revert, { commit: { message: "Also change the gate" } }])).toBe("pending");
+});
+
+describe("the approval card", () => {
+  const reviewed = (mechanism?: boolean) => ({ node_statuses: [{ node_id: "review", status: "completed", session_id: "rev", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, ...(mechanism === undefined ? {} : { mechanism }), at: 3, attempt: 1 } });
+  const run = (over: Record<string, any> = {}) => ({ _id: "run1", user_id: "host", team_id: "team1", created_at: 1, task_id: "t1", primary_conversation_id: "c_log", pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 }, ...reviewed(false), ...over });
+  const users = [{ _id: "u_jason", name: "Jason Benn" }, { _id: "u_ashot", name: "Ashot" }, { _id: "u_cam", name: "Cameron" }, { _id: "host", name: "Host" }];
+  const memberships = users.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id }));
+  const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" }];
+  const world = (tables: Record<string, any[]> = {}) => {
+    // Every world gets its own copies: the fake db patches rows in place.
+    const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], users, team_memberships: memberships, conversations, anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [{ _id: "tc1", task_id: "t1", comment_type: "review", text: "Verdict: ship. It edits land.cast.", created_at: 5 }], pending_messages: [], workflow_runs: [run()], ...tables }));
+    return { db, ctx: { db, scheduler: { runAfter: async () => {} } } };
+  };
+  const people = { title: "Edit land", area_owner: "Ashot", engineers: [{ user_id: "u_jason", name: "Jason" }] };
+  const args = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: ["outreach/line/change/land.cast"], key: "k1", people };
+  const cards = (db: any) => db._tables.session_decisions.filter((d: any) => d.approval_card);
+
+  test("judged files a press did not list go to the presser, once per judged diff, with the files and the review's words", async () => {
+    const w = world({ workflow_runs: [run({ pressed_approval_id: "p1" })], change_approvals: [{ _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: ["docs/a.md"], user_id: "u_jason", created_at: 1 }] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs Jason Benn: edits outreach/line/change/land.cast" });
+    expect(cards(w.db)).toEqual([expect.objectContaining({ asked_user_ids: ["u_jason"], holder: { kind: "user", id: "u_jason" }, conversation_id: "c_log", silent: true, approval: expect.objectContaining({ judged_key: "k1", reason: "judged", run_id: "run1" }) })]);
+    expect(cards(w.db)[0].context_md).toContain("outreach/line/change/land.cast");
+    expect(cards(w.db)[0].context_md).toContain("Verdict: ship. It edits land.cast.");
+    expect(cards(w.db)[0].options[0].label).toBe("Approve merge");
+    await (settle as any)._handler(w.ctx, args);
+    expect(cards(w.db)).toHaveLength(1);
+    // A changed judged diff is a new question.
+    await (settle as any)._handler(w.ctx, { ...args, key: "k2" });
+    expect(cards(w.db)).toHaveLength(2);
+  });
+
+  test("agent work with nobody's press goes to its Requested-by person; a mechanism to an engineer presser, else the area's owner", async () => {
+    const asked = world();
+    await (settle as any)._handler(asked.ctx, { ...args, requested_by: "Jason" });
+    expect(cards(asked.db)[0].asked_user_ids).toEqual(["u_jason"]);
+    const mech = world({ workflow_runs: [run({ ...reviewed(true), pressed_approval_id: "p1" })], change_approvals: [{ _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [], user_id: "u_jason", created_at: 1 }] });
+    expect(await (settle as any)._handler(mech.ctx, { ...args, judged: [] })).toMatchObject({ description: "needs Jason Benn: the review called it a mechanism" });
+    const notEngineer = world({ workflow_runs: [run({ ...reviewed(true) })] });
+    await (settle as any)._handler(notEngineer.ctx, { ...args, judged: [], people: { ...people, engineers: [] } });
+    expect(cards(notEngineer.db)[0].asked_user_ids).toEqual(["u_ashot"]);
+  });
+
+  test("Cam's change: the card goes to the engineer, never to Cam", async () => {
+    // Cam asked, by codecast's record: the task is his.
+    const w = world({ tasks: [{ _id: "t1", user_id: "u_cam" }] });
+    await (settle as any)._handler(w.ctx, { ...args, people: { ...people, area_owner: undefined } });
+    expect(cards(w.db)[0].asked_user_ids).toEqual(["u_jason"]);
+  });
+
+  test("a pull request no codecast run is behind asks the area's owner from the team agent's session", async () => {
+    const w = world({ workflow_runs: [] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
+    expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_anchor", approval: { reason: "review" } });
+  });
+
+  test("a review that gave no mechanism answer is asked again in its own session, once per head, and nobody is carded", async () => {
+    const w = world({ workflow_runs: [run(reviewed(undefined))] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ description: "waiting for the review's mechanism answer" });
+    await (settle as any)._handler(w.ctx, args);
+    expect(cards(w.db)).toEqual([]);
+    const asks = w.db._tables.pending_messages.filter((m: any) => m.conversation_id === "c_rev");
+    expect(asks).toHaveLength(1);
+    expect(asks[0].content).toContain("--mechanism true");
+  });
+
+  test("Approve merge on the card approves that judged diff and re-posts; Revise revokes the run's approvals", async () => {
+    const w = world({ workflow_runs: [run({ pressed_approval_id: "p1" })], change_approvals: [{ _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [], user_id: "u_jason", created_at: 1 }] });
+    await (settle as any)._handler(w.ctx, args);
+    const card = cards(w.db)[0];
+    await settleCardApproval(w.ctx as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_jason" as any }, 20);
+    expect(w.db._tables.change_approvals.at(-1)).toMatchObject({ source: "card", judged_key: "k1", pr_number: 7, decision_id: card._id, user_id: "u_jason" });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "success" });
+    await settleCardApproval(w.ctx as any, card, { status: "answered", answer_index: 1 }, { kind: "user", user_id: "u_jason" as any }, 30);
+    expect(w.db._tables.change_approvals.every((a: any) => a.revoked_at === 30)).toBe(true);
+  });
+
+  test("a merged Release Captain revert that touched a judged file tells the first engineer once", async () => {
+    const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], engineers: [{ user_id: "u_jason", name: "Jason" }] }] };
+    const pr = { ...prRow, state: "merged", approval: { head_sha: HEAD, state: "success", description: "x", captain_revert: true, judged_files: ["outreach/line/change/land.cast"] } };
+    const w = world({ github_app_installations: [inst], pull_requests: [pr], notifications: [] });
+    expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(true);
+    expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(false);
+  });
 });

@@ -59,7 +59,7 @@ import {
   shortSha,
 } from "./lib/gitRefs";
 import { committedSessionIds } from "./lib/prSessions";
-import { postApprovalFromAction, repostOnJudgesPush, scheduleApprovalPost } from "./lib/changeApprovalRows";
+import { noticeCaptainRevertMerged, postApprovalFromAction, repostOnJudgesPush, scheduleApprovalPost } from "./lib/changeApprovalRows";
 import { anchorFromDiffHunk } from "@codecast/shared/comments";
 
 const MERGE_STATE_DELAY_MS = 15 * 1000;
@@ -706,6 +706,8 @@ export const processPRClosedEvent = internalMutation({
     });
 
     await recordPRMergedActivity(ctx, pr, existing.state, pr.state);
+    // A Release Captain's revert that touched what judges changes: an engineer hears it merged (changeApprovals.ts).
+    if (merged) await noticeCaptainRevertMerged(ctx, pr);
     await fireTrigger(ctx, merged ? "pr_merged" : "pr_closed", pr);
 
     await ctx.db.patch(args.event_id, { processed: true });

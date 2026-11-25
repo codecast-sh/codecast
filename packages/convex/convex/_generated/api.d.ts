@@ -273,6 +273,7 @@ import type * as lib_castData from "../lib/castData.js";
 import type * as lib_castMachineAws from "../lib/castMachineAws.js";
 import type * as lib_castMotion from "../lib/castMotion.js";
 import type * as lib_castPlayer from "../lib/castPlayer.js";
+import type * as lib_changeApprovalCards from "../lib/changeApprovalCards.js";
 import type * as lib_changeApprovalRows from "../lib/changeApprovalRows.js";
 import type * as lib_changeGuideValidator from "../lib/changeGuideValidator.js";
 import type * as lib_changesAccess from "../lib/changesAccess.js";
@@ -1121,6 +1122,7 @@ declare const fullApi: ApiFromModules<{
   "lib/castMachineAws": typeof lib_castMachineAws;
   "lib/castMotion": typeof lib_castMotion;
   "lib/castPlayer": typeof lib_castPlayer;
+  "lib/changeApprovalCards": typeof lib_changeApprovalCards;
   "lib/changeApprovalRows": typeof lib_changeApprovalRows;
   "lib/changeGuideValidator": typeof lib_changeGuideValidator;
   "lib/changesAccess": typeof lib_changesAccess;

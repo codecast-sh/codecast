@@ -2,6 +2,7 @@ import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoff
 import { ChangesProvider } from "./changes/ChangesContext";
 import { WebBranchFeed } from "./changes/WebBranchFeed";
 import { RunThroughFlow } from "./line/widgets/RunThroughFlow";
+import { ShipApprovalPrompt } from "./line/widgets/ShipApprovalPrompt";
 import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
@@ -5206,6 +5207,12 @@ const ConversationViewInner = (
       {conversation && !guest && !(leadNode && leadPinned) && (
         <ErrorBoundary name="ThreadSuggestions" level="inline" fallback={null}>
           <ThreadSuggestions conversationId={conversation._id.toString()} />
+        </ErrorBoundary>
+      )}
+      {/* A typed "ship" on a change that touches judged files: the one-click approval of that list (ct-100350). */}
+      {conversation && !guest && (
+        <ErrorBoundary name="ShipApprovalPrompt" level="inline" fallback={null}>
+          <ShipApprovalPrompt conversationId={conversation._id.toString()} sessionTitle={conversation.title ?? "this session"} />
         </ErrorBoundary>
       )}
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>

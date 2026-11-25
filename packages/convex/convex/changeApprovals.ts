@@ -33,6 +33,7 @@ import { fetchPRFiles, PR_FILES_CAP, type PRPath } from "./githubApi";
 import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
 import { approvalContext, askerOf, gateOf, isCam, isReleaseCaptain, preBuildYes } from "./lib/changeApprovalRows";
+import { askReviewForMechanism, cardPeople, postApprovalCard, type CardReason } from "./lib/changeApprovalCards";
 import { diffKey, isJudged, judgedPaths, keyChanged, keyEntriesFor, ownerOf, parseJudges, parseOwners, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./lib/judgedDiff";
 
 const GITHUB = "https://api.github.com";
@@ -49,14 +50,16 @@ export type ApprovalFacts =
       judged: string[];
       /** A revert the Release Captain's run made: CI's required checks alone decide it. */
       captain_revert?: boolean;
+      /** Whether a codecast run is behind the pull request: only a run has a review to give the mechanism answer. */
+      run: boolean;
       /** The review's answer: true a mechanism, false not, null not said (or not yet seen finished). */
       mechanism: boolean | null;
       /** A person's Ship on the run's card, for this judged diff. */
       card?: { who: string; ref: string } | null;
       /** A person's Ship press, for this judged diff. */
       press?: { who: string } | null;
-      /** Who a card about the judged files goes to, and who one about a mechanism goes to, in words. */
-      needs: { judged: string; mechanism: string };
+      /** Who a card goes to, by name, for each question a person may be asked. */
+      needs: { judged: string; mechanism: string; review: string };
     };
 
 export type ApprovalVerdict = { state: "success" | "pending"; description: string };
@@ -84,6 +87,8 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (!f.opted) return null;
   if ("unreadable" in f) return { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
   if (f.captain_revert) return { state: "success", description: "the Release Captain's revert: CI's required checks decide" };
+  // No codecast run, so no review gave a mechanism answer: a person reads it (the card), until then it waits.
+  if (!f.run) return f.card ? { state: "success", description: fit(`approved by ${f.card.who} (${f.card.ref})`) } : { state: "pending", description: fit(`needs a review by ${f.needs.review}: no codecast run reviewed it`) };
   if (f.mechanism === null) return { state: "pending", description: "waiting for the review's mechanism answer" };
   if (!f.judged.length && !f.mechanism) return { state: "success", description: "no judged paths; the review: not a mechanism" };
   if (f.card) return { state: "success", description: fit(`approved by ${f.card.who} (${f.card.ref})`) };
@@ -91,6 +96,21 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (f.press) return { state: "success", description: fit(`approved by ${f.press.who} (Ship press)`) };
   const head = `needs ${f.needs.judged}: edits `;
   return { state: "pending", description: fit(head + pathList(f.judged, DESCRIPTION_MAX - head.length)) };
+}
+
+
+/**
+ * The question a pending status puts to a person, which their approval card asks, or null when it waits on nobody
+ * (a review still to give its mechanism answer goes back to the review, never to a person).
+ */
+export function cardReason(f: ApprovalFacts): CardReason | null {
+  if (!f.opted) return null;
+  if ("unreadable" in f) return "unreadable";
+  if (f.captain_revert || f.card) return null;
+  if (!f.run) return "review";
+  if (f.mechanism === null) return null;
+  if (f.mechanism) return "mechanism";
+  return f.judged.length && !f.press ? "judged" : null;
 }
 
 // ── Reading GitHub ──
@@ -188,12 +208,22 @@ async function prMessages(repository: string, token: string, prNumber: number): 
   return commits.map((c) => String(c.commit?.message ?? ""));
 }
 
+/** Who a card may go to, as GitHub and main's files beside the judges file name them. */
+export type PullPeople = {
+  title: string;
+  author_login: string | null;
+  /** The area's owner by main's owners file (`path-prefix  First-name`), or null when it has none for these paths. */
+  area_owner: string | null;
+  /** Main's engineers file: one `<codecast user id> <name>` a line. */
+  engineers: Array<{ user_id: string; name: string }>;
+};
+
 export type PullRead =
   | { open: false }
-  | { open: true; head_sha: string; unreadable: string; judges?: string[] }
-  | { open: true; head_sha: string; judged: string[]; key: string; judges: string[]; engineers: Array<{ user_id: string; name: string }>; reverts: boolean; requested_by?: string; area_owner?: string };
+  | { open: true; head_sha: string; unreadable: string; judges?: string[]; people: PullPeople }
+  | { open: true; head_sha: string; judged: string[]; key: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople };
 
-/** Main's engineers file beside the judges file: `<codecast user id> <name>` a line, blank and "#" lines skipped. */
+/** Main's engineers file: `<codecast user id> <name>` a line, blank and "#" lines skipped. */
 export function parseEngineers(text: string): Array<{ user_id: string; name: string }> {
   return text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).flatMap((l) => {
     const m = /^(\S+)\s+(.+)$/.exec(l);
@@ -207,34 +237,41 @@ export async function readPull(repository: string, prNumber: number, token: stri
   if (pr.state !== "open" || !pr.head_sha) return { open: false };
   const head = pr.head_sha;
   const main = pr.default_branch ?? pr.base_ref ?? "main";
+  const changed = pr.paths.flatMap(pathsOf);
+  const beside = (name: string) => `${judgesPath.includes("/") ? judgesPath.slice(0, judgesPath.lastIndexOf("/") + 1) : ""}${name}`;
+  const onMain = async (path: string) => {
+    const r = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(path)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
+    return r.status === 404 ? null : r.text ?? "";
+  };
+  const people: PullPeople = { title: pr.title ?? "", author_login: pr.author_login ?? null, area_owner: null, engineers: [] };
   try {
-    const judgesFile = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(judgesPath)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
-    if (judgesFile.status === 404) return { open: true, head_sha: head, unreadable: `${judgesPath} on ${main}` };
-    const judges = parseJudges(judgesFile.text ?? "");
-    if (!pr.complete || pr.paths.length >= PR_FILES_CAP) return { open: true, head_sha: head, unreadable: "every file (over 3,000, or GitHub cut the list short)", judges };
+    const [ownersText, engineersText] = await Promise.all([onMain(beside("owners.txt")), onMain(beside("engineers.txt"))]);
+    const owners = ownersText === null ? [] : parseOwners(ownersText);
+    people.engineers = engineersText === null ? [] : parseEngineers(engineersText);
+    people.area_owner = ownerOf(changed, owners);
+    const judgesText = await onMain(judgesPath);
+    if (judgesText === null) return { open: true, head_sha: head, unreadable: `${judgesPath} on ${main}`, people };
+    const judges = parseJudges(judgesText);
+    if (!pr.complete || pr.paths.length >= PR_FILES_CAP) return { open: true, head_sha: head, unreadable: "every file (over 3,000, or GitHub cut the list short)", judges, people };
     const compare = await rest(`${GITHUB}/repos/${repository}/compare/${encodeURIComponent(main)}...${head}`, token);
     const mb: string | undefined = compare.json?.merge_base_commit?.sha;
-    if (!mb) return { open: true, head_sha: head, unreadable: `the merge base with ${main}`, judges };
+    if (!mb) return { open: true, head_sha: head, unreadable: `the merge base with ${main}`, judges, people };
     // A `name#key` entry judges a file of that name only when its key's value changed: read both sides to decide.
-    const changed = pr.paths.flatMap(pathsOf);
     const byKey = changed.filter((p) => !isJudged(p, judges) && keyEntriesFor(p, judges).length);
     const sides = byKey.length ? await readObjects(repository, token, byKey.flatMap((p) => [{ sha: mb, path: p, text: true }, { sha: head, path: p, text: true }])) : null;
     const keyHits = byKey.filter((p) => keyEntriesFor(p, judges).some((k) => keyChanged(sides!.text(mb, p), sides!.text(head, p), k.key)));
     const judged = judgedPaths(changed, judges, keyHits);
+    // The area is the judged files' when there are any.
+    if (judged.length) people.area_owner = ownerOf(judged, owners) ?? people.area_owner;
     const rebuilt = pathDiffsOf(await withSides(repository, token, pr.paths, mb, head, (p) => judged.includes(p)), (p) => judged.includes(p));
-    if ("unreadable" in rebuilt) return { open: true, head_sha: head, unreadable: `${rebuilt.unreadable}'s diff`, judges };
+    if ("unreadable" in rebuilt) return { open: true, head_sha: head, unreadable: `${rebuilt.unreadable}'s diff`, judges, people };
     const key = await diffKey(rebuilt.diffs);
     const messages = await prMessages(repository, token, prNumber);
     const asker = requestedBy(messages);
-    const ownersPath = `${judgesPath.includes("/") ? judgesPath.slice(0, judgesPath.lastIndexOf("/") + 1) : ""}owners.txt`;
-    const ownersFile = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(ownersPath)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
-    const owner = ownersFile.status === 404 ? null : ownerOf(judged.length ? judged : changed, parseOwners(ownersFile.text ?? ""));
-    const engineersFile = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(ownersPath.replace(/owners\.txt$/, "engineers.txt"))}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
-    const engineers = engineersFile.status === 404 ? [] : parseEngineers(engineersFile.text ?? "");
     // The Captain's exemption is for a pull request of reverts only: one other commit and it is judged like any.
-    return { open: true, head_sha: head, judged, key, judges, engineers, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), ...(owner ? { area_owner: owner } : {}) };
+    return { open: true, head_sha: head, judged, key, judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people };
   } catch (error) {
-    return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})` };
+    return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})`, people };
   }
 }
 
@@ -261,10 +298,9 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
       judged: read.judged, key: read.key,
       ...(read.reverts ? { reverts: true } : {}),
       ...(read.requested_by ? { requested_by: read.requested_by } : {}),
-      ...(read.area_owner ? { area_owner: read.area_owner } : {}),
-      engineers: read.engineers,
     }),
     ...(read.judges ? { judges: read.judges } : {}),
+    people: { ...read.people, area_owner: read.people.area_owner ?? undefined, author_login: read.people.author_login ?? undefined },
   });
   const done = { opted: true as const, open: true as const, head_sha: read.head_sha, token: minted.token, ...verdict };
   if (!args.post) return { ...done, posted: false };
@@ -386,17 +422,22 @@ export const settle = internalMutation({
     key: v.optional(v.string()),
     reverts: v.optional(v.boolean()),
     requested_by: v.optional(v.string()),
-    area_owner: v.optional(v.string()),
-    engineers: v.optional(v.array(v.object({ user_id: v.string(), name: v.string() }))),
     judges: v.optional(v.array(v.string())),
+    people: v.optional(v.object({
+      title: v.string(),
+      author_login: v.optional(v.string()),
+      area_owner: v.optional(v.string()),
+      engineers: v.array(v.object({ user_id: v.string(), name: v.string() })),
+    })),
   },
   handler: async (ctx, args): Promise<ApprovalVerdict & { context: string }> => {
     const repository = normalizeRepository(args.repository);
     const gate = await gateOf(ctx, repository);
     if (!gate) throw new Error(`${repository} is not opted in to the approval status`);
-    if (args.judges && JSON.stringify(args.judges) !== JSON.stringify(gate.judges ?? null)) {
+    const readEngineers = args.people?.engineers;
+    if ((args.judges && JSON.stringify(args.judges) !== JSON.stringify(gate.judges ?? null)) || (readEngineers && JSON.stringify(readEngineers) !== JSON.stringify(gate.engineers ?? null))) {
       const row = await ctx.db.get(gate.installation_row);
-      if (row) await ctx.db.patch(row._id, { approval_gate: (row.approval_gate ?? []).map((g) => (normalizeRepository(g.repository) === repository ? { ...g, judges: args.judges } : g)) });
+      if (row) await ctx.db.patch(row._id, { approval_gate: (row.approval_gate ?? []).map((g) => (normalizeRepository(g.repository) === repository ? { ...g, ...(args.judges ? { judges: args.judges } : {}), ...(readEngineers ? { engineers: readEngineers } : {}) } : g)) });
     }
     const run: any = await ctx.db.query("workflow_runs").withIndex("by_pr", (q) => q.eq("pr.repository", repository).eq("pr.number", args.pr_number)).order("desc").first();
     const key = args.key;
@@ -411,7 +452,7 @@ export const settle = internalMutation({
 
     // A change Cam asked for (codecast's own record of who asked, never a commit trailer): an engineer's in-person yes
     // before the build approves its judged files, bound to the judged diff the run first pushed; never a mechanism.
-    const engineers = args.engineers ?? [];
+    const engineers = args.people?.engineers ?? gate.engineers ?? [];
     const camAsked = !!run && isCam(await askerOf(ctx, run));
     const engineerYes = camAsked ? await preBuildYes(ctx, run, engineers) : null;
     if (engineerYes && key !== undefined && run.pr?.first_head_sha === args.head_sha) {
@@ -424,9 +465,11 @@ export const settle = internalMutation({
       }
     }
 
-    const approvals: Doc<"change_approvals">[] = key === undefined ? [] : (await ctx.db
+    // An approval is keyed to the judged diff; with none readable, to the head a person was shown (an unreadable card).
+    const lookupKey = key ?? `head:${args.head_sha}`;
+    const approvals: Doc<"change_approvals">[] = (await ctx.db
       .query("change_approvals")
-      .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", key))
+      .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", lookupKey))
       .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at);
     const cardRow = approvals.find((a) => a.source === "card");
     const pressRow = approvals.find((a) => a.source === "ship_press");
@@ -435,31 +478,46 @@ export const settle = internalMutation({
     const card = cardRow ? { who: await nameOf(ctx, cardRow.user_id), ref: await refOf(cardRow) } : null;
     // A press and an engineer's pre-build yes both cover the judged files of their diff, never a mechanism.
     const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) } : yesRow ? { who: `${await nameOf(ctx, yesRow.user_id)}, ${await refOf(yesRow)} before the build` } : null;
-    // Who a card goes to, by name (cards to a person, never a role): the presser for judged files their press did not
-    // list; else the work's Requested-by person, the session's owner, the area's owner. A mechanism: an engineer, or
-    // the area's owner (engineers are those main's engineers file lists).
-    const presser: any = run?.pressed_approval_id ? await ctx.db.get(run.pressed_approval_id) : null;
-    const spawner: any = run?.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
-    const presserName = presser ? await nameOf(ctx, presser.user_id) : null;
-    const judgedNeeds = camAsked
-      ? (engineerYes ? await nameOf(ctx, engineerYes.user_id) : null) ?? args.area_owner ?? (engineers[0]?.name ?? "an engineer")
-      : presserName ?? args.requested_by ?? (spawner ? await nameOf(ctx, spawner.user_id) : null) ?? args.area_owner ?? "a person";
-    const needs = { judged: judgedNeeds, mechanism: `an engineer${args.area_owner ? ` or ${args.area_owner}` : ""}` };
+    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
+    const pr = rows[0] ?? null;
+    const before = pr?.approval;
+    // Who each question goes to: a person, never a role (lib/changeApprovalCards.ts).
+    const to = await cardPeople(ctx, {
+      teamId: pr?.team_id ?? run?.team_id, run, camAsked, area_owner: args.people?.area_owner,
+      requested_by: args.requested_by, author_login: args.people?.author_login, engineers, engineerYes,
+    });
+    const needs = { judged: to.judged.name, mechanism: to.mechanism.name, review: to.review.name };
     const role: any = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
     const captainRevert = !!args.reverts && isReleaseCaptain(role);
+    const mechanism = run ? mechanismOf(run, args.head_sha) : null;
 
     const facts: ApprovalFacts = args.unreadable !== undefined
       ? { opted: true, unreadable: args.unreadable }
-      : { opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), mechanism: run ? mechanismOf(run, args.head_sha) : null, card, press, needs };
+      : { opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), run: !!run, mechanism, card, press, needs };
     const verdict = decide(facts)!;
+    const now = Date.now();
 
-    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
-    for (const pr of rows) {
-      await patchPullRequest(ctx, pr._id, {
+    // A review that finished without a mechanism answer is asked again, once per head.
+    const askedReview = run && mechanism === null && before?.review_asked !== args.head_sha
+      && (await askReviewForMechanism(ctx, run, args.head_sha, `${repository}#${args.pr_number}`, runAttempt(run)));
+    // The one card a person is asked, per judged diff and question.
+    const reason: CardReason | null = cardReason(facts);
+    const posted = reason ? await postApprovalCard(ctx, {
+      repository, pr_number: args.pr_number, head_sha: args.head_sha, key, judged, reason, to: to[reason], run, pr,
+      title: args.people?.title ?? pr?.title ?? "", before_key: before?.card_key, now,
+    }) : null;
+
+    for (const row of rows) {
+      await patchPullRequest(ctx, row._id, {
         approval: {
           head_sha: args.head_sha, state: verdict.state, description: verdict.description,
           ...(key !== undefined ? { judged_key: key, judged_files: judged } : {}),
           ...(run ? { run_id: run._id } : {}),
+          ...(typeof mechanism === "boolean" ? { mechanism } : {}),
+          ...(captainRevert ? { captain_revert: true } : {}),
+          ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : before?.card_key ? { card_key: before.card_key, ...(before.card_id ? { card_id: before.card_id } : {}) } : {}),
+          ...(askedReview ? { review_asked: args.head_sha } : before?.review_asked ? { review_asked: before.review_asked } : {}),
+          ...(before?.engineer_told ? { engineer_told: true } : {}),
         },
       });
     }

@@ -4004,6 +4004,15 @@ export default defineSchema({
       judged_key: v.optional(v.string()),
       judged_files: v.optional(v.array(v.string())),
       run_id: v.optional(v.id("workflow_runs")),
+      // The review's mechanism answer as it counted, and whether this is a Release Captain's revert.
+      mechanism: v.optional(v.boolean()),
+      captain_revert: v.optional(v.boolean()),
+      // The approval card codecast posted, keyed by the judged diff and the question, so a re-post never posts twice;
+      // the head whose missing mechanism answer was asked of the review; an engineer told of a merged Captain revert.
+      card_key: v.optional(v.string()),
+      card_id: v.optional(v.id("session_decisions")),
+      review_asked: v.optional(v.string()),
+      engineer_told: v.optional(v.boolean()),
     })),
   })
     .index("by_team_id", ["team_id"])
@@ -5532,7 +5541,10 @@ export default defineSchema({
     gate_node_id: v.optional(v.string()),
     // What a person's Ship on this card approves (changeApprovals.ts): the run's pull request, the judged diff's key
     // and its judged files as they stood when it was asked. Absent when the run had no pull request yet.
-    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), files: v.array(v.string()) })),
+    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()) })),
+    // An approval card codecast itself posted for a pull request's status (changeApprovals.ts): silent, one person's,
+    // and settled by settleCardApproval from `approval` above.
+    approval_card: v.optional(v.boolean()),
     form: v.optional(
       v.object({
         fields: v.array(
@@ -6066,6 +6078,8 @@ export default defineSchema({
       judges_path: v.string(),
       mode: v.union(v.literal("shadow"), v.literal("required")),
       judges: v.optional(v.array(v.string())),
+      // Main's engineers file beside the judges file, as last read: who is told of a merged Captain revert.
+      engineers: v.optional(v.array(v.object({ user_id: v.string(), name: v.string() }))),
     }))),
     created_at: v.number(),
     updated_at: v.number(),
