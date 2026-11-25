@@ -42,6 +42,8 @@ import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, 
 import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
 import { requestTargetDeployCore } from "./deployTargetRequest";
 export { requestTargetDeployCore };
+import { activePauseOf, pauseHolderOf, pauseViewOf } from "./deployPause";
+import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 import { guardedFetch, RefusedHostError } from "./lib/guardedFetch";
 
@@ -62,6 +64,8 @@ const targetValidator = v.object({
   paths: v.array(v.string()),
   ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
   workflow: v.optional(v.string()),
+  rollback_inputs: v.optional(v.record(v.string(), v.string())),
+  ci_workflow: v.optional(v.string()),
 });
 
 /** The team a CLI call means: the one it names (a member), else the repository's (deployTeamFor). */
@@ -121,6 +125,8 @@ export const publish = mutation({
         paths: t.paths,
         ship_stage: t.ship_stage,
         workflow: t.workflow,
+        rollback_inputs: t.rollback_inputs,
+        ci_workflow: t.ci_workflow,
         device_id: args.device_id,
         root: args.root,
       };
@@ -171,8 +177,17 @@ export const view = query({
     const workspace = teamKey(teamId);
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
     const rows = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => !args.target || r.name === args.target);
+    // Each target carries its repository's pause and whether the viewer may pause, lift and roll back (DP17).
+    const canPause = !!(await pauseHolderOf(ctx, userId, teamId));
+    const pauses = new Map<string, DeployPauseView | null>();
     const targets = [];
-    for (const t of rows) targets.push(await targetState(ctx, t));
+    for (const t of rows) {
+      if (!pauses.has(t.repository)) {
+        const p = await activePauseOf(ctx, workspace, t.repository);
+        pauses.set(t.repository, p ? await pauseViewOf(ctx, p) : null);
+      }
+      targets.push({ ...(await targetState(ctx, t)), pause: pauses.get(t.repository) ?? null, can_pause: canPause });
+    }
     return { team_id: teamId, targets };
   },
 });
@@ -282,6 +297,7 @@ export async function autoDeployTargetsCore(ctx: any): Promise<Array<{ target: s
   const out: Array<{ target: string; deploy?: string; why?: string }> = [];
   const rows: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").take(500)).filter((r: Doc<"deploy_targets">) => r.policy === "auto" && r.runs === "here" && !r.retired_at && r.command && r.device_id && r.root);
   for (const t of rows) {
+    if (await activePauseOf(ctx, t.workspace, t.repository)) { out.push({ target: t.name, why: "production is paused" }); continue; }
     const s = await targetState(ctx, t);
     if (s.open || !s.queue.known || !s.queue.commits) continue;
     const newest = s.queue.groups.flatMap((g) => g.commits).sort((a, b) => b.at - a.at)[0];
@@ -521,7 +537,7 @@ export const reportMainCommits = mutation({
   },
 });
 export const backfillCi = internalMutation({
-  args: { team_id: v.id("teams"), rows: v.array(v.object({ repository: v.string(), sha: v.string(), name: v.string(), kind: v.union(v.literal("workflow"), v.literal("suite")), run_id: v.optional(v.string()), status: v.string(), conclusion: v.optional(v.string()), url: v.optional(v.string()), started_at: v.number() })) },
+  args: { team_id: v.id("teams"), rows: v.array(v.object({ repository: v.string(), sha: v.string(), name: v.string(), kind: v.union(v.literal("workflow"), v.literal("suite")), run_id: v.optional(v.string()), path: v.optional(v.string()), status: v.string(), conclusion: v.optional(v.string()), url: v.optional(v.string()), started_at: v.number() })) },
   handler: async (ctx, args) => {
     let n = 0;
     for (const r of args.rows) if (await recordCommitCi(ctx, r, args.team_id)) n++;

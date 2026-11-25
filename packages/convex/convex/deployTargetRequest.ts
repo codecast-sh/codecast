@@ -7,6 +7,7 @@ import { enqueueConfigCommand } from "./users";
 import { DEPLOY_SHORT_ID_PREFIX, liveDeploys } from "@codecast/shared/contracts/deploys";
 import { canRedeploySha, commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
 import { teamKey } from "./deployTargetsCi";
+import { refuseWhilePaused } from "./deployPause";
 import { COMMITS_MAX, commitBySha, deployCommitsOf, devPushOver, mainCommitsAfter, repositoryArg, targetDeploys, targetRows } from "./deployTargetsState";
 
 /**
@@ -32,6 +33,8 @@ export async function requestTargetDeployCore(
   const action = args.action ?? "deploy";
   if (t.runs === "push") throw new Error(`${name} deploys itself when main moves; there is nothing to send from here`);
   if (!t.command) throw new Error(`${name} names no command`);
+  // A pause lets only a rollback through.
+  if (action !== "rollback") await refuseWhilePaused(ctx, workspace, t.repository);
   if (!args.here && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
   const deploys = await targetDeploys(ctx, workspace, name);
   const open = deploys.find((d) => (d.status === "requested" || d.status === "running") && (!d.repository || d.repository === t.repository));

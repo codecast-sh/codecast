@@ -5,6 +5,7 @@ import { publish, recordLiveRead, recordShipPass, reportMainCommits, request, vi
 import { checkSuiteCi, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
+import { grant as grantPause, lift as liftPause, pause as pausePause, status as pauseStatus } from "./deployPause";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):
 // published from the checkout, live from whichever path recorded it, the
@@ -15,6 +16,8 @@ const TEAM = "team_1" as any;
 const WS = `team:${TEAM}`;
 const ME = "user_me";
 const TOKEN = "cast_targets_token";
+const BO = "user_bo";
+const BO_TOKEN = "cast_targets_token_bo";
 const REPO = "acme/app";
 const NOW = Date.now();
 
@@ -22,9 +25,9 @@ const sha = (n: number) => String(n).padStart(2, "0").repeat(20);
 
 async function seed() {
   return {
-    users: [{ _id: ME, name: "Ana" }],
-    api_tokens: [{ _id: "tok_1", user_id: ME, token_hash: await hashToken(TOKEN) }],
-    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "member" }],
+    users: [{ _id: ME, name: "Ana" }, { _id: BO, name: "Bo", email: "bo@acme.dev" }],
+    api_tokens: [{ _id: "tok_1", user_id: ME, token_hash: await hashToken(TOKEN) }, { _id: "tok_2", user_id: BO, token_hash: await hashToken(BO_TOKEN) }],
+    team_memberships: [{ _id: "m1", user_id: ME, team_id: TEAM, role: "member" }, { _id: "m2", user_id: BO, team_id: TEAM, role: "member" }],
     teams: [{ _id: TEAM, name: "Acme" }],
     devices: [{ _id: "dev_row", user_id: ME, device_id: "ana-mac" }],
     github_app_installations: [],
@@ -38,6 +41,8 @@ async function seed() {
     commit_ci: [] as any[],
     deploy_targets: [] as any[],
     deploys: [] as any[],
+    deploy_pauses: [] as any[],
+    org_roles: [] as any[],
     ship_passes: [] as any[],
     external_events: [],
     event_groups: [],
@@ -397,5 +402,36 @@ describe("a json live reader's url (pollLiveReaders)", () => {
       "https://172.32.0.1/x",
       "https://[2606:4700::1111]/x",
     ]) expect([url, liveReaderUrlRefusal(url)]).toEqual([url, null]);
+  });
+});
+
+describe("production paused (DP17)", () => {
+  const as = (token: string) => ({ api_token: token, team_id: TEAM, repository: REPO });
+
+  test("a pause is held by admins and members an admin granted it, never by a deploy grant alone", async () => {
+    const { t, ctx } = await published();
+    await expect((pausePause as any)._handler(ctx, { ...as(TOKEN), reason: "errors spiking" })).rejects.toThrow(/held by founders, engineers and the Release Captain/);
+    t.team_memberships[0].role = "admin";
+    await expect((grantPause as any)._handler(ctx, { ...as(BO_TOKEN), person: "Ana" })).rejects.toThrow(/Only a team admin/);
+    expect(await (grantPause as any)._handler(ctx, { ...as(TOKEN), person: "bo@acme.dev" })).toEqual({ person: "Bo", holds: true });
+    expect(await (pauseStatus as any)._handler(ctx, as(BO_TOKEN))).toEqual({ repository: REPO, paused: null, can_pause: true });
+    await (grantPause as any)._handler(ctx, { ...as(TOKEN), person: "bo@acme.dev", revoke: true });
+    expect((await (pauseStatus as any)._handler(ctx, as(BO_TOKEN))).can_pause).toBe(false);
+  });
+
+  test("while paused nothing is sent to the repository's targets; whoever paused lifts it, and sends go again", async () => {
+    const { t, ctx } = await published();
+    t.team_memberships[0].role = "admin";
+    t.team_memberships[1].production_pause = true;
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);
+    const p = await (pausePause as any)._handler(ctx, { ...as(TOKEN), reason: "errors spiking" });
+    expect(p).toMatchObject({ repository: REPO, by: "Ana", reason: "errors spiking", lifts: "Ana or the Release Captain lifts it.", until: null });
+    await expect((pausePause as any)._handler(ctx, { ...as(BO_TOKEN), reason: "again" })).rejects.toThrow(/already paused by Ana/);
+    await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).rejects.toThrow(/Production is paused by Ana: errors spiking/);
+    expect((await viewOf(ctx, "backend"))[0]).toMatchObject({ pause: { by: "Ana", reason: "errors spiking" }, can_pause: true });
+    await expect((liftPause as any)._handler(ctx, as(BO_TOKEN))).rejects.toThrow(/Ana paused production; they or the Release Captain lift it/);
+    expect(await (liftPause as any)._handler(ctx, as(TOKEN))).toEqual({ lifted: true, repository: REPO });
+    expect(t.deploy_pauses[0]).toMatchObject({ lifted_by: "Ana" });
+    expect(await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).toMatchObject({ action: "deploy" });
   });
 });

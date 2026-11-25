@@ -19,6 +19,8 @@ export type CommitCiInput = {
   name: string;
   kind: "workflow" | "suite";
   run_id?: string;
+  /** A workflow run's file (`.github/workflows/ci.yml`). */
+  path?: string;
   status: string;
   conclusion?: string;
   url?: string;
@@ -41,6 +43,7 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
   const same = rows.find((r) => r.name === row.name && r.kind === row.kind);
   const fields = {
     ...(row.run_id ? { run_id: row.run_id } : {}),
+    ...(row.path ? { path: row.path } : {}),
     status: row.status,
     ...(row.conclusion ? { conclusion: row.conclusion } : {}),
     ...(row.url ? { url: row.url } : {}),
@@ -76,6 +79,7 @@ export function workflowRunCi(payload: any): CommitCiInput | null {
     name,
     kind: "workflow",
     ...(run.id != null ? { run_id: String(run.id) } : {}),
+    ...(run.path ? { path: String(run.path) } : {}),
     status: String(run.status ?? "queued"),
     ...(run.conclusion ? { conclusion: String(run.conclusion) } : {}),
     ...(run.html_url ? { url: run.html_url } : {}),

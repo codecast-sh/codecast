@@ -152,6 +152,7 @@ import type * as decisionThread from "../decisionThread.js";
 import type * as decisionThreadBackfill from "../decisionThreadBackfill.js";
 import type * as decisions from "../decisions.js";
 import type * as deployCarries from "../deployCarries.js";
+import type * as deployPause from "../deployPause.js";
 import type * as deployReach from "../deployReach.js";
 import type * as deployRefs from "../deployRefs.js";
 import type * as deploySchema from "../deploySchema.js";
@@ -997,6 +998,7 @@ declare const fullApi: ApiFromModules<{
   decisionThreadBackfill: typeof decisionThreadBackfill;
   decisions: typeof decisions;
   deployCarries: typeof deployCarries;
+  deployPause: typeof deployPause;
   deployReach: typeof deployReach;
   deployRefs: typeof deployRefs;
   deploySchema: typeof deploySchema;

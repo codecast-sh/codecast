@@ -65,6 +65,10 @@ export const deployTables = {
     ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
     // The Actions workflow file its deploys run as (deploy.yml): each run on the default branch records a deploy.
     workflow: v.optional(v.string()),
+    // The inputs a rollback adds to `sha` and `actor` when codecast dispatches `workflow` (Union's components).
+    rollback_inputs: v.optional(v.record(v.string(), v.string())),
+    // The CI workflow file whose pass on main makes a commit green (ci.yml): a rollback's pause waits for it.
+    ci_workflow: v.optional(v.string()),
     // The checkout that published it and the machine it is on: where a deploy of it runs.
     device_id: v.optional(v.string()),
     root: v.optional(v.string()),
@@ -95,6 +99,8 @@ export const deployTables = {
     name: v.string(),
     kind: v.union(v.literal("workflow"), v.literal("suite")),
     run_id: v.optional(v.string()),
+    // A workflow run's file (`.github/workflows/ci.yml`), so a reader can ask for one workflow's verdict.
+    path: v.optional(v.string()),
     status: v.string(),
     conclusion: v.optional(v.string()),
     url: v.optional(v.string()),
@@ -102,6 +108,42 @@ export const deployTables = {
     updated_at: v.number(),
   })
     .index("by_repository_sha", ["repository", "sha"]),
+
+  // A repository's production paused (deploys.md DP17): nothing is sent to its targets while one stands, except
+  // the rollback that paused it. Who paused and why, and what ends it: a commit green on main (a rollback's
+  // revert or fix forward, filed to the Release Captain as `task_id`), or nothing, when a person or the Release
+  // Captain lifts it. At most one stands per repository; a lifted row is kept as the record.
+  deploy_pauses: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    repository: v.string(),
+    by: v.object({
+      kind: v.union(v.literal("person"), v.literal("role")),
+      name: v.string(),
+      user_id: v.id("users"),
+      role_id: v.optional(v.id("org_roles")),
+    }),
+    reason: v.string(),
+    // The rollback (dp-N) that paused it, and the commit that ends it: the first commit on main after `from_sha` that
+    // names `task_id`, once it (or a later commit) passes CI.
+    rollback: v.optional(v.string()),
+    until: v.optional(v.object({
+      task_id: v.id("tasks"),
+      kind: v.union(v.literal("revert"), v.literal("fix_forward")),
+      from_sha: v.string(),
+      // The commits the rollback took off production, and the migration files among them.
+      shas: v.array(v.string()),
+      migrations: v.array(v.string()),
+    })),
+    created_at: v.number(),
+    reminded_at: v.optional(v.number()),
+    lifted_at: v.optional(v.number()),
+    lifted_by: v.optional(v.string()),
+    // The commit whose green CI lifted it.
+    lifted_on: v.optional(v.string()),
+  })
+    .index("by_workspace_repository_lifted", ["workspace", "repository", "lifted_at"])
+    .index("by_lifted", ["lifted_at"]),
 
   // A workflow that runs on pull requests as well as pushes: CI, which red
   // main judges. A push-only workflow (a release, a publish) is never rerun.

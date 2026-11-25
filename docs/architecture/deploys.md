@@ -622,3 +622,24 @@ dormant, all of them speak. A pull request
 names its commit on main by `pull_requests.merge_commit_sha`, which the closed
 webhook and the GitHub sync write. The rule is `contracts/deployReach`; the
 web's store holds each answer in `deployReach`, keyed by its ref.
+
+## DP17. Pausing production
+
+A pause (`deploy_pauses`, one standing per repository) stops every send to
+the repository's targets: `deployTargets.request` refuses a deploy or a
+redeploy while one stands, and auto targets wait. It records who paused, why
+and when, and what ends it: nothing, when the person who paused or the
+Release Captain lifts it, or a commit green on main (a rollback's, DP18).
+A lifted pause is kept as the record (`lifted_at`, `lifted_by`).
+
+Pausing, lifting and rolling back are a permission of their own, separate
+from any deploy grant: team admins (founders) hold it, a member holds it
+once an admin grants it (`team_memberships.production_pause`, `cast line
+deploy grant <person>`), and a role holds it with the `production-pause`
+authority grant (the Release Captain) when the call comes from its session.
+Lifting is for whoever paused, or the Release Captain.
+
+`cast line deploy status|pause|lift` (`--json` for scripts; deploy.sh reads
+it before it sends) and the Deploys page, where each target carries its
+repository's pause and whether the viewer may pause (`deployTargets.view`).
+The shared rules are `contracts/deployPause`.

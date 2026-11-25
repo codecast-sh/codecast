@@ -640,6 +640,9 @@ export default defineSchema({
     // (decisionRouting.ts).
     takes_decisions: v.optional(v.boolean()),
     focus_project_ids: v.optional(v.array(v.id("projects"))),
+    // Whether this member may pause, lift and roll back the team's production (deploys.md DP17), granted by an
+    // admin; admins hold it without the flag. Separate from any deploy grant.
+    production_pause: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
@@ -4485,6 +4488,16 @@ export default defineSchema({
     // The line-deploy run that carries it through its steps (DP8): each
     // step's state is that run's station, read from the run, never copied here.
     run_id: v.optional(v.id("workflow_runs")),
+    // A deploy codecast sends through its GitHub app (deploys.md DP17): queued until nothing runs or waits for the
+    // target's workflow, sending while it dispatches, sent once GitHub took it (the run's webhook then names it).
+    dispatch: v.optional(v.object({
+      state: v.union(v.literal("queued"), v.literal("sending"), v.literal("sent")),
+      at: v.number(),
+      inputs: v.optional(v.record(v.string(), v.string())),
+    })),
+    // A cancel codecast made itself (a pause or a rollback stopping a run before rollout): the only cancel that counts
+    // as a pause. Any other cancelled run is neutral.
+    cancel: v.optional(v.object({ by: v.string(), at: v.number(), why: v.string() })),
     // A deploy still open when a newer one of its target went live, closed as cancelled: that deploy's short id.
     // A later report of its own (live, failed) still lands on it.
     superseded_by: v.optional(v.string()),
