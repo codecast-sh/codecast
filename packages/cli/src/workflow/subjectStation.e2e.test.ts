@@ -159,9 +159,10 @@ describe("a subject that pins blocked at its own station: the run waits for a pe
   /**
    * The session pins blocked when the brief reaches it and goes quiet. `answerAfter` reads of its row later a person
    * has answered: it works, fixes a.txt and ends its turn pinned `answer` (with none, it never comes back). `ended`
-   * says when the run reads as over on the server (a cancel).
+   * says when the run reads as over on the server (a cancel). `killedAfter`: its row reads killed from that many reads
+   * into the wait (0: killed already when its blocked pin is first read).
    */
-  function asksAPerson(edit: (t: string) => void, opts: { answer?: "done" | "dormant"; answerAfter?: number; ended?: (parkedReads: number) => boolean }) {
+  function asksAPerson(edit: (t: string) => void, opts: { answer?: "done" | "dormant"; answerAfter?: number; ended?: (parkedReads: number) => boolean; killedAfter?: number }) {
     let phase: "brief" | "blocked" | "working" | "answered" = "brief";
     let pinnedAt = 0;
     let parkedReads = 0;
@@ -170,6 +171,10 @@ describe("a subject that pins blocked at its own station: the run waits for a pe
       row: (briefed) => {
         if (!briefed) return {};
         if (phase === "brief") phase = "blocked";
+        if (phase === "blocked" && opts.killedAfter !== undefined && parkedReads >= opts.killedAfter) {
+          if (pinnedAt) parkedReads++;
+          return { is_killed: true, is_live: false };
+        }
         if (phase === "blocked" && pinnedAt && ++parkedReads >= (opts.answerAfter ?? 8) && opts.answer) {
           phase = "working";
           return { work_state: "working", agent_status: "working", message_count: 20 };
@@ -226,6 +231,28 @@ describe("a subject that pins blocked at its own station: the run waits for a pe
       expect(p.s.calls.filter((c) => c.route === "/cli/workflow-runs/poll-gate").length).toBeGreaterThanOrEqual(8);
     }, 60_000);
   }
+
+  const failReasons = (s: ReturnType<typeof server>) => s.calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.fail_reason).map((c) => String(c.body.fail_reason));
+
+  test("a killed session's blocked pin is the station's stop, as before: there is no next turn to wait for", async () => {
+    const { root, edit } = world("bad\n");
+    const p = asksAPerson(edit, { killedAfter: 0 });
+    const { outcome } = await start(root);
+    expect(outcome).toBe("failed");
+    expect(failReasons(p.s).at(-1)).toBe("fix_check is waiting on a person");
+    expect(waits(p.s).some((w) => w?.blocked)).toBe(false);
+    expect(p.s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
+  }, 60_000);
+
+  test("a session killed while the run waits for a person ends the wait on the next read, with the station's stop", async () => {
+    const { root, edit } = world("bad\n");
+    const p = asksAPerson(edit, { killedAfter: 5 });
+    const { outcome } = await start(root);
+    expect(outcome).toBe("failed");
+    expect(waits(p.s).find((w) => w?.blocked)).toMatchObject({ note: PIN, blocked: true });
+    expect(p.parkedReads()).toBeGreaterThanOrEqual(6);
+    expect(failReasons(p.s).at(-1)).toBe("fix_check is waiting on a person");
+  }, 60_000);
 
   test("a session that never comes back is waited for past its station's limit and quiet window; only a cancel ends the run", async () => {
     const { root, edit } = world("bad\n");

@@ -510,8 +510,9 @@ function lastSaid(state: WorkflowRunState): string | undefined {
 // failing ones. Files the finding names that no session wrote go to the run's subject (the session that ran the pass)
 // in the same way; with no subject, the station says nobody heard about them. Every writer's row is read before any
 // brief goes, and a send that fails partway tells the writers already briefed that the run stopped. The run waits on
-// them all at once, each wait on a copy of the run's context: the first to die stops the others, and only its words
-// reach the run; one that pins blocked waits for a person and stops nobody (waitOnStation). Once all have answered it freezes the
+// them all at once, each wait on a copy of the run's context: the first to die (or, killed, to leave a blocked pin)
+// stops the others, and only its words reach the run, an ask before a death. One live and blocked waits for a person
+// and stops nobody (waitOnStation). Once all have answered it freezes the
 // checkout's change again. The writers are other people's sessions in a shared checkout: nothing here parks or
 // retires them.
 async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, named: Writer[], unclaimed: string[]): Promise<NodeOutcome> {
@@ -569,10 +570,16 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   }));
   await waiting(null);
   const answered = results.filter((r) => !r.stopped);
-  const winner = answered.find((r) => r.outcome !== "success");
+  const winner = answered.find((r) => r.outcome !== "success" && r.own["station_blocked"]) ?? answered.find((r) => r.outcome !== "success");
   if (winner) {
     for (const [k, v] of Object.entries(winner.own)) if (context[k] !== v) context[k] = v;
-    await callOff(results.filter((r) => r.stopped).map((r) => r.w), `${winner.w.shortId} could not finish`);
+    // A killed writer's ask reaches a person who must know which session to answer, and about which files.
+    if (context["station_blocked"]) {
+      const asks = `${winner.w.shortId} (writer of ${[...winner.w.files, ...(winner.w.unclaimed ?? [])].join(", ")}) asks: `;
+      context["blocked_note"] = `${asks}${context["blocked_note"] ?? ""}`;
+      context["last_error"] = `${asks}${context["last_error"] ?? ""}`.slice(0, 2000);
+    }
+    await callOff(results.filter((r) => r.stopped).map((r) => r.w), `${winner.w.shortId} ${winner.own["station_blocked"] ? "is waiting on a person" : "could not finish"}`);
     return winner.outcome;
   }
   try {
@@ -854,8 +861,9 @@ async function waitOnStation(
     if (moved || heldDormant || state === "working" || HAND_AT_WORK.has(row.agent_status ?? "")) watch.active();
     lastCount = row.message_count ?? 0;
     // A subject waiting for a person whose transcript has not moved has pinned nothing new: one read of its row and
-    // one of the run's status a poll, its clock stopped. Back at work, the run's row says it is fixing again.
-    if (person) {
+    // one of the run's status a poll, its clock stopped. Back at work, the run's row says it is fixing again. One
+    // killed meanwhile is read in full below, where its pin stops the run.
+    if (person && !row.is_killed) {
       const atWork = state === "working" || AGENT_AT_WORK.has(row.agent_status ?? "");
       if (atWork && person.shown) {
         person.shown = false;
@@ -1047,8 +1055,9 @@ async function waitOnStation(
     // the run or for anything else it holds (its own card, a CI outage). The run waits for that person, with no
     // clock running, and the session's next turn that ends otherwise answers the station as any turn would. Read as
     // the station's stop, such a pin ended 8 of 164 Land runs and each took a person's Ship again (ct-101065).
-    // Only a cancel ends the wait.
-    if (pinnedStatus === "blocked" && subject) {
+    // Only a cancel ends the wait. A killed session has no next turn to wait for: its pin stops the run (below), so a
+    // person sees the ask instead of a run waiting on nothing.
+    if (pinnedStatus === "blocked" && subject && !row.is_killed) {
       if (!person || person.at !== pinned?.at || !person.shown) {
         console.log(`  ${c.yellow}waiting for a person${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}; the run goes on when ${shortId} next ends a turn`);
         await subject.onPerson?.(pinnedText);

@@ -572,6 +572,30 @@ describe("writers answer for themselves", () => {
     expect(progressSaid(s)).not.toContain("waiting on a person");
   }, 1_200_000);
 
+  test("a writer killed while the run waits for its person stops the run with its ask, and stops waiting on the others", async () => {
+    const { root } = checkoutWorld();
+    const ask = "Which config should src/a.ts read, the old one or the new one?";
+    const s = scripted({
+      [A]: (ctl) => {
+        ctl.deliver(A);
+        ctl.row(A).work_state = "working";
+        setTimeout(() => ctl.settle(A, { status: "blocked", state: ask }), 200);
+        setTimeout(() => { Object.assign(ctl.row(A), { is_killed: true, is_live: false }); }, 700);
+      },
+      // B takes its brief and works on, never answering.
+      [B]: (ctl) => { ctl.deliver(B); ctl.row(B).work_state = "working"; },
+    });
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
+    const waits = s.calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.waiting_on_session).map((c) => c.body.waiting_on_session);
+    expect(waits.some((w) => w.blocked && w.conversation_id === A)).toBe(true);
+    expect(progressSaid(s)).toContain("fix_check is waiting on a person");
+    expect(JSON.stringify(s.calls)).toContain(`jx7aaaa (writer of src/a.ts) asks: ${ask}`);
+    expect(progressSaid(s)).not.toContain("killed after");
+    // B hears the run no longer waits on it; A, who asked, is not told so.
+    expect(s.sent(B).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(1);
+    expect(s.sent(A).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(0);
+  }, 1_200_000);
+
   test("files no session wrote go to the session that ran the pass, beside the writer's own", async () => {
     const { root, edit } = checkoutWorld();
     edit(B, "src/b.ts", "export const b = 'good';\n");
