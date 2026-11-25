@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "pr-switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -391,6 +391,54 @@ async function setupSwitch(): Promise<Bench> {
   };
 }
 
+// Moving one tab between a pull request's page and a conversation, the
+// back-and-forth of reading an agent's PR and talking to the agent (ct-101487).
+// The real tab shell (TabContent: the tab's pane, the stage, the route pane)
+// over the same cache as the warm switch; the conversation holds its full
+// window of 200 messages and both pages were visited once before anything is
+// measured. A move is what a click does to the tab: tabNavigate writes the
+// tab's path (store.updateTab). It lasts until the destination is on screen.
+// `marks` reports whether each page's root element survived the round trip,
+// which a warm move keeps and a remount replaces.
+const PR_PATH = "/pr/codecast-sh/codecast/186";
+async function setupPrSwitch(): Promise<Bench> {
+  const { TabContent } = await import("../components/TabContent");
+  const { AUTH_JWT_STORAGE_KEY } = await import("../lib/localAuth");
+  // The pages sit behind AuthGuard, which draws for a device holding a token.
+  w.localStorage.setItem(AUTH_JWT_STORAGE_KEY, "perf");
+  seedStore(2000);
+  const a = convId(1);
+  useInboxStore.getState().setMessages(a, messages(a, 200), { hasMoreAbove: true, initialized: true });
+  const tab = { id: "tab-perf", path: PR_PATH, title: "Pull request" } as any;
+  useInboxStore.setState({ tabs: [tab], activeTabId: tab.id } as any);
+  w.history.replaceState(null, "", PR_PATH);
+  mount();
+  const convPath = `/inbox?s=${a}`;
+  const onConversation = () => host.textContent!.includes(`Last line of answer 199 in ${a.slice(-6)}`);
+  const prRoot = () => host.querySelector("[data-pr-page]") ?? host.querySelector('[data-tab-id] [data-stage-leaf]')?.firstElementChild ?? null;
+  const go = async (path: string) => {
+    await act(async () => { useInboxStore.getState().updateTab(tab.id, { path }); w.history.pushState({ tabNav: true, tabId: tab.id }, "", path); });
+    if (path === convPath) await until(onConversation, "the conversation to paint");
+    else await until(() => !onConversation(), "the pull request page to show");
+    await settle();
+  };
+  // In the app the shell sits inside DashboardLayout, whose rail and chrome
+  // stay put while the tab moves; pages that wrap themselves in
+  // DashboardLayout step aside under its nesting context. The same context
+  // here, so a move measures the pane and not a second rail.
+  await import("../components/DashboardLayout");
+  const Nest = (globalThis as any).__DashboardNestCtx as React.Context<boolean>;
+  await render(<Nest.Provider value={true}><TabContent /></Nest.Provider>);
+  await settle();
+  await go(convPath);
+  await go(PR_PATH);
+  let onPr = true;
+  return {
+    run: () => measure(async () => { onPr = !onPr; await go(onPr ? PR_PATH : convPath); }),
+    reset: async () => { await settle(); },
+  };
+}
+
 // A message arriving in the open conversation: 200 cached messages on screen,
 // one more appended through the store's own merge (the path a streamed answer
 // takes), until its text is drawn. The other rows have nothing new to show,
@@ -564,6 +612,7 @@ async function setupDiff(): Promise<Bench> {
 
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
+  "pr-switch": setupPrSwitch,
   append: setupAppend,
   "inbox-load": () => setupInboxLoad(),
   "inbox-heartbeat": () => setupInboxHeartbeat(),
