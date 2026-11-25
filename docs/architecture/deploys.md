@@ -332,12 +332,12 @@ key instead, and a pressed deploy of that repository fails on them: raise
 `min_cli_version` to a release that knows a key before any repository writes
 it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
 
-`[ship]` is the one workspace.toml table read the same way from 1.1.258:
+`[ship]` is the one workspace.toml table read the same way from 1.1.284:
 workspace acquire and every other reader skip a `[ship]` key they do not
 know. `cast ship` alone still refuses it, naming the key (a newer cast's
 setting? cast update; a typo? fix it), because a skipped key may be how the
 pass is routed, and skipping a misspelled `flow` would push straight past the
-flow's checks and review. CLIs before 1.1.258 refuse it everywhere with the
+flow's checks and review. CLIs before 1.1.284 refuse it everywhere with the
 whole manifest, so a repository adds a `[ship]` key only once
 `min_cli_version` reaches a release that reads it.
 
