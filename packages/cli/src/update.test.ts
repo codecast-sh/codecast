@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
 import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck } from "./update";
+import { isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -168,6 +169,53 @@ describe("cast update download", () => {
     const calls: Call[] = [];
     const download = makeCurlDownload(fakeExec(calls, new Map(), { fail: 63 }));
     await expect(download(`${RELEASE_BASE_URL}/x`, "/tmp/dest", { maxBytes: 1, origin: RELEASE_BASE_URL })).rejects.toThrow("download_curl_63");
+  });
+});
+
+describe("a download that raced the manifest is tried once more", () => {
+  /** curl that lands `served[i]` on its i-th call (the last one after that). */
+  function servingExec(calls: Call[], files: Map<string, Uint8Array>, served: Uint8Array[]) {
+    return ((file: string, args: string[]) => {
+      calls.push({ file, args: [...args] });
+      files.set(args[args.indexOf("-o") + 1], served[Math.min(calls.length - 1, served.length - 1)]!);
+      return args[args.length - 1];
+    }) as unknown as typeof import("./proc.js").execFileSync;
+  }
+  const STALE = enc.encode("OLD CDN COPY OF THE BINARY");
+  const noPause = async () => {};
+
+  it("installs on the second run when the first download did not match the checksum", async () => {
+    const calls: Call[] = [];
+    let files!: Map<string, Uint8Array>;
+    const h = await harness({}, ((f: string, a: string[]) => servingExec(calls, files, [STALE, NEW])(f, a)) as any);
+    files = h.files;
+    expect(await updateWithRetry(() => h.updater.performUpdate(), noPause)).toEqual({ success: true, version: "9.9.9" });
+    expect(calls).toHaveLength(2);
+    expect(h.installed()).toBe(dec.decode(NEW));
+  });
+
+  it("gives up with the checksum error after one retry, leaving the old binary", async () => {
+    const calls: Call[] = [];
+    let files!: Map<string, Uint8Array>;
+    const h = await harness({}, ((f: string, a: string[]) => servingExec(calls, files, [STALE])(f, a)) as any);
+    files = h.files;
+    expect(await updateWithRetry(() => h.updater.performUpdate(), noPause)).toEqual({ success: false, error: "checksum_mismatch_darwin-arm64" });
+    expect(calls).toHaveLength(2);
+    expect(h.installed()).toBe("OLD");
+  });
+
+  it("does not retry a failure that is not a race", async () => {
+    const calls: Call[] = [];
+    const h = await harness({}, fakeExec(calls, new Map(), { fail: 22 }));
+    expect((await updateWithRetry(() => h.updater.performUpdate(), noPause)).error).toBe("download_curl_22");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("names the race errors", () => {
+    expect(isReleaseRace("checksum_mismatch_linux-x64")).toBe(true);
+    expect(isReleaseRace("download_incomplete")).toBe(true);
+    expect(isReleaseRace("download_curl_22")).toBe(false);
+    expect(isReleaseRace(undefined)).toBe(false);
   });
 });
 
