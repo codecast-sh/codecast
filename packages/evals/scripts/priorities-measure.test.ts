@@ -68,20 +68,20 @@ describe('score', () => {
     const s = await score(golden, produced, read, judge, tasksNow());
 
     expect(s.standing_like).toEqual(['a:3']);
-    // a:4 and p:1 hold no labeled session: out of scope, never offered to the judge.
-    expect(offered).toEqual([['a:1', 'a:2']]);
-    expect(s.matches.map((m) => `${m.produced}=${m.golden}`)).toEqual(['a:1=g1', 'a:2=g2']);
-    expect(s.recall).toEqual({ matched: 2, of: 3, missed: ['g3'] });
-    // Active produced in scope: a:1, a:2 matched; a:3 (mostly standing) not. a:4 holds no labeled session: set apart.
-    expect(s.precision).toEqual({ matched: 2, of: 3, unmatched: ['a:3'] });
-    expect(s.unlabeled).toEqual(['a:4', 'p:1']);
+    // a:4 and p:1 hold no sessions at all: still in scope, offered and scored.
+    expect(offered).toEqual([['a:1', 'a:2', 'a:4', 'p:1']]);
+    expect(s.matches.map((m) => `${m.produced}=${m.golden}`)).toEqual(['a:1=g1', 'a:2=g2', 'p:1=g3']);
+    expect(s.recall).toEqual({ matched: 3, of: 3, missed: [] });
+    // Active produced in scope: a:1, a:2 matched; a:3 (mostly standing) and a:4 (sessionless, g1's slot taken) not.
+    expect(s.precision).toEqual({ matched: 2, of: 4, unmatched: ['a:3', 'a:4'] });
+    expect(s.unlabeled).toEqual([]);
     // s1, s2, s3 right; s4 sits under g2's match; s5 under an unmatched one; st1 and st2 should be unassigned. s9 was not read.
     expect(Object.fromEntries(s.sessions.results.map((r) => [r.session, r.correct]))).toEqual({ s1: true, s2: true, s3: true, s4: false, s5: false, st1: false, st2: false });
     expect(s.sessions.not_read).toEqual(['s9']);
     // No critical steps on p:1: no alignment asked.
     expect(aligned.sort()).toEqual(['a:1~g1', 'a:2~g2']);
     expect(s.steps.false_done.map((f) => `${f.produced_step}~${f.golden_step}`)).toEqual(['Faults under 10%~Grader faults']);
-    expect(s.metrics).toEqual({ recall: 2 / 3, precision: 2 / 3, sessions: 3 / 7, step_done: 2 / 3, false_done: 1 });
+    expect(s.metrics).toEqual({ recall: 1, precision: 2 / 4, sessions: 3 / 7, step_done: 2 / 3, false_done: 1 });
     expect(s.pass).toBe(false);
   });
 

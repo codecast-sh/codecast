@@ -61,7 +61,7 @@ export type TaskStatus = (ids: string[]) => Promise<Map<string, string>>;
  * A priority never spans workspaces, so a golden priority whose work spans
  * several may match one produced priority in each; recall counts it once,
  * precision counts each match. A produced priority none of whose sessions the
- * golden set labels is out of its scope (the author never looked at that
+ * golden set labels (and it holds at least one) is out of its scope (the author never looked at that
  * work): it is listed as unlabeled, not counted for or against precision. One
  * whose sessions are mostly standing-role sessions is a false positive and is
  * not offered to the judge. A step falsely done is real unless its golden
@@ -70,7 +70,8 @@ export type TaskStatus = (ids: string[]) => Promise<Map<string, string>>;
 export async function score(golden: Golden, produced: Produced[], read: Map<string, string>, judge: Judge, taskStatus: TaskStatus) {
   const standing = new Set(golden.standing_sessions);
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
-  const unlabeled = produced.filter((p) => !p.sessions.some((s) => labeled.has(s))).map((p) => p.key);
+  // Out of scope only when it has sessions and the golden set labels none of them; a sessionless one (from calls, or emptied) is scored.
+  const unlabeled = produced.filter((p) => p.sessions.length > 0 && !p.sessions.some((s) => labeled.has(s))).map((p) => p.key);
   const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(s)).length / p.sessions.length > 0.5).map((p) => p.key);
   // Out of the golden set's scope: never offered to the judge, so one cannot take a labeled priority's slot.
   const candidates = produced.filter((p) => !standingLike.includes(p.key) && !unlabeled.includes(p.key));
