@@ -3572,6 +3572,26 @@ describe("inboxStore local-first state mutations", () => {
     expect(dispatches.find((d) => d.action === "setTeamVisibility")?.args).toEqual([CID, "full"]);
   });
 
+  it("moveSessionToWorkspace lands the row in the team, or Personal, on every copy, and dispatches", () => {
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, team_id: "teamA", is_private: true, team_visibility: "private" } },
+      conversations: { [CID]: { _id: CID, team_id: "teamA", is_private: true, team_visibility: "private", auto_shared: true } },
+    } as any);
+    useInboxStore.getState().moveSessionToWorkspace(CID, "teamB");
+    let s = useInboxStore.getState();
+    expect(s.conversations[CID]).toMatchObject({ team_id: "teamB", is_private: false });
+    expect((s.conversations[CID] as any).team_visibility).toBeUndefined();
+    expect((s.conversations[CID] as any).auto_shared).toBeUndefined();
+    expect(s.sessions[CID] as any).toMatchObject({ team_id: "teamB", is_private: false, team_visibility: null });
+    expect(dispatches.find((d) => d.action === "moveSessionToWorkspace")?.args).toEqual([CID, "teamB"]);
+
+    useInboxStore.getState().moveSessionToWorkspace(CID, null);
+    s = useInboxStore.getState();
+    expect(s.conversations[CID]).toMatchObject({ is_private: true, team_visibility: "private" });
+    expect((s.conversations[CID] as any).team_id).toBeUndefined();
+    expect(s.sessions[CID] as any).toMatchObject({ team_id: null, is_private: true, team_visibility: "private" });
+  });
+
   // The team feed renders its own cached rows and the inbox session for a
   // session the server never sent: a share or a hide must reach every copy in
   // the same tick, or the chip reads the old state until the next push.

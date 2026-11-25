@@ -36,6 +36,7 @@ import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useOnlyHostedAgent, usePinnedAgentIds } from "../hooks/usePinnedAgents";
 import { deviceDisplayName, deviceWakesOnUse, rosterDeviceOf, type Device } from "./DeviceBadge";
 import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
+import { moveSessionsToWorkspace, planWorkspaceMove, workspaceMoveLedgerFor } from "../lib/workspaceMove";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
@@ -231,7 +232,7 @@ function withRelationIcon<T extends { task?: RelationTask }>(item: T): T & { ico
   return { ...item, icon: v.icon, color: v.color };
 }
 
-type ActionMode = "device" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "session_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "blocker" | "related" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
+type ActionMode = "device" | "workspace" | "snooze" | "rename" | "character" | "project" | "project_status" | "deadline" | "trigger_cancel" | "trigger_delete" | "session_delete" | "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "agent_switch" | "agent_fork" | "agent_handoff" | "bucket" | "model" | "view" | "parent" | "blocker" | "related" | "layout_save" | "layout_update" | "layout_rename" | "layout_delete";
 
 // Modes that act on the WORKSPACE rather than on selected rows: they open with
 // no target and show no entity header. Everything else needs something picked.
@@ -481,6 +482,9 @@ export function ActionSubmenu({
   // re-home for laptop→laptop — see components/BulkMoveSessions).
   const { all: moveTargets } = useMoveTargets();
   const bulkMove = useBulkMoveSessions();
+  // "Move to workspace": a team opens the review (it widens who reads them); Personal is one press.
+  const myTeams = useInboxStore((s) => s.teams) as Array<{ _id: string; name?: string }>;
+  const [workspaceReview, setWorkspaceReview] = useState<{ _id: string; name: string } | null>(null);
   const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
   const messageRef = useRef<HTMLTextAreaElement>(null);
@@ -776,6 +780,15 @@ export function ActionSubmenu({
           active: target?.status === o.key,
         }));
     }
+    if (mode === "workspace") {
+      const rows = [...myTeams.filter((t) => t?._id).map((t) => ({ key: String(t._id), label: t.name || "Team", icon: Users })), { key: "__personal__", label: "Personal", icon: Lock }];
+      return rows
+        .map((r) => {
+          const here = planWorkspaceMove(targets, r.key === "__personal__" ? null : r.key).movers.length === 0;
+          return { ...r, label: here ? `${r.label} · here` : r.label, active: here, usable: !here };
+        })
+        .filter((row) => row.label.toLowerCase().includes(q));
+    }
     if (mode === "device") {
       const everyOwner = targets.length && targets.every((t: any) => t.owner_device_id === targets[0]?.owner_device_id) ? targets[0]?.owner_device_id : null;
       return moveTargets
@@ -860,7 +873,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, moveTargets, orgRoles, assignPeople, assignRoles, pinnedAgents]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, moveTargets, myTeams, orgRoles, assignPeople, assignRoles, pinnedAgents]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -1028,6 +1041,12 @@ export function ActionSubmenu({
       return;
     }
 
+    if (mode === "workspace") {
+      if (item.usable === false) { toast.error("Already there"); return; }
+      if (item.key === "__personal__") { moveSessionsToWorkspace(targets, null, "Personal"); onClose(); return; }
+      setWorkspaceReview({ _id: item.key, name: item.label });
+      return;
+    }
     if (mode === "device") {
       if (item.usable === false) { toast.error(item.label.endsWith(" · running") ? "Already running there" : "That machine is offline"); return; }
       const device = moveTargets.find((d: any) => d.device_id === item.key);
@@ -1261,6 +1280,7 @@ export function ActionSubmenu({
     mode === "agent_handoff" ? "Hand off to — pick an agent…" :
     mode === "bucket" ? "Label session — type to filter or create..." :
     mode === "device" ? "Move to machine — pick where these sessions run…" :
+    mode === "workspace" ? "Move to workspace — pick a team or Personal…" :
     mode === "model" ? "Change model & effort..." :
     mode === "view" ? "Switch view — filter by label or project..." :
     mode === "parent" ? "Set parent — search tasks..." :
@@ -1357,6 +1377,13 @@ export function ActionSubmenu({
 
   return (
     <>
+      {workspaceReview && (
+        <SwitchReview
+          ledger={workspaceMoveLedgerFor(targets, workspaceReview)}
+          onClose={() => setWorkspaceReview(null)}
+          onConfirm={() => { moveSessionsToWorkspace(targets, workspaceReview._id, workspaceReview.name); setWorkspaceReview(null); onClose(); }}
+        />
+      )}
       {deleteReview && deleteTeam && (
         <SwitchReview
           ledger={permanentDeleteLedger({
@@ -2212,7 +2239,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["device", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "session_delete", "bucket", "model", "parent", "blocker", "related", "character"].includes(actionKey)) {
+    if (["device", "workspace", "snooze", "status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "agent_switch", "agent_fork", "agent_handoff", "rename", "project", "project_status", "deadline", "trigger_cancel", "trigger_delete", "session_delete", "bucket", "model", "parent", "blocker", "related", "character"].includes(actionKey)) {
       setActionSearch("");
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);

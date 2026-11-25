@@ -10,7 +10,7 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRouter } from "next/navigation";
 import { ContextMenu, CursorPopover, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
-import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu } from "./BulkMoveSessions";
+import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu, MoveToWorkspaceSubmenu } from "./BulkMoveSessions";
 import { labelSessions } from "../lib/labelSessions";
 import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
@@ -3747,7 +3747,7 @@ function SessionListPanelImpl({
               if (at) characterPicker.openAt(at.x, at.y, sessions);
             }}
             onRename={() => useInboxStore.getState().openSessionRename(session)}
-            extra={!isForeign ? <MoveToDeviceSubmenu sessions={[session]} /> : null}
+            extra={!isForeign ? <><MoveToDeviceSubmenu sessions={[session]} /><MoveToWorkspaceSubmenu sessions={[session]} /></> : null}
           />
         )}
       </ContextMenu>

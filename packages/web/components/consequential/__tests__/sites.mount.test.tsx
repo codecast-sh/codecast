@@ -191,3 +191,42 @@ test("bulk kill: idle sessions end at once; a selection with working ones opens 
     assert.deepEqual(killed[1], ["s1", "s2"]);
   } finally { await done(); }
 }, 120_000);
+
+test("move to workspace: a team opens the review and only its button moves my sessions; Personal is one press", async () => {
+  const { React, q, click, render, done } = await dom();
+  try {
+    const { useInboxStore } = await import("../../../store/inboxStore");
+    const { MoveToWorkspaceItems } = await import("../../BulkMoveSessions");
+    const { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } = await import("../../ui/dropdown-menu");
+    const moved: Array<[string, string | null]> = [];
+    const prior = useInboxStore.getState();
+    useInboxStore.setState({
+      currentUser: { _id: "me" } as any,
+      teams: [{ _id: "tA", name: "Alpha" }, { _id: "tB", name: "Beta" }] as any,
+      conversations: {} as any,
+      moveSessionToWorkspace: (id: string, teamId: string | null) => { moved.push([id, teamId]); },
+    } as any);
+    const sessions = [
+      { _id: "s1", user_id: "me", team_id: "tA", is_private: false },
+      { _id: "s2", user_id: "me", is_private: true },
+      { _id: "s3", user_id: "bea", team_id: "tA", is_private: false },
+    ];
+    const menu = () => React.createElement(DropdownMenu, { open: true }, React.createElement(DropdownMenuTrigger, null, "Move"),
+      React.createElement(DropdownMenuContent, null, React.createElement(MoveToWorkspaceItems, { sessions })));
+    await render(menu());
+    assert.ok(q('[data-move-workspace="tA"]'), "my teams are listed");
+    assert.ok(q('[data-move-workspace="personal"]'), "and Personal");
+    await click('[data-move-workspace="tB"]');
+    assert.deepEqual(moved, [], "the press alone moves nothing");
+    assert.equal(q('[data-switch-figure="private now"]')!.textContent, "1");
+    await click("[data-switch-confirm]");
+    assert.deepEqual(moved, [["s1", "tB"], ["s2", "tB"]], "one dispatch per session of mine; a teammate's is skipped");
+
+    moved.length = 0;
+    await render(menu());
+    await click('[data-move-workspace="personal"]');
+    assert.equal(q("[data-switch-review]"), null, "narrowing needs no review");
+    assert.deepEqual(moved, [["s1", null]], "the session already private stays where it is");
+    useInboxStore.setState({ currentUser: prior.currentUser, teams: prior.teams, moveSessionToWorkspace: prior.moveSessionToWorkspace } as any);
+  } finally { await done(); }
+}, 120_000);

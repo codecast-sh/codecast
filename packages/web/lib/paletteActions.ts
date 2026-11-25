@@ -2,7 +2,7 @@ import { isArtifactDocType } from "@codecast/shared/artifacts";
 import type { ComponentType } from "react";
 import { DEFAULT_IDENTITY_PREFS, sessionIdentity, type IdentityPrefs } from "./sessionIdentity";
 import { cleanTitle } from "./conversationProcessor";
-import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, Link2, X } from "lucide-react";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, Briefcase, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, Link2, X } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
@@ -115,6 +115,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       row("session_favorite", target.is_favorite ? many("Remove from favorites", "Remove # from favorites") : many("Add to favorites", "Add # to favorites"), Star, "v", "conv.favorite"),
       row("bucket", many(`Label ${noun}…`, `Label # ${nouns}…`), Tag, "l", "session.moveToBucket"),
       ...(targets.every((t) => canMoveSessionToMachine(t.agent_type)) ? [row("device", many("Move to machine…", `Move # ${nouns} to machine…`), ArrowRightLeft, "w")] : []),
+      row("workspace", many("Move to workspace…", `Move # ${nouns} to workspace…`), Briefcase, "j"),
       ...(!isSessionKilled(target) ? [row("snooze", many(`Snooze ${noun}…`, `Snooze # ${nouns}…`), Clock, "z", "session.snooze")] : []),
       ...(target.inbox_snoozed_until ? [row("session_unsnooze", "Move to Needs You now", RefreshCw, "u")] : []),
       ...(isSessionSetAside(target) ? [row("session_restore", many(`Restore ${noun} to inbox`, `Restore # ${nouns} to inbox`), RefreshCw, "u")] : [

@@ -154,6 +154,24 @@ export function shareInFullLedger(r: { team: string; others: number; sees: strin
   };
 }
 
+/** Conversations moved into a team's workspace: the team's members can read them from then on. */
+export function moveToWorkspaceLedger(r: { count: number; team: string; nowPrivate: number }): SwitchLedger {
+  return {
+    name: "Move to workspace",
+    subject: r.team,
+    shift: null,
+    figures: [{ value: String(r.count), label: r.count === 1 ? "session" : "sessions" },
+      ...(r.nowPrivate ? [{ value: String(r.nowPrivate), label: "private now", tone: "warn" as const }] : [])],
+    rows: [
+      { k: "Team", v: r.team },
+      { k: "Becomes visible to", v: `${r.team} members`, tone: "warn" },
+      { k: "To undo", v: "Move to Personal" },
+    ],
+    confirm: `Move ${r.count}`,
+    keep: "Cancel",
+  };
+}
+
 /** One problem's line started again from its first step. `goOn`: the run is a person's yes to a step that stopped
  *  with nowhere to go; a run cannot pick up where another stopped, so the review says the new one redoes the steps
  *  up to it before it reaches the next. */
