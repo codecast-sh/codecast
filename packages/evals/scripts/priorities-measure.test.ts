@@ -3,7 +3,8 @@
 // precision over active produced ones in the golden set's scope (mostly-standing
 // ones count against it, unlabeled ones are set apart), a golden priority
 // matched once per workspace, session mapping over the labeled sessions the
-// window read, and false "done" split into real and stale-golden.
+// window read, and false "done" split into real, stale-golden and a done part
+// of an open golden step.
 import { describe, expect, test } from 'bun:test';
 
 import { score, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
@@ -61,8 +62,8 @@ describe('score', () => {
         { produced: 'a:4', golden: 'g1', reason: 'g1 already taken' },
       ],
       {
-        'a:1~g1': [{ produced: 0, golden: 0, reason: '' }, { produced: 1, golden: 1, reason: '' }, { produced: 1, golden: 0, reason: 'repeat' }],
-        'a:2~g2': [{ produced: 0, golden: 0, reason: '' }],
+        'a:1~g1': [{ produced: 0, golden: 0, scope: 'same', reason: '' }, { produced: 1, golden: 1, scope: 'same', reason: '' }, { produced: 1, golden: 0, scope: 'same', reason: 'repeat' }],
+        'a:2~g2': [{ produced: 0, golden: 0, scope: 'same', reason: '' }],
       },
     );
     const s = await score(golden, produced, read, judge, tasksNow());
@@ -90,7 +91,7 @@ describe('score', () => {
     const all = [...clean, { ...produced[4]!, sessions: ['s4'] }];
     const { judge } = scripted(
       [{ produced: 'a:1', golden: 'g1', reason: '' }, { produced: 'a:2', golden: 'g2', reason: '' }, { produced: 'p:1', golden: 'g3', reason: '' }],
-      { 'a:1~g1': [{ produced: 0, golden: 0, reason: '' }, { produced: 1, golden: 1, reason: '' }] },
+      { 'a:1~g1': [{ produced: 0, golden: 0, scope: 'same', reason: '' }, { produced: 1, golden: 1, scope: 'same', reason: '' }] },
     );
     const s = await score(golden, all, read, judge, tasksNow());
     // s5 (golden g4, held by nobody) is the one miss: 6 of 7.
@@ -147,7 +148,7 @@ describe('score', () => {
       priorities: [{ ...golden.priorities[0]!, critical: [{ title: 'Cases', done: false, task: 'ct-1' }, { title: 'Grader faults', done: false, task: 'ct-2' }, { title: 'Requests path', done: false, task: null }] }, ...golden.priorities.slice(1)],
     };
     const p: Produced[] = [{ key: 'a:1', workspace: 'acme', title: 'Evals', summary: '', status: 'active', steps: [step('Cases', true), step('Faults', true), step('Requests', true)], sessions: ['s1'] }];
-    const { judge } = scripted([{ produced: 'a:1', golden: 'g1', reason: '' }], { 'a:1~g1': [0, 1, 2].map((i) => ({ produced: i, golden: i, reason: '' })) });
+    const { judge } = scripted([{ produced: 'a:1', golden: 'g1', reason: '' }], { 'a:1~g1': [0, 1, 2].map((i) => ({ produced: i, golden: i, scope: 'same', reason: '' })) });
     const s = await score(tasked, p, new Map([['s1', '']]), judge, tasksNow({ 'ct-1': 'done', 'ct-2': 'in_progress' }));
     expect(s.steps.stale_done.map((f) => [f.golden_step, f.golden_task, f.task_status, f.verdict])).toEqual([['Cases', 'ct-1', 'done', 'task done now (golden stale)']]);
     expect(s.steps.false_done.map((f) => [f.golden_step, f.golden_task, f.task_status, f.verdict])).toEqual([
@@ -155,5 +156,23 @@ describe('score', () => {
       ['Requests path', null, null, 'no task / task open (real)'],
     ]);
     expect(s.metrics.false_done).toBe(2);
+  });
+
+  test('a done step that is only part of an open golden step is not a false done; a wider one is', async () => {
+    const g: Golden = { ...golden, priorities: [{ ...golden.priorities[0]!, critical: [{ title: 'Every service moved', done: false, task: null }, { title: 'Grader faults', done: false, task: null }, { title: 'Cases', done: true, task: null }] }, ...golden.priorities.slice(1)] };
+    const p: Produced[] = [{ key: 'a:1', workspace: 'acme', title: 'Evals', summary: '', status: 'active', steps: [step('Move the iMessage bridge', true), step('Faults and the rest', true), step('One case', false)], sessions: ['s1'] }];
+    const { judge } = scripted([{ produced: 'a:1', golden: 'g1', reason: '' }], {
+      'a:1~g1': [
+        { produced: 0, golden: 0, scope: 'narrower', reason: '' },
+        { produced: 1, golden: 1, scope: 'wider', reason: '' },
+        // A part still open while the whole is done: wrong.
+        { produced: 2, golden: 2, scope: 'narrower', reason: '' },
+      ],
+    });
+    const s = await score(g, p, new Map([['s1', '']]), judge, tasksNow());
+    expect(s.steps.part_done.map((f) => f.produced_step)).toEqual(['Move the iMessage bridge']);
+    expect(s.steps.false_done.map((f) => f.produced_step)).toEqual(['Faults and the rest']);
+    expect(s.metrics.false_done).toBe(1);
+    expect(s.metrics.step_done).toBe(1 / 3);
   });
 });
