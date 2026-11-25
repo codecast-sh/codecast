@@ -242,11 +242,12 @@ function sessionBlock(s: PassSession): string {
 
 function priorityBlock(p: PassPriority, taskStatus: Map<string, string>): string {
   const rank = p.rank == null ? "unranked" : `rank ${p.rank}${p.rank_set_by === "person" ? " (set by the person)" : ""}`;
-  const head = `${p.short_id} · "${p.title}" · ${p.status === "set_aside" ? "set aside by the person" : p.status} · ${rank}${p.serves ? ` · serves ${p.serves}` : ""} · last active ${day(p.last_active_at)}`;
-  const lines = [`${head}${p.needs_rewrite ? " · rewrite" : ""}`, `  Where it stands: ${p.summary}`];
+  const hide = !!p.needs_rewrite; // its words may tell of sessions gone from view: withheld, so a rewrite cannot copy them back
+  const head = `${p.short_id} · ${hide ? "(title withheld: write it again)" : `"${p.title}"`} · ${p.status === "set_aside" ? "set aside by the person" : p.status} · ${rank}${p.serves ? ` · serves ${p.serves}` : ""} · last active ${day(p.last_active_at)}`;
+  const lines = [`${head}${hide ? " · rewrite" : ""}`, `  Where it stands: ${hide ? "(withheld: write it again from what is shown)" : p.summary}`];
   for (const s of p.steps) {
     const refs = s.refs.map((r) => (r.kind === "task" ? `task ${r.id} (${taskStatus.get(r.id) ?? "unknown"})` : `${r.kind} ${r.id}`));
-    lines.push(`  - ${p.short_id}/${s.key} [${s.tier}${s.tier_set_by === "person" ? ", set by the person" : ""}] ${s.title}${s.done ? " · done" : ""}${refs.length ? ` · ${refs.join(", ")}` : ""}`);
+    lines.push(`  - ${p.short_id}/${s.key} [${s.tier}${s.tier_set_by === "person" ? ", set by the person" : ""}] ${hide ? "(title withheld)" : s.title}${s.done ? " · done" : ""}${refs.length ? ` · ${refs.join(", ")}` : ""}`);
   }
   const newest = [...p.sessions].sort((a, b) => b.last_active - a.last_active).slice(0, PRIORITY_PASS_CAPS.sessions_per_priority);
   const more = p.sessions.length - newest.length;
@@ -561,7 +562,6 @@ const keyNumber = (key: string | null | undefined) => {
   return m ? Number(m[1]) : 0;
 };
 
-
 /**
  * A proposal's steps, continuing the survivor's steps and those of every
  * priority it absorbs. The survivor's steps keep their keys; a step carried
@@ -573,6 +573,7 @@ const keyNumber = (key: string | null | undefined) => {
 function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed: PassPriority[], proposed: PriorityProposal["steps"], taskStatus: Map<string, string>, now: number, notes: string[]): { steps: PriorityStep[]; remap: Map<string, string> } {
   const own = prior?.steps ?? [];
   const ownerOf = new Map<PriorityStep, string>();
+  const needsRewrite = new Set([prior, ...absorbed].filter((p) => p?.needs_rewrite).map((p) => (p === prior ? target : p!.short_id)));
   for (const p of absorbed) for (const s of p.steps) ownerOf.set(s, p.short_id);
   const pool = [...own, ...ownerOf.keys()];
   const matched = matchSteps(pool, proposed, pool.map((s) => ownerOf.get(s) ?? target), target);
@@ -592,7 +593,7 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
     return withDone(step, s.done_judged ?? was?.done, was, taskStatus, now);
   });
   for (const s of pool) {
-    if (s.tier_set_by !== "person" || matched.includes(s)) continue;
+    if (s.tier_set_by !== "person" || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
     const from = ownerOf.get(s);
     steps.push(withDone({ ...s, key: keyOf(s) }, s.done, s, taskStatus, now));
     notes.push(`${target}: kept step ${from ? `${from} ${s.key}` : s.key}, its tier set by the person`);
@@ -752,7 +753,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       if (JSON.stringify(w[k]) !== JSON.stringify((r.prior as unknown as PriorityWrite)[k])) (patch as any)[k] = w[k];
     }
     if (r.proposal || Object.keys(patch).length) plan.updates.push({ short_id: r.prior.short_id, patch });
-    if (r.proposal && r.prior.needs_rewrite) plan.rewritten.push(r.prior.short_id);
+    if (r.proposal && r.prior.needs_rewrite && (r.proposal.title !== r.prior.title || r.proposal.summary !== r.prior.summary)) plan.rewritten.push(r.prior.short_id);
   }
 
   for (const [session, m] of sessionMap) {

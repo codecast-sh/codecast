@@ -544,6 +544,26 @@ describe("re-check fixes", () => {
   });
 });
 
+describe("rewriting a priority whose sessions left view", () => {
+  const secret = priority("pri-1", { title: "Secret acquisition", summary: "talks with Acme", needs_rewrite: true, steps: [step("s1", { title: "Draft Acme term sheet", tier_set_by: "person" })] });
+  test("the prompt withholds its old title, summary and step titles", () => {
+    const { prompt } = buildPriorityPassPrompt(input({ priorities: [secret] }));
+    expect(prompt).toContain("pri-1");
+    for (const word of ["Secret acquisition", "talks with Acme", "Draft Acme term sheet"]) expect(prompt).not.toContain(word);
+  });
+  test("the flag clears only when the reply wrote a new title and summary", () => {
+    const same = mergePriorities(input({ priorities: [secret] }), out([proposal({ short_id: "pri-1", title: "Secret acquisition", summary: "talks with Acme" })]));
+    expect(same.rewritten).toEqual([]);
+    const fresh = mergePriorities(input({ priorities: [secret] }), out([proposal({ short_id: "pri-1", title: "Partnerships", summary: "two calls this week" })]));
+    expect(fresh.rewritten).toEqual(["pri-1"]);
+  });
+  test("a step whose tier the person set is not carried under its old title", () => {
+    const plan = mergePriorities(input({ priorities: [secret] }), out([proposal({ short_id: "pri-1", title: "Partnerships", summary: "two calls", steps: [{ title: "Call list", tier: "critical", refs: [] }] })]));
+    const steps = plan.updates.find((u) => u.short_id === "pri-1")?.patch.steps ?? [];
+    expect(steps.map((x) => x.title)).not.toContain("Draft Acme term sheet");
+  });
+});
+
 describe("orderPriorities", () => {
   type Row = PassPriority & { updated_at: number };
   const row = (short_id: string, rank: number | null, over: Partial<Row> = {}): Row => ({ ...priority(short_id, { rank }), updated_at: 0, ...over });

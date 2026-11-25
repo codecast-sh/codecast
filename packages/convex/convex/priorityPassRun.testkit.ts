@@ -1,6 +1,7 @@
 // Shared fixtures for the priorities pass suites (priorityPassRun, priorityPassSweep,
 // priorityPassEval tests): a stubbed model and a small seeded world. The
 // model is a stubbed fetch; synthetic data only.
+import { navPromptField } from "./userMessagesFilter";
 import { afterEach, beforeEach } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
@@ -101,7 +102,7 @@ export async function world() {
     return { ana, ben, carl, acme, other, teamConv, oldConv, personalConv, benConv, otherConv, carlConv };
   });
   const send = (user: Id<"users">, conversation: Id<"conversations">, timestamp: number, text: string) => t.run(async (ctx) => {
-    const message = await ctx.db.insert("messages", { conversation_id: conversation, role: "user", content: text, timestamp } as any);
+    const message = await ctx.db.insert("messages", { conversation_id: conversation, role: "user", content: text, timestamp, ...navPromptField({ role: "user", content: text }) } as any);
     await ctx.db.insert("user_sends", { user_id: user, conversation_id: conversation, message_id: message, timestamp, words: 3, text, clipped: false } as any);
   });
   const pin = (user: Id<"users">, conversation: Id<"conversations">, at: number, text: string) =>

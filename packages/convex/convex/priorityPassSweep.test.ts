@@ -85,12 +85,13 @@ describe("session counts", () => {
     await w.t.run((ctx) => ctx.db.patch(w.teamConv, { is_private: true, team_visibility: "private" }));
     // The team pair has nothing new but a stray; the personal pair has the now-private session's work.
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).toContainEqual({ user_id: w.ana, workspace: w.team });
-    // The model is told the priority needs a rewrite, and shown it without the session that left.
+    // The model is told the priority needs a rewrite, shown without the session that left or its old words.
     model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: p.short_id, title: "Evals, still going", summary: "Waiting on the next run", steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], sessions: [] })], unassigned: [] });
     const asked = model.prompts.length;
     expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toMatchObject({ status: "ok" });
     expect(model.prompts.length).toBe(asked + 1);
-    expect(model.prompts.at(-1)).toContain(`${p.short_id} · "Trusted evals" · active · rank 1 · last active`);
+    expect(model.prompts.at(-1)).toContain(`${p.short_id} · (title withheld: write it again) · active · rank 1 · last active`);
+    expect(model.prompts.at(-1)).not.toContain("Trusted evals");
     expect(model.prompts.at(-1)).toMatch(/ · rewrite\n/);
     expect(model.prompts.at(-1)).not.toContain("Sessions: jx7team");
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
