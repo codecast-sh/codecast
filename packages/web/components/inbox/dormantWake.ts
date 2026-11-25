@@ -148,7 +148,11 @@ export const DORMANT_CLAIM_TITLE = "The agent named a wake nothing here can see.
 export const DORMANT_UNCONFIRMED_TITLE = "The server saw this wake, but nothing has happened for 3 days; it is yours to check.";
 export const DORMANT_RUN_UNREPORTED_TITLE = "This session's daemon is not reporting, so the run it started no longer vouches for it; it is yours to check.";
 
-export function dormantWakeLabel(wake: DormantWake, now: number): DormantWakeLabel {
+/** `owner` is the name of the person the session returns to when that is not
+ *  the viewer (a teammate's session); left out, the words address the owner. */
+export function dormantWakeLabel(wake: DormantWake, now: number, owner?: string | null): DormantWakeLabel {
+  const theirs = owner ? `it is ${owner}'s to check` : "it is yours to check";
+  const backNow = owner ? `with ${owner} now` : "yours now";
   switch (wake.kind) {
     case "trigger":
       return { what: taskDisplayTitle(wake.row.task) + (wake.others > 0 ? ` +${wake.others}` : ""), when: { task: wake.row.task }, warn: null };
@@ -161,24 +165,24 @@ export function dormantWakeLabel(wake: DormantWake, now: number): DormantWakeLab
     case "workers":
       return { what: "its subagents are still working", when: "when they finish", warn: null };
     case "run":
-      return { what: "a run it started", when: "when it ends or asks you", warn: null };
+      return { what: "a run it started", when: `when it ends or asks ${owner ?? "you"}`, warn: null };
     case "run_unreported":
-      return { what: "a run it started · its session's daemon is not reporting", when: "yours now", warn: DORMANT_RUN_UNREPORTED_TITLE };
+      return { what: "a run it started · its session's daemon is not reporting", when: backNow, warn: owner ? DORMANT_RUN_UNREPORTED_TITLE.replace("it is yours to check", theirs) : DORMANT_RUN_UNREPORTED_TITLE };
     case "blocker":
       return { what: "a task it waits on", when: "when it closes", warn: null };
     case "wait":
       return { what: "a pending wait", when: "when it clears", warn: null };
     case "unconfirmed":
-      return { what: `${wake.wake === "run" ? "a run it started" : "a pending wait"} · unconfirmed ${fmtDuration(Math.max(0, now - wake.since))}`, when: "yours now", warn: DORMANT_UNCONFIRMED_TITLE };
+      return { what: `${wake.wake === "run" ? "a run it started" : "a pending wait"} · unconfirmed ${fmtDuration(Math.max(0, now - wake.since))}`, when: backNow, warn: owner ? DORMANT_UNCONFIRMED_TITLE.replace("it is yours to check", theirs) : DORMANT_UNCONFIRMED_TITLE };
     case "snoozed":
       return { what: "snoozed", when: fmtClock(wake.at, now), warn: null };
     case "parked":
-      return { what: "parked by you", when: "on next activity", warn: null };
+      return { what: `parked by ${owner ?? "you"}`, when: "on next activity", warn: null };
     case "claim":
       return {
         what: wake.what ? `nothing scheduled · ${wake.what}` : "nothing scheduled",
-        when: wake.back > now ? `yours in ${fmtDuration(wake.back - now)}` : "yours now",
-        warn: DORMANT_CLAIM_TITLE,
+        when: wake.back > now ? `${owner ? `back to ${owner}` : "yours"} in ${fmtDuration(wake.back - now)}` : backNow,
+        warn: owner ? `The agent named a wake nothing here can see. It returns to ${owner} if nothing happens.` : DORMANT_CLAIM_TITLE,
       };
   }
 }
