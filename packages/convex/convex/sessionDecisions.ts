@@ -41,7 +41,7 @@ import { noticeAreaOwner, routeByArea } from "./decisionRouting";
 import { settleAreasCard } from "./decisionAreas";
 export { syncDecisionInbox };
 import { artifactUrl } from "./lib/artifactRules";
-import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
+import { humanStarterUser, listSessionOwnerIds, listSessionPartyIds } from "./sessionOwners";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
@@ -300,7 +300,7 @@ export async function buildLadder(
 // manager sees questions from work that reports to them, and the person a
 // lead's role reports to, who may not be the host its seat runs on.
 export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<"users">): Promise<Id<"users">[]> {
-  const owners = await listSessionOwnerIds(ctx, conversation._id);
+  const owners = await listSessionPartyIds(ctx, conversation._id);
   // The join table is canonical. A stale owner_user_id cache (the runner
   // after the seat was assigned away) must not keep questions on that person.
   const ids: Id<"users">[] = [...owners];

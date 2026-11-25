@@ -71,6 +71,13 @@ export type SessionCardViewProps = {
    *  one fresher than the row's own (SessionCard reads it for hosted rows). */
   liveTitle?: string;
   isFavorite: boolean;
+  /** Kept from the team (Mine) in a workspace with Team sessions on: the row
+   *  wears a lock. Shared is the norm there, so only the exception is marked. */
+  mine?: boolean;
+  /** A team session (the team owns it): the row wears the team mark, and
+   *  `answeredBy` names the teammate who last answered it, when not the viewer. */
+  teamSession?: boolean;
+  answeredBy?: string | null;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";

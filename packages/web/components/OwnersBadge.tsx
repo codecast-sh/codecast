@@ -11,7 +11,7 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { X, UserCheck, ArrowRightLeft, ArrowLeft, Network, BadgePlus } from "lucide-react";
+import { X, UserCheck, ArrowRightLeft, ArrowLeft, Network, BadgePlus, Users } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi, type HandoffInfo } from "../hooks/useOwners";
 import { useStoreOwnersEnv, useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
@@ -38,7 +38,8 @@ import { Switch } from "./ui/switch";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { Button } from "./ui/button";
-import { teamMembersOf } from "../lib/activeTeam";
+import { activeTeamIdOf, teamMembersOf } from "../lib/activeTeam";
+import { useTeamFeature } from "../lib/teamFeatures";
 
 export type { OwnersApi, HandoffInfo };
 
@@ -207,9 +208,11 @@ function OwnersSection({ owners, people, handingOff, onHandingOff, onDone }: {
   onHandingOff: (on: boolean) => void;
   onDone: () => void;
 }) {
-  const { ownerList, ownerIds, displayFor, toggle, currentUser } = owners;
+  const { ownerList, ownerIds, displayFor, toggle, currentUser, teamSession, makeTeamSession, takeFromTeam } = owners;
   const meId = currentUser?._id?.toString?.();
   const others = people.filter((m) => m._id !== meId);
+  const teamSessionsOn = useTeamFeature("team_sessions");
+  const teamName = useInboxStore((s) => ((s.teams as any[]) ?? []).find((t) => String(t?._id) === String(owners.sessionTeamId ?? activeTeamIdOf(s)))?.name ?? "the team");
   if (handingOff) {
     return <HandoffStep owners={owners} people={others} onBack={() => onHandingOff(false)} onSent={onDone} />;
   }
@@ -218,7 +221,14 @@ function OwnersSection({ owners, people, handingOff, onHandingOff, onDone }: {
       <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">
         Owners · whose inbox
       </DropdownMenuLabel>
-      {ownerList.length === 0 && (
+      {teamSession && (
+        <div className="flex items-center gap-2 px-2 py-1 text-xs text-sol-text" data-owner-team>
+          <span className="w-5 h-5 shrink-0 rounded-full bg-sol-violet/15 text-sol-violet flex items-center justify-center"><Users className="w-3 h-3" /></span>
+          <span className="flex-1 truncate">Everyone on {teamName}</span>
+          <span className="shrink-0 text-mark uppercase tracking-wide text-sol-violet">Team</span>
+        </div>
+      )}
+      {ownerList.length === 0 && !teamSession && (
         <div className="px-2 py-1 text-xs text-sol-text-dim">Nobody yet</div>
       )}
       {ownerList.map((id) => {
@@ -239,9 +249,14 @@ function OwnersSection({ owners, people, handingOff, onHandingOff, onDone }: {
           </div>
         );
       })}
-      {isPerson(currentUser) && meId && !ownerIds.has(meId) && (
-        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); toggle(meId); }} className="text-xs gap-2 text-sol-cyan">
+      {isPerson(currentUser) && meId && (teamSession || !ownerIds.has(meId)) && (
+        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); teamSession ? takeFromTeam() : toggle(meId); }} className="text-xs gap-2 text-sol-cyan">
           <UserCheck className="w-3.5 h-3.5 shrink-0" /> Take ownership
+        </DropdownMenuItem>
+      )}
+      {teamSessionsOn && !teamSession && (
+        <DropdownMenuItem onSelect={(e) => { e.preventDefault(); makeTeamSession(); }} className="text-xs gap-2 text-sol-violet" data-make-team-session>
+          <Users className="w-3.5 h-3.5 shrink-0" /> Make team session
         </DropdownMenuItem>
       )}
       {others.length > 0 && (

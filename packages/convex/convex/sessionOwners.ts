@@ -1,4 +1,5 @@
 import { Id } from "./_generated/dataModel";
+import { dropViewerTriage, mayBeTeamOwned, viewerTriageFor, viewerTriageMap } from "./lib/viewerTriage";
 
 // ── Owner-set primitives (session_owners join table) ─────────────────────────
 // The join table is the canonical multi-owner store: the humans whose inboxes a
@@ -27,25 +28,159 @@ export async function listSessionOwnerIds(
   return (await ownerRows(ctx, conversationId)).map((r: any) => r.user_id as Id<"users">);
 }
 
+// Whether `userId` owns the session: a person row, or membership in a team
+// that owns it (session_team_owners).
 export async function isSessionOwner(
   ctx: { db: any },
   conversationId: Id<"conversations">,
   userId: Id<"users">,
+  // The conversation, when the caller holds it: skips the team read for a
+  // session no team owns.
+  conversation?: any,
 ): Promise<boolean> {
-  return !!(await sessionOwnerRow(ctx, conversationId, userId));
+  return !!(await sessionOwnerRow(ctx, conversationId, userId, conversation));
 }
 
-// The user's own session_owners row for a conversation, or null.
+// The user's own owner row for a conversation, or null. A member of an owning
+// team gets that team's row read as theirs: who shared it, when, with what
+// note, already acknowledged (one teammate's ack cannot be stored per person
+// on a team row, so a team share notifies once and draws no banner), and the
+// team it came through. Read-only: callers that write acks query
+// session_owners themselves.
 export async function sessionOwnerRow(
   ctx: { db: any },
   conversationId: Id<"conversations">,
   userId: Id<"users">,
+  conversation?: any,
 ): Promise<any | null> {
-  return (await ctx.db
+  const own = await ctx.db
     .query("session_owners")
     .withIndex("by_conversation_user", (q: any) =>
       q.eq("conversation_id", conversationId).eq("user_id", userId))
-    .first()) ?? null;
+    .first();
+  if (own) return own;
+  if (conversation && !mayBeTeamOwned(conversation)) return null;
+  const team = await teamOwnerRowFor(ctx, conversationId, userId);
+  if (!team) return null;
+  return {
+    conversation_id: conversationId,
+    user_id: userId,
+    added_by: team.added_by,
+    added_at: team.added_at,
+    seen_at: team.added_at,
+    ...(team.note ? { note: team.note } : {}),
+    team_id: team.team_id,
+    // This person's own dismiss, stash, snooze and pin (lib/viewerTriage).
+    triage: await viewerTriageFor(ctx, userId, conversationId),
+  };
+}
+
+// ── Team owners (session_team_owners) ────────────────────────────────────────
+
+async function teamOwnerRows(ctx: { db: any }, conversationId: Id<"conversations">): Promise<any[]> {
+  const rows = await ctx.db
+    .query("session_team_owners")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  return rows.sort((a: any, b: any) => a.added_at - b.added_at);
+}
+
+// The teams that own a session, oldest-first.
+export async function listSessionTeamOwnerIds(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+): Promise<Id<"teams">[]> {
+  return (await teamOwnerRows(ctx, conversationId)).map((r: any) => r.team_id as Id<"teams">);
+}
+
+// The owning team row `userId` belongs to, or null. An agent account owns
+// nothing a team owns.
+async function teamOwnerRowFor(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  userId: Id<"users">,
+): Promise<any | null> {
+  const rows = await teamOwnerRows(ctx, conversationId);
+  if (rows.length === 0) return null;
+  if ((await ctx.db.get(userId))?.is_bot) return null;
+  for (const row of rows) {
+    const member = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", row.team_id))
+      .first();
+    if (member) return row;
+  }
+  return null;
+}
+
+// The people on a team: members who are not agent accounts.
+export async function teamPeopleIds(ctx: { db: any }, teamId: Id<"teams">): Promise<Id<"users">[]> {
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  const users = await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)));
+  return users.filter((u: any) => u && !u.is_bot).map((u: any) => u._id as Id<"users">);
+}
+
+// Everyone who owns a session as a person: the person owners first, then the
+// people of each owning team. This is who hears about the session and who is
+// asked its questions; listSessionOwnerIds stays the person rows alone, the set
+// the owner writes diff and the primary-owner cache reads.
+export async function listSessionPartyIds(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+): Promise<Id<"users">[]> {
+  const out = await listSessionOwnerIds(ctx, conversationId);
+  const seen = new Set(out.map(String));
+  for (const teamId of await listSessionTeamOwnerIds(ctx, conversationId)) {
+    for (const id of await teamPeopleIds(ctx, teamId)) {
+      if (seen.has(String(id))) continue;
+      seen.add(String(id));
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+// Make `teamId` an owner of the session. Returns true iff a row was inserted.
+export async function addSessionTeamOwnerRow(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  teamId: Id<"teams">,
+  addedBy: Id<"users">,
+  note?: string,
+): Promise<boolean> {
+  const rows = await teamOwnerRows(ctx, conversationId);
+  if (rows.some((r: any) => String(r.team_id) === String(teamId))) return false;
+  // One team owns a session at a time: a session moved to another team and
+  // made a team session again belongs to the new team only.
+  for (const r of rows) await ctx.db.delete(r._id);
+  await ctx.db.insert("session_team_owners", {
+    conversation_id: conversationId,
+    team_id: teamId,
+    added_by: addedBy,
+    added_at: Date.now(),
+    ...(note ? { note } : {}),
+  });
+  await ctx.db.patch(conversationId, { team_owner_team_id: teamId });
+  return true;
+}
+
+// Stop `teamId` owning the session. Returns true iff a row was deleted.
+export async function removeSessionTeamOwnerRow(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  teamId: Id<"teams">,
+): Promise<boolean> {
+  const existing = (await teamOwnerRows(ctx, conversationId)).find((r: any) => String(r.team_id) === String(teamId));
+  if (!existing) return false;
+  await ctx.db.delete(existing._id);
+  const left = await teamOwnerRows(ctx, conversationId);
+  await ctx.db.patch(conversationId, { team_owner_team_id: left[0]?.team_id ?? undefined });
+  // No team owns it any more: each person's own triage of it goes too.
+  if (left.length === 0) await dropViewerTriage(ctx, conversationId);
+  return true;
 }
 
 // The person who started this session: the original author if the session
@@ -88,6 +223,11 @@ export async function addSessionOwnerRow(
   addedBy: Id<"users">,
   note?: string,
 ): Promise<boolean> {
+  // The team and people never own a session together: a person is added to a
+  // team session only after the team row comes off (the owners menu's Take
+  // ownership). Every other writer (undo, a role seat, the creator, a
+  // migration) leaves a team session the team's.
+  if ((await teamOwnerRows(ctx, conversationId)).length > 0) return false;
   const existing = await ctx.db
     .query("session_owners")
     .withIndex("by_conversation_user", (q: any) =>
@@ -192,7 +332,9 @@ export async function ownerSetOf(
   const owners = (await listSessionOwnerIds(ctx, conversationId)).map(String);
   const conversation = loaded === undefined ? await ctx.db.get(conversationId) : loaded;
   const primary = String(conversation?.owner_user_id ?? "");
-  return [...owners.filter((id) => id === primary), ...owners.filter((id) => id !== primary).sort()];
+  // A team owner reads as `team:<id>`, so an undo puts a team session back.
+  const teams = (await listSessionTeamOwnerIds(ctx, conversationId)).map((id) => `team:${String(id)}`);
+  return [...owners.filter((id) => id === primary), ...owners.filter((id) => id !== primary).sort(), ...teams];
 }
 
 /** One owner row as the org change log keeps it, so an undo puts the row back
@@ -223,7 +365,24 @@ export async function setSessionOwnerRows(
   owners: string[],
   addedBy: Id<"users">,
   restore?: OwnerRowSnapshot[],
+  // Only an undo putting a recorded set back replaces a team owner; every
+  // other writer leaves a team session the team's (see addSessionOwnerRow).
+  opts: { replaceTeam?: boolean } = {},
 ): Promise<boolean> {
+  const teamRefs = owners.filter((o) => o.startsWith("team:"));
+  if (teamRefs.length > 0) {
+    // A recorded team session: its people come off and its team goes back.
+    let changed = false;
+    for (const id of await listSessionOwnerIds(ctx, conversationId)) if (await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
+    for (const ref of teamRefs) if (await addSessionTeamOwnerRow(ctx, conversationId, ref.slice(5) as Id<"teams">, addedBy)) changed = true;
+    if (changed) await syncPrimaryOwnerCache(ctx, conversationId);
+    return changed;
+  }
+  const teamRows = await teamOwnerRows(ctx, conversationId);
+  if (teamRows.length > 0) {
+    if (!opts.replaceTeam) return false;
+    for (const r of teamRows) await removeSessionTeamOwnerRow(ctx, conversationId, r.team_id);
+  }
   const keep = new Set(owners);
   let changed = false;
   const present = new Set<string>();
@@ -246,4 +405,113 @@ export async function setSessionOwnerRows(
   if (!changed && primary && String((await ctx.db.get(conversationId))?.owner_user_id ?? "") !== primary) changed = true;
   if (changed) await syncPrimaryOwnerCache(ctx, conversationId, primary);
   return changed;
+}
+
+// The team sessions a user's teams own, read as theirs (see sessionOwnerRow):
+// each team's `cap` most recently active ones that nobody killed (Done ones
+// stay: a team session is placed in Needs You, Working or Done like any), with
+// this person's own triage laid on. A window of its own, read from the
+// conversations themselves (by_team_owner_updated): `truncatedTeamIds` names a
+// team with more, whose older team sessions are recovered by id when met.
+// One read of the memberships, one range per team, one triage read per
+// windowed session. An agent account owns nothing a team owns.
+// The alerts that mean a session waits on a person, and how many of a
+// person's newest unread ones the team window looks through.
+const WAITING_ALERT_TYPES = new Set(["session_idle", "permission_request", "session_error"]);
+const WAITING_ALERT_CAP = 100;
+const TEAMS_PER_SCAN = 10;
+
+export async function teamOwnerRowsForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  cap: number,
+): Promise<{ rows: any[]; truncated: boolean; truncatedTeamIds: string[] }> {
+  const none = { rows: [], truncated: false, truncatedTeamIds: [] as string[] };
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  if (memberships.length === 0) return none;
+  // An agent account owns nothing a team owns: it reads no team window.
+  const self = await ctx.db.get(userId);
+  if (!self || self.is_bot) return none;
+  // A bound on the teams one scan reads. Teams past it count as overflowed,
+  // so their team sessions are recovered by id when the scan meets them.
+  const teams = memberships.slice(0, TEAMS_PER_SCAN);
+  const teamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+  const truncatedTeamIds: string[] = memberships.slice(TEAMS_PER_SCAN).map((m: any) => String(m.team_id));
+  const convs: any[] = [];
+  const perTeam = await Promise.all(teams.map((m: any) => ctx.db
+    .query("conversations")
+    .withIndex("by_team_owner_updated", (q: any) => q.eq("team_owner_team_id", m.team_id).eq("inbox_killed_at", undefined))
+    .order("desc")
+    .take(cap + 1)));
+  perTeam.forEach((rows: any[], i: number) => {
+    if (rows.length > cap) truncatedTeamIds.push(String(teams[i].team_id));
+    convs.push(...rows.slice(0, cap));
+  });
+  if (convs.length === 0 && truncatedTeamIds.length === 0) return none;
+  // Past a full window, a team session waiting on this person (an unread
+  // alert asking for input) still belongs in their inbox, however many others
+  // were more active since. Read only when a window overflowed.
+  if (truncatedTeamIds.length > 0) {
+    const inWindow = new Set(convs.map((c) => String(c._id)));
+    const waiting = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_read", (q: any) => q.eq("recipient_user_id", userId).eq("read", false))
+      .order("desc")
+      .take(WAITING_ALERT_CAP);
+    const waitingIds = [...new Set(waiting
+      .filter((n: any) => n.conversation_id && WAITING_ALERT_TYPES.has(n.type) && !inWindow.has(String(n.conversation_id)))
+      .map((n: any) => String(n.conversation_id)))];
+    for (const c of await Promise.all(waitingIds.map((id) => ctx.db.get(id)))) {
+      if (c && !c.inbox_killed_at && c.team_owner_team_id && teamIds.has(String(c.team_owner_team_id))) convs.push(c);
+    }
+  }
+  const truncated = truncatedTeamIds.length > 0;
+  if (convs.length === 0) return { rows: [], truncated, truncatedTeamIds };
+  const triage = await viewerTriageMap(ctx, userId, convs.map((c) => c._id));
+  return {
+    truncated,
+    truncatedTeamIds,
+    rows: convs.map((c) => ({
+      conversation_id: c._id,
+      user_id: userId,
+      added_at: c.updated_at ?? 0,
+      // A team session draws no per-person banner: already acknowledged.
+      seen_at: c.updated_at ?? 0,
+      team_id: c.team_owner_team_id,
+      triage: triage.get(String(c._id)) ?? {},
+      // The conversation itself, already read: the inbox scan uses it as is.
+      doc: c,
+    })),
+  };
+}
+
+// A user's newest owner rows, newest first, at most `cap`: their person rows
+// and, read as theirs (see sessionOwnerRow), the rows of sessions their teams
+// own. A session held both ways reads as the person row. `truncated` says a
+// source had more than `cap`, so absence from the list proves nothing.
+export async function ownerRowsForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  cap: number,
+): Promise<{ rows: any[]; truncated: boolean }> {
+  const own: any[] = await ctx.db
+    .query("session_owners")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+    .order("desc")
+    .take(cap + 1);
+  let truncated = own.length > cap;
+  const byConversation = new Map<string, any>();
+  for (const row of own.slice(0, cap)) byConversation.set(String(row.conversation_id), row);
+  // Two windows, each with its own cap: the person rows above, and the live
+  // team sessions here. Either one overflowing makes absence unproven.
+  const team = await teamOwnerRowsForUser(ctx, userId, cap);
+  if (team.truncated) truncated = true;
+  for (const row of team.rows) {
+    const key = String(row.conversation_id);
+    if (!byConversation.has(key)) byConversation.set(key, row);
+  }
+  return { rows: [...byConversation.values()].sort((a, b) => b.added_at - a.added_at), truncated };
 }

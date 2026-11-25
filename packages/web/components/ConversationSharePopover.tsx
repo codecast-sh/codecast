@@ -14,6 +14,7 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
   const convId = conversation._id as Id<"conversations">;
   const { setPrivate, shareWithTeam } = useTeamShareActions(convId);
   const setShareLink = useInboxStore((s) => s.setShareLink);
+  const teamSession = useInboxStore((s) => !!(s.sessions as any)?.[convId]?.team_session);
   const setGuestSuggestions = useInboxStore((s) => s.setGuestSuggestions);
   const pageUrl = `${shareOrigin()}/conversation/${convId}`;
   const policyRefusal = usePolicyRefusal("public_sharing_disabled", policyTeamOf("conversations", conversation));
@@ -23,6 +24,7 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
   const withToken = (token: string) => `${pageUrl}?share=${encodeURIComponent(token)}`;
   return (
     <SharePopover
+      teamSession={teamSession}
       canManage={canManage}
       isPrivate={conversation.is_private !== false}
       teamVisibility={conversation.team_visibility || conversation.effective_team_visibility}

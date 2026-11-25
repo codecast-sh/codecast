@@ -1,5 +1,5 @@
 import { deliverSessionNotification } from "./lib/sessionNotify";
-import { listSessionOwnerIds } from "./sessionOwners";
+import { listSessionPartyIds } from "./sessionOwners";
 
 export async function notifySessionAssigned(
   ctx: any,
@@ -83,7 +83,7 @@ export async function notifySessionExecutionTaken(
   const actor = await ctx.db.get(actorUserId);
   const actorName = actor?.name || actor?.email || "A teammate";
   const label = conversation.title?.trim() || conversation.short_id || "this session";
-  const owners = await listSessionOwnerIds(ctx, conversation._id);
+  const owners = await listSessionPartyIds(ctx, conversation._id);
   const recipients = new Set([conversation.user_id, conversation.owner_user_id, ...owners].filter(Boolean).map(String));
   let delivered = 0;
   for (const recipient of recipients) {

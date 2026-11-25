@@ -3383,14 +3383,16 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const link = token ? conversationShareLink(token) : `${CODECAST_BASE_URL}/conversation/${convId}`;
 
     const items: SheetItem[] = [];
+    // A team session is the whole team's to read: no level to pick here.
+    const teamSession = !!(useInboxStore.getState().sessions as any)?.[convId]?.team_session;
     if (isOwner) {
-      items.push({
+      if (!teamSession) items.push({
         label: 'Private',
         icon: 'lock',
         selected: isPrivate,
         onPress: () => { if (!isPrivate) { setPrivacy(convId, true); showToast('Made private'); } },
       });
-      if (hasTeam) {
+      if (hasTeam && !teamSession) {
         items.push(
           {
             label: 'Team sees the summary',

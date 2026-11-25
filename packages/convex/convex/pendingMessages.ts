@@ -18,7 +18,9 @@ import { HOSTED_IMAGE_REFUSAL, HOSTED_INPUT_MAX_CHARS, type WakeCause } from "@c
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess, standsWithRunner } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
-import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
+import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, listSessionPartyIds, syncPrimaryOwnerCache } from "./sessionOwners";
+import { clearViewerTriageOnSend, isTeamOwnedConversation } from "./lib/viewerTriage";
+import { recordTeamAnswer } from "./lib/teamSessionAnswer";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { composerChannel, insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
@@ -670,6 +672,13 @@ export async function enqueuePendingMessage(
   // "I messaged it, show it to me": a nested session through its parent, or
   // adopted on its own when that parent is never listed (a flow station).
   if (fields.human === true) await bringNestedThreadToInbox(ctx, conversation);
+  // A person writing in a team session (every send passes here): it comes back
+  // for them the way the row's own stamps clear above, the rest of the team's
+  // needs-input alerts clear, and the row says who answered.
+  if (fields.human === true && await isTeamOwnedConversation(ctx, conversation._id, conversation)) {
+    await clearViewerTriageOnSend(ctx, fromUserId, conversation._id);
+    await recordTeamAnswer(ctx, conversation._id, fromUserId, await listSessionPartyIds(ctx, conversation._id), conversation.last_message_role === "assistant");
+  }
 
   // A line into a standing session is one of the role's wakes today (the
   // number `cast brief` and org.health show against its cap).
@@ -1086,6 +1095,8 @@ export async function performSessionSend(
     const existingOwners = await listSessionOwnerIds(ctx, target._id);
     if (
       existingOwners.length === 0 &&
+      // A team session belongs to the whole team: writing in it never claims it.
+      !(await isTeamOwnedConversation(ctx, target._id, target)) &&
       !target.owner_user_id &&
       !(await conversationHasHumanStarter(ctx, target))
     ) {

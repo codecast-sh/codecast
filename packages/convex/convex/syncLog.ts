@@ -299,9 +299,11 @@ export function teamScopeKey(teamId: string): SyncScopeKey {
 
 // The scopes an entity's actions land in, derived from ACCESS, not routing
 // (sync-log-cargo E4, review): owner always; each explicit grant in their own
-// user scope (a task's assignee, a conversation's session owners); the
+// scope (a task's assignee and a conversation's person owners in their user
+// scope; a team session's `team:<id>` grant in that team's scope); the
 // workspace key's team when the stored key is a team key, never for
-// conversations (their team activity is a separate graduated axis). A routing
+// conversations (their team activity is a separate graduated axis). A
+// conversation reaches a team scope only when the team owns it. A routing
 // team_id whose workspace is user:<owner> (private inside a team) therefore
 // never enters the team scope: no existence leak, no projected-delete probes,
 // and every reader who may read a row holds a scope it fans to, which is the
@@ -313,7 +315,8 @@ export function scopesForChange(entityType: ChangeEntity, scope: ChangeScope): S
   const scopes = [userScopeKey(scope.owner_user_id)];
   const addGrant = (g: string) => {
     if (g === scope.owner_user_id) return;
-    const key = userScopeKey(g);
+    // A team grant (everyone on the team owns the session) fans to the team.
+    const key = g.startsWith("team:") ? teamScopeKey(g.slice(5)) : userScopeKey(g);
     if (!scopes.includes(key)) scopes.push(key);
   };
   if (entityType === "conversations") {
@@ -547,7 +550,7 @@ export async function revokeStaleScope(
 // row is inserted/deleted, so the member's client learns to start tracking
 // (bootstrap) or purge (revoke) the team scope without a reload. A removal also
 // lands in the TEAM's scope as a `member` row naming the departed user: their
-// conversations never fan out to the team scope (owner-only, E4), so nothing
+// conversations fan out to the team scope only when the team owns them (E4), so nothing
 // else tells the remaining members' clients that the rows they cached from
 // the team feed are no longer the team's to show. One row per removal, not
 // one per conversation.

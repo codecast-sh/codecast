@@ -67,7 +67,7 @@ export const INBOX_FACT_FIELDS = [
 // rename) it is one of these, or the next list or byIds push would remove it
 // again. A convex test pins this set to what those three functions write.
 export const INBOX_ROW_FIELDS = [
-  "_id", "session_id", "user_id", "team_id", "status", "is_private", "team_visibility",
+  "_id", "session_id", "user_id", "team_id", "status", "is_private", "team_visibility", "team_answered_by", "team_answered_at",
   "title", "subtitle", "started_at", "history_import", "agent_type", "model", "effort", "cc_account", "codex_account", "transcript_revision",
   "project_path", "git_root", "git_branch", "git_remote_url", "worktree_name", "worktree_branch",
   // A staged "Rewind to here" in the checkout (treeSnapshots.reportRewindStaged): the
@@ -94,7 +94,7 @@ export const INBOX_ROW_FIELDS = [
   "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large", "cloud_placement_progress",
   "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subagent_caps", "merge_back",
   // The viewer stamps (stampInboxViewerFields).
-  "owned_by_me", "author_name", "author_email", "assigned_ping", "owner_name", "owner_email",
+  "owned_by_me", "team_session", "author_name", "author_email", "assigned_ping", "owner_name", "owner_email",
 ] as const;
 
 const INBOX_ROW_FIELD_SET: ReadonlySet<string> = new Set(INBOX_ROW_FIELDS);

@@ -200,7 +200,7 @@ export async function isConversationOwner(
 ): Promise<boolean> {
   if (conversation.user_id.toString() === viewerId.toString()) return true;
   if ((conversation as any).owner_user_id?.toString() === viewerId.toString()) return true;
-  return !!conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId));
+  return !!conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId, conversation));
 }
 
 export async function canOwnerOrTeamAccess(
@@ -247,7 +247,7 @@ export async function checkConversationAccess(
     // is the denormalized primary-owner fast path; the session_owners lookup
     // covers secondary owners (a session may have several).
     if ((conversation as any).owner_user_id?.toString() === viewerId.toString()) return "owner";
-    if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId))) return "owner";
+    if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId, conversation))) return "owner";
     if (await canTeamMemberAccess(ctx, viewerId, conversation)) return "team";
     if (conversation._id && (await hasMentionReadGrant(ctx, viewerId, conversation))) return "shared";
   }

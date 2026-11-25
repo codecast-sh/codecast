@@ -605,8 +605,12 @@ describe("overlay read budget", () => {
     // dismissed x2, stashed x2, snoozed x2, owners.
     expect(by("conversations")).toBe(11);
     expect(by("session_owners")).toBe(1);
+    // The viewer's teams, whose live team sessions join the owned window
+    // (sessionOwners.teamOwnerRowsForUser): one read here, where the viewer is
+    // in no team; a member also reads their own user row and one range per team.
+    expect(by("team_memberships")).toBe(1);
     expect(by("get")).toBe(0);
-    expect(ops.length).toBe(17);
+    expect(ops.length).toBe(18);
   });
 });
 

@@ -31,7 +31,7 @@ export async function isRunnerOrOwner(ctx: Ctx, conv: any, userId: Id<"users">):
   const me = userId.toString();
   if (conv.user_id?.toString() === me) return true;
   if (conv.owner_user_id?.toString() === me) return true;
-  return await isSessionOwner(ctx, conv._id, userId);
+  return await isSessionOwner(ctx, conv._id, userId, conv);
 }
 
 async function findHide(ctx: Ctx, userId: Id<"users">, conversationId: Id<"conversations">) {

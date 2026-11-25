@@ -36,7 +36,8 @@ import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
 import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
-import { teamMembersOf } from "../../lib/activeTeam";
+import { activeTeamIdOf, teamMembersOf } from "../../lib/activeTeam";
+import { teamHasFeature } from "../../lib/teamFeatureRule";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -166,6 +167,7 @@ export const SessionCard = memo(function SessionCard({
     (s) => rosterDeviceOf(s.machineRoster as any, deviceId),
     (s) => localDeviceIdOf(s),
     (s) => memberListSig(teamMembersOf(s)),
+    (s) => teamHasFeature(s.teams as any[], activeTeamIdOf(s), "team_sessions"),
     (s) => anchorIdentitySig((s as any).anchors, anchorId),
     // Teammates who have this session open (their faces in the meta row and
     // a ring on the card). The signature is the viewer id list, so a roster
@@ -347,6 +349,11 @@ export const SessionCard = memo(function SessionCard({
       {...rest}
       {...(unsentDraft ? { isUnread: false } : {})}
       session={session}
+      mine={teamHasFeature(st.teams as any[], activeTeamIdOf(st), "team_sessions") && session.is_private === true && !!session.team_id && !session.team_session}
+      teamSession={!!session.team_session}
+      answeredBy={session.team_session && session.team_answered_by && String(session.team_answered_by) !== String(st.currentUser?._id ?? "")
+        ? (((teamMembersOf(st) as any[]) ?? []).find((m) => String(m?._id) === String(session.team_answered_by))?.name?.split(" ")[0] ?? null)
+        : null}
       workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
       roleAbove={roleAbove}

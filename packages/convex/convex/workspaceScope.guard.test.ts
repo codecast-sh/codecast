@@ -52,6 +52,7 @@ const SESSION_CROSS_TEAM = new Map<string, string>([
   ["conversations.ts:resolveReadScope", "walks every team only on an explicit all-teams ask; rows labelled by workspaceOf/teamNameOf"],
   ["calls.ts:getLiveRooms", "reads a session only for its room title, after the per-room membership check"],
   ["anchors.ts:listAnchors", "reads each anchor's own seat session for its place, not team content"],
+  ["sessionOwners.ts:teamOwnerRowsForUser", "the team sessions the caller owns as a member of each team (an owner's inbox spans workspaces, as person owner rows do); each row carries team_owner_team_id"],
 ]);
 
 function convexSources(): Array<{ file: string; src: string }> {

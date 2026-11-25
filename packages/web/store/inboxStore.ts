@@ -694,6 +694,10 @@ export type InboxSession = {
   // focused. It survives a parked create/reload and is cleared only after the
   // authoritative bucket-assignment row syncs back.
   _postCreateBucketId?: string;
+  // Local only: the new-session composer's Personal / Team switch
+  // (TeamSessionSwitch). Team is folded into createSession as `team`;
+  // Personal, or no pick, changes nothing.
+  _team?: "mine" | "team";
   // Local-only "kept draft" marker for a deferred compose stub the user chose
   // to keep instead of abandoning. It is what makes a 0-message blank VISIBLE
   // in the inbox (placeInboxRows' engaged-blank gate) and immune to the
@@ -1041,6 +1045,11 @@ export type InboxSession = {
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
   owned_by_me?: boolean;
+  // A team session (the team owns it; sessionOwners session_team_owners), and
+  // who last answered it (team sessions spec).
+  team_session?: boolean;
+  team_answered_by?: string | null;
+  team_answered_at?: number | null;
   // Unacknowledged handoff: a teammate assigned this session to the current user
   // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
   // computeInboxSessions; cleared by ackSessionAssignment (server) and
@@ -6667,7 +6676,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   confirmSessionCommand: (requestId: string) => void;
   dismissSessionCommand: (requestId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -6833,6 +6842,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // picker). The durable value arrives via the server: rollup echo for
   // in-place switches, reconfigure/create stamps for launches.
   setConversationModel: (id: string, opts: { model?: string | null; effort?: string | null }) => void;
+  setStubTeam: (id: string, team: "mine" | "team") => void;
   // Stamp per-session stable-context launch prefs on a NEW-session stub row
   // (local-only; folded into createSession by createSessionFromStub, same
   // lifecycle as the model/effort stamps). mode: "team" | "solo" | "off";
@@ -12523,7 +12533,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // first_message/first_message_client_id ride the dispatch only: a hosted
   // conversation's start queues its first message server side, matched to
   // the optimistic bubble by its client id.
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -12659,6 +12669,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       git_root: gitRoot || undefined,
       session_id: stubId,
       ...(fallback?.private ? { private: true } : {}),
+      // Team asks for a team session; Personal changes nothing (the folder rule decides who sees it).
+      ...(cur?._team === "team" && !fallback?.private ? { team: true } : {}),
       ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
         ? { linked_object: cur._linkedObject }
@@ -13646,6 +13658,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (opts.model !== undefined) row.model = opts.model ?? undefined;
       if (opts.effort !== undefined) row.effort = opts.effort ?? undefined;
     }
+  }),
+
+  // The new-session composer's Personal | Team switch ("mine" is Personal):
+  // local until the first send folds it into createSession
+  // (createSessionFromStub); only Team is sent.
+  setStubTeam: sync(function (this: Draft, id: string, team: "mine" | "team") {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) if (row) row._team = team;
   }),
 
   setStableContextPrefs: sync(function (this: Draft, id: string, prefs: { mode?: string | null; exclude?: string[] | null }) {

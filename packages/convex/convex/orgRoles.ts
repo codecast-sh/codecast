@@ -1123,7 +1123,7 @@ export const reparentSession = mutation({
     // did: the "assigned to you" push and inbox row, and the ownership-changed
     // notice. Without these an owner added from the chart or the menu would
     // hear nothing. notifySessionAssigned skips the actor and an empty set.
-    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
+    await notifySessionAssigned(ctx, result.conversation_id, [...result.added, ...result.shared_with], authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
   },

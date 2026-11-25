@@ -22,7 +22,7 @@ import {
 } from "./ui/dropdown-menu";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { UserCheck } from "lucide-react";
+import { UserCheck, Users } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import {
   useDevices,
@@ -141,7 +141,7 @@ export function AssignmentBadge({
     !!ownerDeviceId && !own,
   );
   const d = own ?? (foreign || undefined);
-  const { ownerList, displayFor, currentUser, implicitOwnerId } = owners;
+  const { ownerList, displayFor, currentUser, implicitOwnerId, teamSession } = owners;
 
   // Default ownership (the person who started it, or you on your own
   // session) stays off the chip: avatar only, named on hover. The name
@@ -153,7 +153,7 @@ export function AssignmentBadge({
   const onlyStarter =
     ownerList.length === 0 ||
     (ownerList.length === 1 && (!starterId || ownerList[0] === starterId));
-  const ownershipChanged = ownerList.length > 1 || (ownerList.length === 1 && !onlyStarter);
+  const ownershipChanged = teamSession || ownerList.length > 1 || (ownerList.length === 1 && !onlyStarter);
   const selfDisp = currentUser
     ? {
         name: currentUser.name || currentUser.email?.split("@")[0] || "You",
@@ -162,7 +162,9 @@ export function AssignmentBadge({
     : null;
   const ownerNames = (ownerList.length ? ownerList : meId && isRunner ? [meId] : starterId ? [starterId] : [])
     .map((id) => (id === meId ? `${selfDisp?.name ?? "You"}${selfDisp?.name ? " (you)" : ""}` : displayFor(id).name));
-  const ownerHover = seatUnderRole
+  const ownerHover = teamSession
+    ? "Team session: everyone on the team has it, and anyone answers"
+    : seatUnderRole
     ? `Reports to ${parentRole!.name} (@${parentRole!.handle})`
     : ownerNames.length === 0
       ? "No owner — click to take ownership"
@@ -256,6 +258,11 @@ export function AssignmentBadge({
               <>
                 <RoleFace role={parentRole as any} size={16} />
                 {!compact && <span className="truncate cq-sq1">{parentRole!.name}</span>}
+              </>
+            ) : teamSession ? (
+              <>
+                <Users className="w-3.5 h-3.5" />
+                {!compact && <span className="truncate cq-sq1">Team</span>}
               </>
             ) : ownerList.length === 0 && !isRunner && !starterId ? (
               <>

@@ -139,6 +139,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   removeQuoteDrafts: INTERNAL,
   setSessionTargetDevice: DRAFT,
   setStableContextPrefs: DRAFT,
+  setStubTeam: DRAFT,
   setSessionNewProject: DRAFT,
 
   // Creates

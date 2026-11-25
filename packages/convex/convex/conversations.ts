@@ -79,7 +79,8 @@ import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, 
 import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
-import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
+import { isSessionOwner, ownerRowsForUser, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
+import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
@@ -4118,6 +4119,7 @@ export const setPrivacy = mutation({
 
     // Sharing must guarantee a team_id (buildShareUpdate); locking forces the
     // private visibility marker. Never let is_private:false and team_id diverge.
+    await refuseHidingTeamSession(ctx, conversation._id, { is_private: args.is_private });
     const updates = args.is_private
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conversation, authUserId);
@@ -4151,6 +4153,7 @@ export const setTeamVisibility = mutation({
       throw new Error("Unauthorized: can only change visibility of your own conversations");
     }
 
+    await refuseHidingTeamSession(ctx, conversation._id, { team_visibility: args.team_visibility });
     // Setting any team visibility shares the conversation, so guarantee a
     // team_id alongside it (else it's shared-with-nobody).
     const updates = await buildShareUpdate(ctx, conversation, authUserId);
@@ -4188,6 +4191,7 @@ export const setPrivacyBySessionId = mutation({
     // (buildShareUpdate), locking forces the private visibility marker. A raw
     // is_private flip here was the one share path that skipped buildShareUpdate
     // and could mint a "shared with nobody" row (non-private, teamless).
+    await refuseHidingTeamSession(ctx, conversation._id, { is_private: args.is_private });
     const updates = args.is_private
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conversation, authUserId);
@@ -7324,11 +7328,7 @@ export const feedForCLI = query({
     // held in the owner_user_id cache.
     const myOwnerRows = args.member_name
       ? []
-      : await ctx.db
-          .query("session_owners")
-          .withIndex("by_user", (q: any) => q.eq("user_id", authUserId))
-          .order("desc")
-          .take(50);
+      : (await ownerRowsForUser(ctx, authUserId, 50)).rows;
     const myOwnedIds = new Set<string>(
       myOwnerRows.map((r: any) => r.conversation_id.toString())
     );
@@ -8513,6 +8513,10 @@ export async function stampInboxViewerFields(
     row.author_email = author?.email ?? null;
   }
   row.owned_by_me = !!myOwnerRow;
+  // A team session (the team owns it): this viewer's own triage replaces the
+  // row's stamps, and the row says so.
+  row.team_session = !!myOwnerRow?.team_id;
+  if (myOwnerRow?.team_id) overlayViewerTriage(row, myOwnerRow.triage);
   if (myOwnerRow && !myOwnerRow.seen_at && myOwnerRow.added_by?.toString() !== viewerId.toString()) {
     const byDoc = await getDoc(myOwnerRow.added_by);
     row.assigned_ping = {
@@ -8938,6 +8942,9 @@ async function enrichInboxSessionRow(
     // The team feed reads the viewer's own sharing level off this row
     // (web lib/teamFeedRows), and the sharing actions write it here.
     team_visibility: conv.team_visibility ?? null,
+    // A team session: who last wrote in it, for "<name> answered".
+    team_answered_by: (conv as any).team_answered_by ?? null,
+    team_answered_at: (conv as any).team_answered_at ?? null,
     owner_device_id: (conv as any).owner_device_id ?? null,
     // The saved Claude account this session is pinned to (its setup-token),
     // null when it runs on the machine's login. The park card names the
@@ -9340,16 +9347,27 @@ export async function scanInboxConversations(
   // never admitted on that account; they only answer the lookup.
   let ownerLookupRows: any[] = [];
   let ownerLookupComplete = false;
+  // Live team sessions (the team owns them): read alongside the person rows,
+  // a window of their own. A team past its window is recovered by id below.
+  const teamOwnersP = noWindows ? Promise.resolve({ rows: [] as any[], truncated: false, truncatedTeamIds: [] as string[] }) : teamOwnerRowsForUser(ctx, userId, INBOX_WINDOW_CAP);
+  let overflowedTeams = new Set<string>();
   const ownerRowsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
     .query("session_owners")
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .order("desc")
     .take(INBOX_OWNER_LOOKUP_CAP + 1)
-    .then((rows: any[]) => {
+    .then(async (rows: any[]) => {
       ownerLookupComplete = rows.length <= INBOX_OWNER_LOOKUP_CAP;
       ownerLookupRows = rows.slice(0, INBOX_OWNER_LOOKUP_CAP);
       if (rows.length > INBOX_WINDOW_CAP) truncated.add("owned");
-      return rows.slice(0, INBOX_WINDOW_CAP);
+      const team = await teamOwnersP;
+      overflowedTeams = new Set(team.truncatedTeamIds);
+      if (team.truncated) truncated.add("owned");
+      const window = rows.slice(0, INBOX_WINDOW_CAP);
+      const seen = new Set(window.map((r: any) => String(r.conversation_id)));
+      for (const r of team.rows) if (!seen.has(String(r.conversation_id))) window.push(r);
+      ownerLookupRows.push(...team.rows);
+      return window;
     });
   // The five window scans are independent — issue them in ONE batched round
   // trip. This scan backs the heartbeat-hot sessionsLiveness/listInboxSessions
@@ -9399,18 +9417,22 @@ export async function scanInboxConversations(
       myOwnerRowById.set(idStr, looked);
       return Promise.resolve(looked);
     }
+    // A team session of a team whose live window overflowed: recover it by id
+    // (it has no owner_user_id, so the rule below would skip it).
+    // A named lookup reads no team window, so every team session it meets pays the read.
+    const pastTeamWindow = !conv.owner_user_id && !!conv.team_owner_team_id && (!!opts.namedOnly || overflowedTeams.has(String(conv.team_owner_team_id)));
     // An empty owner range proves nothing when it was never read.
-    if (ownerLookupComplete && !opts.namedOnly) return Promise.resolve(null);
+    if (ownerLookupComplete && !opts.namedOnly && !pastTeamWindow) return Promise.resolve(null);
     // A conversation with no owner_user_id has no owner rows at all: the
     // cache names the primary owner whenever one exists (every owner-row
     // writer resyncs it through syncPrimaryOwnerCache). Only a row with an
     // owner can have me among its owners, so only that row pays the read; on
     // a full account the per-row read for every candidate and child put
     // listInboxSessions past Convex's limits (ct-73243).
-    if (!conv.owner_user_id) return Promise.resolve(null);
+    if (!conv.owner_user_id && !pastTeamWindow) return Promise.resolve(null);
     let hit = ownerLookups.get(idStr);
     if (!hit) {
-      hit = sessionOwnerRow(ctx, conv._id, userId).then((row: any) => {
+      hit = sessionOwnerRow(ctx, conv._id, userId, conv).then((row: any) => {
         if (row) { ownedByMeIds.add(idStr); myOwnerRowById.set(idStr, row); }
         return row ?? null;
       });
@@ -9435,7 +9457,8 @@ export async function scanInboxConversations(
   // would be a wasted read on a query that re-runs every heartbeat).
   const ownerRowsToHydrate = ownerRows.filter((r: any) => !byId.has(r.conversation_id.toString()));
   const ownerHydrated = await Promise.all(
-    ownerRowsToHydrate.map((r: any) => Promise.resolve(ctx.db.get(r.conversation_id)).catch(() => null))
+    // A team session's row carries its conversation, read by the team window.
+    ownerRowsToHydrate.map((r: any) => r.doc ? Promise.resolve(r.doc) : Promise.resolve(ctx.db.get(r.conversation_id)).catch(() => null))
   );
   // An owned row is admitted on the owner seat ALONE — no recency window, no
   // status gate. Assignment means the session sits in that person's inbox
@@ -11427,10 +11450,13 @@ export async function collectHiddenSessionsLite(
   // scan, so cursors stay untouched, and present in the whole-set the CLEAR
   // gate checks. Bounded by the same 200-owner cap as the inbox scan.
   if (result.isDone) {
-    const ownerRows = await ctx.db
-      .query("session_owners")
-      .withIndex("by_user", (q: any) => q.eq("user_id", userId))
-      .take(200);
+    const ownerRows = [
+      ...await ctx.db
+        .query("session_owners")
+        .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+        .take(200),
+      ...(await teamOwnerRowsForUser(ctx, userId, 200)).rows,
+    ];
     const seen = new Set(page.map((r: any) => r._id.toString()));
     for (const r of ownerRows) {
       const idStr = r.conversation_id.toString();
@@ -11773,6 +11799,11 @@ export const dismissFromInbox = mutation({
     if (!userId) throw new Error("Not authenticated");
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || conv.user_id !== userId) throw new Error("Not found");
+    // A team session's dismiss is this person's own (lib/viewerTriage).
+    if (await isTeamOwnedConversation(ctx, conv._id, conv)) {
+      await recordViewerTriage(ctx, userId, conv._id, { inbox_dismissed_at: Date.now() });
+      return;
+    }
     await ctx.db.patch(args.conversation_id, {
       inbox_dismissed_at: Date.now(),
     });
@@ -11848,9 +11879,10 @@ export const cliSetSessionVisibility = mutation({
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, async (c) =>
       c.user_id?.toString() === userId.toString() ||
-      c.owner_user_id?.toString() === userId.toString()
+      c.owner_user_id?.toString() === userId.toString() ||
+      (await isTeamOwnedConversation(ctx, c._id, c) && await isSessionOwner(ctx, c._id, userId))
     );
     if (!conv) {
       // Not the runner or an owner: a teammate's session on the team board.
@@ -11881,17 +11913,26 @@ export const cliSetSessionVisibility = mutation({
       // A restore clears the caller's viewer hide too, in case the row was hidden
       // before they became an owner of it.
       await unhideConversationForViewer(ctx, userId, conv._id);
+      // And their own triage of a team session.
+      if (await isTeamOwnedConversation(ctx, conv._id, conv)) await recordViewerTriage(ctx, userId, conv._id, { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_stash_hidden: null, inbox_snoozed_until: null });
       const { wasHidden, rearmed } = await resurfaceHiddenSession(ctx, conv, userId);
       return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }
 
     const wasHidden = !!conv.inbox_dismissed_at;
+    // A team session's stash is this person's own; a kill ends it for everyone.
+    if (args.action !== "kill" && await isTeamOwnedConversation(ctx, conv._id, conv)) {
+      await recordViewerTriage(ctx, userId, conv._id, { inbox_stashed_at: Date.now(), inbox_stash_hidden: args.hidden ? true : null });
+      return { ok: true as const, short_id: shortId, action: args.action, outcome: "none" as const, was_hidden: wasHidden, teardown_enqueued: false, canceled_schedules: 0, canceled_messages: 0, cascaded_children: 0 };
+    }
     // Every stash write sets inbox_stash_hidden (true or cleared): the flag is
     // only honored while the stamp is set, so a re-stash never inherits an
     // earlier gesture's mode.
+    // A kill of a team session is killed for everyone (inbox_killed_at).
+    const teamKill = args.action === "kill" && await isTeamOwnedConversation(ctx, conv._id, conv);
     const patch =
       args.action === "kill"
-        ? { inbox_dismissed_at: Date.now() }
+        ? { inbox_dismissed_at: Date.now(), ...(teamKill && !conv.inbox_killed_at ? { inbox_killed_at: Date.now() } : {}) }
         : { inbox_stashed_at: Date.now(), inbox_stash_hidden: args.hidden ? true : undefined };
     await ctx.db.patch(conv._id, patch);
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
@@ -12000,9 +12041,11 @@ async function resolveCommandableSession(
   session: string,
   verb: string,
 ): Promise<Doc<"conversations">> {
-  const conv = await findConversationByAnyRefWhere(ctx, session, (c) =>
+  // The runner or the primary owner; on a team session, any member of it.
+  const conv = await findConversationByAnyRefWhere(ctx, session, async (c) =>
     c.user_id?.toString() === userId.toString() ||
-    c.owner_user_id?.toString() === userId.toString()
+    c.owner_user_id?.toString() === userId.toString() ||
+    (await isTeamOwnedConversation(ctx, c._id, c) && await isSessionOwner(ctx, c._id, userId))
   );
   if (!conv) {
     throw new Error(
@@ -12489,6 +12532,8 @@ export const drainStaleDismiss = internalMutation({
       for (const conv of result.page) {
         if (conv.inbox_dismissed_at) continue;
         if (conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
+        // A team session is cleared for this person only (lib/viewerTriage).
+        if (await isTeamOwnedConversation(ctx, conv._id, conv)) { await recordViewerTriage(ctx, args.userId, conv._id, { inbox_dismissed_at: now }); continue; }
         await ctx.db.patch(conv._id, { inbox_dismissed_at: now });
       }
 
@@ -13678,7 +13723,8 @@ export async function resolveRestartTarget(
     // sendMessage/resumeSession. An owned session (Mr-Bot-run, assigned to this
     // user) restarts from the owner's inbox exactly like their own; the daemon
     // commands are routed to the runner by the callers.
-    if (conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
+    // On a team session, any member of the team.
+    if (conv.user_id !== userId && conv.owner_user_id !== userId && !(await isTeamOwnedConversation(ctx, conv._id, conv) && await isSessionOwner(ctx, conv._id, userId))) throw new Error("Not authorized");
     // An explicit Restart IS the sanctioned revival — the same gesture class as
     // a human send, so it gets the send path's wake-up rules
     // (enqueuePendingMessage): clear the kill/hide stamps and re-activate, in

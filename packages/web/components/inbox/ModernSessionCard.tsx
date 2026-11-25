@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { Star, Rocket } from "lucide-react";
+import { Star, Rocket, Lock, Users } from "lucide-react";
 import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
 import { entityRoute } from "@codecast/shared/entities";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -76,6 +76,9 @@ export function ModernSessionCardView({
   isUnread,
   liveTitle,
   isFavorite,
+  mine,
+  teamSession,
+  answeredBy,
   sessionLabel,
   variant = "default",
   sectionStatus,
@@ -328,6 +331,13 @@ export function ModernSessionCardView({
               <button type="button" data-mc-fav aria-label="Unfavorite" title="Favorite; press to remove" onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }} className="flex items-center text-sol-yellow hover:opacity-70">
                 <Star className="w-3 h-3" fill="currentColor" />
               </button>
+            )}
+            {mine && <span data-mc-mine title="Mine: kept from the team" className="flex items-center text-sol-text-dim"><Lock className="w-3 h-3" /></span>}
+            {teamSession && (
+              <span data-mc-team title="Team session: everyone on the team has it" className="flex items-center gap-1 text-sol-violet">
+                <Users className="w-3 h-3" />
+                {answeredBy && status !== "needs_you" && <span className="text-meta whitespace-nowrap">{answeredBy} answered</span>}
+              </span>
             )}
             {session.is_pinned && <span data-mc-pin title="Pinned" className="flex items-center text-sol-magenta"><ModernPinGlyph filled className="w-3 h-3" /></span>}
             {time && <span data-mc-time title={details} className="whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{time}</span>}

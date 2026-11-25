@@ -339,7 +339,7 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   const rearm = interval && (patch.status === "scheduled" || ("interval_ms" in patch && current.status === "scheduled"));
   if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(rearm ? { run_at: Date.now() + interval, cadence_slot_at: undefined } : {}) });
   else await ctx.db.patch(w.id, patch);
-  if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId, ownerRows ?? []);
+  if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId, ownerRows ?? [], { replaceTeam: true });
   if (w.table === "tasks" && current.plan_id) await recalcPlanProgress(ctx, current.plan_id, current._id, patch.status ?? current.status);
 }
 

@@ -127,6 +127,10 @@ export type OwnersEnv = {
   // is empty the chip and menu treat them as the owner — a person who started
   // a thread already owns it, even before a session_owners row exists.
   implicitOwnerId?: string;
+  /** The team owns the session (a team session): no person does. */
+  teamSession?: boolean;
+  /** The team the session is on (the one that owns it, when teamSession). */
+  sessionTeamId?: string;
 };
 
 /**
@@ -174,7 +178,9 @@ export function useOwnerCandidates(
 }
 
 export function useOwners(conversationId: string, env: OwnersEnv) {
-  const { teamMembers, currentUser, notify, implicitOwnerId } = env;
+  const { teamMembers, currentUser, notify, teamSession } = env;
+  // A team session has no person owner, so nobody stands in as the starter.
+  const implicitOwnerId = teamSession ? undefined : env.implicitOwnerId;
 
   // useQueryNoThrow: listOwners is enrichment (chips, the handoff banner). A
   // timeout or auth miss must not unmount ConversationView — that is what
@@ -329,6 +335,26 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     }
   };
 
+  /** Make it a team session: the team owns it and no person does, so it sits
+   *  in every member's inbox (sessionOwnership's "everyone" owner). */
+  const makeTeamSession = async () => {
+    try {
+      await env.reparent({ kind: "user", owners: ["everyone"], mode: "set" }, { toastFallback: "Team session: everyone on the team has it" });
+    } catch (e: any) {
+      notify?.(humanizeConvexError(e, "Could not make it a team session"), "error");
+    }
+  };
+
+  /** Take a team session back from the team: you become its only owner. */
+  const takeFromTeam = async () => {
+    if (!meId) return;
+    try {
+      await env.reparent({ kind: "user", owners: [meId], mode: "set" }, { toastFallback: "It's yours now" });
+    } catch (e: any) {
+      notify?.(humanizeConvexError(e, "Could not take ownership"), "error");
+    }
+  };
+
   const clearAll = async () => {
     const ids = Array.from(ownerIds);
     setOverrides((o) => { const n = { ...o }; for (const id of ids) n[id] = false; return n; });
@@ -364,7 +390,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   };
 
   const canManage = error || data === null ? false : data ? true : undefined;
-  return { ownerIds, ownerList, implicitOwnerId, displayFor, toggle, moveToRole, handoffTo, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage };
+  return { ownerIds, ownerList, implicitOwnerId, teamSession: !!teamSession, sessionTeamId: env.sessionTeamId, makeTeamSession, takeFromTeam, displayFor, toggle, moveToRole, handoffTo, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

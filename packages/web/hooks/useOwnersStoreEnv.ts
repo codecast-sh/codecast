@@ -31,6 +31,9 @@ export function useStoreOwnersEnv(
   base: Pick<OwnersEnv, "teamMembers" | "currentUser"> & { notify: NonNullable<OwnersEnv["notify"]> },
 ): OwnersEnv {
   const { teamMembers, currentUser, notify } = base;
+  // A team session: the team owns it (the row's team_session stamp).
+  const teamSession = useInboxStore((s) => !!sessionRowOf(s, conversationId)?.team_session);
+  const sessionTeamId = useInboxStore((s) => (sessionRowOf(s, conversationId)?.team_id as string | undefined) ?? undefined);
   const starterIds = useInboxStore(useShallow((s) => {
     const row = sessionRowOf(s, conversationId);
     return [row?.author_user_id ?? null, row?.user_id ?? null] as const;
@@ -50,6 +53,8 @@ export function useStoreOwnersEnv(
     teamMembers,
     currentUser,
     implicitOwnerId,
+    teamSession,
+    sessionTeamId,
     notify,
     reparent: async (target, opts) => {
       const r = await useInboxStore.getState().reparentOrgSession(conversationId, target, { note: opts.note });

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "./ui/button";
-import { Forward, Link as LinkIcon } from "lucide-react";
+import { Forward, Link as LinkIcon, Users } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { copyText } from "../lib/copyText";
@@ -13,6 +13,9 @@ interface SharePopoverProps {
   /** Open on mount: the page was reached by a link to its share control
    *  (a call's `?share=open`, from the room's thread). */
   defaultOpen?: boolean;
+  /** A team session: the whole team owns it and reads it whole, so there is
+   *  no level to pick here (taking ownership is in the owners menu). */
+  teamSession?: boolean;
   isPrivate?: boolean;
   teamVisibility?: string | null;
   hasShareToken: boolean;
@@ -93,6 +96,7 @@ const LINK_ACCESS: SegmentedOption<LinkAccess>[] = [
 ];
 
 export function SharePopover({
+  teamSession = false,
   isPrivate = false,
   teamVisibility,
   hasShareToken,
@@ -199,7 +203,13 @@ export function SharePopover({
 
         <div className="px-3.5 pb-3.5 pt-2 space-y-3.5 [&>*+*]:border-t [&>*+*]:border-sol-border/60 [&>*+*]:pt-3.5">
           {access}
-          {canManage && hasTeam && (
+          {teamSession ? (
+            <div className="flex items-center gap-2 text-xs text-sol-text" data-share-team-session>
+              <Users className="w-3.5 h-3.5 text-sol-violet" />
+              <span className="flex-1">Team session</span>
+              <span className="text-sol-text-dim">the whole team reads it</span>
+            </div>
+          ) : canManage && hasTeam && (
             <div className="space-y-2">
               <TeamShareModePicker
                 mode={currentMode}

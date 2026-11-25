@@ -54,6 +54,10 @@ async function authorizedForCtx(ctx: AccessCtx, stamp: AccessStamp | null, userI
   const uid = String(userId);
   if (stamp.access_owner === uid) return true;
   if (stamp.access_grants?.includes(uid)) return true;
+  // A team grant (a session everyone on a team owns) reads like a team key.
+  for (const grant of stamp.access_grants ?? []) {
+    if (grant.startsWith("team:") && await workspaceGrantsAccess(ctx, userId, grant)) return true;
+  }
   return await workspaceGrantsAccess(ctx, userId, stamp.access_key);
 }
 

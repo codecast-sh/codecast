@@ -719,6 +719,44 @@ export default defineSchema({
     // Membership check / dedupe — is this user already an owner of this session?
     .index("by_conversation_user", ["conversation_id", "user_id"]),
 
+  // A session owned by EVERYONE on a team: every person who is a member of
+  // team_id counts as an owner, worked out at read time from team_memberships
+  // (sessionOwners.ts), so a member who joins later is included and one who
+  // leaves drops out with no row to keep in step. Part of the same owner set
+  // as session_owners: it puts the session in every member's inbox, sends them
+  // its notifications and lets them steer and triage it as co-owners do. The
+  // access stamp turns it into a `team:<id>` grant. One row per conversation
+  // and team.
+  session_team_owners: defineTable({
+    conversation_id: v.id("conversations"),
+    team_id: v.id("teams"),
+    added_by: v.id("users"),
+    added_at: v.number(),
+    note: v.optional(v.string()),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_team", ["team_id", "added_at"]),
+
+  // One person's own triage of a team session (a session_team_owners row
+  // owns it): their dismiss, stash, snooze and pin. Everyone on the team holds
+  // the session, so these are per person, never the conversation's stamps,
+  // which would hide it from the whole team (lib/viewerTriage.ts). Done and
+  // kill stay on the conversation: they end it for everyone.
+  session_viewer_triage: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    inbox_dismissed_at: v.optional(v.number()),
+    inbox_closed_at: v.optional(v.number()),
+    inbox_stashed_at: v.optional(v.number()),
+    inbox_stash_hidden: v.optional(v.boolean()),
+    inbox_snoozed_until: v.optional(v.number()),
+    inbox_pinned_at: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_user_conversation", ["user_id", "conversation_id"])
+    .index("by_conversation", ["conversation_id"]),
+
   // A viewer's hide of a session they neither run nor own: a teammate's row on
   // the team board. The owner's own triage lives on the conversation
   // (inbox_stashed_at / inbox_dismissed_at) and hides the row from everyone's
@@ -831,6 +869,15 @@ export default defineSchema({
     // was stalled.
     transcript_revision: v.optional(v.number()),
     is_private: v.boolean(),
+    // The team that owns this session as a whole (a session_team_owners row),
+    // kept by that table's two writers (sessionOwners add/removeSessionTeamOwnerRow).
+    // A copy for one index: the team's inbox window, newest activity first.
+    team_owner_team_id: v.optional(v.id("teams")),
+    // A team session (session_team_owners): who last wrote in it and when, so
+    // the row reads "<name> answered" after everyone was asked for input
+    // (lib/teamSessionAnswer.ts).
+    team_answered_by: v.optional(v.id("users")),
+    team_answered_at: v.optional(v.number()),
     team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
     status: v.union(v.literal("active"), v.literal("completed")),
     share_token: v.optional(v.string()),
@@ -1573,6 +1620,8 @@ export default defineSchema({
     .index("by_user_killed", ["user_id", "inbox_killed_at"])
     // The Closed shelf's closes (listClosedSessions), newest-first.
     .index("by_user_closed", ["user_id", "inbox_closed_at"])
+    // A team's team sessions by activity: every member's inbox window of them.
+    .index("by_team_owner_updated", ["team_owner_team_id", "inbox_killed_at", "updated_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .index("by_owner_device_register_only", ["user_id", "owner_device_id", "register_only", "ended_at"])
     // A device's live rows (cloud.hostSessions): a host that has run thousands
