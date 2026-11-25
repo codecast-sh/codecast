@@ -86,7 +86,7 @@ fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
 const verb = args.slice(0, 2).join(" ");
 if (verb === "ws path") { console.log(${JSON.stringify(repo)}); process.exit(0); }
 if (verb === "flow asker") {
-  if (process.env.FAKE_ASKER_FAIL) { console.error("Error: no /cli/sessions/originator route"); process.exit(1); }
+  if (process.env.FAKE_ASKER_FAIL) { console.error(process.env.FAKE_ASKER_FAIL); process.exit(1); }
   console.log(JSON.stringify(${JSON.stringify(ASKER)})); process.exit(0);
 }
 if (verb === "flow blind") { console.log(JSON.stringify({ files: 1, added: 3, removed: 1, text: "diff --git a/deploys.tsx b/deploys.tsx" })); process.exit(0); }
@@ -215,11 +215,11 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
       "Intent asks a person: the intent read failed: the model's answer held no usable citation"],
     ["a failed model call", () => { model = { ok: false, reason: "budget", error: "no room", cost_usd: 0 }; }, "conv_lead",
       "Intent asks a person: the intent read failed: no room"],
-    ["no session behind the change", () => {}, null,
-      "Intent asks a person: the intent read failed: no session started this change"],
+    ["a task no session is tied to, with no session behind the change", () => { process.env.FAKE_ASKER_FAIL = "No session you can read is tied to ct-7"; }, null,
+      "Intent asks a person: the intent read failed: No session you can read is tied to ct-7"],
     ["a branch that does not resolve", () => {}, "conv_lead|no-such-branch",
       "Intent asks a person: the intent read failed: the branch no-such-branch does not resolve to a commit here"],
-    ["the asker failing", () => { process.env.FAKE_ASKER_FAIL = "1"; }, "conv_lead",
+    ["the asker failing", () => { process.env.FAKE_ASKER_FAIL = "Error: no /cli/sessions/originator route"; }, "conv_lead",
       "Intent asks a person: the intent read failed: Error: no /cli/sessions/originator route"],
     ["the server refusing the citation", () => { clearAnswer = { error: "Not verified: jx7lead:115 is not a line a person typed" }; }, "conv_lead",
       "Intent asks a person: the server did not verify the citation: Not verified: jx7lead:115 is not a line a person typed"],
@@ -238,6 +238,12 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
       expect(taskComments()).toEqual([["task", "comment", "ct-7", said, "-t", "progress"]]);
     });
   }
+
+  test("a run with no session behind its change, started on a task alone, reads the task's sessions and can clear", async () => {
+    expect(await run(null)).toBe("landed");
+    expect(casts().find((a) => a[0] === "flow" && a[1] === "asker")).toEqual(["flow", "asker", "--task", "ct-7", "--run", "run_1"]);
+    expect(clears()).toHaveLength(1);
+  });
 
   test("a clear leaves no comment of the segment's own: the server says what cleared it", async () => {
     expect(await run()).toBe("landed");
