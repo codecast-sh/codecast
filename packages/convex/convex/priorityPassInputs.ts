@@ -33,7 +33,7 @@ export const OVERLAP_MS = 10 * MINUTE;
 /** The oldest typed messages and pin events a probe reads (each). A typed message holds up to 8 KB: this keeps it far under the read limit. */
 const ACTIVITY_READ = 1_000;
 /** The sessions touched earliest that one pass reads; the prompt may fit fewer. A pass reads activity until this many sessions, not a count of rows. */
-const SESSIONS_READ = 120;
+const SESSIONS_READ = 50; // 88 in one chunk overflowed the reply's 16k-token limit in calibration (Nov 25)
 /** The most typed messages and pin events one pass scans, together, while it collects its sessions: a guard on the read limit. */
 const ACTIVITY_SCAN = 2_000;
 const TASKS_PER_SESSION = 12;
