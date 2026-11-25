@@ -86,7 +86,7 @@ const STEP_MARK: Record<StepState, { icon: IconName; tone: keyof Palette }> = {
 };
 
 const answerColor = (answer: string | null, t: Palette) =>
-  /^ship\b/i.test(answer ?? '') ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
+  /^(ship|approve merge)\b/i.test(answer ?? '') ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
 
 export default function RunScreen() {
   const Theme = useTheme();
@@ -148,7 +148,7 @@ export default function RunScreen() {
 
   // Approved to ship but its landing step refused a branch behind its base: the line's Rebase step lands it.
   const landingOut = (run.node_statuses ?? []).filter((n) => LANDING_STATIONS.has(n.node_id)).map((n) => n.result_preview).find((t) => behindBase(t));
-  const behind = !run.merge && /^ship\b/i.test(answer ?? '') && run.status === 'failed' ? behindBase(landingOut) : null;
+  const behind = !run.merge && /^(ship|approve merge)\b/i.test(answer ?? '') && run.status === 'failed' ? behindBase(landingOut) : null;
 
   const stop = () => appAlert('Stop this run?', 'It ends now, and its task reads stopped.', [
     { text: 'Keep running', style: 'cancel' },

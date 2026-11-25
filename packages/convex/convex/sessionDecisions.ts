@@ -56,6 +56,7 @@ import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -881,6 +882,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await settleAreasCard(ctx, row, verdict, by, now);
   // A Vault Ask first read's decision grants or denies that session (vault.md).
   await settleSecretApproval(ctx, row, verdict, by, now);
+  // A person's Ship on a run's card approves its change; a Revise or Drop revokes the run's approvals (changeApprovals.ts).
+  await settleCardApproval(ctx as any, row as any, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
@@ -1301,7 +1304,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       asked_user_ids: given ?? people,
       ...(docId ? { doc_id: docId } : {}),
       ...(task ? { task_id: task._id, station: args.station ?? task.status_id ?? task.status } : {}),
-      ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id } : {}),
+      ...(args.workflow_run_id ? { workflow_run_id: args.workflow_run_id, gate_node_id: args.gate_node_id, ...(await approvalStampFor(ctx, args.workflow_run_id)) } : {}),
       ...joined,
       ...(trialProject ? { trial: true, hops: ladder.hops } : {}),
       team_id,
@@ -1360,6 +1363,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     stack_joined_at: stack ? now : undefined,
     workflow_run_id: args.workflow_run_id,
     gate_node_id: args.gate_node_id,
+    ...(await approvalStampFor(ctx, args.workflow_run_id)),
     holder,
     holder_key,
     asked_user_ids: people,

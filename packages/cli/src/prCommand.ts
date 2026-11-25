@@ -1129,9 +1129,14 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .option("--rebase", "Replay the commits onto the base branch")
     .option("--delete-branch", "Delete the head branch after it merges")
     .option("--admin", "Bypass branch protection (required checks and reviews), if GitHub allows you")
+    .option("--as-app", "Merge as codecast's GitHub app, only once codecast's approval rule holds on --head (never with --admin)")
+    .option("--subject <text>", "The merge commit's subject (a squash's title)")
+    .option("--body <text>", "The merge commit's body")
     .option("--head <sha>", HEAD_GUARD)
     .option("--json", "Machine-readable output")
     .action(async (ref: string | undefined, options) => {
+      if (options.asApp && options.admin) fail("--as-app never bypasses branch protection: drop --admin");
+      if (options.asApp && !options.head) fail("--as-app merges only the head you looked at: pass --head <sha>");
       const method = mergeMethodOf(options);
       const locator = await locate(deps, ref, options).catch((error: Error) => fail(error.message));
       const result = await apiPost(deps, "/cli/pr/merge", {
@@ -1140,6 +1145,9 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
         delete_branch: options.deleteBranch || undefined,
         expected_head_sha: options.head,
         bypass: options.admin || undefined,
+        as_app: options.asApp || undefined,
+        ...(options.subject !== undefined ? { commit_title: options.subject } : {}),
+        ...(options.body !== undefined ? { commit_message: options.body } : {}),
       });
       if (result.error) fail(result.error);
       if (options.json) {

@@ -371,7 +371,7 @@ export function killSessionsLedger(r: { total: number; working: string[]; lost?:
  * `asks`: what a person is asked on every run; `asksIf`: what makes a run ask a person only on some runs (its `asks_if`),
  * or "" when that route has none.
  */
-export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; asksIf?: string | null; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null }): SwitchLedger {
+export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; asksIf?: string | null; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null; approves?: ReadonlyArray<string> | null }): SwitchLedger {
   const by = (who: string) => r.stages.filter((s) => s.who === who).map((s) => s.label);
   const agents = by("agent");
   const backs = r.stages.filter((s) => s.loops.length).map((s) => s.label);
@@ -393,6 +393,8 @@ export function flowRunLedger(r: { flow: string; session: string; count?: number
     rows: [
       ...(r.from ? [{ k: "From", v: r.from, tone: "bad" as const }] : []),
       { k: "Ships", v: n > 1 ? `Each session's change, one run apiece` : "This session's change" },
+      // A press approves the judged files it lists here, and only those (convex changeApprovals.ts).
+      ...(r.approves?.length ? [{ k: "Approves", v: r.approves.length === 1 ? r.approves[0] : `${r.approves.length} judged files`, tone: "warn" as const, ...(r.approves.length > 1 ? { list: [...r.approves] } : {}) }] : []),
       ...(r.drawn ? [] : [{ k: r.stations ? "Stations" : "Stages", v: path.join(" → ") }]),
       ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
       ...r.asks.map((q) => ({ k: "You", v: q })),

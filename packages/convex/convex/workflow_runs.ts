@@ -41,6 +41,7 @@ import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
 import { closeRunningStations, endRunFields } from "./lib/runEnd";
 import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
+import { claimPress, scheduleRunApprovalPost } from "./lib/changeApprovalRows";
 
 export { withAgentSessions };
 
@@ -784,6 +785,8 @@ export async function createRunCore(
   });
 
   await ctx.db.patch(runId, { primary_conversation_id: primaryConvId });
+  // A person's Ship press in the session that asked for this run is the run's approval (changeApprovals.ts).
+  await claimPress(ctx, runId, opts.spawner_conversation_id, now);
 
   await ctx.db.insert("messages", {
     conversation_id: primaryConvId,
@@ -1278,6 +1281,9 @@ export const updateProgress = mutation({
       ...(run.station_place && (args.current_node_id !== run.station_place.node_id || args.run_status === "completed" || args.run_status === "failed") ? { station_place: undefined } : {}),
       updated_at: now,
     });
+
+    // The reviewer station finished: its mechanism answer now counts for the approval status (changeApprovals.mechanismOf).
+    if (nodeEntry?.status === "completed" && run.review_verdict?.node_id === args.node_id) await scheduleRunApprovalPost(ctx, run);
 
     // Link the session conversation to this workflow run
     if (args.session_id) {

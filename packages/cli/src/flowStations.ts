@@ -60,7 +60,7 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
     .option("--body <text>", "The body of a pull request it opens", "")
     .option("--refresh", "Merge pushed the branch rebased for a retest: take origin's branch as the head, keep the review")
     .option("--rebase", "Main went green again: put origin's branch onto --base, push it, and keep the review")
-    .option("--run <id>", "The run whose station this is: --rebase records its rebase on it, as Merge does")
+    .option("--run <id>", "The run whose station this is (default: $run_id): --rebase records its rebase on it, as Merge does, and the pull request and its head are recorded on it")
     .action(async (opts: { branch?: string; dir: string; base: string; title?: string; body: string; refresh?: boolean; rebase?: boolean; run?: string }) => {
       const { prStation, rebasePr, refreshPr } = await import("./workflow/prStation.js");
       if (!opts.refresh && !opts.rebase && !opts.branch) throw new Error("--branch is required unless --refresh or --rebase");
@@ -70,6 +70,14 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
         console.log(r.reason);
         // 4: someone else moved origin's branch, so the run starts a new round at PR.
         process.exit(r.new_round ? 4 : 1);
+      }
+      // The run's pull request and the head pushed, on the server: the first one is what a Ship press approves
+      // (convex changeApprovals.ts). A failed report costs the approval status a wait, never the station.
+      const runId = opts.run ?? process.env.run_id;
+      const repository = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(r.pr.url)?.[1];
+      if (runId && repository) {
+        await deps.cliPost("/cli/workflow-runs/pr", { run_id: runId, repository, number: r.pr.number, head_sha: r.pr.head_sha }, { throwOnError: true })
+          .catch((err) => console.error(`the pull request was not recorded on the run: ${err instanceof Error ? err.message : String(err)}`));
       }
       console.log(JSON.stringify(r.pr));
     });
@@ -134,13 +142,16 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
     .option("--round <id>", "The review round, as pr.json names it")
     .option("--run <id>", "The run, when this session reviews for more than one")
     .option("--node <id>", "The reviewer station's id, when the session runs more than one")
-    .action(async (opts: { verdict: string; head: string; round?: string; run?: string; node?: string }) => {
+    .option("--mechanism <answer>", "true or false: whether the change is a mechanism (a mistake that reaches many people and cannot be undone). Left out, the review has not said, and an approval status waits on it")
+    .action(async (opts: { verdict: string; head: string; round?: string; run?: string; node?: string; mechanism?: string }) => {
+      if (opts.mechanism !== undefined && opts.mechanism !== "true" && opts.mechanism !== "false") { console.error("--mechanism is true or false"); process.exit(1); }
       const session = deps.callingSession();
       if (!session) { console.error("no session: the review verdict is recorded from inside the reviewer station's own session"); process.exit(1); }
       try {
         const r = await deps.cliPost("/cli/workflow-runs/review-verdict", {
           session_id: session, verdict: opts.verdict, head_sha: opts.head,
           ...(opts.round ? { round: opts.round } : {}), ...(opts.run ? { run_id: opts.run } : {}), ...(opts.node ? { node_id: opts.node } : {}),
+          ...(opts.mechanism !== undefined ? { mechanism: opts.mechanism === "true" } : {}),
         }, { throwOnError: true });
         console.log(`recorded ${opts.verdict} on ${opts.head.slice(0, 10)} for ${r?.node_id ?? "the reviewer station"}`);
       } catch (err) {

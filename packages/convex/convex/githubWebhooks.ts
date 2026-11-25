@@ -58,6 +58,7 @@ import {
   shortSha,
 } from "./lib/gitRefs";
 import { committedSessionIds } from "./lib/prSessions";
+import { gateOf, scheduleApprovalPost } from "./lib/changeApprovalRows";
 import { anchorFromDiffHunk } from "@codecast/shared/comments";
 
 const MERGE_STATE_DELAY_MS = 15 * 1000;
@@ -398,6 +399,13 @@ export async function syncPRCommits(ctx: any, prId: Id<"pull_requests">, reposit
   }
 }
 
+/** Codecast's `approval` status for the pull request's head (changeApprovals.ts), when its repository is opted in. */
+async function postApproval(ctx: any, repository: string, prNumber: number): Promise<void> {
+  if (await ctx.runQuery(internal.changeApprovals.gateFor, { repository })) {
+    await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluate, { repository, pr_number: prNumber, post: true });
+  }
+}
+
 export const processPROpenedEvent = internalAction({
   args: {
     event_id: v.id("github_webhook_events"),
@@ -438,6 +446,9 @@ export const processPROpenedEvent = internalAction({
       created_at: new Date(pr.created_at).getTime(),
       updated_at: new Date(pr.updated_at).getTime(),
     });
+
+    // Pending from the moment it opens whenever it needs a person, posted whether or not the row matched anything.
+    await postApproval(ctx, repositoryFullName, prNumber);
 
     let filesSynced = false;
     if (result.pr_id) {
@@ -537,6 +548,8 @@ export const processPRSynchronizeEvent = internalAction({
       actor_login: payload.sender?.login,
       actor_avatar_url: payload.sender?.avatar_url,
     });
+    // Every push re-posts: a new head carries no status until codecast posts one.
+    await postApproval(ctx, repositoryFullName, prNumber);
 
     let token: string | null = null;
 
@@ -757,6 +770,8 @@ export const processPRMetaEvent = internalMutation({
     const result = await patchPullRequest(ctx, existing._id, patch);
     if (!result) return { success: false };
     const pr = result.pr;
+    // A reopened or edited pull request gets its status worked out again (changeApprovals.ts).
+    await scheduleApprovalPost(ctx, pr.repository, pr.number);
 
     const kind =
       action === "reopened" ? "pr_reopened"
@@ -1634,6 +1649,13 @@ export const processPushEvent = internalMutation({
     }
 
     const branch = ref.replace("refs/heads/", "");
+    // Main's judges file changed: every open pull request's judged paths may have, so each is posted again.
+    if (branch === payload.repository?.default_branch) {
+      const gate = await gateOf(ctx, repository);
+      if (gate && commits.some((c: any) => [...(c.added ?? []), ...(c.modified ?? []), ...(c.removed ?? [])].includes(gate.judges_path))) {
+        await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluateOpen, { repository });
+      }
+    }
     const teamId = await resolveTeamForRepository(ctx, repository);
     if (!teamId) return { success: true, reason: "No installation for this repository", commits_created: 0 };
 

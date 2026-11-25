@@ -3931,6 +3931,17 @@ export default defineSchema({
     shepherd_last_wake_at: v.optional(v.number()),
     shepherd_last_wake_reason: v.optional(v.string()),
     shepherd_wake_count: v.optional(v.number()),
+    // The `approval` status codecast last worked out for the head (changeApprovals.ts): its state and words, the
+    // judged diff's key and files, the run behind the pull request, and the first head that run pushed.
+    // "unposted": worked out, but the app could not post it (the reason is the description).
+    approval: v.optional(v.object({
+      head_sha: v.string(),
+      state: v.union(v.literal("success"), v.literal("pending"), v.literal("unposted")),
+      description: v.string(),
+      judged_key: v.optional(v.string()),
+      judged_files: v.optional(v.array(v.string())),
+      run_id: v.optional(v.id("workflow_runs")),
+    })),
   })
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
@@ -3945,6 +3956,29 @@ export default defineSchema({
     .index("by_team_updated", ["team_id", "updated_at"])
     // Walked one row per repository (repos.ts repositoriesForUser).
     .index("by_team_repository", ["team_id", "repository"]),
+
+  // A person's approval of a change to judged paths (ct-100350, changeApprovals.ts): a Ship press in codecast that
+  // listed the judged files beside the button, or a person's Ship on a run's card. Bound to the judged diff's key (its
+  // patch id, lib/judgedDiff.ts), so it carries while that diff is unchanged. A press is untied (no pr_number,
+  // judged_key) until the run it started pushes its first head; Revise or Drop on the run's card revokes.
+  change_approvals: defineTable({
+    repository: v.string(),
+    pr_number: v.optional(v.number()),
+    judged_key: v.optional(v.string()),
+    files: v.array(v.string()),
+    user_id: v.id("users"),
+    source: v.union(v.literal("ship_press"), v.literal("card")),
+    conversation_id: v.optional(v.id("conversations")),
+    workflow_run_id: v.optional(v.id("workflow_runs")),
+    task_id: v.optional(v.id("tasks")),
+    decision_id: v.optional(v.id("session_decisions")),
+    head_sha: v.optional(v.string()),
+    revoked_at: v.optional(v.number()),
+    created_at: v.number(),
+  })
+    .index("by_pr_key", ["repository", "pr_number", "judged_key"])
+    .index("by_run", ["workflow_run_id"])
+    .index("by_conversation", ["conversation_id", "created_at"]),
 
   // A change guide a model wrote for a pull request whose author wrote none
   // (prGuides.ts, the PR page's Guide tab). One row per write, the newest
@@ -5419,6 +5453,9 @@ export default defineSchema({
     // the node that asked. finalizeAnswer resumes the run.
     workflow_run_id: v.optional(v.id("workflow_runs")),
     gate_node_id: v.optional(v.string()),
+    // What a person's Ship on this card approves (changeApprovals.ts): the run's pull request, the judged diff's key
+    // and its judged files as they stood when it was asked. Absent when the run had no pull request yet.
+    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), files: v.array(v.string()) })),
     form: v.optional(
       v.object({
         fields: v.array(
@@ -5944,6 +5981,15 @@ export default defineSchema({
     last_webhook_at: v.optional(v.number()),
     last_sync_at: v.optional(v.number()),
     last_error: v.optional(v.string()),
+    // Repositories whose pull requests get codecast's `approval` status (changeApprovals.ts), set by an admin
+    // (changeApprovals.setGate). "shadow" posts it as `approval (shadow)`, which no ruleset requires; "required" posts
+    // `approval`. `judges`: the judges file's entries as last read from the default branch, for Ship's confirm.
+    approval_gate: v.optional(v.array(v.object({
+      repository: v.string(),
+      judges_path: v.string(),
+      mode: v.union(v.literal("shadow"), v.literal("required")),
+      judges: v.optional(v.array(v.string())),
+    }))),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -8937,7 +8983,13 @@ export default defineSchema({
     // `ci_changed`: the pull request edits CI's own config, so a clearance also needs a person's Ship on the run's card.
     ci_verdict: v.optional(v.object({ node_id: v.string(), green: v.boolean(), head_sha: v.string(), ci_changed: v.optional(v.boolean()), at: v.number(), attempt: v.number() })),
     // The reviewer's verdict as its own session reported it (orgLineMerge.recordReviewVerdict): on which head, in which round.
-    review_verdict: v.optional(v.object({ node_id: v.string(), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), at: v.number(), attempt: v.number() })),
+    // `mechanism`: the reviewer's answer to whether the change is a mechanism (UL5); absent is not said.
+    review_verdict: v.optional(v.object({ node_id: v.string(), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), mechanism: v.optional(v.boolean()), at: v.number(), attempt: v.number() })),
+    // The pull request the run's PR station opened (orgLineMerge.recordRunPr) and the first head it pushed: a Ship
+    // press is tied to the judged diff at that head (changeApprovals.ts).
+    pr: v.optional(v.object({ repository: v.string(), number: v.number(), first_head_sha: v.string(), head_sha: v.string(), at: v.number() })),
+    // The Ship press that started the run, when a person's press in codecast did (changeApprovals.recordPress).
+    pressed_approval_id: v.optional(v.id("change_approvals")),
     // The Merge station's own rebases of a reviewed head, pushed to be tested again (orgLineMerge.recordStationRebase):
     // a review of `from` covers `to`, which differs only by the default branch it sits on. The newest few.
     station_rebases: v.optional(v.array(v.object({ from: v.string(), to: v.string(), at: v.number(), attempt: v.number() }))),
@@ -9004,7 +9056,9 @@ export default defineSchema({
     // A session flow's runs (session_flows): the runs on one graph in one workspace, newest first.
     .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"])
     // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
-    .index("by_resume_queued", ["resume_queued.since"]),
+    .index("by_resume_queued", ["resume_queued.since"])
+    // The run behind a pull request (changeApprovals.ts).
+    .index("by_pr", ["pr.repository", "pr.number"]),
 
   client_state: defineTable({
     user_id: v.id("users"),

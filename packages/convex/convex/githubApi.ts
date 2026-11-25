@@ -333,18 +333,21 @@ export const mergePullRequest = internalAction({
     // branch has moved since, so a push that lands mid-review is never merged unseen.
     expected_head_sha: v.optional(v.string()),
     bypass_node_id: v.optional(v.string()),
+    // The merge commit's words (a squash's subject and body), GitHub's own when absent.
+    commit_title: v.optional(v.string()),
+    commit_message: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ merged: boolean; sha?: string; message?: string; branch_deleted: boolean }> => {
     const [owner, repo] = splitRepository(args.repository);
     let data: { merged?: boolean; sha?: string; message?: string };
     if (args.bypass_node_id) {
       const result = await ghGraphQL(
-        `mutation($id: ID!, $method: PullRequestMergeMethod, $head: GitObjectID) {
-          mergePullRequest(input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $head }) {
+        `mutation($id: ID!, $method: PullRequestMergeMethod, $head: GitObjectID, $title: String, $body: String) {
+          mergePullRequest(input: { pullRequestId: $id, mergeMethod: $method, expectedHeadOid: $head, commitHeadline: $title, commitBody: $body }) {
             pullRequest { merged mergeCommit { oid } }
           }
         }`,
-        { id: args.bypass_node_id, method: args.method.toUpperCase(), head: args.expected_head_sha ?? null },
+        { id: args.bypass_node_id, method: args.method.toUpperCase(), head: args.expected_head_sha ?? null, title: args.commit_title ?? null, body: args.commit_message ?? null },
         args.github_access_token,
         true,
       );
@@ -355,7 +358,12 @@ export const mergePullRequest = internalAction({
       data = await githubFetch(
         `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/merge`,
         args.github_access_token,
-        { method: "PUT", body: { merge_method: args.method, ...(args.expected_head_sha ? { sha: args.expected_head_sha } : {}) } },
+        { method: "PUT", body: {
+          merge_method: args.method,
+          ...(args.expected_head_sha ? { sha: args.expected_head_sha } : {}),
+          ...(args.commit_title !== undefined ? { commit_title: args.commit_title } : {}),
+          ...(args.commit_message !== undefined ? { commit_message: args.commit_message } : {}),
+        } },
       );
     }
 
@@ -710,6 +718,76 @@ export const getUserRepositories = internalAction({
 });
 
 const MAX_PATCH_SIZE = 50 * 1024;
+/** GitHub lists at most 3,000 files of a pull request; past that the list is cut short and says nothing. */
+export const PR_FILES_CAP = 3000;
+/** How many files a pull request row stores with their patches (the row is capped at a megabyte). */
+const STORED_PR_FILES = 100;
+
+/** One file of a pull request as GitHub lists it, with its whole patch (absent: binary, or too large for GitHub). */
+export type PRPath = { filename: string; status: string; sha?: string; previous_filename?: string; patch?: string; additions: number; deletions: number };
+
+/**
+ * A pull request's files, read page by page up to GitHub's 3,000 cap. `files` is what the row stores (the first
+ * hundred, patches cut to size), `paths` every file read with its blob and, on a rename, the path it came from, and
+ * `complete` whether that is all of them: fewer than `changed_files` means GitHub stopped listing, so anything that
+ * judges the change by its paths must not read the list as whole.
+ */
+export async function fetchPRFiles(repository: string, prNumber: number, token: string) {
+  const [owner, repo] = splitRepository(repository);
+  const headers = { "Authorization": `Bearer ${token}`, "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  const prResponse = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}`, { headers });
+  if (!prResponse.ok) throw new Error(`GitHub API error fetching PR: ${prResponse.status} ${await prResponse.text()}`);
+  const prData = await prResponse.json();
+
+  const raw: any[] = [];
+  for (let page = 1; raw.length < PR_FILES_CAP; page++) {
+    const filesResponse = await fetch(`${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`, { headers });
+    if (!filesResponse.ok) throw new Error(`GitHub API error fetching files: ${filesResponse.status} ${await filesResponse.text()}`);
+    const batch: any[] = await filesResponse.json();
+    raw.push(...batch);
+    if (batch.length < 100) break;
+  }
+
+  const files = raw.slice(0, STORED_PR_FILES).map((file: any) => {
+    let patch = file.patch;
+    if (patch && patch.length > MAX_PATCH_SIZE) {
+      patch = patch.substring(0, MAX_PATCH_SIZE) + "\n... [truncated, patch too large]";
+    }
+    return {
+      filename: file.filename,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      changes: file.changes,
+      patch,
+    };
+  });
+  const paths: PRPath[] = raw.map((file: any) => ({
+    filename: String(file.filename),
+    status: String(file.status ?? ""),
+    ...(typeof file.sha === "string" ? { sha: file.sha } : {}),
+    ...(typeof file.previous_filename === "string" ? { previous_filename: file.previous_filename } : {}),
+    ...(typeof file.patch === "string" ? { patch: file.patch } : {}),
+    additions: Number(file.additions ?? 0),
+    deletions: Number(file.deletions ?? 0),
+  }));
+
+  return {
+    files,
+    paths,
+    complete: raw.length >= (prData.changed_files ?? 0),
+    additions: prData.additions,
+    deletions: prData.deletions,
+    changed_files: prData.changed_files,
+    commits_count: prData.commits,
+    base_ref: prData.base?.ref,
+    head_ref: prData.head?.ref,
+    head_sha: prData.head?.sha as string | undefined,
+    default_branch: prData.base?.repo?.default_branch as string | undefined,
+    state: (prData.merged ? "merged" : prData.state === "closed" ? "closed" : "open") as "merged" | "closed" | "open",
+    merged_at: prData.merged_at ? new Date(prData.merged_at).getTime() : undefined,
+  };
+}
 
 export const getPRFiles = internalAction({
   args: {
@@ -717,71 +795,10 @@ export const getPRFiles = internalAction({
     pr_number: v.number(),
     github_access_token: v.string(),
   },
-  handler: async (ctx, args) => {
-    const [owner, repo] = args.repository.split("/");
-
-    if (!owner || !repo) {
-      throw new Error(`Invalid repository format: ${args.repository}. Expected: owner/repo`);
-    }
-
-    const prUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}`;
-    const prResponse = await fetch(prUrl, {
-      headers: {
-        "Authorization": `Bearer ${args.github_access_token}`,
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-
-    if (!prResponse.ok) {
-      const errorText = await prResponse.text();
-      throw new Error(`GitHub API error fetching PR: ${prResponse.status} ${errorText}`);
-    }
-
-    const prData = await prResponse.json();
-
-    const filesUrl = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${args.pr_number}/files?per_page=100`;
-    const filesResponse = await fetch(filesUrl, {
-      headers: {
-        "Authorization": `Bearer ${args.github_access_token}`,
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-    });
-
-    if (!filesResponse.ok) {
-      const errorText = await filesResponse.text();
-      throw new Error(`GitHub API error fetching files: ${filesResponse.status} ${errorText}`);
-    }
-
-    const filesData = await filesResponse.json();
-
-    const files = filesData.map((file: any) => {
-      let patch = file.patch;
-      if (patch && patch.length > MAX_PATCH_SIZE) {
-        patch = patch.substring(0, MAX_PATCH_SIZE) + "\n... [truncated, patch too large]";
-      }
-      return {
-        filename: file.filename,
-        status: file.status,
-        additions: file.additions,
-        deletions: file.deletions,
-        changes: file.changes,
-        patch,
-      };
-    });
-
-    return {
-      files,
-      additions: prData.additions,
-      deletions: prData.deletions,
-      changed_files: prData.changed_files,
-      commits_count: prData.commits,
-      base_ref: prData.base?.ref,
-      head_ref: prData.head?.ref,
-      state: prData.merged ? "merged" : prData.state === "closed" ? "closed" : "open",
-      merged_at: prData.merged_at ? new Date(prData.merged_at).getTime() : undefined,
-    };
+  handler: async (_ctx, args) => {
+    const { paths: _paths, complete: _complete, head_sha: _head, default_branch: _default, ...stored } =
+      await fetchPRFiles(args.repository, args.pr_number, args.github_access_token);
+    return stored;
   },
 });
 
@@ -1136,6 +1153,8 @@ export const compare = internalAction({
       args.github_access_token,
     );
     return {
+      // The commit both sides grew from: what a pull request's diff is taken against (three-dot).
+      merge_base_sha: (data.merge_base_commit?.sha ?? null) as string | null,
       ahead_by: data.ahead_by as number,
       behind_by: data.behind_by as number,
       total_commits: data.total_commits as number,

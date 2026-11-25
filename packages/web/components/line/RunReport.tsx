@@ -45,7 +45,7 @@ export function ReportChip({ href, children, title, tone = "default", external }
 
 /** An answer's tone, from its words: Ship, Revise, Drop. */
 export const answerTone = (answer: string | null | undefined): "ship" | "drop" | "revise" | "default" =>
-  /^ship\b/i.test(answer ?? "") ? "ship" : /^drop\b/i.test(answer ?? "") ? "drop" : /^revise\b/i.test(answer ?? "") ? "revise" : "default";
+  /^(ship|approve merge)\b/i.test(answer ?? "") ? "ship" : /^drop\b/i.test(answer ?? "") ? "drop" : /^revise\b/i.test(answer ?? "") ? "revise" : "default";
 
 const STEP_MARK: Record<StepState, { icon: typeof Check; cls: string }> = {
   done: { icon: Check, cls: "text-sol-green" },

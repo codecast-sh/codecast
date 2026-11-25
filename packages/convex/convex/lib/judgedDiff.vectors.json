@@ -1,0 +1,247 @@
+{
+  "definition": "key = git patch-id --stable of `git -c diff.algorithm=myers diff --no-renames <merge-base(main, head)> <head> -- <judged paths>`, \"none\" when no path is judged. Judged: an entry of main's judges.txt names the path, or ends in / and prefixes it; blank and # lines skipped, lines trimmed.",
+  "git_version": "git version 2.56.1",
+  "judges": "# What a person approves before it merges.\n\noutreach/line/change/\noutreach/deploy.sh\n  outreach/ci.sh  \n",
+  "cases": [
+    {
+      "name": "edits a judged file",
+      "judged": [
+        "outreach/line/change/land.cast"
+      ],
+      "key": "ca7d704ef99f9a89e0a6793353370e63ebc6eae7",
+      "files": [
+        {
+          "filename": "docs/a.md",
+          "status": "modified",
+          "sha": "9f9806451a59d91c051d58c1e568d904dee27808",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -1,5 +1,5 @@\n-line 1\n-line 2\n-line 3\n-line 4\n-line 5\n+line 1!\n+line 2!\n+line 3!\n+line 4!\n+line 5!",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        },
+        {
+          "filename": "outreach/line/change/land.cast",
+          "status": "modified",
+          "sha": "3d21e41d61703267d41d2b3df134d21a5da3ff4d",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -17,7 +17,7 @@ line 16\n line 17\n line 18\n line 19\n-line 20\n+line 20 changed\n line 21\n line 22\n line 23",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "a rebase over unrelated main commits keeps the key",
+      "judged": [
+        "outreach/line/change/land.cast"
+      ],
+      "key": "ca7d704ef99f9a89e0a6793353370e63ebc6eae7",
+      "files": [
+        {
+          "filename": "docs/a.md",
+          "status": "modified",
+          "sha": "9f9806451a59d91c051d58c1e568d904dee27808",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -1,5 +1,5 @@\n-line 1\n-line 2\n-line 3\n-line 4\n-line 5\n+line 1!\n+line 2!\n+line 3!\n+line 4!\n+line 5!",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        },
+        {
+          "filename": "outreach/line/change/land.cast",
+          "status": "modified",
+          "sha": "c0d0eeceb09ec2aeede4832eaf1d075232575ed7",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -17,7 +17,7 @@ line 16\n line 17\n line 18\n line 19\n-line 20\n+line 20 changed\n line 21\n line 22\n line 23",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        }
+      ],
+      "same_key_as": "edits a judged file"
+    },
+    {
+      "name": "editing a judged file again changes the key",
+      "judged": [
+        "outreach/line/change/land.cast"
+      ],
+      "key": "b4fb349642454c25e4cce9c6ffc89fb1d613bbed",
+      "files": [
+        {
+          "filename": "docs/a.md",
+          "status": "modified",
+          "sha": "9f9806451a59d91c051d58c1e568d904dee27808",
+          "additions": 5,
+          "deletions": 5,
+          "patch": "@@ -1,5 +1,5 @@\n-line 1\n-line 2\n-line 3\n-line 4\n-line 5\n+line 1!\n+line 2!\n+line 3!\n+line 4!\n+line 5!",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        },
+        {
+          "filename": "outreach/line/change/land.cast",
+          "status": "modified",
+          "sha": "6b2f54b284543b8d563736c5eecc8a07ddfe9a9a",
+          "additions": 2,
+          "deletions": 2,
+          "patch": "@@ -17,7 +17,7 @@ line 16\n line 17\n line 18\n line 19\n-line 20\n+line 20 changed\n line 21\n line 22\n line 23\n@@ -27,7 +27,7 @@ line 26\n line 27\n line 28\n line 29\n-line 30\n+line 30 too\n line 31\n line 32\n line 33",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        }
+      ],
+      "differs_from": "edits a judged file"
+    },
+    {
+      "name": "no judged paths",
+      "judged": [],
+      "key": "none",
+      "files": [
+        {
+          "filename": "docs/a.md",
+          "status": "modified",
+          "sha": "f98585722413e2775399bf49fd987a837d5aad5a",
+          "additions": 1,
+          "deletions": 0,
+          "patch": "@@ -3,3 +3,4 @@ line 2\n line 3\n line 4\n line 5\n+line 6",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        }
+      ]
+    },
+    {
+      "name": "a rename is two entries",
+      "judged": [
+        "outreach/line/change/land.cast",
+        "outreach/line/change/land2.cast"
+      ],
+      "key": "d2b943a847d658e072ca7a42d0f6d9e95beb23c2",
+      "files": [
+        {
+          "filename": "outreach/line/change/land2.cast",
+          "status": "renamed",
+          "sha": "e1338e31bad05849d1ce71415a899b240cff089f",
+          "additions": 0,
+          "deletions": 0,
+          "previous_filename": "outreach/line/change/land.cast",
+          "base_mode": "100644",
+          "head_mode": "100644",
+          "base_text": "line 1\nline 2 on main\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25\nline 26\nline 27\nline 28\nline 29\nline 30\nline 31\nline 32\nline 33\nline 34\nline 35\nline 36\nline 37\nline 38\nline 39\nline 40\n",
+          "head_text": "line 1\nline 2 on main\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25\nline 26\nline 27\nline 28\nline 29\nline 30\nline 31\nline 32\nline 33\nline 34\nline 35\nline 36\nline 37\nline 38\nline 39\nline 40\n"
+        }
+      ]
+    },
+    {
+      "name": "a deletion and an executable added without a final newline",
+      "judged": [
+        "outreach/ci.sh",
+        "outreach/line/change/judges.txt"
+      ],
+      "key": "39538311dabd57af7da67a75ba273d79391b29fa",
+      "files": [
+        {
+          "filename": "outreach/ci.sh",
+          "status": "added",
+          "sha": "03538c00a8cb17e709d5547955bc1a8d66b231b3",
+          "additions": 2,
+          "deletions": 0,
+          "patch": "@@ -0,0 +1,2 @@\n+#!/bin/sh\n+exit 0\n\\ No newline at end of file",
+          "base_mode": null,
+          "head_mode": "100755"
+        },
+        {
+          "filename": "outreach/line/change/judges.txt",
+          "status": "removed",
+          "additions": 0,
+          "deletions": 5,
+          "patch": "@@ -1,5 +0,0 @@\n-# What a person approves before it merges.\n-\n-outreach/line/change/\n-outreach/deploy.sh\n-  outreach/ci.sh  ",
+          "base_mode": "100644",
+          "head_mode": null
+        }
+      ]
+    },
+    {
+      "name": "a mode change and an empty file",
+      "judged": [
+        "outreach/line/change/empty.cast",
+        "outreach/line/change/land.cast"
+      ],
+      "key": "4ed7373bd2c59100ef045596ad9f5c943430a747",
+      "files": [
+        {
+          "filename": "outreach/line/change/empty.cast",
+          "status": "added",
+          "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+          "additions": 0,
+          "deletions": 0,
+          "base_mode": null,
+          "head_mode": "100644"
+        },
+        {
+          "filename": "outreach/line/change/land.cast",
+          "status": "modified",
+          "sha": "e1338e31bad05849d1ce71415a899b240cff089f",
+          "additions": 0,
+          "deletions": 0,
+          "base_mode": "100644",
+          "head_mode": "100755"
+        }
+      ]
+    },
+    {
+      "name": "a true revert",
+      "judged": [
+        "outreach/line/change/land.cast"
+      ],
+      "key": "d2610ad12510ce20940e6005ff3623a82bb91fcf",
+      "files": [
+        {
+          "filename": "docs/a.md",
+          "status": "modified",
+          "sha": "94c99a3280d27d2ebb75c61b3dcf7eb09a716ff7",
+          "additions": 0,
+          "deletions": 4,
+          "patch": "@@ -3,7 +3,3 @@ line 2\n line 3\n line 4\n line 5\n-line 6\n-line 7\n-line 8\n-line 9",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        },
+        {
+          "filename": "outreach/line/change/land.cast",
+          "status": "modified",
+          "sha": "e1338e31bad05849d1ce71415a899b240cff089f",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -7,7 +7,7 @@ line 6\n line 7\n line 8\n line 9\n-line 10 risky\n+line 10\n line 11\n line 12\n line 13",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        }
+      ],
+      "reverts": {
+        "sha_is_on_main": true,
+        "whole_key": "e77213e6f01992ac02ac8426cfbf0561a75bd058",
+        "commit_files": [
+          {
+            "filename": "docs/a.md",
+            "status": "modified",
+            "sha": "5578ccbff170151f4f036f240512750700ef7bd2",
+            "additions": 4,
+            "deletions": 0,
+            "patch": "@@ -3,3 +3,7 @@ line 2\n line 3\n line 4\n line 5\n+line 6\n+line 7\n+line 8\n+line 9",
+            "base_mode": "100644",
+            "head_mode": "100644"
+          },
+          {
+            "filename": "outreach/line/change/land.cast",
+            "status": "modified",
+            "sha": "fe583c14cf25fc4f379a9cea4314759a828cc5b0",
+            "additions": 1,
+            "deletions": 1,
+            "patch": "@@ -7,7 +7,7 @@ line 6\n line 7\n line 8\n line 9\n-line 10\n+line 10 risky\n line 11\n line 12\n line 13",
+            "base_mode": "100644",
+            "head_mode": "100644"
+          }
+        ]
+      }
+    }
+  ]
+}

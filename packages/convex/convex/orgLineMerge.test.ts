@@ -4,7 +4,7 @@ import schema from "./schema";
 import { resumeFailedRunCore } from "./failedRunResume";
 import { landAgainCore, reaskRunCore } from "./workflow_runs";
 import { restartRunFresh } from "./lineTrial";
-import { MERGE_AUTHORITY_ID, checkMergeCore, clearForMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, mergeProofCore, recordCiVerdictCore, recordMergeCore, recordReviewVerdictCore, recordStationRebaseCore } from "./orgLineMerge";
+import { MERGE_AUTHORITY_ID, checkMergeCore, clearForMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, mergeProofCore, recordCiVerdictCore, recordMergeCore, recordReviewVerdictCore, recordRunPrCore, recordStationRebaseCore } from "./orgLineMerge";
 import { lineOfRole } from "./orgRoles";
 
 // The line's merge step on the server (the-line.md L12): the allowance read
@@ -281,6 +281,20 @@ describe("a merge no role is behind", () => {
     const ciApart = solo();
     ciApart.tables.workflows[0].edges = [{ from: "review__review", to: "verdicts" }, { from: "verdicts", to: "intent_gate" }];
     await expect(clear(ciApart.ctx)).rejects.toThrow("the CI station ci does not lead to it");
+  });
+
+  test("the PR station records the run's pull request and keeps the first head it pushed; the review records its mechanism answer", async () => {
+    const s = solo();
+    Object.assign(s.run(), { current_node_id: "ci", node_statuses: [{ node_id: "ci", status: "running", started_at: NOW + 1 }] });
+    const report = (head: string, user = HOST) => recordRunPrCore(s.ctx, user as any, { run_id: "workflow_runs_1", repository: "Union-AI/Union-Mobile", number: 12, head_sha: head }, NOW + 3);
+    expect(await report(HEAD)).toEqual({ first_head_sha: HEAD });
+    expect(await report("b".repeat(40))).toEqual({ first_head_sha: HEAD });
+    expect(s.run().pr).toEqual({ repository: "union-ai/union-mobile", number: 12, first_head_sha: HEAD, head_sha: "b".repeat(40), at: NOW + 3 });
+    await expect(report(HEAD, "users_someone")).rejects.toThrow("Only the run's own runner");
+    Object.assign(s.run(), { current_node_id: "review__review", node_statuses: [{ node_id: "review__review", status: "running", started_at: NOW + 1, session_id: "jx7revw" }] });
+    await expect(report(HEAD)).rejects.toThrow("is not a running script station");
+    await recordReviewVerdictCore(s.ctx, HOST as any, { session_id: "rev-agent-uuid", verdict: "ship", head_sha: HEAD, mechanism: true }, NOW + 4);
+    expect(s.run().review_verdict).toMatchObject({ verdict: "ship", mechanism: true });
   });
 
   test("the CI verdict is recorded only by the run's runner, from a script station running now in this attempt", async () => {

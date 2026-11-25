@@ -29,6 +29,8 @@ import { roleOfRun } from "./lib/actor";
 import { roleMergeAllowance } from "./lib/regretRead";
 import { runWorkflowOf } from "./lib/runGraph";
 import { byPerson, cardRef, isShipAnswer, newestFirst, offersShip, verdictLabel } from "./lib/taskVerdicts";
+import { scheduleApprovalPost, scheduleRunApprovalPost } from "./lib/changeApprovalRows";
+import { parseOwnerRepo } from "@codecast/shared/contracts";
 
 /** The pull request a handoff named in its evidence ("PR: <url>", taskClaim
  *  handoffCommentText), or null. */
@@ -245,7 +247,7 @@ function leadsTo(graph: any, from: string, to: string): boolean {
 
 /** The heads a review of `reviewed` covers in this attempt: that head, and every head a recorded rebase chain leads
  *  to from it, link by link (R to X, then X to Y). */
-function coveredHeads(run: any, attempt: number, reviewed: string): Set<string> {
+export function coveredHeads(run: any, attempt: number, reviewed: string): Set<string> {
   const links = (run.station_rebases ?? []).filter((r: any) => r.attempt === attempt);
   const heads = new Set([reviewed]);
   for (let grew = true; grew; ) {
@@ -299,7 +301,7 @@ async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Pro
  * This keeps a confused agent or a stale verdict from counting; it is no defence against a process that holds the
  * account's token, which could push the default branch directly anyway.
  */
-export async function recordReviewVerdictCore(ctx: any, userId: Id<"users">, args: { session_id?: string; verdict: string; head_sha: string; round?: string; run_id?: string; node_id?: string }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
+export async function recordReviewVerdictCore(ctx: any, userId: Id<"users">, args: { session_id?: string; verdict: string; head_sha: string; round?: string; run_id?: string; node_id?: string; mechanism?: boolean }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
   if (!SHA.test(args.head_sha)) throw new Error(`${args.head_sha} is not a commit sha`);
   if (!["ship", "changes", "rejected"].includes(args.verdict)) throw new Error(`${args.verdict} is not a verdict: ship, changes or rejected`);
   const ids = await callerIds(ctx, userId, String(args.session_id ?? ""));
@@ -318,7 +320,9 @@ export async function recordReviewVerdictCore(ctx: any, userId: Id<"users">, arg
   if (!found.length) throw new Error("This session is no running run's reviewer station in this attempt: only the reviewer station's own session records its review verdict");
   if (found.length > 1) throw new Error(`This session is the reviewer station of ${found.length} running runs; pass --run to name one`);
   const { run, node_id, attempt } = found[0];
-  await ctx.db.patch(run._id, { review_verdict: { node_id, verdict: args.verdict, head_sha: args.head_sha, ...(args.round ? { round: args.round.slice(0, 100) } : {}), at: now, attempt }, updated_at: now });
+  await ctx.db.patch(run._id, { review_verdict: { node_id, verdict: args.verdict, head_sha: args.head_sha, ...(args.round ? { round: args.round.slice(0, 100) } : {}), ...(args.mechanism !== undefined ? { mechanism: args.mechanism } : {}), at: now, attempt }, updated_at: now });
+  // The approval status reads the mechanism answer once codecast sees this station finish (changeApprovals.mechanismOf).
+  await scheduleRunApprovalPost(ctx, run);
   return { run_id: String(run._id), node_id, attempt };
 }
 
@@ -342,6 +346,34 @@ export async function recordStationRebaseCore(ctx: any, userId: Id<"users">, arg
   return { attempt };
 }
 
+/**
+ * The PR station opened (or found) the run's pull request and pushed a head: the run's own runner, from the script
+ * station running now, as a rebase is recorded. The first head it reports is the one a Ship press is tied to
+ * (changeApprovals.ts); a later round moves only `head_sha`. Every report re-posts the approval status.
+ */
+export async function recordRunPrCore(ctx: any, userId: Id<"users">, args: { run_id: string; repository: string; number: number; head_sha: string }, now = Date.now()): Promise<{ first_head_sha: string }> {
+  const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
+  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner records its pull request");
+  if (!SHA.test(args.head_sha)) throw new Error(`${args.head_sha} is not a commit sha`);
+  const repository = parseOwnerRepo(args.repository);
+  if (!repository || !Number.isInteger(args.number) || args.number < 1) throw new Error("A pull request is owner/name and a number");
+  const station = (run.node_statuses ?? []).find((s: any) => s.node_id === run.current_node_id);
+  const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
+  if (run.status !== "running" || station?.status !== "running" || station.session_id || node?.type !== "command") {
+    throw new Error(`${run.current_node_id} is not a running script station: only the PR station's own script records the run's pull request`);
+  }
+  const same = run.pr && run.pr.repository === repository && run.pr.number === args.number;
+  const first_head_sha = same ? run.pr.first_head_sha : args.head_sha;
+  await ctx.db.patch(run._id, { pr: { repository, number: args.number, first_head_sha, head_sha: args.head_sha, at: now }, updated_at: now });
+  await scheduleApprovalPost(ctx, repository, args.number);
+  return { first_head_sha };
+}
+
+export const recordRunPr = mutation({
+  args: { api_token: v.string(), run_id: v.string(), repository: v.string(), number: v.number(), head_sha: v.string() },
+  handler: async (ctx, { api_token, ...args }) => recordRunPrCore(ctx, await requireToken(ctx, api_token), args),
+});
+
 /** What the server holds for this attempt that a merge stands on: the reviewer's verdict and the head it read, and
  *  the recorded rebase links. The Merge station verifies the chain from that head itself, and trusts no file for it. */
 export async function mergeProofCore(ctx: any, userId: Id<"users">, runId: string): Promise<{ review: { verdict: string; head_sha: string; node_id: string } | null; rebases: Array<{ from: string; to: string }> }> {
@@ -361,7 +393,7 @@ export const mergeProof = query({
 });
 
 export const recordReviewVerdict = mutation({
-  args: { api_token: v.string(), session_id: v.optional(v.string()), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), run_id: v.optional(v.string()), node_id: v.optional(v.string()) },
+  args: { api_token: v.string(), session_id: v.optional(v.string()), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), run_id: v.optional(v.string()), node_id: v.optional(v.string()), mechanism: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => recordReviewVerdictCore(ctx, await requireToken(ctx, api_token), args),
 });
 
