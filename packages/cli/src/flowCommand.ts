@@ -741,10 +741,6 @@ async function readLive(deps: FlowDeps, at: PoolAt): Promise<{ flows: LiveFlow[]
 }
 
 /**
- * A flow this session wrote on stdin, kept for what comes next: where its file is (run it again, or edit it,
- * by that path) and pushed as the session's own draft graph, so the transcript draws it before any run.
- */
-/**
  * A flow named in a checkout, as the repo's default branch has it (workflow/repoFlowAtDefault.ts, flows.md FL2): the
  * checkout's copy only when it is the default branch's or holds edits of its own. A path or a graph on stdin runs as
  * given. Says on stderr when the copy that runs is not the checkout's file as it stands.
@@ -760,6 +756,10 @@ function flowAsDefaultHasIt(ref: string, found: FoundFlow, cwd: string, opts: { 
   return at.use === "default" ? { ...describeFlow(found.slug, at.source, "repo", at.file), source: at.source, at: `${at.ref}:${at.rel}` } : found;
 }
 
+/**
+ * A flow this session wrote on stdin, kept for what comes next: where its file is (run it again, or edit it,
+ * by that path) and pushed as the session's own draft graph, so the transcript draws it before any run.
+ */
 async function keepSessionFlow(f: Pick<FoundFlow, "file" | "slug">, deps: FlowDeps): Promise<void> {
   if (!f.file) return;
   console.log(dim(`kept at ${path.relative(deps.realCwd(), f.file)}`));
