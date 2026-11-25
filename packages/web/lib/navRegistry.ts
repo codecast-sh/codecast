@@ -69,7 +69,7 @@ const ROWS = [
   // Team: the people.
   { id: "chat", label: "Chat", path: "/chat", icon: "MessageSquare", group: "team", feature: "chat", focus: "more", dailyPage: true, badge: "chat" },
   { id: "calls", label: "Calls", path: "/calls", icon: "Phone", group: "team", feature: "calls", focus: "more", dailyPage: true, title: "Calls: live huddles and transcripts" },
-  { id: "activity", label: "Activity", path: "/team/activity", icon: "Activity", group: "team", feature: "team", focus: "more", classicLabel: "Feed", formerLabels: ["Dashboard"], title: "Activity: what the team's sessions did" },
+  { id: "activity", label: "Activity", path: "/team/activity", icon: "Activity", group: "team", feature: "team", focus: "more", dailyPage: true, classicLabel: "Feed", formerLabels: ["Dashboard"], title: "Activity: what the team's sessions did" },
   // Work: what the team is doing.
   { id: "tasks", label: "Tasks", path: "/tasks", icon: "ClipboardCheck", group: "work", focus: "keep" },
   { id: "docs", label: "Docs", path: "/docs", icon: "FileText", group: "work", focus: "keep", match: ["/docs", "/plans"] },
@@ -144,7 +144,8 @@ export function navRow(id: NavId): NavRow {
 }
 
 /** Whether a short rail keeps `row`: the registry's "keep" rows, and in Modern
- *  focused its daily pages (Inbox, Decisions, Chat, Calls, Tasks, Docs). */
+ *  focused its daily pages (Inbox, Decisions, Chat, Calls, Activity, Tasks,
+ *  Docs). Activity's row exists only for a team, so a solo rail is unchanged. */
 export function keptOnShortRail(row: NavRow, daily = false): boolean {
   return row.focus === "keep" || (daily && row.dailyPage === true);
 }

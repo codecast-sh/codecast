@@ -76,5 +76,18 @@ test("a 25-person team's Modern focused rail has Activity on its root level, not
   expect(inMore || onRoot).toBe(true);
   // The miss: Activity is only reachable through More, never on the root rail.
   expect(onRoot).toBe(true);
+  // Listed once: the More level does not list it again.
+  expect(host.querySelector('[data-rail-more-list] a[href="/team/activity"]')).toBeNull();
+  // "Show every page in the rail" still unfolds the rail, and folds it back.
+  const toggle = () => host.querySelector<HTMLButtonElement>("[data-rail-focus-toggle] button");
+  expect(toggle()?.textContent).toContain("Show every page in the rail");
+  await act(async () => { toggle()!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+  expect(useInboxStore.getState().clientState.ui?.rail_everything).toBe(true);
+  expect(scroll!.querySelector('a[href="/projects"]')).not.toBeNull();
+  expect(scroll!.querySelector('a[href="/team/activity"]')).not.toBeNull();
+  expect(toggle()?.textContent).toContain("Keep the rail short");
+  await act(async () => { toggle()!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
+  expect(scroll!.querySelector('a[href="/projects"]')).toBeNull();
+  expect(scroll!.querySelector('a[href="/team/activity"]')).not.toBeNull();
   await act(async () => root.unmount());
 });
