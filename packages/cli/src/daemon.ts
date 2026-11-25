@@ -181,6 +181,7 @@ import {
   fetchRateLimitFingerprint,
   sameAccountFingerprint,
   attributeFingerprintToProfile,
+  recordMintRejection,
   writeAccountToken,
   removeAccountToken,
 } from "./ccAccounts.js";
@@ -5234,6 +5235,9 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
     await killTmuxSessionAndTree(MINT_FLOW_TMUX).catch(() => {});
     fs.rmSync(mintUrlPath(), { force: true });
     const owner = storedFor ?? profile;
+    if (status === "rejected") {
+      try { recordMintRejection(profile, reason ?? "unknown reason"); } catch {}
+    }
     log(`[MINT-FLOW] ${status}${reason ? `: ${reason}` : ""}${status === "confirmed" ? ` — token stored for "${owner}"` : ""}`);
     // The token's metadata reaches the web on the inventory beat; push it now.
     if (status === "confirmed") sendHeartbeat().catch(() => {});

@@ -56,6 +56,16 @@ const CLOCK_SLACK_MS = 60_000;
 // before the dialog stops claiming it was stored.
 const REPORT_WAIT_MS = 60_000;
 
+/** The rejected mint for this profile that nothing has replaced since: no
+ *  later attempt (the device keeps one flow) and no token stored after it.
+ *  It stays on the account until then, because the account still has no
+ *  token and the person has to act on it. */
+function rejectedMint(flow: MintFlow | null, profile: MintProfile): MintFlow | null {
+  if (flow?.status !== "rejected" || !flow.finished_at) return null;
+  if (profile.setup_token && profile.setup_token.stored_at >= flow.finished_at - CLOCK_SLACK_MS) return null;
+  return flow;
+}
+
 function expiryDate(expiresAt: number): string {
   return new Date(expiresAt).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
@@ -95,6 +105,7 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
   const flow = device.mint_flow?.profile === profile.name ? device.mint_flow : null;
   const pending = flow?.status === "pending" && now - flow.started_at < MINT_FLOW_STALE_MS;
   const has = profileHasSetupToken(profile, now);
+  const failed = !pending && rejectedMint(flow, profile);
   return (
     <>
       <button
@@ -103,14 +114,18 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
         title={
           pending
             ? "A token is being minted for this account. Open to follow the sign-in."
-            : has
+            : failed
+              ? `The last token mint failed: ${failed.reason ?? "unknown reason"}. Open to try again.`
+              : has
               ? "A minted token is on file for this account. Open to renew or remove it."
               : "Mint a fixed one-year token for this account, with a guided browser sign-in"
         }
         className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-meta font-medium transition-colors ${
           pending
             ? "border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
-            : "border-sol-border text-sol-text-dim hover:border-sol-violet/40 hover:bg-sol-violet/10 hover:text-sol-violet"
+            : failed
+              ? "border-sol-red/40 bg-sol-red/10 text-sol-red hover:bg-sol-red/20"
+              : "border-sol-border text-sol-text-dim hover:border-sol-violet/40 hover:bg-sol-violet/10 hover:text-sol-violet"
         } ${className ?? ""}`}
       >
         {pending ? (
@@ -118,7 +133,7 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
         ) : (
           <KeyRound className="h-3 w-3" aria-hidden />
         )}
-        {pending ? "minting…" : has ? "token" : "mint token"}
+        {pending ? "minting…" : failed ? "mint failed" : has ? "token" : "mint token"}
       </button>
       {open && <MintTokenDialog device={device} profile={profile} onClose={() => setOpen(false)} />}
     </>
@@ -179,7 +194,9 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
   const flow = device.mint_flow?.profile === profile.name ? device.mint_flow : null;
   const fresh = !!flow && (startedAt === null || flow.started_at === startedAt);
   const pending = busy === "start" || (fresh && flow?.status === "pending" && now - flow.started_at < MINT_FLOW_STALE_MS);
-  const rejected = fresh && flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
+  // Shown for as long as the account row shows it (rejectedMint), so the row's
+  // "mint failed" always opens onto its reason.
+  const rejected = fresh && !!rejectedMint(flow, profile);
   const minted = fresh && flow?.status === "confirmed" && !!flow.finished_at && now - flow.finished_at < 30 * 60 * 1000;
   // A confirmed outcome is only true while this attempt's token is still on
   // file: removed or replaced since, the dialog shows the account as it is now.
@@ -389,8 +406,8 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             )}
           </div>
           <div className="flex items-center gap-2">
-            {pending && (device.profiles?.length ?? 0) > 1 && (
-              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => cancel(true)} className="h-7 px-2 text-meta">
+            {(pending || rejected) && !choosingAccount && (device.profiles?.length ?? 0) > 1 && (
+              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => pending ? cancel(true) : setChoosingAccount(true)} className="h-7 px-2 text-meta">
                 Use a different account
               </Button>
             )}

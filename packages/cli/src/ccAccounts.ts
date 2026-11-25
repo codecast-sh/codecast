@@ -1381,8 +1381,43 @@ export function writeAccountToken(name: string, token: string): string {
   const file = accountTokenFilePath(name);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   atomicWriteFile(file, renderProviderEnvFile({ CLAUDE_CODE_OAUTH_TOKEN: extracted }), { mode: 0o600 });
+  clearMintRejection(name);
   invalidateAccountsCache();
   return file;
+}
+
+// The last guided mint the daemon rejected for a profile, kept until a token
+// is stored for it, so `cast accounts ls` (what an agent reads) shows the
+// failure and the in-app way out beside the account, as Settings does.
+function mintRejectionPath(name: string): string {
+  assertValidProfileName(name);
+  return path.join(defaultConfigDir(), `cc-mint-rejected-${name}.json`);
+}
+
+export function recordMintRejection(name: string, reason: string, at: number = Date.now()): void {
+  const file = mintRejectionPath(name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  atomicWriteFile(file, JSON.stringify({ reason, at }));
+}
+
+export function readMintRejection(name: string): { reason: string; at: number } | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(mintRejectionPath(name), "utf8"));
+    return typeof v?.reason === "string" && typeof v?.at === "number" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearMintRejection(name: string): void {
+  try { fs.rmSync(mintRejectionPath(name), { force: true }); } catch {}
+}
+
+/** The `cast accounts ls` note for a rejected mint: its reason and the button
+ *  that retries it. Never Terminal steps: the guided flow is the recovery. */
+export function mintRejectionNote(name: string): string | null {
+  const r = readMintRejection(name);
+  return r ? `token mint failed: ${r.reason} — retry with the account's "mint token" button in Settings (Claude accounts)` : null;
 }
 
 export function removeAccountToken(name: string): boolean {
@@ -1849,15 +1884,17 @@ export function extractSetupToken(text: string): string | null {
 // token itself can't say whose it is).
 // ---------------------------------------------------------------------------
 
-/** Same account iff both reset timestamps are known and identical. Utilization
- *  is deliberately ignored — it moves between two probes seconds apart. */
+/** Same account iff the 7d resets are known and agree, and so do the 5h resets
+ *  when both probes carry one. "Agree" is within 2s, the same slack
+ *  attributeFingerprint allows: an idle account's window is opened BY the two
+ *  probes, which run in parallel, so each answer stamps the reset from its own
+ *  request and they can land a second apart. A probe with no 5h window says
+ *  nothing about it; the 7d reset still has to match. Utilization is ignored —
+ *  it moves between two probes seconds apart. */
 export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFingerprint): boolean {
-  return (
-    a.five_hour_reset != null &&
-    a.seven_day_reset != null &&
-    a.five_hour_reset === b.five_hour_reset &&
-    a.seven_day_reset === b.seven_day_reset
-  );
+  const near = (x: number | null, y: number | null): boolean => x != null && y != null && Math.abs(x - y) <= 2;
+  if (!near(a.seven_day_reset, b.seven_day_reset)) return false;
+  return a.five_hour_reset == null || b.five_hour_reset == null || near(a.five_hour_reset, b.five_hour_reset);
 }
 
 /** Which SAVED profile a scope-less token belongs to, judged from the usage
