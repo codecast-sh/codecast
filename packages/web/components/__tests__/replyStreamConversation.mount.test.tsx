@@ -131,13 +131,16 @@ afterAll(() => {
   restoreGlobals();
 });
 
-function seed(flagOn: boolean) {
+// `full`: the full-density feed (simple view off); else condensed, the
+// default when the preference is unset.
+function seed(flagOn: boolean, { full = false }: { full?: boolean } = {}) {
   (useInboxStore.getState() as any)._setDispatch?.(async () => undefined);
-  useInboxStore.setState({
+  useInboxStore.setState((s: any) => ({
     sessions: {}, conversations: {}, messages: {}, pendingMessages: {}, drafts: {}, replyStreams: {},
     teams: flagOn ? [{ _id: "team_rs", name: "T", features: { reply_streaming: true } }] : [],
     currentUser: { _id: ME, name: "Tester" }, clientStateInitialized: true,
-  } as any);
+    clientState: { ...s.clientState, ui: { ...(s.clientState?.ui ?? {}), simple_view: !full } },
+  }) as any);
   useInboxStore.getState().syncTable("sessions", [{
     _id: CONV, session_id: "s-rs", title: "Streaming", user_id: ME, agent_type: "claude_code", status: "active", is_idle: false,
     agent_status: "working", message_count: 5, updated_at: T, started_at: T - 100_000, last_heartbeat: Date.now(), project_path: "/src/p", git_branch: "main",
@@ -198,9 +201,10 @@ beforeEach(() => {
   subscribed = [];
 });
 
-test("its own row, after the tool result, boxed like the message that replaces it, which keeps the row", async () => {
-  seed(true);
+for (const full of [false, true]) test(`its own row, after the tool result, boxed like the message that replaces it, which keeps the row (${full ? "full" : "condensed"})`, async () => {
+  seed(true, { full });
   const v = await mount();
+  expect(v.feed().getAttribute("data-cc-density")).toBe(full ? "full" : "condensed");
   expect(subscribed).toContain("replyStreams:get");
   const drawnBefore = rowLooks(v);
   await push(1, "The jump comes from two writes in one frame.");
@@ -287,6 +291,77 @@ test("scrolled up inside the reply, its growth moves nothing; at the bottom, the
   await resizeObserved();
   await tick(50);
   expect(feed.scrollTop).toBe(reading);
+  await v.unmount();
+});
+
+const land = (content: string, extra: Record<string, unknown> = {}) => act(async () => {
+  useInboxStore.getState().mergeMessages(CONV, [{ _id: id(9), conversation_id: CONV, role: "assistant", content, timestamp: STARTED + 300, model: "claude-opus-4", ...extra }] as any, "append");
+  flushSyncPublishes();
+});
+
+for (const full of [false, true]) test(`the message landing taller than the last push moves nothing for a reader scrolled up inside it, and keeps the bottom pinned (${full ? "full" : "condensed"})`, async () => {
+  seed(true, { full });
+  const v = await mount();
+  await push(1, "x".repeat(1_200));
+  await resizeObserved();
+  await tick(50);
+  const feed = v.feed();
+  feed.scrollTop = 1e9;
+  await tick(50);
+  feed.scrollTop = feed.scrollTop - 300;
+  await tick(50);
+  const reading = feed.scrollTop;
+  // The closing paragraph arrives with the message.
+  await land("x".repeat(1_200) + "\n\n" + "y".repeat(600));
+  await resizeObserved();
+  await tick(80);
+  expect(v.rowKeys()).toContain(STREAM_KEY);
+  expect(feed.scrollTop).toBe(reading);
+  await v.unmount();
+
+  seed(true, { full });
+  const b = await mount();
+  await push(1, "x".repeat(1_200));
+  await resizeObserved();
+  await tick(50);
+  const bottom = b.feed();
+  bottom.scrollTop = 1e9;
+  await tick(50);
+  await land("x".repeat(1_200) + "\n\n" + "y".repeat(600));
+  await resizeObserved();
+  await tick(80);
+  expect(bottom.scrollTop).toBe(scrollHeightOf(bottom) - VIEWPORT);
+  await b.unmount();
+});
+
+// What the server and the daemon insert into a live conversation at their own
+// "now": none of it is the reply's message.
+const INSERTED: Record<string, Record<string, unknown>> = {
+  "a workflow event": { subtype: "workflow_event", content: JSON.stringify({ __wf: "node_start", node_id: "review", node_label: "Review", node_type: "agent" }) },
+  "a scheduled task result": { subtype: "scheduled_task_result", content: "Nightly digest: 3 sessions need you." },
+  "an interactive prompt's prose": { message_uuid: "interactive-prompt-s-rs-abc123-prose", content: "The workflow is running; I will report when the review lands." },
+  "a limit-dialog banner": { message_uuid: "limit-dialog-s-rs-abc123-492000", content: "You've hit your limit · resets 3pm" },
+};
+for (const [kind, fields] of Object.entries(INSERTED)) test(`${kind} arriving mid-reply leaves the reply drawn in its own row; the real message still takes it`, async () => {
+  seed(true);
+  const v = await mount();
+  await push(1, "The workflow is running; I will report when the review lands.");
+  const streamRow = v.row(STREAM_KEY)!;
+  await act(async () => {
+    useInboxStore.getState().mergeMessages(CONV, [{ _id: id(7), conversation_id: CONV, role: "assistant", timestamp: STARTED + 2_000, ...fields }] as any, "append");
+    flushSyncPublishes();
+  });
+  await tick(30);
+  expect(v.row(STREAM_KEY)).toBe(streamRow);
+  expect(streamRow.querySelector('[data-cc-message="assistant"]')?.textContent).toContain("I will report when the review lands.");
+  expect(v.rowKeys()).toContain(id(7));
+  await push(2, "The workflow is running; I will report when the review lands.\n\nStill going.");
+  expect(v.row(STREAM_KEY)!.textContent).toContain("Still going.");
+  await land("The workflow is running; I will report when the review lands.\n\nStill going.\n\nDone.");
+  expect(v.row(STREAM_KEY)).toBe(streamRow);
+  expect(streamRow.textContent).toContain("Done.");
+  expect(v.row(id(9))).toBeNull();
+  expect(v.rowKeys()).toContain(id(7));
   await v.unmount();
 });
 

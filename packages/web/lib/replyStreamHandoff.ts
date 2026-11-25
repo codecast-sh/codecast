@@ -22,7 +22,20 @@ import {
  *  with when this browser received its latest push. */
 export type StoredReplyStream = ReplyStreamRow & { _id: string; received_at: number };
 
-type MessageLike = { role: string; content?: string; timestamp: number };
+type MessageLike = { role: string; content?: string; timestamp: number; subtype?: string; message_uuid?: string };
+
+/** Whether a stored row can be the message a stream was writing: an assistant
+ *  row Claude Code's transcript wrote. Rows inserted into a live conversation
+ *  by anyone else cannot, whatever they say or when: the server's carry a
+ *  subtype (workflow events, scheduled task results), the daemon's a uuid it
+ *  minted (an interactive prompt's card and prose, a limit-dialog banner). A
+ *  transcript assistant row never has a subtype (packages/cli parser.ts sets
+ *  one only on system rows) and keeps the entry's own uuid. */
+export function replyStreamCanBeMessage(m: MessageLike): boolean {
+  if (m.role !== "assistant" || m.subtype) return false;
+  const uuid = m.message_uuid ?? "";
+  return !uuid.startsWith("interactive-prompt-") && !uuid.startsWith("limit-dialog-");
+}
 
 // The transcript keeps a text block as written (packages/cli parser.ts joins a
 // row's text blocks untrimmed), and the daemon builds the stream from the
@@ -70,7 +83,8 @@ export function replyStreamFresh(row: StoredReplyStream, now: number): boolean {
 }
 
 /** Whether `messages` (oldest first, as the store holds a conversation) holds
- *  the assistant message this stream was writing. Two ways:
+ *  the assistant message this stream was writing: a row that can be it
+ *  (replyStreamCanBeMessage), found one of two ways:
  *  - stamped no earlier than the stream began, less the skew allowance, and
  *    opening with the stream's text;
  *  - an assistant TEXT row (non-blank `content`; a tool call or thinking row
@@ -89,7 +103,7 @@ export function replyStreamHandedOff(row: StoredReplyStream, messages: readonly 
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.timestamp < since) break;
-    if (m.role !== "assistant") continue;
+    if (!replyStreamCanBeMessage(m)) continue;
     const content = m.content ?? "";
     if (opensWith(content, prefix)) return true;
     if (m.timestamp >= stampedSince && content.trim()) return true;
