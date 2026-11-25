@@ -34,8 +34,10 @@ import { CAST_PLAYER_JS } from "./lib/castPlayer";
 import { CAST_MOTION_JS } from "./lib/castMotion";
 import { CAST_DATA_JS } from "./lib/castData";
 import { pageUsesData } from "@codecast/shared/contracts/pageData";
+import { appIconSize, parsePageApp, type PageApp } from "@codecast/shared/contracts/pageApp";
+import { monogramPng } from "./lib/appIcon";
 import { servePageData, type PageDataSet } from "./pageData";
-import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageServingOrigin, pageUsesPlayer } from "@codecast/shared/contracts";
+import { HYPERFRAMES_RUNTIME, isPageHost, pageHasHyperframesRuntime, pageIsMotion, pageServingOrigin, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
@@ -350,6 +352,64 @@ async function withDataHash(contentHash: string, setJson: string): Promise<strin
   return setJson ? await sha256Hex(`${contentHash}\ndata:${setJson}`) : contentHash;
 }
 
+/** The hash with the page's app manifest folded in, so a changed manifest is a new version: publish and rollback agree on it. */
+async function withAppHash(contentHash: string, app: PageApp | null | undefined): Promise<string> {
+  return app ? await sha256Hex(`${contentHash}\napp:${JSON.stringify(app)}`) : contentHash;
+}
+
+/**
+ * A declaration's "app" block taken apart from its live data: the parsed
+ * manifest (undefined when it declares none, or an empty block), the rest of
+ * the declaration for validateDeclaration (null when only the app was
+ * declared), or the reason the manifest is refused.
+ */
+export function splitAppDeclaration(data: unknown): { app?: PageApp; data: unknown } | { error: string } {
+  if (!data || typeof data !== "object" || Array.isArray(data) || !("app" in data)) return { data: data ?? null };
+  const { app: raw, ...rest } = data as Record<string, unknown>;
+  const parsed = parsePageApp(raw);
+  if (!parsed.ok) return { error: parsed.error };
+  return {
+    ...(Object.keys(parsed.app).length ? { app: parsed.app } : {}),
+    data: rest.queries !== undefined || rest.state !== undefined ? rest : null,
+  };
+}
+
+/** Width and height from a PNG's IHDR chunk (its first 24 bytes), or null when the bytes are not a PNG. */
+export function pngDimensions(head: Uint8Array): { width: number; height: number } | null {
+  const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (head.byteLength < 24 || SIG.some((b, i) => head[i] !== b)) return null;
+  if (String.fromCharCode(head[12], head[13], head[14], head[15]) !== "IHDR") return null;
+  const view = new DataView(head.buffer, head.byteOffset, 24);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** The smallest app icon a host can build its Dock and taskbar icons from. */
+export const APP_ICON_MIN_PX = 512;
+
+/**
+ * The manifest's icons must be PNG files the bundle carries, and the app icon
+ * a square PNG of at least APP_ICON_MIN_PX. `head` reads a file's first bytes
+ * (inline, or from its upload).
+ */
+export async function appIconProblem<F extends { path: string; content_type: string }>(
+  app: PageApp | undefined,
+  files: F[],
+  head: (file: F) => Promise<Uint8Array | null>,
+): Promise<string | null> {
+  for (const [field, path] of [["app.icon", app?.icon], ["app.tray.icon", app?.tray?.icon]] as const) {
+    if (!path) continue;
+    const file = files.find((f) => f.path === path);
+    if (!file || file.content_type !== "image/png") return `"${field}" names ${path}, which is not a PNG file in the bundle`;
+    if (field !== "app.icon") continue;
+    const bytes = await head(file);
+    const size = bytes ? pngDimensions(bytes) : null;
+    if (!size) return `"app.icon" names ${path}, which is not a valid PNG`;
+    if (size.width !== size.height) return `"app.icon" must be square; ${path} is ${size.width}x${size.height}`;
+    if (size.width < APP_ICON_MIN_PX) return `"app.icon" must be at least ${APP_ICON_MIN_PX}x${APP_ICON_MIN_PX}; ${path} is ${size.width}x${size.height}`;
+  }
+  return null;
+}
+
 /** Pages with <cast-player> or a <video> get the player script, from the host that served them. */
 function injectPlayer(html: string, apiBase: string): string {
   if (!pageUsesPlayer(html) || /\/cli\/player\.js/.test(html)) return html;
@@ -392,7 +452,7 @@ export const publish = httpAction(async (ctx, request) => {
   let attached = false;
   try {
     const body = await request.json();
-    const { api_token, content, title, source_path, force_new, kind: rawKind, files, session_ref, access, thumb_b64, task, plan, data } = body;
+    const { api_token, content, title, source_path, force_new, kind: rawKind, files, session_ref, access, thumb_b64, task, plan } = body;
     if (!api_token || !title) return json({ error: "Missing api_token or title" }, 400);
     const kind = rawKind === "markdown" || rawKind === "bundle" ? rawKind : "html";
     if (kind !== "bundle" && typeof content !== "string") return json({ error: "Missing content" }, 400);
@@ -513,6 +573,19 @@ export const publish = httpAction(async (ctx, request) => {
         return json({ error: e instanceof Error ? e.message : "Invalid access flags" }, 400);
       }
     }
+
+    // The installed-app manifest rides in the same declaration; a bad one
+    // refuses the publish as a bad query does, and it is part of the hash.
+    const split = splitAppDeclaration(body.data);
+    if ("error" in split) return json({ error: `cast-data.json: ${split.error}` }, 400);
+    const { app, data } = split as { app?: PageApp; data: any };
+    const iconProblem = await appIconProblem(app, assetInputs, async (f) => {
+      if (f.bytes) return f.bytes.subarray(0, 24);
+      const blob = f.upload ? await ctx.storage.get(f.upload.storage_id) : null;
+      return blob ? new Uint8Array(await blob.slice(0, 24).arrayBuffer()) : null;
+    });
+    if (iconProblem) return json({ error: `cast-data.json: ${iconProblem}` }, 400);
+    contentHash = await withAppHash(contentHash, app);
 
     // Live data (cast-data.json): checked against the readers and the
     // publisher's access before anything is stored, and part of the content
@@ -641,6 +714,7 @@ export const publish = httpAction(async (ctx, request) => {
       task_id: binding.task_id,
       plan_id: binding.plan_id,
       station: binding.station,
+      app,
     });
     attached = true;
     // A republish replaces the page's query set; a page without one has none.
@@ -795,7 +869,8 @@ async function performRollback(ctx: ActionCtx, slug: string, targetVersion: numb
   } else {
     contentHash = await sha256Hex(mainText);
   }
-  // The restored version's live queries come back with it.
+  // The restored version's app manifest and live queries come back with it.
+  contentHash = await withAppHash(contentHash, past.app);
   const setJson: string | null = await ctx.runQuery(internal.pageData.setAt, { artifact_id: art._id, version: targetVersion });
   if (setJson) contentHash = await withDataHash(contentHash, setJson);
 
@@ -809,6 +884,7 @@ async function performRollback(ctx: ActionCtx, slug: string, targetVersion: numb
     content_hash: contentHash,
     edited_by: `rollback to v${targetVersion}`,
     assets: assets as never,
+    app: past.app ?? null,
   });
   await ctx.runMutation(internal.pageData.restoreSet, { artifact_id: art._id, from_version: targetVersion, to_version: appended.version });
   return null;
@@ -1073,6 +1149,37 @@ const htmlResponse = (html: string, status: number, cache: string) =>
     },
   });
 
+// An installed app's host (isPageHost: its user agent ends in
+// " CodecastApp/<ver> (<slug>)" naming this very page) gets the page with
+// allow-same-origin, so localStorage, IndexedDB and cookies work. That is safe
+// only inside a host: each install has its own storage (an Electron partition
+// per app, a WebKit data store per bundle id) and its navigation is locked to
+// the slug, so no other page ever shares that origin's storage there. In a
+// browser every page on a.codecast.sh would share one origin and read each
+// other's storage, so a browser must never get this response. It cannot: a
+// web page cannot set the user agent of a navigation or a frame, the edge
+// forwards the user agent only for this pattern and never caches the answer,
+// and the answer is private, no-store and varies on User-Agent.
+const HOST_CSP = `${ARTIFACT_SECURITY_HEADERS["Content-Security-Policy"]} allow-same-origin`;
+const HOST_HEADERS = { "Content-Security-Policy": HOST_CSP, "Cache-Control": "private, no-store", Vary: "User-Agent" };
+
+/** A page document: the page itself, as a browser or a host loads it. It
+ * names the version it delivers (X-Cast-Version), which is how a host learns
+ * what it loaded, never from the page's own word. */
+const pageDocResponse = (html: string, cache: string, version: number, host: boolean) =>
+  new Response(html, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      ...ARTIFACT_SECURITY_HEADERS,
+      "Cache-Control": cache,
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Expose-Headers": "X-Cast-Version",
+      "X-Cast-Version": String(version),
+      ...(host ? HOST_HEADERS : {}),
+    },
+  });
+
 // How long a browser or CDN may still answer from cache after the owner adds
 // a password, revokes an edit link, sets an expiry or deletes the page. Bytes
 // a viewer already has cannot be recalled by anyone; what this bounds is the
@@ -1118,6 +1225,8 @@ export const serve = httpAction(async (ctx, request) => {
   if (!slug) return notFound("Page not found");
   const apiBase = apiBaseFrom(request);
   const q = url.searchParams;
+  // An installed app hosting this page (see HOST_HEADERS for why only a host).
+  const host = isPageHost(request.headers.get("User-Agent"), slug);
 
   const artifact = await ctx.runQuery(internal.artifacts.bySlug, { slug });
   if (!artifact) return notFound("Page not found");
@@ -1139,19 +1248,22 @@ export const serve = httpAction(async (ctx, request) => {
     && (await ctx.runQuery(internal.artifacts.teamGateAdmits, { artifact_id: artifact._id, m: presentedM }))
     ? presentedM
     : null;
+  // The keys this request opened the page with, for the URLs ?app=1 hands back.
+  const openedWith: { k?: string; e?: string; m?: string } = mToken ? { m: mToken } : {};
   if (artifact.team_gate && !mToken) {
-    if (q.get("meta") === "1") return json({ error: "Locked" }, 403);
-    if (q.get("thumb") === "1" || tail) return notFound("Not found");
+    if (q.get("meta") === "1" || q.get("app") === "1") return json({ error: "Locked" }, 403);
+    if (q.get("thumb") === "1" || q.has("icon") || tail) return notFound("Not found");
     return htmlResponse(teamGatePage({ slug, teamName: artifact.team_gate_name, shareUrl }), 403, CACHE_PROTECTED);
   }
   let kToken = "";
   if (artifact.password_hash) {
     kToken = await kTokenFor(artifact.password_hash, slug);
     if (q.get("k") !== kToken) {
-      if (q.get("meta") === "1") return json({ error: "Locked" }, 403);
-      if (q.get("thumb") === "1") return notFound("Not found");
+      if (q.get("meta") === "1" || q.get("app") === "1") return json({ error: "Locked" }, 403);
+      if (q.get("thumb") === "1" || q.has("icon")) return notFound("Not found");
       return htmlResponse(passwordGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_PROTECTED);
     }
+    openedWith.k = kToken;
   }
   if (artifact.email_gate && artifact.owner_key) {
     const eToken = await eTokenFor(artifact.owner_key, slug);
@@ -1160,9 +1272,11 @@ export const serve = httpAction(async (ctx, request) => {
     // exception covers the page URL only: a sub-path (_data, an asset) with
     // ?meta=1 is still behind the wall.
     if (q.get("e") !== eToken && (q.get("meta") !== "1" || tail)) {
-      if (q.get("thumb") === "1") return notFound("Not found");
+      if (q.get("app") === "1") return json({ error: "Locked" }, 403);
+      if (q.get("thumb") === "1" || q.has("icon")) return notFound("Not found");
       return htmlResponse(emailGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_PROTECTED);
     }
+    if (q.get("e") === eToken) openedWith.e = eToken;
   }
 
   // --- <page>/_data[/<id>] — the page's live query results, behind the same gates ---
@@ -1212,6 +1326,27 @@ export const serve = httpAction(async (ctx, request) => {
         },
       },
     );
+  }
+
+  // --- ?app=1 — the page as an installed app, for the viewer the request proves (never cached) ---
+  if (q.get("app") === "1" && !tail) {
+    const info = await ctx.runQuery(internal.artifacts.appInfoBySlug, { slug, identity_token: q.get("i") ?? undefined, gate: openedWith });
+    if (!info) return notFound("Page not found");
+    return new Response(JSON.stringify(info), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" },
+    });
+  }
+
+  // --- ?icon=<size> — the app icon: the bundle's declared PNG, else the generated tile ---
+  if (q.has("icon") && !tail) {
+    const headers = { "Content-Type": "image/png", ...ARTIFACT_SECURITY_HEADERS, "Cache-Control": cachePolicy(artifact), "Access-Control-Allow-Origin": "*" };
+    const declared = artifact.app?.icon
+      ? await ctx.runQuery(internal.artifacts.assetByPath, { artifact_id: artifact._id, version: artifact.version, path: artifact.app.icon })
+      : null;
+    const blob = declared ? await ctx.storage.get(declared.storage_id) : null;
+    if (blob) return new Response(blob, { status: 200, headers });
+    return new Response(monogramPng(artifact.title, artifact.slug, appIconSize(q.get("icon"))) as unknown as BodyInit, { status: 200, headers });
   }
 
   // --- ?thumb=1 (gated artifacts never serve it — checked above) ---
@@ -1275,6 +1410,8 @@ export const serve = httpAction(async (ctx, request) => {
         ...ARTIFACT_SECURITY_HEADERS,
         "Cache-Control": cachePolicy(artifact),
         "Access-Control-Allow-Origin": "*",
+        // A bundle's other documents are pages of the same app.
+        ...(host ? HOST_HEADERS : {}),
       },
     });
   }
@@ -1408,9 +1545,16 @@ export const serve = httpAction(async (ctx, request) => {
     const qs = gate.toString();
     html = injectData(html, `${apiBase}/cli/a/${artifact.slug}/_data${qs ? `?${qs}` : ""}`, apiBase, artifact.slug);
   }
+  // An installed app is the page itself: no bar (and with it no live-reload
+  // banner, since the host reloads itself), never cached anywhere shared.
+  if (host) return pageDocResponse(html, CACHE_PROTECTED, doc.version, true);
   // A card's live thumbnail: the page alone. No bar means no view beacon and
   // no comment polling, so a gallery of previews counts nothing as a view.
-  if (q.get("preview") === "1") return htmlResponse(html, 200, cachePolicy(artifact));
+  if (q.get("preview") === "1") return pageDocResponse(html, cachePolicy(artifact), doc.version, false);
+  // Install as app on the bar's menu, unless the page's team turned installs
+  // off. Page-level only: this document is cached for every viewer, and a
+  // browser's navigation carries no sign-in (the desktop sheet decides the rest).
+  const installable = await ctx.runQuery(internal.artifacts.pageInstallAllowed, { artifact_id: artifact._id });
   // Bake the validated gate tokens into the meta URL so the bar's polling
   // clears the same gates the document did.
   const metaTokens = `${mToken ? `&m=${mToken}` : ""}${kToken ? `&k=${kToken}` : ""}${artifact.email_gate && q.get("e") ? `&e=${q.get("e")}` : ""}`;
@@ -1436,6 +1580,7 @@ export const serve = httpAction(async (ctx, request) => {
     live: q.get("live") === "1",
     hasThumb: !!artifact.thumb_storage_id,
     hasAgent: !!artifact.session_conversation_id,
+    installable,
   });
-  return htmlResponse(branded, 200, cachePolicy(artifact));
+  return pageDocResponse(branded, cachePolicy(artifact), doc.version, false);
 });

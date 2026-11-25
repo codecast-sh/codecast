@@ -408,6 +408,8 @@ ${VISUAL_SNIPPET_END}
 
 /** What `cast guide visual` prints after the body: the detail an install leaves out of CLAUDE.md. */
 export const VISUAL_REFERENCE = `
+A canvas is a snapshot of the numbers you put in it. A product number codecast already watches stays live as its ID alone on a line (\`mw-12\` draws the metric's chart, \`eg-2242\` the issue's count and last 72 hours), so build a dashboard of those cards and keep the canvas for what only you can compute.
+
 Full CSS and SVG work: grid/flex, gradients, \`<defs>\`+\`<use>\`, animations, hover states, \`<details>\`. \`data-canvas-size="wide"\` on the root uses the full screen width. \`data:\` URIs work in a canvas but bloat the message.
 
 \`\`\`bash
@@ -712,6 +714,69 @@ cast publish unwatch <target>                 # stop
 \`\`\`
 
 Each burst of writes is one turn listing what changed (who, which row, the value), so a small row needs no read. Answer with \`cast publish state\`: the row shows in every open copy at once, marked as the session's, and a session's own writes never wake it. A watch is an event trigger (\`--on page_state --page <target>\` on \`cast trigger add\`), listed in \`cast trigger ls\`. Any session whose person can read the page may watch it, and writes what that person could write there. Give a page \`<cast-agent></cast-agent>\` to show viewers that an agent is watching and when it is working on their change; \`cast.agents(({watching, working}) => …)\` is the same signal for a page's own UI.
+
+### Pages as desktop apps
+
+Any page installs as an app on the person's Mac or Windows PC, from its Share menu (Install as app): its own name and icon in the Dock or taskbar, Launchpad and Spotlight or the Start menu, its own window, and live updates on every republish. Declare how it installs with an \`"app"\` block beside \`queries\` and \`state\` (a declaration may hold only \`app\`). Every field is optional:
+
+\`\`\`json
+{ "app": { "name": "Vitals", "icon": "icon.png",
+    "window": { "width": 420, "height": 640, "minWidth": 320, "minHeight": 400, "resizable": true, "titleBar": "default" },
+    "tray": { "icon": "tray.png", "width": 360, "height": 480, "tooltip": "Vitals" },
+    "permissions": ["notifications", "menu-bar"] } }
+\`\`\`
+
+\`icon\` is a square PNG of at least 512 px in the bundle (without one, a monogram tile is drawn); \`tray.icon\` a monochrome PNG; \`titleBar: "hidden"\` lets the page draw its own, with drag regions marked \`-webkit-app-region: drag\`. Publishing refuses an unknown field or permission with the reason. A page with an app block gets an \`app:\` line in the publish output naming the install command and what it asks for.
+
+What an app may do comes in three tiers. Every app gets what a browser tab gets plus \`cast.app.window.*\`, \`badge\`, \`info\`, \`permissions.*\` and \`on\`. App permissions are granted one at a time: \`notifications\`, \`menu-bar\` (a menu bar or tray item with a popover), \`shortcuts\` (global, two modifiers or more), \`overlay\` (always on top, every workspace, click-through), \`agent\` (ask the person's agent; runs as them and counts toward their usage), \`login\` (open at login). \`full-access\` adds files, programs and \`shell.open\`, and is offered only for the person's own pages or their team's, when the team allows it. Consent belongs to a version: after a republish, every non-default call answers \`needs-consent\` until the person approves again, in one tap when nothing new is asked.
+
+\`window.cast.app\` exists only inside an installed app; check for it, so the page still works in a tab or on the phone:
+
+\`\`\`js
+cast.app.info()                                   // {slug, name, version, surface: "window"|"tray", platform, grants, requested}
+cast.app.permissions.request(["notifications"])   // the person's consent sheet; resolves to the new grants
+cast.app.notify({title, body, tag})               // click fires on("notification-click", {tag})
+cast.app.tray.set({title, tooltip, badge})        // the popover shows this page at surface "tray"; tray.remove()
+cast.app.shortcuts.register("CmdOrCtrl+Shift+K")  // fires on("shortcut", {accelerator})
+cast.app.window.setAlwaysOnTop(true)              // overlay; setSize, setTitle, focus, minimize, close need no grant
+cast.app.badge(3)                                 // 0 clears it
+cast.app.agent.ask(prompt)                        // {answer}
+cast.app.login.set(true)
+cast.app.fs.readText(path) / writeText / list / stat / remove / watch(path, cb)   // full access; absolute or ~/ paths
+cast.app.process.run(cmd, args, {cwd, env, timeoutMs})  // full access; no shell; {code, stdout, stderr, timedOut}
+cast.app.shell.open(pathOrUrl)                    // full access
+cast.app.on(event, cb)                            // notification-click, shortcut, tray-click, surface, version, grants, fs-change
+\`\`\`
+
+A refused call rejects with an Error whose \`.code\` says why (\`needs-consent\`, \`denied\`, \`not-allowed-by-team\`, \`not-your-page\`, \`mixed-version\`, \`bad-args\`, \`failed\`): show it. Inside an app the page carries no publish bar, its user agent ends in \` CodecastApp/<version> (<slug>)\`, and \`localStorage\`, IndexedDB and cookies work and persist, kept apart for each install.
+
+Installing is the person's act. \`cast publish install\` opens Codecast's install sheet on this computer, where they choose the permissions and confirm; nothing is installed or granted until they do.
+
+\`\`\`bash
+cast publish install <target>     # open the install sheet in the desktop app (a URL's ?k= / ?m= keys go along)
+cast publish uninstall <target>   # ask Codecast to remove it; the person confirms
+cast publish apps                 # what is installed here, each with its granted version and permissions
+\`\`\`
+
+A menu bar app, as one file:
+
+\`\`\`html
+<title>Builds</title>
+<script type="application/cast-data+json">
+{ "app": { "name": "Builds", "tray": { "width": 320, "height": 400 }, "permissions": ["menu-bar"] } }
+</script>
+<main id="list">Open builds…</main>
+<script type="module">
+const app = window.cast?.app;
+const info = app && (await app.info());
+if (info?.surface === "window") {
+  try {
+    if (!info.grants.includes("menu-bar")) await app.permissions.request(["menu-bar"]);
+    await app.tray.set({ title: "3 ✓", tooltip: "Builds" });
+  } catch (e) { list.textContent = \`Menu bar off: \${e.code}\`; }
+}
+</script>
+\`\`\`
 `;
 
 export const BROWSER_SNIPPET_END = "<!-- /codecast-browser -->";
@@ -992,8 +1057,11 @@ Every codecast object has a short ID. Written anywhere (a message, comment, doc 
 | Call    | \`cl-42\`   | \`cast calls\` |
 | Flow    | \`flow:change\` | \`cast flow ls\` |
 | Deploy  | \`dp-1972\` | \`cast line deploy targets\` |
+| Issue   | \`eg-2242\` | \`cast events groups\` |
+| Metric  | \`mw-12\`   | \`cast metrics ls\` |
+| Replay  | \`rp-311@1:23\` | \`cast replay ls\` |
 
-Write the bare ID by default (\`Filed under ct-4102.\`); it reads as a sentence and renders in full. A flow ID alone on a line draws the flow, each step open to its prompt. Write \`@[Title id]\` (\`@[Fix the auth race ct-4102]\`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
+Write the bare ID by default (\`Filed under ct-4102.\`); it reads as a sentence and renders in full. An ID alone on its line is a live card (a metric's chart, an issue's last 72h, a flow's steps); stack them for a dashboard. Write \`@[Title id]\` (\`@[Fix the auth race ct-4102]\`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
 ${REFERENCES_SNIPPET_END}
 `;
 

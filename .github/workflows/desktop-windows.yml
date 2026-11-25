@@ -1,0 +1,84 @@
+name: Desktop (Windows)
+
+# Builds the Windows installer, installs it silently the way a person's
+# machine would, launches the installed app in --smoke-test mode, and keeps
+# the installer, the screenshot and the report as artifacts. Proves the
+# Windows build boots on a machine that has never seen it; publishing stays
+# with packages/electron/scripts/release.sh.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "packages/electron/**"
+      - "platform/packages/desktop/**"
+      - ".github/workflows/desktop-windows.yml"
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Unit tests for the Windows pieces
+        shell: bash
+        working-directory: packages/electron
+        run: node --test updatePolicy.test.js winInstaller.test.js smokeTest.test.js buildFiles.test.js
+
+      # Unsigned until the signing decision (sd-4722) lands; build-win.sh
+      # signs on its own once the AZURE_* secrets are passed here.
+      - name: Build the installer
+        shell: bash
+        working-directory: packages/electron
+        run: scripts/build-win.sh
+
+      - name: Install silently, per user
+        shell: pwsh
+        working-directory: packages/electron
+        run: |
+          $installer = Get-ChildItem dist -Filter "Codecast-*-x64-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "no installer in dist" }
+          "Installer: $($installer.Name) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+          # The one-click installer starts the app when it finishes; the smoke
+          # run below needs the single-instance lock to itself.
+          Start-Sleep -Seconds 5
+          Get-Process Codecast -ErrorAction SilentlyContinue | Stop-Process -Force
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\Codecast\Codecast.exe"
+          if (-not (Test-Path $exe)) { throw "Codecast.exe not at $exe" }
+          $cmd = (Get-ItemProperty "HKCU:\Software\Classes\codecast\shell\open\command")."(default)"
+          if ($cmd -notlike "*Codecast.exe*") { throw "codecast:// is not registered to Codecast.exe (got: $cmd)" }
+          "codecast:// -> $cmd"
+          "CODECAST_EXE=$exe" >> $env:GITHUB_ENV
+
+      - name: Launch the installed app in smoke-test mode
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "smoke"
+          $p = Start-Process -FilePath $env:CODECAST_EXE -ArgumentList "--smoke-test=$out", "--smoke-timeout=120" -Wait -PassThru
+          Get-Content (Join-Path $out "report.json")
+          if ($p.ExitCode -ne 0) { throw "smoke test failed (exit $($p.ExitCode))" }
+
+      - name: Keep the installer, screenshot and report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: codecast-windows-${{ github.sha }}
+          path: |
+            packages/electron/dist/Codecast-*-x64-setup.exe
+            packages/electron/dist/latest.yml
+            ${{ runner.temp }}/smoke/
+          if-no-files-found: warn
+          retention-days: 14

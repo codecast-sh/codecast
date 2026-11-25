@@ -78,6 +78,26 @@ You can also ask the agent to set any of these when it publishes. The manage lin
 
 Each page's menu offers **Open**, **Copy link**, **Manage**, **Edit** and **Delete**. Deleting a page removes its whole history, and the link stops working at once.
 
+## Install a page as an app
+
+With the Codecast desktop app on your Mac or Windows PC, any page can become an app of its own. Choose **Install as app** from the page's **Share** menu (on the page, its card in Pages, or the page in a conversation). In a browser, the same item hands off to the desktop app, or offers the download when it isn't installed.
+
+The install sheet shows the app's icon and name, who made it, and each permission the page asks for as a switch you can leave off. The button names what happens: **Install Vitals**. The app then has its own icon in the Dock and Launchpad, or the taskbar and Start menu, its own window, and it updates whenever the page is republished.
+
+| Permission | What it allows |
+|------------|----------------|
+| **Notifications** | Notifications under the app's own name and icon |
+| **Menu bar** | An item in the menu bar (or the Windows tray) that opens a small panel |
+| **Global shortcuts** | Keyboard shortcuts that work in any app |
+| **Always on top** | Stays above other windows, on every desktop |
+| **Ask your agent** | Asks your agent a question; it runs as you and counts toward your usage |
+| **Open at login** | Starts when you log in |
+| **Full access** | Reads and writes files and runs programs. Offered only for your own pages and your team's, and only when your team allows it |
+
+Without any of these, an app can do what the page can do in a browser tab. When the page is republished, the app asks again before it uses a permission; if the new version asks for nothing new, approving takes one click. **Settings > Installed apps** lists every app with its version and permissions, each a switch, plus **Open** and **Uninstall**. Team admins can turn installs off for the team, and full access is off for teams until an admin turns it on.
+
+An agent can ask to install a page with `cast publish install <page>`: the same sheet opens on your computer, and nothing is installed or granted until you confirm.
+
 ## When something is off
 
 | What you notice | What to do |

@@ -16,8 +16,8 @@ const { contextBridge, ipcRenderer, webFrame } = require("electron");
 const { createBridge, bufferedChannel } = require("@platform/desktop");
 
 // The same origin list main.js admits IPC from. The local dev site is on it
-// only when main marked this run as one that may use it (never a packaged
-// build): see LOCAL_DEV_ALLOWED there.
+// only when main marked this run as one that may use it: see LOCAL_DEV_ALLOWED
+// there.
 const { trustedShellUrl, shellOrigins, LOCAL_DEV_FLAG } = require("./shellAuthority");
 const origins = shellOrigins({ localDev: process.env[LOCAL_DEV_FLAG] === "1", baseUrl: process.env.CODECAST_URL });
 if (process.isMainFrame && trustedShellUrl(globalThis.location.href, origins)) {
@@ -85,6 +85,9 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // ask (a notification post, askForMediaAccess, a capture attempt);
   // `openSettings` lands on the kind's System Settings pane.
   getOsPermissions: () => ipcRenderer.invoke("get-os-permissions"),
+  // Switch the main window between codecast.sh and local.codecast.sh, in
+  // place (a packaged build that never used the local site relaunches into it).
+  toggleEnvironment: (path) => ipcRenderer.invoke("toggle-environment", path),
   requestOsPermission: (kind) => ipcRenderer.invoke("request-os-permission", kind),
   openOsPermissionSettings: (kind) => ipcRenderer.invoke("open-os-permission-settings", kind),
   // The two grants that belong to the codecast computer helper
@@ -92,6 +95,29 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // vocabulary. Kept out of getOsPermissions because one read runs the CLI and
   // takes seconds; `openOsPermissionSettings` covers both kinds too.
   getComputerPermissions: () => ipcRenderer.invoke("get-computer-permissions"),
+  // Installed apps: published pages installed as desktop apps
+  // (docs/architecture/installed-apps.md, "Desktop bridge for the web app";
+  // installedApps/host.js answers). `install` opens the install sheet and
+  // resolves when it closes; `facts` is the sync host window's appInfo feed;
+  // `consent` is what the /apps/consent/<id> route reads and answers.
+  apps: {
+    list: () => ipcRenderer.invoke("apps:list"),
+    install: (info) => ipcRenderer.invoke("apps:install", info),
+    // {surface: "tray"} opens the menu bar popover (Electron-window host).
+    open: (slug, opts) => ipcRenderer.invoke("apps:open", slug, opts),
+    uninstall: (slug) => ipcRenderer.invoke("apps:uninstall", slug),
+    setGrants: (slug, grants) => ipcRenderer.invoke("apps:set-grants", slug, grants),
+    facts: (slug, info) => ipcRenderer.send("apps:facts", slug, info),
+    onChange: (cb) => {
+      const handler = (_event, apps) => cb(apps);
+      ipcRenderer.on("apps:changed", handler);
+      return () => ipcRenderer.removeListener("apps:changed", handler);
+    },
+    consent: {
+      get: (id) => ipcRenderer.invoke("apps:consent-get", id),
+      answer: (id, answer) => ipcRenderer.invoke("apps:consent-answer", id, answer),
+    },
+  },
   // The CLI and daemon on this machine (daemonSetup.js). getDaemonSetup:
   // { supported, installed, linked, running }. runDaemonSetup(token) runs the
   // installer with a setup token the page minted: { ok } or { ok: false, error }.

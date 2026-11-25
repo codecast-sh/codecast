@@ -6,6 +6,16 @@ const { spawn, execFile } = require("child_process");
 
 app.name = "Codecast";
 
+// Windows ties toasts, taskbar grouping and pinning to an AppUserModelID; the
+// installer's shortcuts carry the appId, so the running app must claim the
+// same one before any window or notification exists.
+if (process.platform === "win32") app.setAppUserModelId("sh.codecast.desktop");
+
+// --smoke-test=<dir>: boot, screenshot the main window, write a report, quit
+// (smokeTest.js). Background work that would outlive the check stays off.
+const { smokeTestOptions, runSmokeTest } = require("./smokeTest");
+const SMOKE_TEST = smokeTestOptions(process.argv);
+
 // Isolated profile for dev/test runs so a from-source instance can run beside
 // the installed app: its own singleton lock, service-worker cache, IndexedDB,
 // and localStorage. Must be set before anything reads userData paths.
@@ -92,6 +102,12 @@ const { attachSpellMenu } = require("./spellMenu");
 
 let notificationRefs = [];
 
+// The inset traffic lights belong to macOS. Anywhere else a hidden title bar
+// means a window with no caption buttons at all, so it keeps the native frame.
+const INSET_TITLE_BAR = process.platform === "darwin"
+  ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 12 } }
+  : {};
+
 // Set once osPermissions exists (below): the modern-API path. macOS refuses
 // Electron's legacy `Notification` from any process that has spoken to
 // UNUserNotificationCenter — this one does, at boot, to read its permission —
@@ -122,14 +138,16 @@ const PROD_URL = "https://codecast.sh";
 // so the Convex auth token only lives on https. Loading http here would
 // redirect anyway — point straight at https to skip the round-trip.
 const LOCAL_URL = LOCAL_DEV_URL;
-// The local dev site belongs to a from-source run. A packaged build does not
-// treat local.codecast.sh as the app: it is not one of its shell origins, the
-// sticky "local" choice is ignored, and Switch Environment (menu and global
-// shortcut) is absent. That name resolves through ordinary DNS, so on a
-// network that answers it with another address a build that trusted it would
-// hand the whole bridge to whatever was served there. The preload reads the
-// same decision from the environment, which every renderer inherits.
-const LOCAL_DEV_ALLOWED = !app.isPackaged;
+// The local dev site belongs to a from-source run, or to a packaged build whose
+// person turned it on (settings.json `localDev`, set the first time the web
+// menu's Switch to local is pressed: see requestEnvironmentSwitch). Any other
+// packaged build does not treat local.codecast.sh as the app: it is not one of
+// its shell origins, the sticky "local" choice is ignored, and Switch
+// Environment (menu and global shortcut) is absent. Trusting that name hands
+// the whole bridge to whatever this machine serves on it, which no customer
+// install needs. The preload reads the same decision from the environment,
+// which every renderer inherits.
+const LOCAL_DEV_ALLOWED = !app.isPackaged || loadFullSettings().localDev === true;
 if (LOCAL_DEV_ALLOWED) process.env[LOCAL_DEV_FLAG] = "1";
 else delete process.env[LOCAL_DEV_FLAG];
 // Env is sticky across restarts: the last toggled choice is persisted in
@@ -255,6 +273,75 @@ function saveSettings(shortcuts) {
   updateSettings({ shortcuts: diffOverrides(shortcuts) });
 }
 
+// ── Installed apps (docs/architecture/installed-apps.md) ──
+// Published pages installed as desktop apps. The host (installedApps/host.js)
+// answers the shell's apps.* bridge from the moment this file loads, and
+// builds its platform half once Electron is ready: native shims on macOS
+// (macHost.js), Electron windows on Windows, or on a Mac when
+// CODECAST_APPS_HOST=electron.
+const { createAppsHost } = require("./installedApps/host");
+const { createRegistry, safeStorageSealer } = require("./installedApps/registry");
+const { createConsentWindows } = require("./installedApps/consentWindow");
+const { nativeImaging } = require("./installedApps/icons");
+const APPS_HOST = process.platform === "darwin" && process.env.CODECAST_APPS_HOST !== "electron" ? "mac" : "electron";
+// A from-source run may serve pages from elsewhere (the integration test's
+// local server); a packaged build only ever trusts the real page origin.
+const APPS_PAGE_ORIGIN = (!app.isPackaged && originOf(process.env.CODECAST_APPS_PAGE_ORIGIN)) || "https://a.codecast.sh";
+// Started with --background (a shim waking Codecast) or for an app
+// (--codecast-app=<slug> from a Start menu shortcut): the main window loads,
+// so the web app can feed facts, but does not come forward.
+let launchHidden = process.argv.includes("--background") || process.argv.some((a) => a.startsWith("--codecast-app="));
+const appsRegistry = createRegistry({ settings: settingsFile, sealer: safeStorageSealer(require("electron").safeStorage) });
+const appsConsent = createConsentWindows({
+  createWindow: (options) => {
+    const win = createShellWindow({ ...options, webPreferences: preloadPrefs() });
+    // The sheet asks over another app's window (a shim is its own process on
+    // macOS), so Codecast has to come forward with it.
+    if (process.platform === "darwin") win.once("ready-to-show", () => app.focus({ steal: true }));
+    return win;
+  },
+  url: (id) => `${currentBaseUrl}/apps/consent/${encodeURIComponent(id)}`,
+  display: (anchor) => (anchor ? screen.getDisplayMatching(anchor) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint())).workArea,
+});
+const appsHost = createAppsHost({
+  registry: appsRegistry,
+  consent: appsConsent,
+  ipc: shellIpc,
+  broadcast: (channel, data) => {
+    for (const win of BrowserWindow.getAllWindows()) if (shellAuthority.isShell(win.webContents)) win.webContents.send(channel, data);
+  },
+  pageOrigin: APPS_PAGE_ORIGIN,
+  appsDir: path.join(app.getPath("userData"), "apps"),
+  imaging: nativeImaging(nativeImage),
+  shell,
+  shellAlive: () => !!mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isCrashed(),
+  createPlatform: (deps) => {
+    if (APPS_HOST === "mac") {
+      const { createMacHost, shimBinaryPath } = require("./installedApps/macHost");
+      return createMacHost({
+        ...deps,
+        socketPath: path.join(app.getPath("userData"), "apps.sock"),
+        hostVersion: app.getVersion(),
+        shimBinaryPath: shimBinaryPath({ resourcesPath: process.resourcesPath, packaged: app.isPackaged }),
+        openInCodecast: () => {
+          if (!mainWindow) return;
+          mainWindow.show();
+          mainWindow.focus();
+        },
+      });
+    }
+    const { createElectronHost } = require("./installedApps/electronHost");
+    return createElectronHost({
+      ...deps,
+      electron: { BrowserWindow, session, ipcMain, Tray, nativeImage, globalShortcut, shell, screen, app, powerMonitor },
+      appVersion: app.getVersion(),
+      notify: ({ title, body }, onClick) => showNativeNotification(title, body, onClick),
+      // A from-source run can keep app windows off screen (the integration test).
+      showWindows: app.isPackaged || process.env.CODECAST_APPS_SHOW !== "0",
+    });
+  },
+});
+appsHost.installIpc();
 
 // Single instance lock — clear stale locks from crashed/updated processes
 let gotLock = app.requestSingleInstanceLock();
@@ -277,6 +364,8 @@ if (!gotLock) {
 }
 if (gotLock) {
   app.on("second-instance", (_e, argv) => {
+    // A Start menu app shortcut (--codecast-app=<slug>) opens that app, not Codecast.
+    if (appsHost.handleArgv(argv)) return;
     const url = argv.find((a) => a.startsWith("codecast://"));
     if (url) handleDeepLink(url);
     if (mainWindow) {
@@ -298,6 +387,13 @@ if (app.isPackaged) {
 } else if (process.env.CODECAST_CLAIM_PROTOCOL) {
   app.setAsDefaultProtocolClient("codecast", process.execPath, [app.getAppPath()]);
   reportProtocolOwner();
+}
+
+// Windows and Linux hand a link that cold-starts the app over in argv (a
+// running app hears it through second-instance above); macOS uses open-url.
+// Held until the main window can take it.
+if (process.platform !== "darwin") {
+  deepLinkUrl = process.argv.find((a) => a.startsWith("codecast://")) ?? null;
 }
 
 // The claim can lose quietly: Launch Services may keep links on another copy
@@ -388,8 +484,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 12 },
+    ...INSET_TITLE_BAR,
     webPreferences: {
       ...preloadPrefs(),
       zoomFactor: zoom,
@@ -457,7 +552,9 @@ function createWindow() {
   startLoad();
 
   mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
+    // A background or app launch keeps the first window out of sight (launchHidden).
+    if (launchHidden) launchHidden = false;
+    else mainWindow.show();
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -557,8 +654,7 @@ function buildTabWindow(extraArgs = []) {
     height: 760,
     minWidth: 700,
     minHeight: 500,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 12 },
+    ...INSET_TITLE_BAR,
     webPreferences: {
       ...preloadPrefs(),
       zoomFactor: zoom,
@@ -972,8 +1068,7 @@ function createPeopleWindow() {
     // (desktopHeaderClass / --titlebar-inset) rather than measuring it — its
     // top row is at the window's corner by construction — and draws its own
     // drag region from the same class.
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 12 },
+    ...INSET_TITLE_BAR,
     // Restored from the last session: a pinned buddy list stays pinned.
     alwaysOnTop: state.alwaysOnTop === true,
     webPreferences: {
@@ -1194,6 +1289,10 @@ app.on("before-quit", () => {
   // Sign-in lives in the web origin's storage, which Chromium writes lazily;
   // a token refreshed just before a quit or an update restart would be lost.
   session.defaultSession.flushStorageData();
+  // Installed apps in Electron windows (Windows) close with Codecast, keeping
+  // their bounds; an open consent sheet counts as a refusal. macOS shims keep
+  // running and reconnect.
+  appsHost.stop();
   // A staged update installs on the way out. Quitting is the human's own
   // restart; a staged bundle left behind would wait for a click nobody makes.
   applyStagedUpdateOnQuit();
@@ -2897,12 +2996,24 @@ function navigateMain(navPath) {
   );
 }
 
-function toggleEnvironment() {
+// The web menu's Switch to local / prod. A packaged build that has not opted
+// into the local site opts in and relaunches into it, since the origin list,
+// the dev certificate trust and the preload's flag are all fixed at startup.
+function requestEnvironmentSwitch(path) {
+  if (LOCAL_DEV_ALLOWED) return toggleEnvironment(path);
+  updateSettings({ localDev: true, env: "local" });
+  app.relaunch();
+  app.exit(0);
+}
+
+// `path` keeps the page the person was on (a same-app path only).
+function toggleEnvironment(path) {
   if (!LOCAL_DEV_ALLOWED || !mainWindow) return;
   currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
   const env = currentBaseUrl === PROD_URL ? "prod" : "local";
   updateSettings({ env });
-  mainWindow.loadURL(currentBaseUrl);
+  const keep = typeof path === "string" && path.startsWith("/") && !path.startsWith("//") ? path : "";
+  mainWindow.loadURL(currentBaseUrl + keep);
   mainWindow.webContents.once("did-finish-load", () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.executeJavaScript(
@@ -3186,16 +3297,23 @@ function buildAppMenu() {
 //
 // This needs no launchd, no Squirrel, no daemon, and reports real download
 // progress to the renderer over the existing `update-status` IPC.
+//
+// Windows rides the same run with a different artifact: latest.yml names the
+// NSIS installer, which is downloaded, hash-checked and staged; "Restart now"
+// (or quitting) runs it silently once this process exits (winInstaller.js).
 // ---------------------------------------------------------------------------
-const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
 const DESKTOP_BASE = "https://dl.codecast.sh/desktop";
+const DESKTOP_FEED = `${DESKTOP_BASE}/latest-mac.yml`;
+const WIN_FEED = `${DESKTOP_BASE}/latest.yml`;
+const IS_WIN = process.platform === "win32";
 // Our Apple Developer Team ID — the swapped bundle MUST be signed by us.
 const EXPECTED_TEAM_ID = "WRG9THCK9Q";
 
 // Most recent {status,version,percent}, replayed to any window that loads after
 // it was emitted (boot/reload) so the banner never misses the download.
 let lastUpdateStatus = null;
-// { version, incomingPath, bundlePath } once a verified bundle is staged.
+// { version, incomingPath, bundlePath } once a verified bundle is staged, or
+// { version, installerPath } on Windows.
 let stagedUpdate = null;
 // The in-flight update run and its abort handle. A promise (not a boolean
 // flag) so a user-initiated retry can abort a wedged download, WAIT for it to
@@ -3223,9 +3341,17 @@ function installedBundlePath() {
   return bundle.endsWith(".app") ? bundle : null;
 }
 
+// Where an update must write: the .app on macOS, the install directory on
+// Windows (per-user under %LOCALAPPDATA%\Programs, unless an organization
+// installed it for the machine).
+function installLocation() {
+  return IS_WIN ? path.dirname(app.getPath("exe")) : installedBundlePath();
+}
+
 // Which feed entries and bundles the updater accepts (zip name, version
 // floor, bundle version equal to the feed's) lives in updatePolicy.js.
-const { cmpVersions, parseFeed, plistVersion, bundleRefusal } = require("./updatePolicy");
+const { cmpVersions, parseFeed, parseWinFeed, plistVersion, bundleRefusal } = require("./updatePolicy");
+const { installerLaunch, signatureCheck, signatureAccepted, EXPECTED_PUBLISHER: EXPECTED_WIN_PUBLISHER } = require("./winInstaller");
 
 // Network layer (redirect-following GET, feed fetch, resumable download with
 // inactivity timeouts and abort support) lives in updaterNet.js — pure Node,
@@ -3259,16 +3385,17 @@ function rmrf(p) {
 // the in-flight one may be a download wedged on a dead socket, and returning
 // silently here is what made the retry button do nothing.
 async function checkForDesktopUpdate(opts = {}) {
-  if (process.platform !== "darwin" || !app.isPackaged) {
+  if (!(process.platform === "darwin" || IS_WIN) || !app.isPackaged) {
     if (opts.manual) showNativeNotification("Updates unavailable", "Auto-update only runs in the installed desktop app.");
     return;
   }
   // An organization that turns automatic updates off ships versions itself;
   // a person asking from the menu still can.
   if (!opts.manual && managedAutoUpdate() === "off") return;
-  // A bundle this user cannot write (root-owned, installed by Codecast.pkg)
-  // is updated by whoever installed it; the swap would only fail.
-  const bundle = installedBundlePath();
+  // A bundle this user cannot write (root-owned, installed by Codecast.pkg,
+  // or a per-machine install on Windows) is updated by whoever installed it;
+  // the swap would only fail.
+  const bundle = installLocation();
   if (bundle && !isWritable(bundle)) {
     if (opts.manual) showNativeNotification("Updates come from your organization", "Codecast was installed by your organization and updates when it ships a new version.");
     return;
@@ -3315,15 +3442,17 @@ function managedAutoUpdate() {
 }
 
 async function runDesktopUpdateCheck(opts) {
-  const bundle = installedBundlePath();
+  const bundle = installLocation();
   if (!bundle) return;
 
   const abort = new AbortController();
   updateAbort = abort;
   const work = path.join(app.getPath("userData"), "update-stage");
   try {
-    const { version, zip, sha512 } = parseFeed(await fetchText(DESKTOP_FEED));
-    if (!version || !zip || !sha512) throw new Error("could not parse feed");
+    const feed = IS_WIN ? parseWinFeed(await fetchText(WIN_FEED)) : parseFeed(await fetchText(DESKTOP_FEED));
+    const { version, sha512 } = feed;
+    const artifact = IS_WIN ? feed.installer : feed.zip;
+    if (!version || !artifact || !sha512) throw new Error("could not parse feed");
     if (cmpVersions(version, app.getVersion()) <= 0 && !opts.force) {
       if (opts.manual) showNativeNotification("Codecast is up to date", `You're on the latest version (${app.getVersion()}).`);
       return;
@@ -3332,35 +3461,18 @@ async function runDesktopUpdateCheck(opts) {
     emitUpdateStatus({ status: "available", version });
     rmrf(work);
     fs.mkdirSync(work, { recursive: true });
-    const zipPath = path.join(work, zip);
+    const artifactPath = path.join(work, artifact);
 
     emitUpdateStatus({ status: "downloading", version, percent: 0 });
-    const got = await downloadResumable(`${DESKTOP_BASE}/${zip}`, zipPath, {
+    const got = await downloadResumable(`${DESKTOP_BASE}/${artifact}`, artifactPath, {
       signal: abort.signal,
       onProgress: (percent) => emitUpdateStatus({ status: "downloading", version, percent }),
     });
     if (got !== sha512) throw new Error("sha512 mismatch");
 
-    const extractDir = path.join(work, "extract");
-    fs.mkdirSync(extractDir, { recursive: true });
-    const ex = await execFileP("/usr/bin/ditto", ["-x", "-k", zipPath, extractDir]);
-    if (!ex.ok) throw new Error("extract failed");
-    const newApp = path.join(extractDir, "Codecast.app");
-    if (!fs.existsSync(newApp)) throw new Error("Codecast.app missing from archive");
-    if (!(await verifyBundleSignature(newApp))) throw new Error("signature/team verification failed");
-    const plist = await execFileP("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", path.join(newApp, "Contents", "Info.plist")]);
-    const refusal = bundleRefusal({ feedVersion: version, bundleVersion: plist.ok ? plistVersion(plist.stdout) : null, runningVersion: app.getVersion(), force: opts.force });
-    if (refusal) throw new Error(refusal);
-
-    // Pre-stage a sibling copy on the SAME volume as the running bundle so the
-    // post-quit swap is just two atomic renames (minimal downtime, no half-state).
-    const incoming = path.join(path.dirname(bundle), ".Codecast.app.incoming");
-    rmrf(incoming);
-    const cp = await execFileP("/usr/bin/ditto", [newApp, incoming]);
-    if (!cp.ok) throw new Error("stage copy failed");
-    rmrf(work);
-
-    stagedUpdate = { version, incomingPath: incoming, bundlePath: bundle };
+    stagedUpdate = IS_WIN
+      ? await stageWindowsInstaller(artifactPath, version)
+      : await stageMacBundle({ zipPath: artifactPath, work, bundle, version, force: opts.force });
     emitUpdateStatus({ status: "ready", version });
     showNativeNotification(
       `Codecast ${version} is ready`,
@@ -3379,11 +3491,56 @@ async function runDesktopUpdateCheck(opts) {
   }
 }
 
+// Extract the verified zip, hold it to our team's signature and the feed's
+// version, and pre-stage a sibling copy on the SAME volume as the running
+// bundle so the post-quit swap is just two atomic renames (minimal downtime,
+// no half-state).
+async function stageMacBundle({ zipPath, work, bundle, version, force }) {
+  const extractDir = path.join(work, "extract");
+  fs.mkdirSync(extractDir, { recursive: true });
+  const ex = await execFileP("/usr/bin/ditto", ["-x", "-k", zipPath, extractDir]);
+  if (!ex.ok) throw new Error("extract failed");
+  const newApp = path.join(extractDir, "Codecast.app");
+  if (!fs.existsSync(newApp)) throw new Error("Codecast.app missing from archive");
+  if (!(await verifyBundleSignature(newApp))) throw new Error("signature/team verification failed");
+  const plist = await execFileP("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", path.join(newApp, "Contents", "Info.plist")]);
+  const refusal = bundleRefusal({ feedVersion: version, bundleVersion: plist.ok ? plistVersion(plist.stdout) : null, runningVersion: app.getVersion(), force });
+  if (refusal) throw new Error(refusal);
+
+  const incoming = path.join(path.dirname(bundle), ".Codecast.app.incoming");
+  rmrf(incoming);
+  const cp = await execFileP("/usr/bin/ditto", [newApp, incoming]);
+  if (!cp.ok) throw new Error("stage copy failed");
+  rmrf(work);
+  return { version, incomingPath: incoming, bundlePath: bundle };
+}
+
+// The installer stays where it downloaded until it runs. Once Windows builds
+// are signed, it must also carry our publisher's valid signature.
+async function stageWindowsInstaller(installerPath, version) {
+  if (EXPECTED_WIN_PUBLISHER) {
+    const { command, args } = signatureCheck(installerPath);
+    const out = await execFileP(command, args);
+    if (!signatureAccepted(out.stdout)) throw new Error(`installer signature refused: ${out.stdout.trim()}`);
+  }
+  return { version, installerPath };
+}
+
 // Apply the staged update: a detached helper waits for THIS process to exit,
 // swaps the bundle via two atomic renames, clears quarantine, then (when asked)
 // relaunches us in the FOREGROUND. Our own exit is what lets the rename succeed.
+// On Windows the helper runs the staged installer instead.
 let updateInstallTriggered = false;
 function spawnUpdateSwap({ relaunch }) {
+  if (stagedUpdate.installerPath) {
+    try {
+      const { command, args } = installerLaunch({ pid: process.pid, installer: stagedUpdate.installerPath, relaunch });
+      spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    } catch (e) {
+      console.error("update installer failed to spawn:", e?.message);
+    }
+    return;
+  }
   const { incomingPath, bundlePath } = stagedUpdate;
   const oldPath = path.join(path.dirname(bundlePath), ".Codecast.app.old");
   const pid = process.pid;
@@ -3540,6 +3697,7 @@ shellIpc.on("compose-submit", (_e, data) => {
 });
 
 // Settings IPC
+shellIpc.handle("toggle-environment", (_event, path) => { requestEnvironmentSwitch(path); return true; });
 shellIpc.handle("get-shortcuts", () => loadSettings());
 // Richer readout for the settings UI: current bindings, the defaults (so the
 // web can offer "reset to default" without hardcoding them), and which
@@ -3694,7 +3852,7 @@ function registerShortcuts() {
     // A feature's key is held only while the feature is on: a dock that was
     // turned off must not take a chord away from every other app.
     if (key === "toggleAgentDock" && !loadAgentDock().enabled) continue;
-    // Switch Environment exists in a from-source run only (LOCAL_DEV_ALLOWED).
+    // Switch Environment exists only where the local site may load (LOCAL_DEV_ALLOWED).
     if (key === "toggleEnv" && !LOCAL_DEV_ALLOWED) continue;
     let ok = false;
     // register() returns false when another app already holds the accelerator
@@ -3706,6 +3864,8 @@ function registerShortcuts() {
     }
     if (!ok) shortcutIssues[key] = acc;
   }
+  // unregisterAll above took the installed apps' shortcuts too.
+  appsHost.reregisterShortcuts();
 }
 
 // The app's own windows keep their warnings and errors on disk
@@ -3808,6 +3968,22 @@ app.whenReady().then(() => {
     website: "https://codecast.sh",
   });
   createWindow();
+  // Installed apps: re-seal macOS bundles before any shim connects, serve
+  // their socket, and open the app a shortcut launch asked for.
+  appsHost.start();
+  appsHost.handleArgv(process.argv);
+  if (SMOKE_TEST) {
+    runSmokeTest(mainWindow, {
+      ...SMOKE_TEST,
+      isLoaded: (url) => !isRecoveryUrl(url) && url.startsWith(currentBaseUrl),
+      // The web app hides #boot-shell once it has drawn (packages/web/index.html).
+      drawnProbe: `(() => { const b = document.getElementById("boot-shell"); return !b || b.dataset.hidden === "true" || getComputedStyle(b).display === "none"; })()`,
+      info: { version: app.getVersion(), platform: process.platform, arch: process.arch, packaged: app.isPackaged, baseUrl: currentBaseUrl },
+    }).then((report) => {
+      console.log(`smoke test: ${report.ok ? "ok" : `FAILED: ${report.error}`} (${SMOKE_TEST.dir})`);
+      app.exit(report.ok ? 0 : 1);
+    });
+  }
   createTray();
   buildAppMenu();
   createPaletteWindow();
@@ -3836,8 +4012,10 @@ app.whenReady().then(() => {
   // usually already staged + "ready" by the time the user notices the banner),
   // then re-check hourly. The actual install only happens on a deliberate
   // "Restart now" — see checkForDesktopUpdate / installUpdateAndRestart.
-  setTimeout(() => { checkForDesktopUpdate(); }, 8000);
-  setInterval(() => { checkForDesktopUpdate(); }, 60 * 60 * 1000);
+  if (!SMOKE_TEST) {
+    setTimeout(() => { checkForDesktopUpdate(); }, 8000);
+    setInterval(() => { checkForDesktopUpdate(); }, 60 * 60 * 1000);
+  }
 });
 
 app.on("activate", () => {

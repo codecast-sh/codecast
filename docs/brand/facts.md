@@ -30,6 +30,20 @@ Source: `packages/web/app/(marketing)/download/`.
 - iOS app with push notifications. There is no Android app: do not claim one.
 - CLI (`cast`) on macOS, Linux and Windows (Windows runs it inside WSL).
 
+## Installed apps (pages as desktop apps)
+
+Source: `docs/architecture/installed-apps.md`, `packages/shared/contracts/pageApp.ts`, `packages/electron/installedApps/`. Checked 2026-11-24.
+
+Being built (plan pl-1104) and not announced: leave it out of public copy until the changelog names it, and do not claim a Windows desktop app before the download page offers one.
+
+- Any published page can be installed from its Share menu ("Install as app") as a desktop app on macOS and Windows. It gets its own name and icon in the Dock or taskbar, Launchpad and Spotlight or the Start menu, its own window, and it updates live when the page is republished.
+- It needs the Codecast desktop app installed and signed in on that computer. There is no installed-app support on Linux or the phone; there the page stays a page.
+- Three permission tiers. Every app can do what a browser tab can, plus manage its own window and Dock badge. App permissions are granted one at a time by the person: notifications, a menu bar or tray item, global shortcuts, always on top, asking the person's agent, and opening at login. Full access (reading and writing files, running programs) is offered only for the person's own pages or their team's, and only when the team allows it.
+- Consent is per version. When the page is republished, the app asks again before it uses any permission; if the new version asks for nothing new, approving takes one tap.
+- An agent can open the install sheet (`cast publish install`) but cannot install an app or grant a permission. The person confirms on their own computer.
+- Team admins have two switches: whether members may install pages at all (on by default) and whether installed apps may get full access (off by default). A personal workspace allows both.
+- Each install keeps its own storage, apart from every other app and from the browser. Uninstalling removes the app, its storage and its record, and leaves the page's shared data alone.
+
 ## Pricing
 
 Source: `packages/web/app/(marketing)/pricing/page.tsx`.
