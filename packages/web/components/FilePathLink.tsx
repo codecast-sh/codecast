@@ -6,33 +6,39 @@
 // path like `lib/pageLayout.tsx` resolves against that session's working
 // directory before it leaves the page.
 //
-// Plain click opens the file BESIDE the conversation when the stage allows
-// (lib/filesPane); modified clicks keep the Link compat's tab/window
-// behaviour; right-click offers the rest (folder, Finder, new tab).
+// Plain click opens the file in the code editor BESIDE the conversation, at
+// the line and column, in the Files pane already on stage when there is one
+// (lib/filesPane openInEditor), and links that conversation to the editor.
+// Modified clicks keep the Link compat's tab/window behaviour; right-click
+// offers the rest (a split, the folder, Finder, new tab).
 
 import { useCallback, useContext, type ReactNode } from "react";
 import Link from "next/link";
 import { FilePathContext, filePathHref } from "../lib/filePathLinks";
 import { openSessionChangedPath } from "../lib/sessionChangedFiles";
-import { canOpenFilesBeside, openFilesBeside } from "../lib/filesPane";
+import { canOpenFilesBeside, openInEditor } from "../lib/filesPane";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { useVaultStore } from "../store/vaultStore";
+import { useTabContext } from "../lib/tabParams";
 
 export function FilePathLink({
   path,
   line,
+  column,
   children,
   className,
   onClick,
 }: {
   path: string;
   line?: number;
+  column?: number;
   children: ReactNode;
   className?: string;
   onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 }) {
   const ctx = useContext(FilePathContext);
-  const href = filePathHref(path, line, ctx);
+  const fromLeaf = useTabContext()?.leafId ?? null;
+  const href = filePathHref(path, line, ctx, column);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>) => {
@@ -44,23 +50,23 @@ export function FilePathLink({
       }
       if (!canOpenFilesBeside()) return; // the Link takes the tab there
       e.preventDefault();
-      openFilesBeside(href);
+      openInEditor({ path, line, column, ctx }, { fromLeaf });
     },
-    [href, onClick, path, ctx],
+    [path, line, column, ctx, fromLeaf, onClick],
   );
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>) => {
-      requestFilePathMenu(e, { path, line, href, ctx });
+      requestFilePathMenu(e, { path, line, column, href, ctx, fromLeaf });
     },
-    [path, line, href, ctx],
+    [path, line, column, href, ctx, fromLeaf],
   );
 
   return (
     <Link
       href={href}
       className={`fs-link${className ? ` ${className}` : ""}`}
-      title={`Open ${path} in Files`}
+      title={`Open ${path}${line ? `:${line}` : ""} in the editor`}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
     >

@@ -35,8 +35,8 @@ function toolbarVerbs(html: string): string[] {
 }
 
 describe("PublishedPageEmbed header actions", () => {
-  test("copy link to the published page is first, then the two ways to open it, and collapse", () => {
-    expect(toolbarVerbs(markup("my-page"))).toEqual(["Copy link", "Open beside your work", "Open in a new tab", "Collapse"]);
+  test("copy link to the published page is first, then the two ways to open it, install as app, and collapse", () => {
+    expect(toolbarVerbs(markup("my-page"))).toEqual(["Copy link", "Open beside your work", "Open in a new tab", "Install as app", "Collapse"]);
   });
 
   test("a page taller than its frame shows Expand under it, outside the hover toolbar", () => {

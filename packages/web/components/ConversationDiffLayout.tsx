@@ -27,6 +27,8 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
+import { firstChangedLine, gitRefForDiffBase } from "../lib/filesPane";
+import { OpenInEditorButton } from "./OpenInEditorButton";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { matchesAction } from "../shortcuts";
 import { useFollowSurface } from "../hooks/useFollowSurface";
@@ -549,6 +551,19 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
         : `All ${changes.length} changes`)
     + (pendingFiles > 0 ? ` · loading ${pendingFiles} ${pendingFiles === 1 ? "file" : "files"}` : "");
 
+  // Each file's "Edit": the local file in the editor beside, at its first
+  // changed line, with the editor's own diff against the git ref this base
+  // stands for, so reviewing and editing happen in one place. A base git has
+  // no ref for (a turn, a review mark, a picked range) opens the file alone.
+  const editRef = rangeStart !== null ? null : gitRefForDiffBase(base, changes);
+  const fileAction = (filename: string, file: { patch?: string }) => (
+    <OpenInEditorButton
+      label="Edit"
+      target={{ path: filename, line: firstChangedLine(file.patch), ctx: { base: gitRoot ?? undefined, gitRoot } }}
+      diffAgainst={editRef ?? undefined}
+    />
+  );
+
   // A changed file's name (tree row or header) opens the same menu as a file
   // link in the transcript: open it, its folder, the sessions that touched it.
   const onFileContextMenu = (e: React.MouseEvent) => {
@@ -568,6 +583,7 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
         emptyState={<p>{rangeStart !== null ? "Nothing changed in the selected range" : BASE_EMPTY[base]}</p>}
         fileMarks={fileMarks}
         onToggleViewed={onToggleViewed}
+        fileAction={fileAction}
         focusFile={selectedFile}
         focusNonce={focusNonce}
         sidebarHeader={

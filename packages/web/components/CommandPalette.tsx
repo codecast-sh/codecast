@@ -38,7 +38,9 @@ import { deviceDisplayName, deviceWakesOnUse, rosterDeviceOf, type Device } from
 import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
-import { filesHref } from "../lib/vault/vaultHref";
+import { filesHref, isFilesPath } from "../lib/vault/vaultHref";
+import { rankPaletteFiles } from "../lib/paletteFiles";
+import { EDITOR_PALETTE_COMMANDS, runEditorPaletteCommand } from "../lib/editorPaletteCommands";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
@@ -48,7 +50,7 @@ import { useRemoteSearch } from "../hooks/useRemoteSearch";
 import { RecentVisitGlyph } from "./RecentVisitRow";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
-import { score, matchScore } from "../hooks/useMentionQuery";
+import { matchScore } from "../hooks/useMentionQuery";
 import { collapseSameTitle } from "../lib/mentionRanking";
 import { sessionSearchHaystack, mergeSearchRows, rankSessions, sessionStanding, type SessionStanding } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
@@ -196,6 +198,7 @@ import {
   Redo2,
   History,
   Flag,
+  FileCode,
 } from "lucide-react";
 import { HeadOfPeopleFace } from "./anchor/AnchorIdentity";
 import { objectHref } from "../lib/entityLinks";
@@ -1702,20 +1705,20 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     () => (open && vaultReady ? useVaultStore.getState().files : EMPTY_VAULT_FILES),
     [open, vaultReady],
   );
-  const vaultNoteMatches = useMemo(() => {
-    const q = rankQuery.trim().toLowerCase();
-    if (!q) return [];
-    const ranked: Array<{ path: string; base: string; rank: number; mtime: number }> = [];
-    for (const [path, entry] of Object.entries(vaultFiles)) {
-      if (entry.dir || !MARKDOWN_RE.test(path)) continue;
-      const base = (path.split("/").pop() || path).replace(MARKDOWN_RE, "");
-      const rank = Math.min(score(base, q), score(path, q));
-      if (rank === Infinity) continue;
-      ranked.push({ path, base, rank, mtime: entry.mtime || 0 });
-    }
-    ranked.sort((a, b) => a.rank - b.rank || b.mtime - a.mtime);
-    return ranked.slice(0, ENTITY_RENDER_CAP);
-  }, [vaultFiles, rankQuery]);
+  // A local vault's code files are results too, opening in the code editor;
+  // a read-only mirror from another machine lists its notes only.
+  const vaultLocal = useMemo(() => open && !useVaultStore.getState().isRemote, [open]);
+  const { notes: vaultNoteMatches, code: vaultCodeMatches } = useMemo(
+    () => rankPaletteFiles(vaultFiles, rankQuery, { includeCode: vaultLocal, cap: ENTITY_RENDER_CAP }),
+    [vaultFiles, rankQuery, vaultLocal],
+  );
+  // The editor's commands, offered while the Files workspace has the stage.
+  const filesFocused = useMemo(() => {
+    if (!open) return false;
+    const st = useInboxStore.getState();
+    const tab = st.tabs.find((t) => t.id === st.activeTabId);
+    return !!tab && isFilesPath(tab.path);
+  }, [open]);
 
   // Triggers (schedules) search — same list the /triggers page subscribes to,
   // gated on an actual query so an idle palette costs nothing. Convex dedupes
@@ -3356,6 +3359,47 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
+
+        {!picking && vaultCodeMatches.length > 0 && (
+          <CommandPrimitive.Group heading="Code" className={groupClass}>
+            {vaultCodeMatches.map((n) => (
+              <CommandPrimitive.Item
+                key={`vcode-${n.path}`}
+                value={`__entity__ ${n.base} ${n.path}|||vault-code`}
+                onSelect={() => openVaultNote(n.path)}
+                className={itemClass}
+              >
+                <FileCode className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+                <span className="truncate flex-1 font-mono">{n.base}</span>
+                {n.path.includes("/") && (
+                  <span className="text-meta text-sol-text-dim/70 font-mono truncate max-w-[220px] flex-shrink-0">
+                    {n.path.slice(0, n.path.lastIndexOf("/"))}
+                  </span>
+                )}
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
+
+        {!picking && filesFocused && (
+          <CommandPrimitive.Group heading="Editor" className={groupClass}>
+            {EDITOR_PALETTE_COMMANDS.map((c) => (
+              <CommandPrimitive.Item
+                key={`editor-${c.id}`}
+                value={`editor ${c.label} ${c.keywords}`}
+                onSelect={() => {
+                  closePalette();
+                  runEditorPaletteCommand(c);
+                }}
+                className={itemClass}
+              >
+                <c.icon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                <span className="truncate flex-1">{c.label}</span>
+                {c.shortcut && <MenuKeyCaps action={c.shortcut} />}
+              </CommandPrimitive.Item>
+            ))}
+          </CommandPrimitive.Group>
+        )}
 
         {!picking && createGroup}
 

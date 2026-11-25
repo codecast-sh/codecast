@@ -3,7 +3,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useLocation } from "react-router";
 import { useInboxStore, isSessionHidden } from "../store/inboxStore";
 import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
-import { requestStagePlacement, sessionPanePath } from "../lib/stage";
+import { openSessionInFocusedPane, requestStagePlacement, sessionPanePath } from "../lib/stage";
 import { isNonTabRoute } from "../lib/tabRoutes";
 
 // The one way to open a session from wherever the user is standing — the rail
@@ -43,6 +43,14 @@ export function useOpenSession(): (id: string) => void {
       if (store.showMySessions) store.setShowMySessions(false);
     } else {
       store.requestNavigate(id, { showMySessions: false });
+    }
+    // The pointer above keeps the rail's highlight; a focused conversation
+    // pane needs its own path moved to show the session. Only when the open
+    // landed here: a Cmd-click diverts it to a background tab and the pointer
+    // stays put, and so must the pane.
+    const after = useInboxStore.getState();
+    if ([after.currentSessionId, after.viewingDismissedId, after.pendingNavigateId].includes(id)) {
+      openSessionInFocusedPane(id);
     }
   }, []);
 

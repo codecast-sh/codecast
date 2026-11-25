@@ -613,10 +613,10 @@ describe("product sources (src-N)", () => {
   test("a source routes to the Ops timeline by query and its url parses back", () => {
     expect(entityRoute("source", "src-13")).toBe("/ops?source=src-13");
     expect(parseEntityUrl("https://codecast.sh/ops?source=src-13")).toEqual({ type: "source", id: "src-13" });
-    // Ops itself, its tabs and its issue pages name no source.
+    // Ops itself and its tabs name no source; an issue page names its issue.
     expect(parseEntityUrl("/ops")).toBeNull();
     expect(parseEntityUrl("/ops/issues?source=src-13")).toBeNull();
-    expect(parseEntityUrl("/ops/issues/eg-4")).toBeNull();
+    expect(parseEntityUrl("/ops/issues/eg-4")).toEqual({ type: "issue", id: "eg-4" });
   });
 });
 
@@ -644,5 +644,20 @@ describe("replays (rp-N) and their moments (rp-N@m:ss)", () => {
     // The rest of Ops is still a source or a view.
     expect(parseEntityUrl("/ops?source=src-2")).toEqual({ type: "source", id: "src-2" });
     expect(parseEntityUrl("/ops/replays")).toBe(null);
+  });
+
+  // An Ops issue and a metric watch are objects with pages: their ids and
+  // their pages' links (what the Share button copies) are references.
+  test("eg-N is an issue and mw-N a metric, by id and by their Ops links", () => {
+    expect(entityTypeFromId("eg-2242")).toBe("issue");
+    expect(entityTypeFromId("mw-12")).toBe("metric");
+    for (const word of ["eg-x", "mw-", "eg-ish"]) expect(isEntityId(word)).toBe(false);
+    expect("Opened eg-2242 after mw-12 crossed its line.".match(bareEntityIdRegex())).toEqual(["eg-2242", "mw-12"]);
+    expect(entityRoute("issue", "eg-2242")).toBe("/ops/issues/eg-2242");
+    expect(entityRoute("metric", "mw-12")).toBe("/ops/metrics/mw-12");
+    expect(parseEntityUrl("https://codecast.sh/ops/issues/eg-2242")).toEqual({ type: "issue", id: "eg-2242" });
+    expect(parseEntityUrl("/ops/metrics/MW-12")).toEqual({ type: "metric", id: "mw-12" });
+    expect(parseEntityUrl("/ops/issues")).toBe(null);
+    expect(parseEntityUrl("/ops/metrics/not-a-watch")).toBe(null);
   });
 });

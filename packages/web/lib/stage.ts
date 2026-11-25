@@ -355,6 +355,31 @@ export function requestStagePlacement(path: string, title?: string): boolean {
   return true;
 }
 
+/**
+ * Opening a session in place (the rail, the switcher) on a split stage whose
+ * focused pane is a conversation. That pane is pinned to its own id and never
+ * reads the store's current session, so moving that pointer alone changes
+ * nothing on screen: the focused pane takes the session instead. A pane
+ * already showing it is focused rather than doubled. False when the focused
+ * pane is not a conversation (the inbox follows the pointer on its own).
+ */
+export function openSessionInFocusedPane(sessionId: string): boolean {
+  if (borrowsTabShell()) return false;
+  const tab = activeTab();
+  const layout = tab ? tabStageLayout(tab) : null;
+  const focused = layout && tab?.focusedLeafId ? findLeaf(layout, tab.focusedLeafId) : null;
+  if (!layout || !focused || !paneSessionId(focused.path)) return false;
+  const path = sessionPanePath(sessionId);
+  if (focused.path === path) return true;
+  const existing = leavesOf(layout).find((l) => l.path === path);
+  if (existing) {
+    stageFocus(existing.id);
+    return true;
+  }
+  tabNavigate(path, "push");
+  return true;
+}
+
 /** Resolve a pending placement into a pane (or a fresh tab). */
 export function placeStagePick(target: { leafId: string } | "newTab") {
   const st = useInboxStore.getState();

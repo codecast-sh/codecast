@@ -315,7 +315,11 @@ const PageView = memo(function PageView({ el, pageLive, onPageLive }: { el: Boar
       leave();
       (node.closest("[data-board]") as HTMLElement | null)?.focus({ preventScroll: true });
     };
-    const onPress = (e: PointerEvent) => { if (!node?.contains(e.target as Node)) leave(); };
+    // The selection bar drives the entered page (its Done toggles it), so a press there is the bar's to act on.
+    const onPress = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!node?.contains(target) && !target?.closest?.(".board-bar")) leave();
+    };
     // An editable board backs out of the page on its own Escape, a layer before the selection.
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") leave(); };
     window.addEventListener("message", onMessage);
@@ -332,6 +336,7 @@ const PageView = memo(function PageView({ el, pageLive, onPageLive }: { el: Boar
       ref={ref}
       data-key={el.key}
       className={`board-el board-page${live ? " is-live" : ""}`}
+      data-board-wheel-frame
       style={boxStyle(el)}
       onDoubleClick={controlled ? undefined : (e) => { e.stopPropagation(); setLive(true); }}
     >

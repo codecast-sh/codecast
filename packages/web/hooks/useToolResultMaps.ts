@@ -5,6 +5,7 @@ import { typedPollAnswerTexts } from "../lib/pollPayload";
 import type { SentFileData } from "../components/tools/SentFileBlock";
 import type { ImageData, Message, ToolResult } from "../components/conversation/types";
 import type { ConversationData } from "../components/conversation/types";
+import { useConversationOwnerDevice } from "./useConversationOwnerDevice";
 import { ToolCallMemo, keepIfSameRecord, sameElements } from "./toolCallMemo";
 
 // Every tool result by its call id, with the typed answer of a declined poll.
@@ -122,8 +123,10 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
   );
   const convId = conversation?._id ? String(conversation._id) : null;
   const isForeign = !!foreign;
+  const deviceId = useConversationOwnerDevice(conversation?._id);
   const filePathCtx = useMemo(
     () => ({
+      deviceId,
       base: filePathBase,
       home,
       repository: codeRepository,
@@ -133,7 +136,7 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
       conversationId: convId,
       foreign: isForeign,
     }),
-    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey, convId, isForeign],
+    [deviceId, filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey, convId, isForeign],
   );
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };

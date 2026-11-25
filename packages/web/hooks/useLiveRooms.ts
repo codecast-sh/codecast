@@ -76,24 +76,29 @@ export function useLiveRoom(roomKey: string | null): LiveRoomRow | null {
   );
 }
 
-/** The lock on a room I'm in: its state and the gesture that flips it. Any
- *  occupant may lock — the huddle is theirs while it runs, and the lock dies
- *  with it (the server clears it when the room restarts from empty).
- *  Local-first: the glyph flips on click (callRooms), the echo reconciles. */
-export function useRoomLock(roomKey: string | null): {
-  locked: boolean;
-  toggle: () => void;
-  title: string;
+/** Who may walk into the room I'm in. `team`: any teammate walks in.
+ *  `locked`: teammates see it and knock. `private`: listed only to the people
+ *  it admits, chosen when the huddle starts (calls.joinRoom). */
+export type RoomDoor = "team" | "locked" | "private";
+
+/** The door of a room I'm in: its state and the gesture that sets it. Any
+ *  occupant may lock or open it; the huddle is theirs while it runs, and the
+ *  lock dies with it (the server clears it when the room restarts from empty).
+ *  Private is set only at the start, so the door can leave it (opening the
+ *  room) but never enter it. Local-first: the store flips on click
+ *  (callRooms), the echo reconciles. */
+export function useRoomDoor(roomKey: string | null): {
+  door: RoomDoor;
+  setDoor: (door: Exclude<RoomDoor, "private">) => void;
 } {
-  const room = useLiveRoom(roomKey);
-  const locked = !!room?.locked;
+  const door = useInboxStore((st: any) => {
+    const r = roomKey ? st.callRooms?.[roomKey] : undefined;
+    return r?.private && r?.locked ? "private" : r?.locked ? "locked" : "team";
+  }) as RoomDoor;
   return {
-    locked,
-    toggle: () => {
-      if (roomKey) useInboxStore.getState().setRoomLocked(roomKey, !locked);
+    door,
+    setDoor: (next) => {
+      if (roomKey && next !== door) useInboxStore.getState().setRoomLocked(roomKey, next === "locked");
     },
-    title: locked
-      ? "Locked — teammates must knock. Click to open the room again"
-      : "Open room — any teammate can walk in. Click to lock it",
   };
 }

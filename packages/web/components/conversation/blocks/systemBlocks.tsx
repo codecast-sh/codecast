@@ -840,7 +840,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, variant = "se
         ) : name ? (
           <span data-cc-row-text className="text-xs font-medium text-sol-cyan/90">{name}</span>
         ) : (
-          <span data-cc-row-text className="text-xs text-sol-text-muted">another session</span>
+          <span data-cc-row-text className="text-xs text-sol-text-muted">codecast</span>
         )}
         {/* The sender's identity says WHO wrote this; this says WHERE. Naming a
             session alone lands a reader at its tail, which is almost never the

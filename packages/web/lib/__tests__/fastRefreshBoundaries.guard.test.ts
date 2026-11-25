@@ -118,7 +118,6 @@ const ALLOWED = new Set<string>([
   "components/calls/MeetingOfferToast.tsx",
   "components/calls/RecordingMark.tsx",
   "components/calls/RoomRecording.tsx",
-  "components/changes/EvidenceDrawer.tsx",
   "components/changes/StoryParts.tsx",
   "components/changes/useChangesKeys.tsx",
   "components/cloudAgents/index.tsx",

@@ -50,6 +50,18 @@ export type Device = {
   update_requested_at?: number;
   update_state?: "requested" | "installing" | "failed";
   update_error?: string;
+  /** An MCP server sign-in running on this machine (convex/mcpLogin.ts). */
+  mcp_login_flow?: {
+    status: "pending" | "confirmed" | "rejected";
+    client: "claude" | "codex";
+    server: string;
+    url?: string;
+    notice?: string;
+    notice_at?: number;
+    reason?: string;
+    started_at: number;
+    finished_at?: number;
+  };
   /** When this daemon process started (devices.listDevices). */
   daemon_started_at?: number;
   /** Per-repo git health on this device (daemon gitPlane sweep). */

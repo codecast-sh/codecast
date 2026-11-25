@@ -107,6 +107,7 @@ import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
 import { useSyncLineDecisionsEverywhere } from "../hooks/useSyncSessionDecisions";
 import { useSyncOpenDecisionDetails } from "../hooks/useSyncDecisionDetail";
+import { DecisionPagesFeeder, DecisionFramesPreload } from "./decisions/DecisionPagePrefetch";
 import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
@@ -133,6 +134,7 @@ import { ModRuntimes } from "./mods/ModRuntimes";
 import { useSyncMods } from "../lib/mods/useMods";
 import { resolveCommentsEnabled } from "../lib/uiPrefDefaults";
 import { lazyNamed } from "../lib/lazyNamed";
+import { InstalledAppsFacts } from "./installedApps/InstalledAppsFacts";
 
 const SettingsModal = lazyNamed(() => import("./settings/SettingsModal"), "SettingsModal");
 const CallSyncEffects = lazyNamed(() => import("./calls/CallSyncEffects"), "CallSyncEffects");
@@ -542,7 +544,8 @@ function HostFeeders() {
   // Every run the store holds as live, checked against the server's live runs, so no surface shows an ended run as
   // live; a leaf of its own, so its wakes re-render nothing here.
   // Machine resource reports (one feeder per device): the pressure notice and /resources read them.
-  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /><SessionCardPullRequestsFeeder /></>;
+  // Installed apps: each one's page facts (version, relation, policy) handed to the desktop's main process, which has no sign-in.
+  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /><SessionCardPullRequestsFeeder /><InstalledAppsFacts /><DecisionPagesFeeder /></>;
 }
 
 // The pull requests every session card draws as chips (lib/sessionPullRequests):
@@ -585,6 +588,7 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
     <LandedReachFeeder />
     <VisibleOwnersFeeder />
     <InboxWarmLoop />
+    <DecisionFramesPreload />
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}

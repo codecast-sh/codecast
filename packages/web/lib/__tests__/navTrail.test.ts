@@ -157,5 +157,8 @@ describe("placeOf", () => {
   test("a header whose title already names a crumb draws no crumbs", () => {
     expect(crumbsForTitle(placeOf("/ops/issues/eg-3").crumbs, "Ops")).toEqual([]);
     expect(crumbsForTitle(placeOf("/tasks/ct-1").crumbs, "Fix login").map((c) => c.label)).toEqual(["Tasks"]);
+    // The way back already names the lone crumb's place: said once.
+    expect(crumbsForTitle([{ label: "Org", href: "/org" }], "Samvit", "Org")).toEqual([]);
+    expect(crumbsForTitle([{ label: "Org", href: "/org" }], "Samvit", "Inbox").map((c) => c.label)).toEqual(["Org"]);
   });
 });

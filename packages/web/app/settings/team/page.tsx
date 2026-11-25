@@ -31,6 +31,7 @@ import { TeamReadKeys } from "../../../components/settings/TeamReadKeys";
 import { TeamTemplateLearning } from "../../../components/settings/TeamTemplateLearning";
 import { TeamModelBudget } from "../../../components/settings/TeamModelBudget";
 import { TeamDomainAccess } from "../../../components/settings/TeamDomainAccess";
+import { TeamAppsPolicy } from "../../../components/installedApps/TeamAppsPolicy";
 import { Github, TriangleAlert, Users } from "lucide-react";
 import { SelectBox } from "../../../components/ui/select-box";
 import {
@@ -507,6 +508,8 @@ export default function TeamPage() {
       {effectiveTeamId && <TeamTemplateLearning teamId={String(effectiveTeamId)} />}
 
       {effectiveTeamId && <TeamModelBudget teamId={effectiveTeamId} isAdmin={isAdmin} />}
+
+      {effectiveTeamId && <TeamAppsPolicy teamId={String(effectiveTeamId)} teamName={team.name} isAdmin={isAdmin} />}
 
       {effectiveTeamId && (
         <TeamTaskStatusEditor

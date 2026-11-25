@@ -22,7 +22,7 @@ import { useRunnerSilence } from "../hooks/useRunnerSilence";
 import { HOSTED_IMAGE_REFUSAL } from "@codecast/shared/contracts/assistant";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
-import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
+import { formatCountdown, HIBERNATED_COPY, personalSettingOn } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
 import { cancelPendingSend } from "../lib/cancelPendingSend";
@@ -339,8 +339,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     (t) => (limitParkedAt == null ? "" : limitResetAt != null ? formatCountdown(limitResetAt - t) + (t >= limitResetAt ? "!" : "") : "parked"),
     30_000,
   );
-  // Suggestion pills pref — off by default; the strip mounts only when on.
-  const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  // Suggested replies: the person's own setting, else the workspace's team default.
+  const suggestionsEnabled = useInboxStore((s) => personalSettingOn(s.clientState?.ui?.composer_suggestions, s.teams || [], s.clientState?.ui?.active_team_id, "composer_suggestions"));
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
     const teamId = mentionTeamId

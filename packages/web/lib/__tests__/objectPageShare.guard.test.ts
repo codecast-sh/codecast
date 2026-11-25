@@ -29,6 +29,8 @@ const ENTITY_PAGES: Record<EntityType, Page> = {
   call: ["app/calls/page.tsx"],
   source: { none: "a source opens the Ops timeline filtered to it (/ops?source=src-N), a list view, not a page of its own" },
   replay: ["components/ops/ReplayIssues.tsx", "components/ops/ReplayPlayer.tsx"],
+  issue: ["components/ops/IssuePage.tsx"],
+  metric: ["components/ops/MetricPage.tsx"],
   // A role's page is its standing conversation.
   role: ["app/inbox/QueuePageClient.tsx"],
   person: ["app/team/[username]/page.tsx"],
@@ -42,8 +44,6 @@ const ENTITY_PAGES: Record<EntityType, Page> = {
 const OTHER_PAGES = [
   "app/workflows/runs/[id]/page.tsx",
   "components/decisions/StackPage.tsx",
-  "components/ops/IssuePage.tsx",
-  "components/ops/MetricPage.tsx",
   "components/mods/ObjectPage.tsx",
   "components/mods/ModPanePage.tsx",
   "components/repo/RepoChrome.tsx",

@@ -15,6 +15,8 @@
 // undo could not put the server back where it was (a field its mutation cannot
 // clear, a prior state the inverse verb does not produce); each such case says
 // why at its site.
+import { roleManagers } from "@codecast/shared/contracts/orgLead";
+import { teamAppsPolicy } from "@codecast/shared/contracts/pageApp";
 import type { CellChange, Invocation, UndoCtx, UndoSpec } from "@platform/engine";
 import { DEFAULT_TASK_STATUS_NAMES, teamTaskStatuses, waitClause, waitTargetOf, type TaskWait } from "@codecast/shared/tasks";
 import { targetDayOf } from "@codecast/shared/time";
@@ -22,6 +24,7 @@ import { INITIATIVE_RECORD_NOUN, type InitiativeRecordOp } from "@codecast/share
 import { assigneeLabelOf, resolveAssigneeInfo } from "../../../lib/liveEntities";
 import type { UndoPolicy } from "../policy";
 import type { OrgReparentSessionTarget } from "../../orgSlice";
+import { managersOfPerson, rolePeopleOnTree } from "../../orgTreeMoves";
 import { counted, quoted, sessionTitle } from "../labels";
 import { isThinBefore, withSessionsPrior } from "../thinConversation";
 import { undoBlockedByWire } from "../writers";
@@ -855,6 +858,26 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
       },
     },
   },
+  // Each field the call set goes back to what the row held, read through the same defaults the server applies (teamAppsPolicy).
+  setTeamAppsPolicy: {
+    spec: {
+      label: (ctx) => {
+        const f = ctx.args[1] as { install?: boolean; full_access?: boolean };
+        if (f.full_access !== undefined) return `Turned full access for installed apps ${f.full_access ? "on" : "off"}`;
+        return `Turned installing pages as apps ${f.install ? "on" : "off"}`;
+      },
+      inverse: (ctx) => {
+        const before = teamRow(ctx.before, ctx.args[0] as string);
+        if (!before) return null;
+        const f = ctx.args[1] as { install?: boolean; full_access?: boolean };
+        const prior = teamAppsPolicy(before);
+        return [call("setTeamAppsPolicy", ctx.args[0], {
+          ...(f.install !== undefined ? { install: prior.install } : {}),
+          ...(f.full_access !== undefined ? { full_access: prior.fullAccess } : {}),
+        })];
+      },
+    },
+  },
   setTeamWorkspaceAgent: {
     spec: {
       label: () => "Changed the workspace's agent",
@@ -901,7 +924,41 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
       label: (ctx) => `Moved ${personName(ctx.before, ctx.args[1] as string)} in the org`,
       inverse: (ctx) => {
         const was = (ctx.before as any)?.orgTree?.people?.find((p: any) => p.user_id === ctx.args[1]);
-        return was ? [call("reparentOrgPerson", ctx.args[0], ctx.args[1], was.reports_to_user_id ?? null)] : null;
+        return was ? [call("reparentOrgPerson", ctx.args[0], ctx.args[1], managersOfPerson(was))] : null;
+      },
+    },
+  },
+  setOrgRoleManagers: {
+    spec: {
+      label: (ctx) => `Changed whom ${roleName(ctx.before, ctx.args[0] as string)} reports to`,
+      inverse: (ctx) => {
+        const was = (ctx.before as any)?.orgTree?.roles?.find((r: any) => r._id === ctx.args[0]);
+        return was ? [call("setOrgRoleManagers", ctx.args[0], roleManagers(was))] : null;
+      },
+    },
+  },
+  setOrgPersonProfile: {
+    spec: {
+      label: (ctx) => `Edited ${personName(ctx.before, ctx.args[1] as string)}'s profile`,
+      inverse: (ctx) => {
+        const [teamId, userId, patch] = ctx.args as [string, string, Record<string, unknown>];
+        const was = (ctx.before as any)?.orgTree?.people?.find((p: any) => p.user_id === userId);
+        const about = (ctx.before as any)?.orgPersonDetails?.[`${teamId}:${userId}`]?.about;
+        // An `about` edit made before its detail row arrived has no known
+        // before; undoing it would clear the stored text, so it has no undo.
+        if (!was || ("about" in (patch ?? {}) && about === undefined)) return null;
+        const back: Record<string, unknown> = {};
+        for (const k of Object.keys(patch ?? {})) back[k] = k === "about" ? about : was[k] ?? (k === "labels" ? [] : "");
+        return [call("setOrgPersonProfile", teamId, userId, back)];
+      },
+    },
+  },
+  setRolePeople: {
+    spec: {
+      label: (ctx) => `Changed who reports to ${roleName(ctx.before, ctx.args[1] as string)}`,
+      inverse: (ctx) => {
+        const tree = (ctx.before as any)?.orgTree;
+        return tree ? [call("setRolePeople", ctx.args[0], ctx.args[1], rolePeopleOnTree(tree, ctx.args[1] as string).map((p) => p.user_id))] : null;
       },
     },
   },

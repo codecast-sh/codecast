@@ -17,7 +17,9 @@ export type SettingsSectionId =
   | "notifications"
   | "sounds"
   | "keyboard"
+  | "editor"
   | "calls"
+  | "voice"
   | "team"
   | "managed-devices"
   | "access-log"
@@ -37,6 +39,7 @@ export type SettingsSectionId =
   | "migrate"
   | "desktop"
   | "apps"
+  | "installed-apps"
   | "connected-agents";
 
 export const DEFAULT_SETTINGS_SECTION: SettingsSectionId = "general";
@@ -49,7 +52,9 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/notifications": "notifications",
   "/settings/sounds": "sounds",
   "/settings/keyboard": "keyboard",
+  "/settings/editor": "editor",
   "/settings/calls": "calls",
+  "/settings/voice": "voice",
   "/settings/team": "team",
   "/settings/managed-devices": "managed-devices",
   "/settings/access-log": "access-log",
@@ -70,6 +75,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/migrate": "migrate",
   "/settings/desktop": "desktop",
   "/settings/apps": "apps",
+  "/settings/installed-apps": "installed-apps",
   "/settings/connected-agents": "connected-agents",
 };
 

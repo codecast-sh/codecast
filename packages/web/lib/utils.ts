@@ -78,6 +78,11 @@ export function inferHomeDir(paths: Array<string | undefined>): string | undefin
   return undefined;
 }
 
+// An absolute path with its home directory written "~" ("/Users/a/x" → "~/x").
+export function shortenHome(path: string): string {
+  return path.replace(/^\/(Users|home)\/[^/]+/, "~");
+}
+
 // The parent directory of an absolute path ("/a/b/c" → "/a/b", "/a" → "/").
 export function parentDir(abs: string): string {
   const i = abs.replace(/\/$/, "").lastIndexOf("/");

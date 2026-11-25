@@ -17,7 +17,9 @@ import { useWatchEffect } from "./useWatchEffect";
 // Broadcast (writing our own row: heartbeat + draft pushes + leave-cleanup) is
 // gated: we write iff `forceBroadcast` is set OR someone else is already present.
 // So a passive solo viewer writes nothing, but once anyone joins, everyone there
-// announces themselves. The query is gated by `enabled` (skip until authed;
+// announces themselves. An id the server refuses (a deleted conversation, lost
+// access) writes nothing either: its heartbeat would fail every 3s for as long
+// as the tab stays open. The query is gated by `enabled` (skip until authed;
 // getPresence errors during the auth-loading window otherwise).
 
 export type PresenceAnchor = { message_id: string; offset: number };
@@ -46,10 +48,21 @@ const NO_ROWS: PresenceRow[] = [];
 
 /** Read-only: who else is on a doc id. Several surfaces may read one id; only one broadcasts. */
 export function usePresenceRows(docId: string, enabled: boolean): PresenceRow[] {
-  // Presence only decorates the editor: when the doc is gone or the viewer
-  // lost access the query throws NOT_FOUND, and the editor's own doc read says
-  // so. The avatars go empty rather than taking the surface down.
-  return (useQueryNoThrow(api.docSync.getPresence, enabled ? { doc_id: docId } : "skip").data ?? NO_ROWS) as PresenceRow[];
+  return usePresence(docId, enabled).rows;
+}
+
+// Presence only decorates the editor: when the doc is gone or the viewer lost
+// access the query throws NOT_FOUND, and the editor's own doc read says so. The
+// avatars go empty rather than taking the surface down, and `refused` tells a
+// broadcaster that every write to this id would be refused by the same gate.
+function usePresence(docId: string, enabled: boolean): { rows: PresenceRow[]; refused: boolean } {
+  const { data, error } = useQueryNoThrow(api.docSync.getPresence, enabled ? { doc_id: docId } : "skip");
+  return { rows: (data ?? NO_ROWS) as PresenceRow[], refused: error !== undefined };
+}
+
+/** Write our own row iff the server accepts this id and we must announce ourselves or someone else is here. */
+export function shouldBroadcast(enabled: boolean, forceBroadcast: boolean, othersPresent: number, refused: boolean): boolean {
+  return enabled && !refused && (forceBroadcast || othersPresent > 0);
 }
 
 export function useDocPresence(opts: {
@@ -67,8 +80,8 @@ export function useDocPresence(opts: {
   const { docId, draftText = "", anchor = null, cursor = null, inDraft = false, enabled, forceBroadcast } = opts;
   const update = useMutation(api.docSync.updatePresence);
   const remove = useMutation(api.docSync.removePresence);
-  const present = usePresenceRows(docId, enabled);
-  const broadcast = enabled && (forceBroadcast || present.length > 0);
+  const { rows: present, refused } = usePresence(docId, enabled);
+  const broadcast = shouldBroadcast(enabled, forceBroadcast, present.length, refused);
 
   const draftRef = useRef(draftText);
   draftRef.current = draftText;

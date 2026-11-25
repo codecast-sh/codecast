@@ -3,6 +3,18 @@ import { parseEntityUrl, CONTEXTUAL_PR_REF_PREFIX, entityTypeFromId, type Entity
 
 const CARD_PREFIX = "card:";
 
+/**
+ * The types an agent's message and a doc draw as a card when the reference
+ * stands alone on its line: a staffing proposal (org-staffing.md S24), a call
+ * (`cl-42`, or `cl-42:15-25` the words said then), a replay (`rp-12`, or
+ * `rp-12@1:23` the recorded page playing from that second), the rest of Ops
+ * (`eg-N` an issue's status, count and last 72 hours, `mw-N` a metric watch's
+ * live chart, `src-N` a source, `dp-N` a deploy), and a flow drawn step by
+ * step. A run of them on consecutive lines is a live dashboard. A lone task id
+ * keeps the inline pill it always had; team chat promotes every type.
+ */
+export const ALONE_CARD_TYPES: readonly EntityType[] = ["proposal", "call", "replay", "issue", "metric", "source", "deploy", "flow"];
+
 export type EntityCardsOptions = {
   /** Only these types are promoted; every other reference stays a pill. A
    *  conversation transcript promotes a staffing proposal alone (an agent's

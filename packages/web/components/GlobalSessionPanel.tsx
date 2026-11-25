@@ -398,6 +398,37 @@ function BlockedSessionsBanner({
     else next.add(id);
     setPicked(next);
   };
+  // Tick or untick every pickable row in a group at once.
+  const togglePickAll = (ids: string[]) => {
+    const next = new Set(chosenIds);
+    const all = ids.every((id) => next.has(id));
+    for (const id of ids) {
+      if (all) next.delete(id);
+      else next.add(id);
+    }
+    setPicked(next);
+  };
+  const pickAllRow = (rows: InboxSession[]) => {
+    const ids = rows.filter((sess) => pickableIds.has(sess._id)).map((sess) => sess._id);
+    if (ids.length < 2) return null;
+    const ticked = ids.filter((id) => chosenIds.has(id)).length;
+    return (
+      <label className="flex w-full cursor-pointer items-center gap-2 py-1 text-meta text-sol-text-dim hover:text-sol-text">
+        <input
+          type="checkbox"
+          checked={ticked === ids.length}
+          ref={(el) => {
+            if (el) el.indeterminate = ticked > 0 && ticked < ids.length;
+          }}
+          disabled={busy !== null}
+          onChange={() => togglePickAll(ids)}
+          className="h-3 w-3 shrink-0 accent-amber-500"
+          aria-label="Include every session in the restart"
+        />
+        <span className="tabular-nums">{ticked} of {ids.length}</span>
+      </label>
+    );
+  };
   // Rows show their cause only when the causes differ; otherwise the headline says it.
   const mixedCauses = new Set(blocked.map((sess) => sess.pending_api_error_kind)).size > 1;
 
@@ -716,7 +747,7 @@ function BlockedSessionsBanner({
       <button
         onClick={() => handleAcknowledge([sess._id])}
         className="shrink-0 rounded p-0.5 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:bg-sol-bg-alt hover:text-sol-text transition-opacity"
-        title="Never restart this session: remove it from this list"
+        title="Never restart this session: remove it from this list (a line step's session is stopped, so its run moves on)"
         aria-label="Dismiss this session"
       >
         <X className="h-3 w-3" />
@@ -831,6 +862,7 @@ function BlockedSessionsBanner({
                       </div>
                     )}
                     <div className="mt-1 max-h-48 overflow-y-auto scrollbar-auto divide-y divide-sol-border/30">
+                      {canAct && pickAllRow(rows)}
                       {rows.map((sess) => sessionRow(sess, canAct, workers > 0 && plain > 0))}
                     </div>
                   </>
@@ -841,7 +873,7 @@ function BlockedSessionsBanner({
         </div>
       )}
       {expanded && unlaned.length > 0 && (
-        <div className="mt-1.5 divide-y divide-sol-border/30">{unlaned.map((sess) => sessionRow(sess, pickableIds.has(sess._id), true))}</div>
+        <div className="mt-1.5 divide-y divide-sol-border/30">{pickAllRow(unlaned)}{unlaned.map((sess) => sessionRow(sess, pickableIds.has(sess._id), true))}</div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <button
@@ -862,8 +894,7 @@ function BlockedSessionsBanner({
         )}
         <button
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
-          disabled={busy !== null}
-          title="Never restart these — clear all of them from the blocked set permanently"
+          title="Never restart these: clear all of them from the blocked set permanently (line steps' sessions are stopped, so their runs move on)"
           className="ml-auto rounded px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
         >
           {blocked.length === 1 ? "Dismiss" : "Dismiss all"}

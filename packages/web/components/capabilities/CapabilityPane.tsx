@@ -15,6 +15,8 @@ import { confidenceFromKind, confidenceFromSurfaces, kindMeta, type CapabilityDe
 import { ReachControl } from "./KitList";
 import { setKitReach, useKitReach, type KitItem, type KitConflict, type KitWorkspace, type PendingConsent } from "./useKit";
 import { teamMembersOf } from "../../lib/activeTeam";
+import { Button } from "../ui/button";
+import { McpSignInDialog, type McpSignInTarget } from "./McpSignInDialog";
 
 export type Selection = { key: string };
 
@@ -77,6 +79,7 @@ export function CapabilityPane({
       </div>
 
       {devices.length > 0 && <Machines row={row} devices={devices} />}
+      {row && kind === "mcp" && <McpSignIns row={row} devices={devices} />}
 
       {kitItem ? (
         <KitBody item={kitItem} />
@@ -287,6 +290,41 @@ function Machines({ row, devices }: { row: FleetGridRow | undefined; devices: Ca
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Each machine whose agents reach this MCP server over the network, with a sign-in per agent CLI. */
+function McpSignIns({ row, devices }: { row: FleetGridRow; devices: CapabilityDevice[] }) {
+  const [target, setTarget] = useState<McpSignInTarget | null>(null);
+  const machines = devices.flatMap((d) => {
+    const signIn = row.byDevice[d.deviceId]?.signIn;
+    return signIn?.length ? [{ device: d, signIn }] : [];
+  });
+  if (machines.length === 0) return null;
+  return (
+    <div className="px-4 py-3 border-b border-sol-border space-y-1.5 text-meta">
+      {machines.map(({ device, signIn }) => (
+        <div key={device.deviceId} className="flex items-center gap-2">
+          <DeviceDot online={device.online} />
+          <span className="text-sol-text truncate">{device.name}</span>
+          {signIn.some((s) => s.needed) && <span className="text-sol-yellow">Needs sign-in</span>}
+          <div className="flex-1" />
+          {signIn.map((s) => (
+            <Button
+              key={s.client}
+              variant={s.needed ? "amber" : "outline"}
+              size="xs"
+              disabled={!device.online}
+              title={device.online ? undefined : `${device.name} is offline`}
+              onClick={() => setTarget({ deviceId: device.deviceId, deviceName: device.name, server: row.identity, client: s.client, cwd: s.cwd })}
+            >
+              {signIn.length > 1 ? `Sign in · ${s.client === "codex" ? "Codex" : "Claude"}` : "Sign in"}
+            </Button>
+          ))}
+        </div>
+      ))}
+      {target && <McpSignInDialog target={target} onClose={() => setTarget(null)} />}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cable, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck, ChevronLeft } from "lucide-react";
+  Search, Volume2, Keyboard, Code2, Video, AudioLines, ArrowRightLeft, MonitorSmartphone, AppWindow, Unplug, Cable, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck, ChevronLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -17,7 +17,9 @@ import AccountsPanel from "../../app/settings/accounts/page";
 import NotificationsPanel from "../../app/settings/notifications/page";
 import SoundsPanel from "../../app/settings/sounds/page";
 import KeyboardPanel from "../../app/settings/keyboard/page";
+import EditorPanel from "../../app/settings/editor/page";
 import CallsPanel from "../../app/settings/calls/page";
+import VoicePanel from "../../app/settings/voice/page";
 import TeamPanel from "../../app/settings/team/page";
 import ManagedDevicesPanel from "../../app/settings/managed-devices/page";
 import AccessLogPage from "../../app/settings/access-log/page";
@@ -37,6 +39,7 @@ import DevicesPanel from "../../app/settings/devices/page";
 import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
 import AppsPanel from "../../app/settings/apps/page";
+import InstalledAppsPanel from "../../app/settings/installed-apps/page";
 import ConnectedAgentsPanel from "../../app/settings/connected-agents/page";
 import PlanPanel from "../../app/settings/plan/page";
 import { modernButton, modernDialog, modernField, modernLook, modernMenuLabel, modernScrim } from "../ui/modernLook";
@@ -48,7 +51,9 @@ const PANELS: Record<PanelId, React.ComponentType> = {
   "notifications": NotificationsPanel,
   "sounds": SoundsPanel,
   "keyboard": KeyboardPanel,
+  "editor": EditorPanel,
   "calls": CallsPanel,
+  "voice": VoicePanel,
   "team": TeamPanel,
   "managed-devices": ManagedDevicesPanel,
   "access-log": AccessLogPage,
@@ -67,6 +72,7 @@ const PANELS: Record<PanelId, React.ComponentType> = {
   "migrate": MigratePanel,
   "desktop": DesktopPanel,
   "apps": AppsPanel,
+  "installed-apps": InstalledAppsPanel,
   "connected-agents": ConnectedAgentsPanel,
 };
 
@@ -101,9 +107,12 @@ const GROUPS: { label: string; sections: NavDef[] }[] = [
       { id: "notifications", label: "Notifications", icon: Bell, desc: "What reaches you, and on which device", keywords: "push email digest mentions mute presence away" },
       { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
       { id: "keyboard", label: "Keyboard", icon: Keyboard, desc: "Every shortcut, and the keys you'd rather press", keywords: "shortcuts keys hotkeys keybindings rebind chords customize" },
+      { id: "editor", label: "Editor", icon: Code2, desc: "Vim and your vimrc, how code looks and saves, language servers", keywords: "code editor vim vimrc neovim font size line height relative numbers wrap whitespace autosave format on save tab size lsp language servers overlay" },
       { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
+      { id: "voice", label: "Voice", icon: AudioLines, desc: "Recognizing your voice in recordings", keywords: "voice recognition recognize voiceprint samples speaker who said biometric voice note recording delete" },
       { id: "accounts", label: "Accounts", icon: KeyRound, desc: "Sign-in identities linked to this account", keywords: "github oauth email login delete danger" },
       { id: "apps", label: "Apps", icon: MonitorSmartphone, desc: "Codecast on your Mac, your iPhone and in Chrome", keywords: "desktop mac macos download dmg ios iphone ipad app store mobile phone push chrome extension install" },
+      { id: "installed-apps", label: "Installed apps", icon: AppWindow, desc: "Pages installed as apps on this computer, and what each may do", keywords: "install page app desktop dock taskbar permissions grants notifications menu bar tray shortcuts full access uninstall review" },
       { id: "connected-agents", label: "Connected agents", icon: Cable, desc: "Claude, Cursor, Codex and other agents that read codecast as you", keywords: "mcp claude cursor codex chatgpt connector oauth outside agent connect disconnect revoke address" },
     ],
   },

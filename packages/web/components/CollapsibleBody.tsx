@@ -90,6 +90,7 @@ export function CollapsibleBody({
   expandLabel = "Expand",
   collapseLabel = "Collapse",
   openOnFocus = false,
+  more = false,
   children,
 }: {
   collapsedHeight?: number;
@@ -102,6 +103,9 @@ export function CollapsibleBody({
   /** Open when focus enters the body. An editable body (a description, a
    *  form) must not stay clipped around the caret the reader just placed. */
   openOnFocus?: boolean;
+  /** The open body holds more than the clipped one shows even when the clip fits (a
+   *  preview that leaves out blocks), so the toggle stays. */
+  more?: boolean;
   children: React.ReactNode | ((expanded: boolean) => React.ReactNode);
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -126,7 +130,7 @@ export function CollapsibleBody({
       <div style={clipped ? { maxHeight: collapsedHeight, overflow: "hidden", ...clipFade() } : undefined}>
         <div ref={innerRef} data-collapsible-body="">{typeof children === "function" ? children(expanded) : children}</div>
       </div>
-      {overflows && (
+      {(overflows || more) && (
         <button
           onClick={() => setExpanded((e) => !e)}
           className={`shrink-0 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors ${toggleClassName}`}

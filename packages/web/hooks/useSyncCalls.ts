@@ -88,3 +88,12 @@ export function useCallPlaces(calls: any[]): Record<string, CallPlace | null> {
     return out;
   }, [ids, data, error]);
 }
+
+/** The viewer's own voice samples: how many, how many seconds, the last
+ *  added (voiceprints.myVoiceprint, registry `myVoiceprint`). undefined until
+ *  the cache or the server has it. The switch is currentUser.voice_id_enabled.
+ *  Write through the store's setVoiceIdEnabled and deleteMyVoiceprints. */
+export function useMyVoiceprint(): { count: number; seconds: number; last_added_at: number | null } | undefined {
+  useSyncCollection("myVoiceprint", api.voiceprints.myVoiceprint, {});
+  return useInboxStore((s: any) => s.myVoiceprint ?? undefined);
+}

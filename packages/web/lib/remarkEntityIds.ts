@@ -356,12 +356,12 @@ export function remarkEntityIds() {
         // on surfaces that render links plainly, and EntityAwareLink upgrades
         // it with the session's working directory when it has one.
         FILE_PATH_SCAN_RE,
-        (full: string, rawPath: string, line?: string) => {
-          const mention = mentionFromMatch(full, rawPath, line);
+        (full: string, rawPath: string, line?: string, column?: string) => {
+          const mention = mentionFromMatch(full, rawPath, line, column);
           if (!mention) return false;
           const link = {
             type: "link" as const,
-            url: filesHref({ localPath: mention.path, line: mention.line }),
+            url: filesHref({ localPath: mention.path, line: mention.line, column: mention.column }),
             children: [{ type: "text" as const, value: mention.text }],
           };
           return mention.rest ? [link, { type: "text" as const, value: mention.rest }] : link;

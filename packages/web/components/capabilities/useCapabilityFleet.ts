@@ -42,12 +42,14 @@ type ObservedEntry = {
    *  (`inventory.ts`, the `meta` folding at the end of `readInventory`). */
   meta?: unknown;
   cost?: unknown;
+  /** The agent client that reported it; absent on rows from older daemons. */
+  client?: unknown;
 };
 
 const str = (v: unknown): string | undefined =>
   typeof v === "string" && v !== "" ? v : undefined;
 
-function toInventoryItem(raw: ObservedEntry, rowScopeKey: string): FleetInventoryItem | null {
+function toInventoryItem(raw: ObservedEntry, rowScopeKey: string, rowClient?: string): FleetInventoryItem | null {
   const kind = str(raw.kind);
   const name = str(raw.name);
   if (!kind || !name) return null;
@@ -81,6 +83,9 @@ function toInventoryItem(raw: ObservedEntry, rowScopeKey: string): FleetInventor
     source: str(raw.source),
     command: str(meta.command),
     url: str(meta.url),
+    transport: str(meta.transport),
+    auth: str(meta.auth),
+    client: str(raw.client) ?? rowClient,
     event: str(meta.event),
     cost: (raw.cost ?? undefined) as FleetInventoryItem["cost"],
   };
@@ -120,7 +125,7 @@ export function buildFleetReports(
     if (parsed.unreadable || parsed.withheld) continue;
     const items = reports[row.device_id] ?? (reports[row.device_id] = []);
     for (const entry of parsed.entries) {
-      const item = toInventoryItem(entry as ObservedEntry, row.scope_key ?? "");
+      const item = toInventoryItem(entry as ObservedEntry, row.scope_key ?? "", row.client);
       if (item) items.push(item);
     }
   }

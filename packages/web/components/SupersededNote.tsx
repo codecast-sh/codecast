@@ -15,8 +15,10 @@ function hrefOf(by: string): { href: string; label: string } | null {
   return null;
 }
 
-export function SupersededNote({ superseded, className }: { superseded: NonNullable<Superseded>; className?: string }) {
-  const to = superseded.by ? hrefOf(superseded.by) : null;
+/** `runId`: the run the artifact belongs to, opened when nothing replaced it (a station removed, a line changed, a
+ *  run moved on), so the note always leads somewhere. */
+export function SupersededNote({ superseded, runId, className }: { superseded: NonNullable<Superseded>; runId?: string | null; className?: string }) {
+  const to = superseded.by ? hrefOf(superseded.by) : runId ? { href: `/workflows/runs/${runId}`, label: "its run" } : null;
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-sol-text-dim", className)} data-superseded={superseded.why}>
       <span>{superseded.by ? "Replaced" : "Outdated"} · {SUPERSEDED_WORDS[superseded.why]}</span>

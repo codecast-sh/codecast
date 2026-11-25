@@ -186,6 +186,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const AppConsent = lazy(() => import("@/app/apps/consent/[id]/page"));
 const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
@@ -487,6 +488,7 @@ export function App() {
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
               <Route path="call-ring" element={<E name="CallRing"><CallRing /></E>} />
+              <Route path="apps/consent/:id" element={<E name="AppConsent"><AppConsent /></E>} />
               <Route path="agent-dock" element={<E name="AgentDock"><AgentDock /></E>} />
               <Route path="share-cursors" element={<E name="ShareCursors"><ShareCursors /></E>} />
             </Route>

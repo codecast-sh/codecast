@@ -8,6 +8,7 @@ import {
   Activity, Globe, LayoutList, MonitorDot, Palette, User, Volume2,
 } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { personalSettingOn } from "@codecast/shared/contracts";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
@@ -249,7 +250,7 @@ const INTERFACE_TOGGLES: Array<{
   locked?: (ui: ClientUI | undefined) => { on: boolean; why: string } | undefined;
   /** The value when it is not a plain stored boolean (a default that depends
    *  on the style). Overrides `defaultOn`. */
-  resolve?: (ui: ClientUI | undefined) => boolean;
+  resolve?: (ui: ClientUI | undefined, teams: TeamsWithFeatures) => boolean;
 }> = [
   { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, locked: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? { on: true, why: "Always on in the Minimal style" } : undefined) },
   { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
@@ -262,8 +263,15 @@ const INTERFACE_TOGGLES: Array<{
   { prefKey: "show_branch_pill", label: "Branch pill", desc: "Show a pill on inbox cards when a session sits off the default branch: its branch, or the short commit when its checkout is detached", resolve: resolveShowBranchPill },
   { prefKey: "comments_enabled", label: "Comments", desc: "Show the tools to leave comments on conversations. You can always read and reply to comments others leave, even with this off.", resolve: resolveCommentsEnabled },
   { prefKey: "auto_open_browser_panes", label: "Open agent pane offers", desc: "When an agent offers a page (cast browser pane), open it beside the conversation you are reading instead of waiting for a click" },
-  { prefKey: "composer_suggestions", label: "Suggested replies", desc: "One-tap reply suggestions above the composer when a session waits on you, predicted from the session and how you usually reply" },
+  { prefKey: "composer_suggestions", label: "Suggested replies", desc: "One-tap reply suggestions above the composer when a session waits on you, predicted from the session and how you usually reply", resolve: resolveComposerSuggestions },
 ];
+
+type TeamsWithFeatures = Parameters<typeof personalSettingOn>[1];
+
+/** Suggested replies: your own choice, else the workspace's team default. */
+function resolveComposerSuggestions(ui: ClientUI | undefined, teams: TeamsWithFeatures): boolean {
+  return personalSettingOn(ui?.composer_suggestions, teams, ui?.active_team_id, "composer_suggestions");
+}
 
 function InterfaceSection() {
   return (
@@ -278,7 +286,7 @@ function InterfaceSection() {
 
 function PrefToggleRow(t: (typeof INTERFACE_TOGGLES)[number]) {
   const enabled = useInboxStore((s) => {
-    if (t.resolve) return t.resolve(s.clientState?.ui);
+    if (t.resolve) return t.resolve(s.clientState?.ui, s.teams || []);
     const v = s.clientState?.ui?.[t.prefKey];
     return t.defaultOn ? v !== false : v === true;
   });

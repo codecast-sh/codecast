@@ -1,5 +1,6 @@
 import rehypeHighlight from "rehype-highlight";
 import { entityRemarkPlugins } from "./remarkEntityIds";
+import { ALONE_CARD_TYPES, remarkEntityCards, type EntityCardsOptions } from "./remarkEntityCards";
 import { remarkDrafting } from "./remarkDrafting";
 
 // ---------------------------------------------------------------------------
@@ -67,3 +68,8 @@ export const MD_REHYPE_PLUGINS = [rehypeHighlight];
 // remarkDrafting turns a doc's drafting spans (alternatives, ghosts, Lab
 // flags) into what a reader sees instead of literal tags.
 export const MD_REMARK_PLUGINS = [remarkDrafting, ...entityRemarkPlugins, remarkSanitizeInvisibleUnicode];
+
+/** A doc's reading view (and its public share page): the same, plus a
+ *  reference alone on its line drawn as its live card, as an agent's message
+ *  draws it, so a doc of `mw-N` and `eg-N` lines reads as a live dashboard. */
+export const DOC_MD_REMARK_PLUGINS = [...MD_REMARK_PLUGINS, [remarkEntityCards, { types: ALONE_CARD_TYPES, aloneOnly: true } satisfies EntityCardsOptions]];

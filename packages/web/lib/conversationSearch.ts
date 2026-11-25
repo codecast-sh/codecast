@@ -118,8 +118,11 @@ export function planActivation(hit: Pick<PendingHit, "localIndex" | "jumped">, v
   if (view.expandKey && !view.expanded) return { kind: "expand", key: view.expandKey };
   if (view.sinceLoadedMs >= MOUNT_GRACE_MS && view.markCount === 0) return { kind: "dead" };
   if (!view.mounted) return { kind: "scrollRow", index: view.rowIndex };
-  if (view.markCount === 0) return { kind: "wait" };
-  return { kind: "activate", markIndex: Math.min(hit.localIndex, view.markCount - 1) };
+  // Fewer marks than the server counted: the row has not drawn them all yet,
+  // or never will (text the renderer leaves out). Never settle on another
+  // hit's mark, or stepping would sit on one mark while the counter moves.
+  if (hit.localIndex >= view.markCount) return view.sinceLoadedMs >= MOUNT_GRACE_MS ? { kind: "dead" } : { kind: "wait" };
+  return { kind: "activate", markIndex: hit.localIndex };
 }
 
 /** The hit to try after a dead one, or null once every hit has been tried. */

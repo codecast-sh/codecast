@@ -8,6 +8,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
 import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
+import { DOC_MD_REMARK_PLUGINS } from "../lib/markdownPlugins";
 import { DOC_MD_COMPONENTS } from "../lib/docMarkdownComponents";
 import { DocReviewBar } from "./DocReviewBar";
 import { SlotActions } from "./workspace/Slot";
@@ -32,7 +33,7 @@ import { PageHeader } from "./ui/page-header";
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
 // of MessageReview's measurement container, so every block is hover-quotable.
 const renderDocBlocks = (content: string) => (
-  <MarkdownBlocks content={content} components={DOC_MD_COMPONENTS} />
+  <MarkdownBlocks content={content} components={DOC_MD_COMPONENTS} remarkPlugins={DOC_MD_REMARK_PLUGINS} />
 );
 
 interface DocumentDetailLayoutProps {

@@ -7137,7 +7137,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
    week story's button are left out: their story draws the ring around the
    whole row or card (.chg-story below). The filter field shows focus by its
    border alone. */
-.chg-root :is(button, a, [role=tab]):not(.chg-row [data-story-trigger]):not(button[data-story-key]):focus-visible {
+.chg-root :is(button, a, [role=tab]):focus-visible {
   outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent);
   outline-offset: 2px;
 }
@@ -7229,37 +7229,18 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   background-size: 200% 100%;
   animation: ccShimmer 2.4s linear infinite;
 }
-/* The cursor's tint marks a closed row; an open one is marked by its drawer,
-   and a tint across the drawer would read as a hover state. A card (the lead,
-   the week's biggest story) keeps its own fill and takes a hairline inside its
-   border instead, its drop shadow kept. */
-.chg-row.chg-story[data-focused="true"]:not(:has(> .chg-drawer[data-state="open"])) { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
-.chg-story.bg-sol-card[data-focused="true"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-text) 22%, transparent), var(--tw-shadow, 0 0 transparent); }
-/* A row's head is one control: the whole of it answers the pointer. Its open
-   drawer is reading matter, so it neither points nor tints the row on hover. */
-.chg-row [data-story-trigger] { cursor: pointer; }
-.chg-row .chg-drawer { cursor: auto; }
-.chg-row:not([data-focused="true"]):hover:not(:has(.chg-drawer:hover)) { background: color-mix(in srgb, var(--sol-text) 3%, transparent); transition: background-color 120ms; }
-/* A row's worded risks: the first two show, each clamped at two lines, then
-   "+N more". Its open drawer lifts the clamp and shows them all. */
-.chg-risk-extra { display: none; }
-.chg-row:has(> .chg-drawer[data-state="open"]) .chg-risk-clamp { display: block; -webkit-line-clamp: unset; overflow: visible; }
-.chg-row:has(> .chg-drawer[data-state="open"]) .chg-risk-more { display: none; }
+/* A closed card is one control: it answers the pointer, and the cursor (j/k,
+   a click) wears a faint tint. The open card keeps its own fill. */
+.chg-entry:not([data-open]):hover { background: color-mix(in srgb, var(--sol-text) 3%, transparent); }
+.chg-entry:not([data-open])[data-focused="true"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
 /* References on the page (sessions, pull requests) are quiet ink, not the
    loudest thing on it; they still answer as links on hover and focus. */
 .chg-root .entity-ref { background: transparent; color: color-mix(in srgb, var(--sol-text) 62%, transparent); font-weight: 400; }
 .chg-root .entity-ref:hover, .chg-root .entity-ref:focus-visible { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .chg-story { scroll-margin: 24px 0 96px; }
-/* A row rings when its own trigger has focus, not when a link in its open
-   drawer does: that link wears its own ring, and two would say two things. */
-.chg-row:has(> [data-story-trigger]:focus-visible, > * > [data-story-trigger]:focus-visible), .chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
-/* An opening drawer is at its full height at once, and its contents rise in.
-   Its height never animates: the story that opens keeps its place only if
-   the page measures the drawers at their real size, and a background tab
-   parks an animation on its first frame, which for a height is a drawer
-   shut. A drawer that closes goes at once. */
-.chg-drawer { overflow: hidden; }
-.chg-drawer[data-state="open"] > * { animation: chgRise 180ms ease-out both; }
+/* A change rings when it holds keyboard focus itself, not when a link inside
+   it does: that link wears its own ring, and two would say two things. */
+.chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 30%, transparent); outline-offset: 0; }
 /* Transform with a partial fade: a background tab parks an animation on its
    first frame, and a region parked invisible is a page nobody can read. */
 @keyframes chgRise { from { opacity: 0.35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -7275,8 +7256,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 @keyframes chgPulse { 0% { opacity: 1; } 35% { opacity: 0.3; } 100% { opacity: 1; } }
 .chg-pulse { animation: chgPulse 700ms ease-out 1; }
 @media (prefers-reduced-motion: reduce) {
-  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] > * { animation: none; }
-  .chg-row:not([data-focused="true"]):hover:not(:has(.chg-drawer:hover)) { transition: none; }
+  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar { animation: none; }
 }
 
 /* A quote inside a user's message (ReplyQuote): a ruled, quieter block above the

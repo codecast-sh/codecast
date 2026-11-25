@@ -21,6 +21,7 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DocDates } from "../../../components/DocDates";
 import { ShareControl } from "../../../components/ShareControl";
 import { PageHeader } from "../../../components/ui/page-header";
+import { PersonProfile } from "../../../components/org/PersonProfile";
 
 export default function UserProfilePage() {
   return (
@@ -212,6 +213,9 @@ function UserProfileContent() {
         actions={profileUser.github_username ? <a href={`https://github.com/${profileUser.github_username}`} target="_blank" rel="noopener noreferrer" className="font-mono text-meta text-sol-text-dim hover:text-sol-cyan">@{profileUser.github_username}</a> : null}
         share={<ShareControl label="person" path={`/team/${profileUser.github_username || profileUser._id}`} />}
       />
+
+      {/* What they do and whom they report to (org-people.md P4). */}
+      <PersonProfile userId={String(profileUser._id)} />
 
       {/* Activity heatmap -- derived from feed data */}
       {heatmapData && heatmapData.length > 0 && <ActivityHeatmap data={heatmapData} />}

@@ -4,13 +4,14 @@ import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
-import { useMutation, useConvexAuth } from "convex/react";
+import { useMutation, useConvexAuth, useConvex } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { floorRequestDue, isBelowFloor } from "../lib/desktopFloor";
 import { updateCardState } from "../lib/desktopUpdateState";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
+  desktopApps,
   updateBadge,
   onDeepLink,
   checkDesktopUpdate,
@@ -44,6 +45,8 @@ import { useOsPermission } from "../hooks/useOsPermissions";
 import { soundChatMessage } from "../lib/sounds";
 import { useInboxStore } from "../store/inboxStore";
 import { showBrowserHandoffToast } from "./BrowserHandoffToast";
+import { parseInstallDeepLink } from "../lib/installedApps";
+import { installFromDesktop } from "../hooks/useInstalledApps";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { usePresenceReporter } from "../hooks/usePresenceReporter";
 import { useNotificationDelivery } from "../hooks/useNotificationDelivery";
@@ -86,6 +89,7 @@ function sessionBannerTitle(n: { type?: unknown; conversation_id?: unknown; conv
  *  in the huddle, which this answers from the store's `phase` alone. */
 export function DesktopProvider() {
   const router = useRouter();
+  const convex = useConvex();
   const initRef = useRef(false);
   const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
   // This window asked for the update. A finished download does not clear it.
@@ -375,6 +379,13 @@ export function DesktopProvider() {
     // the front and nothing happened.
     onDeepLink((urls) => {
       for (const url of urls) {
+        // codecast://install/<slug>: read the page's app info signed in and open the install sheet (installed-apps.md).
+        const install = parseInstallDeepLink(url);
+        if (install) {
+          const apps = desktopApps();
+          if (apps) void installFromDesktop(convex, apps, install.slug, install.gate);
+          continue;
+        }
         const arrival = planDeepLinkArrival(url, useInboxStore.getState().currentSessionId);
         if (arrival.kind === "navigate") goTo(arrival.path);
         else if (arrival.kind === "offer") showBrowserHandoffToast(arrival.path, goTo);

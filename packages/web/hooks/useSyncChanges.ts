@@ -223,7 +223,7 @@ const storySig = (s: StoryRow) =>
     s.release ? `${s.release.surface}@${s.release.version ?? s.release.sha}` : "",
     s.risks.map((r) => `${r.code}:${r.evidence.join(",")}`).join(";"), JSON.stringify(s.risk_lines ?? null), JSON.stringify(s.area_counts),
     s.conversation_ids.join(","), s.actor_user_ids.join(","), s.author_names.join(","), s.pr_ids.join(","),
-    s.private_session_count,
+    s.private_session_count, (s.screens ?? []).map((x) => x.url).join(","),
   ].join("|");
 
 const editionSig = (e: EditionRow) =>

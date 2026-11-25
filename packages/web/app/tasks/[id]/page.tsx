@@ -1,4 +1,5 @@
 "use client";
+import { FlowContext } from "../../../components/FlowContext";
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShortId } from "../../../components/ShortId";
 import { taskRepository } from "../../../lib/repoNavigation";
@@ -588,6 +589,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
           {/* The line (the-line.md L3, LM7, LE16): the station strip, and for a
               cause the story under it: where it is, its goal, signals, card answer and runs */}
           {!isProblem && <TaskLineStory task={data as any} />}
+
+          {/* The flow the task's run is going through: every station, where it stands, each one click away. */}
+          {(data as any).workflow_run_id && <FlowContext runId={(data as any).workflow_run_id} className="mb-6" />}
 
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">

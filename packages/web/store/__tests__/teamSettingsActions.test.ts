@@ -63,4 +63,17 @@ describe("team settings store actions", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(calls.some((c) => c.action === "renameTeam" && c.args[1] === "Old name")).toBe(true);
   });
+
+  it("the apps policy paints at once, dispatches its fields, and undoes to the defaults the row read as", async () => {
+    await useInboxStore.getState().setTeamAppsPolicy(TEAM, { full_access: true });
+    expect(useInboxStore.getState().teams[0].apps_full_access).toBe(true);
+    expect(useInboxStore.getState().teams[0].apps_install).toBeUndefined();
+    expect(calls[0]).toEqual({ action: "setTeamAppsPolicy", args: [TEAM, { full_access: true }] });
+    calls = [];
+    expect(performUndo()).toBeTruthy();
+    expect(useInboxStore.getState().teams[0].apps_full_access).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 20));
+    // Never set means off for full access (teamAppsPolicy); the inverse names only the field the call touched.
+    expect(calls).toContainEqual({ action: "setTeamAppsPolicy", args: [TEAM, { full_access: false }] });
+  });
 });

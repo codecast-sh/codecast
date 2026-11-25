@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { DecisionDocument } from "./decisions/DecisionDocument";
+import { hasOpenModal } from "../shortcuts";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 // The real conversation pane the inbox uses — same component, same data hooks,
 // so the queue IS the session view: the decision card renders inside it
 // (SessionDecisionCard, mounted by ConversationView), and the queue only adds
@@ -28,8 +32,11 @@ import { setDecisionQueueCursor } from "../lib/decisionQueueCursor";
 export function DecisionQueue({ onExit, initialConversationId, initialKey }: { onExit?: () => void; initialConversationId?: string | null; initialKey?: string | null }) {
   const queue = useDecisionQueue();
   const [anchorKey, setAnchorKey] = useState<string | null>(null);
-  // How many were resolved in this visit — only for the empty screen's copy.
-  const [resolvedCount, setResolvedCount] = useState(0);
+  // The decisions resolved in this visit, oldest first, so Back can return to
+  // one to read it whole or change its answer. `back` is the one on screen,
+  // an index into it; null is the open queue.
+  const [answered, setAnswered] = useState<string[]>([]);
+  const [back, setBack] = useState<number | null>(null);
 
   // Entering from a specific card (the rail's Questions section) starts on
   // THAT session's question; answering then walks the rest of the queue.
@@ -48,8 +55,10 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
   // Called with the key of an item that is LEAVING (answered/dismissed/evicted):
   // re-anchor on whatever follows it, before the store removal re-renders us.
   const advance = useCallback((leavingKey: string) => {
-    setResolvedCount((n) => n + 1);
     const i = queue.findIndex((it) => it.key === leavingKey);
+    const leaving = queue[i];
+    const id = leaving?.shortId ?? leaving?.decisionId;
+    if (id) setAnswered((a) => [...a.filter((x) => x !== id), id]);
     const next = queue.find((it, j) => j > i && it.key !== leavingKey) ?? null;
     setAnchorKey(next?.key ?? null);
   }, [queue]);
@@ -59,20 +68,23 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
     setAnchorKey(queue[(position + 1) % queue.length]?.key ?? null);
   }, [queue, position]);
 
+  // Back walks the open queue to its first decision, then the answered ones, newest first.
+  const canBack = position > 0 || answered.length > 0 || queue.length > 1;
   const onPrev = useCallback(() => {
-    if (queue.length === 0) return;
-    setAnchorKey(queue[(position - 1 + queue.length) % queue.length]?.key ?? null);
-  }, [queue, position]);
+    if (position > 0) setAnchorKey(queue[position - 1]?.key ?? null);
+    else if (answered.length > 0) setBack(answered.length - 1);
+    else if (queue.length > 1) setAnchorKey(queue[queue.length - 1]?.key ?? null);
+  }, [queue, position, answered.length]);
 
   const stepper = useMemo<DecisionStepper | null>(() => current ? {
     position: position + 1,
     total: queue.length,
     onDone: () => advance(current.key),
     onSkip,
-    onPrev,
+    onPrev: canBack ? onPrev : undefined,
     onExit,
     item: current,
-  } : null, [current, position, queue.length, advance, onSkip, onPrev, onExit]);
+  } : null, [current, position, queue.length, advance, onSkip, onPrev, canBack, onExit]);
 
   // Keep the rail's highlight on the question you are reading. Off the inbox
   // the rail highlights sidePanelSessionId (sessionFocusKind → "panel"), and
@@ -97,7 +109,10 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
     if (store.sidePanelSessionId !== currentId) store.selectPanelSession(currentId);
   }, [currentId]);
 
-  if (!current || !stepper) return <QueueEmpty resolved={resolvedCount} onExit={onExit} />;
+  if (back !== null && answered[back]) {
+    return <AnsweredDecision id={answered[back]} at={back} count={answered.length} onStep={setBack} onExit={onExit} />;
+  }
+  if (!current || !stepper) return <QueueEmpty resolved={answered.length} onBack={answered.length ? () => setBack(answered.length - 1) : undefined} onExit={onExit} />;
   // The decision answering or skipping lands on: its page loads ahead, so it shows at once.
   const next = queue.length > 1 ? queue[(position + 1) % queue.length] : null;
 
@@ -116,15 +131,51 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
   );
 }
 
-function QueueEmpty({ resolved, onExit }: { resolved: number; onExit?: () => void }) {
-  // Nothing to render means nothing to claim keys for, except the way out.
+// A decision answered in this visit, whole, on its own page: read it, change
+// its answer (the new answer goes to the session as a message), or step on.
+// ← goes further back, → forward, and past the newest returns to the queue.
+function AnsweredDecision({ id, at, count, onStep, onExit }: { id: string; at: number; count: number; onStep: (to: number | null) => void; onExit?: () => void }) {
+  const prev = at > 0 ? () => onStep(at - 1) : undefined;
+  const next = () => onStep(at + 1 < count ? at + 1 : null);
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onExit?.();
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.defaultPrevented || hasOpenModal() || keyBelongsElsewhere(e.target)) return;
+      if (e.key === "ArrowLeft" && prev) { e.preventDefault(); prev(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); next(); }
+      else if (e.key === "Escape") { e.preventDefault(); onStep(null); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onExit]);
+  }, [at, count, onStep]);
+  const btn = "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent";
+  const nav = (
+    <div className="flex items-center gap-2 text-meta" data-decision-queue-back={`${at + 1}/${count}`}>
+      <button type="button" className={btn} disabled={!prev} onClick={prev} aria-label="Earlier answered decision">
+        <ChevronLeft className="w-3.5 h-3.5" /><KeyCap size="xs">←</KeyCap>
+      </button>
+      <span className="tabular-nums text-sol-text-dim">Answered {at + 1} of {count}</span>
+      <button type="button" className={btn} onClick={next} aria-label={at + 1 < count ? "Later answered decision" : "Back to the queue"}>
+        <KeyCap size="xs">→</KeyCap><ChevronRight className="w-3.5 h-3.5" />
+      </button>
+      <button type="button" className={`${btn} ml-auto`} onClick={() => onStep(null)} data-decision-queue-return>
+        <KeyCap size="xs">esc</KeyCap><span>Back to the queue</span>
+      </button>
+      {onExit && <button type="button" className={btn} onClick={onExit}>Leave</button>}
+    </div>
+  );
+  return <div className="h-full bg-sol-bg"><DecisionDocument key={id} id={id} pager={false} nav={nav} /></div>;
+}
+
+function QueueEmpty({ resolved, onBack, onExit }: { resolved: number; onBack?: () => void; onExit?: () => void }) {
+  // Nothing to render means nothing to claim keys for, except the way back and the way out.
+  useWatchEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onExit?.();
+      if (e.key === "ArrowLeft" && onBack && !keyBelongsElsewhere(e.target)) { e.preventDefault(); onBack(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onExit, onBack]);
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-6">
@@ -134,11 +185,18 @@ function QueueEmpty({ resolved, onExit }: { resolved: number; onExit?: () => voi
           ? "You cleared the queue. New decisions appear here the moment an agent asks."
           : "Your agents are working. You will be interrupted when that changes."}
       </div>
-      {onExit && (
-        <button onClick={onExit} className="mt-2 text-xs text-sol-text-dim hover:text-sol-text transition-colors">
-          <KeyCap size="xs">esc</KeyCap> <span className="ml-1">back to the inbox</span>
-        </button>
-      )}
+      <div className="mt-2 flex items-center gap-4">
+        {onBack && (
+          <button onClick={onBack} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors" data-decision-queue-review>
+            <KeyCap size="xs">←</KeyCap> <span className="ml-1">review what you answered ({resolved})</span>
+          </button>
+        )}
+        {onExit && (
+          <button onClick={onExit} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
+            <KeyCap size="xs">esc</KeyCap> <span className="ml-1">back to the inbox</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 }

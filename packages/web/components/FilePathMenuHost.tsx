@@ -5,14 +5,14 @@
 // they hand the event to this host (lib/filePathMenu requestFilePathMenu),
 // mounted once in the dashboard shell next to the other docks.
 
-import { FileDiff, Folder, FolderOpen } from "lucide-react";
+import { Code2, Columns2, FileDiff, Folder, FolderOpen } from "lucide-react";
 import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
 import { OpenLinkItems, SessionsLinkItem } from "./LinkMenuHost";
 import { fileSessionsLink } from "../lib/sessionSearchLinks";
 import { filePathHref, matchSessionChangedFile, resolveMentionPath } from "../lib/filePathLinks";
 import { setFilePathMenuListener, type FilePathMenuPayload } from "../lib/filePathMenu";
 import { parentDir } from "../lib/utils";
-import { openFiles } from "../lib/filesPane";
+import { openFiles, openInEditor } from "../lib/filesPane";
 import { resolveVaultTarget } from "../lib/vault/vaultHref";
 import { vaultOp } from "../lib/vault/client";
 import { fileManagerName } from "../lib/vault/reveal";
@@ -47,7 +47,14 @@ export function FilePathMenuHost() {
                 <CtxSeparator />
               </>
             )}
-            <OpenLinkItems href={p.href} openLabel="Open in Files" />
+            <CtxItem icon={Code2} onSelect={() => openInEditor({ path: abs, line: p.line, column: p.column }, { fromLeaf: p.fromLeaf })}>
+              Open in editor
+            </CtxItem>
+            <CtxItem icon={Columns2} onSelect={() => openInEditor({ path: abs, line: p.line, column: p.column }, { fromLeaf: p.fromLeaf, split: true })}>
+              Open in editor in a split
+            </CtxItem>
+            <CtxSeparator />
+            <OpenLinkItems href={p.href} openLabel="Open here" />
             <CtxSeparator />
             <CtxItem icon={Folder} onSelect={() => openFiles(folderHref)}>
               Open containing folder

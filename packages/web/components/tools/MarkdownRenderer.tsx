@@ -22,8 +22,11 @@ interface MarkdownRendererProps {
 export const MarkdownBlocks = memo(function MarkdownBlocks({
   content,
   components = MD_COMPONENTS,
+  remarkPlugins = MD_REMARK_PLUGINS,
 }: {
   content: string;
+  /** Remark-plugin override (a doc draws lone references as cards: DOC_MD_REMARK_PLUGINS). A module-level constant, for the same reason. */
+  remarkPlugins?: any[];
   /** Component-map override for surfaces with their own type scale (the doc
    *  reading view). Must be a module-level constant — a fresh object identity
    *  per render defeats both this memo and react-markdown's caching. */
@@ -35,7 +38,7 @@ export const MarkdownBlocks = memo(function MarkdownBlocks({
   if (html) return html;
   return (
     <ReactMarkdown
-      remarkPlugins={MD_REMARK_PLUGINS}
+      remarkPlugins={remarkPlugins}
       rehypePlugins={MD_REHYPE_PLUGINS}
       components={components}
     >
