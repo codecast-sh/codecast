@@ -258,7 +258,26 @@ function useModelControl(conversationId: string | undefined, agentType: string |
  */
 function modelLabel(agentType: string | undefined, model: string): string {
   const launch = cloudAgentLaunch(agentType, model);
-  return launch ? cloudAgentLaunchWords(launch).join(" · ") : formatModel(model);
+  if (launch) return cloudAgentLaunchWords(launch).join(" · ");
+  const joined = splitJoinedStamp(agentType, model);
+  return joined ? (findModelOption(agentType, joined.key)?.label ?? joined.key) : formatModel(model);
+}
+
+/**
+ * An agent that records model and effort as one id (antigravity's
+ * `gemini-4-carbon-medium`): the catalog key and the effort it carried. Null
+ * for any other stamp. The effort in it goes stale the moment the effort is
+ * picked, so nothing shows the id itself.
+ */
+function splitJoinedStamp(agentType: string | undefined, model: string | undefined): { key: string; effort: string } | null {
+  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  if (!model || !cfg) return null;
+  for (const effort of cfg.efforts) {
+    if (!model.endsWith(`-${effort}`)) continue;
+    const key = model.slice(0, -(effort.length + 1));
+    if (key !== "default" && cfg.models.some((m) => m.key === key)) return { key, effort };
+  }
+  return null;
 }
 
 export function SessionControlPanel({
@@ -479,6 +498,8 @@ export function HeaderModelControl({
   const overlayModel = picked?.model !== undefined
     ? modelStampForPick(agentType, picked.model)
     : (modelFitsAgent(storeModel, agentType) ? storeModel : undefined);
+  // The model as a title names it: a joined stamp without its stamped effort.
+  const overlayModelId = splitJoinedStamp(agentType, overlayModel)?.key ?? overlayModel;
   const overlayEffort = picked?.effort !== undefined
     ? (picked.effort === "default" ? undefined : picked.effort)
     : storeEffort;
@@ -498,7 +519,7 @@ export function HeaderModelControl({
     if (!label) return null;
     return (
       <div className="hidden sm:flex items-center flex-shrink-0">
-        <span className="font-mono truncate max-w-none" title={overlayModel}>{label}</span>
+        <span className="font-mono truncate max-w-none" title={overlayModelId}>{label}</span>
         {glyph && <span className="ml-1 text-sol-text-dim/80" title={`${overlayEffort} effort`}>{glyph}</span>}
       </div>
     );
@@ -507,7 +528,7 @@ export function HeaderModelControl({
   const composer = variant === "composer";
   const title = cloudNote
     ? `${cloudNote} · switch attempt, fork, hand off`
-    : `Model: ${overlayModel ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`;
+    : `Model: ${overlayModelId ?? "default"}${overlayEffort ? ` · ${overlayEffort} effort` : ""} · model, agent, fork, hand off`;
   // A cloud launch that asked for nothing more names what the panel does instead: move it (fork or hand off).
   // The effort as a level meter: it lights when Alt+. / Alt+, move it.
   const effortLevels = overlayEffort ? effortLevelsFor(agentType, storeModel, live?.sessionId, blank) : [];
