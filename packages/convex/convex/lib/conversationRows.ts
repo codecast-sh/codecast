@@ -43,6 +43,7 @@ export const CONVERSATION_ROW_TABLES: ReadonlyArray<readonly [string, string]> =
   ["execution_bindings", "by_conversation_epoch"],
   ["conversation_execution_heads", "by_conversation"],
   ["managed_sessions", "by_conversation_id"],
+  ["reply_streams", "by_conversation"],
 ];
 
 /** What deleting one of those rows does beyond the row itself. */
