@@ -3,6 +3,8 @@ import { awaitingOkIds } from "../lib/decisionQueue";
 import { hostedComposerWords, hostedLastExchange, type HostedLast } from "../lib/hostedComposer";
 import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
+import { useConversationChatOpen } from "../hooks/useConversationChatPeople";
+import { formatAgentType } from "./AgentTypeIcon";
 import { useAllowanceOut } from "./simple/usePlanFigures";
 import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, Suspense, type ReactElement } from "react";
 import { RevealInBandCtx } from "../lib/revealHost";
@@ -290,6 +292,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   messageRef.current = message;
   const sendingRef = useRef(false);
   const [isFocused, setIsFocused] = useState(false);
+  // With a teammate's chat docked open beside this box, both boxes say who
+  // they send to ("Message Claude Code" here, "Message Ashot" there), so a
+  // message meant for one is not typed into the other.
+  const chatDockOpen = useConversationChatOpen(conversationId) && !bareComposer && !!agentType;
+  const recipientWords = chatDockOpen ? `Message ${formatAgentType(agentType)}` : null;
+  const plainPlaceholder = recipientWords ? `${recipientWords}...` : "Send a message...";
   const [composeMode, setComposeMode] = useState(false);
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
@@ -2652,6 +2660,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       lightboxOpen={lightboxImageIndex !== null}
       composeMode={composeMode}
       selectionActive={isSelectionActive}
+      markFocus={chatDockOpen}
       onSubmit={handleFormSubmit}
       foot={composerFoot && !composeMode ? <ComposerFoot start={composerFoot} end={<>{rowActions}{sendButton}</>} /> : undefined}
       before={<>
@@ -3160,7 +3169,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : plainPlaceholder) : plainPlaceholder)}
+                    aria-label={recipientWords ?? undefined}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}

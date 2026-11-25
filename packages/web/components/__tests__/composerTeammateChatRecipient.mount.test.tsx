@@ -67,6 +67,11 @@ test("with a teammate's chat open, the agent composer and the chat box each name
     });
     const chip = w.document.querySelector(".cc-chat-chip");
     expect(chip).not.toBeNull();
+    // Closed, the session composer reads as it always has.
+    const closedBox = container.querySelector("textarea") as HTMLTextAreaElement;
+    expect(closedBox.getAttribute("placeholder")).toBe("Send a message...");
+    expect(closedBox.hasAttribute("aria-label")).toBe(false);
+    expect(closedBox.closest("[data-cc-composer-box]")!.className).not.toContain("focus-within:ring");
     await act(async () => { chip.dispatchEvent(new w.MouseEvent("click", { bubbles: true })); });
     await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
 
@@ -80,6 +85,8 @@ test("with a teammate's chat open, the agent composer and the chat box each name
     // The agent's box must too: "Send a message..." names nobody, and beside
     // "Message Ashot Petrosian" it reads as the same kind of box.
     expect(nameOf(agentBox!)).toMatch(/claude|agent/i);
+    // And its field rings while it holds the keyboard (the chat box already does, .ch-composer:focus-within).
+    expect(agentBox!.closest("[data-cc-composer-box]")!.className).toContain("focus-within:ring");
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

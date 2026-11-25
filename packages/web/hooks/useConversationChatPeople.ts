@@ -17,6 +17,12 @@ export function holdConversationChatPeople(conversationId: string, ids: string[]
 }
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
 
+/** Whether this conversation's teammate chat dock is open: the session's
+ *  composer then names who it sends to, beside the dock's own box. */
+export function useConversationChatOpen(conversationId: string): boolean {
+  return useSyncExternalStore(subscribe, () => held.has(conversationId), () => false);
+}
+
 /**
  * Who the dock talks to: teammates viewing this conversation (the roster's
  * viewing field) plus teammates in its composer, or, while the dock is open
