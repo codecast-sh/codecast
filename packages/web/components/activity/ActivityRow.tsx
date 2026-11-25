@@ -36,9 +36,12 @@ const PHONE_QUIET = "hidden sm:inline-flex modern:inline-flex";
 /** The press a session that waits on someone offers on the spot. */
 function primaryAction(item: ActivityItem): { kind: "answer" | "restart"; href?: string; label: string } | null {
   const ask = item.outcomes.decisions.find((d) => d.pending && d.askedOfViewer);
-  if (ask) return { kind: "answer", label: "Answer", href: (ask.shortId && entityRoute("decision", ask.shortId)) || `/conversation/${item.id}` };
+  // The decision page answers by short id or by its Convex id, so an ask
+  // without a short id still lands on itself (ct-101350).
+  if (ask) return { kind: "answer", label: "Answer", href: entityRoute("decision", ask.shortId || ask.id) || `/conversation/${item.id}` };
   if (item.isOwn && item.status === "error") return { kind: "restart", label: "Restart" };
-  if (item.isOwn && item.status === "needs_you") return { kind: "answer", label: "Answer", href: `/conversation/${item.id}` };
+  // The anchor scrolls to and marks the reply that waits on the viewer.
+  if (item.isOwn && item.status === "needs_you") return { kind: "answer", label: "Answer", href: `/conversation/${item.id}${item.askMessageId ? `#msg-${item.askMessageId}` : ""}` };
   return null;
 }
 

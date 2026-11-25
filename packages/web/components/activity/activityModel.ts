@@ -64,6 +64,9 @@ export type ActivityItem = {
   /** Waits on a person: Needs you, Error, or a pending decision. */
   needs: boolean;
   outcomes: ActivityOutcomes;
+  /** The message the viewer's own session waits on them about (its newest
+   *  reply), when the store holds it: Answer lands there (ct-101350). */
+  askMessageId?: string | null;
   conv: Conversation;
   /** A digest of everything the row draws: an equal digest keeps the old item. */
   sig: string;
@@ -290,6 +293,7 @@ export function makeItem(input: {
   actor: ActivityActor;
   outcomes: ActivityOutcomes;
   hiddenFromTeam: boolean;
+  askMessageId?: string | null;
 }): ActivityItem {
   const { conv, status, outcomes } = input;
   const needs = status === "needs_you" || status === "error" || outcomes.decisions.some((d) => d.pending);
@@ -298,7 +302,7 @@ export function makeItem(input: {
   const sig = [
     status, input.title, input.line, input.reason ?? "", at, input.actor.id, input.actor.name, input.actor.image ?? "",
     project ?? "", input.hiddenFromTeam ? 1 : 0, conv.message_count ?? 0, conv.subtitle ?? "", branchOf(conv) ?? "",
-    outcomesSig(outcomes),
+    outcomesSig(outcomes), input.askMessageId ?? "",
   ].join("\u0001");
   return {
     id: conv._id,
@@ -313,6 +317,7 @@ export function makeItem(input: {
     hiddenFromTeam: input.hiddenFromTeam,
     needs,
     outcomes,
+    askMessageId: input.askMessageId ?? null,
     conv,
     sig,
   };
@@ -492,4 +497,16 @@ export function groupActivity(items: readonly ActivityItem[], loose: readonly Pr
       for (const g of list) for (const i of g.items) { sessions += 1; people.add(i.actor.id); }
       return { date, label: formatDate(date), groups: list, sessions, people: people.size };
     });
+}
+
+/** The message an own session waits on the viewer about: its newest reply
+ *  that the server holds (a Convex id, so a #msg- link resolves), or null when
+ *  the store holds none. */
+export function waitingMessageId(messages: readonly { _id: string; role: string; content?: string; _isOptimistic?: true }[] | undefined, isServerId: (id: string) => boolean): string | null {
+  if (!messages) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && !m._isOptimistic && m.content?.trim() && isServerId(m._id)) return m._id;
+  }
+  return null;
 }

@@ -12,7 +12,7 @@
 // hooks already tick on.
 import { useMemo, useRef } from "react";
 import { isHostedAgentType } from "@codecast/shared/contracts";
-import { railRowPlacement, useTrackedStore, type InboxSession, type SessionDecisionItem } from "../../store/inboxStore";
+import { isConvexId, railRowPlacement, useTrackedStore, type InboxSession, type SessionDecisionItem } from "../../store/inboxStore";
 import { makeCollectionSig } from "../../store/wakeSig";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useViewerIdentity } from "../../hooks/useTeamRoster";
@@ -28,7 +28,7 @@ import { threadStateView } from "../../lib/threadState";
 import type { Conversation } from "../../lib/conversationRow";
 import type { ExternalEventRecord } from "../../lib/externalEventRecord";
 import {
-  indexOutcomes, keepStableItems, loosePrs, makeItem, prFromStatus, prThreads, withLivePr,
+  indexOutcomes, keepStableItems, waitingMessageId, loosePrs, makeItem, prFromStatus, prThreads, withLivePr,
   type ActivityActor, type ActivityItem, type DecisionRowLike, type PrThread, type TaskRowLike,
 } from "./activityModel";
 
@@ -56,13 +56,19 @@ export type ActivityItems = { items: ActivityItem[]; loose: PrThread[] };
 export function useActivityItems(rows: readonly Conversation[], opts: { teamId: string | null; teamMode: boolean }): ActivityItems {
   const now = useCoarseNow(15_000);
   const viewer = useViewerIdentity();
+  const askSigOf = (s: { messages: Record<string, Parameters<typeof waitingMessageId>[0]> }) =>
+    rows.map((c) => (c.is_own ? waitingMessageId(s.messages[c._id], isConvexId) ?? "" : "")).join(",");
   const st = useTrackedStore([
     (s) => ownSessionsSig(s.sessions),
     (s) => decisionsSig(s.sessionDecisions ?? NO_DECISIONS),
+    // The newest reply of each own session, for Answer's #msg- anchor: a string,
+    // so streaming into a message wakes nothing until a new reply lands.
+    (s) => askSigOf(s),
   ]);
   const sessionsSig = ownSessionsSig(st.sessions);
   const decisionMap = st.sessionDecisions ?? NO_DECISIONS;
   const decisionSig = decisionsSig(decisionMap);
+  const askSig = askSigOf(st);
 
   const tasks = useWorkspaceCollection<TaskRowLike>("tasks", taskSig);
   const { teamId, teamMode } = opts;
@@ -136,6 +142,7 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
         actor,
         outcomes: withLivePr(sessionOutcomes, own?.pr_status ? prFromStatus(own.pr_status) : null),
         hiddenFromTeam: teamMode && !!conv.is_own && conv.is_private !== false,
+        askMessageId: own && status === "needs_you" ? waitingMessageId(st.messages[conv._id], isConvexId) : null,
       });
     });
     const next = keepStableItems(cache.current, built);
@@ -143,7 +150,7 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
     return next.items;
     // sessionsSig stands in for st.sessions: only the drawn fields wake it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, sessionsSig, outcomes, now, viewer, teamMode]);
+  }, [rows, sessionsSig, askSig, outcomes, now, viewer, teamMode]);
 
   // Only inside the span the loaded sessions cover, as the Classic feed keeps
   // its git rows: older pages bring their own, and a busy repo never fills
