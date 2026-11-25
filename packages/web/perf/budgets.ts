@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "pr-switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -63,6 +63,22 @@ await test("switch", "a warm conversation switch fetches no history and opens th
       // The pane swaps its subtrees; nothing else on the page moves. Six rows
       // of overscan each side (ConversationView) set how many it mounts.
       domMutations: 21,
+    });
+  }
+});
+
+await test("pr-switch", "opening a conversation from a pull request's page draws none of its transcript inside the click, as a click between conversations does", async () => {
+  await setup("pr-switch");
+  for (const r of await twice()) {
+    console.log(`      click task ms (from the PR page, between conversations): ${r.detail.clickMs.join(", ")}`);
+    expect(pick(r, ["syncRows", "syncRowsBetweenConversations"])).toEqual({
+      // The destination's rows on screen when the click's task ends. A switch
+      // between conversations keeps the old one painted and mounts the next
+      // at transition priority, so the click itself draws none; arriving
+      // from the PR page must cost the click no more (ct-101487: 0.45 to
+      // 1.2 s frozen inside the root click handler on every such move).
+      syncRows: 0,
+      syncRowsBetweenConversations: 0,
     });
   }
 });
