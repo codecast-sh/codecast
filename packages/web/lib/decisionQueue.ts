@@ -497,3 +497,40 @@ export function oldestBlocked<T extends { agent_status?: string | null; agent_st
   }
   return oldest;
 }
+
+type RelatedTaskRow = { short_id?: string; related?: string[]; duplicate_of?: string; superseded_by?: string };
+type RelatedDecisionRow = { _id: string; short_id?: string; task_id?: string; status?: string; asked_user_ids?: string[]; in_queue?: boolean };
+
+/** The open decisions on the same subject as `decision` that the viewer's
+ *  stepper does not show (ct-101357): another pending decision on the same
+ *  task, or on a task linked to it as related, duplicate or superseded in
+ *  either direction, that is not asked of the viewer. The person answering
+ *  one of them learns the other exists and can open it in one press, instead
+ *  of finding it later in a teammate's lane. Matches on task links only,
+ *  never on question text. */
+export function relatedOpenDecisions<D extends RelatedDecisionRow>(
+  decision: Pick<RelatedDecisionRow, "_id" | "task_id"> | undefined,
+  decisions: Record<string, D> | undefined,
+  tasks: Record<string, RelatedTaskRow> | undefined,
+  meId: string | undefined,
+): D[] {
+  if (!decision?.task_id || !decisions || !tasks) return [];
+  const own = tasks[decision.task_id];
+  if (!own) return [];
+  const ref = (t: RelatedTaskRow | undefined, id: string) => t?.short_id ?? id;
+  const ownRef = ref(own, decision.task_id);
+  const linked = new Set([...(own.related ?? []), own.duplicate_of, own.superseded_by].filter((x): x is string => !!x));
+  const sameSubject = (taskId: string): boolean => {
+    if (taskId === decision.task_id) return true;
+    const t = tasks[taskId];
+    if (linked.has(ref(t, taskId))) return true;
+    return !!t && (t.related?.includes(ownRef) || t.duplicate_of === ownRef || t.superseded_by === ownRef);
+  };
+  const out: D[] = [];
+  for (const d of Object.values(decisions)) {
+    if (d._id === decision._id || d.status !== "pending" || !d.task_id) continue;
+    if (askedOfViewer(d, meId)) continue;
+    if (sameSubject(d.task_id)) out.push(d);
+  }
+  return out;
+}

@@ -44,6 +44,7 @@ import { LANE_COPY } from "./simple/lane";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { ModernDecisionDock } from "./conversation/ModernDecisionDock";
 import { registerDecisionOpener } from "../lib/decisionOpenRegistry";
+import { RelatedDecisionPointer } from "./decisions/RelatedDecisionPointer";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -696,6 +697,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
               ? <ChangeCardHeadline card={card} question={question} className="mb-2" />
               : question && <h1 className={`decision-question text-sol-text ${facts ? "" : "mb-5"}`}>{question}</h1>}
             {!card && facts}
+            {decideId && <RelatedDecisionPointer decisionId={decideId} className="mb-5" />}
             {cardBar ? (
               <>
                 <ChangeCardVerdictBar card={card!}>{answerBlock}</ChangeCardVerdictBar>
