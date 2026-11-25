@@ -101,6 +101,45 @@ describe("the request through heartbeats", () => {
     expect(row(db).update_requested_at).toBeUndefined();
   });
 
+  test("a request naming its release survives a stale '' from an old daemon and clears when the machine runs it", async () => {
+    // 2026-11-24: 1.1.273 out, every machine on 1.1.272 with a cached "" and no
+    // update_checked_for; each press was cleared on the next beat, unseen.
+    const db = await fixture({ can_self_update: true, update_available: undefined });
+    await (requestDeviceUpdate as any)._handler(ctx(db), { api_token: TOKEN, device_id: "laptop", version: "1.1.0" });
+    const at = row(db).update_requested_at;
+    expect(row(db).update_requested_version).toBe("1.1.0");
+
+    const r1 = await beat(db, { update_available: "" });
+    expect(r1.update_request).toEqual({ version: "1.1.0", at });
+    expect(row(db).update_state).toBe("requested");
+
+    // A newer release than the one asked for also answers it.
+    await beat(db, { version: "1.2.0", update_available: "" });
+    expect(row(db).update_requested_at).toBeUndefined();
+  });
+
+  test("a daemon that restarts on another version than the one asked for ends the run as failed, saying so", async () => {
+    // A stale CDN edge handed the daemon 1.1.0 while the CLI asked for 1.2.0.
+    const db = await fixture({ can_self_update: true });
+    await (requestDeviceUpdate as any)._handler(ctx(db), { api_token: TOKEN, device_id: "laptop", version: "1.2.0" });
+    const at = row(db).update_requested_at;
+    const first = { daemon_started_at: 100 };
+    await beat(db, { ...first, update_available: "1.2.0", update_status: { state: "installing", at } });
+    // A beat the installing daemon built before its run began lands late: no run, same process.
+    await beat(db, { ...first, update_available: "1.2.0" });
+    expect(row(db).update_state).toBe("installing");
+    await beat(db, { ...first, update_available: "1.2.0", update_status: { state: "installing", at } });
+    expect(row(db).update_state).toBe("installing");
+    await beat(db, { daemon_started_at: 200, version: "1.1.0", update_available: "" });
+    expect(row(db)).toMatchObject({ update_state: "failed", update_error: "restarted on 1.1.0, not the 1.2.0 asked for" });
+  });
+
+  test("a version that is not a release is refused", async () => {
+    const db = await fixture({ can_self_update: true });
+    await expect((requestDeviceUpdate as any)._handler(ctx(db), { api_token: TOKEN, device_id: "laptop", version: "latest" })).rejects.toThrow(/Not a release version/);
+    expect(row(db).update_state).toBeUndefined();
+  });
+
   test("reports can_self_update and distribution on the row", async () => {
     const db = await fixture();
     await beat(db, { can_self_update: false, distribution: "source" });
@@ -125,6 +164,18 @@ describe("selfUpdateBeatPatch", () => {
     expect(nothingNewer(0, { ...req, update_state: "installing" })).toBe(true);
     expect(nothingNewer(0, { ...req, update_state: "failed" })).toBe(true);
     expect(nothingNewer(undefined)).toBe(true);
+  });
+
+  test("a request naming its release clears by version order, never on ''", () => {
+    const req = { update_requested_at: 5, update_state: "requested" as const, update_requested_version: "1.1.273" };
+    const clears = (version: string, row: Record<string, unknown> = req) =>
+      "update_requested_at" in selfUpdateBeatPatch(row, { version, update_available: "" });
+    expect(clears("1.1.272")).toBe(false);
+    expect(clears("1.1.273")).toBe(true);
+    expect(clears("1.1.300")).toBe(true);
+    expect(clears("1.2.0")).toBe(true);
+    // A failed run stays on the row, with its reason, until a new press.
+    expect(clears("1.1.272", { ...req, update_state: "failed" })).toBe(false);
   });
 
   test("no request: nothing to hand to the daemon", () => {
