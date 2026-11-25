@@ -8,6 +8,7 @@
 // Pure of DOM: the phone imports it.
 import { useInboxStore } from "../../store/inboxStore";
 import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
+import type { ProductionPaint } from "../../store/lineSlice";
 import { deployTargetLedger } from "../../components/consequential/ledgers";
 import type { SwitchLedger, SwitchRow } from "../../components/consequential/ConsequentialSwitch";
 import { rollbackTarget, targetNow, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "./targets";
@@ -136,16 +137,34 @@ export function rollbackLedger(p: RollbackPress, deploys: ReadonlyArray<TeamDepl
 }
 
 // Each paints the repository's one production row (store deployProductions); its echo replaces the paint, and a
-// refused write lifts the paint's lock (lineSlice).
+// refused write puts back the row as the press found it (lineSlice restoreProduction).
+
+/** The repository's production row as a press found it and as it painted it. */
+function paintOf(teamId: string, repository: string): ProductionPaint {
+  const row = (useInboxStore.getState() as any).deployProductions?.[repository];
+  return structuredClone({ pause: row?.workspace === `team:${teamId}` ? row.pause ?? null : null, can_lift: !!row?.can_lift });
+}
+
+/** Run a press that paints the repository's production row; a refusal puts back what was there before it. */
+function pressProduction(teamId: string, repository: string, press: () => Promise<unknown>, refused?: () => void): void {
+  const before = paintOf(teamId, repository);
+  const call = press();
+  const painted = paintOf(teamId, repository);
+  void call.catch((e) => {
+    if (!isRefusedDispatchError(e)) return;
+    useInboxStore.getState().restoreProduction(teamId, repository, before, painted);
+    refused?.();
+  });
+}
 
 /** Pause's confirm: the repository, and so every target of it, reads paused at once. */
 export function sendPause(t: DeployTargetRow, reason: string, by: string): void {
-  void useInboxStore.getState().pauseProduction(t.team_id, t.repository, reason.trim(), by).catch(() => {});
+  pressProduction(t.team_id, t.repository, () => useInboxStore.getState().pauseProduction(t.team_id, t.repository, reason.trim(), by));
 }
 
 /** Lift: one press, the repository reads unpaused at once. */
 export function sendLift(t: Pick<DeployTargetRow, "team_id" | "repository">): void {
-  void useInboxStore.getState().liftProductionPause(t.team_id, t.repository).catch(() => {});
+  pressProduction(t.team_id, t.repository, () => useInboxStore.getState().liftProductionPause(t.team_id, t.repository));
 }
 
 /** Roll back's confirm: the rollback reads requested and production paused at once; the echo names what ends the
@@ -155,10 +174,10 @@ export function sendRollback(p: RollbackPress, reason: string, deploys: Readonly
   const t = p.target;
   const clientKey = `dp-client-${Math.random().toString(36).slice(2, 10)}`;
   const n = targetNow(t, deploys);
-  void useInboxStore
-    .getState()
-    .rollbackProduction(clientKey, t.team_id, t.repository, t.name, p.of.short_id || null, reason.trim(), { started_by: startedBy, sha: p.of.sha, previous_sha: n.live?.sha ?? null, commits: 0, sessions: [] })
-    .catch((e) => {
-      if (isRefusedDispatchError(e)) useInboxStore.getState().removeDeployStub(clientKey);
-    });
+  pressProduction(
+    t.team_id,
+    t.repository,
+    () => useInboxStore.getState().rollbackProduction(clientKey, t.team_id, t.repository, t.name, p.of.short_id || null, reason.trim(), { started_by: startedBy, sha: p.of.sha, previous_sha: n.live?.sha ?? null, commits: 0, sessions: [] }),
+    () => useInboxStore.getState().removeDeployStub(clientKey),
+  );
 }

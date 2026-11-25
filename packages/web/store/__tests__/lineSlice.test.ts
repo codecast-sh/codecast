@@ -142,24 +142,35 @@ describe("production pause on the Deploys page (deploys.md DP17, DP19)", () => {
     expect(locks()).toEqual([]);
   });
 
-  it("a refused pause or lift puts can_lift back, and the feed's next word is the pause", async () => {
-    reply = refused("Production is already paused by Bo: deploy broke");
+  it("a refused pause puts back exactly the row the press found", async () => {
+    reply = refused("Pausing, lifting and rolling back production is held by founders, engineers and the Release Captain");
     sendPause(targets()["acme/app#web"], "errors spiking", "Ana");
-    await settle();
-    expect(prod("acme/app").can_lift).toBe(false);
-    expect(locks()).toEqual([]);
-    // `pause` is unprotected: the refused paint stands until the feed next speaks, which replaces it.
     expect(prod("acme/app").pause).toMatchObject({ by: "Ana" });
-    echo(production("acme/app", { pause: standing, can_lift: true }));
-    expect(prod("acme/app").pause).toEqual(standing);
+    await settle();
+    expect(prod("acme/app")).toMatchObject({ pause: null, can_lift: false });
+    expect(locks()).toEqual([]);
+  });
 
+  it("a refused lift puts the standing pause back", async () => {
+    useInboxStore.setState({ deployProductions: { ...s().deployProductions, "acme/app": production("acme/app", { pause: standing, can_lift: true }) } } as any);
     reply = refused("Bo paused production; they or the Release Captain lift it");
     sendLift(targets()["acme/app#web"]);
     expect(prod("acme/app").pause).toBeNull();
     await settle();
-    expect(prod("acme/app").can_lift).toBe(true);
+    expect(prod("acme/app")).toMatchObject({ pause: standing, can_lift: true });
     expect(locks()).toEqual([]);
     expect(calls.at(-1)?.[0]).toBe("liftProductionPause");
+  });
+
+  it("a refusal leaves the server's word standing when the feed spoke after the press", async () => {
+    let refuse!: () => void;
+    reply = () => new Promise((_, rej) => { refuse = () => rej(new Error("[CONVEX M(dispatch:dispatch)] Server Error\nUncaught Error: Production is already paused by Bo: deploy broke")); });
+    sendPause(targets()["acme/app#web"], "errors spiking", "Ana");
+    await settle();
+    echo(production("acme/app", { pause: standing, can_lift: false }));
+    refuse();
+    await settle();
+    expect(prod("acme/app").pause).toEqual(standing);
   });
 
   it("Lift holds through a stale push until the server says lifted", async () => {
@@ -190,12 +201,14 @@ describe("production pause on the Deploys page (deploys.md DP17, DP19)", () => {
     expect(locks()).toEqual([]);
   });
 
-  it("a refused rollback takes back its requested deploy and can_lift", async () => {
+  it("a refused rollback takes back its requested deploy and puts the row back as the press found it", async () => {
+    useInboxStore.setState({ deployProductions: { ...s().deployProductions, "acme/app": production("acme/app", { pause: standing, can_lift: false }) } } as any);
     reply = refused("No target of acme/app names the workflow its deploys run as");
     sendRollback({ target: targets()["acme/app#production"], of: before as any }, "checkout broken", Object.values(s().teamDeploys) as any, "Ana");
+    expect(prod("acme/app").pause).toMatchObject({ reason: "Rollback dp-8: checkout broken" });
     await settle();
     expect(Object.values(s().teamDeploys).some((d: any) => d.client_key)).toBe(false);
-    expect(prod("acme/app").can_lift).toBe(false);
+    expect(prod("acme/app")).toMatchObject({ pause: standing, can_lift: false });
     expect(locks()).toEqual([]);
   });
 });

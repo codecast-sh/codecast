@@ -55,6 +55,7 @@ export type LineSliceActions = {
   rollbackProduction: (clientKey: string, teamId: string, repository: string, target: string, of: string | null, reason: string, stub: DeployStub) => Promise<RollbackResult | null | undefined>;
   /** Take back a requested deploy the server refused, which never landed (as removeTaskStub does for a task). */
   removeDeployStub: (clientKey: string) => void;
+  restoreProduction: (teamId: string, repository: string, before: ProductionPaint, painted: ProductionPaint) => void;
   /** Stop a live run (convex workflow_runs cancelRunByPerson): it ends at once, as a person's cancel. */
   stopLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
   labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
@@ -93,6 +94,9 @@ function deployStubRow(clientKey: string, teamId: string, repository: string, ta
     note: null, commits: stub.commits, sessions: stub.sessions, steps: [], created_at: Date.now(), live_at: null, finished_at: null,
   };
 }
+
+/** What a press paints on a repository's production row: a refused press puts back exactly what was there before. */
+export type ProductionPaint = { pause: DeployPauseView | null; can_lift: boolean };
 
 /** A team's production row for one repository (store deployProductions, keyed by the repository). */
 function productionRow(rows: Record<string, any> | undefined, teamId: string, repository: string): any | undefined {
@@ -238,6 +242,15 @@ export function createLineSlice(): LineSliceActions {
     removeDeployStub: sync(function (this: { teamDeploys: Record<string, any> }, clientKey: string) {
       if (this.teamDeploys[clientKey]?.client_key === clientKey) delete this.teamDeploys[clientKey];
     }) as LineSliceActions["removeDeployStub"],
+
+    // A refused Pause, Lift or Roll back puts the row back as it was before the press, unless the server's read has
+    // replaced the paint meanwhile (then the server's state stands).
+    restoreProduction: sync(function (this: { deployProductions: Record<string, any> }, teamId: string, repository: string, before: ProductionPaint, painted: ProductionPaint) {
+      const row = productionRow(this.deployProductions, teamId, repository);
+      if (!row || JSON.stringify(row.pause ?? null) !== JSON.stringify(painted.pause ?? null)) return;
+      row.pause = before.pause;
+      row.can_lift = before.can_lift;
+    }) as LineSliceActions["restoreProduction"],
 
     // "Stop the run": the run reads ended on the draft, as the server's cancel leaves it.
     stopLineRun: asyncAction(function (this: { workflowRuns: Record<string, any> }, runId: string) {
