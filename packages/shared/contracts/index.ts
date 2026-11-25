@@ -69,6 +69,7 @@ export * from "./stableContext";
 export * from "./vaultProtocol";
 export * from "./vaultMirror";
 export * from "./terminalStream";
+export * from "./replyStream";
 export * from "./browserStream";
 export * from "./callRoomKeys";
 export * from "./recordingAudio";
