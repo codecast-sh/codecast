@@ -18,8 +18,9 @@ import { commandExpansionName } from "../../web/lib/conversationProcessor";
 import { launchedByProgram, mayBeTyped, messageProvenance, queuedTwin, sameWordsKey, typedPart } from "./lib/messageProvenance";
 import { walkOriginatorChain, type CardFacts, type ChainLink, type ChainStop, type CiteRun, type TypedLine } from "./lib/originatorChain";
 import { verifyApiToken } from "./apiTokens";
-import { canReadRun } from "./workflow_runs";
+import { canReadRun, projectLeadSession } from "./workflow_runs";
 import { cardRef, personAnswersIn, personVerdicts, verdictLabel, type PersonVerdict } from "./lib/taskVerdicts";
+import { HANDOFF_COMMENT } from "./lib/runAgentSessions";
 
 type Conv = Doc<"conversations">;
 
@@ -27,7 +28,8 @@ export type ChainEntry = { conversation_id: string; short_id: string; title: str
 export type OriginatorHead = {
   chain: ChainEntry[];
   stopped?: ChainStop;
-  originator: {
+  /** Absent on a read of a task alone. */
+  originator?: {
     conversation_id: string;
     short_id: string;
     user_id: string;
@@ -86,13 +88,67 @@ async function walkFrom(ctx: any, userId: Id<"users">, start: Conv) {
   return { chain, stopped, root: hops[hops.length - 1].conversation };
 }
 
-/** The chain of the session that filed a task, as far as `userId` may read it. */
-async function filingChain(ctx: any, userId: Id<"users">, task: Doc<"tasks">): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
-  const filedIn = task.created_from_conversation ? await ctx.db.get(task.created_from_conversation as Id<"conversations">) : null;
-  if (!filedIn) return { chain: [] };
-  if (!(await canOwnerOrTeamAccess(ctx, userId, filedIn))) return { chain: [], stopped: "access_denied" };
-  const walk = await walkFrom(ctx, userId, filedIn);
-  return { chain: walk.chain, ...(walk.stopped ? { stopped: walk.stopped } : {}) };
+/** The most sessions bound to or handing off a task that its chains start from, the newest kept. */
+export const TASK_SESSION_ANCHORS = 12;
+/** The newest comments on a task read for handoffs, as runAgentSessions reads them. */
+const HANDOFF_SCAN = 200;
+
+/**
+ * The sessions tied to a task, each read off the record, never named by a client: the one that filed it
+ * (created_from_conversation) and, with `worked`, the sessions bound to it (active_task_id, set by a start or a move
+ * to in progress, a session created for the task or a handoff, never by an update that only links the session in
+ * conversation_ids) and those whose handoff comment is on it, newest first. A session reviewing the task is none of
+ * them. Like the filing session, a binding or a handoff comment names its session from the writer's ref, so a person
+ * forging one is outside what the check guards (citeRun).
+ */
+async function taskAnchors(ctx: any, task: Doc<"tasks">, worked: boolean): Promise<Conv[]> {
+  const filed = task.created_from_conversation ? await ctx.db.get(task.created_from_conversation as Id<"conversations">) : null;
+  const out: Conv[] = filed ? [filed] : [];
+  if (!worked) return out;
+  const notReview = (c: Conv | null): c is Conv => !!c && String(c.review_of_task_id ?? "") !== String(task._id);
+  const bound: Conv[] = (await ctx.db.query("conversations").withIndex("by_active_task", (q: any) => q.eq("active_task_id", task._id)).order("desc").take(TASK_SESSION_ANCHORS * 2))
+    .filter(notReview)
+    .sort((a: Conv, b: Conv) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const handoffIds = (await ctx.db.query("task_comments").withIndex("by_task_created", (q: any) => q.eq("task_id", task._id)).order("desc").take(HANDOFF_SCAN))
+    .filter((c: any) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text))
+    .map((c: any) => String(c.conversation_id));
+  const seen = new Set([...out, ...bound].map((c) => String(c._id)));
+  const handedOff: Conv[] = [];
+  for (const id of handoffIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const conv = await ctx.db.get(id as Id<"conversations">);
+    if (notReview(conv)) handedOff.push(conv);
+  }
+  return [...out, ...[...bound, ...handedOff].slice(0, TASK_SESSION_ANCHORS)];
+}
+
+/**
+ * The chains up from the sessions tied to a task (taskAnchors), merged, as far as `userId` may read them: the filing
+ * session's alone, or with `worked` the bound and handoff sessions' too.
+ */
+async function taskChains(ctx: any, userId: Id<"users">, task: Doc<"tasks">, worked: boolean): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
+  const chain = new Map<string, ChainEntry>();
+  let stopped: ChainStop | undefined;
+  for (const anchor of await taskAnchors(ctx, task, worked)) {
+    if (!(await canOwnerOrTeamAccess(ctx, userId, anchor))) { stopped ??= "access_denied"; continue; }
+    const walk = await walkFrom(ctx, userId, anchor);
+    for (const hop of walk.chain) if (!chain.has(hop.conversation_id)) chain.set(hop.conversation_id, hop);
+    stopped ??= walk.stopped;
+  }
+  return { chain: [...chain.values()], ...(stopped ? { stopped } : {}) };
+}
+
+/**
+ * The session that started a run, if one did: its spawner, unless that is only the stand-in a run gets when no
+ * session started it (createFromCli gives a run that names no spawner its project lead's standing session). A lead
+ * that runs the work itself still reaches the check through the task's sessions, which it is bound to or spawned.
+ */
+async function startingSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null): Promise<Conv | null> {
+  if (!run.spawner_conversation_id) return null;
+  const lead = task ? await projectLeadSession(ctx, task) : null;
+  if (lead && String(lead._id) === String(run.spawner_conversation_id)) return null;
+  return await ctx.db.get(run.spawner_conversation_id);
 }
 
 /** Who started a run (workflow_runs.user_id), read from the run itself. */
@@ -101,36 +157,61 @@ async function starterOf(ctx: any, run: Doc<"workflow_runs">) {
   return { starter_id: String(run.user_id), starter_name: nameOf(row), starter_is_bot: !!row?.is_bot };
 }
 
-/** The chain from a session to its originator, a task's filing session's chain when one is named, and who started the run when one is. */
+/**
+ * The chain from a session to its originator, the chain of the session that filed a task when one is named, and who
+ * started the run when one is. With a task and no session (a run started from a plain shell on a task whose working
+ * sessions have ended), the chains of the task's sessions (taskAnchors) are the whole read, as citeRun walks them for
+ * a run no session started, and a task no session is tied to is an error.
+ */
 export const chain = internalQuery({
-  args: { api_token: v.string(), conversation_id: v.string(), task: v.optional(v.string()), run_id: v.optional(v.string()) },
+  args: { api_token: v.string(), conversation_id: v.optional(v.string()), task: v.optional(v.string()), run_id: v.optional(v.string()) },
   handler: async (ctx, args): Promise<(OriginatorHead & Partial<Awaited<ReturnType<typeof starterOf>>>) | { error: string }> => {
-    const access = await readableConversation(ctx, args.api_token, args.conversation_id);
-    if ("error" in access) return { error: access.error ?? "Access denied" };
-    const userId = access.user._id;
+    let userId: Id<"users">;
+    let start: Conv | null = null;
+    if (args.conversation_id !== undefined) {
+      const access = await readableConversation(ctx, args.api_token, args.conversation_id);
+      if ("error" in access) return { error: access.error ?? "Access denied" };
+      userId = access.user._id;
+      start = access.conv;
+    } else {
+      if (!args.task) return { error: "Name a session or a task" };
+      const auth = await verifyApiToken(ctx, args.api_token);
+      if (!auth) return { error: "Unauthorized" };
+      userId = auth.userId as Id<"users">;
+    }
     const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
     const run = runId ? await ctx.db.get(runId) : null;
     if (args.run_id && (!run || !(await canReadRun(ctx, userId, run)))) return { error: `Run ${args.run_id} not found` };
-    const walk = await walkFrom(ctx, userId, access.conv);
-    const author = walk.root.author_user_id ?? walk.root.user_id;
-    const authorRow = await ctx.db.get(author);
-    const head: OriginatorHead = {
-      chain: walk.chain,
-      ...(walk.stopped ? { stopped: walk.stopped } : {}),
-      originator: {
+    const task = args.task ? await findTaskByRef(ctx, args.task) : null;
+    if (args.task && (!task || !(await canAccessTask(ctx, userId, task)))) return { error: `Task ${args.task} not found` };
+    // Named no session, a read walks what citeRun walks: the session that started the run when one did, else the
+    // task's working sessions (`worked`).
+    let worked = false;
+    if (!start) {
+      const starting = run ? await startingSession(ctx, run, task) : null;
+      if (starting && (await canOwnerOrTeamAccess(ctx, userId, starting))) start = starting;
+      worked = !starting;
+    }
+    const head: OriginatorHead = { chain: [], cards: [] };
+    if (start) {
+      const walk = await walkFrom(ctx, userId, start);
+      const author = walk.root.author_user_id ?? walk.root.user_id;
+      const authorRow = await ctx.db.get(author);
+      head.chain = walk.chain;
+      if (walk.stopped) head.stopped = walk.stopped;
+      head.originator = {
         conversation_id: String(walk.root._id),
         short_id: shortIdOf(walk.root),
         user_id: String(author),
         user_name: nameOf(authorRow),
         is_bot: !!authorRow?.is_bot,
         launched_by_program: launchedByProgram(walk.root),
-      },
-      cards: [],
-    };
-    const task = args.task ? await findTaskByRef(ctx, args.task) : null;
-    if (args.task) {
-      if (!task || !(await canAccessTask(ctx, userId, task))) return { error: `Task ${args.task} not found` };
-      head.task = { short_id: task.short_id ?? String(task._id), ...(await filingChain(ctx, userId, task)) };
+      };
+    }
+    if (task) {
+      // A read of a task alone takes the sessions that worked it; beside a session, only the one that filed it.
+      head.task = { short_id: task.short_id ?? String(task._id), ...(await taskChains(ctx, userId, task, worked)) };
+      if (!start && !head.task.chain.length) return { error: `No session you can read is tied to ${args.task}` };
     }
     // Cards asked in any session on the chain, then the task's Ship cards: one line per card.
     const sessions = new Map([...head.chain, ...(head.task?.chain ?? [])].map((h) => [h.conversation_id, h.short_id]));
@@ -155,9 +236,11 @@ export const chain = internalQuery({
 /**
  * What a cited word (`cast flow intent-verify`, /cli/intent/verify) is checked against: who started the run, every session its
  * change came through as the run's own runner may read them, and the newest verdict a person gave on the task's
- * Ship cards. The chain is walked up from two anchors only, both written by the server, not by agents: the session
- * that started the run (spawner_conversation_id) and the one that filed its task (created_from_conversation). Task
- * comments, which any agent can post, name no anchor.
+ * Ship cards. The chain is walked up from anchors the server reads off the run and its task, never from a session
+ * the caller names: the session that started the run (startingSession: its spawner, unless that is only the project
+ * lead's stand-in) and the one that filed its task (created_from_conversation). For a run no session started (a plain
+ * shell's `--task` run), its task's working sessions stand in: those bound to the task and those that handed it off
+ * (taskAnchors). Any other task comment names no anchor.
  *
  * The threat this guards against is an honest misread: a model citing a line a person did not type, a quote not on
  * it, another person's word, or a word a later verdict took back. It does not guard against a holder of the
@@ -171,12 +254,13 @@ export const citeRun = internalQuery({
     const run = runId ? await ctx.db.get(runId) : null;
     if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner can check its asker's word" };
     const task = run.task_id ? await ctx.db.get(run.task_id) : null;
-    const spawner = run.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
+    const spawner = await startingSession(ctx, run, task);
     const chain = new Map<string, { conversation_id: string; short_id: string }>();
     if (spawner && (await canOwnerOrTeamAccess(ctx, run.user_id, spawner))) {
       for (const hop of (await walkFrom(ctx, run.user_id, spawner)).chain) chain.set(hop.conversation_id, hop);
     }
-    if (task) for (const hop of (await filingChain(ctx, run.user_id, task)).chain) chain.set(hop.conversation_id, hop);
+    // A run no session started (a plain shell) takes its task's working sessions as its line of work.
+    if (task) for (const hop of (await taskChains(ctx, run.user_id, task, !spawner)).chain) chain.set(hop.conversation_id, hop);
     const starter = await starterOf(ctx, run);
     const [verdict] = task ? await personVerdicts(ctx, task._id) : [];
     return {

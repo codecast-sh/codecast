@@ -7,12 +7,17 @@ const typedStepOf = (ctx: any, api_token: string) => (id: string, state: unknown
 
 // POST /cli/sessions/originator (`cast flow asker`): who started a session's line of work and what people typed
 // along it, its chain up to the originator and each typed line with its provenance, numbered as `cast read` numbers it.
+// A task named without a session reads the sessions tied to the task instead.
 export async function originatorRoute(ctx: any, body: any) {
   const { api_token, conversation_id, task, run_id } = body;
-  if (typeof api_token !== "string" || typeof conversation_id !== "string") return { error: "Missing api_token or conversation_id" };
+  if (typeof api_token !== "string") return { error: "Missing api_token" };
+  if (typeof conversation_id !== "string" && typeof task !== "string") return { error: "Missing conversation_id or task" };
   return await readOriginator({
     head: () => ctx.runQuery(internal.originator.chain, {
-      api_token, conversation_id, ...(typeof task === "string" ? { task } : {}), ...(typeof run_id === "string" ? { run_id } : {}),
+      api_token,
+      ...(typeof conversation_id === "string" ? { conversation_id } : {}),
+      ...(typeof task === "string" ? { task } : {}),
+      ...(typeof run_id === "string" ? { run_id } : {}),
     }),
     typedStep: typedStepOf(ctx, api_token),
   });
