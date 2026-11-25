@@ -1399,8 +1399,10 @@ export function createOrgSlice(): OrgSliceImpl {
       // it moves in the same tick, and the echo of the conversation confirms it.
       // Mirrors performReparentSession: a role's own standing session never
       // moves, and any person target but a remove clears the role.
-      const session = (this as OrgDraft & { sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null }> }).sessions?.[conversationId];
+      const session = (this as OrgDraft & { sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null; team_session?: boolean }> }).sessions?.[conversationId];
       if (session && !session.standing_role_id && (target.kind === "role" || target.mode !== "remove")) session.org_role_id = target.kind === "role" ? target.role_id : null;
+      // A team session shows the same tick: "everyone" among the owners makes one; a set without it, or adding a person, ends it.
+      if (session && target.kind === "user" && target.owners) session.team_session = target.owners.includes("everyone") ? target.mode !== "remove" : target.mode === "remove" ? session.team_session : false;
       // Move the tree only when it is mounted and can place the move; recording
       // an intent for a session in no bucket the page did not hand over would
       // replay a no-op until its TTL. A `remove` has no single new parent, so

@@ -86,7 +86,9 @@ import {
 import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { RECEIPT_OWNS_SERVER_WRITE, hasReceiptCommandId, receiptCommandId, receiptLocalResult, receiptOrLegacyCommandId, runReceiptBackedCreate, validatedCreateContinuation } from "./dispatchReceipts";
 import { deleteRecordingRun } from "./callRecordings";
-import { isSessionOwner } from "./sessionOwners";
+import { addSessionTeamOwnerRow, isSessionOwner, setSessionOwnerRows } from "./sessionOwners";
+import { canUseTeamSessions } from "./lib/teamFeatureGuard";
+import { VIEWER_TRIAGE_FIELDS, isTeamOwnedConversation, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { getComment } from "./commentStore";
@@ -522,6 +524,33 @@ export async function applyPatches(
           const lead = close ? null : await ctx.db.get((doc as any).parent_conversation_id);
           if (close || (lead && (finalSafe as any).inbox_adopted_at === lead.inbox_closed_at)) {
             (finalSafe as any).inbox_adopted_at = (doc as any).inbox_adopted_at;
+          }
+        }
+        // A team session's dismiss, close, stash, snooze and pin are each
+        // person's own (lib/viewerTriage.ts): written for this person, never on
+        // the row the whole team reads. A kill stays on the row and ends it for
+        // everyone; the client marks a kill only by its action name
+        // (EXPLICIT_KILL_ACTIONS: forceKill without close).
+        const explicitKill = !!opts?.forceKill && !opts?.close;
+        if (
+          table === "conversations"
+          && VIEWER_TRIAGE_FIELDS.some((k) => k in finalSafe)
+          && await isTeamOwnedConversation(ctx as any, doc._id as Id<"conversations">, doc)
+        ) {
+          const f = finalSafe as any;
+          if (explicitKill && f.inbox_dismissed_at) {
+            // Killed for everyone: one field says so (inbox_killed_at), and it
+            // takes the session out of every member's window.
+            if (!f.inbox_killed_at && !(doc as any).inbox_killed_at) f.inbox_killed_at = f.inbox_dismissed_at;
+          } else if ((doc as any).inbox_killed_at && "inbox_dismissed_at" in f && !f.inbox_dismissed_at) {
+            // A restore of a killed team session brings it back for everyone,
+            // and this person's own hides come off with it.
+            f.inbox_killed_at = undefined;
+            await recordViewerTriage(ctx as any, userId, doc._id as Id<"conversations">, { inbox_dismissed_at: null, inbox_closed_at: null, inbox_stashed_at: null, inbox_stash_hidden: null, inbox_snoozed_until: null });
+          } else if (!f.inbox_killed_at) {
+            const triage: Record<string, any> = {};
+            for (const k of VIEWER_TRIAGE_FIELDS) if (k in f) { triage[k] = f[k]; delete f[k]; }
+            if (Object.keys(triage).length) await recordViewerTriage(ctx as any, userId, doc._id as Id<"conversations">, triage);
           }
         }
         if (Object.keys(finalSafe).length === 0) continue;
@@ -1100,7 +1129,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; description?: string; team_id?: string } }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; description?: string; team_id?: string } }]) => {
     // A hosted conversation (the simple lane's assistant) runs in this
     // backend: no device, no daemon command. Its start queues the first
     // message in the same transaction, idempotent on session_id like below.
@@ -1252,6 +1281,23 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const projectId = project?._id ?? null;
     if (project?.team_id && !resolvedTeamId && (await isTeamMember(ctx as any, userId, project.team_id))) resolvedTeamId = project.team_id;
     if (handChannel && String(resolvedTeamId ?? "") !== String(handChannel.team_id)) opts = { ...opts, private: true };
+    // The composer's Team pill, chosen before the first send: share it the way
+    // the header's share control does (buildShareUpdate resolves the team).
+    // Mine rides as `private`, which wins; untouched, the folder rule decides.
+    // Team (the composer's switch): a team session, owned by everyone on the
+    // team and read whole by them. Behind the team's Team sessions feature.
+    let teamSession = false;
+    if (opts.team && !opts.private) {
+      const share = await buildShareUpdate(ctx, { team_id: resolvedTeamId, git_root: resolvedGitRoot, project_path: resolvedProjectPath, git_remote_url: resolvedGitRemoteUrl }, userId);
+      // Only where that team has Team sessions on: elsewhere the pick changes
+      // nothing and the session starts as it always would.
+      if (share.team_id && await canUseTeamSessions(ctx as any, share.team_id)) {
+        resolvedTeamId = share.team_id;
+        isPrivate = false;
+        autoShared = false;
+        teamSession = true;
+      }
+    }
     const conversationId = await ctx.db.insert("conversations", {
       user_id: runnerUserId,
       ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
@@ -1270,7 +1316,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // no folder rule can share it.
       ...(opts.private
         ? { is_private: true, team_visibility: "private" as const }
-        : { is_private: isPrivate, auto_shared: autoShared || undefined }),
+        : { is_private: isPrivate, auto_shared: autoShared || undefined, ...(teamSession ? { team_visibility: "full" as const } : {}) }),
       status: "active" as const,
       ...(linkedTask ? { active_task_id: linkedTask._id } : {}),
       // Stamp the plan so the inbox can group plan workers even without a viable
@@ -1289,6 +1335,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
     await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+    // A team session has no person owners: the team owns it.
+    if (teamSession && resolvedTeamId) {
+      await setSessionOwnerRows(ctx, conversationId, [], userId);
+      await addSessionTeamOwnerRow(ctx, conversationId, resolvedTeamId, userId);
+    }
     if (projectId && (opts.project_default || newProjectId)) await claimProjectDefaultSession(ctx, projectId, conversationId);
     // A session born bound to a task or plan a lead owns is the lead's (S35).
     if (linkedTask || workerPlanId) await (ctx as any).scheduler?.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conversationId });
@@ -1629,6 +1680,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
     // Sharing must guarantee a team_id (buildShareUpdate); locking forces the
     // private visibility marker. Never let is_private:false and team_id diverge.
+    await refuseHidingTeamSession(ctx as any, conv._id, { is_private: isPrivate });
     const updates = isPrivate
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conv, userId);
@@ -1694,6 +1746,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    await refuseHidingTeamSession(ctx as any, conv._id, { team_visibility: visibility });
     // Setting any team visibility shares the conversation, so guarantee a
     // team_id alongside it (else it's shared-with-nobody).
     const updates = await buildShareUpdate(ctx, conv, userId);

@@ -1,4 +1,5 @@
 import { LogoIcon } from "../Logo";
+import { TeamSessionSwitch } from "./TeamSessionSwitch";
 import { FolderSyncControl } from "./FolderSyncControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
 import { usePolicyRefusal } from "../../lib/managedPolicy";
@@ -1417,6 +1418,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             {agentRow && agentSwitcher(true)}
             {!hosted && <div ref={setModeSlot} className="contents" />}
             {!hosted && <span className="ml-2 inline-flex"><NewSessionProjectToggle conversation={conversation} /></span>}
+            {!hosted && <TeamSessionSwitch conversationId={String(conversation._id)} />}
           </>,
           slots.foot,
         )}
@@ -1456,7 +1458,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
           </ErrorBoundary>
           <div className="flex-1" />
-          <div className="w-full px-4 mb-2 flex"><NewSessionProjectToggle conversation={conversation} /></div>
+          <div className="w-full px-4 mb-2 flex items-center"><NewSessionProjectToggle conversation={conversation} /><TeamSessionSwitch conversationId={String(conversation._id)} /></div>
           {contextLine("w-full px-4 mb-4")}
         </>
       )}

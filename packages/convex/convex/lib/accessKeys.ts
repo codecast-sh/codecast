@@ -8,7 +8,8 @@
 // live in access.ts, which re-exports this file so callers see one layer.
 import { Id } from "../_generated/dataModel";
 import { isTeamMember, teamVisibleConvTeam } from "../privacy";
-import { listSessionOwnerIds } from "../sessionOwners";
+import { listSessionOwnerIds, listSessionTeamOwnerIds } from "../sessionOwners";
+import { mayBeTeamOwned } from "./viewerTriage";
 
 type AccessCtx = { db: any };
 
@@ -56,10 +57,12 @@ export async function accessStampFor(ctx: AccessCtx, table: string, doc: any): P
   const stamp = accessStampFromDoc(table, doc);
   if (!stamp) return null;
   if (table === "conversations") {
-    const grants = (await listSessionOwnerIds(ctx, doc._id))
-      .map(String)
-      .filter((id) => id !== stamp.access_owner)
-      .sort();
+    // Person owners grant to themselves; an owning team grants to whoever
+    // holds its key, so a member who joins later reads it with no re-stamp.
+    const grants = [
+      ...(await listSessionOwnerIds(ctx, doc._id)).map(String).filter((id) => id !== stamp.access_owner),
+      ...(mayBeTeamOwned(doc) ? await listSessionTeamOwnerIds(ctx, doc._id) : []).map((id) => `team:${String(id)}`),
+    ].sort();
     if (grants.length) stamp.access_grants = [...new Set(grants)];
   } else if (!stamp.access_key) {
     stamp.access_key = await resolveWorkspaceKey(ctx, doc);
@@ -80,7 +83,7 @@ export function authorizedFor(
 ): boolean {
   if (!stamp?.access_owner) return false;
   if (stamp.access_owner === userId) return true;
-  if (stamp.access_grants?.includes(userId)) return true;
+  if (stamp.access_grants?.some((g) => g === userId || heldKeys.has(g))) return true;
   if (stamp.access_key && heldKeys.has(stamp.access_key)) return true;
   return false;
 }

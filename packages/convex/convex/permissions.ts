@@ -1,4 +1,7 @@
 import { permissionRemovalValidator } from "./lib/permissionRemoval";
+import { isTeamOwnedConversation } from "./lib/viewerTriage";
+import { recordTeamAnswer } from "./lib/teamSessionAnswer";
+import { listSessionPartyIds } from "./sessionOwners";
 import { settlePermissionProposals, viewerSeesDetail } from "./teamSuggestions";
 import { redactSecrets } from "./redact";
 import { mutation, query, internalMutation } from "./functions";
@@ -266,6 +269,10 @@ async function answerPermission(
     ...(answer.remember ? { remember: true } : {}),
   });
   await settlePermissionProposals(ctx, p, answer.status);
+  // On a team session everyone was asked: the rest of the team's alerts clear.
+  if (await isTeamOwnedConversation(ctx, conversation._id, conversation)) {
+    await recordTeamAnswer(ctx, conversation._id, userId, await listSessionPartyIds(ctx, conversation._id), true);
+  }
   await recordAuthorityEvent(ctx, {
     kind: "permission_answered",
     actor_user_id: userId,

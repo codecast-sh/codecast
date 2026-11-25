@@ -1,4 +1,7 @@
 import { isHostedAgentType } from "@codecast/shared/contracts";
+import { isTeamOwnedConversation } from "./lib/viewerTriage";
+import { recordTeamAnswer } from "./lib/teamSessionAnswer";
+import { listSessionPartyIds } from "./sessionOwners";
 import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage, imageEchoMatchesPending, injectedImageRefs, injectedImageStorageIds, pendingImageStorageIds, resolveEchoImages, verifiedEchoImages } from "./lib/echoMatch";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { clipText } from "./lib/wellFormed";
@@ -921,6 +924,16 @@ async function settleEchoesOn(
   for (const row of echoed) await settleEchoedPending(ctx, row, message._id);
 }
 
+// A person typing into a team session's own terminal answers it too: their
+// words arrive here, not through a send, and the rest of the team's alerts
+// clear the same way (lib/teamSessionAnswer). Only a turn a person opened
+// (lib/userSend.turnOpener), never a session's message, a trigger's wake or a
+// summary, and the answerer is that person.
+export async function answerTeamSessionFromTranscript(ctx: { db: any }, conversation: Doc<"conversations">, opener: TurnOpener | null) {
+  if (opener?.origin !== "person" || !(await isTeamOwnedConversation(ctx, conversation._id, conversation))) return;
+  await recordTeamAnswer(ctx, conversation._id, opener.by, await listSessionPartyIds(ctx, conversation._id), conversation.last_message_role === "assistant");
+}
+
 // Stamp what the session opened with (see titleGeneration.firstPromptOf),
 // once. Only on a young session: an old row with no stamp gets it from the
 // backfill, which reads its real opening, where this batch holds its latest turn.
@@ -1236,6 +1249,7 @@ export const addMessage = mutation({
       last_message_role: args.role,
     };
     stampFirstPrompt(conversation, [{ role: args.role, content: safeContent, tool_results: args.tool_results }], convPatch);
+    await answerTeamSessionFromTranscript(ctx, conversation, opener);
     await rollUpUsage(ctx, conversation, [{ usage: args.usage, api_message_id: args.api_message_id, inserted: true, model: args.model, timestamp: msgTimestamp }], convPatch, now);
     const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, content: contentToStore, timestamp: msgTimestamp }]);
     if (msgModel && msgModel !== conversation.model) {
@@ -1962,6 +1976,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       last_message_role: lastMsg.role,
     };
     stampFirstPrompt(conversation, args.messages, convPatch);
+    await answerTeamSessionFromTranscript(ctx, conversation, lastTurnOpener);
     await rollUpUsage(ctx, conversation, usageRows, convPatch, Date.now());
     if (oldRowEdits > 0) {
       convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;

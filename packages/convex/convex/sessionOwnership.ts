@@ -1,12 +1,20 @@
 import { mutation, query, internalMutation, internalAction } from "./functions";
+import { isTeamOwnedConversation } from "./lib/viewerTriage";
 import { roleRunner } from "./lib/seatPlace";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { checkConversationAccess } from "./privacy";
+import { buildShareUpdate, checkConversationAccess } from "./privacy";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
+import { requireTeamFeature } from "./lib/teamFeatureGuard";
 import {
+  addSessionTeamOwnerRow,
+  listSessionPartyIds,
+  listSessionTeamOwnerIds,
+  removeSessionTeamOwnerRow,
+  teamPeopleIds,
   addSessionOwnerRow,
   removeSessionOwnerRow,
   listSessionOwnerIds,
@@ -76,7 +84,29 @@ export type OwnerMutationResult = {
   owners: OwnerInfo[]; // the full resulting owner set
   added: Id<"users">[]; // newly added by this call — exactly who to notify
   removed: Id<"users">[];
+  // The team whose every member owns the session (the `everyone` owner ref),
+  // and the people this call newly reached by sharing it with them: who to
+  // notify beyond `added`.
+  team: TeamOwnerInfo | null;
+  shared_with: Id<"users">[];
 };
+
+export type TeamOwnerInfo = { team_id: string; name: string; added_by: string; added_at: number; note: string | null };
+
+// The owner ref that means "everyone on the session's team".
+export function isEveryoneRef(ref: string): boolean {
+  return ref.trim().toLowerCase() === "everyone";
+}
+
+async function teamOwnerInfo(ctx: { db: any }, conversationId: Id<"conversations">): Promise<TeamOwnerInfo | null> {
+  const row = await ctx.db
+    .query("session_team_owners")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .first();
+  if (!row) return null;
+  const team = await ctx.db.get(row.team_id);
+  return { team_id: String(row.team_id), name: team?.name ?? "the team", added_by: String(row.added_by), added_at: row.added_at, note: row.note ?? null };
+}
 
 async function resolveOwnableConversation(
   ctx: { db: any },
@@ -399,6 +429,7 @@ async function reparentSessionCore(
 
   const added: Id<"users">[] = [];
   const removed: Id<"users">[] = [];
+  const sharedWith: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
 
@@ -411,15 +442,76 @@ async function reparentSessionCore(
     const refs = args.target.owners ?? (args.target.user_id ? [args.target.user_id.toString()] : []);
     const desiredKeys = new Set<string>();
     const desired: any[] = [];
+    let everyone = false;
+    let namedTeam: Id<"teams"> | undefined;
     for (const ref of refs) {
       const trimmed = ref.trim();
       if (!trimmed) continue;
+      if (isEveryoneRef(trimmed)) { everyone = true; continue; }
+      // A recorded team owner (`team:<id>`, the org log's form): everyone on that team.
+      // Only the session's own team: a team ref never moves a session elsewhere.
+      if (trimmed.startsWith("team:")) {
+        if (!trimmed.slice(5) || trimmed.slice(5) !== String(conversation.team_id ?? "")) throw new Error("A session can only be shared with everyone on its own team");
+        everyone = true; namedTeam = trimmed.slice(5) as Id<"teams">; continue;
+      }
       const user = await resolveOwnerRef(ctx, authUserId, conversation, trimmed);
       if (mode !== "remove") assertHumanOwner(user);
       const key = user._id.toString();
       if (desiredKeys.has(key)) continue;
       desiredKeys.add(key);
       desired.push(user);
+    }
+    // Everyone on the session's team: one team owner row. Adding it needs the
+    // session to be on a team the caller belongs to, the rule an owner ref of
+    // a teammate follows.
+    // A session with no team yet takes the team sharing it would give its
+    // RUNNER (buildShareUpdate for the account that runs it), never the
+    // caller's: a co-owner cannot carry someone's session into their own team.
+    let teamId = (namedTeam ?? conversation.team_id) as Id<"teams"> | undefined;
+    if (everyone && mode !== "remove" && !teamId) teamId = (await buildShareUpdate(ctx as any, conversation, conversation.user_id)).team_id;
+    if (everyone && mode !== "remove") {
+      if (!teamId) throw new Error(`Session ${shortId} has no team, so there is no everyone to share it with`);
+      await requireTeamFeature(ctx as any, teamId, "team_sessions");
+      const member = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", authUserId).eq("team_id", teamId))
+        .first();
+      if (!member) throw new Error("You are not a member of this session's team");
+      // A session the runner locked private is theirs alone to open to the team.
+      if (conversation.team_visibility === "private" && String(authUserId) !== String(conversation.user_id)) {
+        throw new Error("Only the person running this session can share it, since they made it private");
+      }
+      // The team replaces the person owners, so each of them must be on it, or
+      // they lose their own session (a teamless session an agent account runs
+      // resolves to the agent's team, which its people may not share).
+      for (const ownerId of await listSessionOwnerIds(ctx, conversation._id)) {
+        if ((await ctx.db.get(ownerId))?.is_bot) continue;
+        const onTeam = await ctx.db
+          .query("team_memberships")
+          .withIndex("by_user_team", (q: any) => q.eq("user_id", ownerId).eq("team_id", teamId))
+          .first();
+        if (!onTeam) throw new Error("Every owner must be on the team before it becomes a team session");
+      }
+      const reachedBefore = new Set((await listSessionPartyIds(ctx, conversation._id)).map(String));
+      if (await addSessionTeamOwnerRow(ctx, conversation._id, teamId, authUserId, handoff ?? note)) {
+        for (const id of await teamPeopleIds(ctx, teamId)) if (!reachedBefore.has(String(id))) sharedWith.push(id);
+        // A team session is always the team's to read, whole.
+        await patchConversationVisibility(ctx as any, conversation, { team_id: teamId, is_private: false, team_visibility: "full", auto_shared: undefined }, authUserId);
+      }
+    } else if (mode === "remove" ? everyone : mode === "set" || desired.length > 0) {
+      // Personal again: a set without everyone, or a person added to it.
+      // Every team row goes, whatever team the session is on now.
+      for (const tid of await listSessionTeamOwnerIds(ctx, conversation._id)) await removeSessionTeamOwnerRow(ctx, conversation._id, tid);
+    }
+    // The team and people never own a session together (team sessions spec:
+    // a team session has no person owners). Adding the team takes every
+    // person row off, so each member's triage is their own row for all of them.
+    if (everyone && mode !== "remove") {
+      desired.length = 0;
+      desiredKeys.clear();
+      for (const ownerId of await listSessionOwnerIds(ctx, conversation._id)) {
+        if (await removeSessionOwnerRow(ctx, conversation._id, ownerId)) removed.push(ownerId);
+      }
     }
     if (mode === "remove") {
       for (const user of desired) {
@@ -442,12 +534,14 @@ async function reparentSessionCore(
     // see. Only a real addition clears them, and only a stamp that is set — an
     // untouched row takes no write. A kill is left alone: that row is retired,
     // and `cast restore` is the gesture that brings it back.
-    if (added.length > 0) await unhide(ctx, conversation);
+    if (added.length > 0 || sharedWith.length > 0) await unhide(ctx, conversation);
     // The session reports to the person this act named: `add` hands it to the
     // added person (a handoff, the chart follows), `set` to the LAST listed —
     // callers put the person the act names at the end of `owners`. A remove
     // leaves the line to whoever remains, oldest first.
     const preferred = mode === "remove" ? undefined : desired[desired.length - 1]?._id;
+    // Also the conversation write that re-stamps its access grants, so a team
+    // owner added or removed reaches the team's sync scope.
     await syncPrimaryOwnerCache(ctx, conversation._id, preferred);
     // A person is now the parent: the role pointer comes off (S11). A remove
     // is not a re-homing, so a session filed under a role stays there.
@@ -497,6 +591,8 @@ async function reparentSessionCore(
     owners,
     added,
     removed,
+    team: await teamOwnerInfo(ctx, conversation._id),
+    shared_with: sharedWith,
     org_role_id: roleId ?? null,
     reports_to: after,
     told,
@@ -677,7 +773,7 @@ export const setSessionOwner = mutation({
       session_id: args.session_id,
       owners: ownerRef ? [ownerRef] : [],
     });
-    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId);
+    await notifySessionAssigned(ctx, result.conversation_id, [...result.added, ...result.shared_with], authUserId);
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return { ok: true as const, short_id: result.short_id, owner: result.owners[0] ?? null };
   },
@@ -700,7 +796,7 @@ export const setSessionOwners = mutation({
       note: args.note?.trim() || undefined,
       from_session: args.from_session,
     });
-    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
+    await notifySessionAssigned(ctx, result.conversation_id, [...result.added, ...result.shared_with], authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
   },
@@ -723,7 +819,7 @@ export const addSessionOwner = mutation({
       note: args.note?.trim() || undefined,
       from_session: args.from_session,
     });
-    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
+    await notifySessionAssigned(ctx, result.conversation_id, [...result.added, ...result.shared_with], authUserId, args.note?.trim());
     await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
     return result;
   },
@@ -827,11 +923,13 @@ export async function performListOwners(
   short_id: string;
   conversation_id: Id<"conversations">;
   owners: OwnerInfo[];
+  team: TeamOwnerInfo | null;
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
   const owners = await listOwnerInfos(ctx, conversation._id);
-  if (owners.length === 0) {
+  const team = await teamOwnerInfo(ctx, conversation._id);
+  if (owners.length === 0 && !team) {
     const starter = await humanStarterUser(ctx, conversation);
     if (starter) {
       const startedAt = conversation.started_at ?? conversation._creationTime ?? Date.now();
@@ -850,6 +948,7 @@ export async function performListOwners(
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
     owners,
+    team,
   };
 }
 
@@ -985,6 +1084,9 @@ const BOUND_NOTE = "It looks after the work this session is bound to. It reads w
 
 export async function applyHoldChange(ctx: { db: any; scheduler?: any }, conversationId: Id<"conversations">): Promise<{ change: HoldChange["kind"]; role?: string }> {
   const c = await ctx.db.get(conversationId);
+  // A team session is the team's: no background move files it under a role
+  // or hands it to a person (team sessions spec).
+  if (c && await isTeamOwnedConversation(ctx, c._id, c)) return { change: "keep" };
   const change = await holdChangeFor(ctx, c);
   if (change.kind === "keep") return { change: "keep" };
   const actor = c.owner_user_id ?? c.user_id;

@@ -31,7 +31,7 @@ import {
 import { personName } from "./sessionTell";
 import { computeWorkspaceKey } from "./access";
 import { capsFor, trustOf } from "./orgCaps";
-import { listSessionOwnerIds, ownerRowsOf, ownerSetOf, type OwnerRowSnapshot } from "../sessionOwners";
+import { listSessionOwnerIds, listSessionTeamOwnerIds, ownerRowsOf, ownerSetOf, type OwnerRowSnapshot } from "../sessionOwners";
 
 type Ctx = { db: any };
 
@@ -125,7 +125,7 @@ function recordingDb(db: any, s: State): any {
   return new Proxy(db, { get(target, prop) {
     if (prop === "delete") return async (...args: any[]) => {
       const id = args.at(-1);
-      if (target.normalizeId("session_owners", id)) await noteOwnersBefore(target, s, (await target.get(id))?.conversation_id);
+      if (target.normalizeId("session_owners", id) || target.normalizeId("session_team_owners", id)) await noteOwnersBefore(target, s, (await target.get(id))?.conversation_id);
       return target.delete(...args);
     };
     if (prop === "get") return async (id: string) => {
@@ -134,7 +134,7 @@ function recordingDb(db: any, s: State): any {
       return doc;
     };
     if (prop === "insert") return async (table: string, doc: any) => {
-      if (table === "session_owners") await noteOwnersBefore(target, s, doc.conversation_id);
+      if (table === "session_owners" || table === "session_team_owners") await noteOwnersBefore(target, s, doc.conversation_id);
       const id = await target.insert(table, doc);
       cache.set(id, { ...doc, _id: id });
       recordWrite(s, table, id, null, doc);
@@ -190,6 +190,13 @@ export const scopeRef = (scope: any) => ({ project_ids: (scope?.project_ids ?? [
 export async function labelsOf(ctx: Ctx, ids: Array<string | null | undefined | false>, read: (id: any) => Promise<any> = (id) => ctx.db.get(id)): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const id of new Set(ids.filter(Boolean) as string[])) {
+    // A team owner (`team:<id>`, sessionParent) reads as everyone on it.
+    if (id.startsWith("team:")) {
+      let team: any = null;
+      try { team = await read(id.slice(5)); } catch { team = null; }
+      out[id] = `Everyone on ${team?.name ?? "the team"}`;
+      continue;
+    }
     let doc: any = null;
     try { doc = await read(id); } catch { doc = null; }
     if (!doc) continue;
@@ -204,7 +211,10 @@ export async function labelsOf(ctx: Ctx, ids: Array<string | null | undefined | 
 /** Who a session reports to, as the log stores it. */
 export async function sessionParent(ctx: Ctx, conversation: { _id: any; org_role_id?: any }): Promise<OrgSessionParent> {
   const owners = (await listSessionOwnerIds(ctx as any, conversation._id)).map(String);
-  return { owner_user_ids: owners, ...(conversation.org_role_id ? { org_role_id: String(conversation.org_role_id) } : {}) };
+  // A team owner reads as `team:<id>` (sessionOwners.setSessionOwnerRows puts
+  // it back), so an undo returns a team session to its team.
+  const teams = (await listSessionTeamOwnerIds(ctx as any, conversation._id)).map((id) => `team:${String(id)}`);
+  return { owner_user_ids: [...owners, ...teams], ...(conversation.org_role_id ? { org_role_id: String(conversation.org_role_id) } : {}) };
 }
 
 // ── The batch: what a person did in one gesture ──────────────────────────────

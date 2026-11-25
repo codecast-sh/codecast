@@ -305,7 +305,11 @@ describe("the read budget of a takeover", () => {
     // under ten a session moved: the role, the admin check, the acting person
     // and the sender are resolved once for the batch. Was 973 and 2,573.
     expect(dry).toBeLessThan(150);
-    expect(apply).toBeLessThan(1000);
+    // Each moved session also reads its team owners three times (its access
+    // grants, its decisions' routing, and the org log's record of its parent,
+    // team sessions): about 300 reads at this size (measured 1,223 against
+    // roughly 923 before).
+    expect(apply).toBeLessThan(1300);
     // Accept all keeps one takeover change to a transaction (acceptAllChunk),
     // and even two of this size would fit the limit now.
     expect(apply * 2).toBeLessThan(4096);

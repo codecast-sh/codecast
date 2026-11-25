@@ -118,3 +118,8 @@ export async function gatedSnippetAvailability(
   return attachedAvailability(TEAM_FEATURE_CATALOG, teams, (f) => f.snippets);
 }
 
+
+/** Whether a team has Team sessions on (team sessions spec): a read, named as one. */
+export function canUseTeamSessions(ctx: DbCtx, teamId: Id<"teams"> | null | undefined): Promise<boolean> {
+  return teamHasFeature(ctx, teamId, "team_sessions");
+}

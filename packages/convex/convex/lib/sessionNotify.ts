@@ -7,7 +7,7 @@
 import { internal } from "../_generated/api";
 import { IDLE_DIGEST_WINDOW_MS, isAssignedAwayFromOwnerSet } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
-import { listSessionOwnerIds } from "../sessionOwners";
+import { listSessionPartyIds } from "../sessionOwners";
 import { cardRangFor } from "./decisionRing";
 
 export type SessionNotifType =
@@ -167,7 +167,7 @@ export async function deliverSessionNotificationToParties(
   // written before the session_owners backfill has a cached owner but no join
   // row, and it must not silently stop notifying them in the window between
   // deploy and backfill. Once backfilled the two agree, and the Set de-dupes.
-  const recipients = await listSessionOwnerIds(ctx, conversation._id);
+  const recipients = await listSessionPartyIds(ctx, conversation._id);
   if (conversation.owner_user_id) recipients.push(conversation.owner_user_id);
 
   // The alert follows the inbox row. A session whose owner set excludes the

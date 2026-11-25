@@ -9,6 +9,7 @@
 // for a read check all joined one import cycle, and every function in them
 // loaded the same 3.26 MB bundle (ct-92329). Keep access.ts free of imports
 // that lead back into the function modules.
+import { isTeamOwnedConversation, keepTeamSessionVisible } from "./viewerTriage";
 import type { Scheduler } from "convex/server";
 import { Id } from "../_generated/dataModel";
 import { roleDropForVisibility } from "./sessionTell";
@@ -50,6 +51,14 @@ export async function patchConversationVisibility(
   // and retroactive directory share down with it from 2026-09-22. Nothing
   // under sessionOwnership imports this module, and convex/moduleLoad.test.ts
   // imports every entry to keep it that way.
+  // A team session is always the team's to read, whole (team sessions spec):
+  // nothing makes it private or summary-only while the team owns it. The
+  // person-facing controls refuse first with a message; a sweep or a folder
+  // rule reaching one here just leaves it as it is.
+  if (await isTeamOwnedConversation(ctx as any, conversation._id, conversation)) {
+    updates = keepTeamSessionVisible(updates);
+    if (Object.keys(updates).length === 0) return 0;
+  }
   const drop = await roleDropForVisibility(ctx, { ...conversation, ...updates });
   await ctx.db.patch(conversation._id, drop ? { ...updates, ...drop.patch } : updates);
   if (drop) await drop.tell();

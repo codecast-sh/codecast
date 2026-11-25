@@ -313,7 +313,8 @@ export function scopesForChange(entityType: ChangeEntity, scope: ChangeScope): S
   const scopes = [userScopeKey(scope.owner_user_id)];
   const addGrant = (g: string) => {
     if (g === scope.owner_user_id) return;
-    const key = userScopeKey(g);
+    // A team grant (everyone on the team owns the session) fans to the team.
+    const key = g.startsWith("team:") ? teamScopeKey(g.slice(5)) : userScopeKey(g);
     if (!scopes.includes(key)) scopes.push(key);
   };
   if (entityType === "conversations") {
