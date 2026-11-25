@@ -8,6 +8,7 @@ import {
   devServices, devStateDir, ensureService, groupAlive, isAlive, readRecord, runningDevServer, serviceStatus, stopService, tcpListeners, type DevRecord,
 } from "./dev.js";
 import type { WorkspaceManifest } from "./types.js";
+import { freePort } from "../browser/instance.js";
 import {
   IDLE_STOP_MS, SWEEP_GAP_MS, awakeSince, clientCount, devServerExit, inCodecastWorktree, logSaysCrashed, looksLikeDevServer, orphanExit, orphanTreeGone,
   parseLsofTcp, parseProcNetClients, parsePs, readLogEnd, reapDevServers, sweepFile, treeClients,
@@ -191,7 +192,9 @@ describe("reapDevServers on real servers", () => {
    * record. Not through ensureService: its readiness probe keeps sockets open
    * from this process, which are clients until it exits.
    */
-  async function start(port: number): Promise<{ checkout: string; record: DevRecord }> {
+  async function start(): Promise<{ checkout: string; record: DevRecord }> {
+    // A port the OS hands out now: any fixed one sits in Linux's ephemeral range, where an outbound socket can hold it.
+    const port = await freePort();
     const checkout = fs.mkdtempSync(path.join(tmp, "repo-"));
     const command = `bun -e 'Bun.serve({ port: ${port}, fetch: () => new Response("ok") })' & wait`;
     const child = spawn("bash", ["-c", command], { cwd: checkout, detached: true, stdio: "ignore" });
@@ -207,7 +210,7 @@ describe("reapDevServers on real servers", () => {
   }
 
   test("a server whose checkout is deleted stops, its child included", async () => {
-    const { checkout, record } = await start(47410);
+    const { checkout, record } = await start();
     fs.rmSync(checkout, { recursive: true, force: true });
     const lines = await reapDevServers({ orphans: false });
     expect(lines).toEqual([expect.stringContaining("its checkout is gone")]);
@@ -216,8 +219,8 @@ describe("reapDevServers on real servers", () => {
   }, 60_000);
 
   test("an orphan wrapper's clients include its child's: a wrapper listening on nothing is not idle", async () => {
-    const { record } = await start(47450);
-    const child = tcpListeners({ pgid: record.pid })!.find((l) => l.port === 47450)!.pid;
+    const { record } = await start();
+    const child = tcpListeners({ pgid: record.pid })!.find((l) => l.port === record.port)!.pid;
     expect(child).not.toBe(record.pid);
     const socket = net.connect({ host: "127.0.0.1", port: record.port });
     await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
@@ -233,7 +236,7 @@ describe("reapDevServers on real servers", () => {
   }, 60_000);
 
   test("a server whose runner crashed stops even with a client connected", async () => {
-    const { record } = await start(47440);
+    const { record } = await start();
     fs.writeFileSync(record.log, `panic(main thread): Segmentation fault at address 0x0\noh no: Bun has crashed.\n${"[vite] hmr update /a.tsx\n".repeat(200)}`);
     const socket = net.connect({ host: "127.0.0.1", port: record.port });
     await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
@@ -246,7 +249,7 @@ describe("reapDevServers on real servers", () => {
       try { process.kill(-record.pid, "SIGKILL"); } catch { /* gone */ }
     }
     // The tombstone keeps status and logs answering, and a restart keeps the crash in <log>.prev.
-    const m = manifest(47440);
+    const m = manifest(record.port);
     const svc = devServices(m)[0];
     expect(await serviceStatus(svc, record.cwd, m)).toEqual({ name: "web", state: "stopped", stoppedBy: { at: expect.any(String), reason: "its runner crashed" } });
     expect(fs.readFileSync(record.log, "utf-8")).toContain("stopped by the codecast daemon: its runner crashed");
@@ -262,7 +265,7 @@ describe("reapDevServers on real servers", () => {
   }, 60_000);
 
   test("the first sweep after a sleep restarts the idle count instead of stopping", async () => {
-    const { checkout, record } = await start(47470);
+    const { checkout, record } = await start();
     try {
       const later = Date.now() + IDLE_STOP_MS + 60_000;
       fs.writeFileSync(sweepFile(), JSON.stringify({ at: Date.now() - 60_000, awakeSince: 0 }));
@@ -276,18 +279,18 @@ describe("reapDevServers on real servers", () => {
   }, 60_000);
 
   test("a dead wrapper with its server still up: cast dev reuses it, cast dev stop ends the group", async () => {
-    const { checkout, record } = await start(47490);
+    const { checkout, record } = await start();
     try {
       process.kill(record.pid, "SIGKILL"); // the bun run dev wrapper dies alone; its child keeps serving
       await pollUntil(() => !isAlive(record.pid), "the wrapper to die");
       expect(groupAlive(record.pid)).toBe(true);
-      const m = manifest(47490);
+      const m = manifest(record.port);
       const svc = devServices(m)[0];
       expect(runningDevServer(checkout)?.pid).toBe(record.pid);
       const reused = await ensureService(svc, { checkout, manifest: m, timeoutSec: 30 });
       expect(reused.state).toBe("running");
       if (reused.state === "running") expect(reused.record.pid).toBe(record.pid);
-      expect(new Set((tcpListeners({ port: 47490 }) ?? []).map((l) => l.pgid))).toEqual(new Set([record.pid]));
+      expect(new Set((tcpListeners({ port: record.port }) ?? []).map((l) => l.pgid))).toEqual(new Set([record.pid]));
       expect(await stopService(svc, checkout)).toBe(true);
       expect(groupAlive(record.pid)).toBe(false);
       expect(readRecord(checkout, "web")).toBeNull();
@@ -297,9 +300,9 @@ describe("reapDevServers on real servers", () => {
   }, 60_000);
 
   test("cast dev reusing a server counts as a use", async () => {
-    const { checkout, record } = await start(47480);
+    const { checkout, record } = await start();
     try {
-      const m = manifest(47480);
+      const m = manifest(record.port);
       expect((await ensureService(devServices(m)[0], { checkout, manifest: m, timeoutSec: 30 })).state).toBe("running");
       const used = Date.parse(readRecord(checkout, "web")?.lastUsedAt ?? "");
       expect(Date.now() - used).toBeLessThan(60_000);
@@ -310,8 +313,8 @@ describe("reapDevServers on real servers", () => {
   }, 60_000);
 
   test("a server with no client past the window stops; one with an open connection stays", async () => {
-    const idle = await start(47420);
-    const held = await start(47430);
+    const idle = await start();
+    const held = await start();
     const socket = net.connect({ host: "127.0.0.1", port: held.record.port });
     await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
     try {
