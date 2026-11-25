@@ -5,7 +5,7 @@
 // group). Open, each row's letter picks it, so New then T is a task; Ctrl+N
 // still starts a session from anywhere without the menu.
 
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState, type PointerEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, SquarePen } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -19,13 +19,32 @@ export const NewMenu = memo(function NewMenu({ compact = false }: { compact?: bo
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const kinds = useCreateKinds().filter((k) => !k.variant);
+  // Radix opens the menu inside the pointerdown, and its Presence and Popper
+  // then measure the new content (getComputedStyle, getBoundingClientRect via
+  // floating-ui) in the same event, forcing a layout of the whole page before
+  // the press can return: 359 ms on a long transcript (ct-101476). A press on
+  // the closed menu opens it on the next frame instead, so the press returns at
+  // once and the menu mounts and measures in a frame of its own. Closing and
+  // the keyboard keep Radix's own handling.
+  const openFrame = useRef(0);
+  useEffect(() => () => cancelAnimationFrame(openFrame.current), []);
+  const openOnNextFrame = (e: PointerEvent) => {
+    if (open || e.button !== 0 || e.ctrlKey) return;
+    // Stops Radix's synchronous toggle and the focus move, as Radix does itself.
+    e.preventDefault();
+    if (openFrame.current) return;
+    openFrame.current = requestAnimationFrame(() => {
+      openFrame.current = 0;
+      setOpen(true);
+    });
+  };
   const create = (run: (typeof kinds)[number]["run"]) => {
     setOpen(false);
     run(inAppCreateEnv((href) => router.push(href)));
   };
   return (
     <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
-      <DropdownMenuTrigger asChild>
+      <DropdownMenuTrigger asChild onPointerDown={openOnNextFrame}>
         {compact ? (
           <TopbarButton aria-label="New">
             <SquarePen />
