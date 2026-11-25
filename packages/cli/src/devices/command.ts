@@ -29,10 +29,12 @@ import { requireDestructiveConfirm } from "../destructiveCommands.js";
 import { promptHiddenSecret } from "../hiddenSecret.js";
 import { encryptProviderKey } from "../providerKeyCrypto.js";
 import { deviceLine, pickDevice } from "./resolve.js";
+import { isCurrent, notCurrent, settle, summaryLine, unsettled, verdictLine, type Verdict } from "./updateReport.js";
 
 export type Team = { _id: string; name: string; role?: string };
 
-export type Backend = { client: any; token: string; api: any };
+/** `client` prints a server refusal and exits; `raw` throws it, for a verb that reports each machine's refusal on its own line. */
+export type Backend = { client: any; raw: any; token: string; api: any };
 
 export function die(message: string): never {
   console.error(fmt.error(message));
@@ -41,7 +43,7 @@ export function die(message: string): never {
 
 /** The signed-in client, with every server refusal printed as its one sentence (cliErrorMessage) rather than a request id and stack. */
 export async function backend(): Promise<Backend> {
-  let b: Backend;
+  let b: Awaited<ReturnType<typeof convexClient>>;
   try {
     b = await convexClient();
   } catch {
@@ -52,7 +54,7 @@ export async function backend(): Promise<Backend> {
     query: (fn: any, args: any) => said(b.client.query(fn, args)),
     mutation: (fn: any, args: any) => said(b.client.mutation(fn, args)),
   };
-  return { ...b, client };
+  return { ...b, client, raw: b.client };
 }
 
 const ownDevices = (b: Backend): Promise<any[]> => b.client.query(b.api.devices.listDevices, { api_token: b.token });
@@ -84,7 +86,8 @@ export function pickTeams(teams: Team[], names: string[]): Team[] {
 }
 
 /** Pad to a visible width: colour codes take no columns. */
-const pad = (text: string, width: number) => text + " ".repeat(Math.max(1, width - text.replace(/\x1b\[[0-9;]*m/g, "").length));
+const visibleWidth = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "").length;
+const pad = (text: string, width: number) => text + " ".repeat(Math.max(1, width - visibleWidth(text)));
 
 /** Names for a list: the display name, plus the hostname where two machines would otherwise read the same. */
 function listNames(rows: any[]): Map<string, string> {
@@ -300,19 +303,90 @@ export function registerDevicesCommand(program: Command): void {
 
   devices
     .command("update [devices...]")
-    .description("Update codecast on machines now (works with automatic update off)")
-    .option("--all", "Every online machine of yours that is behind")
-    .action(async (needles: string[], o: { all?: boolean }) => {
+    .description("Update codecast on machines to the latest release and report what each one runs (works with automatic update off)")
+    .option("--all", "Every machine of yours (inactive ones are listed and skipped)")
+    .option("--wait <seconds>", "How long to wait for the machines to update", "300")
+    .action(async (needles: string[], o: { all?: boolean; wait: string }) => {
+      if (!o.all && !needles.length) die("name machines to update, or pass --all");
+      const waitS = Number(o.wait);
+      if (!Number.isFinite(waitS) || waitS < 0) die(`--wait takes seconds, not "${o.wait}"`);
+      // The release as the manifest says now: a machine's own check is cached
+      // for up to a day and cannot say whether it is current.
+      const { updater } = await import("../update.js");
+      const manifest = await updater.fetchManifest().catch(() => null);
+      if (!manifest) die("could not read the release manifest (dl.codecast.sh), so cannot tell which machines are current");
+      const latest = manifest.version;
       const b = await backend();
       const own = await ownDevices(b);
+      const now = Date.now();
       const targets = o.all
-        ? own.filter((d) => d.online && (d.update_available || d.update_required))
+        ? own
         : needles.map((n) => { const r = pickDevice(own, n, "machine of yours"); if ("error" in r) die(r.error); return r.device; });
-      if (!targets.length) { console.log(o.all ? "every online machine is current" : "name machines to update, or pass --all"); return; }
+
+      const names = listNames(targets);
+      const nameOf = (d: any) => names.get(d.device_id) ?? deviceDisplayName(d);
+      const verdicts = new Map<string, Verdict>();
+      const asked = new Map<string, { at: number; from?: string }>();
       for (const d of targets) {
-        await b.client.mutation(b.api.devices.requestDeviceUpdate, { api_token: b.token, device_id: d.device_id });
-        console.log(`${fmt.success("asked")} ${deviceLine(d)} (on ${d.cli_version ?? "unknown"}) to update${d.online ? "" : "; it runs when the machine is back"}`);
+        if (isCurrent(d.cli_version, latest)) { verdicts.set(d.device_id, { kind: "current" }); continue; }
+        if (o.all && !d.online && machineOutOfService(d, own, now)) {
+          verdicts.set(d.device_id, { kind: "skipped", reason: `inactive, last seen ${formatAgeShort(now - d.last_seen)} ago (cast devices remove --stale)` });
+          continue;
+        }
+        // Runs from source, or from a folder it cannot write (an MDM install):
+        // nothing here can update it, so --all lists it rather than fail on it.
+        if (o.all && d.can_self_update === false) {
+          verdicts.set(d.device_id, { kind: "skipped", reason: d.distribution === "source" ? "runs from source" : "cannot replace its own binary (folder not writable, or installed by an MDM)" });
+          continue;
+        }
+        try {
+          const res = await b.raw.mutation(b.api.devices.requestDeviceUpdate, { api_token: b.token, device_id: d.device_id, version: latest });
+          asked.set(d.device_id, { at: res.requested_at, from: d.cli_version });
+          console.log(`${fmt.muted("asked")} ${nameOf(d)} (on ${d.cli_version ?? "unknown"}) to update to ${latest}`);
+        } catch (err) {
+          verdicts.set(d.device_id, { kind: "failed", reason: cliErrorMessage(err) });
+        }
       }
+
+      // Each asked machine until its daemon reports the release running, or
+      // its run fails, or the wait ends. A restarting daemon is briefly offline.
+      // The roster as of each request, until a poll reads it back.
+      let rows = new Map<string, any>(targets.map((d) => {
+        const ask = asked.get(d.device_id);
+        return [d.device_id, ask ? { ...d, update_requested_at: ask.at, update_state: "requested" } : d];
+      }));
+      const until = Date.now() + waitS * 1000;
+      const waiting = (id: string) => !verdicts.has(id) && (rows.get(id)?.online || rows.get(id)?.update_state === "installing");
+      if ([...asked.keys()].some(waiting) && waitS > 0) console.log(fmt.muted(`waiting up to ${waitS}s for the machines to update…`));
+      while ([...asked.keys()].some(waiting) && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const fresh: any[] | null = await b.raw.query(b.api.devices.listDevices, { api_token: b.token }).catch(() => null);
+        if (!fresh) continue;
+        rows = new Map(fresh.map((d) => [d.device_id, d]));
+        for (const [id, { at, from }] of asked) {
+          if (verdicts.has(id) || !rows.get(id)) continue;
+          const v = settle(rows.get(id), latest, at);
+          if (!v) continue;
+          verdicts.set(id, v.kind === "updated" ? { kind: "updated", from } : v);
+          console.log(fmt.muted(`${v.kind === "updated" ? "updated" : "failed"} ${nameOf(rows.get(id))}`));
+        }
+      }
+      for (const [id, { at }] of asked) {
+        if (verdicts.has(id)) continue;
+        const row = rows.get(id) ?? {};
+        const seenAgo = row.last_seen ? formatAgeShort(Date.now() - row.last_seen) : undefined;
+        verdicts.set(id, settle(row, latest, at) ?? unsettled(row, Math.round(waitS), seenAgo));
+      }
+
+      console.log(`\nlatest release ${latest}`);
+      const width = Math.max(...targets.map((d) => visibleWidth(nameOf(d)))) + 2;
+      for (const d of targets) {
+        const row = rows.get(d.device_id) ?? d;
+        console.log(verdictLine(verdicts.get(d.device_id)!, pad(nameOf(d), width), row.cli_version));
+      }
+      const all = [...verdicts.values()];
+      console.log(summaryLine(all, latest));
+      if (all.some(notCurrent)) process.exitCode = 1;
     });
 
   devices
