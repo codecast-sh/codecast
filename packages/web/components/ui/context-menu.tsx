@@ -82,11 +82,11 @@ const SURFACE = cn(
   "text-sol-text",
 );
 
-/** Render at the list/page root; rows call `state.open(e, payload)`. */
 /** Closes the open context menu, for what inside it acts without an item's
  *  select (a row verb's chord, lib/hoverTarget useMenuTarget). */
 export const CtxMenuClose = React.createContext<(() => void) | null>(null);
 
+/** Render at the list/page root; rows call `state.open(e, payload)`. */
 export function ContextMenu<T>({
   state,
   children,

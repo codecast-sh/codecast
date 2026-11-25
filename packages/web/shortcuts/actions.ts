@@ -6,7 +6,8 @@ import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
 import { resolvePaletteTarget } from "../lib/paletteTarget";
 
-import { useCallback, useEffect } from "react";
+import { useCallback } from "react";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { goBackInTrail } from "../hooks/useNavTrail";
 import { isModernStyle } from "../lib/visualStyle";
@@ -58,10 +59,9 @@ export function focusedActionSessionId(
 }
 
 // The sessions a row verb (close, stash, pin, defer…) acts on (rowVerbIds in
-// lib/hoverTarget): an open context menu's sessions; in pointer mode the row
-// under the pointer, or nothing when no row is there, never the focused card
-// behind it; in keyboard mode the focused card, unless another row shows its
-// hover toolbar. `advance` is false unless the one target is the focused card:
+// lib/hoverTarget): an open context menu's sessions, else the row the pointer
+// moved onto, else nothing while another row shows its hover toolbar, else
+// the focused card. `advance` is false unless the one target is the focused card:
 // acting on another row must not move the view.
 export function rowVerbTarget(
   store: Parameters<typeof focusedActionSessionId>[0],
@@ -79,7 +79,7 @@ export function useGlobalShortcutActions() {
   const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
   const openSession = useOpenSession();
 
-  useEffect(() => watchHoverTarget(), []);
+  useMountEffect(() => watchHoverTarget());
 
   useShortcutAction('palette.toggle', useCallback(() => {
     const state = useInboxStore.getState();
