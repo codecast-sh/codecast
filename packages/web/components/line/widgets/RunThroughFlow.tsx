@@ -87,19 +87,30 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const live = runIsLive(run);
   // A press the session answered and then settled without starting a run: it will not start one.
   const declined = !!press?.reply && settled && !live;
-  const starting = !!press && !declined && !live;
-  const chip = starting ? { words: "Starting", tone: "working" } : declined && !run ? { words: "Not run", tone: "idle" } : chipOf(journey, reach, !!landed);
+  // A press this viewer just sent, held until the session echoes it (its message, a run, or a decline): the send
+  // writes nothing local, so without it the chip reads "Ship" again and the picker offers the same press twice.
+  // Past PRESS_WAIT_MS with no echo the hold lets go, and the panel says the session has not picked the press up.
+  const [mine, setMine] = useState<(SentPress & { at: number; expired?: true }) | null>(null);
+  const newPress = !!press && press.id !== mine?.press;
+  const echoed = !!mine && ((run?._id ?? null) !== mine.run || newPress);
+  const held = !!mine && !mine.expired && pressWaiting({ sent: mine, newestRun: run?._id ?? null, press, settled });
+  const unheard = !!mine?.expired && !echoed && !live ? mine : null;
+  const starting = (!!press && !declined && !live) || held;
+  const chip = starting ? { words: "Starting", tone: "working" } : declined && !run ? { words: "Not run", tone: "idle" } : unheard ? { words: "Not picked up", tone: "idle" } : chipOf(journey, reach, !!landed);
   const approval = usePressApproval(conversationId, !!reviewing);
   const send = (flow: AppFlow) => {
     setReviewing(null);
     setAgain(false);
+    const sent = { run: run?._id ?? null, press: press?.id ?? null, at: Date.now() };
+    setMine(sent);
+    setTimeout(() => setMine((m) => (m === sent ? { ...sent, expired: true } : m)), PRESS_WAIT_MS);
     void approval.record();
     useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
   };
   // One click starts the run (pl-1075, shipConfirms): a card a run may ask later arrives as its own card.
   const ship = (flow: AppFlow) => (shipConfirms(approvalOf(flow)) ? setReviewing(flow) : send(flow));
   const showRun = !!run && !!runFlow && !again && !starting;
-  const notice = declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
+  const notice = unheard ? <UnheardNotice at={unheard.at} /> : declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
   const onOpenChange = (o: boolean) => { setOpen(o); if (!o) setAgain(false); };
   // The chip stays in the header at every width (the squeeze sheds its words, never the chip): Ship is one press away.
   const trigger = (
@@ -111,7 +122,9 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const panel = showRun ? (
     <RunPanel conversationId={conversationId} run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
   ) : starting && !again ? (
-    <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
+    // Before the echo there is no message to open yet: the view says when Ship was asked.
+    <Starting at={held && !newPress ? mine!.at : press!.at}
+      onOpen={held && !newPress ? undefined : () => { setOpen(false); openMessage(conversationId, press!.id); }} />
   ) : (
     // Mounted only while open: the pool's feed is read when someone looks, never by every header.
     <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); ship(flow); }} /></>
@@ -149,14 +162,14 @@ function SheetCloser() {
 }
 
 /** A press the session has not answered with a run yet: how long ago it went, and the message itself a press away. */
-function Starting({ press, onOpen }: { press: Press; onOpen: () => void }) {
-  const now = useCoarseNow(press.at > Date.now() - 60_000 ? 1000 : 15_000);
+function Starting({ at, onOpen }: { at: number; onOpen?: () => void }) {
+  const now = useCoarseNow(at > Date.now() - 60_000 ? 1000 : 15_000);
   return (
     <div className="shp" data-ship-starting>
       <header className="shp-head">
         <b>Starting</b>
-        <span className="shp-sub">asked {formatElapsed(press.at, now)} ago · no run yet</span>
-        <button type="button" className="shp-link" onClick={onOpen} data-ship-press-open>Open message</button>
+        <span className="shp-sub">asked {formatElapsed(at, now)} ago · no run yet</span>
+        {onOpen ? <button type="button" className="shp-link" onClick={onOpen} data-ship-press-open>Open message</button> : null}
         <SheetCloser />
       </header>
     </div>
@@ -170,6 +183,16 @@ function PressNotice({ press, onRead }: { press: Press; onRead: () => void }) {
     <section className="shp-declined" data-ship-declined>
       <header><b>Not run</b><span>Ship pressed {formatElapsed(press.at, now)} ago</span><button type="button" className="shp-link" onClick={onRead} data-ship-reply-open>Read reply</button></header>
       <blockquote>{press.reply!.text}</blockquote>
+    </section>
+  );
+}
+
+/** A press this viewer sent that the session never echoed: it has not received it, so nothing started. Ship below tries again. */
+function UnheardNotice({ at }: { at: number }) {
+  const now = useCoarseNow(15_000);
+  return (
+    <section className="shp-declined" data-ship-unheard>
+      <header><b>Not picked up</b><span>Ship pressed {formatElapsed(at, now)} ago · the session has not received it</span></header>
     </section>
   );
 }
