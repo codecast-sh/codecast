@@ -1972,6 +1972,11 @@ export type ClientUI = {
   // otherwise, so it outlives the route — and the reload. Unstamped: the
   // sidebar's shape is a per-device layout preference like the rest.
   nav_sections?: Record<string, boolean>;
+  // The row last left open on /priorities, by workspace key: a sidebar
+  // return to the bare /priorities reopens it (components/priorities/
+  // PrioritiesPage). The URL's ?open= is the truth while on the page; this
+  // is only what it goes back to. Closing a row removes its entry.
+  priorities_open?: Record<string, string>;
   /** Teammates' shared mods this person runs (lib/mods/host): mod ids. Their own mods run by their own switch. */
   mods_installed?: string[];
   zen_mode?: boolean;
