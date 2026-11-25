@@ -8117,6 +8117,21 @@ export default defineSchema({
     view_count: v.number(),
   }).index("by_artifact_email", ["artifact_id", "email"]),
 
+  // The reply Claude Code is writing right now, as its MessageDisplay hook
+  // hands the daemon each finished line (convex/replyStreams.ts; the contract
+  // is @codecast/shared/contracts/replyStream). One row per conversation,
+  // reused, one writer, written only while someone has the conversation open.
+  // Kept apart from `messages`: the web hides it once the real message lands.
+  reply_streams: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"),
+    message_id: v.string(),
+    text: v.string(),
+    seq: v.number(),
+    started_at: v.number(),
+    updated_at: v.number(),
+  }).index("by_conversation", ["conversation_id"]).index("by_updated_at", ["updated_at"]),
+
   // Live screen of one tmux pane on one machine — the transport that lets the
   // terminal split watch a pane the browser cannot reach on loopback (an agent
   // running on your Mac mini while you sit at a laptop). See

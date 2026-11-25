@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { gatedSnippetAvailability, setTeamFeature, teamHasFeature } from "./teamFeatures";
+import { gatedSnippetAvailability, setTeamFeature, teamHasFeature, userTeams } from "./teamFeatures";
 import { createChannel, listChannels, searchMessages, sendMessage } from "./chat";
 import { snippetAvailableForTeams, teamFeatureEnabled } from "@codecast/shared/contracts";
 
@@ -87,8 +87,8 @@ describe("the server guard", () => {
 
 describe("snippet availability for the heartbeat", () => {
   test("names each gated slug with whether any of the user's teams has it on", async () => {
-    expect(await gatedSnippetAvailability(ctxFor(ALICE), ALICE)).toEqual({ chat: true, calls: false });
-    expect(await gatedSnippetAvailability(ctxFor(BOB), BOB)).toEqual({ chat: false, calls: false });
+    expect(gatedSnippetAvailability(await userTeams(ctxFor(ALICE), ALICE))).toEqual({ chat: true, calls: false });
+    expect(gatedSnippetAvailability(await userTeams(ctxFor(BOB), BOB))).toEqual({ chat: false, calls: false });
   });
 });
 

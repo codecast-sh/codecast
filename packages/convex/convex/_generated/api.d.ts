@@ -702,6 +702,7 @@ import type * as replayTallies from "../replayTallies.js";
 import type * as replays from "../replays.js";
 import type * as replaysHttp from "../replaysHttp.js";
 import type * as replaysSearch from "../replaysSearch.js";
+import type * as replyStreams from "../replyStreams.js";
 import type * as repoFlows from "../repoFlows.js";
 import type * as repoLeases from "../repoLeases.js";
 import type * as repoPublicHttp from "../repoPublicHttp.js";
@@ -1542,6 +1543,7 @@ declare const fullApi: ApiFromModules<{
   replays: typeof replays;
   replaysHttp: typeof replaysHttp;
   replaysSearch: typeof replaysSearch;
+  replyStreams: typeof replyStreams;
   repoFlows: typeof repoFlows;
   repoLeases: typeof repoLeases;
   repoPublicHttp: typeof repoPublicHttp;
