@@ -40,7 +40,7 @@ async function seed(opts: { flag?: boolean; ownerLevel?: string; personal?: bool
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
 // A page showing the conversation: the owner's, renewing the row's lease.
-const view = (s: Seeded) => s.t.withIdentity({ subject: s.owner }).mutation(api.replyStreams.watch, { conversation_id: s.conversation });
+const view = (s: Seeded) => s.t.withIdentity({ subject: s.owner }).mutation(api.replyStreamLease.watch, { conversation_id: s.conversation });
 
 const push = (s: Seeded, over: Partial<{ message_id: string; seq: number; started_at: number; text: string; api_token: string }> = {}) =>
   s.t.mutation(api.replyStreams.push, {
@@ -210,7 +210,7 @@ describe("get", () => {
 
 describe("watch", () => {
   const watchAs = (s: Seeded, user?: any) =>
-    (user ? s.t.withIdentity({ subject: user }) : s.t).mutation(api.replyStreams.watch, { conversation_id: s.conversation });
+    (user ? s.t.withIdentity({ subject: user }) : s.t).mutation(api.replyStreamLease.watch, { conversation_id: s.conversation });
 
   test("creates the row, empty, with a lease; get still reads null until text is pushed", async () => {
     const s = await seed({ flag: true });
@@ -261,25 +261,41 @@ describe("watch", () => {
 });
 
 describe("prune", () => {
-  test("keeps a row someone is watching, however long since its last push", async () => {
+  const HOUR = 60 * 60_000;
+  const base = (s: Seeded) => ({ conversation_id: s.conversation, user_id: s.owner, message_id: "m", text: "t", seq: 1, started_at: 1, updated_at: Date.now() - 3 * HOUR });
+
+  test("deletes a row whose lease ran out over an hour ago; keeps a watched one and a lately lapsed one", async () => {
     const s = await seed();
     await s.t.run(async (ctx) => {
-      const base = { conversation_id: s.conversation, user_id: s.owner, message_id: "m", text: "t", seq: 1, started_at: 1, updated_at: Date.now() - 61 * 60_000 };
-      await ctx.db.insert("reply_streams", { ...base, message_id: "watched", watch_until: Date.now() + 60_000 });
-      await ctx.db.insert("reply_streams", { ...base, message_id: "lapsed", watch_until: Date.now() - 60_000 });
+      await ctx.db.insert("reply_streams", { ...base(s), message_id: "watched", watch_until: Date.now() + 60_000 });
+      await ctx.db.insert("reply_streams", { ...base(s), message_id: "lapsed", watch_until: Date.now() - 60_000 });
+      await ctx.db.insert("reply_streams", { ...base(s), message_id: "gone", watch_until: Date.now() - HOUR - 60_000 });
+      // A row from before leases existed has none: it goes too.
+      await ctx.db.insert("reply_streams", { ...base(s), message_id: "no lease" });
     });
-    expect(await s.t.mutation(internal.replyStreams.prune, {})).toEqual({ deleted: 1 });
-    expect((await rows(s)).map((r) => r.message_id)).toEqual(["watched"]);
+    expect(await s.t.mutation(internal.replyStreams.prune, {})).toEqual({ deleted: 2 });
+    expect((await rows(s)).map((r) => r.message_id).sort()).toEqual(["lapsed", "watched"]);
   });
 
-  test("deletes rows untouched for an hour and keeps fresh ones", async () => {
+  test("rows watched all day never stand in front of the ones to delete", async () => {
     const s = await seed();
     await s.t.run(async (ctx) => {
-      const base = { conversation_id: s.conversation, user_id: s.owner, message_id: "m", text: "t", seq: 1, started_at: 1 };
-      await ctx.db.insert("reply_streams", { ...base, message_id: "old", updated_at: Date.now() - 61 * 60_000 });
-      await ctx.db.insert("reply_streams", { ...base, message_id: "fresh", updated_at: Date.now() - 5 * 60_000 });
+      for (let i = 0; i < 510; i++) await ctx.db.insert("reply_streams", { ...base(s), message_id: `watched ${i}`, watch_until: Date.now() + 60_000 });
+      await ctx.db.insert("reply_streams", { ...base(s), message_id: "gone", watch_until: Date.now() - HOUR - 60_000 });
     });
     expect(await s.t.mutation(internal.replyStreams.prune, {})).toEqual({ deleted: 1 });
-    expect((await rows(s)).map((r) => r.message_id)).toEqual(["fresh"]);
+    expect(await rows(s)).toHaveLength(510);
+  });
+
+  test("a full batch runs again at once, so nothing is left behind", async () => {
+    const s = await seed();
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 520; i++) await ctx.db.insert("reply_streams", { ...base(s), message_id: `gone ${i}`, watch_until: Date.now() - HOUR - 60_000 });
+    });
+    expect(await s.t.mutation(internal.replyStreams.prune, {})).toEqual({ deleted: 500 });
+    // The next run is scheduled: let it start, then wait for it.
+    await new Promise((done) => setTimeout(done, 20));
+    await s.t.finishInProgressScheduledFunctions();
+    expect(await rows(s)).toHaveLength(0);
   });
 });
