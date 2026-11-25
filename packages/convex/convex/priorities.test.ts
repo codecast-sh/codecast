@@ -1,6 +1,7 @@
 // Priorities API (priorities.ts): who reads a priority, what history counts,
 // the pin line, and the owner's controls (rank, step tier, set aside) that the
 // pass must never override.
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
@@ -254,6 +255,16 @@ describe("reads", () => {
     expect((await rowsOf(as(bea), {})).map((r: any) => r.short_id)).not.toContain("pri-1");
     expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
     expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
+  });
+
+  test("changing a mapped session's visibility flags its priority for a rewrite at once", async () => {
+    const { t, as, bea, p1, c1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = await ctx.db.get(c1);
+      await patchConversationVisibility(ctx as any, conv as any, { is_private: true, team_visibility: "private" });
+    });
+    expect((await t.run((ctx) => ctx.db.get(p1)))?.needs_rewrite).toBe(true);
+    expect((await rowsOf(as(bea), {})).map((r: any) => r.short_id)).not.toContain("pri-1");
   });
 
   test("a priority that needs a rewrite is its owner's alone: no list row, show or pin line for a teammate", async () => {

@@ -10,3 +10,10 @@ export async function dropPrioritySession(ctx: { db: any }, conv: { priority_id?
   if (!priority) return;
   await ctx.db.patch(priority._id, { needs_rewrite: true, ...(priority.session_count ? { session_count: priority.session_count - 1 } : {}) });
 }
+
+/** A mapped session changed who can see it: its priority's text may tell of it, so teammates wait for a rewrite. */
+export async function flagPriorityRewrite(ctx: { db: any }, conv: { priority_id?: Id<"priorities"> }): Promise<void> {
+  if (!conv.priority_id) return;
+  const priority = await ctx.db.get(conv.priority_id);
+  if (priority && !priority.needs_rewrite) await ctx.db.patch(priority._id, { needs_rewrite: true });
+}
