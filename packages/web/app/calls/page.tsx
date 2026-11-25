@@ -32,7 +32,7 @@ import { useCallDetail, useCallList, useCallPlaces } from "../../hooks/useSyncCa
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { CALL_LINK_REFUSED_WORDS, callAnchorHref, callPathRef, callViewParam, humanizeConvexError, isMeetRoomKey, isRecRoomKey, isRoomlessKey, lineFrameMs, lineSeekMs, parseCallAnchor, parseCallMomentParam, parseCallShareParam, parseCallViewParam, type CallView } from "@codecast/shared/contracts";
+import { CALL_LINK_REFUSED_WORDS, callAnchorHref, callPathRef, callViewParam, humanizeConvexError, isMeetRoomKey, isRecRoomKey, isRoomlessKey, lineSeekMs, parseCallAnchor, parseCallMomentParam, parseCallShareParam, parseCallViewParam, type CallView } from "@codecast/shared/contracts";
 import { callRefId } from "@codecast/shared/entities";
 import { joinCall } from "../../lib/calls/callManager";
 import { callTitle, type CallPlace } from "../../lib/calls/roomLabels";
@@ -45,8 +45,7 @@ import { usePaneShortcutAction } from "../../shortcuts/ShortcutProvider";
 import type { ClickedLine } from "../../components/calls/TranscriptTurns";
 import type { CallMoment } from "../../components/calls/RoomThreadRows";
 import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls/roomThreadModel";
-import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
-import { copyCallFrameLink, copyCallLink } from "../../lib/calls/callLinks";
+import { copyCallFrameLink } from "../../lib/calls/callLinks";
 import { copyText } from "../../lib/copyText";
 import {
   callVideoNotice,
@@ -109,16 +108,14 @@ import {
   Mic,
   PanelLeft,
   PanelLeftClose,
-  Send,
   Sparkles,
   Users,
   Video,
-  X,
 } from "lucide-react";
 import "../../components/calls/recorder.css";
 import "../../components/calls/callMedia.css";
 
-import { useMountEffect } from "../../hooks/useMountEffect";
+import { TurnSelectionBar, useTurnSelection } from "../../components/calls/TurnSelection";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMediaMoment } from "../../hooks/useMediaMoment";
 import { useCoarsePointer } from "../../hooks/useIsPhone";
@@ -398,8 +395,8 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
 
   // Selection: an anchor turn and an end turn — a contiguous range, like
   // text selection but snapped to speaker turns.
-  const [anchor, setAnchor] = useState<number | null>(null);
-  const [end, setEnd] = useState<number | null>(null);
+  const sel = useTurnSelection();
+  const anchor = sel.anchor;
   const [sentTick, setSentTick] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -458,22 +455,8 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   const media = useMediaMoment(turns);
   const mediaAt = media.at;
   const setMediaAt = media.set;
-  const [selLo, selHi] =
-    anchor === null ? [null, null] : end === null ? [anchor, anchor] : [Math.min(anchor, end), Math.max(anchor, end)];
-  const selectedCount = selLo === null ? 0 : (selHi as number) - selLo + 1;
-
-  const clearSelection = () => {
-    setAnchor(null);
-    setEnd(null);
-  };
-
-  useMountEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") clearSelection();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+  const selectedCount = sel.count;
+  const clearSelection = sel.clear;
 
   // Selection, and where the media stood, reset when the viewer moves to
   // another call.
@@ -502,8 +485,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
       .filter((i) => i >= 0);
     if (hit.length === 0) return;
     landed.current = key;
-    setAnchor(hit[0]);
-    setEnd(hit[hit.length - 1]);
+    sel.setRange(hit[0], hit[hit.length - 1]);
   }, [id, focus, turns, rows, recording]);
 
   // A link to a moment (`?t=754`, what `cl-42@12:34` opens) lands there
@@ -611,31 +593,25 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   const guestNames: string[] = (call.guests ?? []).map((g: { name: string }) => g.name);
   const heardAll = !live && (segments?.length ?? 0) > 0 && !(rows ?? []).some((r) => r.event === "transcribe_off" && (!r.transcript_id || r.transcript_id === String(call._id)));
 
-  const buildExcerpt = (which: "selection" | "all"): TranscriptExcerpt => {
-    const chosen =
-      which === "selection" && selLo !== null
-        ? turns.slice(selLo, (selHi as number) + 1).flatMap((t) => t.segments)
-        : (call.segments ?? []);
-    return {
-      segments: chosen,
+  const showSent = (what: string) => {
+    setSentTick(what);
+    setTimeout(() => setSentTick(null), 3500);
+  };
+  const onPickAll = (t: FeedTarget, note?: string) => {
+    const excerpt: TranscriptExcerpt = {
+      segments: call.segments ?? [],
       transcriptId: String(call._id),
       title: call.title,
       startedAt: call.started_at,
       live,
-      partial: which === "selection" && selectedCount > 0 && selectedCount < turns.length,
+      partial: false,
     };
+    void sendExcerpt(t, excerpt, note).then(() =>
+      showSent(t.kind === "new-doc" ? "saved to doc" : "sent. The agent replies in the side panel."),
+    );
   };
 
-  const onPick = (which: "selection" | "all") => (t: FeedTarget, note?: string) => {
-    const excerpt = buildExcerpt(which);
-    void sendExcerpt(t, excerpt, note).then(() => {
-      setSentTick(t.kind === "new-doc" ? "saved to doc" : "sent. The agent replies in the side panel.");
-      setTimeout(() => setSentTick(null), 3500);
-    });
-    if (which === "selection") clearSelection();
-  };
-
-  const isSelected = (i: number) => selLo !== null && i >= selLo && i <= (selHi as number);
+  const isSelected = sel.isSelected;
   const seekTo = (ms: number) => seekCallMedia(mediaTarget, ms);
 
   // A recording's start or stop in the thread jumps to the picture it is
@@ -658,21 +634,14 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // A finger has no Shift key: on a touch screen a press and hold on a line
   // starts a selection, and while one is open a tap extends it instead of
   // seeking (a tap with nothing selected still shows that moment).
-  const onTurnHold = (i: number) => {
-    setAnchor(i);
-    setEnd(null);
-  };
+  const onTurnHold = sel.hold;
   const onTurnClick = (i: number, e: React.MouseEvent, line: ClickedLine) => {
     if (seekable && !e.shiftKey && !(coarse && anchor !== null)) {
       setFollowing(true);
       seekTo(lineSeekMs(stretches, line));
       return;
     }
-    if (anchor === null) return setAnchor(i);
-    if (e.shiftKey || anchor !== null) {
-      if (i === anchor && end === null) return clearSelection();
-      setEnd(i);
-    }
+    sel.pick(i);
   };
 
   // Playing, the line lights while its words are said; paused (or landed on
@@ -805,7 +774,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   );
   const guestRoom = live && !roomless ? call.room_key : null;
   const onJoin = live && !roomless && !inThisRoom ? () => void joinCall(call.room_key, { intent: "deliberate" }) : null;
-  const onSend = turns.length > 0 ? () => openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") }) : null;
+  const onSend = turns.length > 0 ? () => openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPickAll }) : null;
 
   return (
     <div ref={detailRef} className="flex h-full min-h-0 min-w-0 flex-col">
@@ -989,54 +958,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
       {/* The selection action bar: an in-flow footer, never absolute — the
           tab shell's transformed ancestors hijack absolute/fixed containing
           blocks (the fixed-under-transform trap). */}
-      {selectedCount > 0 && (
-        <div className="z-20 flex shrink-0 justify-center border-t border-sol-border/20 py-2.5">
-          <div className="relative flex items-center gap-2 rounded-xl border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-2xl">
-            <span className="text-[12px] text-sol-text-muted">
-              {selectedCount} turn{selectedCount === 1 ? "" : "s"} selected
-            </span>
-            <button
-              onClick={() =>
-                openFeedTargetPicker({
-                  title: `Send ${selectedCount} turn${selectedCount === 1 ? "" : "s"} to…`,
-                  gesture: "send",
-                  withNote: true,
-                  onPick: onPick("selection"),
-                })
-              }
-              className="flex items-center gap-1.5 rounded-md bg-sol-violet/15 px-2.5 py-1 text-[12px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/25"
-            >
-              <Send className="h-3 w-3" /> Send to agent
-            </button>
-            <button
-              onClick={() =>
-                copyCallLink(
-                  callPathRef(call),
-                  turnsAnchor(turns.slice(selLo!, (selHi as number) + 1)),
-                  // With video the link also waits at the first line's moment,
-                  // the second `cast call snap` frames for that line.
-                  hasVideo && turns[selLo!]?.segments[0] ? lineFrameMs(turns[selLo!].segments[0]) : undefined,
-                )
-              }
-              className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium text-sol-text-muted transition-colors hover:bg-sol-bg/60 hover:text-sol-text"
-              title={
-                hasVideo
-                  ? "Copy a link that opens the call on these turns, the video waiting at the first"
-                  : "Copy a link that opens the call on these turns"
-              }
-            >
-              <Link2 className="h-3 w-3" /> Copy link
-            </button>
-            <button
-              onClick={clearSelection}
-              className="rounded p-1 text-sol-text-dim transition-colors hover:text-sol-text"
-              title="Clear selection (Esc)"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
+      <TurnSelectionBar call={call} turns={turns} selection={sel} live={live} video={hasVideo} onSent={showSent} />
     </div>
   );
 }

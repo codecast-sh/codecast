@@ -708,3 +708,32 @@ test("on the stage rail a spoken turn can be selected and sent to the agent", as
   window.localStorage.removeItem("codecast.roomThread.words.stage");
   await r.unmount();
 });
+
+// ct-101368: the rail's selection is the call page's (TurnSelection): a click
+// on a later turn extends to it, the bar counts the range, Esc clears it.
+test("on the stage rail a second click extends the selection and Esc clears it", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {} } as any);
+  window.localStorage.setItem("codecast.roomThread.words.stage", "full");
+  const segments = [seg(0, "Ada", "one", 0), seg(1, "Bob", "two", 30_000), seg(2, "Ada", "three", 60_000)];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ segments })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  const click = async (i: number) =>
+    act(async () => {
+      r.container.querySelector(`[data-turn="${i}"]`)!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+    });
+  const pressed = () => [...r.container.querySelectorAll("[data-turn]")].map((t) => t.getAttribute("aria-pressed"));
+  expect(r.container.textContent).toContain("Click · select a turn · click another · extend");
+  await click(0);
+  expect(pressed()).toEqual(["true", "false", "false"]);
+  await click(2);
+  expect(pressed()).toEqual(["true", "true", "true"]);
+  expect(r.container.textContent).toContain("3 turns selected");
+  await act(async () => {
+    window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape" }));
+  });
+  expect(pressed()).toEqual(["false", "false", "false"]);
+  expect(r.container.textContent).not.toContain("turns selected");
+  window.localStorage.removeItem("codecast.roomThread.words.stage");
+  await r.unmount();
+});
