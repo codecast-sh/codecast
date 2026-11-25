@@ -320,8 +320,9 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   const [picking, setPicking] = useState(false);
   const [filter, setFilter] = useState("");
   const [hi, setHi] = useState(0);
-  // Machine-root suggestions start collapsed on every picker open; one click
-  // on the "N more folders" row reveals them for that open only.
+  // Machine-root suggestions start collapsed; one click on the "N more folders"
+  // row reveals them, and they stay revealed across reopens so leaving and
+  // coming back doesn't make the person expand the list again.
   const [showSuggested, setShowSuggested] = useState(false);
   const pickerRef = useRef<HTMLInputElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
@@ -409,7 +410,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
     prevFocusRef.current = document.activeElement as HTMLElement | null;
     setFilter("");
     setHi(0);
-    setShowSuggested(false);
     setPicking(true);
     return true;
   }, []);
@@ -738,6 +738,10 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
 
       <div
         className={`rounded-lg transition-all ${picking ? "w-full max-w-3xl ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-2" : ""}`}
+        // A press anywhere in the open panel (a gap between chips, the divider,
+        // the hint row) keeps focus on the filter input, so its onBlur doesn't
+        // close the picker. Presses on the input itself place the caret as usual.
+        onMouseDown={picking ? (e) => { if (e.target !== pickerRef.current) e.preventDefault(); } : undefined}
       >
         {picking && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pb-2 mb-2 border-b border-sol-cyan/20">
