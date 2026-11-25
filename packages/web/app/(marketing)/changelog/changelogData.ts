@@ -1,4 +1,5 @@
 import { RELEASES_2026_AUG_SEP } from "./releases2026AugSep";
+import { RELEASES_2026_OCT_NOV } from "./releases2026OctNov";
 
 // Codecast changelog — what we shipped, month by month.
 //
@@ -122,6 +123,7 @@ export interface Release {
 
 /** Newest first. The first entry is treated as the current release. */
 export const RELEASES: Release[] = [
+  ...RELEASES_2026_OCT_NOV,
   ...RELEASES_2026_AUG_SEP,
   {
     id: "2026-07",

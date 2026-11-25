@@ -10,6 +10,45 @@ then extend that file.
 
 ---
 
+## November 2026: Ship and deploy, boards and sheets, and a native phone app
+**v1.1.211 – v1.1.253 · Desktop v1.1.131**
+
+This month a change can go all the way out from codecast. A session with
+changes gets a Ship button, and a Deploys page shows what runs on each of your
+deploy targets and what on main is still waiting for it. Boards, sheets and
+dashboards are documents people and agents edit together. Every codecast link
+the phone opens now lands on a native screen, the agent's terminal included.
+
+- **Ship and deploy from codecast** (Nov 4 to 21). One press on Ship commits, opens the pull request and has the session look after it until it merges. A repository lists its deploy targets in `.codecast/deploy.toml`; the Deploys page shows each target's live version and the commits waiting for it, and `cast deploy` sends every target a release covers. PR and commit pills say whether that code is live. `cast flow edit` changes a project's flow one step at a time.
+- **Boards, sheets and dashboards** (Nov 11 to 19). Three new kinds of document, made from the Docs page, that people and agent sessions edit at once, each with a cursor. Ask agent, comments, history, Share, search inside them, and pins on a call's stage. Agents use `cast board`, `cast sheet` and `cast dashboard`.
+- **The phone app goes native** (Nov 4 to 20). Every codecast destination opens a native screen, notification taps included. Open and type into the agent's terminal from the phone. Passkey sign-in, a text size setting, select text on long press, and undo for stash and kill.
+- **Sessions in any terminal, or none** (Nov 4 to 18). A Claude Code session in Ghostty or another terminal takes your messages without moving to tmux. Claude sessions can run on Anthropic's Agent SDK, switched per session from the header. Rewind to here shows what putting the files back to a turn would change. `/btw` answers a side question without sending it to the agent. Grok runs as its own backend.
+- **Decisions in one place** (Nov 4 to 15). A message naming several decisions counts them, and Go through them flips through each as a full page. Terminal permission prompts appear as approve and deny cards in the conversation. `ctrl+i` jumps to Needs You. Deep dive: [Decisions](https://codecast.sh/documentation/decisions).
+- **Browser, computer and cloud hosts** (Nov 4 to 20). Vault sign-ins load into any Chrome an agent drives, and extension setup picks the Chrome profile. `cast computer` uses the mouse on background windows. Cloud sessions can drive Chrome on the host or your laptop, `cast cloud` manages hosts, and Namespace Devboxes are a second provider. Deep dive: [Remote and cloud sessions](https://codecast.sh/documentation/remote-and-cloud-sessions).
+- **A Modern look, and the rest** (Nov 3 to 20). Modern is a third interface style beside Classic and Minimal, and every style gets a 12px type floor and a brighter default theme. Mods can ship themes. Team chat has threads, codecast links unfurl in Slack with their content, and teams get read-only API keys. Deep dive: [Team chat](https://codecast.sh/documentation/team-chat).
+
+---
+
+## October 2026: Flows, mods, a team vault, and decisions that route themselves
+**v1.1.144 – v1.1.210 · Desktop v1.1.122**
+
+This month every change got a path to follow. Flows run a change through check,
+review, decide, land and deploy, and a team shares one library of them. Mods let
+anyone add panes, commands and live objects to the app. A team vault holds the
+keys and sign-ins agents need, behind Touch ID. Decisions route to whoever
+covers the area, and a person can pass one on or escalate it.
+
+- **Flows: the path every change takes** (Oct 22 to 31). A team keeps one library of flows and smaller segments. `cast flow run change` sends a session's edits through one, drawn live in the conversation. Flows run from saved versions with history and pin. Deep dive: [Workflows](https://codecast.sh/documentation/workflows).
+- **Mods: extend the app** (Oct 5 to 22). Small sandboxed modules that add panes, palette commands, sidebar sections, tracked objects and rich fenced blocks, with an optional local half. `cast mod new`, `build` and `push` take one live in seconds.
+- **A vault for your team** (Oct 22 to 24). Keys, logins with 2FA, files and browser sign-ins, for you or your team, used by agents without the value reaching the transcript. Ask first and reveals need Touch ID, and a pasted credential is held back with an offer to save it. Deep dive: [Vault](https://codecast.sh/documentation/vault).
+- **Decisions that route themselves** (Oct 22 to 28). One Decisions page with Mine and Team views; each decision goes to whoever covers its area. Pass one on with a note or escalate it, from web, phone or CLI. Every decision has a team thread, and permission prompts become decision cards. Deep dive: [Decisions](https://codecast.sh/documentation/decisions).
+- **The org grows up** (Sep 29 to Oct 31). A Head of People files sessions under their roles and proposes org changes. `cast route` hands a request to its owner. People can report to people, the hire gallery offers ready-made roles, and goals read live metrics. Deep dive: [The org](https://codecast.sh/documentation/org-roles).
+- **Calls, chat and sharing** (Sep 27 to Oct 31). Private huddles, recordings, guests, and iPhone video calls. Transcripts can fire triggers. Chat gets DMs and per-thread mute, and a guest on a shared session can suggest messages for the owner to approve. Deep dive: [Huddles and transcripts](https://codecast.sh/documentation/calls).
+- **Machines and accounts** (Sep 29 to Oct 28). Shared Linux hosts with a daemon per teammate. New sessions start in the cloud when your Mac is overloaded. `cast migrate` moves sessions laptop to laptop, `cast remote sync` mirrors a cloud session's files, and a saved Claude account can be reserved for one job. Deep dive: [Remote and cloud sessions](https://codecast.sh/documentation/remote-and-cloud-sessions).
+- **Faster to drive** (Oct 2 to 31). Rebindable shortcuts, instant session search in the palette, stop and send, a since-my-last-review diff, an undo timeline and a session map. Product errors, metrics and replays arrive as events agents read with `cast events`, `cast metrics` and `cast replay`.
+
+---
+
 ## September 2026: The org, pull requests, and sessions in the cloud
 **v1.1.114 – v1.1.143 · Desktop v1.1.112**
 
