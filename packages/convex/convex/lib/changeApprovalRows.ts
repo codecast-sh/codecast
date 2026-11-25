@@ -154,7 +154,7 @@ export async function claimPress(ctx: { db: any }, runId: Id<"workflow_runs">, c
  * What a card a run asks carries for its Ship to approve: the run's pull request and the judged diff as codecast
  * last worked it out for that head. Absent until the run's PR station reported its pull request.
  */
-export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_runs"> | undefined): Promise<{ approval: { repository: string; pr_number: number; judged_key: string; files: string[] } } | {}> {
+export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_runs"> | undefined): Promise<{ approval: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[] } } | {}> {
   const run: any = runId ? await ctx.db.get(runId) : null;
   if (!run?.pr) return {};
   const pr: any = await ctx.db
@@ -163,7 +163,7 @@ export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_run
     .first();
   const a = pr?.approval;
   if (!a?.judged_key || a.head_sha !== pr.head_sha) return {};
-  return { approval: { repository: run.pr.repository, pr_number: run.pr.number, judged_key: a.judged_key, files: a.judged_files ?? [] } };
+  return { approval: { repository: run.pr.repository, pr_number: run.pr.number, judged_key: a.judged_key, ...(a.whole_key ? { whole_key: a.whole_key } : {}), files: a.judged_files ?? [] } };
 }
 
 /**
@@ -175,7 +175,7 @@ export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_run
  */
 export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
+  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
   verdict: { status: string; answer_index?: number },
   by: { kind: string; user_id?: Id<"users"> },
   now: number,
@@ -190,20 +190,24 @@ export async function settleCardApproval(
   const ship = verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
   if (ship) {
     // Only a card that showed a judged diff ({pr, judged_key, files}) approves, and only that diff: an unstamped card's
-    // Ship approves nothing, and the status asks again.
-    if (row.approval) await ctx.db.insert("change_approvals", {
-      repository: row.approval.repository,
-      pr_number: row.approval.pr_number,
-      judged_key: row.approval.judged_key,
-      files: row.approval.files,
-      user_id: by.user_id,
-      source: "card",
-      conversation_id: row.conversation_id,
-      workflow_run_id: run._id,
-      ...(row.task_id ? { task_id: row.task_id } : {}),
-      decision_id: row._id,
-      created_at: now,
-    });
+    // Ship approves nothing, and the status asks again. The run's card read the change whole, so its Ship also binds to
+    // the whole diff it showed, which covers a mechanism until any code changes.
+    const a = row.approval;
+    if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
+      await ctx.db.insert("change_approvals", {
+        repository: a.repository,
+        pr_number: a.pr_number,
+        judged_key: key,
+        files: a.files,
+        user_id: by.user_id,
+        source: "card",
+        conversation_id: row.conversation_id,
+        workflow_run_id: run._id,
+        ...(row.task_id ? { task_id: row.task_id } : {}),
+        decision_id: row._id,
+        created_at: now,
+      });
+    }
   } else {
     const held: Doc<"change_approvals">[] = await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", run._id)).collect();
     for (const a of held) if (!a.revoked_at) await ctx.db.patch(a._id, { revoked_at: now });

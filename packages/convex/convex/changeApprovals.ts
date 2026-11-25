@@ -9,8 +9,10 @@
 //              judged diff of the first head the run's PR station pushed; or a person's Ship (or Approve merge) on
 //              the run's card. An agent, a role or a policy never approves. Never the run's starter as such: agents
 //              start runs as the human.
-//   carry      an approval holds while the judged diff's patch id (lib/judgedDiff.ts) is unchanged: a rebase keeps
-//              it, a changed judged diff asks again.
+//   carry      an approval holds while the patch id (lib/judgedDiff.ts) of the diff it approved is unchanged: a rebase
+//              keeps it, a changed diff asks again. Judged-file approvals (a press, a card about the judged files)
+//              bind to the judged diff; one that read the change whole (a mechanism, no review to say, the run's
+//              card) binds to the pull request's whole diff, so any code change asks it again.
 //   mechanism  the reviewer's answer counts only from a reviewer station codecast saw finish, on the head (or a head
 //              the run's own rebase made of it). Until one exists the status is pending: there is no default.
 //   revert     a Release Captain's revert (the run's role, and git's revert line on its commits) merges on CI's
@@ -58,10 +60,10 @@ export type ApprovalFacts =
       run: "live" | "ended" | false;
       /** The review's answer: true a mechanism, false not, null not said (or not yet seen finished). */
       mechanism: boolean | null;
-      /** A person's Ship on the run's card, for this judged diff. */
+      /** A person's yes on a card that read the change whole, for this whole diff: it covers a mechanism too. */
       card?: { who: string; ref: string } | null;
-      /** A person's Ship press, for this judged diff. */
-      press?: { who: string } | null;
+      /** What covers this judged diff's files, never a mechanism: a Ship press, a card that asked about them, an engineer's pre-build yes. */
+      press?: { who: string; ref?: string } | null;
       /** Who a card goes to, by name, for each question a person may be asked. */
       needs: { judged: string; mechanism: string; review: string };
     };
@@ -106,7 +108,7 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (!f.judged.length && !f.mechanism) return { state: "success", description: "no judged paths; the review: not a mechanism" };
   if (f.card) return approved(f.card);
   if (f.mechanism) return { state: "pending", description: fit(`needs ${f.needs.mechanism}: the review called it a mechanism`) };
-  if (f.press) return { state: "success", description: fit(`approved by ${f.press.who} (Ship press)`) };
+  if (f.press) return { state: "success", description: fit(`approved by ${f.press.who} (${f.press.ref ?? "Ship press"})`) };
   const head = `needs ${f.needs.judged}: edits `;
   return { state: "pending", description: fit(head + pathList(f.judged, DESCRIPTION_MAX - head.length)) };
 }
@@ -211,6 +213,20 @@ async function withSides(repository: string, token: string, files: PRPath[], bas
   });
 }
 
+/**
+ * The key of the pull request's whole diff against its merge base (patch-id --verbatim, as the judged diff's): what a
+ * card that read the change whole approves, so a pure rebase carries it and any code change asks again. When a file's
+ * diff cannot be rebuilt (binary, too large, unreadable), the head itself, so every push asks again.
+ */
+async function wholeKey(repository: string, token: string, paths: PRPath[], base: string, head: string): Promise<string> {
+  try {
+    const all = pathDiffsOf(await withSides(repository, token, paths, base, head, () => true), () => true);
+    return "unreadable" in all ? `head:${head}` : await diffKey(all.diffs);
+  } catch {
+    return `head:${head}`;
+  }
+}
+
 async function prMessages(repository: string, token: string, prNumber: number): Promise<string[]> {
   const commits: any[] = [];
   for (let page = 1; page <= 3; page++) {
@@ -235,7 +251,7 @@ export type PullPeople = {
 export type PullRead =
   | { open: false }
   | { open: true; head_sha: string; unreadable: string; judges?: string[]; people: PullPeople }
-  | { open: true; head_sha: string; judged: string[]; key: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople };
+  | { open: true; head_sha: string; judged: string[]; key: string; whole_key: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople };
 
 /** Main's engineers file: `<codecast user id> <name>` a line, blank and "#" lines skipped. */
 export function parseEngineers(text: string): Array<{ user_id: string; name: string }> {
@@ -280,10 +296,11 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const rebuilt = pathDiffsOf(await withSides(repository, token, pr.paths, mb, head, (p) => judged.includes(p)), (p) => judged.includes(p));
     if ("unreadable" in rebuilt) return { open: true, head_sha: head, unreadable: `${rebuilt.unreadable}'s diff`, judges, people };
     const key = await diffKey(rebuilt.diffs);
+    const whole_key = await wholeKey(repository, token, pr.paths, mb, head);
     const messages = await prMessages(repository, token, prNumber);
     const asker = requestedBy(messages);
     // The Captain's exemption is for a pull request of reverts only: one other commit and it is judged like any.
-    return { open: true, head_sha: head, judged, key, judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people };
+    return { open: true, head_sha: head, judged, key, whole_key, judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people };
   } catch (error) {
     return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})`, people };
   }
@@ -309,7 +326,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   const verdict: ApprovalVerdict & { context: string } = await ctx.runMutation(internal.changeApprovals.settle, {
     repository, pr_number: args.pr_number, head_sha: read.head_sha,
     ...("unreadable" in read ? { unreadable: read.unreadable } : {
-      judged: read.judged, key: read.key,
+      judged: read.judged, key: read.key, whole_key: read.whole_key,
       ...(read.reverts ? { reverts: true } : {}),
       ...(read.requested_by ? { requested_by: read.requested_by } : {}),
     }),
@@ -440,6 +457,7 @@ export const settle = internalMutation({
     unreadable: v.optional(v.string()),
     judged: v.optional(v.array(v.string())),
     key: v.optional(v.string()),
+    whole_key: v.optional(v.string()),
     reverts: v.optional(v.boolean()),
     requested_by: v.optional(v.string()),
     judges: v.optional(v.array(v.string())),
@@ -485,23 +503,25 @@ export const settle = internalMutation({
       }
     }
 
-    // An approval is keyed to the judged diff. A card that asked about the change whole (no review could say whether it
-    // is a mechanism, or codecast could not read it) is keyed to the head it showed, so any later push asks again.
-    const headKey = `head:${args.head_sha}`;
-    const keyed = async (k: string): Promise<Doc<"change_approvals">[]> => (await ctx.db
+    // Two keys an approval binds to. The judged diff's: a Ship press, an engineer's pre-build yes and a card that asked
+    // about the judged files cover those files while their diff is unchanged, never a mechanism. The whole diff's: a card
+    // that read the change whole (a mechanism, no review to say, the run's own card) covers all of it while the whole
+    // diff is unchanged, so a pure rebase carries it and any code change asks again. Unread, the head stands for it.
+    const wholeKey = args.whole_key ?? `head:${args.head_sha}`;
+    const keyed = async (k: string | undefined): Promise<Doc<"change_approvals">[]> => (k === undefined ? [] : (await ctx.db
       .query("change_approvals")
       .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
-      .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at);
-    const approvals = key === undefined ? [] : await keyed(key);
-    const wholeCards = (await keyed(headKey)).filter((a) => a.source === "card");
-    // With no run behind it, only a card on this head counts: a judged-diff card would outlive a push of unjudged code.
-    const cardRow = (run ? approvals.find((a) => a.source === "card") : undefined) ?? wholeCards[0];
+      .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at));
+    const approvals = await keyed(key);
+    const wholeRow = (await keyed(wholeKey)).find((a) => a.source === "card");
     const pressRow = approvals.find((a) => a.source === "ship_press");
     const yesRow = approvals.find((a) => a.source === "engineer_yes");
+    const judgedCardRow = approvals.find((a) => a.source === "card");
     const refOf = async (a: Doc<"change_approvals">) => (a.decision_id ? ((await ctx.db.get(a.decision_id))?.short_id ?? "its card") : "its card");
-    const card = cardRow ? { who: await nameOf(ctx, cardRow.user_id), ref: await refOf(cardRow) } : null;
-    // A press and an engineer's pre-build yes both cover the judged files of their diff, never a mechanism.
-    const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) } : yesRow ? { who: `${await nameOf(ctx, yesRow.user_id)}, ${await refOf(yesRow)} before the build` } : null;
+    const card = wholeRow ? { who: await nameOf(ctx, wholeRow.user_id), ref: await refOf(wholeRow) } : null;
+    const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) }
+      : judgedCardRow ? { who: await nameOf(ctx, judgedCardRow.user_id), ref: await refOf(judgedCardRow) }
+      : yesRow ? { who: await nameOf(ctx, yesRow.user_id), ref: `${await refOf(yesRow)} before the build` } : null;
     const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
     const pr = rows[0] ?? null;
     const before = pr?.approval;
@@ -528,8 +548,9 @@ export const settle = internalMutation({
       && (await askReviewForMechanism(ctx, run, args.head_sha, `${repository}#${args.pr_number}`, runAttempt(run)));
     // The one card a person is asked, per judged diff and question; the one it replaces is taken back first.
     const reason: CardReason | null = cardReason(facts);
-    const cardKey = reason === "review" || reason === "unreadable" ? undefined : key;
-    const stale = cardStale(before?.card_key, { diff: (reason ? cardKey : key) ?? args.head_sha, reason, success: verdict.state === "success" });
+    // A card about the judged files binds to their diff; any other reads the change whole.
+    const cardKey = reason === "judged" && key !== undefined ? key : wholeKey;
+    const stale = cardStale(before?.card_key, { diffs: reason ? [cardKey] : [key, wholeKey].filter((k): k is string => !!k), reason, success: verdict.state === "success" });
     if (stale && before?.card_id) await withdrawApprovalCard(ctx, before.card_id, now, "The pull request's judged diff or what it waits on changed; a new card asks if anything is needed.");
     const posted = reason ? await postApprovalCard(ctx, {
       repository, pr_number: args.pr_number, head_sha: args.head_sha, key: cardKey, judged, reason, to: to[reason], run, pr,
@@ -541,6 +562,7 @@ export const settle = internalMutation({
         approval: {
           head_sha: args.head_sha, state: verdict.state, description: verdict.description,
           ...(key !== undefined ? { judged_key: key, judged_files: judged } : {}),
+          ...(args.whole_key ? { whole_key: args.whole_key } : {}),
           ...(run ? { run_id: run._id } : {}),
           ...(typeof mechanism === "boolean" ? { mechanism } : {}),
           ...(captainRevert ? { captain_revert: true } : {}),

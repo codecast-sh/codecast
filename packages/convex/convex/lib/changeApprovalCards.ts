@@ -112,19 +112,19 @@ const WHY: Record<CardReason, string> = {
   unreadable: "Codecast could not read enough of it to tell, so a person approves.",
 };
 
-/** What a card asks about: the judged diff (or, unreadable, the head) and the question. */
+/** What a card asks about: the diff it binds to (the judged diff's key or the whole diff's) and the question. */
 export const cardKeyOf = (diff: string, reason: CardReason) => `${diff}:${reason}`;
 const diffOfCardKey = (cardKey: string) => cardKey.slice(0, cardKey.lastIndexOf(":"));
 
 /**
  * Whether the card a pull request holds open stops standing: it asked another question or about another diff, or the
- * status no longer waits on a person. While the status waits only on the review's mechanism answer, the card for this
- * same diff stays.
+ * status no longer waits on a person. While the status waits only on the review's mechanism answer, a card about a
+ * diff the pull request still has (`diffs`: the one the asked question binds to, else either of its keys) stays.
  */
-export function cardStale(held: string | undefined, now: { diff: string; reason: CardReason | null; success: boolean }): boolean {
+export function cardStale(held: string | undefined, now: { diffs: string[]; reason: CardReason | null; success: boolean }): boolean {
   if (!held) return false;
-  if (now.reason) return held !== cardKeyOf(now.diff, now.reason);
-  return now.success || diffOfCardKey(held) !== now.diff;
+  if (now.reason) return held !== cardKeyOf(now.diffs[0], now.reason);
+  return now.success || !now.diffs.includes(diffOfCardKey(held));
 }
 
 /**
@@ -142,10 +142,10 @@ export async function withdrawApprovalCard(ctx: { db: any; scheduler: any }, car
  * or already asked).
  */
 export async function postApprovalCard(ctx: { db: any }, a: {
-  repository: string; pr_number: number; head_sha: string; key: string | undefined; judged: string[];
+  repository: string; pr_number: number; head_sha: string; /** The diff its yes approves (changeApprovals.settle). */ key: string; judged: string[];
   reason: CardReason; to: Person; run: any | null; pr: Doc<"pull_requests"> | null; title: string; before_key?: string; now: number;
 }): Promise<{ card_key: string; card_id: Id<"session_decisions"> } | null> {
-  const card_key = cardKeyOf(a.key ?? a.head_sha, a.reason);
+  const card_key = cardKeyOf(a.key, a.reason);
   if (!a.to.user_id || a.before_key === card_key) return null;
   const conversation = await askingConversation(ctx, a.run, a.pr);
   if (!conversation) return null;
@@ -182,7 +182,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     hops: [],
     ...(a.run?.task_id ? { task_id: a.run.task_id } : {}),
     ...(a.pr?.team_id ? { team_id: a.pr.team_id } : {}),
-    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key ?? `head:${a.head_sha}`, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason },
+    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason },
     approval_card: true,
     created_at: a.now,
     session_title: conversation.title,
