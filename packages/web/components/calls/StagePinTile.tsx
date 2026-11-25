@@ -46,7 +46,7 @@ export const StagePinTile = memo(function StagePinTile({ share, small }: { share
   // Its own surface, lighter than the stage, the way a screen share is a
   // picture in a frame: the thing is the room's to work on.
   return (
-    <div className="h-full w-full overflow-hidden rounded-xl bg-sol-bg-alt ring-1 ring-white/[0.06]" data-stage-pin={row.ref}>
+    <div className="h-full w-full overflow-hidden rounded-xl bg-sol-bg-alt ring-1 ring-sol-text/[0.06]" data-stage-pin={row.ref}>
       <PinWhole row={row} />
     </div>
   );
@@ -57,7 +57,7 @@ export const StagePinTile = memo(function StagePinTile({ share, small }: { share
 function PinCard({ row }: { row: StagePinRow }) {
   const title = usePinTitle(row);
   return (
-    <div className="stage-tile-small flex aspect-video w-full shrink-0 flex-col justify-between rounded-lg bg-white/[0.05] p-2 ring-1 ring-white/[0.06]">
+    <div className="stage-tile-small flex aspect-video w-full shrink-0 flex-col justify-between rounded-lg bg-sol-text/[0.05] p-2 ring-1 ring-sol-text/[0.06]">
       <PinMark row={row} size={16} />
       <div className="min-w-0">
         <div className="truncate font-mono text-meta text-sol-text">{title}</div>
@@ -130,7 +130,7 @@ function PinHead({ row, toolbar }: { row: StagePinRow; toolbar?: ReactNode }) {
   const path = pinPath(row);
   const title = usePinTitle(row);
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-white/[0.06] px-2.5" data-stage-pin-head={row.ref}>
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b border-sol-text/[0.06] px-2.5" data-stage-pin-head={row.ref}>
       <PinMark row={row} />
       <span className="min-w-0 max-w-[40%] truncate font-mono text-[12.5px] text-sol-text" title={title}>{title}</span>
       {(row.pinned_by_agent || row.pinned_by_name) && (
@@ -145,7 +145,7 @@ function PinHead({ row, toolbar }: { row: StagePinRow; toolbar?: ReactNode }) {
         <button
           type="button"
           onClick={() => actions.openPath(path)}
-          className="shrink-0 rounded-md p-1 text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text"
+          className="shrink-0 rounded-md p-1 text-sol-text-muted transition-colors hover:bg-sol-text/[0.06] hover:text-sol-text"
           title="Open it whole"
           aria-label="Open it whole"
         >
@@ -156,7 +156,7 @@ function PinHead({ row, toolbar }: { row: StagePinRow; toolbar?: ReactNode }) {
         <button
           type="button"
           onClick={() => useInboxStore.getState().unpinFromStage(actions.roomKey, row.ref)}
-          className="shrink-0 rounded-md p-1 text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text"
+          className="shrink-0 rounded-md p-1 text-sol-text-muted transition-colors hover:bg-sol-text/[0.06] hover:text-sol-text"
           title="Take it off the stage for everyone"
           aria-label="Take it off the stage"
         >

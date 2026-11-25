@@ -411,19 +411,40 @@
   height: 1px;
   background: color-mix(in srgb, var(--sol-text) 10%, transparent);
 }
-/* The earlier group's label is a fold (a button with aria-expanded): it
-   fills the row like the plain label and its chevron turns when open. */
-.rt-divider[aria-expanded] {
-  width: 100%;
-  cursor: pointer;
-  text-align: left;
-  transition: color 120ms;
+/* The calls these same people had before (EarlierCalls): one row each,
+   on the names' edge, a link to the call's own page. */
+.rt-earlier-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
 }
-.rt-divider[aria-expanded]:hover {
+.rt-earlier-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 28px;
+  border-radius: 6px;
+  color: var(--sol-text-muted);
+  transition: background-color 120ms, color 120ms;
+}
+.rt-earlier-row:hover {
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
   color: var(--sol-text);
 }
-.rt-divider[aria-expanded="true"] .rt-chevron {
-  transform: rotate(90deg);
+.rt-earlier-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rt-earlier-meta {
+  flex-shrink: 0;
+  color: var(--sol-text-dim);
+  font-size: var(--fs-mark);
+}
+.rt-earlier-more {
+  color: var(--sol-text-dim);
 }
 /* How selecting works: one quiet line in the list, after the recap and
    before the first turn it explains. The list's inset plus the 28px glyph

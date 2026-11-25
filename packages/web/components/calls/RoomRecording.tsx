@@ -546,7 +546,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
     <div
       role="status"
       className={`pointer-events-auto flex max-w-[380px] items-start gap-2.5 rounded-lg bg-sol-bg/90 px-3 py-2.5 shadow-2xl ring-1 backdrop-blur animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none ${
-        stopped?.failed ? "ring-sol-orange/30" : stopped ? "ring-white/10" : "ring-sol-red/30"
+        stopped?.failed ? "ring-sol-orange/30" : stopped ? "ring-sol-text/10" : "ring-sol-red/30"
       }`}
     >
       {shown.mode === "confirm" ? (
@@ -596,7 +596,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                       setShown(null);
                       openCall(href);
                     }}
-                    className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-white/10"
+                    className="rounded-md bg-sol-text/[0.06] px-2 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-sol-text/10"
                     title="Open the call page at the recording"
                   >
                     Open
@@ -606,7 +606,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                   <button
                     type="button"
                     onClick={() => setShown(null)}
-                    className="rounded-md px-2 py-0.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-white/10 hover:text-sol-text"
+                    className="rounded-md px-2 py-0.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-text/10 hover:text-sol-text"
                   >
                     Dismiss
                   </button>
@@ -618,7 +618,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                 <button
                   type="button"
                   onClick={() => setShown(null)}
-                  className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-white/10"
+                  className="rounded-md bg-sol-text/[0.06] px-2 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-sol-text/10"
                 >
                   Got it
                 </button>

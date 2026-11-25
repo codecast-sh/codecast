@@ -16,9 +16,10 @@ import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { Avatar } from "./Avatar";
 import { SessionFace } from "../identity";
 import { TranscriptTurnList, type ClickedLine } from "./TranscriptTurns";
+import { useSpeakerAttribution } from "./speakerContext";
 import { CallLinkButton } from "./CallLinkButton";
 import { turnsAnchor } from "./transcriptTurnModel";
-import { firstName, speakerColor } from "./speakers";
+import { firstName, speakerAccent, speakerColor } from "./speakers";
 import { formatCallTime, parseCallRef } from "@codecast/shared/entities";
 import { GuestTag, ParticipantTag } from "./GuestTag";
 import { HEARS, type EventRow, type Passage, type ThreadRow } from "./roomThreadModel";
@@ -82,6 +83,7 @@ export const PassageBlock = memo(function PassageBlock({
   live,
   fresh,
   recording,
+  voices = false,
   dayOf,
   onToggle,
   selection,
@@ -96,6 +98,8 @@ export const PassageBlock = memo(function PassageBlock({
   /** Began after the thread mounted: it rises in like any other new row. */
   fresh: boolean;
   recording: boolean;
+  /** A recording whose lines carry voice keys: turns by speaker, named through SpeakerAttribution. */
+  voices?: boolean;
   /** The call's start: a wall clock on the same day drops its date. */
   dayOf: number | undefined;
   /** Handed the passage, so the thread can pass one stable function. */
@@ -104,14 +108,15 @@ export const PassageBlock = memo(function PassageBlock({
   /** The call the passage belongs to: its turns and its head offer links. */
   callId?: string;
 }) {
-  const units = recording ? "line" : "turn";
+  const lines = recording && !voices;
+  const units = lines ? "line" : "turn";
   const n = passage.turns.length;
   const bodyId = `${idPrefix}p${passage.index}`;
   const className = `rt-passage${open ? " rt-passage-open" : ""}${live ? " rt-passage-live" : ""}${fresh ? " rt-in" : ""}`;
   // One turn of a huddle: its row already carries the name and the clock,
   // so a head over it would say the same twice and outweigh the words.
   // The rule stays, so it still reads as spoken.
-  if (!recording && n === 1) {
+  if (!lines && n === 1) {
     return (
       <section className={className}>
         <div className="rt-passage-body">
@@ -143,8 +148,10 @@ export const PassageBlock = memo(function PassageBlock({
       >
         <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
         <span className="rt-passage-who">
-          {recording ? (
+          {lines ? (
             <span className="text-sol-text-muted">Spoken</span>
+          ) : voices ? (
+            <PassageVoices speakers={passage.speakers} />
           ) : (
             passage.speakers.map((sp, i) => (
               <span key={sp.id} className={speakerColor(sp.id)}>
@@ -179,7 +186,7 @@ export const PassageBlock = memo(function PassageBlock({
             isSelected={selection?.isSelected}
             onTurnClick={selection?.onTurnClick}
             onTurnHold={selection?.onTurnHold}
-            compact={recording}
+            compact={lines}
             activeIndex={selection?.activeIndex ?? null}
             activeSeq={selection?.activeSeq}
             filmed={selection?.filmed}
@@ -190,6 +197,24 @@ export const PassageBlock = memo(function PassageBlock({
     </section>
   );
 });
+
+/** A voice note passage's head: who speaks in it, as the picker last named them. */
+function PassageVoices({ speakers }: { speakers: Passage["speakers"] }) {
+  const ctx = useSpeakerAttribution();
+  return (
+    <>
+      {speakers.map((sp, i) => {
+        const who = ctx ? ctx.resolve({ speaker_id: sp.id, speaker_name: sp.name }) : { key: sp.id, name: sp.name, suggested: false };
+        return (
+          <span key={sp.id} className={`${speakerAccent(sp.id)}${who.suggested ? " opacity-70" : ""}`}>
+            {who.name}
+            {i < speakers.length - 1 ? ", " : ""}
+          </span>
+        );
+      })}
+    </>
+  );
+}
 
 // ── The recap so far ───────────────────────────────────────────────────────
 
@@ -489,7 +514,7 @@ export function RecordEventLine({
         <button
           type="button"
           onClick={moment.onSeek}
-          className={`${clock} transition-colors hover:bg-white/[0.06] hover:text-sol-text`}
+          className={`${clock} transition-colors hover:bg-sol-text/[0.06] hover:text-sol-text`}
           title="Show the video at this moment"
         >
           {moment.label}

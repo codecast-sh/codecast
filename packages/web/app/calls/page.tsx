@@ -24,7 +24,9 @@ import { DocTypeMark } from "../../components/docs/DocTypeMark";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ShareControl } from "../../components/ShareControl";
 import { KeyCap } from "../../components/KeyCap";
-import { policyTeamOf } from "@codecast/shared/contracts";
+import { hasVoiceSpeakers, policyTeamOf } from "@codecast/shared/contracts";
+import { SpeakerAttribution, SpeakerStrip } from "../../components/calls/SpeakerAttribution";
+import { useNamedSegments } from "../../components/calls/speakerRoster";
 import { GuestInvite } from "../../components/calls/GuestDoor";
 import { GuestTag, ParticipantTag } from "../../components/calls/GuestTag";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -44,7 +46,7 @@ import { termsOf, useCallSearch } from "../../hooks/useCallSearch";
 import { usePaneShortcutAction } from "../../shortcuts/ShortcutProvider";
 import type { ClickedLine } from "../../components/calls/TranscriptTurns";
 import type { CallMoment } from "../../components/calls/RoomThreadRows";
-import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls/roomThreadModel";
+import { buildPassages, flatTurns, type ThreadRow, type TranscriptSegment } from "../../components/calls/roomThreadModel";
 import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
 import { copyCallFrameLink, copyCallLink } from "../../lib/calls/callLinks";
 import { copyText } from "../../lib/copyText";
@@ -447,9 +449,17 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // The passages are the thread's model of the words, so the flat turn list
   // the selection indexes is exactly what the thread renders, in order.
   const segments = call?.segments;
+  // A voice note whose lines carry voice keys: turns by speaker, a speaker
+  // row under the audio, and every name one press from the picker. The
+  // thread decides the same way (RoomThread), so the turn indices agree.
+  const voices = recording && hasVoiceSpeakers(segments);
+  // Each line named as its voice is now: the turns, the thread's previews and
+  // aria labels, and an excerpt sent to an agent all read these.
+  const named = useNamedSegments<TranscriptSegment>(call, segments, voices);
+  const threadCall = useMemo(() => (call && named !== segments ? { ...call, segments: named } : call), [call, named, segments]);
   const turns = useMemo(
-    () => flatTurns(buildPassages(segments ?? [], (rows ?? []).map((r) => r.at), { recording })),
-    [segments, rows, recording],
+    () => flatTurns(buildPassages(named ?? [], (rows ?? []).map((r) => r.at), { recording: recording && !voices })),
+    [named, rows, recording, voices],
   );
   // Where the call's media is (ms since the call started) and whether it is
   // playing: the audio of a recording, or the video of a recorded huddle.
@@ -469,7 +479,8 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
 
   useMountEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") clearSelection();
+      // An Esc a popover or menu already took (the speaker picker) is theirs.
+      if (e.key === "Escape" && !e.defaultPrevented) clearSelection();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -615,7 +626,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
     const chosen =
       which === "selection" && selLo !== null
         ? turns.slice(selLo, (selHi as number) + 1).flatMap((t) => t.segments)
-        : (call.segments ?? []);
+        : (named ?? []);
     return {
       segments: chosen,
       transcriptId: String(call._id),
@@ -808,6 +819,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   const onSend = turns.length > 0 ? () => openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") }) : null;
 
   return (
+    <SpeakerAttribution call={call} enabled={voices}>
     <div ref={detailRef} className="flex h-full min-h-0 min-w-0 flex-col">
       {/* Header: what this call was, who spoke, the ways in. */}
       <PageHeader
@@ -924,6 +936,11 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
             onTimeUpdate={(e) => media.onTime(e.currentTarget.currentTime * 1000, !e.currentTarget.paused)}
             onPause={(e) => media.onTime(e.currentTarget.currentTime * 1000, false)}
           />
+          {voices && (
+            <div className="mt-2.5">
+              <SpeakerStrip segments={segments} />
+            </div>
+          )}
         </div>
       )}
       </div>
@@ -935,7 +952,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
       <div ref={threadRef} className="call-media-thread">
       <RoomThread
         roomKey={call.room_key}
-        call={call}
+        call={threadCall}
         rows={rows}
         liveTranscriptId={live ? id : null}
         surface="page"
@@ -1038,6 +1055,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
         </div>
       )}
     </div>
+    </SpeakerAttribution>
   );
 }
 

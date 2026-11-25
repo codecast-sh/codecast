@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
   AppWindow,
+  Check,
   ChevronDown,
   Circle,
   CircleUserRound,
   ExternalLink,
+  EyeOff,
   Globe,
   Link2,
   Lock,
@@ -14,7 +16,6 @@ import {
   Minimize2,
   MonitorUp,
   Radio,
-  Unlock,
   Users,
   Video,
   VideoOff,
@@ -63,7 +64,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { guestsJoining } from "../../lib/calls/roomGuests";
 import { useStageRoster } from "../../hooks/useStageRoster";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
-import { useRoomLock } from "../../hooks/useLiveRooms";
+import { useRoomDoor, type RoomDoor } from "../../hooks/useLiveRooms";
 import {
   SMALL_CALL_WINDOW_SIZES,
   attachTitlebarHead,
@@ -333,6 +334,13 @@ export function CallStage({
   // quick interjection does not yank the app away (lib/follow.ts).
   const followLeaderId = useInboxStore((s) => s.followLeaderId);
   const rosterIds = roster.map((m: any) => String(m.user_id)).join(",");
+  // Who is seated, for the rail's earlier calls: a new array only when the
+  // seats change, so the memoized rail does not redraw with every tile.
+  const rosterNames = roster.map((m: any) => m.user_name ?? "").join("\0");
+  const people = useMemo(() => {
+    const names = rosterNames.split("\0");
+    return rosterIds ? rosterIds.split(",").map((id, i) => ({ id, name: names[i] })) : [];
+  }, [rosterIds, rosterNames]);
   useWatchEffect(() => {
     const next = stageFollowTarget({
       view,
@@ -380,7 +388,6 @@ export function CallStage({
     ],
     [ringing, listed, guestMedia],
   );
-  const lock = useRoomLock(call.roomKey);
 
   // In the panel this header row IS the window's titlebar: it is what you drag
   // the window by, and `.electron-drag-region` is also what marks every button
@@ -406,20 +413,18 @@ export function CallStage({
   // transformed ancestors would otherwise capture this fixed overlay (the
   // classic fixed-under-transform trap) and leave the header painted on top.
   //
-  // The stage is always dark — video wants a dark room — so it carries the
-  // `dark` class itself: every sol-* token inside resolves to the dark
-  // palette whatever theme the app is in. Without it, light mode paints
-  // --sol-text (#002b36) on a #002b36 stage and every label disappears.
+  // The stage follows the app's theme: surfaces and tints use sol-* tokens
+  // (sol-text/[x] for overlays), so light and dark both read. Only chips
+  // that sit on top of video keep fixed black/white.
   return createPortal(
     <div
-      className={`call-stage dark fixed inset-0 z-[200] flex flex-col select-none bg-sol-bg text-sol-text${
+      className={`call-stage fixed inset-0 z-[200] flex flex-col select-none bg-sol-bg text-sol-text${
         // The window is see-through and frameless, so the stage's own surface
         // is the only surface there is: a rounded card, clipped so the video
-        // inside it does not square off the corners — and EDGED, because the
-        // card sits over the app's own dark surfaces and without a line the
-        // eye cannot tell where the window stops.
+        // inside it does not square off the corners, and edged so the eye
+        // can tell where the window stops.
         chromeless
-          ? " overflow-hidden rounded-xl border border-white/[0.13] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+          ? " overflow-hidden rounded-xl border border-sol-border"
           : ""
       }`}
     >
@@ -432,14 +437,14 @@ export function CallStage({
           760px, `.stage-word-tight` under 640px) and the title's "huddle · "
           with them, so the room's name is what survives truncation. The left
           group clips: nothing in it may ever paint under the view control. */}
-      <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 border-b border-white/[0.06] px-3">
+      <div ref={headRef} className="flex h-11 shrink-0 items-center gap-1 border-b border-sol-text/[0.06] px-3">
         <div className="flex min-w-0 shrink items-center gap-0.5 overflow-hidden">
           <span className="min-w-0 truncate px-1 font-mono text-[12.5px] text-sol-text-secondary">
             {parsed?.kind === "session" && <span className="stage-word">huddle · </span>}
             {label}
           </span>
           {roster.length > 0 && (
-            <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-meta text-sol-text-muted">
+            <span className="shrink-0 rounded-full bg-sol-text/[0.06] px-1.5 py-px font-mono text-meta text-sol-text-muted">
               {roster.length}
             </span>
           )}
@@ -494,13 +499,7 @@ export function CallStage({
                 <Radio className="h-3.5 w-3.5" />
               </Link>
             ))}
-          {/* The door. An open huddle is the default — any teammate can walk
-              in — so the lock is the exception, and it reads as one: lit
-              violet while the room is closed, quiet chrome while it is open. */}
-          <StageChromeButton onClick={lock.toggle} active={lock.locked} accent="violet" title={lock.title}>
-            {lock.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
-            <span className="stage-word">{lock.locked ? "locked" : "open"}</span>
-          </StageChromeButton>
+          {call.roomKey && <DoorMenu roomKey={call.roomKey} />}
           {/* The door for somebody with no account: a link they open in a
               browser. Beside the lock, because both decide who gets in. */}
           {call.roomKey && call.phase === "connected" && (
@@ -666,6 +665,7 @@ export function CallStage({
             rows={rows}
             panel={panel}
             sinceAt={roster.find((m) => String(m.user_id) === myUserId)?.joined_at}
+            people={people}
             closing={railClosing && !threadOpen}
             onClosed={onRailClosed}
             onOpenedSession={collapse}
@@ -678,7 +678,7 @@ export function CallStage({
           controls have a floor to stand on rather than floating up into the
           video. Captions first — a lane, left-aligned, the speaker in a
           column — then the notice, then the one control bar. */}
-      <div className="shrink-0 border-t border-white/[0.06] bg-black/[0.12]">
+      <div className="shrink-0 border-t border-sol-text/[0.06] bg-sol-bg-alt">
         {/* The lane folds to nothing while the rail is open (the open
             passage shows the words) instead of leaving the tree, so the foot
             changes height over the same 200ms the rail slides in. */}
@@ -700,7 +700,7 @@ export function CallStage({
 
 /** A thin rule between the header's groups. */
 function HeaderRule() {
-  return <span aria-hidden="true" className="mx-1.5 h-4 w-px shrink-0 bg-white/[0.08]" />;
+  return <span aria-hidden="true" className="mx-1.5 h-4 w-px shrink-0 bg-sol-text/[0.08]" />;
 }
 
 /**
@@ -717,7 +717,7 @@ function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }
       <DropdownMenuTrigger asChild>
         <StageChromeButton
           title="Shrink this window to faces floating over your work"
-          className="data-[state=open]:bg-white/10 data-[state=open]:text-sol-text"
+          className="data-[state=open]:bg-sol-text/10 data-[state=open]:text-sol-text"
         >
           <Minimize2 className="h-3.5 w-3.5" />
           shrink
@@ -727,7 +727,7 @@ function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }
         align="end"
         sideOffset={6}
         collisionPadding={8}
-        className="dark w-[248px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-white/[0.08]"
+        className="w-[248px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-sol-text/[0.08]"
       >
         {SMALL_CALL_WINDOW_SIZES.map((size) => {
           const chrome = SMALL_SIZE_CHROME[size];
@@ -735,13 +735,72 @@ function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }
             <DropdownMenuItem
               key={size}
               onSelect={() => onSetSize(size)}
-              className="items-start gap-2.5 rounded-md px-2 py-1.5 text-left focus:bg-white/[0.06] [&>svg]:size-3.5"
+              className="items-start gap-2.5 rounded-md px-2 py-1.5 text-left focus:bg-sol-text/[0.06] [&>svg]:size-3.5"
             >
               <chrome.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-text-muted" />
               <span className="min-w-0">
                 <span className="block font-mono text-meta text-sol-text">{chrome.label}</span>
                 <span className="block text-meta leading-snug text-sol-text-muted">{chrome.hint}</span>
               </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// Who may walk in, named the way the start dialog names it. Team is the
+// default, so it sits quiet; locked and private are the exceptions and light
+// up. Private is chosen when the huddle starts (it also keeps the record
+// private), so the menu lists it only while it is the room's state: opening
+// the room is the way out of it.
+const DOOR_CHROME: Record<RoomDoor, { icon: typeof Users; label: string; hint: string }> = {
+  team: { icon: Users, label: "team", hint: "Any teammate can walk in" },
+  locked: { icon: Lock, label: "locked", hint: "Teammates see it and knock" },
+  private: { icon: EyeOff, label: "private", hint: "Hidden from the team. Only people rung in" },
+};
+
+function DoorMenu({ roomKey }: { roomKey: string }) {
+  const { door, setDoor } = useRoomDoor(roomKey);
+  const now = DOOR_CHROME[door];
+  const options: RoomDoor[] = door === "private" ? ["private", "team"] : ["team", "locked"];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <StageChromeButton
+          active={door !== "team"}
+          accent="violet"
+          title={`Who can join: ${now.hint.toLowerCase()}`}
+          aria-label={`Who can join: ${now.label}`}
+          className="data-[state=open]:bg-sol-text/10"
+        >
+          <now.icon className="h-3.5 w-3.5" />
+          <span className="stage-word">{now.label}</span>
+          <ChevronDown className="h-3 w-3 opacity-60" />
+        </StageChromeButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        className="w-[240px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-sol-text/[0.08]"
+      >
+        {options.map((key) => {
+          const chrome = DOOR_CHROME[key];
+          const current = key === door;
+          return (
+            <DropdownMenuItem
+              key={key}
+              onSelect={() => key !== "private" && setDoor(key)}
+              className="items-start gap-2.5 rounded-md px-2 py-1.5 text-left focus:bg-sol-text/[0.06] [&>svg]:size-3.5"
+            >
+              <chrome.icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${current ? "text-sol-violet" : "text-sol-text-muted"}`} />
+              <span className="min-w-0 flex-1">
+                <span className="block font-mono text-meta text-sol-text">{chrome.label}</span>
+                <span className="block text-meta leading-snug text-sol-text-muted">{chrome.hint}</span>
+              </span>
+              {current && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-violet" />}
             </DropdownMenuItem>
           );
         })}
@@ -777,8 +836,8 @@ function StageChromeButton({
           ? "bg-sol-violet/10 text-sol-violet"
           : accent === "yellow"
             ? "bg-sol-yellow/10 text-sol-yellow"
-            : "bg-white/10 text-sol-text"
-    : "text-sol-text-muted hover:bg-white/[0.06] hover:text-sol-text";
+            : "bg-sol-text/10 text-sol-text"
+    : "text-sol-text-muted hover:bg-sol-text/[0.06] hover:text-sol-text";
   return (
     <button className={`${CHROME_BTN} ${tone} ${className}`} {...rest}>
       {children}
@@ -806,6 +865,7 @@ const ThreadRail = memo(function ThreadRail({
   rows,
   panel,
   sinceAt,
+  people,
   closing,
   onClosed,
   onOpenedSession,
@@ -817,6 +877,8 @@ const ThreadRail = memo(function ThreadRail({
   panel: boolean;
   /** When the viewer joined: the thread's divider anchor before any transcript. */
   sinceAt?: number;
+  /** Who is seated now: the earlier calls the rail lists are these people's. */
+  people: ReadonlyArray<{ id: string; name?: string }>;
   /** On its way out: the exit runs and `onClosed` fires when it ends. */
   closing: boolean;
   onClosed: () => void;
@@ -842,7 +904,7 @@ const ThreadRail = memo(function ThreadRail({
   return (
     <aside
       style={{ width: `min(${width}px, max(${RAIL_MIN_W}px, calc(100% - ${stageMinW}px)))` }}
-      className={`relative flex shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] motion-reduce:animate-none ${
+      className={`relative flex shrink-0 flex-col overflow-hidden rounded-xl bg-sol-text/[0.04] motion-reduce:animate-none ${
         closing
           ? "animate-out fade-out slide-out-to-right-2 fill-mode-forwards duration-150"
           : "animate-in fade-in slide-in-from-right-2 duration-200"
@@ -862,6 +924,7 @@ const ThreadRail = memo(function ThreadRail({
         seated
         panel={panel}
         sinceAt={sinceAt}
+        people={people}
         onOpenedSession={onOpenedSession}
         className="min-h-0 flex-1"
       />
@@ -901,7 +964,7 @@ function CaptionsLane({
   const shown = lines.slice(-CAPTION_LINES);
   return (
     <div
-      className="pointer-events-none border-b border-white/[0.06] px-5 py-2"
+      className="pointer-events-none border-b border-sol-text/[0.06] px-5 py-2"
       style={{ minHeight: `calc(${CAPTION_LINES} * 13px * 1.375 + ${CAPTION_LINES - 1} * 4px + 16px)` }}
     >
       {shown.length === 0 ? (
@@ -945,7 +1008,7 @@ function ControlBar({ call, live }: { call: any; live: { transcript_id: string; 
 
   return (
     <div className="group/ctl flex flex-col items-center gap-1 px-5 pb-1.5 pt-2.5">
-      <div className="flex items-center gap-1 rounded-full bg-white/[0.05] px-2 py-1.5 ring-1 ring-white/[0.06]">
+      <div className="flex items-center gap-1 rounded-full bg-sol-text/[0.05] px-2 py-1.5 ring-1 ring-sol-text/[0.06]">
         <MicButton muted={call.muted} />
         <button
           onClick={() => void setCamera(!call.camera)}
@@ -967,7 +1030,7 @@ function ControlBar({ call, live }: { call: any; live: { transcript_id: string; 
         )}
         <TranscribeControls live={transcribing} />
         {call.roomKey && call.phase === "connected" && <RecordButton roomKey={call.roomKey} />}
-        <div className="mx-1.5 h-5 w-px bg-white/10" />
+        <div className="mx-1.5 h-5 w-px bg-sol-text/10" />
         <HangUpButton />
       </div>
       {/* Not a setting, a fact: the floating circles either follow a face or
@@ -1029,7 +1092,7 @@ function ShareThumb({ src, icon: Icon, className }: { src: string; icon: typeof 
   const [failed, setFailed] = useState(false);
   if (failed || !src || src.endsWith("base64,")) {
     return (
-      <span className={`flex items-center justify-center bg-white/[0.04] ${className}`}>
+      <span className={`flex items-center justify-center bg-sol-text/[0.04] ${className}`}>
         <Icon className="h-5 w-5 text-sol-text-dim" />
       </span>
     );
@@ -1062,7 +1125,7 @@ function SharePicker({
   return (
     <div
       ref={rootRef}
-      className="absolute bottom-full left-1/2 z-10 mb-3 max-h-[calc(100dvh-120px)] w-[min(440px,calc(100vw-24px))] -translate-x-1/2 overflow-y-auto rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
+      className="absolute bottom-full left-1/2 z-10 mb-3 max-h-[calc(100dvh-120px)] w-[min(440px,calc(100vw-24px))] -translate-x-1/2 overflow-y-auto rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-sol-text/5"
     >
       {sources === null ? (
         <div className="px-1 py-6 text-center text-meta text-sol-text-muted">Looking…</div>
@@ -1080,7 +1143,7 @@ function SharePicker({
                   <button
                     key={src.id}
                     onClick={() => onPick(src.id)}
-                    className="group flex flex-col gap-1.5 rounded-lg border border-white/5 p-1.5 text-left transition-colors hover:border-sol-violet/60 hover:bg-sol-violet/10"
+                    className="group flex flex-col gap-1.5 rounded-lg border border-sol-text/5 p-1.5 text-left transition-colors hover:border-sol-violet/60 hover:bg-sol-violet/10"
                     title={src.name}
                   >
                     <ShareThumb
@@ -1098,7 +1161,7 @@ function SharePicker({
             </section>
           )}
           {windowCount > 0 && (
-            <section className={screens.length > 0 ? "mt-3 border-t border-white/5 pt-2.5" : ""}>
+            <section className={screens.length > 0 ? "mt-3 border-t border-sol-text/5 pt-2.5" : ""}>
               <div className="mb-1.5 flex items-center gap-2 px-1">
                 <span className="text-meta font-medium text-sol-text-muted">
                   Windows <span className="text-sol-text-dim">· {windowCount}</span>
@@ -1111,7 +1174,7 @@ function SharePicker({
                     if (e.key === "Enter" && windows[0]) onPick(windows[0].id);
                   }}
                   placeholder="Find a window…"
-                  className="ml-auto h-6 w-40 rounded-md bg-white/5 px-2 text-meta text-sol-text outline-none ring-1 ring-white/5 placeholder:text-sol-text-dim focus:ring-sol-violet/50"
+                  className="ml-auto h-6 w-40 rounded-md bg-sol-text/5 px-2 text-meta text-sol-text outline-none ring-1 ring-sol-text/5 placeholder:text-sol-text-dim focus:ring-sol-violet/50"
                   style={{ fontVariantLigatures: "none" }}
                 />
               </div>
@@ -1128,7 +1191,7 @@ function SharePicker({
                       }`}
                       title={src.name}
                     >
-                      <ShareThumb src={src.thumbnail} icon={AppWindow} className="h-9 w-16 shrink-0 rounded ring-1 ring-white/5" />
+                      <ShareThumb src={src.thumbnail} icon={AppWindow} className="h-9 w-16 shrink-0 rounded ring-1 ring-sol-text/5" />
                       {src.appIcon ? (
                         <img src={src.appIcon} alt="" className="h-4 w-4 shrink-0" />
                       ) : (

@@ -39,7 +39,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { roomRecordingOn } from "./roomRecordingFields";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
 import { CHAT_CHANNEL_STUB_PREFIX, dmOpenInFlight, newChatMessageClientId, resolveChannelStubId } from "../../store/chatSlice";
-import { bindWalkieUpgrade, getCallTiles, getRoom, joinCall, leaveCall, mediaFailureReason, setCamera, setMuted } from "./callManager";
+import { bindWalkieUpgrade, getCallTiles, getRoom, joinCall, leaveCall, mediaFailureReason, ringInto, setCamera, setMuted } from "./callManager";
 import { guestMediaOf, type GuestMedia } from "./callMedia";
 import {
   getDesktopWindowRole,
@@ -1475,15 +1475,28 @@ export async function joinWalkieLive(
   /** Who is on the other end, when the surface that offered the button knows.
    *  Only the sentence uses it — "You joined Jordan" rather than "You joined
    *  the call" — so a caller that cannot name them still joins the same way. */
-  opts: { name?: string | null } = {},
+  opts: WalkieJoinOpts = {},
 ): Promise<void> {
   if (voiceHostElsewhere()) return viaHost("joinWalkieLive", [roomKey, opts], () => joinWalkieLiveHere(roomKey, opts));
   return joinWalkieLiveHere(roomKey, opts);
 }
 
-async function joinWalkieLiveHere(roomKey: string, opts: { name?: string | null }): Promise<void> {
+type WalkieJoinOpts = {
+  name?: string | null;
+  /** CALL from my own burst: the people to ring once the room is a call. The
+   *  person I was talking at may be away and never seated, so nobody joined
+   *  yet: the ring is the news, not "You joined Ann". */
+  ring?: string[];
+};
+
+async function joinWalkieLiveHere(roomKey: string, opts: WalkieJoinOpts): Promise<void> {
   if (huddleInOtherWindow() && await focusExistingHuddle()) return;
   markWalkieUpgraded(roomKey);
+  if (opts.ring?.length) {
+    await joinCall(roomKey, { intent: "deliberate", walkieJoin: true });
+    await ringInto(roomKey, opts.ring, undefined, { failMessage: "Could not call them" });
+    return;
+  }
   // SAID BEFORE THE JOIN. The answer to a press has to be immediate, the stamp
   // is a round trip away, and this side already knows what it did.
   announceJoin(roomKey, youJoinedText(opts.name));
