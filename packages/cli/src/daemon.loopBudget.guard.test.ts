@@ -95,6 +95,12 @@ const ROWS: Row[] = [
   // read-modify-write of the usage cache has to stay off the loop.
   { file: D, name: "handleStatusLinePost", kind: "function", minLines: 20, mustContain: "ingestStatusLineUsage" },
   { file: "ccAccounts.ts", name: "ingestStatusLineUsage", kind: "function", minLines: 15, mustContain: "liveUsageKey" },
+  // Live replies: every line of a streaming reply, while the person's terminal
+  // waits on the answer, and the settings file checked before every launch.
+  { file: D, name: "handleHookIngressHttp", kind: "function", minLines: 60, mustContain: "REPLY_STREAM_HOOK_PATH" },
+  { file: "replyStream.ts", name: "receive", kind: "method", minLines: 15, mustContain: "this.pump" },
+  { file: "replyStream.ts", name: "pump", kind: "method", minLines: 25, mustContain: "this.deps.push" },
+  { file: "replyStream.ts", name: "ensureReplyStreamSettings", kind: "function", minLines: 10, mustContain: "fsp.rename" },
   // Attribution itself reads nothing: it is handed the profiles and the
   // snapshots the caller already loaded asynchronously.
   { file: "ccAccounts.ts", name: "liveUsageKey", kind: "function", minLines: 8, mustContain: "attributeFingerprint" },

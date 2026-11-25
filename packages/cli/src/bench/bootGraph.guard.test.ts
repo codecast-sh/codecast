@@ -346,7 +346,9 @@ describe("command groups stay off the boot graph", () => {
     // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
     // 375 (2026-11-24): fsAtomic.ts (node imports only), so machineKey.ts and
     // device.ts replace their files whole and concurrent readers agree on a key.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(375);
+    // 376 the same day: contracts/replyStream.ts, the live replies contract
+    // (no imports), carried by the contracts barrel.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(376);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -536,7 +538,9 @@ describe("command groups stay off the boot graph", () => {
     // host's token: the run variable and commentSession in sessionIdentity.ts, used by `cast task comment`,
     // `done -m` and `drop -m` (+1).
     // 4857 (2026-11-25): the messaging-only onboarding gate and `cast relay --stop` in index.ts (#149) (+1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4857);
+    // 4861 the same day: live replies, contracts/replyStream.ts (+3) and SyncService.pushReplyStream with the
+    // reply_streaming config mirror (+1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4861);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -768,7 +772,9 @@ describe("command groups stay off the boot graph", () => {
     // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
     // 626 (2026-11-24): pidFileLock.ts, the pid-file lock moved out of daemon.ts
     // so cast relay can take one without loading the daemon (#102).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(626);
+    // 628 the same day: live replies, contracts/replyStream.ts as on index.ts's
+    // graph above, and replyStream.ts, the MessageDisplay hook receiver.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(628);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

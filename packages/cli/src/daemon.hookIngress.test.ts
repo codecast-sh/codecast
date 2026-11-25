@@ -7,9 +7,11 @@
 // status-code test and fail this one.
 
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import * as http from "node:http";
 import { handleHookIngressHttp, type HookStatusData } from "./daemon.js";
 import { admitHookRequest } from "./hookAdmission.js";
+import { pollUntil } from "./test-helpers/pollUntil.js";
 
 const TOKEN = "a".repeat(64);
 
@@ -166,6 +168,56 @@ describe("hook ingress admission", () => {
     handleHookIngressHttp(fakeReq(STATUS_URL, { authorization: "Bearer " }), res, h.deps);
     expect(res.status).toBe(401);
     expect(h.delivered).toEqual([]);
+  });
+
+  describe("/hook/message-display", () => {
+    const URL = "/hook/message-display";
+    function postReq(headers: Record<string, string>, body: string): http.IncomingMessage {
+      const req = Object.assign(new EventEmitter(), { url: URL, method: "POST", headers, resume() {}, destroy() {} });
+      setImmediate(() => {
+        req.emit("data", Buffer.from(body));
+        req.emit("end");
+      });
+      return req as unknown as http.IncomingMessage;
+    }
+    function endRes() {
+      const res = { status: null as number | null, body: "", ended: false, writeHead(s: number) { res.status = s; return res; }, end(chunk?: string) { if (chunk) res.body += chunk; res.ended = true; return res; } };
+      return res;
+    }
+    function withDisplay(onBody: (body: string) => void) {
+      const h = harness();
+      return { ...h, deps: { ...h.deps, messageDisplay: onBody } };
+    }
+
+    test("refused without the token, and the body is never read", async () => {
+      const seen: string[] = [];
+      const h = withDisplay((b) => seen.push(b));
+      const res = endRes();
+      expect(handleHookIngressHttp(postReq({}, '{"x":1}'), res as unknown as http.ServerResponse, h.deps)).toBe(true);
+      expect(res.status).toBe(401);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(seen).toEqual([]);
+    });
+
+    test("answers 200 with an empty body before the batch is handed over", async () => {
+      const res = endRes();
+      const atHandover: Array<{ status: number | null; ended: boolean; body: string; got: string }> = [];
+      const h = withDisplay((got) => atHandover.push({ status: res.status, ended: res.ended, body: res.body, got }));
+      handleHookIngressHttp(postReq({ authorization: `Bearer ${TOKEN}` }, '{"hook_event_name":"MessageDisplay"}'), res as unknown as http.ServerResponse, h.deps);
+      await pollUntil(() => atHandover.length === 1, "message display handover");
+      expect(atHandover[0]).toEqual({ status: 200, ended: true, body: "", got: '{"hook_event_name":"MessageDisplay"}' });
+    });
+
+    test("an oversized body is refused and never handed over", async () => {
+      const seen: string[] = [];
+      const h = withDisplay((b) => seen.push(b));
+      const res = endRes();
+      handleHookIngressHttp(postReq({ authorization: `Bearer ${TOKEN}` }, "x".repeat(256 * 1024 + 1)), res as unknown as http.ServerResponse, h.deps);
+      await pollUntil(() => res.ended, "413 answer");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(res.status).toBe(413);
+      expect(seen).toEqual([]);
+    });
   });
 
   test("routes it does not own are left alone", () => {

@@ -17,7 +17,7 @@ import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
-import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, ReplyStreamPushResult, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem, withoutDeliveryId } from "@codecast/shared/contracts";
 import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
@@ -488,6 +488,18 @@ export class SyncService {
       path: folder,
       ...opts,
     });
+  }
+
+  /** A live reply's text so far (replyStream.ts). Never throttled, so message
+   *  sync never waits behind it; null while the write budget is paused and on
+   *  any failure, which the tracker reads as "nobody is watching". */
+  async pushReplyStream(args: { conversation_id: string; message_id: string; seq: number; started_at: number; text: string }): Promise<ReplyStreamPushResult | null> {
+    if (this.writeBudget.waitMs() > 0) return null;
+    try {
+      return await this.mutate("replyStreams:push", { api_token: this.apiToken, ...args });
+    } catch {
+      return null;
+    }
   }
 
   async recordPeerLink(link: { from_device_id: string; to_device_id: string; mode: "direct" | "relay"; ok: boolean; reason?: string; bytes?: number }): Promise<void> {
