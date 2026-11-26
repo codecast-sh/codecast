@@ -18,6 +18,7 @@ import { mergePriorities, parsePriorityPassOutput } from "./lib/priorityPass";
 import { CLASSIFIER_DAILY_USD, RERUN_DELAY_MS, RERUN_MAX } from "./lib/priorityClassifierHook";
 import { parseClassifierReply, type ClassifierInput } from "./lib/priorityClassifier";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
+import { applyPlan } from "./priorityPassRun";
 
 setDefaultTimeout(60_000);
 
@@ -264,6 +265,29 @@ describe("precedence: the person > a known link > the classifier > the pass", ()
     const conv = await w.conversation(w.teamConv);
     expect(conv).toMatchObject({ priority_id: w.grader, priority_set_by: "classifier" });
     expect(conv?.priority_step_key).toBeUndefined();
+  });
+
+  test("a plan that rewrites milestones but removes none reads no sessions to clear their steps", async () => {
+    const w = await classifierWorld();
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" } as any));
+    const grader = await w.t.run((ctx) => ctx.db.get(w.grader));
+    const tables: string[] = [];
+    await w.t.run(async (ctx: any) => {
+      const db = new Proxy(ctx.db, {
+        get(target, prop) {
+          if (prop === "query") return (table: string) => (tables.push(table), target.query(table));
+          const value = target[prop];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      await (applyPlan as any)._handler({ ...ctx, db }, {
+        user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+        plan: { creates: [], updates: [{ short_id: "pri-1", patch: { steps: [...grader!.steps.map((s: any) => ({ ...s, title: `${s.title}, renamed` }))] } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
+      });
+    });
+    expect(tables).toContain("priorities");
+    expect(tables).not.toContain("conversations");
+    expect((await w.t.run((ctx) => ctx.db.get(w.grader)))!.steps[0].title).toBe("Grader faults under 10%, renamed");
   });
 
   test("a milestone the pass removes or drops leaves a linked or classified session on the priority, step unknown; a live milestone keeps its sessions", async () => {

@@ -347,6 +347,8 @@ export const applyPlan = internalMutation({
     // Per priority this plan rewrote: its live step keys after the write, and the plan's new keys that moved.
     const liveSteps = new Map<string, Set<string>>();
     const rekeyed = new Map<string, Map<string, string>>();
+    // Per priority, the milestones this plan removed or dropped: their linked and classified sessions lose the step.
+    const gone = new Map<Id<"priorities">, Set<string>>();
     let newMilestone = false;
     for (const u of plan.updates) {
       const row = await mine(u.short_id);
@@ -370,7 +372,10 @@ export const applyPlan = internalMutation({
           return { ...st, key: moved.get(st.key)! };
         });
         patch.steps = holdPersonSteps(row.steps, [...steps, ...unseen]);
-        liveSteps.set(row.short_id, new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key)));
+        const live = new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key));
+        liveSteps.set(row.short_id, live);
+        const removed = row.steps.filter((st) => !st.dropped && !live.has(st.key)).map((st) => st.key);
+        if (removed.length) gone.set(row._id, new Set(removed));
         newMilestone ||= patch.steps.some((st) => !st.dropped && !row.steps.some((x) => x.key === st.key));
         if (moved.size) rekeyed.set(row.short_id, moved);
       }
@@ -440,11 +445,9 @@ export const applyPlan = internalMutation({
     }
 
     // A session a known link or the classifier put on a milestone this plan removed keeps the priority, step unknown.
-    for (const [short_id, live] of liveSteps) {
-      const row = await mine(short_id);
-      if (!row) continue;
-      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).take(SESSION_COUNT_CAP)) {
-        if ((conv.priority_set_by === "link" || conv.priority_set_by === "classifier") && conv.priority_step_key && !live.has(conv.priority_step_key)) {
+    for (const [id, keys] of gone) {
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP)) {
+        if ((conv.priority_set_by === "link" || conv.priority_set_by === "classifier") && conv.priority_step_key && keys.has(conv.priority_step_key)) {
           await ctx.db.patch(conv._id, { priority_step_key: undefined });
         }
       }
