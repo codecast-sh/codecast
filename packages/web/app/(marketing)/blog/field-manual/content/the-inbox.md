@@ -16,7 +16,7 @@ The inbox renders these sections top to bottom, and the order is the point: your
 - **Working**: the agent is producing right now. Leave it alone.
 - **Dormant** (blue): parked on a wake a machine owns, such as a scheduled check or a background watcher.
 
-Below those sit three collapsed buckets that are nobody's move: **Snoozed**, **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath, and moves to Stashed once something wakes it). On a busy day they hold hundreds of sessions, none of them in your way.
+Below those sit three collapsed buckets that are nobody's move: **Snoozed**, **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath, and moves to Stashed once a trigger or another session wakes it). On a busy day they hold hundreds of sessions, none of them in your way.
 
 ![The inbox after a lead session spawned two workers: under 'Retry failed webhooks' in Working, two indented child rows, 'Webhook API half' on a cloud host and 'Dashboard retry UI', each with its own agent icon and message count](/blog/field-manual/inbox-workers.webp "Workers a session spawns nest under it in the same section (here a Codex worker on a cloud host and a Cursor worker), so a fan-out reads as one line of work instead of three cards.")
 
@@ -85,7 +85,7 @@ Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of
 | Snooze | Right-click ("Snooze…") | `Alt+Z` | | Dormant until the time you pick; "Move to Needs You now" wakes it early |
 | Stash | Triage bar, right-click | `Ctrl+Backspace` | Long-press | Out of the inbox; agent keeps running |
 | Stash and hide | Triage bar "more", right-click | `Ctrl+Alt+Backspace` | | Stays out until an ask |
-| Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept; back when it's done or asks (a role: when it asks) |
+| Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept; back on Done or Needs you (a role or repeating trigger: Needs you only) |
 | Kill | Right-click, command palette, selection bar; the stop button on a stashed or closed card | | Long-press | Agent stopped, schedules cancelled (asks first when there are some), filed under Closed |
 | Restore | Right-click on a stashed or closed card | | | Back in the inbox (a closed or killed agent stays stopped) |
 | Pin | Triage bar "more", right-click | `Ctrl+Shift+P`; jump to pinned with `Ctrl+P` (Mac) | Long-press | Top of the list, state kept underneath |

@@ -15,6 +15,7 @@ import {
   isMachineWake,
   wakeHideFields,
 } from "@codecast/shared/contracts";
+import { hideViewerClosesOnWake } from "./lib/viewerTriage";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { insertRiskResendPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
@@ -2100,6 +2101,7 @@ export async function abandonAmbiguousAndResendInDb(
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
     ...wakeHideFields(conversation, { machine: isMachineWake(message) }),
   });
+  if (isMachineWake(message)) await hideViewerClosesOnWake(ctx, conversation);
   return {
     originalDeliveryId: fence.deliveryId,
     messageId,

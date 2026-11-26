@@ -19,9 +19,9 @@ export type CloseFacts = {
   inFlight: InFlightReason | "nested" | null;
   /** A role's own session or a standing anchor. */
   role: boolean;
-  /** A closed session stays out through machine wakes and comes back when it
-   *  asks for the person; an ordinary one also when it finishes (shared
-   *  closeReturnsOnDone), a role, an anchor or a standing trigger's home not. */
+  /** A closed session stays out through machine wakes and comes back when its
+   *  agent pins blocked (Needs you); an ordinary one also when it pins done
+   *  (shared closeReturnsOnDone), a role, an anchor or a standing trigger's home not. */
   returnsOnDone: boolean;
   /** Armed triggers that inject into it. */
   triggers: number;
@@ -52,20 +52,21 @@ export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 export function closeTooltip(f: CloseFacts): string {
   const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
   // What brings a closed session back: its agent pinning done (an ordinary
-  // session) or blocked (isClosedHidden, performSetThreadState), or a person
-  // writing to it.
-  const back = f.returnsOnDone ? "back when it's done or asks" : "back when it asks";
+  // session) or blocked (isClosedHidden, performSetThreadState), named by the
+  // sections they file under, or a person writing to it.
+  const back = f.returnsOnDone ? "back on Done or Needs you" : "back on Needs you";
   switch (closeKindOf(f)) {
     case "aside": return `Close: hides it, ${back}`;
     case "awaiting": return "Close: hides it; it still waits on you";
     case "keeps_background": return `Close: hides it, keeps its background work, ${back}`;
     case "keeps_loop": return `Close: hides it, keeps its loop, ${back}`;
-    case "keeps_limit": return `Close: hides it, resumes after its limit, ${back}`;
+    // The resume after a reset is an ordinary send, so it shows the session.
+    case "keeps_limit": return "Close: hides it, back when its limit resets";
     case "keeps_triggers":
       if (f.triggers === 0) return `Close: stops ${them}, ${back}`;
       return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, ${back}`;
     case "waits_on_run": return `Close: stops ${them}, its run goes on, ${back}`;
-    case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} until it asks`;
+    case "clears": return `Close: stops ${them}, ${back}`;
   }
 }
 

@@ -3099,7 +3099,8 @@ program
     "Moves the session to the Stashed bucket: out of the active inbox, agent\n" +
     "alive and resumable. Use it to tidy finished or parked workers out of the\n" +
     "human's view without killing them. A stashed session returns to the inbox\n" +
-    "when a trigger fires into it (something happened, so show it), when a settle\n" +
+    "when a trigger fires into it or another session writes to it (something\n" +
+    "happened, so show it), when a settle\n" +
     "is declared --status blocked, a run completes --needs-attention, or it\n" +
     "stalls (permission prompt, open question, dead process). Pass --hide to\n" +
     "keep it out through trigger wakes and other sessions' messages: only the\n" +

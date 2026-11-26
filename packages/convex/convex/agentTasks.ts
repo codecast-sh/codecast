@@ -1,4 +1,4 @@
-import { isClosedSession } from "@codecast/shared/contracts";
+import { closeReturnsOnDone, isClosedSession } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { normalizeRepository } from "./lib/gitRefs";
@@ -21,6 +21,7 @@ import { canAccessChannel } from "./chatAccess";
 import { projectChannelRefusal } from "@codecast/shared/contracts";
 import { mainSessionFor, mainSessionRefusal } from "./lib/projectMainSession";
 import { restoreToInbox } from "./inboxFilters";
+import { resurfaceViewerTriageOnPin } from "./lib/viewerTriage";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
 import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, isChatTriggerEvent, isPageTriggerEvent, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
@@ -420,6 +421,13 @@ async function parkRunAtLimit(
 // the same origin that keeps a hidden stash hidden and never chimes. A killed
 // owner is resurrected for delivery, as a scheduled follow-up into a closed
 // session is — a failure nobody reads is the exact card this replaces.
+// A run asking for attention asks for the person: the session comes back,
+// for each person who hid a team session too (as a blocked pin does).
+async function restoreForAttention(ctx: any, conv: Doc<"conversations">): Promise<void> {
+  await restoreToInbox(ctx, conv);
+  if (!conv.inbox_killed_at) await resurfaceViewerTriageOnPin(ctx, conv, "blocked", closeReturnsOnDone(conv));
+}
+
 async function wakeRunOwner(
   ctx: TaskCtx,
   task: Doc<"agent_tasks">,
@@ -463,7 +471,7 @@ async function wakeRunOwner(
   // run asking for attention asks for the person, so it comes back.
   if (outcome === "attention") {
     const fresh = await ctx.db.get(owner._id);
-    if (fresh) await restoreToInbox(ctx, fresh);
+    if (fresh) await restoreForAttention(ctx, fresh);
   }
   return true;
 }
@@ -1659,7 +1667,7 @@ export const completeTaskRun = mutation({
           : attentionConvId
             ? await ctx.db.get(attentionConvId)
             : null;
-      if (conv && conv.user_id === auth.userId) await restoreToInbox(ctx, conv);
+      if (conv && conv.user_id === auth.userId) await restoreForAttention(ctx, conv);
     }
 
     await patchTask(ctx, task, updates);

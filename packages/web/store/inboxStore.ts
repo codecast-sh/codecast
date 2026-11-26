@@ -9939,7 +9939,8 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
       Object.assign(merged.writes, r.writes);
       // Both are the close: the stamp a set-aside shares with its stash is what
       // lets a done pin bring it back (isClosedHidden), as the server writes it.
-      for (const sid of r.hidden) {
+      // A set-aside marks only the row closed; the server stashes its cascade plainly.
+      for (const sid of mode === "kill" ? r.hidden : [id]) {
         if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
         if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
         // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).

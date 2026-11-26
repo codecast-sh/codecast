@@ -345,7 +345,8 @@ a trigger's wake, a quiet send from a session leaves a hidden stash and a
 snooze in place, and a closed session's close becomes a hidden stash
 (`wakeHideFields`), while a killed or dismissed session still revives. So a
 session working on a failed check stays out of the inbox, and surfaces on its
-own only when it pins blocked. A run with no session of its own sends no
+own only when it pins blocked (or, for an ordinary session a person
+closed, done: `pinHideFields`). A run with no session of its own sends no
 quiet briefs, and its log says so. A hibernated subject is not resumed to hear
 a gate's answer. A server older than `quiet` refuses the send, and the runner
 sends it again plain under the same `client_id`, so a first send that did land

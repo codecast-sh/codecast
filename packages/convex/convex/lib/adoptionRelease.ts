@@ -38,7 +38,7 @@ function endsClose(before: any, fields: any): boolean {
   const stashAfter = "inbox_stashed_at" in fields ? fields.inbox_stashed_at : before.inbox_stashed_at;
   if (stashAfter === closedAt) return false;
   if ("inbox_dismissed_at" in fields && fields.inbox_dismissed_at !== before.inbox_dismissed_at) return true;
-  return "inbox_stashed_at" in fields && before.inbox_stashed_at === closedAt;
+  return "inbox_stashed_at" in fields && fields.inbox_stashed_at == null && before.inbox_stashed_at === closedAt;
 }
 
 export function makeAdoptionReleaseDb(db: any, rawDb: any): any {
