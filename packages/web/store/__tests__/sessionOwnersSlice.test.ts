@@ -86,6 +86,15 @@ describe("applySessionOwners", () => {
     expect(ownersModelOnFor({ sessions: { x: { _id: "x", owners_model: true } }, sessionOwners: {} } as any, "x")).toBe(true);
   });
 
+  test("a row cached before the flag turned on still opens the new menu once its owners read says the model", () => {
+    const read = { _id: "x", people_ids: [], people_info: {}, role: null, parent_session: null, implicit_starter: null, starter_id: ME, role_started: false, can_edit: true, owners_changed_at: null };
+    expect(ownersModelOnFor({ sessions: { x: { _id: "x" } }, sessionOwners: { x: read } } as any, "x")).toBe(true);
+    // The flag going off: the read comes back off the model and drops the cached one.
+    useInboxStore.setState({ sessionOwners: { [S]: { ...read, _id: S } } } as any);
+    applySessionOwnersRead(S, { owners: [], team: null });
+    expect((useInboxStore.getState() as any).sessionOwners[S]).toBeUndefined();
+  });
+
   test("Save paints the people and the role on the owners read and the inbox row at once, and sends one change", async () => {
     useInboxStore.getState().applySessionOwners(S, { add: [ASHOT], role: ROLE }, { remove: [ASHOT], role: null });
     expect(owners()).toEqual([ME, ASHOT]);

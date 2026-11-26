@@ -113,8 +113,11 @@ describe("flag off: nothing new draws", () => {
     <CoOwnerFaces owners={coOwnersOf(useInboxStore.getState() as any, S, "me", [me, ashot])} />
   </>;
 
-  test("a cached owners read the flag left behind draws nothing on an inbox row that says off", async () => {
+  test("an inbox row cached before the flag turned on draws the owners UI once its read says the model; a read off drops it", async () => {
     useInboxStore.setState((s: any) => ({ sessionOwners: { [S]: STALE }, sessions: { [S]: { ...s.sessions[S], owners_model: null } } }));
+    await render(everything());
+    expect($("[data-owners-seg]")).not.toBeNull();
+    await act(async () => applySessionOwnersRead(S, { conversation_id: S, short_id: "s1", owners: [] }));
     await render(everything());
     expect(container.innerHTML).toBe("");
   });
@@ -204,6 +207,12 @@ describe("flag on: the header's owners segment and menu", () => {
     await render(<OwnersSegment conversationId={S} />);
     await click($("[data-owners-seg]"));
     await click($(`[data-owner-row="r:${ROLE}"] .own-x`));
+    // The removed role is a candidate again, below the teammates: sharing with a person is the usual move.
+    const kinds = $$("[data-owner-candidate]").map((c) => c.getAttribute("data-owner-candidate")!.slice(0, 2));
+    expect([kinds.includes("r:"), kinds.includes("p:")]).toEqual([true, true]);
+    expect(kinds.lastIndexOf("p:")).toBeLessThan(kinds.indexOf("r:"));
+    const text = $("[data-owners-menu]")!.textContent!;
+    expect(text.indexOf("Teammates")).toBeLessThan(text.search(/Suggested roles|Roles/));
     await click($("[data-select-all-teammates]"));
     expect($$("[data-chip-label]").map((c) => c.textContent)).toEqual(["+ Ashot", "+ Armen", "Eval Suite lead"]);
     await click([...$$("[data-owners-foot] button")].find((b) => b.textContent === "Cancel")!);

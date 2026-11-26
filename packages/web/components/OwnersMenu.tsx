@@ -237,19 +237,19 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
           <input ref={searchRef} autoFocus={autoFocusSearch} value={m.query} onChange={(e) => m.setQuery(e.target.value)} placeholder={m.isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
         </label>
         <div className="max-h-[320px] overflow-y-auto" data-owner-candidates>
-          {m.shownRoles.length > 0 && <div className={LABEL}>{q || m.moreRoles ? "Roles" : "Suggested roles"}</div>}
           {candidates.map((c, i) => {
             const isRole = c.kind === "role";
             const name = isRole ? c.role.name : c.person.name;
             const reason = isRole ? (!q && !m.moreRoles ? m.reasonOf(c.role) : null) ?? charterLine(c.role.charter) : null;
             const member = isRole ? null : liveMember(c.person._id) ?? c.member;
             const presence = member ? presenceOf(member) : null;
-            const firstTeammate = !isRole && (i === 0 || candidates[i - 1].kind === "role");
+            const firstTeammate = !isRole && i === 0;
+            const firstRole = isRole && (i === 0 || candidates[i - 1].kind === "person");
             return (
               <div key={c.key}>
+                {firstRole && <div className={LABEL}>{q || m.moreRoles ? "Roles" : "Suggested roles"}</div>}
                 {firstTeammate && (
                   <>
-                    {moreRolesRow}
                     <div className={LABEL}>Teammates</div>
                     {!q && m.unselected.length > 1 && (
                       <button type="button" data-select-all-teammates className={`${ROW} w-full text-sol-text-muted`} onClick={m.selectAllTeammates}>
@@ -288,7 +288,7 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
               </div>
             );
           })}
-          {!candidates.some((c) => c.kind === "person") && moreRolesRow}
+          {moreRolesRow}
           {candidates.length === 0 && <div className="px-2 py-2 text-meta text-sol-text-dim">{q ? `Nobody called “${m.query.trim()}”` : "Nobody else to add"}</div>}
         </div>
         <div className={SEP} />

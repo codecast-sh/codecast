@@ -95,9 +95,10 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   const leaving = !!meId && initial.people.includes(meId) && !draft.people.includes(meId);
   const unselected = people.filter((m) => !draft.people.includes(String(m._id)) && !(leaving && String(m._id) === meId));
   const teammates = unselected.filter((m) => matches(memberName(m), m.email));
+  // Teammates first: sharing with a person is the usual move, a role the rarer one.
   const candidates: OwnerCandidate[] = readOnly ? [] : [
-    ...shownRoles.map((r) => ({ key: `r:${r._id}`, kind: "role" as const, role: r })),
     ...teammates.map((m) => ({ key: `p:${m._id}`, kind: "person" as const, person: personOf(String(m._id)), member: m })),
+    ...shownRoles.map((r) => ({ key: `r:${r._id}`, kind: "role" as const, role: r })),
   ];
 
   const add = (c: OwnerCandidate) => {
