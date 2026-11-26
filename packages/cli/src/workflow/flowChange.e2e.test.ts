@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
+import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, putChangeInWorktree, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
 import { behindWords, readFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
@@ -256,6 +256,47 @@ describe("a named branch's fix comes back to the run", () => {
     expect(again.change.tip).toBe(amended);
     expect(fs.readFileSync(path.join(worktree, "a.txt"), "utf-8")).toBe("v2\n");
   }, 180_000);
+
+  // ct-101654 on Nov 26: the run's worktree, named per flow and task, still held the first run's -ledger branch when a
+  // second run on the task brought -checks, and the refreeze stopped the run on the mismatch (ct-101845).
+  test("a second run on the task with a new branch moves the reused worktree onto it, keeping the old branch's work", async () => {
+    const here = path.join(sandbox, "here-reused");
+    fs.mkdirSync(here);
+    git(here, "init", "-q", "-b", "main");
+    write(here, "a.txt", "base\n");
+    git(here, "add", "a.txt");
+    git(here, "commit", "-qm", "base");
+    git(here, "switch", "-qc", "ct-1-ledger");
+    write(here, "a.txt", "ledger\n");
+    git(here, "commit", "-qam", "ledger");
+    const ledger = git(here, "rev-parse", "HEAD");
+    git(here, "switch", "-qc", "ct-1-checks", "main");
+    write(here, "b.txt", "checks\n");
+    git(here, "add", "b.txt");
+    git(here, "commit", "-qm", "checks");
+    const checks = git(here, "rev-parse", "HEAD");
+    git(here, "switch", "-q", "main");
+    // The first run's worktree, left on its branch with work it never committed.
+    const worktree = path.join(sandbox, "run-wt-reused");
+    git(here, "worktree", "add", "--quiet", worktree, "ct-1-ledger");
+    write(worktree, "a.txt", "ledger, unfinished\n");
+    write(worktree, "notes.md", "left behind\n");
+
+    await putChangeInWorktree(worktree, { branch: "ct-1-checks", tip: checks }, "ct-1");
+    expect(git(worktree, "symbolic-ref", "--short", "HEAD")).toBe("ct-1-checks");
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(checks);
+    expect(git(worktree, "status", "--porcelain")).toBe("");
+    // The old branch only gained its leftovers, on top of where it was.
+    expect(git(here, "rev-parse", "ct-1-ledger^")).toBe(ledger);
+    expect(git(here, "show", "ct-1-ledger:a.txt")).toBe("ledger, unfinished");
+    expect(git(here, "show", "ct-1-ledger:notes.md")).toBe("left behind");
+
+    const runDir = path.join(sandbox, "run-dir-reused");
+    writeFrozenChange(runDir, { source: "branch", session: "jx7aaaa", base: checks, tip: checks, branch: "ct-1-checks", worktree: "run-wt-reused", paths: ["b.txt"], shared: [], held: [] });
+    const refrozen = await refreezeSessionChange(here, runDir, worktree);
+    expect(refrozen.moved).toBe(false);
+    expect(refrozen.change.tip).toBe(checks);
+  }, 60_000);
 });
 
 // A shared checkout whose HEAD lags its upstream: the change is cut on HEAD,

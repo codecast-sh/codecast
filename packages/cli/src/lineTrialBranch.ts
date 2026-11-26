@@ -115,7 +115,7 @@ export function runHandsVia(post: (route: string, body: Record<string, unknown>)
  * which outlive the hands that asked for them. Anything still running in the
  * tree after that refuses too.
  */
-async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promise<void> {
+export async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promise<void> {
   let busy = processesIn(tree);
   if (!busy.length) return;
   const owners = ownersOf(busy.map((p) => p.pid));

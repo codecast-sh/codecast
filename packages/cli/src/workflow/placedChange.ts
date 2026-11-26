@@ -74,7 +74,8 @@ export async function preparePlacedChange(projectPath: string, runDir: string, p
   // checked out, and after that every difference between the old tip and the new one reads as uncommitted there.
   const earlierPath = (await cast(["ws", "path", placed.worktree], projectPath)).out.trim();
   const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-  if (earlier) {
+  // One on another branch (an earlier run's) keeps its work on that branch instead (putChangeInWorktree).
+  if (earlier && spawnSync("git", ["-C", earlier, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf-8" }).stdout.trim() === placed.branch) {
     const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
     if (dirty) throw new Error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`);
   }
@@ -88,7 +89,10 @@ export async function preparePlacedChange(projectPath: string, runDir: string, p
   const change: FrozenChange = { ...placed, tip, pushed: true, ...(runId ? { run: runId } : {}) };
   const ws = await cast(["ws", "acquire", change.worktree, "--branch", change.branch, "--skip-pool", "--json"], projectPath);
   if (ws.code !== 0) throw new Error(acquireFailureWords(change.worktree, ws.out, ws.err));
-  if (earlier) spawnSync("git", ["-C", earlier, "reset", "--quiet", "--hard", tip]);
+  if (earlier) {
+    const { putChangeInWorktree } = await import("./flowChange.js");
+    await putChangeInWorktree(earlier, change, change.worktree);
+  }
   writeFrozenChange(runDir, change);
   return change;
 }

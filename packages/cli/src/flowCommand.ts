@@ -485,10 +485,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const runDir = lineRunDir(top, worktree);
       const { writeFrozenChange, originTip, freezeSessionChange } = await import("./workflow/flowChange.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
-      // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never reset.
+      // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never
+      // reset. One on another branch (an earlier run's) keeps its work on that branch instead (putChangeInWorktree).
       const earlierPath = (await cast(["ws", "path", worktree], top)).out.trim();
       const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-      if (earlier && !placed && (branch || sessionRef || opts.checkout)) {
+      const earlierOn = earlier ? spawnSync("git", ["-C", earlier, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf-8" }).stdout.trim() : "";
+      if (earlier && !placed && (branch || sessionRef || opts.checkout) && earlierOn === (branch ?? `codecast/${worktree}`)) {
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
       }
@@ -526,8 +528,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         if (!opts.json) console.error(dim(`  making worktree ${worktree} on ${change.branch} (its setup can take a few minutes)`));
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
         if (ws.code !== 0) { console.error(acquireFailureLine(worktree, ws.out, ws.err)); process.exit(1); }
-        // A rerun moved the branch under the worktree an earlier run made: its files follow the new tip.
-        if (earlier) spawnSync("git", ["-C", earlier, "reset", "--quiet", "--hard", change.tip]);
+        // A rerun moved the branch under the worktree an earlier run made, or brought another branch: its files follow the new tip.
+        if (earlier) {
+          const { runHandsVia } = await import("./lineTrialBranch.js");
+          const { putChangeInWorktree } = await import("./workflow/flowChange.js");
+          await putChangeInWorktree(earlier, change, task!, runHandsVia((route, body) => deps.cliPost(route, body))).catch((err: Error) => { console.error(err.message); process.exit(1); });
+        }
         writeFrozenChange(runDir, change);
       }
 

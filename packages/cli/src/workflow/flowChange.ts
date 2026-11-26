@@ -33,6 +33,7 @@ import { git, gitTry } from "../wipSnapshot.js";
 import { BRIEF_TREE, branchChangePaths, heldDir, type FrozenChange } from "./flowChangeFile.js";
 import { readRebaseChain } from "./rebaseRecord.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
+import type { RunHands } from "../lineTrialBranch.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
 /** Whether `ref` (a codecast id, its 7-character short id, or the agent's own session id) names this session. */
@@ -306,6 +307,34 @@ export async function fetchBranch(root: string, branch: string): Promise<string>
   await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
   await git(root, ["update-ref", `refs/remotes/origin/${branch}`, tip]);
   return tip;
+}
+
+/**
+ * Put a change frozen for a run into the run's worktree `tree`, one an earlier run of the same flow and task made
+ * (runner.ts runSlug names it per flow and task, not per branch), so its files follow the change's tip. On the change's
+ * branch it is reset there: the freeze moved the branch under it. On another branch (a second run on the task with a
+ * new branch: ct-101654's worktree held -ledger for -checks, Nov 26), the reset took the change's tip onto that other
+ * branch, and the refreeze then refused the mismatch and stopped the run (refreezeSessionChange). So the worktree goes
+ * onto the change's branch first, keeping the old branch's work as lineTrialBranch.ts freeBranch does: what it left
+ * uncommitted is committed onto it, and nothing else moves it. Anything still at work in the tree refuses
+ * (clearTree), and so does a switch git will not make; each says what to do, and nothing has moved.
+ */
+export async function putChangeInWorktree(tree: string, change: Pick<FrozenChange, "branch" | "tip">, task: string, hands?: RunHands): Promise<void> {
+  const on = await gitTry(tree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  if (on !== change.branch) {
+    const { clearTree } = await import("../lineTrialBranch.js");
+    await clearTree(tree, hands);
+    if (await git(tree, ["status", "--porcelain"])) {
+      if (!on) throw new Error(`The run's worktree ${tree} is on no branch and holds uncommitted work, so it cannot go onto the change's branch ${change.branch}: commit that work to a branch or clear it, then run this change again`);
+      await git(tree, ["add", "-A"]);
+      await git(tree, ["commit", "-q", "--no-verify", "-m", `Left uncommitted by an earlier run on ${task}`]);
+    }
+    await git(tree, ["switch", "-q", change.branch]).catch((err: Error) => {
+      const why = err.message.split("\n").find((l) => /error|fatal/i.test(l))?.trim() || err.message.split("\n")[0];
+      throw new Error(`The run's worktree ${tree} is on ${on ?? "no branch"}, not the change's branch ${change.branch}, and git would not switch it (${why}). ${on ? `${on} keeps all its work. ` : ""}Free ${change.branch} or clear the worktree, then run this change again`);
+    });
+  }
+  await git(tree, ["reset", "--quiet", "--hard", change.tip]);
 }
 
 /** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */
