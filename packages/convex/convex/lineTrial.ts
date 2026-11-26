@@ -927,11 +927,6 @@ export const spendDrift = internalQuery({
       await priceRun(ctx, run, seen, live);
       alone += (await priceRun(ctx, run, new Set(), newSessionPrice())).sessions;
     }
-    let walked = 0;
-    for (const t of (await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect()) as Doc<"tasks">[]) {
-      const run = t.workflow_run_id ? await ctx.db.get(t.workflow_run_id) : null;
-      if (run?.status === "running" || run?.status === "pending") walked++;
-    }
     const round = (n: number) => Math.round(n * 100) / 100;
     return {
       runs: runs.length,
@@ -944,7 +939,7 @@ export const spendDrift = internalQuery({
       accounts: await sessionAccounts(ctx, runs),
       /** Sessions counted by more than one run when each run is priced alone. */
       shared_sessions: alone - live.sessions,
-      running: { by_status: await runningIn(ctx, project), by_tasks: walked },
+      running: await runningIn(ctx, project),
     };
   },
 });
@@ -1060,13 +1055,12 @@ export function routeOf(task: Pick<Doc<"tasks">, "cause">): "judge" | "product" 
 
 /** How many of a trial project's runs hold a machine now (a paused run waits on a card and holds none). */
 async function runningIn(ctx: Ctx, project: Doc<"projects">): Promise<number> {
-  // From the live runs, not the project's problems: a rerun reads a handful of runs, never every task.
+  // From the project's problems, each run read by key: every account's live runs together are thousands (a line
+  // parks them at its queue for weeks), too many to read for one project.
   let running = 0;
-  for (const status of ["running", "pending"] as const) {
-    for (const run of (await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).collect()) as Doc<"workflow_runs">[]) {
-      const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
-      if (task?.project_id === project._id && task.workflow_run_id === run._id) running++;
-    }
+  for (const task of (await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect()) as Doc<"tasks">[]) {
+    const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
+    if ((run?.status === "running" || run?.status === "pending") && run.task_id === task._id) running++;
   }
   return running;
 }

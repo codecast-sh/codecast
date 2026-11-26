@@ -128,22 +128,33 @@ export async function reissueWaitingMigrations(ctx: { db: any }, userId: Id<"use
  * session like any other; one without (a Task subagent inside its parent's
  * process) moves with its parent. A workflow step stays: its runner watches it
  * through a handle on the machine it started on, and a moved step reads as a
- * dead station.
+ * dead station. The runs are read by key from the conversations judged: a
+ * step is spawned nested under its run's own session, which names the run, and
+ * a step the runner reported by its session id names it itself. An account
+ * holds thousands of live runs (parked at a queue for weeks), too many to scan.
  */
 export type MovabilityFacts = { live: Set<string>; stepRefs: Set<string>; runParents: Set<string> };
 
-export async function movabilityFacts(ctx: { db: any }, userId: Id<"users">): Promise<MovabilityFacts> {
+export async function movabilityFacts(ctx: { db: any }, userId: Id<"users">, convs: ReadonlyArray<{ workflow_run_id?: string; parent_conversation_id?: string }>): Promise<MovabilityFacts> {
   const live = new Set(
     (await listLiveManagedSessions(ctx, userId)).filter((s) => s.conversation_id && isDaemonManagedRow(s)).map((s) => String(s.conversation_id)),
   );
+  const parents = new Map<string, any>();
+  const runIds = new Set<string>();
+  for (const c of convs) {
+    if (c.workflow_run_id) runIds.add(String(c.workflow_run_id));
+    const parentId = c.parent_conversation_id ? String(c.parent_conversation_id) : null;
+    if (parentId && !parents.has(parentId)) parents.set(parentId, await ctx.db.get(parentId));
+    const parentRun = parentId ? parents.get(parentId)?.workflow_run_id : undefined;
+    if (parentRun) runIds.add(String(parentRun));
+  }
   const stepRefs = new Set<string>();
   const runParents = new Set<string>();
-  for (const status of ["running", "paused"] as const) {
-    const runs = await ctx.db.query("workflow_runs").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status)).collect();
-    for (const run of runs) {
-      if (run.primary_conversation_id) runParents.add(String(run.primary_conversation_id));
-      for (const n of run.node_statuses ?? []) if (n.status === "running" && n.session_id) stepRefs.add(n.session_id);
-    }
+  for (const id of runIds) {
+    const run = await ctx.db.get(id);
+    if (!run || String(run.user_id) !== String(userId) || (run.status !== "running" && run.status !== "paused")) continue;
+    if (run.primary_conversation_id) runParents.add(String(run.primary_conversation_id));
+    for (const n of run.node_statuses ?? []) if (n.status === "running" && n.session_id) stepRefs.add(n.session_id);
   }
   return { live, stepRefs, runParents };
 }
@@ -160,8 +171,8 @@ export function heldReason(c: { _id: string; session_id?: string; is_subagent?: 
   return null;
 }
 
-export async function annotateHeld<T extends { _id: string }>(ctx: { db: any }, userId: Id<"users">, convs: T[]): Promise<Array<T & { held: string | null }>> {
-  const facts = await movabilityFacts(ctx, userId);
+export async function annotateHeld<T extends { _id: string; workflow_run_id?: string; parent_conversation_id?: string }>(ctx: { db: any }, userId: Id<"users">, convs: T[]): Promise<Array<T & { held: string | null }>> {
+  const facts = await movabilityFacts(ctx, userId, convs);
   return convs.map((c) => ({ ...c, held: heldReason(c as any, facts) }));
 }
 

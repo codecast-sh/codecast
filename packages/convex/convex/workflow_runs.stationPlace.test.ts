@@ -77,6 +77,16 @@ describe("workflow_runs.admitToStation", () => {
     expect(await admit(b, 1)).toMatchObject({ admitted: true });
   });
 
+  test("runs parked elsewhere, or holding a place at another station, take none of this station's places", async () => {
+    const { t, run, admit } = await setup();
+    for (let i = 0; i < 50; i++) await run(undefined, "queue");
+    const proving = await run(undefined, "prove");
+    await t.run((ctx) => ctx.db.patch(proving as any, { station_place: { node_id: "prove", at: T0 } } as any));
+    const a = await run();
+    expect(await admit(a, 1)).toMatchObject({ admitted: true, inside: 1 });
+    expect(await admit(await run(), 1)).toMatchObject({ admitted: false, inside: 1, cap: 1 });
+  });
+
   test("another workspace's runs take none of this one's places", async () => {
     const { ids, run, admit } = await setup();
     const elsewhere = await run(ids.otherWorkspace);

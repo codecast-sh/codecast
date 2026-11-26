@@ -394,6 +394,28 @@ describe("a merge no role is behind", () => {
     await expect(say(reviewing(), { verdict: "lgtm" })).rejects.toThrow("is not a verdict");
   });
 
+  // An account holds thousands of running runs parked at a queue; the reviewer's run is the newest of them.
+  test("the reviewer's run is found past the account's 200 oldest running runs", async () => {
+    const crowded = (linked: boolean) => {
+      const s = solo({ indexes: true });
+      const parked = Array.from({ length: 201 }, (_, i) => ({ _id: `workflow_runs_parked${i}`, _creationTime: i + 1, user_id: HOST, workflow_id: "workflows_change", status: "running", workspace: `team:${TEAM}`, current_node_id: "queue", node_statuses: [{ node_id: "queue", status: "running", started_at: 1 }], created_at: i + 1, updated_at: i + 1 }));
+      Object.assign(s.run(), { _creationTime: NOW, review_verdict: undefined, current_node_id: "review__review", node_statuses: [{ node_id: "review__review", status: "running", started_at: NOW + 1, session_id: "jx7revw" }] });
+      s.tables.workflow_runs.unshift(...parked);
+      if (linked) {
+        // The station runs nested under the run's own session, which names the run.
+        Object.assign(s.tables.conversations.find((c: any) => c._id === "conversations_hand"), { workflow_run_id: "workflow_runs_1", is_workflow_primary: true });
+        Object.assign(s.tables.conversations.find((c: any) => c._id === "conversations_rev"), { parent_conversation_id: "conversations_hand" });
+      }
+      return s;
+    };
+    const say = (s: ReturnType<typeof solo>) => recordReviewVerdictCore(s.ctx, HOST as any, { session_id: "rev-agent-uuid", verdict: "ship", head_sha: HEAD }, NOW + 2);
+    const linked = crowded(true);
+    expect(await say(linked)).toMatchObject({ run_id: "workflow_runs_1", node_id: "review__review" });
+    expect(linked.tables.workflow_runs.find((r: any) => r._id === "workflow_runs_1").review_verdict).toMatchObject({ verdict: "ship", head_sha: HEAD });
+    // A station whose conversation names no run is found by the fallback scan, newest first.
+    expect(await say(crowded(false))).toMatchObject({ run_id: "workflow_runs_1", node_id: "review__review" });
+  });
+
   test("merge proof: the runner reads this attempt's reviewed head and rebase links, nothing older and nobody else", async () => {
     const s = solo();
     Object.assign(s.run(), { station_rebases: [{ from: "1".repeat(40), to: "2".repeat(40), at: NOW, attempt: NOW - 1 }, { from: HEAD, to: "c".repeat(40), at: NOW, attempt: NOW }] });

@@ -9211,6 +9211,8 @@ export default defineSchema({
     .index("by_workspace_status_updated", ["workspace", "status", "updated_at"])
     // A flow's runs standing at given stations, all of them (workflow_runs.runsAtStations): a line's queue reads who waits.
     .index("by_workspace_status_node", ["workspace", "status", "current_node_id"])
+    // Sparse in effect: the runs holding a place at a capped station (workflow_runs.admitToStation counts them).
+    .index("by_workspace_status_place", ["workspace", "status", "station_place.node_id"])
     .index("by_task", ["task_id"])
     .index("by_plan", ["plan_id"])
     // LE6: a role's line runs still in flight hold its card slots.

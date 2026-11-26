@@ -125,10 +125,11 @@ async function offloadChecks(ctx: QueryCtx, userId: Id<"users">, args: CheckArgs
     : "The laptop has not reported its resources yet; try again once it does");
   const checks: Check[] = [];
   const groups = new Map<string, Id<"conversations">[]>();
-  const facts = await movabilityFacts(ctx, userId);
+  const convs = await Promise.all(args.selections.map((s) => ctx.db.get(s.conversation_id)));
+  const facts = await movabilityFacts(ctx, userId, convs.filter((c) => c !== null));
   const busyParents = await parentsOfRunningChildren(ctx, userId, source.snapshot.processes);
-  for (const selection of args.selections) {
-    const conv = await ctx.db.get(selection.conversation_id);
+  for (const [i, selection] of args.selections.entries()) {
+    const conv = convs[i];
     if (!conv || conv.user_id !== userId || conv.session_id !== selection.session_id || conv.owner_device_id !== args.source_device_id) return refused("Session ownership changed; refresh the selection");
     const blockers: string[] = [];
     const activeMove = await ctx.db.query("session_migrations").withIndex("by_conversation", q => q.eq("conversation_id", conv._id))
