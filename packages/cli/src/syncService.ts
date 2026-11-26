@@ -18,7 +18,7 @@ import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
-import type { OpenTaskReport, AgentStatus, LoopState, ReplyStreamPushResult, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, LoopState, ReplyStreamPushResult, SessionBrowserReport, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem, withoutDeliveryId } from "@codecast/shared/contracts";
 import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
@@ -2108,6 +2108,11 @@ export class SyncService {
       api_token: this.apiToken,
       sessions,
     });
+  }
+
+  // This device's whole set of open browser tabs per session (convex/browserTabs.ts).
+  async reportBrowserTabs(sessions: SessionBrowserReport[]): Promise<void> {
+    await this.mutate("browserTabs:report" as any, { api_token: this.apiToken, device_id: deviceId(), sessions });
   }
 
   async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number, agentStartedAt?: number): Promise<void> {

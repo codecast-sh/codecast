@@ -6,6 +6,7 @@ export * from "./agentStatus";
 export * from "./liveness";
 export * from "./hibernation";
 export * from "./openTasks";
+export * from "./browserTabs";
 export * from "./pendingStatus";
 export * from "./daemonCommands";
 export * from "./mcpLogin";

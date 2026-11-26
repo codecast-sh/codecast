@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { ArrowDownWideNarrow, ArrowUp, ArrowUpNarrowWide, CalendarPlus, Check, ChevronDown, Crosshair, FolderKanban, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUp, ArrowUpNarrowWide, CalendarPlus, Check, ChevronDown, Crosshair, FolderKanban, Globe, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
 import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -19,6 +19,7 @@ const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
   reports: { label: "Reports", icon: Network },
   trigger: { label: "Trigger", icon: Zap },
   machine: { label: "Machine", icon: Laptop },
+  browser: { label: "Browser", icon: Globe },
 };
 
 // The views whose whole order is one sort, so it can run either way.
