@@ -3,7 +3,7 @@
 # THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
 # fix. Add a store action for the gesture (draft write + named dispatch side effect in convex/dispatch.ts), classify it in store/undo/policy.ts, and call it.
 #
-# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+# Prune it (drops gone entries, lowers only the numbers that must come down, adds nothing):
 #   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/storeActionMutations.guard.test.ts
 app/artifacts/auth/page.tsx 1
 app/calls/page.tsx 1

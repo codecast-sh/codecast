@@ -3,7 +3,7 @@
 # THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
 # fix. Import the same names from src/proc.ts instead — identical signatures, plus windowsHide and the slow-sync spawn report.
 #
-# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+# Prune it (drops gone entries, lowers only the numbers that must come down, adds nothing):
 #   cd packages/cli && RATCHET_WRITE=prune bun test src/childProcessImports.ratchet.test.ts
 src/browser/appIdentity.ts 1
 src/browser/cloudHost.ts 1

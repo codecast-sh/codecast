@@ -14,7 +14,7 @@
 // the daemon ended up carrying `cast state` and `cast publish` before ct-49546.
 //
 // The ceilings are the same idea one level up. Each is a multiple of its step,
-// and a step is about a month of the graph's ordinary growth, so a branch that
+// and a step is weeks of the graph's ordinary growth, so a branch that
 // adds a leaf or a few KB touches no line here and two such branches never
 // conflict on one. Crossing a ceiling is the moment to look at what grew.
 
@@ -32,12 +32,13 @@ const rel = (file: string) => path.relative(ROOT, file);
  *  bun's 5 s default on an idle box and well over it on a loaded agent box. */
 const GRAPH_WALK_TIMEOUT = 60_000;
 
-// One step is about a month of growth: from 2026-10-27 to 2026-11-26 the
-// index.ts graph went from 4380 to 4892 KB and from 329 to 377 files, and the
-// daemon's from 521 to 630 files.
+// From 2026-10-27 to 2026-11-26 the index.ts graph went from 4380 to 4892 KB
+// and from 329 to 377 files, and the daemon's from 521 to 630 files. A file
+// step is about that month; the KB step is about half of it, so a subsystem
+// arriving sideways cannot hide in the headroom.
 type Ceiling = { ceiling: number; step: number };
 const INDEX_FILES: Ceiling = { ceiling: 400, step: 50 };
-const INDEX_KB: Ceiling = { ceiling: 5000, step: 500 };
+const INDEX_KB: Ceiling = { ceiling: 5000, step: 250 };
 const DAEMON_FILES: Ceiling = { ceiling: 700, step: 100 };
 
 function expectUnderCeiling(measured: number, what: string, { ceiling, step }: Ceiling) {

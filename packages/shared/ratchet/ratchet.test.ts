@@ -79,14 +79,49 @@ describe("shrink-only ratchet", () => {
     expect(problems.some((p) => p.includes("guarding nothing"))).toBe(true);
   });
 
-  test("prune drops gone entries and lowers numbers, and adds nothing", () => {
+  test("prune drops gone entries and adds nothing", () => {
     const root = fixture({ "a.ts": "banned();\n", "b.ts": "banned();\n", "c.ts": "allowed();\n" });
     const spec = specFor(root);
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 5  # a reason worth keeping\nsrc/c.ts 1\n");
     syncAllowlist(spec, [{ key: "src/a.ts", value: 1 }, { key: "src/b.ts", value: 1 }], "prune");
     const written = parseAllowlist(readFileSync(spec.allowlist, "utf8"));
     expect([...written.keys()]).toEqual(["src/a.ts"]); // b never added, c dropped
-    expect(written.get("src/a.ts")).toEqual({ value: 1, note: "a reason worth keeping" });
+    expect(written.get("src/a.ts")).toEqual({ value: 5, note: "a reason worth keeping" }); // no floor: nothing to lower
+  });
+
+  test("prune rewrites only the lines that fail and leaves every other line as written", () => {
+    // Two prunes from different bases must never rewrite the same line, so a
+    // shrink inside the floor is not lowered, and nothing is re-sorted or
+    // re-spaced.
+    const root = fixture({});
+    const spec = { ...specFor(root), shrinkFloor: 0.9 };
+    const before = [
+      "# hand-written header",
+      "src/z.ts 1000   # split owed, out of order on purpose",
+      "src/a.ts 2000",
+      "src/gone.ts 900",
+      "src/b.ts 1000",
+      "",
+    ].join("\n");
+    writeFileSync(spec.allowlist, before);
+    // z shrank inside the floor, a fell past it, gone is under the cap, b held.
+    syncAllowlist(spec, [{ key: "src/z.ts", value: 950 }, { key: "src/a.ts", value: 1500 }, { key: "src/b.ts", value: 1000 }], "prune");
+    expect(readFileSync(spec.allowlist, "utf8")).toBe([
+      "# hand-written header",
+      "src/z.ts 1000   # split owed, out of order on purpose",
+      "src/a.ts 1500",
+      "src/b.ts 1000",
+      "",
+    ].join("\n"));
+  });
+
+  test("a listed entry with no number fails, since it caps nothing", () => {
+    const root = fixture({ "a.ts": "banned();\nbanned();\n" });
+    writeFileSync(join(root, "allowlist.txt"), "src/a.ts  # no number\n");
+    const problems = checkRatchet(specFor(root)).problems;
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("src/a.ts is listed in allowlist.txt with no number");
+    expect(problems[0]).toContain("Write its current 2 after it.");
   });
 
   test("with a shrink floor, a listed file that came down below it must be pruned", () => {

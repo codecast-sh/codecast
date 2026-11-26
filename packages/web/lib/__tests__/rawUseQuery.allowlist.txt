@@ -3,7 +3,7 @@
 # THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the
 # fix. Mount the feeder in hooks/ and read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection); if the query only enriches a surface that can paint without it, use useQueryNoThrow.
 #
-# Prune it (drops gone entries, lowers numbers that came down, adds nothing):
+# Prune it (drops gone entries, lowers only the numbers that must come down, adds nothing):
 #   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/rawUseQuery.ratchet.test.ts
 app/admin/daemon-logs/page.tsx 4
 app/auth/cli/page.tsx 1

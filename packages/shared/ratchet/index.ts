@@ -21,8 +21,10 @@ import { basename, join } from "node:path";
 // The fix for a failure is always to remove the offence, never to widen the
 // list. The only sanctioned edit to the list is downward:
 //   RATCHET_WRITE=prune bun test <the ratchet test>
-// which drops entries that no longer match and lowers pinned numbers that came
-// down. It never adds an entry and never raises a number.
+// which drops entries that no longer match and lowers the numbers that fell
+// past the shrink floor. Every other line stays exactly as written, so two
+// prunes from different bases rewrite only the lines each one had to. It never
+// adds an entry and never raises a number.
 
 export type RatchetAllowance = { value?: number; note?: string };
 
@@ -56,6 +58,11 @@ export type RatchetSpec = {
    *  Unset, a pin only caps growth. */
   shrinkFloor?: number;
 };
+
+/** A listed file that shrank far enough that its line must be lowered. */
+function belowShrinkFloor(spec: RatchetSpec, pinned: number, value: number): boolean {
+  return spec.shrinkFloor !== undefined && value < pinned * spec.shrinkFloor;
+}
 
 export type RatchetOffender = { key: string; value: number };
 
@@ -140,7 +147,7 @@ export function formatAllowlist(spec: RatchetSpec, entries: ReadonlyMap<string, 
     "# THIS LIST MAY ONLY SHRINK. Adding a line to get a test green is never the",
     `# fix. ${spec.fix}`,
     "#",
-    `# Prune it (drops gone entries, lowers numbers that came down, adds nothing):`,
+    `# Prune it (drops gone entries, lowers only the numbers that must come down, adds nothing):`,
     `#   ${spec.pruneCommand}`,
     "",
   ].join("\n");
@@ -174,26 +181,36 @@ function scan(spec: RatchetSpec): { scanned: number; offenders: RatchetOffender[
 }
 
 /**
- * Rewrite the allowlist downward. `prune` keeps only entries that still match
- * and lowers pinned numbers that came down; it never adds a key and never
- * raises a number, so it cannot be used to widen. `init` writes the current
- * scan verbatim, for bootstrapping a brand new ratchet.
+ * Rewrite the allowlist downward. `prune` touches only the lines that fail:
+ * it drops an entry that no longer matches and lowers a number that fell past
+ * the shrink floor, and leaves every other line exactly as written. It never
+ * adds a key and never raises a number, so it cannot be used to widen. `init`
+ * writes the current scan verbatim, for bootstrapping a brand new ratchet.
  */
 export function syncAllowlist(spec: RatchetSpec, offenders: readonly RatchetOffender[], mode: "prune" | "init"): void {
   const current = new Map(offenders.map((o) => [o.key, o.value]));
-  const existing = existsSync(spec.allowlist) ? parseAllowlist(readFileSync(spec.allowlist, "utf8")) : new Map<string, RatchetAllowance>();
-  const next = new Map<string, RatchetAllowance>();
+  const exists = existsSync(spec.allowlist);
   if (mode === "init") {
+    const existing = exists ? parseAllowlist(readFileSync(spec.allowlist, "utf8")) : new Map<string, RatchetAllowance>();
+    const next = new Map<string, RatchetAllowance>();
     for (const [key, value] of current) next.set(key, { value, note: existing.get(key)?.note });
-  } else {
-    for (const [key, allowance] of existing) {
-      const value = current.get(key);
-      if (value === undefined) continue; // gone: drop it
-      const pinned = allowance.value;
-      next.set(key, { value: pinned === undefined ? undefined : Math.min(pinned, value), note: allowance.note });
-    }
+    writeFileSync(spec.allowlist, formatAllowlist(spec, next));
+    return;
   }
-  writeFileSync(spec.allowlist, formatAllowlist(spec, next));
+  if (!exists) return;
+  const lines: string[] = [];
+  for (const raw of readFileSync(spec.allowlist, "utf8").split("\n")) {
+    const entry = [...parseAllowlist(raw)][0];
+    if (!entry) {
+      lines.push(raw); // a comment or a blank line
+      continue;
+    }
+    const [key, { value: pinned }] = entry;
+    const value = current.get(key);
+    if (value === undefined) continue; // gone: drop it
+    lines.push(pinned !== undefined && belowShrinkFloor(spec, pinned, value) ? raw.replace(/^(\s*\S+\s+)\d+/, `$1${value}`) : raw);
+  }
+  writeFileSync(spec.allowlist, lines.join("\n"));
 }
 
 /**
@@ -228,15 +245,16 @@ export function checkRatchet(spec: RatchetSpec): RatchetResult {
       problems.push(`${spec.name}: ${key} newly breaks this rule (${value}). ${spec.fix}`);
       continue;
     }
-    if (allowance.value !== undefined && value > allowance.value) {
+    if (allowance.value === undefined) {
+      // A line with no number caps nothing: the file could grow without limit.
+      problems.push(
+        `${spec.name}: ${key} is listed in ${listName} with no number, so nothing stops it growing. Write its current ${value} after it.`,
+      );
+    } else if (value > allowance.value) {
       problems.push(
         `${spec.name}: ${key} went from ${allowance.value} to ${value}. A listed file may not grow. ${spec.fix}`,
       );
-    } else if (
-      spec.shrinkFloor !== undefined &&
-      allowance.value !== undefined &&
-      value < allowance.value * spec.shrinkFloor
-    ) {
+    } else if (belowShrinkFloor(spec, allowance.value, value)) {
       problems.push(
         `${spec.name}: ${key} came down from ${allowance.value} to ${value}. Lower its line in ${listName} so the ground stays taken. (${spec.pruneCommand})`,
       );
