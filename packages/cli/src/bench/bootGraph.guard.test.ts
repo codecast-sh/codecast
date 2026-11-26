@@ -345,8 +345,8 @@ describe("command groups stay off the boot graph", () => {
     // 374 (2026-11-23): contracts/closedSession.ts, the shared Close verdict
     // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
     // 375 (2026-11-24): fsAtomic.ts (node imports only), so machineKey.ts and
-    // device.ts replace their files whole and concurrent readers agree on a key. 376 (11-25): contracts/replyStream.ts.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(376);
+    // device.ts replace their files whole and concurrent readers agree on a key. 376 (11-25): contracts/replyStream.ts. 377: ccMintIdentity.ts (ct-101517).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(377);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -537,8 +537,8 @@ describe("command groups stay off the boot graph", () => {
     // `done -m` and `drop -m` (+1).
     // 4857 (2026-11-25): the messaging-only onboarding gate and `cast relay --stop` in index.ts (#149) (+1).
     // 4863 the same day: live replies, contracts/replyStream.ts (+4) and SyncService.pushReplyStream with its config mirror (+2).
-    // 4864 the same day: checker = "bun" for `cast check`, its `check-watch` flags and the guide paragraph (+1); the bodies load on demand.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4864);
+    // 4864 the same day: checker = "bun" for `cast check`, its `check-watch` flags and the guide paragraph (+1); the bodies load on demand. 4866: ccMintIdentity.ts (+2).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4866);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -769,8 +769,8 @@ describe("command groups stay off the boot graph", () => {
     // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
     // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
     // 626 (2026-11-24): pidFileLock.ts, the pid-file lock moved out of daemon.ts
-    // so cast relay can take one without loading the daemon (#102). 628 (11-25): contracts/replyStream.ts and replyStream.ts.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(628);
+    // so cast relay can take one without loading the daemon (#102). 628 (11-25): contracts/replyStream.ts and replyStream.ts. 630: ccMintIdentity.ts, ccStoreProbe.ts.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(630);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

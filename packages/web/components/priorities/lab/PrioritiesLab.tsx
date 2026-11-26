@@ -1,0 +1,404 @@
+"use client";
+// Priorities lab (throwaway prototype, nothing ships): the redesigned List
+// view of /priorities over the real rows. Filter bar, a ten-day momentum band,
+// then each priority as a flat header and one line per open milestone, its
+// best session, the rest as dots, its plan, and a strip whose days line up
+// down the page.
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { AlertTriangle, Check, ChevronDown, Target } from "lucide-react";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../../ui/dropdown-menu";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import type { PriorityDetail, PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
+import { heatLevels } from "../../ActivityHeatmap";
+import { EmptyState } from "../../ui/empty-state";
+import { SkeletonRows } from "../../ui/skeleton";
+import { PageFrame, PageHeader } from "../../ui/page-header";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
+import { usePriorityWrites } from "../../../hooks/usePriorities";
+import { useSyncCollection } from "../../../hooks/useSyncCollection";
+import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { findEntityInStore } from "../../../lib/liveEntities";
+import { listRows, ownerGroups, prioritySig } from "../../../lib/priorities";
+import { useInboxStore } from "../../../store/inboxStore";
+import { cn } from "../../../lib/utils";
+import { C_PROGRESS, C_STRIP, C_TODAY, GRID, prefixIndex, sessionView, useSessionStates } from "./LabParts";
+import { MomentumBand, type TodaySegment } from "./MomentumBand";
+import { PriorityPage } from "./PriorityPage";
+import { PriorityPill } from "./PriorityRef";
+import { isPickUp, nextOf } from "./nextAction";
+import { WaitingStrip, type WaitingItem } from "./Waiting";
+import { LAB_CSS } from "./labCss";
+import { PriorityBlock, type MilestoneModel, type PriorityModel } from "./PriorityBlock";
+import {
+  LAB_DAYS, alignCounts, attributePlans, connectedSessions, landedAt, landedByDay, lastDays, localDayKey, orderSessions, readFilters, stepTitle, writeFilters,
+  type ConnectedRaw, type DeployInfo, type LabFilters, type PlanOf, type PlanRow, type PrInfo, type ShowRefs, type TaskInfo, type TaskOf, type TaskRow,
+} from "./labModel";
+
+const api = _api as any;
+/**
+ * FAKED for the prototype: the pass's own ranking is not on the row (a person-set rank overwrites it), so one
+ * row carries a made-up suggestion to show how a disagreement would read.
+ */
+const RANK_SUGGESTIONS: Record<string, number> = { "pri-24": 2 };
+const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD", "develop"]);
+const CONTAINER = { containerType: "inline-size" } as CSSProperties;
+
+export default function PrioritiesLab() {
+  // `?ws=team:…` pins the lab to one workspace without switching the app's active one (screenshots of Union while you sit elsewhere).
+  const pinned = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("ws");
+  const active = useActiveWorkspaceKey();
+  const workspace = pinned ?? active;
+  const feed = useSyncCollection("priorities", api.priorities.list, workspace ? { workspace } : "skip", { select: listRows });
+  const rows = useWorkspaceCollection<PriorityRow>("priorities", prioritySig, workspace);
+  const writes = usePriorityWrites(rows);
+  const now = useCoarseNow(30_000);
+  const history = useQueryNoThrow(
+    api.priorities.history,
+    workspace ? { workspace, days: LAB_DAYS, tz_offset_minutes: new Date().getTimezoneOffset() } : "skip",
+    { remember: true },
+  ).data as PriorityHistory | undefined;
+
+  const [filters, setFiltersState] = useState<LabFilters>(() => readFilters(typeof window === "undefined" ? "" : window.location.search));
+  const setFilters = (f: LabFilters) => { setFiltersState(f); writeFilters(f); };
+
+  const scoped = useMemo(() => rows.filter((r) => r.status !== "merged" && (!filters.mine || r.mine)), [rows, filters.mine]);
+  const visible = useMemo(() => scoped.filter((r) => !filters.hideDone || r.status === "active"), [scoped, filters.hideDone]);
+
+  // Every step's sessions, once each visible priority's `show` answered (a list row holds only its newest three).
+  const [details, setDetails] = useState<Record<string, PriorityDetail>>({});
+  const onDetail = useMemo(() => (id: string, d: PriorityDetail) => setDetails((m) => (m[id] === d ? m : { ...m, [id]: d })), []);
+
+  const days = useMemo(() => {
+    const local = lastDays(LAB_DAYS, now);
+    return history?.days?.length === LAB_DAYS && history.days[LAB_DAYS - 1] === local[LAB_DAYS - 1] ? history.days : local;
+  }, [history, now]);
+  const todayIndex = days.indexOf(localDayKey(now));
+
+  // Plans arrive through their own feeder; reading them here wakes the page when they land.
+  const plans = useWorkspaceCollection<PlanRow>("plans", undefined, workspace);
+
+  // Re-read when tasks land: a lookup bound to an earlier store misses tasks (and so plans) synced after it.
+  const taskCount = useInboxStore((st) => Object.keys((st as any).tasks ?? {}).length);
+  const taskOf = useMemo<TaskOf>(() => {
+    const st = useInboxStore.getState() as any;
+    return (id: string) => findEntityInStore(st, "task", id) as TaskRow | undefined;
+  }, [rows, taskCount]);
+
+  // Per priority: which plan is its own and which are its milestones' (labModel attributePlans).
+  const attribution = useMemo(() => {
+    const st = useInboxStore.getState() as any;
+    const planById = new Map(plans.map((p) => [p._id, p]));
+    const planOf: PlanOf = (id) => planById.get(id) ?? st.plans?.[id];
+    return new Map(visible.map((r) => [r.short_id, attributePlans(r.steps, taskOf, planOf)]));
+  }, [visible, taskOf, plans]);
+
+  // Per milestone: every directly connected session (mapped, linked, via a task).
+  const rawSessions = useMemo(() => {
+    const out = new Map<string, ConnectedRaw[]>();
+    for (const r of visible) for (const s of r.steps) out.set(`${r.short_id}:${s.key}`, connectedSessions(r, s, details[r.short_id], taskOf));
+    return out;
+  }, [visible, details, taskOf]);
+  const allIds = useMemo(() => [...new Set([...rawSessions.values()].flat().map((s) => s.short_id))].sort(), [rawSessions]);
+  const live = useSessionStates(allIds);
+
+  const models = useMemo<PriorityModel[]>(() => {
+    const st = useInboxStore.getState() as any;
+    const sessionsByPrefix = prefixIndex(st.sessions);
+    const prByKey = new Map<string, any>();
+    for (const pr of Object.values(st.pullRequests ?? {}) as any[]) prByKey.set(`${String(pr.repository).toLowerCase()}#${pr.number}`, pr);
+    const deploys = Object.values(st.teamDeploys ?? {}) as any[];
+    const lane = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
+    return visible.map((row) => {
+      const plansHere = attribution.get(row.short_id);
+      const milestones = row.steps.map((step): MilestoneModel => {
+        // A workflow step reads as what it works on: "Review: <its task's title>", never "Review · ct-N".
+        const sessions = orderSessions((rawSessions.get(`${row.short_id}:${step.key}`) ?? []).map((s) => {
+          const v = sessionView(s, live);
+          const named = v.auto ? stepTitle(v.title, taskOf) : null;
+          return named ? { ...v, title: named } : v;
+        }));
+        const sessionCounts = new Map(sessions.map((s) => [s.short_id, alignCounts(history, days, history?.sessions?.[s.short_id])]));
+        const counts = days.map((_, i) => sessions.reduce((n, s) => n + (sessionCounts.get(s.short_id)?.[i] ?? 0), 0));
+        const ids = new Set(sessions.map((s) => s.short_id));
+        const taskIds = step.refs.filter((r) => r.kind === "task").map((r) => r.id);
+        const tasks: TaskInfo[] = taskIds.map((id) => {
+          const t = taskOf(id);
+          return { short_id: id, title: t?.title ?? "", done: t?.status === "done" };
+        });
+        // Branches: the ones its own sessions work on, never the default branch.
+        const branches = [...new Set(sessions.map((s) => {
+          const r = sessionsByPrefix.get(s.short_id);
+          return (r?.worktree_branch || r?.git_branch || "") as string;
+        }).filter((b) => b && !DEFAULT_BRANCHES.has(b)))];
+        // Deploys that shipped its tasks or its sessions' commits, newest first, one per target.
+        const mine = deploys.filter((d) =>
+          (d.tasks ?? []).some((t: any) => taskIds.includes(t.short_id)) ||
+          (d.sessions ?? []).some((x: any) => ids.has(String(x.short_id ?? x.conversation_id ?? "").slice(0, 7))) ||
+          (d.commit_rows ?? []).some((c: any) => c.conversation_id && ids.has(String(c.conversation_id).slice(0, 7))),
+        ).map((d) => ({ short_id: d.short_id, target: d.target ?? "deploy", status: d.status ?? "", at: d.live_at ?? d.finished_at ?? d.created_at ?? 0 }))
+          .sort((x, y) => y.at - x.at);
+        const deployInfos: DeployInfo[] = [];
+        for (const d of mine) if (!deployInfos.some((x) => x.target === d.target)) deployInfos.push(d);
+        // Pull requests: refs the milestone names, and those its sessions' shipped commits squash-merged as "(#N)".
+        const prKeys = new Set<string>();
+        for (const r of step.refs) if (r.kind === "pr") prKeys.add(r.id.toLowerCase());
+        for (const d of deploys) for (const c of d.commit_rows ?? []) {
+          if (!c.conversation_id || !ids.has(String(c.conversation_id).slice(0, 7))) continue;
+          const m = /\(#(\d+)\)\s*$/.exec(c.subject ?? "");
+          if (m) prKeys.add(`${String(d.repository).toLowerCase()}#${m[1]}`);
+        }
+        const prs: PrInfo[] = [...prKeys].map((k) => prByKey.get(k)).filter(Boolean)
+          .map((pr: any) => ({ repository: pr.repository, number: pr.number, title: pr.title ?? "", state: pr.state ?? "open" }));
+        const planned = plansHere?.steps.get(step.key);
+        return { step, sessions, counts, sessionCounts, plan: planned?.plan ?? null, partOf: planned?.partOf ?? [], tasks, prs, branches, deploys: deployInfos, coveredByDriver: false, landedAt: landedAt(step, taskOf) };
+      });
+      // A session bound across at least half the open milestones drives the priority: shown once on its header (at most two).
+      // Counted over the open critical milestones: polish is folded away, so a rail down to it would point at nothing.
+      const open = milestones.filter((m) => !m.step.done);
+      const openCritical = open.filter((m) => m.step.tier === "critical");
+      const reach = new Map<string, number>();
+      for (const m of openCritical) for (const s of m.sessions) reach.set(s.short_id, (reach.get(s.short_id) ?? 0) + 1);
+      const byId = new Map(open.flatMap((m) => m.sessions).map((s) => [s.short_id, s]));
+      // A session a person drives outranks a workflow step at the same reach (and a step only leads when nothing else qualifies).
+      const driverIds = openCritical.length >= 2
+        ? [...reach.entries()].filter(([, n]) => n >= 2 && n * 2 >= openCritical.length)
+          .sort((a, b) => Number(byId.get(a[0])!.auto) - Number(byId.get(b[0])!.auto) || b[1] - a[1]).slice(0, 2).map(([id]) => id)
+        : [];
+      const drivers = driverIds.map((id) => byId.get(id)!).filter(Boolean);
+      for (const m of milestones) if (!m.step.done && m.sessions.some((s) => driverIds.includes(s.short_id))) m.coveredByDriver = true;
+      const landedDays = new Set(row.steps.map((s) => landedAt(s, taskOf)).filter((t): t is number => !!t).map(localDayKey));
+      return {
+        row,
+        counts: alignCounts(history, days, lane.get(row.short_id)?.counts),
+        landed: days.map((d) => landedDays.has(d)),
+        milestones,
+        plan: plansHere?.priority ?? null,
+        drivers,
+      };
+    });
+  }, [visible, rawSessions, attribution, live, history, days, taskOf]);
+
+  // Each priority's next milestone and what to press (one function for the list, the card and the page),
+  // and the page's one "Next": the top-ranked of the viewer's own that is theirs to pick up.
+  const actions = useMemo(() => new Map(models.map((m) => [m.row.short_id, nextOf(m)])), [models]);
+  const pageNextId = useMemo(() => {
+    const mine = models.filter((m) => m.row.mine && m.row.status === "active").sort((a, b) => (a.row.rank ?? 1e9) - (b.row.rank ?? 1e9));
+    return mine.find((m) => isPickUp(actions.get(m.row.short_id) ?? null))?.row.short_id ?? null;
+  }, [models, actions]);
+  const ownerCount = useMemo(() => rows.filter((r) => r.mine && r.status === "active").length, [rows]);
+
+  // Waiting on you: a session on one of the viewer's open milestones that asks something, or a pending decision it raised.
+  const decisionSig = useInboxStore((st) => Object.values(((st as any).sessionDecisions ?? {}) as Record<string, { _id: string; status: string; conversation_id: string }>)
+    .filter((d) => d.status === "pending").map((d) => `${d._id}:${String(d.conversation_id).slice(0, 7)}`).sort().join(","));
+  const waiting = useMemo<WaitingItem[]>(() => {
+    const decisions = new Map<string, string>();
+    for (const part of decisionSig.split(",").filter(Boolean)) { const [id, sid] = part.split(":"); if (!decisions.has(sid)) decisions.set(sid, id); }
+    const out: WaitingItem[] = [];
+    const seen = new Set<string>();
+    const mine = models.filter((m) => m.row.mine && m.row.status === "active").sort((a, b) => (a.row.rank ?? 1e9) - (b.row.rank ?? 1e9));
+    for (const pm of mine) {
+      const open = pm.milestones.filter((m) => !m.step.done).sort((a, b) => Number(a.step.tier === "polish") - Number(b.step.tier === "polish"));
+      for (const m of open) {
+        for (const s of m.sessions) {
+          if (seen.has(s.short_id)) continue;
+          const asks = s.status === "needs_you" || s.status === "error";
+          const decision = decisions.get(s.short_id);
+          if (!asks && !decision) continue;
+          seen.add(s.short_id);
+          out.push({ key: `${pm.row.short_id}:${m.step.key}:${s.short_id}`, priority: pm.row.short_id, rank: pm.row.rank, milestone: m.step.title, session: s, decision: !!decision });
+        }
+      }
+    }
+    return out;
+  }, [models, decisionSig]);
+
+  const headLevels = useMemo(() => heatLevels(models.flatMap((m) => m.counts)), [models]);
+  const landed = useMemo(() => landedByDay(scoped, days, taskOf), [scoped, days, taskOf]);
+  // The ten days before these, from the same done dates (tasks' closes), for the headline's change.
+  // Only honest when priorities already existed through that window: a milestone the pass had not yet
+  // written down cannot have "landed" in it, so a younger set compares against a structural zero.
+  const priorCritical = useMemo(() => {
+    const prior = lastDays(LAB_DAYS * 2, now).slice(0, LAB_DAYS);
+    const since = Math.min(...scoped.map((r) => r.first_seen_at));
+    if (!(since <= new Date(`${prior[0]}T00:00:00`).getTime())) return null;
+    return [...landedByDay(scoped, prior, taskOf).values()].flat().filter((l) => l.tier === "critical").length;
+  }, [scoped, taskOf, now]);
+
+  // Today's typing by priority: the viewer's own lanes, in rank order, top three strong, unassigned last.
+  const today = useMemo<TodaySegment[]>(() => {
+    const i = history?.days.indexOf(localDayKey(now)) ?? -1;
+    if (!history || i === -1) return [];
+    const rank = new Map(rows.filter((r) => r.mine && r.status === "active").map((r) => [r.short_id, r.rank ?? 99]));
+    const own = history.lanes.filter((l) => !l.owner && (l.counts[i] ?? 0) > 0);
+    const seg = own.map((l) => {
+      const r = l.short_id ? rank.get(l.short_id) : undefined;
+      const tone: TodaySegment["tone"] = !l.short_id ? "none" : r != null && r <= 3 ? "top" : "rest";
+      return { key: l.key, rank: l.short_id ? r ?? null : null, title: l.short_id ? `${r != null ? `#${r} ` : ""}${l.title}` : "Not in a priority", count: l.counts[i] ?? 0, tone, order: !l.short_id ? 1e4 : r ?? 1e3 };
+    });
+    return seg.sort((a, b) => a.order - b.order).map(({ order: _o, ...x }) => x);
+  }, [history, rows, now]);
+
+  // The page view: `?view=pri-60` is one priority's own page; a title opens it.
+  const [view, setViewState] = useState<string | null>(() => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("view")));
+  const setView = (id: string | null) => {
+    setViewState(id);
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("view", id); else url.searchParams.delete("view");
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    document.querySelector("[data-priorities-lab]")?.closest("[data-main-scroll]")?.scrollTo({ top: 0 });
+  };
+  const viewed = view ? models.find((m) => m.row.short_id === view) : undefined;
+
+  let body;
+  if (viewed) {
+    body = (
+      <>
+        <PriorityPage model={viewed} action={actions.get(viewed.row.short_id) ?? null} waiting={waiting.filter((w) => w.priority === viewed.row.short_id)} workspace={workspace} writes={writes} show={filters.show} now={now} onBack={() => setView(null)} ownerCount={ownerCount} />
+        <DetailProbe shortId={viewed.row.short_id} onData={onDetail} />
+      </>
+    );
+  } else if (rows.length === 0 && feed.error) {
+    body = <EmptyState icon={AlertTriangle} title="Priorities didn't load" action={{ label: "Try again", onClick: feed.retry }} />;
+  } else if (rows.length === 0) {
+    body = <SkeletonRows rows={6} className="pt-2" rowClassName="h-8" />;
+  } else {
+    const groups = ownerGroups(visible);
+    const showOwners = !filters.mine;
+    body = (
+      <>
+        <MomentumBand days={days} landed={landed} priorCritical={priorCritical} todayIndex={todayIndex} today={today} />
+        <FilterBar filters={filters} onChange={setFilters} />
+        {filters.mine && <WaitingStrip items={waiting} />}
+        <ColumnHeads />
+        {groups.map((g) => (
+          <section key={g.user_id} className={cn(showOwners && "mb-6")}>
+            {showOwners && <h2 className="mb-1 border-b border-sol-border/60 pb-1.5 text-ui font-semibold text-sol-text">{g.mine ? "You" : g.owner || "Teammate"}</h2>}
+            <ol>
+              {[...g.active, ...g.past].map((r) => {
+                const model = models.find((m) => m.row.short_id === r.short_id);
+                return model ? (
+                  <PriorityBlock key={r.short_id} model={model} action={actions.get(r.short_id) ?? null} pageNext={pageNextId === r.short_id} show={filters.show} hideDone={filters.hideDone} todayIndex={todayIndex} headLevels={headLevels} writes={writes} now={now} onOpen={setView} suggestion={RANK_SUGGESTIONS[r.short_id]} ownerCount={ownerCount} />
+                ) : null;
+              })}
+            </ol>
+          </section>
+        ))}
+        {visible.map((r) => <DetailProbe key={r.short_id} shortId={r.short_id} onData={onDetail} />)}
+        <MessageDemo models={models} onOpen={setView} />
+      </>
+    );
+  }
+
+  return (
+    <PageFrame
+      header={<PageHeader legacy={<h1 className="px-4 pt-6 text-title font-semibold text-sol-text">Priorities</h1>} title="Priorities" icon={Target} count={visible.length || null} />}
+      legacyColumn="mx-auto w-full max-w-[1080px]"
+      column="mx-auto w-full max-w-[1080px] px-3 pb-16 pt-3 sm:px-4"
+    >
+      <div data-priorities-lab style={CONTAINER}>
+        <style>{LAB_CSS}</style>
+        {body}
+      </div>
+    </PageFrame>
+  );
+}
+
+function DetailProbe({ shortId, onData }: { shortId: string; onData: (id: string, d: PriorityDetail) => void }) {
+  const d = useQueryNoThrow(api.priorities.show, { short_id: shortId }, { remember: true }).data as PriorityDetail | null | undefined;
+  useEffect(() => { if (d) onData(shortId, d); }, [d, shortId, onData]);
+  return null;
+}
+
+const SHOW_LABELS: Array<[keyof ShowRefs, string]> = [["sessions", "Sessions"], ["plans", "Plans"], ["tasks", "Tasks"], ["prs", "PRs"], ["branches", "Branches"], ["deploys", "Deploys"]];
+
+/** Which priorities: two filters in one segmented control, set apart from the quieter Show group. */
+function Segment({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-8 items-center gap-1.5 px-3 text-ui transition-colors first:rounded-l-[7px] last:rounded-r-[7px]",
+        on ? "bg-sol-text text-sol-bg font-medium" : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text",
+      )}
+    >
+      {on && <Check className="size-3.5" strokeWidth={2.5} />}
+      {children}
+    </button>
+  );
+}
+
+function FilterBar({ filters, onChange }: { filters: LabFilters; onChange: (f: LabFilters) => void }) {
+  const toggleShow = (k: keyof ShowRefs) => onChange({ ...filters, show: { ...filters.show, [k]: !filters.show[k] } });
+  const shown = SHOW_LABELS.filter(([k]) => filters.show[k]).length;
+  return (
+    <div data-lab-filters className="mb-3 flex items-center gap-3">
+      <div className="inline-flex shrink-0 divide-x divide-sol-border rounded-lg border border-sol-border">
+        <Segment on={filters.mine} onClick={() => onChange({ ...filters, mine: !filters.mine })}>Mine</Segment>
+        <Segment on={filters.hideDone} onClick={() => onChange({ ...filters, hideDone: !filters.hideDone })}>Hide done</Segment>
+      </div>
+      <div className="hidden items-center gap-0.5 [@container(min-width:44rem)]:flex">
+        <span className="mr-1 text-meta text-sol-text-dim">Show</span>
+        {SHOW_LABELS.map(([k, label]) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={filters.show[k]}
+            onClick={() => toggleShow(k)}
+            className={cn("inline-flex h-7 items-center gap-1 rounded-control px-2 text-meta transition-colors hover:bg-sol-bg-alt", filters.show[k] ? "text-sol-text" : "text-sol-text-dim")}
+          >
+            <i className={cn("block size-[7px] rounded-[2px]", filters.show[k] ? "bg-sol-text-muted" : "border border-sol-text-dim/60")} />
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="ml-auto [@container(min-width:44rem)]:hidden">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" data-lab-show-menu className="inline-flex h-8 items-center gap-1 rounded-control px-2.5 text-ui text-sol-text-muted hover:bg-sol-bg-alt">
+              Show <span className="tabular-nums text-sol-text-dim">{shown}</span> <ChevronDown className="size-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {SHOW_LABELS.map(([k, label]) => (
+              <DropdownMenuCheckboxItem key={k} checked={filters.show[k]} onSelect={(e) => e.preventDefault()} onCheckedChange={() => toggleShow(k)}>{label}</DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+/** The column labels, once at the top: what the progress, today and ten-day columns are, and which bar is today. */
+function ColumnHeads() {
+  return (
+    <div aria-hidden className={cn(GRID, "hidden border-b border-sol-border/50 pb-1 text-[10px] font-medium uppercase tracking-wide text-sol-text-dim [@container(min-width:44rem)]:grid")}>
+      <span className={C_PROGRESS}>Critical</span>
+      <span className={C_TODAY}>Today</span>
+      <span className={cn(C_STRIP, "relative w-[52px] text-left")}>
+        10 days
+        <span className="absolute -bottom-[5px] right-[1px] text-[8px] font-semibold leading-none text-sol-text-muted">T</span>
+      </span>
+    </div>
+  );
+}
+
+/** A demo of `pri-60` mentioned in a message: the pill, and its card on hover. */
+function MessageDemo({ models, onOpen }: { models: PriorityModel[]; onOpen: (id: string) => void }) {
+  const p60 = models.find((m) => m.row.short_id === "pri-60") ?? models[0];
+  if (!p60) return null;
+  return (
+    <section data-lab-message className="mt-10 border-t border-sol-border/60 pt-4">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-sol-text-dim">In a message</div>
+      <div className="flex items-start gap-2.5">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sol-violet/15 text-meta font-semibold text-sol-violet">J</span>
+        <div className="max-w-[34rem] rounded-xl rounded-tl-sm border border-sol-border/60 bg-sol-bg-alt/70 px-3 py-2 text-ui leading-relaxed text-sol-text">
+          Can you pick up <PriorityPill model={p60} onOpen={onOpen} /> next? Session mapping is the milestone that blocks the Union rollout.
+        </div>
+      </div>
+    </section>
+  );
+}
