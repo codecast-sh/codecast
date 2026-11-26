@@ -12,8 +12,8 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 
 const HIDE = ["live", "closed"] as const;
 
-/** Where a linked change stands on its way: moving toward main, parked there, or not drawn in this grid. */
-export type FocusComing = "coming" | "parked" | null;
+/** Where a linked change stands on its way: moving toward main, parked there, not read yet, or not drawn in this grid. */
+export type FocusComing = "coming" | "parked" | "reading" | null;
 
 type Filters = DeployFilters["coming"];
 
@@ -43,7 +43,7 @@ export function OnItsWay({ repository, filters, onFilters, me, focus, onFocusFou
   // A linked row counts where the grid draws it, by the group it draws it in: parked, or any group it shows; a live or
   // closed one is hidden, and with nothing coming the grid draws nothing.
   const group = focused && coming ? shown.filter(focused).map((r) => groupOf(r, now)).find((g) => !!g && !HIDE.includes(g as (typeof HIDE)[number])) ?? null : null;
-  const found: FocusComing = !group ? null : group === "parked" ? "parked" : "coming";
+  const found: FocusComing = focused && !ready ? "reading" : !group ? null : group === "parked" ? "parked" : "coming";
   // eslint-disable-next-line no-restricted-syntax -- reports a match up to the page's focus chip, which draws outside this grid
   useEffect(() => onFocusFound?.(found), [found, onFocusFound]);
   if (ready && !coming) return null;

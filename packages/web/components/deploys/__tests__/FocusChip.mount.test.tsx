@@ -83,7 +83,7 @@ test("a branch keeps its plain name", () => {
 
 // A link to something on neither the queue nor a deploy: when it is on its way (an open change, found in the left
 // column) the chip says so and reads as waiting; otherwise it is not on this target.
-function mountWhere(coming: "coming" | "parked" | null) {
+function mountWhere(coming: "coming" | "parked" | "reading" | null) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -102,6 +102,12 @@ test("a change on its way, on no deploy yet, reads as on its way and waiting", (
 test("a parked change says so, never that it is moving", () => {
   const { host, unmount } = mountWhere("parked");
   expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("parked on its way");
+  unmount();
+});
+
+test("while what is on its way is still being read, the chip says it is looking, never that the thing is not here", () => {
+  const { host, unmount } = mountWhere("reading");
+  expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("looking…");
   unmount();
 });
 

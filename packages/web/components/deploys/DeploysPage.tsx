@@ -644,6 +644,7 @@ export function FocusChip({ focus, repository, waiting, coming = null, deploys, 
   const where = waiting ? "waiting"
     : !d && coming === "coming" ? "on its way"
     : !d && coming === "parked" ? "parked on its way"
+    : !d && coming === "reading" ? "looking…"
     : !d ? "not on this target"
     : focus.kind === "deploy" ? (d._id === live?._id ? "live now" : d.status)
     : d._id === live?._id ? `live in ${d.short_id}` : d.status === "live" ? `went out in ${d.short_id}` : `${d.status} in ${d.short_id}`;
