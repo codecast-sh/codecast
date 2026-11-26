@@ -2526,6 +2526,27 @@ export function isSessionHidden(
   return !!s.inbox_dismissed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > Date.now();
 }
 
+/** `linked`: the open arrived by link (a /conversation/<id> page, the inbox's
+ *  `?s=`, a palette or bookmark jump), not by a pick inside the inbox. */
+export type LinkedOpen = { linked?: boolean };
+
+// Whether opening `id` only SHOWS it, through the view-only peek
+// (viewingDismissedId), instead of making it the current session. A hidden
+// session always does (dismiss/stash are absolute). A teammate's session opened
+// by link does too (ct-101797): Team Activity, a pill or a shared link shows it,
+// but the person's own current session and the remembered pointer
+// (lastFocusedConversationId / clientState.current_conversation_id) stay on
+// their own work, so the next visit to the inbox, or a reload, lands on their
+// queue. A teammate's session picked inside the inbox still becomes current.
+export function opensAsPeek(
+  state: { conversations: Record<string, any>; currentUser?: { _id?: unknown } | null },
+  session: InboxSession,
+  opts?: LinkedOpen,
+): boolean {
+  if (isSessionHidden(session)) return true;
+  return !!opts?.linked && isForeignSession(session, state.conversations[session._id], state.currentUser?._id?.toString());
+}
+
 // ── Working-set membership (sync-convergence C4/C5) ─────────────────────────
 //
 // "In the inbox" is no longer a per-device memory of the last payload
@@ -6973,7 +6994,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setComposerPrefill: (req: { convId: string; fill: string; add: string } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
-  injectSession: (session: InboxSession) => void;
+  injectSession: (session: InboxSession, opts?: LinkedOpen) => void;
   seedSession: (session: InboxSession) => void;
   preloadForkSessions: (forks: ForkChild[], forkedFrom?: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
@@ -6992,7 +7013,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // lifecycle as the model/effort stamps). mode: "team" | "solo" | "off";
   // exclude: conversation ids dropped from the injected feed.
   setStableContextPrefs: (id: string, prefs: { mode?: string | null; exclude?: string[] | null }) => void;
-  navigateToSession: (id: string, source?: ViewNavSource) => void;
+  navigateToSession: (id: string, source?: ViewNavSource, opts?: LinkedOpen) => void;
   requestNavigate: (
     id: string,
     opts?: {
@@ -13786,12 +13807,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return sessions[currentSessionId] ?? null;
   },
 
-  injectSession: action(function (this: Draft, session: InboxSession) {
+  injectSession: action(function (this: Draft, session: InboxSession, opts?: LinkedOpen) {
     // Dismiss/stash are absolute — never altered by viewing. If the injected
     // session arrived hidden, surface it through viewingDismissedId so the user
     // can read it without resurrecting it into the active inbox.
     const merged = seedSessionRow(this, session);
-    if (isSessionHidden(merged)) {
+    if (opensAsPeek(this, merged, opts)) {
       setDismissedView(this, session._id);
     } else {
       declareViewNav("gesture");
@@ -13912,7 +13933,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  navigateToSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture") {
+  navigateToSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture", opts?: LinkedOpen) {
     // Plain navigation. Forks are first-class conversations — clicking one
     // (in the sidebar, BranchSelector, or a deep link) just sets it as the
     // current conversation. No overlay-on-parent state to keep in sync.
@@ -13928,7 +13949,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     declareViewNav(source);
     const session = this.sessions[id];
     if (session) {
-      if (isSessionHidden(session)) {
+      if (opensAsPeek(this, session, opts)) {
         setDismissedView(this, id);
       } else {
         commitCurrentSession(this, id);

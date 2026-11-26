@@ -18,7 +18,7 @@ import { ConversationPlaceholder } from "../../components/ConversationPlaceholde
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../components/conversation/types";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome, viewerCommandsSession } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome, viewerCommandsSession, isSessionHidden, opensAsPeek } from "../../store/inboxStore";
 import { freshHomeLaunchPending } from "../../store/viewNav";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
@@ -46,6 +46,11 @@ import { requestSessionRestart } from "../../lib/sessionCommands";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 import { windowOrgTree } from "../../store/orgSlice";
 import { lazyNamed } from "../../lib/lazyNamed";
+
+// Every way a session reaches this pane other than a pick inside it (`?s=`, a
+// palette or bookmark jump, a fetched deep-link target) is a linked open: a
+// teammate's session is shown, never made current (opensAsPeek, ct-101797).
+const LINKED = { linked: true } as const;
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
@@ -499,7 +504,7 @@ export function QueuePageClient() {
     setUnavailableId(null);
     if (store.showMySessions) setShowMySessions(false);
     if (store.sessions[paramSessionId]) {
-      navigateToSession(paramSessionId);
+      navigateToSession(paramSessionId, "gesture", LINKED);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
@@ -520,17 +525,27 @@ export function QueuePageClient() {
     if (!useInboxStore.getState().showMySessions) setShowMySessions(true);
   }, [isActiveTab, paramSessionId, setShowMySessions]);
 
+  // Going to the inbox itself (a bare /inbox, the sidebar's Inbox) ends a
+  // linked peek at a teammate's session, so the person lands on their own
+  // current session rather than the one they opened from Team Activity.
+  useWatchEffect(() => {
+    if (!isActiveTab || paramSessionId) return;
+    const st = useInboxStore.getState();
+    const peek = st.viewingDismissedId ? st.sessions[st.viewingDismissedId] : undefined;
+    if (peek && !isSessionHidden(peek) && opensAsPeek(st, peek, LINKED)) setViewingDismissedId(null);
+  }, [isActiveTab, paramSessionId, setViewingDismissedId]);
+
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
     if (unavailableId && !pendingInjectId) {
       if (!missingRow) return;
       setUnavailableId(null);
-      injectSession(missingRow);
+      injectSession(missingRow, LINKED);
       return;
     }
     if (!pendingInjectId) return;
     if (sessions[pendingInjectId]) {
-      navigateToSession(pendingInjectId);
+      navigateToSession(pendingInjectId, "gesture", LINKED);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
       return;
@@ -553,7 +568,7 @@ export function QueuePageClient() {
     }
     // A stashed/dismissed target arrives hidden (ct-42666), and injectSession's
     // own hidden check routes the view through the peek path.
-    injectSession(missingRow);
+    injectSession(missingRow, LINKED);
     setPendingInjectId(null);
     paramProcessedRef.current = true;
   }, [pendingInjectId, unavailableId, missingRow, sessions, navigateToSession, injectSession]);
@@ -581,7 +596,7 @@ export function QueuePageClient() {
     }
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
-      navigateToSession(pendingNavigateId);
+      navigateToSession(pendingNavigateId, "gesture", LINKED);
     } else {
       setPendingInjectId(pendingNavigateId);
     }
