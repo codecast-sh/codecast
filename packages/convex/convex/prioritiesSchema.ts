@@ -26,7 +26,7 @@ const priorityRef = v.object({
 
 // A milestone. Every `*_set_by: "person"` field, and `dropped`, is the
 // person's: priorityPassRun applyPlan rejects a pass's change to it.
-const priorityStep = v.object({
+export const priorityStep = v.object({
   key: v.string(),
   title: v.string(),
   title_set_by: v.optional(setBy),

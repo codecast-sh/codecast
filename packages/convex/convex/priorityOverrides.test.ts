@@ -260,11 +260,11 @@ describe("past 1,500 sessions on one priority", () => {
     }
     throw new Error("scheduled runs never settled");
   };
-  const make = (w: World, priority: Id<"priorities">, n: number, step?: string) => w.t.run(async (ctx) => {
+  const make = (w: World, priority: Id<"priorities">, n: number, step?: string, fields: Record<string, unknown> = {}) => w.t.run(async (ctx) => {
     for (let i = 0; i < n; i++) {
       await ctx.db.insert("conversations", {
         user_id: w.ana, agent_type: "claude_code", session_id: `jx7m${priority}${i}`, team_id: w.acme, is_private: false, team_visibility: "full",
-        started_at: 1, updated_at: 1, message_count: 1, status: "active", priority_id: priority, ...(step ? { priority_step_key: step } : {}),
+        started_at: 1, updated_at: 1, message_count: 1, status: "active", priority_id: priority, ...(step ? { priority_step_key: step } : {}), ...fields,
       } as any);
     }
   });
@@ -371,6 +371,55 @@ describe("past 1,500 sessions on one priority", () => {
     expect(reruns.length).toBeGreaterThan(1);
     expect(reruns.every((t) => t.wrote === 0)).toBe(true);
   }, 180_000);
+
+  /** One session the person placed, `older` sessions before it and 250 after: past the newest page the plan's own read of anchors sees. */
+  const placedAmong = async (w: World, priority: Id<"priorities">, step: string, older: number) => {
+    await make(w, priority, older);
+    await make(w, priority, 1, step, { priority_set_by: "person", session_id: "jx7placed" });
+    await make(w, priority, 250);
+    return w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_priority", (q) => q.eq("priority_id", priority)).collect()).find((c) => c.session_id === "jx7placed")!._id);
+  };
+
+  for (const [where, older] of [["the first page", 0], ["a scheduled page", 210]] as const) {
+    test(`a pass merge carries the milestone an old placed session sits on, in ${where}`, async () => {
+      const w = await seeded();
+      const p8 = await priority(w, "pri-8", { steps: [{ key: "s1", title: "Auth", tier: "critical", refs: [] }], step_key_max: 1 });
+      const placed = await placedAmong(w, p8, "s1", older);
+      await applyPlan(w, { merges: [{ short_id: "pri-8", merged_into: "pri-1", step_keys: {} }] });
+      await drain(w);
+      const survivor = await byShort(w, "pri-1");
+      const auth = survivor.steps.find((s: any) => s.title === "Auth" && !s.dropped);
+      expect(auth?.key).toBe("s4");
+      expect(survivor.step_key_max).toBe(4);
+      expect(await w.conversation(placed)).toMatchObject({ priority_id: survivor._id, priority_step_key: "s4", priority_set_by: "person" });
+      bounded();
+    }, 120_000);
+
+    test(`a plan that removes the milestone an old placed session sits on puts it back, in ${where}`, async () => {
+      const w = await seeded();
+      const p1 = await byShort(w, "pri-1");
+      const placed = await placedAmong(w, p1._id, "s2", older);
+      await make(w, p1._id, 3, "s2");
+      await applyPlan(w, { updates: [{ short_id: "pri-1", patch: { steps: p1.steps.filter((s: any) => s.key !== "s2") } }] });
+      await drain(w);
+      const after = await byShort(w, "pri-1");
+      expect(after.steps.find((s: any) => s.key === "s2")).toMatchObject({ title: "Ship the grader" });
+      expect((await w.conversation(placed))?.priority_step_key).toBe("s2");
+      // The milestone is back, so the pass's sessions on it keep it too.
+      expect(await on(w, p1._id, "s2")).toBe(4);
+      bounded();
+    }, 120_000);
+  }
+
+  test("a person's drop clears the milestone off a session they placed on it", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const placed = await placedAmong(w, p1._id, "s3", 210);
+    await as(w, w.ana).mutation(pri.dropStep, { short_id: "pri-1", step_key: "s3" });
+    await drain(w);
+    expect((await w.conversation(placed))?.priority_step_key).toBeUndefined();
+    expect((await byShort(w, "pri-1")).steps.find((s: any) => s.key === "s3")?.dropped).toBe(true);
+  }, 120_000);
 });
 
 describe("milestone keys from before the mark", () => {
