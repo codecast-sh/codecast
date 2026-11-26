@@ -9,9 +9,9 @@
 // a retry, a budget with no room, or any exception gives no answer, and a person reads the change whole
 // (changeApprovals.ts). Nothing goes green without the answer for the head it read.
 //
-// Sonnet takes no temperature (lib/anthropic.ts STRONG_MODEL), so two calls on one head can differ: the first answer
-// stored for a head is the one that counts, and a mechanism or objection holds for every later head of the pull request
-// (changeApprovals.settle), so a re-run never rolls it green.
+// Sonnet takes no temperature (lib/anthropic.ts STRONG_MODEL), so two calls on the same head can differ: the first
+// answer stored for a head is the one that counts, and a mechanism or objection on any head holds the pull request for a
+// person until one approves it on a card (changeApprovals.settle), so a re-run or a new push never rolls it green.
 import type { Infer } from "convex/values";
 import { STRONG_MODEL } from "./anthropic";
 import { runModelCall, type CallScope } from "../modelCalls";
@@ -115,7 +115,7 @@ export type ReviewInput = {
 };
 
 /**
- * The review of one head. Every outcome is a record: an answer, or why none; an exception included, so a failure in the
+ * The review of a head. Every outcome is a record: an answer, or why none; an exception included, so a failure in the
  * budget's bookkeeping or the call settles as a failed review, never as a hang.
  */
 export async function reviewHead(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope | null, a: ReviewInput, now: number): Promise<AutomaticReview> {

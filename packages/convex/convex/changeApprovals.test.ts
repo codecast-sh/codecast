@@ -514,28 +514,26 @@ describe("the approval card", () => {
     expect(cards(w.db).map((c: any) => c.status)).toEqual(["withdrawn"]);
   });
 
-  test("the area's owner is the owners file's user id; with none, an author on the team, else the workspace's admins (second review, finding 2)", async () => {
+  test("on a pull request no run is behind the author is asked nothing: owner, admins and installer count without them (second review round 2, finding 2)", async () => {
     const byId = world({ workflow_runs: [] });
     await (settle as any)._handler(byId.ctx, noAnswer);
     expect(cards(byId.db)[0].asked_user_ids).toEqual(["u_ashot"]);
-    const pat = { _id: "u_gh", name: "Pat", github_username: "pat-gh" };
-    const author = world({ workflow_runs: [], users: [...users, pat], team_memberships: [...memberships, { _id: "m_gh", team_id: "team1", user_id: "u_gh" }] });
-    expect(await (settle as any)._handler(author.ctx, { ...noAnswer, people: { title: "Bump", author_login: "pat-gh", engineers: [] } })).toMatchObject({ description: "needs a review by Pat: the automatic review could not answer (the team's model budget has no room for it)" });
-    expect(cards(author.db)[0].asked_user_ids).toEqual(["u_gh"]);
-    // An author codecast knows but who is not on the team, a bot, and an owner id this deployment does not know are
-    // nobody's to card: the workspace's admins are, all of them asked.
-    const admins = memberships.map((m) => (m.user_id === "u_jason" || m.user_id === "u_cam" ? { ...m, role: "admin", joined_at: m.user_id === "u_jason" ? 1 : 2 } : m));
-    for (const over of [
-      { users: [...users, pat] },
-      { users: [...users, { _id: "u_bot", name: "dependabot", github_username: "pat-gh", is_bot: true }], team_memberships: [...admins, { _id: "m_bot", team_id: "team1", user_id: "u_bot" }] },
-    ]) {
-      const w = world({ workflow_runs: [], team_memberships: admins, ...over });
-      expect(await (settle as any)._handler(w.ctx, { ...noAnswer, people: { title: "Bump", author_login: "pat-gh", engineers: [] } })).toMatchObject({ description: "needs a review by Jason Benn: the automatic review could not answer (the team's model budget has no room for it)" });
-      expect(cards(w.db)[0].asked_user_ids).toEqual(["u_jason", "u_cam"]);
-    }
-    const unknown = world({ workflow_runs: [], team_memberships: admins });
-    expect(await (settle as any)._handler(unknown.ctx, { ...noAnswer, people: { ...people, area_owner: { user_id: "not-an-id", name: "Samvit" } } })).toMatchObject({ description: "needs a review by Jason Benn: the automatic review could not answer (the team's model budget has no room for it)" });
-    expect(cards(unknown.db)[0].asked_user_ids).toEqual(["u_jason", "u_cam"]);
+    const admins = memberships.map((m) => (m.user_id === "u_ashot" || m.user_id === "u_jason" || m.user_id === "u_cam" ? { ...m, role: "admin", joined_at: m.user_id === "u_ashot" ? 0 : m.user_id === "u_jason" ? 1 : 2 } : m));
+    const ashotWrote = { ...people, author_login: "ashot-gh" };
+    const withLogins = users.map((u) => (u._id === "u_ashot" ? { ...u, github_username: "ashot-gh" } : u._id === "u_jason" ? { ...u, github_username: "jason-gh" } : u));
+    // The owner wrote it (Union's owners file names Ashot for everything): the admins other than Ashot, all asked.
+    const ownerWrote = world({ workflow_runs: [], users: withLogins, team_memberships: admins });
+    expect(await (settle as any)._handler(ownerWrote.ctx, { ...noAnswer, people: ashotWrote })).toMatchObject({ description: "needs a review by Jason Benn: the automatic review could not answer (the team's model budget has no room for it)" });
+    expect(cards(ownerWrote.db)[0].asked_user_ids).toEqual(["u_jason", "u_cam"]);
+    // A failure with no owner, written by a member who is an admin: every reason leaves them out.
+    const noOwner = world({ workflow_runs: [], users: withLogins, team_memberships: admins });
+    await (settle as any)._handler(noOwner.ctx, { ...noAnswer, people: { title: "Bump", author_login: "jason-gh", engineers: [] } });
+    expect(cards(noOwner.db)[0].asked_user_ids).toEqual(["u_ashot", "u_cam"]);
+    // An unknown owner id, and no admin but its author: whoever installed codecast's app.
+    const inst = { ...installation, installed_by_user_id: "u_cam" };
+    const onlyAuthor = world({ workflow_runs: [], users: withLogins, github_app_installations: [inst], team_memberships: memberships.map((m) => (m.user_id === "u_jason" ? { ...m, role: "admin" } : m)) });
+    expect(await (settle as any)._handler(onlyAuthor.ctx, { ...noAnswer, people: { ...people, author_login: "jason-gh", area_owner: { user_id: "not-an-id", name: "Samvit" } } })).toMatchObject({ description: "needs a review by Cameron: the automatic review could not answer (the team's model budget has no room for it)" });
+    expect(cards(onlyAuthor.db)[0].asked_user_ids).toEqual(["u_cam"]);
   });
 
   test("agent work with nobody's press goes to its Requested-by person; a mechanism to an engineer presser, else the area's owner", async () => {
@@ -846,27 +844,66 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     expect(prompts).toHaveLength(1);
   });
 
-  test("a mechanism or objection holds for every later head: each is a person's until their Approve merge covers it (third review, finding 1c)", async () => {
-    stubs();
-    answers.push(said({ mechanism: true, reason: "A bulk delete." }));
-    const db = world();
-    await evaluateNow(db);
+  test("a push mid-review: the first head's mechanism holds the pull request whether it lands before the second head's ship or after (round 2, finding 1)", async () => {
     const { claimAutomaticReview } = await import("./changeApprovals");
-    // A trivial push, and the model now says ship and not a mechanism: still a person's.
-    expect(await (claimAutomaticReview as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: NEXT })).toMatchObject({ action: "claimed" });
-    const shipNext = { head_sha: NEXT, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: Date.now() };
-    const next = { repository: REPO, pr_number: 7, head_sha: NEXT, judged: [], key: "none", whole_key: "w2", automatic: shipNext };
-    expect(await (settle as any)._handler(ctxOf(db), next)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of an earlier head (aaaaaaaaaa) called it a mechanism" });
-    const card = cards(db).at(-1);
-    expect(card.approval.reason).toBe("objection");
-    expect(card.context_md).toContain("Held: the automatic review of an earlier head");
-    db._tables.session_decisions.find((d: any) => d._id === card._id).status = "answered";
-    await settleCardApproval(ctxOf(db) as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_ashot" as any }, 20);
-    expect(await (settle as any)._handler(ctxOf(db), next)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
-    // The head after that is held still.
-    const third = "d".repeat(40);
-    await (claimAutomaticReview as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: third });
-    expect(stored(db)).toMatchObject({ head_sha: third, pending: true, held: expect.stringContaining("called it a mechanism") });
+    const ship2 = { head_sha: NEXT, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: Date.now() };
+    const mech1 = { head_sha: HEAD, mechanism: true, verdict: "ship", reason: "A bulk delete.", at: Date.now() };
+    const at = (head: string, automatic: any) => ({ repository: REPO, pr_number: 7, head_sha: head, judged: [], key: "none", whole_key: head === HEAD ? "w1" : "w2", automatic });
+    for (const order of ["mechanism first", "ship first"]) {
+      const db = world();
+      db._tables.pull_requests[0].head_sha = NEXT;
+      // Head 1 is claimed, then head 2 is pushed and claimed while head 1's call is out.
+      await (claimAutomaticReview as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD });
+      await (claimAutomaticReview as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: NEXT });
+      const scheduled: string[] = [];
+      const ctx = { db, scheduler: { runAfter: async (_ms: number, ref: any) => { scheduled.push(getFunctionName(ref)); } } };
+      if (order === "mechanism first") {
+        await (settle as any)._handler(ctx, at(HEAD, mech1));
+        expect(scheduled).toEqual(["changeApprovals:evaluate"]);
+        expect(await (settle as any)._handler(ctx, at(NEXT, ship2))).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of aaaaaaaaaa called it a mechanism" });
+      } else {
+        expect(await (settle as any)._handler(ctx, at(NEXT, ship2))).toMatchObject({ state: "success" });
+        await (settle as any)._handler(ctx, at(HEAD, mech1));
+        // The late answer re-works the head, which is now held.
+        expect(scheduled).toContain("changeApprovals:evaluate");
+        expect(await (settle as any)._handler(ctx, at(NEXT, undefined))).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of aaaaaaaaaa called it a mechanism" });
+      }
+      // Head 2's record is its own: the older head's answer never overwrote it.
+      expect(stored(db)).toMatchObject({ head_sha: NEXT, verdict: "ship", mechanism: false });
+      expect(db._tables.pull_requests[0].approval.held).toContain("called it a mechanism");
+      const card = cards(db).at(-1);
+      expect(card.approval.reason).toBe("objection");
+      expect(card.context_md).toContain("**Held:** the automatic review of aaaaaaaaaa called it a mechanism");
+      // Only a person's card clears it: after their Approve merge, head 2's own answer decides again.
+      db._tables.session_decisions.find((d: any) => d._id === card._id).status = "answered";
+      await settleCardApproval(ctxOf(db) as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_ashot" as any }, 20);
+      expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
+      expect(await (settle as any)._handler(ctxOf(db), at(NEXT, undefined))).toMatchObject({ state: "success", description: "no judged paths; the automatic review: not a mechanism" });
+      // Re-settling head 2's kept answer never re-sets the hold.
+      expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
+    }
+  });
+
+  test("a codecast run recorded onto a held pull request keeps the hold until a person approves (round 2, finding 4)", async () => {
+    const run = { _id: "run1", user_id: "agent", status: "completed", created_at: 1, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, mechanism: false, at: 3, attempt: 1 }, pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
+    const db = world({ workflow_runs: [run], pull_requests: [{ ...prRow, approval: { head_sha: HEAD, state: "pending", description: "x", held: "the automatic review of bbbbbbbbbb called it a mechanism" } }] });
+    expect(await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", whole_key: "w1" })).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
+    expect(cards(db)).toHaveLength(1);
+  });
+
+  test("a pull request codecast keeps no row for is never sent to the model: it fails closed to the installer (round 2, finding 3)", async () => {
+    stubs();
+    // A personal install, its owners file naming no one.
+    routes = routes.filter((r) => !/owners\.txt/.test(String(r.match)));
+    routes.unshift({ method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ status: 404 }) });
+    answers.push(said({}));
+    const db = world({ pull_requests: [], github_app_installations: [{ ...installation, team_id: undefined, scope_user_id: "u_jason" }], conversations: [{ _id: "c_j", session_id: "j", user_id: "u_jason", title: "Mine", updated_at: 1 }], anchors: [] });
+    expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: expect.stringContaining("codecast keeps no record of this pull request") });
+    expect(prompts).toEqual([]);
+    expect(cards(db).map((c: any) => c.asked_user_ids)).toEqual([["u_jason"]]);
+    // A second evaluation finds the open card and asks nothing again.
+    await evaluateNow(db);
+    expect(cards(db)).toHaveLength(1);
   });
 
   test("no mechanism file beside the judges file: nothing is sent and the owner reads it (third review, finding 3)", async () => {

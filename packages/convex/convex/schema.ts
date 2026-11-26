@@ -4020,6 +4020,9 @@ export default defineSchema({
       // With no codecast run behind it: what codecast's automatic review said about a head (lib/automaticReview.ts),
       // kept so each head is read once.
       automatic: v.optional(automaticReviewValidator),
+      // An automatic review called a head of this pull request a mechanism or objected: every head is a person's to read
+      // until a person approves it on a card (changeApprovalRows clearHold). Set by any such answer, whatever its head.
+      held: v.optional(v.string()),
     })),
   })
     .index("by_team_id", ["team_id"])

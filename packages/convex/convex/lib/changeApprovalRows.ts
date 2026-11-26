@@ -193,6 +193,7 @@ export async function settleCardApproval(
     // Ship approves nothing, and the status asks again. The run's card read the change whole, so its Ship also binds to
     // the whole diff it showed, which covers a mechanism until any code changes.
     const a = row.approval;
+    if (a) await clearHold(ctx, a.repository, a.pr_number);
     if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
       await ctx.db.insert("change_approvals", {
         repository: a.repository,
@@ -213,6 +214,19 @@ export async function settleCardApproval(
     for (const a of held) if (!a.revoked_at) await ctx.db.patch(a._id, { revoked_at: now });
   }
   await scheduleRunApprovalPost(ctx, run);
+}
+
+/**
+ * A person approved the pull request on a card: the hold an automatic review's mechanism or objection put on it is
+ * cleared (changeApprovals.settle). Nothing else clears it.
+ */
+async function clearHold(ctx: { db: any }, repository: string, prNumber: number): Promise<void> {
+  const rows: Doc<"pull_requests">[] = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", prNumber)).collect();
+  for (const row of rows) {
+    if (!row.approval?.held) continue;
+    const { held: _held, ...rest } = row.approval;
+    await ctx.db.patch(row._id, { approval: rest });
+  }
 }
 
 /** The Release Captain role (pl-1075 Words), by its handle or its title: whose revert merges on CI alone. */
@@ -281,6 +295,7 @@ async function settleApprovalCard(
   if (by.kind !== "user" || !by.user_id) return;
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
+    await clearHold(ctx, a.repository, a.pr_number);
     await ctx.db.insert("change_approvals", {
       repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
       conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),

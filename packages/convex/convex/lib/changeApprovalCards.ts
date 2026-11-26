@@ -8,9 +8,11 @@
 //                  (changes or rejected) or no answer at all go to the area's owner, never a commit's Requested-by;
 //                  a run that ended with no mechanism answer: whoever a mechanism goes to.
 //   the area       the owners file's person for it (an id this deployment does not know is no owner); else the pull
-//                  request's author when they are a person on the team, never for a mechanism or an objection on a
-//                  pull request no run is behind (the author wrote it); else the workspace's admins. A card always
-//                  lands: with no session to ask from, it is asked from its person's own, else they are notified.
+//                  request's author when they are a person on the team; else the workspace's admins; else whoever
+//                  installed codecast's app. On a pull request no run is behind, the author is asked nothing, whatever
+//                  the question: an owner who is the author is no owner, and admins and the installer count without
+//                  them. A card always lands: with no session to ask from, it is asked from its person's own, else they
+//                  are notified.
 //   Cam's changes  the engineer whose yes came before the build; else the area's owner, else the first engineer;
 //                  never Cam.
 // A review that gave no mechanism answer is asked again, never carded. One card per judged diff and question, and at
@@ -51,6 +53,13 @@ async function memberNamed(ctx: { db: any }, teamId: Id<"teams"> | undefined, na
   return null;
 }
 
+/** Any codecast user the login names, a bot's included: who wrote the pull request, to keep them off its cards. */
+async function anyUserByLogin(ctx: { db: any }, login: string | null | undefined): Promise<Id<"users"> | null> {
+  if (!login) return null;
+  const u: any = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", login)).first();
+  return u?._id ?? null;
+}
+
 /** The pull request's author, when codecast knows them as a person on the team: never a bot, never a stranger. */
 async function teamAuthor(ctx: { db: any }, teamId: Id<"teams"> | undefined, login: string | null | undefined): Promise<Person | null> {
   if (!login || !teamId) return null;
@@ -83,6 +92,8 @@ export async function cardPeople(ctx: { db: any }, a: {
   author_login?: string;
   engineers: Array<{ user_id: string; name: string }>;
   engineerYes: { user_id: Id<"users"> } | null;
+  /** Who installed codecast's app for the repository: the last one asked, so a card always reaches someone. */
+  installer?: Id<"users">;
 }): Promise<Record<CardReason, Person>> {
   // The owners file names its person by codecast user id: one this deployment does not know is no owner.
   const owner = a.area_owner ? await personOf(ctx, a.area_owner.user_id) : null;
@@ -91,12 +102,16 @@ export async function cardPeople(ctx: { db: any }, a: {
   const press: any = a.run?.pressed_approval_id ? await ctx.db.get(a.run.pressed_approval_id) : null;
   const presser = press ? await personOf(ctx, press.user_id) : null;
   const engineer = (p: Person | null) => !!p?.user_id && a.engineers.some((e) => e.user_id === String(p.user_id));
-  // No owner: the author when they are on the team, else the workspace's admins (a bot's pull request, a stranger's).
-  const admins = owner ? [] : await workspaceAdmins(ctx, a.teamId);
+  // On a pull request no run is behind, the author is asked nothing: whoever wrote it, codecast's user or not.
+  const writer = a.run ? null : await anyUserByLogin(ctx, a.author_login);
+  const notWriter = (p: Person | null) => (p && writer && String(p.user_id) === String(writer) ? null : p);
+  const areaOwner = notWriter(owner);
+  // No owner: the author when they are on the team (with a run behind it), else the workspace's admins (a bot's pull
+  // request, a stranger's), else the installer.
+  const admins = areaOwner ? [] : (await workspaceAdmins(ctx, a.teamId)).filter((p) => notWriter(p));
   const adminCard: Person | null = admins.length ? { ...admins[0], also: admins.slice(1).map((p) => p.user_id!) } : null;
-  const area = owner ?? author ?? adminCard ?? nobody;
-  // What the author must never approve themselves: a mechanism or an objection on a pull request no run is behind.
-  const areaNotAuthor = owner ?? adminCard ?? nobody;
+  const installer = notWriter(a.installer ? await personOf(ctx, a.installer) : null);
+  const area = a.run ? owner ?? author ?? adminCard ?? installer ?? nobody : areaOwner ?? adminCard ?? installer ?? nobody;
   if (a.camAsked) {
     const firstEngineer = a.engineers.length ? (await personOf(ctx, a.engineers[0].user_id)) ?? { user_id: null, name: a.engineers[0].name } : null;
     const camOwner = owner && !isCam(owner) ? owner : null;
@@ -106,9 +121,9 @@ export async function cardPeople(ctx: { db: any }, a: {
   const spawner: any = a.run?.spawner_conversation_id ? await ctx.db.get(a.run.spawner_conversation_id) : null;
   const asker = a.requested_by ? (await memberNamed(ctx, a.teamId, a.requested_by)) ?? { user_id: null, name: a.requested_by } : null;
   const judged = presser ?? asker ?? (spawner ? await personOf(ctx, spawner.user_id) : null) ?? area;
-  const mechanism = engineer(presser) ? presser! : a.run ? area : areaNotAuthor;
+  const mechanism = engineer(presser) ? presser! : area;
   // The change read whole: with no run, the area's owner; a run whose review never answered, whoever reads a mechanism.
-  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area, objection: areaNotAuthor };
+  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area, objection: area };
 }
 
 /** The review's own words on the run's task, newest first, cut to fit a card. */
@@ -145,7 +160,7 @@ const WHY: Record<CardReason, string> = {
   mechanism: "The review called it a mechanism: a mistake here reaches many people and cannot be undone.",
   review: "No review said whether it is a mechanism (a mistake that reaches many people and cannot be undone), and none can now; you read the change whole.",
   unreadable: "Codecast could not read enough of it to tell, so a person approves.",
-  objection: "Codecast's automatic review asked for changes or rejected it; you read the change whole.",
+  objection: "Codecast's automatic review called this pull request a mechanism or objected to it, on this head or an earlier one, and no person has approved it since; you read the change whole.",
 };
 
 /** What a card asks about: the diff it binds to (the judged diff's key or the whole diff's) and the question. */
@@ -182,9 +197,16 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   reason: CardReason; to: Person; run: any | null; pr: Doc<"pull_requests"> | null; title: string; before_key?: string; now: number;
   /** The review's words when no run holds them (codecast's automatic review). */
   words?: string;
+  /** What holds the pull request for a person (changeApprovals.settle), shown first. */
+  held?: string;
 }): Promise<{ card_key: string; card_id?: Id<"session_decisions"> } | null> {
   const card_key = cardKeyOf(a.key, a.reason);
   if (!a.to.user_id || a.before_key === card_key) return null;
+  // With no pull request row to remember the card on, the open card it would repeat is found among its person's own.
+  if (!a.pr) {
+    const open: any[] = await ctx.db.query("session_decisions").withIndex("by_holder_status", (q: any) => q.eq("holder_key", `user:${a.to.user_id}`).eq("status", "pending")).take(200);
+    if (open.some((d) => d.approval_card && d.approval?.repository === a.repository && d.approval?.pr_number === a.pr_number && cardKeyOf(d.approval.judged_key, d.approval.reason) === card_key)) return null;
+  }
   const asked = [a.to.user_id, ...(a.to.also ?? [])];
   const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id);
   if (!conversation) {
@@ -200,6 +222,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   const files = a.judged.length ? a.judged.map((f) => `- \`${f}\``).join("\n") : "_(no judged files)_";
   const context_md = [
     WHY[a.reason],
+    a.held ? `**Held:** ${a.held}.` : null,
     `**Judged files** in ${a.repository}#${a.pr_number} at \`${a.head_sha.slice(0, 10)}\`:\n${files}`,
     review ? `**The review**\n\n${review}` : null,
     `https://github.com/${a.repository}/pull/${a.pr_number}`,

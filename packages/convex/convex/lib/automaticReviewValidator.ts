@@ -14,8 +14,6 @@ export const automaticReviewValidator = v.object({
   reason: v.string(),
   /** No answer: a person reads it whole. */
   failed: v.optional(v.boolean()),
-  /** An earlier head's answer called it a mechanism or objected, which holds for this head too: a person reads it. */
-  held: v.optional(v.string()),
   cost_usd: v.optional(v.number()),
   at: v.number(),
 });
