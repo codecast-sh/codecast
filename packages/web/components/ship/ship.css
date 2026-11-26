@@ -221,6 +221,8 @@ a.sj-left { text-decoration: none; }
   .sj-node { grid-area: 1 / 1; }
   .sj-label { grid-area: 1 / 2; margin-top: 0; }
   .sj-who { grid-area: 1 / 3; }
+  /* A stacked row has room for who acts and the round on one line. */
+  .sj-who .sj-round { display: inline; margin-left: 3px; }
   .sj-hint { grid-area: 2 / 2 / 3 / 4; }
   .sj-left { grid-column: 2 / 4; white-space: normal; }
   /* A stage that opens is a block holding its button's grid: the step left for you lines up with the label column. */
