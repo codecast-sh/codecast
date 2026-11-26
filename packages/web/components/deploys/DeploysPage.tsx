@@ -60,8 +60,8 @@ function offCentre(row: Element, scroller: Element | null): boolean {
  * Land a link: bring each highlighted row to the middle of whatever scrolls it (each column scrolls on its own, so
  * each brings its own; one scroller takes the most telling), and flash each row once as it first appears. Queues,
  * history and what is on its way arrive on their own clocks and can grow above a row after it is found, so it keeps
- * the rows centred as anything moves, for 6s after the first one appeared. The viewer's own scroll, press or key ends
- * it, and so does 10s with nothing found.
+ * the rows centred as anything moves, for 6s after the first one appeared. The viewer's own scroll, press, key or a
+ * focus moving (a screen reader reading on) ends it, and so does 10s with nothing found.
  */
 function landFocus(): () => void {
   const pane = document.querySelector("[data-deploy-pane]");
@@ -103,9 +103,9 @@ function landFocus(): () => void {
     sized.disconnect();
     clearTimeout(cap);
     clearTimeout(give);
-    for (const e of ["wheel", "touchstart", "pointerdown", "keydown"]) window.removeEventListener(e, stop);
+    for (const e of ["wheel", "touchstart", "pointerdown", "keydown", "focusin"]) window.removeEventListener(e, stop);
   }
-  for (const e of ["wheel", "touchstart", "pointerdown", "keydown"]) window.addEventListener(e, stop, { passive: true });
+  for (const e of ["wheel", "touchstart", "pointerdown", "keydown", "focusin"]) window.addEventListener(e, stop, { passive: true });
   later();
   return stop;
 }

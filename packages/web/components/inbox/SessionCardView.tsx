@@ -279,7 +279,7 @@ export function SessionCardView({
           role="button"
           tabIndex={0}
           onClick={(e) => onSelect(session, e)}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
+          onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
           className="w-full text-left cursor-pointer px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sol-cyan/60"
         >
           <div className="flex items-center gap-1.5">
@@ -457,7 +457,7 @@ export function SessionCardView({
         // state words nested in it never pile into the name a reader hears.
         aria-label={isHostedAgentType(session.agent_type) ? `${displayTitle}, ${formatRowTime(session.updated_at, true)}` : undefined}
         onClick={(e) => onSelect(session, e)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
+        onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sol-cyan/60"
       >
       <div className="flex items-center gap-2.5">

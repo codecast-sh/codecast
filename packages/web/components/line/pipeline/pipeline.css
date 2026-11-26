@@ -111,6 +111,8 @@
 .pv-targets { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 26px; min-width: 0; }
 .pv-target { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--lw-ink-2); }
 .pv-target b { font-weight: 600; color: var(--lw-ink); }
+a.pv-target { text-decoration: none; }
+a.pv-target:hover b, a.pv-target:focus-visible b { text-decoration: underline; }
 .pv-target[data-tone="stuck"] span, .pv-target[data-tone="failed"] span { color: var(--lw-bad); }
 .pv-led { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; background: var(--lw-ink-3); }
 .pv-led[data-tone="current"] { background: var(--lw-ok); }

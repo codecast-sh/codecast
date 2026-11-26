@@ -308,7 +308,7 @@ export function ModernSessionCardView({
         tabIndex={0}
         aria-label={`${displayTitle}, ${meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
         onClick={(e) => onSelect(session, e)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
+        onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className={`block w-full cursor-pointer text-left ${nested ? "py-1.5 pl-6 pr-3" : "py-2 pl-3 pr-3"} outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--focus-ring)]`}
       >
         <div data-mc-line1 className="flex min-w-0 items-center gap-2">
