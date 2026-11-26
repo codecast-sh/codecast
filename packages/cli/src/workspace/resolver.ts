@@ -59,7 +59,9 @@ export function withAgentConfigCopies(
   root: string,
   opts: { isInputRoot: boolean; warn?: (m: string) => void },
 ): WorkspaceManifest {
-  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, includeAncestors: false, withinRoot: true, tolerateMissing: true, config: readLocalConfig() });
+  // Agent context only: without it the walk copies every untracked .md file and everything under a docs/ or
+  // scripts/ folder, so another session's work in progress landed in every new worktree (ct-102042).
+  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, agentContextOnly: true, includeAncestors: false, withinRoot: true, tolerateMissing: true, config: readLocalConfig() });
   for (const skipped of context.skipped) opts.warn?.(`agent config ${skipped.path} skipped: ${skipped.reason}`);
   const existing = manifest.setup.copy;
   const additions = context.files.filter((f) => f.scope === "project")

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRANCH, PR, PR_URL, T, setup } from "./mergeStation.testkit";
+import { mainCheckout } from "./mergeScratch";
 
 // The change flow's Merge station: what it merges, what it refuses, and what
 // it sends back to CI (mergeStation.testkit.ts builds the world). Deploy
@@ -200,6 +201,40 @@ describe("cast flow merge", () => {
       expect(r.line).toMatch(/^change conflicts with main in a\.txt; main's commits that touched them: [0-9a-f]+ main rewrites a$/);
       expect(s.merged()).toBe(false);
       expect(existsSync(join(s.runDir, "merge.json"))).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  /** The station's tree, holding an untracked `file` (a copy of another session's work) before it rebases. */
+  const treeWithUntracked = (s: ReturnType<typeof setup>, file: string, text: string): Parameters<typeof s.run>[0] => ({
+    scratch: async (repo, at) => { const t = await s.scratch(repo, at); s.write(t.path, file, text); return t; },
+  });
+
+  test("an untracked file identical to the one main now tracks is harmless: the rebase goes over it and the change merges", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("b.txt", "bee\n");
+      s.advanceMain("templates/ship.md", "landed\n", "main lands the template");
+      s.ci(head);
+      const r = await s.run(treeWithUntracked(s, "templates/ship.md", "landed\n"));
+      expect(r.code).toBe(0);
+      expect(r.line).toBe(s.originMain());
+      expect(s.git(s.work, "show", `${r.line}:templates/ship.md`)).toBe("landed");
+    } finally { s.done(); }
+  }, T);
+
+  test("an untracked file that differs from the one main now tracks stops the merge (exit 2), naming it and the main checkout it is copied from", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("b.txt", "bee\n");
+      s.advanceMain("templates/ship.md", "landed\n", "main lands the template");
+      s.ci(head);
+      // The draft sits in the main checkout, and the tree the station makes gets a copy of it.
+      s.write(s.work, "templates/ship.md", "draft\n");
+      const r = await s.run(treeWithUntracked(s, "templates/ship.md", "draft\n"));
+      expect(r.code).toBe(2);
+      const repo = mainCheckout(s.work);
+      expect(r.line).toBe(`untracked file templates/ship.md in ${repo} differs from the default branch's tracked copy, and every merge worktree copies it from there: commit, remove or move it in ${repo}, then merge again`);
+      expect(s.merged()).toBe(false);
     } finally { s.done(); }
   }, T);
 
