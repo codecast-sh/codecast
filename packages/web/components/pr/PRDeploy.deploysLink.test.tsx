@@ -1,15 +1,16 @@
 import { describe, expect, mock, test } from "bun:test";
 
 // The PR page's Production band and its "ships to" list link each target into
-// /deploys. A merged PR's link names the PR, so the page opens at that target
-// with the deploy that took it highlighted; an open PR is on no target yet.
+// /deploys, and so does the header chip. Every link names the PR: a merged one
+// lands on its queue commit or the deploy that took it, an open one on its row
+// in On its way.
 
 mock.module("next/link", () => ({
   default: ({ href, children, ...props }: any) => <a href={href} {...props}>{children}</a>,
 }));
 
 const { renderToStaticMarkup } = await import("react-dom/server");
-const { PRDeployBand, PRShipsTo } = await import("./PRDeploy");
+const { PRDeployBand, PRReachChip, PRShipsTo } = await import("./PRDeploy");
 
 const NOW = 1_800_000_000_000;
 const base = { teamId: "T1", repository: "acme/app", number: 101, now: NOW, mergedAt: NOW - 3_600_000, press: { open() {}, review: null }, headline: null };
@@ -32,11 +33,23 @@ describe("the PR page's links into Deploys", () => {
     ]);
   });
 
-  test("an open PR's targets open on the Deploys page with nothing highlighted", () => {
+  test("an open PR's targets open on the Deploys page with the PR highlighted on its way", () => {
     const model: any = {
       ...base, merged: false, open: true, declares: true, rows: [], dormant: [],
       shipsTo: [{ target: { _id: "t1", name: "web", runs: "here", policy: "auto" }, idle: false }],
     };
-    expect(hrefs(renderToStaticMarkup(<PRShipsTo model={model} />))).toEqual(["/deploys?team=T1&repo=acme%2Fapp&target=web"]);
+    expect(hrefs(renderToStaticMarkup(<PRShipsTo model={model} />))).toEqual(["/deploys?team=T1&repo=acme%2Fapp&target=web&pr=101"]);
+  });
+
+  test("the header chip opens the Deploys page at the PR, on the target the headline is about", () => {
+    const Chip = ({ children }: any) => <span>{children}</span>;
+    const model: any = {
+      ...base, merged: true, open: false, shipsTo: null, declares: true, dormant: [],
+      headline: { state: "waiting", words: "Not live yet on production" },
+      rows: [{ target: "production", state: "waiting" }],
+    };
+    const html = renderToStaticMarkup(<PRReachChip model={model} Chip={Chip} />);
+    expect(hrefs(html)).toEqual(["/deploys?team=T1&repo=acme%2Fapp&target=production&pr=101"]);
+    expect(html).toContain("Not live yet on production");
   });
 });

@@ -1,17 +1,17 @@
 "use client";
 // An inbox card's word for where its session's work is on its way to
 // production (lib/ship/sessionShip): in review, your call, fixing, waiting to
-// deploy, live in dp-N, deploy failed. A deploy's state opens that deploy.
+// deploy, live in dp-N, deploy failed. A deploy's state opens that deploy, and
+// one about a landed commit opens the Deploys page at that commit.
 import Link from "next/link";
-import { entityRoute } from "@codecast/shared/entities";
-import type { SessionShip } from "../../lib/ship/sessionShip";
+import { shipHref, type SessionShip } from "../../lib/ship/sessionShip";
 import "./ship.css";
 
 export function SessionShipChip({ ship }: { ship: SessionShip | null }) {
   if (!ship) return null;
   // The words are their own flex item: an ellipsis needs a box that can shrink below its text, which the chip's anonymous text is not.
   const body = <><i aria-hidden /><span className="ssc-words">{ship.words}</span></>;
-  const href = ship.deploy ? entityRoute("deploy", ship.deploy) : null;
+  const href = shipHref(ship);
   return href
     ? <Link href={href} className="ssc" data-tone={ship.tone} title={ship.words} onClick={(e) => e.stopPropagation()} data-session-ship={ship.words}>{body}</Link>
     : <span className="ssc" data-tone={ship.tone} title={ship.words} data-session-ship={ship.words}>{body}</span>;

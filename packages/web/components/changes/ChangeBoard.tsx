@@ -93,7 +93,8 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
   const picked = pick?.group ?? null;
   // The picked group keeps its name on screen with nothing in it, so the press that clears it is still there.
   const groups = useMemo(() => groupChanges(rows, groupClock, picked).filter((g) => !hideGroups.includes(g.id)), [rows, hideGroups, groupClock, picked]);
-  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
+  // A group folds by default, but not while it holds the row a link points at; the viewer's own press then decides.
+  const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   return (
     <div className="chb-scope">
       {rows.map((r) => (r.reach_ref ? <ReachFeed key={r.reach_ref} refId={r.reach_ref} /> : null))}
@@ -104,18 +105,14 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
           <span className="chb-age">Updated</span>
         </div>
         {groups.length ? groups.map((g) => {
-          const folded = g.folded && !unfolded.has(g.id);
+          const folded = toggled.get(g.id) ?? (g.folded && !(focused && g.rows.some(focused)));
           const head = <><i aria-hidden />{groupLabel(g, mine)}<b>{g.rows.length}</b></>;
           return (
             <section key={g.id} className="chb-group" data-tone={g.tone} data-change-group={g.id} data-folded={folded ? "" : undefined}>
               {pick && PICKABLE_GROUPS.includes(g.id) ? (
                 <button type="button" className="chb-group-head chb-pick" aria-pressed={picked === g.id} onClick={() => pick.onPick(picked === g.id ? null : g.id)} data-change-pick={g.id}>{head}</button>
               ) : g.folded ? (
-                <button type="button" className="chb-group-head chb-fold" aria-expanded={!folded} onClick={() => setUnfolded((u) => {
-                  const next = new Set(u);
-                  if (next.has(g.id)) next.delete(g.id); else next.add(g.id);
-                  return next;
-                })} data-change-fold={g.id}>{head}<ChevronRight className="chb-chevron" aria-hidden /></button>
+                <button type="button" className="chb-group-head chb-fold" aria-expanded={!folded} onClick={() => setToggled((t) => new Map(t).set(g.id, !folded))} data-change-fold={g.id}>{head}<ChevronRight className="chb-chevron" aria-hidden /></button>
               ) : <div className="chb-group-head">{head}</div>}
               {folded ? null : g.rows.length ? <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} focused={!!focused?.(r)} />)}</div>
                 : g.id === picked ? <div className="chb-rows"><div className="chb-empty">{empty}</div></div> : null}

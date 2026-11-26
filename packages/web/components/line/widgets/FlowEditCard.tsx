@@ -7,6 +7,7 @@
 // lib/line/flowEditCard.ts; the phone draws the same one.
 import { memo, useContext, useMemo, useState } from "react";
 import Link from "next/link";
+import { entityRoute } from "@codecast/shared/entities";
 import type { FlowEdit } from "@codecast/shared/contracts/flowEdit";
 import { FlowDiagram } from "./FlowDiagram";
 import { InlineDiff } from "../../InlineDiff";
@@ -19,7 +20,7 @@ import { MessageIdentity } from "../../../lib/conversationBlockContexts";
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy } from "../../../lib/line/flowEditCard";
 import { pipelineHref, repoName } from "../../../lib/line/pipelineModel";
 import { journeyOf } from "../../../lib/ship/journey";
-import { runShip } from "../../../lib/ship/sessionShip";
+import { runShip, shipHref, type SessionShip } from "../../../lib/ship/sessionShip";
 import "../workspace/workspace.css";
 import "./flowEdit.css";
 
@@ -35,6 +36,16 @@ function useMadeAt(conversationId: string | null, ref: string | null): number | 
 
 /** `madeBy`: the tool call that printed the edit, when it is a `cast flow edit` card; else the message the fence is in.
  *  `dryRun`: `--dry-run` wrote nothing, so nothing ships; the card is the preview. */
+/** Where a shipped edit stands: Live opens its deploy, and a word about a landed commit opens the Deploys page at it. */
+function FlowEditState({ live, dp, ship }: { live: boolean; dp: string | null; ship: SessionShip | null }) {
+  const tone = live ? "passed" : ship?.tone === "bad" ? "failed" : ship?.tone === "you" || ship?.tone === "wait" ? "waiting" : undefined;
+  const words = live ? `Live${dp ? ` · ${dp}` : ""}` : ship?.words ?? "Shipping";
+  const href = live ? (dp ? entityRoute("deploy", dp) : null) : ship ? shipHref(ship) : null;
+  return href
+    ? <Link className="lw-flow-state no-underline hover:underline" data-tone={tone} href={href} title="Open on the Deploys page">{words}</Link>
+    : <span className="lw-flow-state" data-tone={tone}>{words}</span>;
+}
+
 export const FlowEditCard = memo(function FlowEditCard({ edit, diff = null, conversationId: convProp, madeBy = null, dryRun = false }: { edit: FlowEdit; diff?: string | null; conversationId?: string | null; madeBy?: string | null; dryRun?: boolean }) {
   const identity = useContext(MessageIdentity);
   const conversationId = convProp ?? identity?.conversationId ?? null;
@@ -60,9 +71,7 @@ export const FlowEditCard = memo(function FlowEditCard({ edit, diff = null, conv
         {edit.repository ? <Link className="fe-repo" href={pipelineHref(edit.repository)} title={`${edit.repository}: open its pipeline`}>{repoName(edit.repository)}</Link> : null}
         <span className="fe-grow" />
         {run ? (
-          <span className="lw-flow-state" data-tone={live ? "passed" : ship?.tone === "bad" ? "failed" : ship?.tone === "you" || ship?.tone === "wait" ? "waiting" : undefined}>
-            {live ? `Live${dp ? ` · ${dp}` : ""}` : ship?.words ?? "Shipping"}
-          </span>
+          <FlowEditState live={live} dp={dp} ship={ship} />
         ) : (
           <span className="lw-flow-state fe-draft">{dryRun ? "Dry run" : "Not shipped"}</span>
         )}

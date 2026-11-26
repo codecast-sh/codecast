@@ -1,6 +1,6 @@
 // The Deploys page's focus chip: the thing a link names reads as the pill a conversation draws for it (a session or
-// task by its title), never a raw conversation id, and its × still clears the highlight. The pill runs
-// for real; only the Convex transport is faked.
+// task by its title), never a raw conversation id, and its × still clears the highlight; a change on its
+// way reads as on its way. The pill runs for real; only the Convex transport is faked.
 import { afterAll, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
@@ -78,6 +78,32 @@ test("a branch keeps its plain name", () => {
   const { host, unmount } = mount({ kind: "branch", name: "jb/x" });
   expect(host.querySelector(".dpp-focus b")!.textContent).toBe("jb/x");
   expect(host.querySelector(".dpp-focus a")).toBeNull();
+  unmount();
+});
+
+// A link to something on neither the queue nor a deploy: when it is on its way (an open change, found in the left
+// column) the chip says so and reads as waiting; otherwise it is not on this target.
+function mountWhere(coming: boolean) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  act(() => root.render(<MemoryRouter><FocusChip focus={{ kind: "pr", pr: 101 } as any} repository="acme/app" waiting={false} coming={coming} deploys={[]} live={null} onClear={() => {}} /></MemoryRouter>));
+  return { host, unmount: () => act(() => root.unmount()) };
+}
+
+test("a change on its way, on no deploy yet, reads as on its way and waiting", () => {
+  const { host, unmount } = mountWhere(true);
+  const chip = host.querySelector(".dpp-focus")!;
+  expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("on its way");
+  expect(chip.getAttribute("data-state")).toBe("waiting");
+  unmount();
+});
+
+test("a change neither coming nor deployed is not on this target", () => {
+  const { host, unmount } = mountWhere(false);
+  const chip = host.querySelector(".dpp-focus")!;
+  expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("not on this target");
+  expect(chip.getAttribute("data-state")).toBe("missing");
   unmount();
 });
 

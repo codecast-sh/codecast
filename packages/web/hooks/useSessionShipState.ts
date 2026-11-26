@@ -92,14 +92,14 @@ function shipMap(s: ShipState): Map<string, SessionShip> {
 /** One session's ship state as a string, "" when nothing of its work is on its way or out: a dep for the card's subscription, so it wakes only when the words change. */
 export function sessionShipSig(s: ShipState, conversationId: string | null | undefined): string {
   const v = conversationId ? shipMap(s).get(conversationId) : undefined;
-  return v ? `${v.tone}\u0000${v.words}\u0000${v.deploy ?? ""}\u0000${v.run ?? ""}` : "";
+  return v ? `${v.tone}\u0000${v.words}\u0000${v.deploy ?? ""}\u0000${v.run ?? ""}\u0000${v.sha ?? ""}\u0000${v.team ?? ""}` : "";
 }
 
 /** The ship state a signature from sessionShipSig spells, or null for "". */
 export function sessionShipFromSig(sig: string): SessionShip | null {
   if (!sig) return null;
-  const [tone, words, deploy, run] = sig.split("\u0000");
-  return { tone: tone as SessionShip["tone"], words, deploy: deploy || null, run: run || null };
+  const [tone, words, deploy, run, sha, team] = sig.split("\u0000");
+  return { tone: tone as SessionShip["tone"], words, deploy: deploy || null, run: run || null, sha: sha || null, team: team || null };
 }
 
 /** One session's ship state, for a list row that has no card subscription to fold it into (mobile's SessionItem). */

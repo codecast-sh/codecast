@@ -3,7 +3,7 @@
 // change of a target's repository not yet live, on the lifecycle grid, beside
 // the commits already waiting on main. Its own filters narrow it: the
 // viewer's own (Mine) and one group, picked here or by the group's name.
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useRepoChanges } from "../../hooks/useRepoChanges";
 import { ChangeBoard } from "./ChangeBoard";
 import { PICKABLE_GROUPS, changeRowOf, filterChanges, groupName, groupOf, isComing, isParked, type ChangeRow, type ChangeViewer } from "../../lib/changes/rows";
@@ -14,12 +14,14 @@ const HIDE = ["live", "closed"] as const;
 
 type Filters = DeployFilters["coming"];
 
-export function OnItsWay({ repository, filters, onFilters, me, focus }: {
+export function OnItsWay({ repository, filters, onFilters, me, focus, onFocusFound }: {
   repository: string;
   filters: Filters;
   onFilters: (f: Filters) => void;
   me: ChangeViewer;
   focus: DeployFocus | null;
+  /** Whether the thing a link points at is on its way here, so the page's chip can say so. */
+  onFocusFound?: (found: boolean) => void;
 }) {
   const { ready, changes } = useRepoChanges(repository);
   // What has landed waits on main, listed beside it by session: this grid is what has yet to get there.
@@ -33,6 +35,10 @@ export function OnItsWay({ repository, filters, onFilters, me, focus }: {
     const mineRows = filterChanges(rows, { mine: filters.mine, group: null }, me, now, focused);
     return new Map(PICKABLE_GROUPS.map((id) => [id, mineRows.filter((r) => groupOf(r, now) === id).length]));
   }, [rows, filters.mine, me, now, focused]);
+  // Only a row really coming counts (a parked one is still open): a closed or live one is not on its way.
+  const found = !!focused && shown.some((r) => focused(r) && isComing(r));
+  // eslint-disable-next-line no-restricted-syntax -- reports a match up to the page's focus chip, which draws outside this grid
+  useEffect(() => onFocusFound?.(found), [found, onFocusFound]);
   // What is really on its way: not live, not closed, and not parked.
   const coming = rows.filter((r) => isComing(r) && !isParked(r, now)).length;
   if (ready && !coming) return null;

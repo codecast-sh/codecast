@@ -40,22 +40,67 @@ const logWord = (d: Pick<TeamDeployRow, "source" | "url">) => `${sourceWord(d)} 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "—");
 const ago = (now: number, at: number | null | undefined) => (at ? ageShort(now - at) : "");
 
+/** The rows a link highlights, most telling first: a commit waiting in the queue, the deploy that took it, its change on its way. */
+const FOCUS_ROWS = [".dpp-commit[data-focus]", "[data-focus] > .dpp-dp-row", ".chb-row[data-focus]"];
+
+/** What scrolls an element: its nearest ancestor that scrolls vertically (a column in two columns, else the pane). */
+function scrollerOf(el: Element): Element | null {
+  for (let p = el.parentElement; p; p = p.parentElement) if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p;
+  return null;
+}
+
 /**
- * Bring the highlighted row to the middle of whatever scrolls it (the pane, or in two columns the column that holds
- * it), and keep it there while the sections above it settle (queues and history arrive after the first paint). The
- * viewer's own scroll, or 1.5s, ends it.
+ * Land a link: bring each highlighted row to the middle of whatever scrolls it (each column scrolls on its own, so
+ * each brings its own; one scroller takes the most telling), and flash each row once as it first appears. Queues,
+ * history and what is on its way arrive on their own clocks and can grow above a row after it is found, so it keeps
+ * the rows centred as anything moves, for 6s after the first one appeared. The viewer's own scroll, press or key ends
+ * it, and so does 10s with nothing found.
  */
-function keepFocusInView(): () => void {
+function landFocus(): () => void {
   const pane = document.querySelector("[data-deploy-pane]");
-  // A deploy's row, not its item: the item holds the opened detail, which can be taller than the screen.
-  const center = () => pane?.querySelector(".dpp-commit[data-focus], [data-focus] > .dpp-dp-row")?.scrollIntoView({ block: "center" });
-  const frame = requestAnimationFrame(center);
-  const watch = pane ? new ResizeObserver(center) : null;
-  // A column keeps its own height while its sections grow, so watch the sections themselves.
-  if (pane) for (const s of pane.querySelectorAll("[data-deploy-col] > *")) watch!.observe(s);
-  const stop = () => { cancelAnimationFrame(frame); watch?.disconnect(); for (const e of ["wheel", "touchstart", "keydown"]) window.removeEventListener(e, stop); clearTimeout(timer); };
-  const timer = setTimeout(stop, 1500);
-  for (const e of ["wheel", "touchstart", "keydown"]) window.addEventListener(e, stop, { passive: true });
+  if (!pane) return () => {};
+  const flashed = new WeakSet<Element>();
+  let frame = 0;
+  let moved = true;
+  let cap: ReturnType<typeof setTimeout> | undefined;
+  const sized = new ResizeObserver(() => { moved = true; later(); });
+  const center = () => {
+    frame = 0;
+    // Sections mount late (each reads its own query): watch each as it appears, so its growth re-centres the rows.
+    for (const s of pane.querySelectorAll("[data-deploy-col], [data-deploy-col] > *")) sized.observe(s);
+    const rows = FOCUS_ROWS.flatMap((sel) => [...pane.querySelectorAll(sel)]);
+    const fresh = rows.filter((r) => !flashed.has(r));
+    if (!rows.length || (!moved && !fresh.length)) return;
+    moved = false;
+    const centred = new Set<Element | null>();
+    for (const r of rows) {
+      const scroller = scrollerOf(r);
+      if (centred.has(scroller)) continue;
+      centred.add(scroller);
+      r.scrollIntoView({ block: "center" });
+    }
+    for (const r of fresh) {
+      flashed.add(r);
+      r.setAttribute("data-flash", "");
+      const done = (e: Event) => { if (e.target !== r) return; r.removeAttribute("data-flash"); r.removeEventListener("animationend", done); };
+      r.addEventListener("animationend", done);
+    }
+    if (!cap) { clearTimeout(give); cap = setTimeout(stop, 6000); }
+  };
+  function later() { if (!frame) frame = requestAnimationFrame(center); }
+  const grows = new MutationObserver(later);
+  grows.observe(pane, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-focus", "data-folded"] });
+  const give = setTimeout(stop, 10_000);
+  function stop() {
+    cancelAnimationFrame(frame);
+    grows.disconnect();
+    sized.disconnect();
+    clearTimeout(cap);
+    clearTimeout(give);
+    for (const e of ["wheel", "touchstart", "pointerdown", "keydown"]) window.removeEventListener(e, stop);
+  }
+  for (const e of ["wheel", "touchstart", "pointerdown", "keydown"]) window.addEventListener(e, stop, { passive: true });
+  later();
   return stop;
 }
 
@@ -223,17 +268,22 @@ function TargetPane({ target: t, production, deploys, now, onPress, onPause, onR
   const held = reachDeployOn(reach, t.name);
   const focusDeploys = !focus ? [] : held ? n.history.filter((d) => d.short_id === held.short_id) : n.history.filter((d) => deployMatches(d, focus));
   const focusOpen = focusWaiting ? null : focusDeploys[0]?.short_id ?? null;
+  // An open change is on neither the queue nor a deploy, only on its way (the left column says so).
+  const [focusComing, setFocusComing] = useState(false);
   const [open, setOpen] = useState<string | null>(openDeploy ?? focusOpen);
-  // Reach lands after the first paint: once the linked thing is found here, open the deploy it names and bring it on
-  // screen, once. Later moves (the commit going out while the page is open) never move the page on their own.
-  const landed = useRef(false);
-  // eslint-disable-next-line no-restricted-syntax -- scrolls the linked row into view once its data arrives
+  // Reach lands after the first paint: once the deploy that took the linked thing is known here, open it, once.
+  // Later moves (the commit going out while the page is open) never move the page on their own.
+  const opened = useRef(false);
+  // eslint-disable-next-line no-restricted-syntax -- opens the linked deploy once its data arrives
   useEffect(() => {
-    if (!focus || landed.current || (!focusWaiting && !focusOpen)) return;
-    landed.current = true;
-    if (focusOpen && !openDeploy) setOpen(focusOpen);
-    keepFocusInView();
-  }, [focus, focusOpen, focusWaiting, openDeploy]);
+    if (opened.current || !focusOpen || openDeploy) return;
+    opened.current = true;
+    setOpen(focusOpen);
+  }, [focusOpen, openDeploy]);
+  // A link brings what it names on screen and flashes it, wherever it is on either side; the rows find themselves.
+  const focusKey = focus ? `${focus.kind}:${focusWord(focus)}` : null;
+  // eslint-disable-next-line no-restricted-syntax -- scrolls the linked rows into view as their data arrives
+  useEffect(() => (focusKey ? landFocus() : undefined), [focusKey]);
   // Mine keeps the commit a link points at, so the highlight is never filtered away.
   const mine = filters.waiting.mine;
   const groups = mine ? mineOnly(t.queue.groups, me, (c) => commitMatches(c, focus)) : t.queue.groups;
@@ -289,11 +339,11 @@ function TargetPane({ target: t, production, deploys, now, onPress, onPause, onR
 
       {pause ? <Paused p={pause} canLift={!!production?.can_lift} now={now} onLift={onLift} /> : null}
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
-      {focus ? <FocusChip focus={focus} repository={t.repository} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
+      {focus ? <FocusChip focus={focus} repository={t.repository} waiting={focusWaiting} coming={focusComing} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
 
       {/* Before main on the left, main and after on the right: two columns once the page is wide (deploys.css), each its own scroll. */}
       <div className="dpp-body">
-      {t.record_only ? null : <div className="dpp-col" data-deploy-col="before"><OnItsWay repository={t.repository} filters={filters.coming} onFilters={(coming) => onFilters({ ...filters, coming })} me={me} focus={focus} /></div>}
+      {t.record_only ? null : <div className="dpp-col" data-deploy-col="before"><OnItsWay repository={t.repository} filters={filters.coming} onFilters={(coming) => onFilters({ ...filters, coming })} me={me} focus={focus} onFocusFound={setFocusComing} /></div>}
 
       <div className="dpp-col" data-deploy-col="after">
       {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
@@ -583,14 +633,15 @@ function LabelSwitch({ labels, onToggle }: { labels: DeployLabel[]; onToggle: (l
 }
 
 /** The thing the link pointed at, and where it is on this target: waiting, live in a deploy, on its way out, or not here. */
-export function FocusChip({ focus, repository, waiting, deploys, live, onClear }: { focus: DeployFocus; repository: string; waiting: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
+export function FocusChip({ focus, repository, waiting, coming = false, deploys, live, onClear }: { focus: DeployFocus; repository: string; waiting: boolean; coming?: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
   const d = deploys[0];
-  const where = !d && !waiting ? "not on this target"
-    : waiting ? "waiting"
+  const where = waiting ? "waiting"
+    : !d && coming ? "on its way"
+    : !d ? "not on this target"
     : focus.kind === "deploy" ? (d._id === live?._id ? "live now" : d.status)
     : d._id === live?._id ? `live in ${d.short_id}` : d.status === "live" ? `went out in ${d.short_id}` : `${d.status} in ${d.short_id}`;
   return (
-    <div className="dpp-focus" data-state={waiting ? "waiting" : d ? "deployed" : "missing"} data-deploy-focus={focusWord(focus)}>
+    <div className="dpp-focus" data-state={waiting || (!d && coming) ? "waiting" : d ? "deployed" : "missing"} data-deploy-focus={focusWord(focus)}>
       {/* The thing reads as its pill does anywhere: a session, task, PR, commit or deploy by its title; a branch by its name. */}
       <span className="dpp-focus-ref"><FocusRef focus={focus} repository={repository} /></span>
       <span>{where}</span>
