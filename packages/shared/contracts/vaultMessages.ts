@@ -1,4 +1,5 @@
 import type { SecretKind } from "./secrets";
+import { SECRET_REDACTION_MIN } from "./secretRules";
 import { escapeTagAttr, stripInjectionNoise, unescapeTagAttr } from "./machineMessages";
 
 // A person filled a secret an agent asked for (`cast vault request`): the
@@ -22,8 +23,10 @@ export function formatVaultReady(s: { short_id: string; name: string; kind: Secr
 }
 
 /** A person declined a secret an agent asked for: plain words to the asking session, which goes on without it. */
-export function formatVaultDeclined(name: string): string {
-  return `Vault: your request for ${name} was declined, so no value is coming. Go on without it, or ask in this conversation why.`;
+/** A key request also hears the minimum, the usual reason a key is declined: a value under it is one the Vault refuses. */
+export function formatVaultDeclined(name: string, kind?: SecretKind): string {
+  const short = kind === "key" ? ` If the value is under ${SECRET_REDACTION_MIN} characters (a card security code, a PIN), it is too short for the Vault: have the person enter it at the step that needs it.` : "";
+  return `Vault: your request for ${name} was declined, so no value is coming.${short} Go on without it, or ask in this conversation why.`;
 }
 
 export function parseVaultReady(rawContent: string | null | undefined): VaultReadyMessage | null {

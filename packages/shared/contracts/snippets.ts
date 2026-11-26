@@ -24,6 +24,7 @@
 
 import { CHECK_REFERENCE, CHECK_SNIPPET, CHECK_SNIPPET_END, WORKFLOW_REFERENCE, WORKFLOW_SNIPPET, WORKFLOW_SNIPPET_END } from "./snippetsWorkflow";
 import { manifestHash } from "./capabilities";
+import { SECRET_REDACTION_MIN } from "./secretRules";
 import { ASSIGNEE_MEANS } from "./orgAssignee";
 import { agentSetupPageUrl } from "./agentToolSetup";
 import { BROWSER_EXTENSION_STORE_URL } from "./browserExtension";
@@ -779,7 +780,7 @@ ${VAULT_SNIPPET_END}
 
 /** What `cast guide vault` prints after the body: the detail an install leaves out of CLAUDE.md. */
 export const VAULT_REFERENCE = `
-Take credentials from the team's Vault; never ask a person to paste one. Hand a value to the command, never your context: \`cast vault run [names] -- <cmd>\`, \`vault://<name>\` in an \`--env-file\`, or stdin via \`< <(cast vault get <name>)\`. Never put one in an argument (\`$(…)\` included: \`ps\` shows arguments to every local user), print it, or write it to a tracked file. Missing one: \`cast vault request <name> --why "…"\`; a read that exits 3 names the decision it waits on. Either way, end the turn dormant naming it.
+Take credentials from the team's Vault; never ask a person to paste one. Hand a value to the command, never your context: \`cast vault run [names] -- <cmd>\`, \`vault://<name>\` in an \`--env-file\`, or stdin via \`< <(cast vault get <name>)\`. Never put one in an argument (\`$(…)\` included: \`ps\` shows arguments to every local user), print it, or write it to a tracked file. Missing one: \`cast vault request <name> --why "…"\`. A Vault value needs at least ${SECRET_REDACTION_MIN} characters, and a shorter one is refused when the person fills it, so never request one (a card security code, a PIN): have the person enter it at the step that needs it. A read that exits 3 names the decision it waits on. Either way, end the turn dormant naming it.
 
 \`\`\`bash
 cast vault ls                                    # what you can use, open requests first

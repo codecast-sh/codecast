@@ -168,6 +168,8 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
   const [error, setError] = useState<string | null>(null);
   const checked = checkedPayload(row.kind, draft);
   const ready = "payload" in checked;
+  // A typed key under the minimum can never save: say so, and Decline beside the field is the way out.
+  const short = row.kind === "key" && draft.value.trim() !== "" && "error" in checked ? checked.error : null;
   // Replacing a login lays its lines out in the panel's label column, each blank one keeping its current value.
   const loginReplace = mode === "rotate" && row.kind === "login";
   const save = async () => {
@@ -229,7 +231,7 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
           {actions}
         </div>
       )}
-      {error ? <div className="text-meta text-sol-red">{error}</div> : null}
+      {error || short ? <div className="text-meta text-sol-red" data-vault-value-problem>{error ?? short}</div> : null}
     </form>
     {reviewing && review && <SwitchReview ledger={review} onClose={() => setReviewing(false)} onConfirm={() => void save()} />}
     </>
