@@ -85,6 +85,7 @@ export async function runCall(req: SurfaceRequest, dir: string, opts: { dry: boo
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'prompt.md'), req.prompt);
   if (req.system) writeFileSync(join(dir, 'system.md'), req.system);
+  if (req.output_schema) writeFileSync(join(dir, 'schema.json'), JSON.stringify(req.output_schema));
   writeFileSync(join(dir, 'request.json'), JSON.stringify(req, null, 1));
   const started = Date.now();
   if (opts.dry) {
@@ -92,12 +93,13 @@ export async function runCall(req: SurfaceRequest, dir: string, opts: { dry: boo
     return { request: req, text: req.prompt, outputTokens, stopReason: 'end_turn', modelUsage: { [req.model]: { outputTokens } }, costUsd: 0, isError: false, exitCode: 0, dir, realMs: 0 };
   }
   const run = join(dir, 'run');
-  // With the evals' API key the call goes out as prod posts it; without one, through the harness's Claude Code.
+  // With the evals' API key the call goes out as prod posts it; without one, through the harness's Claude Code, which
+  // takes prod's output_schema as its --json-schema.
   const key = evalsApiKey();
   const exitCode = key
     ? await postCall(req, run, key)
     : await harness(
-        ['--run', run, '--prompt', join(dir, 'prompt.md'), '--call', ...(req.system ? ['--system', join(dir, 'system.md')] : []), '--model', req.model, '--max-output-tokens', String(req.max_tokens)],
+        ['--run', run, '--prompt', join(dir, 'prompt.md'), '--call', ...(req.system ? ['--system', join(dir, 'system.md')] : []), ...(req.output_schema ? ['--json-schema', join(dir, 'schema.json')] : []), '--model', req.model, '--max-output-tokens', String(req.max_tokens)],
         dir,
       );
   return readCallRun(req, run, exitCode, Date.now() - started);

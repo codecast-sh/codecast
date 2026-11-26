@@ -24,6 +24,12 @@ describe("the child environment", () => {
     const args = callArgs({ model: "claude-sonnet-5-5", systemFile: "/r/system.txt", effort: "high" });
     expect(args.join(" ")).toContain("-p --tools  --system-prompt-file /r/system.txt --strict-mcp-config --disable-slash-commands --max-turns 1 --model claude-sonnet-5-5 --effort high");
   });
+
+  test("a call with a schema asks for structured output of it, as the prod call's output_schema does", () => {
+    const schema = '{"type":"object","properties":{"mechanism":{"type":"boolean"}}}';
+    expect(callArgs({ model: "claude-sonnet-5-5", jsonSchema: schema }).join(" ")).toContain(`--json-schema ${schema} --output-format stream-json`);
+    expect(callArgs({ model: "claude-sonnet-5-5" })).not.toContain("--json-schema");
+  });
 });
 
 describe("reading the stream", () => {
