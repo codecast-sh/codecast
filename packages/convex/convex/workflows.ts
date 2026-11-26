@@ -321,6 +321,18 @@ export const workspaceFactsForCli = internalQuery({
   },
 });
 
+/** Whether any of the caller's own teams knows a repository (teamKnowsRepository): the web's Ship picker asks it so its
+ *  preview of the personal Ship matches what `cast flow run change` decides (web lib/line/flowPool.ts previewsPersonal).
+ *  One boolean about the caller's own memberships; signed out reads as known, which previews the team's flow. */
+export const repositoryKnownToTeams = query({
+  args: { repository: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return true;
+    return await teamKnowsRepository(ctx, userId, normalizeRepository(args.repository));
+  },
+});
+
 async function teamKnowsRepository(ctx: { db: any }, userId: Id<"users">, repository: string): Promise<boolean> {
   const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
   for (const m of memberships) {

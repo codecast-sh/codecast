@@ -26,7 +26,7 @@ import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
 import { registerFlowRunsCommand } from "./flowRunsCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
 import { findFlow, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
-import { flowRunSubjects, personalShipOf, personalTaskRefusal, workflowRunArgs } from "./flowPersonal.js";
+import { flowRunSubjects, personalHandoff, personalShipOf, personalTaskRefusal, workflowRunArgs } from "./flowPersonal.js";
 import { boundOpenTask, callingSubject, sessionTitleOf, spawnerArgs, taskChange } from "./flowRunSubject.js";
 import { acquireFailureLine, castResult } from "./flowAcquire.js";
 
@@ -519,7 +519,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         writeFrozenChange(runDir, change);
       }
 
-      const runArgs = workflowRunArgs(found, task!, shipsPersonal);
+      const runArgs = workflowRunArgs(found, task!, shipsPersonal ? personalHandoff(top, task!) : null);
       if (!opts.foreground) runArgs.push("--detach", "--json");
       runArgs.push(...spawnerArgs(asker, opts.session));
       if (placed) runArgs.push("--device", placed.device_id, ...(changeFile ? ["--change", changeFile] : []));

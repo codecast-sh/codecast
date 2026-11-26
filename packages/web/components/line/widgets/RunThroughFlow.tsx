@@ -26,6 +26,8 @@ import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
 import { editedSince, fixRounds } from "../../../lib/ship/newEdits";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
 import { BELOW_SM, useMediaQuery } from "../../../hooks/useIsPhone";
@@ -262,7 +264,10 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
   const repository = repositoryOfRemote(remote);
   const repoFlows = useRepoFlows(root, repository);
   // A session no team shares ships through the personal Ship, as `cast flow run change` does in its directory.
-  const personal = previewsPersonal(workspace, repository);
+  // Whether a team of the person's knows the repository: then `cast flow run change` runs the team's flow, and so does
+  // the preview, also while the answer loads or if it fails.
+  const known = useQueryNoThrow(api.workflows.repositoryKnownToTeams, repository && workspace?.startsWith("user:") ? { repository } : "skip").data;
+  const personal = previewsPersonal(workspace, repository, known);
   const { pool, fallback } = useMemo(() => shipPicks(appPool(workflows, repoFlows), repository, teamSlug, personal), [workflows, repoFlows, repository, teamSlug, personal]);
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];

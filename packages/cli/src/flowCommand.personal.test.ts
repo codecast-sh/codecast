@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
 import { registerFlowCommands, type FlowDeps } from "./flowCommand";
-import { workflowRunArgs } from "./flowPersonal";
+import { personalHandoff, takePersonalHandoff, workflowRunArgs } from "./flowPersonal";
 import { checkoutLocation, directoryWorkspace, runSubjects, shippedPersonalRefusal, type DirectoryIO, type DirectoryRule } from "./directoryTeam";
 import { matchDirectoryMapping } from "@codecast/shared/team/directoryRules";
 import { changeFlowOf } from "./pipeline";
@@ -446,31 +446,60 @@ describe("a team's pool keeps what it had before the personal Ship", () => {
   });
 
   test("the run `cast flow run` starts for the shipped personal Ship is never refused in its own world", () => {
-    expect(workflowRunArgs({ slug: "personal", file: null }, "ct-9", true)).toEqual(["workflow", "run", "personal", "--task", "ct-9", "--personal-established"]);
-    expect(workflowRunArgs({ slug: "mine", file: "/r/.codecast/flows/mine.cast" }, "ct-9", true)).toEqual(["workflow", "run", "/r/.codecast/flows/mine.cast", "--task", "ct-9", "--personal-established"]);
-    expect(workflowRunArgs({ slug: "change", file: null }, "ct-9", false)).toEqual(["workflow", "run", "change", "--task", "ct-9"]);
+    expect(workflowRunArgs({ slug: "personal", file: null }, "ct-9", "t0k3n")).toEqual(["workflow", "run", "personal", "--task", "ct-9", "--personal-established", "t0k3n"]);
+    expect(workflowRunArgs({ slug: "mine", file: "/r/.codecast/flows/mine.cast" }, "ct-9", "t0k3n")).toEqual(["workflow", "run", "/r/.codecast/flows/mine.cast", "--task", "ct-9", "--personal-established", "t0k3n"]);
+    expect(workflowRunArgs({ slug: "change", file: null }, "ct-9", null)).toEqual(["workflow", "run", "change", "--task", "ct-9"]);
     // The real CLI, as that run starts it: an agent's env with no session id, a server it cannot reach, so nothing
-    // could be told there. The marked run goes ahead; the same command typed without it is refused.
+    // could be told there. The run handed its token goes ahead; the same command typed without one is refused. (No
+    // task here: a dry run with one asks the unreachable server for it first.)
     const home = mkdtemp();
-    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
-    fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ auth_token: "x", convex_url: "http://127.0.0.1:9", web_url: "http://127.0.0.1:9", user_id: "u" }));
-    const env = { PATH: process.env.PATH!, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli" };
+    const dirOf = path.join(home, ".codecast");
+    fs.mkdirSync(dirOf, { recursive: true });
+    fs.writeFileSync(path.join(dirOf, "config.json"), JSON.stringify({ auth_token: "x", convex_url: "http://127.0.0.1:9", web_url: "http://127.0.0.1:9", user_id: "u" }));
+    const env = { PATH: process.env.PATH!, HOME: home, CODECAST_DIR: dirOf, CLAUDECODE: "1", CLAUDE_CODE_ENTRYPOINT: "cli" };
     const cli = path.join(import.meta.dir, "index.ts");
-    const cast = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { cwd: repo(), env, encoding: "utf-8", timeout: 60_000 });
-    const started = cast("workflow", "run", "personal", "--personal-established", "--dry-run");
+    const root = repo();
+    const cast = (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { cwd: root, env, encoding: "utf-8", timeout: 60_000 });
+    const handoff = () => { const saved = process.env.CODECAST_DIR; process.env.CODECAST_DIR = dirOf; try { return personalHandoff(root, undefined); } finally { process.env.CODECAST_DIR = saved; } };
+    const started = cast("workflow", "run", "personal", "--personal-established", handoff(), "--dry-run");
     expect(started.stderr).not.toContain("not established as personal");
     // Past the check, the graph starts (a dry run stops where a station would have answered).
     expect(started.stdout).toContain("Workflow: personal");
     expect(started.stdout).toContain("Find check");
     const typed = cast("workflow", "run", "personal", "--dry-run");
     expect([typed.status, typed.stderr]).toEqual([1, expect.stringContaining("not established as personal")]);
+    // The flag typed by hand names no hand-off, and a used token is gone: both decide for themselves, and are refused.
+    const forged = cast("workflow", "run", "personal", "--personal-established", "0".repeat(32), "--dry-run");
+    expect([forged.status, forged.stderr]).toEqual([1, expect.stringContaining("not established as personal")]);
+    const token = handoff();
+    cast("workflow", "run", "personal", "--personal-established", token, "--dry-run");
+    const replayed = cast("workflow", "run", "personal", "--personal-established", token, "--dry-run");
+    expect([replayed.status, replayed.stderr]).toEqual([1, expect.stringContaining("not established as personal")]);
     // A flow built on the personal Ship, typed by hand, is refused the same way; with the hand-off it starts.
     const dir = mkdtemp();
     fs.writeFileSync(path.join(dir, "mine.cast"), `digraph mine {\n  graph [kind="line", extends="personal"]\n}\n`);
-    const built = spawnSync(process.execPath, [cli, "workflow", "run", path.join(dir, "mine.cast"), "--dry-run"], { cwd: repo(), env, encoding: "utf-8", timeout: 60_000 });
+    const built = cast("workflow", "run", path.join(dir, "mine.cast"), "--dry-run");
     expect([built.status, built.stderr]).toEqual([1, expect.stringContaining("not established as personal")]);
-    const handed = spawnSync(process.execPath, [cli, "workflow", "run", path.join(dir, "mine.cast"), "--personal-established", "--dry-run"], { cwd: repo(), env, encoding: "utf-8", timeout: 60_000 });
+    const handed = cast("workflow", "run", path.join(dir, "mine.cast"), "--personal-established", handoff(), "--dry-run");
     expect(handed.stdout).toContain("Find check");
+  });
+
+  test("a hand-off is good once, for its own checkout and task, and only while fresh", () => {
+    const saved = process.env.CODECAST_DIR;
+    process.env.CODECAST_DIR = mkdtemp();
+    try {
+      const root = mkdtemp();
+      expect(takePersonalHandoff(personalHandoff(root, "ct-9"), root, "ct-9")).toBe(true);
+      const once = personalHandoff(root, "ct-9");
+      expect([takePersonalHandoff(once, root, "ct-9"), takePersonalHandoff(once, root, "ct-9")]).toEqual([true, false]);
+      expect(takePersonalHandoff(personalHandoff(root, "ct-9"), mkdtemp(), "ct-9")).toBe(false);
+      expect(takePersonalHandoff(personalHandoff(root, "ct-9"), root, "ct-10")).toBe(false);
+      const stale = personalHandoff(root, "ct-9");
+      const file = path.join(process.env.CODECAST_DIR!, "personal-handoff", `${stale}.json`);
+      fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf-8")), at: Date.now() - 10 * 60_000 }));
+      expect(takePersonalHandoff(stale, root, "ct-9")).toBe(false);
+      expect(takePersonalHandoff("not-a-token", root, "ct-9")).toBe(false);
+    } finally { process.env.CODECAST_DIR = saved; }
   });
 
   test("a run's subjects: a named team task, an unreadable one, and every open team task a pulse binds rule personal out", async () => {

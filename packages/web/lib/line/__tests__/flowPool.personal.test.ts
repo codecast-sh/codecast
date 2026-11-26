@@ -30,10 +30,14 @@ const repoChange: RepoFlow = {
 
 describe("the Ship picker's default", () => {
   const store = { currentUser: { _id: "u1" }, conversations: { cTeam: { team_id: "t1" }, cMine: {} } };
-  const personalOf = (conversation: string) => previewsPersonal(sessionWorkspaceOf(store, conversation), "o/repo");
+  const personalOf = (conversation: string) => previewsPersonal(sessionWorkspaceOf(store, conversation), "o/repo", false);
 
   test("only a session no team shares, in a checkout with an origin, previews the personal Ship: the CLI lands nothing personal without one", () => {
-    expect([previewsPersonal(sessionWorkspaceOf(store, "cMine"), "o/repo"), previewsPersonal(sessionWorkspaceOf(store, "cMine"), null), previewsPersonal(sessionWorkspaceOf(store, "cTeam"), "o/repo")]).toEqual([true, false, false]);
+    expect([previewsPersonal(sessionWorkspaceOf(store, "cMine"), "o/repo", false), previewsPersonal(sessionWorkspaceOf(store, "cMine"), null, false), previewsPersonal(sessionWorkspaceOf(store, "cTeam"), "o/repo", false)]).toEqual([true, false, false]);
+  });
+
+  test("a repository one of the person's teams knows previews the team's flow, as the CLI runs it; so does the answer still loading", () => {
+    expect([previewsPersonal(sessionWorkspaceOf(store, "cMine"), "o/repo", true), previewsPersonal(sessionWorkspaceOf(store, "cMine"), "o/repo", undefined)]).toEqual([false, false]);
   });
 
   test("a session no team shares defaults to personal, labelled Ship, with no second Ship beside it", () => {

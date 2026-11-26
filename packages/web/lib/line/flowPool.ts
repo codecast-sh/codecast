@@ -163,9 +163,10 @@ export const linesFirst = (pool: ReadonlyArray<AppFlow>): AppFlow[] => [...pool.
  *  terms (a personal session ships through `personal` where the repository has no `change` of its own, as `cast flow
  *  run` there does), only the whole flows that take a session's change, the default by defaultFlowOf. */
 /** Whether a session's Ship previews the personal Ship, as far as the web can tell what `cast flow run change` decides
- *  (cli directoryTeam.ts): no team shares the session, and its checkout has an origin to land on. The CLI also asks the
- *  server whether a team already knows that repository, which the web cannot read; there it runs `change`. */
-export const previewsPersonal = (workspace: string | null | undefined, repository: string | null): boolean => !!workspace?.startsWith("user:") && !!repository;
+ *  (cli directoryTeam.ts): no team shares the session, its checkout has an origin to land on, and no team of the
+ *  person's knows that repository (convex workflows.repositoryKnownToTeams; `known` is undefined while it loads, which
+ *  previews the team's flow until the answer says otherwise). */
+export const previewsPersonal = (workspace: string | null | undefined, repository: string | null, known: boolean | undefined): boolean => !!workspace?.startsWith("user:") && !!repository && known === false;
 
 export function shipPicks(pool: ReadonlyArray<AppFlow>, repository: string | null, workspaceSlug: string | null, personal: boolean): { pool: AppFlow[]; fallback: AppFlow | null } {
   // Flows only: a segment runs one part of a change, never the change to live.

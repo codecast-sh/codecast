@@ -22437,7 +22437,7 @@ workflow
   .addOption(new Option("--change <file>", "With --device: the frozen change (JSON) that machine fetches and freezes before the run starts (cast flow run writes it)").hideHelp())
   .option("--no-subject", "No session is behind the run: its hands spawn under none, and its gates ask the project lead's session, else the run's own log")
   .addOption(new Option("--spawner <session>", "The session behind the run, named by the cast flow run that started it").hideHelp())
-  .addOption(new Option("--personal-established", "cast flow run established this checkout as personal before starting the personal Ship").hideHelp())
+  .addOption(new Option("--personal-established <token>", "cast flow run established this checkout as personal before starting the personal Ship (its one-time hand-off)").hideHelp())
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -22479,7 +22479,9 @@ workflow
       process.exit(1);
     }
     // Asked only of a run typed by hand: one `cast flow run` started has decided this already, where it was decided.
-    const personalRefused = options.personalEstablished ? null : await (await import("./flowPersonal.js")).workflowRunRefusal(resolved, {
+    const personalMod = await import("./flowPersonal.js");
+    const handedOff = typeof options.personalEstablished === "string" && personalMod.takePersonalHandoff(options.personalEstablished, process.cwd(), taskRef ?? undefined);
+    const personalRefused = handedOff ? null : await personalMod.workflowRunRefusal(resolved, {
       post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()], where: groupDeps().flow.directoryWorkspace });
     if (personalRefused) { console.error(`✗ ${personalRefused}`); process.exit(1); }
     const source = resolved.source;
