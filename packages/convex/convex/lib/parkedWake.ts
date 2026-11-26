@@ -2,10 +2,10 @@
 // server can see, so the inbox classifier counts it as verified with no read
 // (shared/contracts/inboxProjection.ts). "blocker": its active task is held by
 // an open task in its blocked_by, exact because every task write recomputes
-// it. "run": a live routine run the session spawned for its own work on its
-// own machine. "wait": only waits stand, a waiting wait on its active task (a
-// failed wait never clears, so it wakes nothing) or a wait it set on another
-// task (parked_on_task_ids) that still owes it a wake; a wait rests on a
+// it. "run": a live routine run the session spawned, on its own machine.
+// "wait": only waits stand, a waiting wait on its active task (a failed wait
+// never clears, so it wakes nothing) or a wait it set on another task
+// (parked_on_task_ids) that still owes it a wake; a wait rests on a
 // webhook or a job that can be lost, so the classifier trusts it for 72h.
 // Blocker beats run beats wait.
 // Kept true by makeParkedWakeDb, which every wrapped mutation's db passes
@@ -29,8 +29,11 @@ type Conv = Pick<Doc<"conversations">, "_id" | "active_task_id" | "review_of_tas
 /** How many tasks a session's waits elsewhere are remembered on, newest last. */
 export const PARKED_ON_CAP = 10;
 
-/** A live run parks its spawner when it is a routine run on the spawner's own
- *  work (no task, or the task it holds), and not waiting on the spawner. A
+/** A live run parks its spawner when it is any routine run the spawner started,
+ *  whatever task it ships (a lead shipping a builder's task holds none, or
+ *  another), and not waiting on the spawner. That is safe because the run's end
+ *  is itself the wake: a status change restamps its spawner (runChanged below),
+ *  so the session comes back whether or not the end message reached it. A
  *  paused run waits at a gate on a person, so it parks only while that gate's
  *  card is out (gate_decision_id): with none, nobody sees it. A run counts only
  *  on the spawner's own machine (runner_device unset, or the session's
@@ -42,7 +45,6 @@ export function runParksSpawner(run: Doc<"workflow_runs">, conv: Conv): boolean 
   if (run.run_kind === "workflow") return false;
   if (run.runner_device && run.runner_device !== conv.owner_device_id) return false;
   if (run.status === "paused" && !run.gate_decision_id) return false;
-  if (run.task_id && String(run.task_id) !== String(conv.active_task_id ?? "")) return false;
   return run.waiting_on_session?.conversation_id !== String(conv._id);
 }
 
@@ -150,7 +152,7 @@ export async function stampParkedWake(ctx: { db: any }, writeDb: any, conv: Conv
 // Bound on the sessions holding one task (one, normally) that a write recomputes.
 const BOUND_CAP = 20;
 
-const RUN_FIELDS = ["status", "spawner_conversation_id", "task_id", "waiting_on_session", "run_kind", "gate_decision_id", "runner_device"] as const;
+const RUN_FIELDS = ["status", "spawner_conversation_id", "waiting_on_session", "run_kind", "gate_decision_id", "runner_device"] as const;
 const TASK_FIELDS = ["status", "blocked_by", "waits"] as const;
 const CONV_FIELDS = ["active_task_id", "review_of_task_id", "parked_on_task_ids", "owner_device_id"] as const;
 // What makes a session stop holding its task (holdsTask): leaving it, being
