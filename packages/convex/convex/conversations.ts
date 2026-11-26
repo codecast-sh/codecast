@@ -168,7 +168,7 @@ import {
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
 import { inheritLink, sessionEvidence } from "./lib/priorityLinks";
-import { sessionActivity } from "./lib/priorityPassSchedule";
+import { pinsAskForPass, sessionActivity } from "./lib/priorityPassSchedule";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
 export { generateShareToken, isNonEmptyMessage };
 
@@ -12484,11 +12484,14 @@ export async function performSetThreadState(
     thread_state_result_at: result ? at : undefined,
   });
   // The pin keeps only the latest; this keeps the trail the priorities pass reads,
-  // one row per change (an agent re-pinning the same words adds nothing, unless
-  // it names what the session serves), and each change asks for the owner's pass.
-  if (text !== conv.thread_state || status !== conv.thread_state_status || serves) {
+  // one row per change of words, status or what it says it serves (an agent
+  // re-pinning the same ones adds nothing), and each change asks for the
+  // owner's pass unless a role or a machine wrote it (lib/priorityPassSchedule).
+  const changed = text !== conv.thread_state || status !== conv.thread_state_status;
+  const newServes = !changed && !!serves && (serves !== (await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).order("desc").first())?.serves);
+  if (changed || newServes) {
     await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status, ...(serves ? { serves } : {}) });
-    await sessionActivity(ctx, conv);
+    if (pinsAskForPass(conv)) await sessionActivity(ctx, conv);
   }
   // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
   if (status === "done") await sessionEvidence(ctx, conv, at);

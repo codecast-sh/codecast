@@ -7,22 +7,29 @@
 //
 // The pass runs PASS_DEBOUNCE_MS after the last ask of a burst, and no later
 // than PASS_MAX_WAIT_MS after its first, so steady activity cannot hold it off
-// for good. Automatic passes of one pair start at least PASS_MIN_GAP_MS apart.
-// The gap is sized by the daily ceiling (priorityPassRun
-// PRIORITY_PASS_DAILY_USD, $1.50 a pair): an incremental pass is estimated at
-// $0.05 to $0.12 (calibration: $0.17 to $0.50 for a 14-day catch-up of 52 to
-// 88 sessions, one replay $0.20), so hourly passes over a 12-hour day spend
-// $0.60 to $1.45 and stay under it, where half-hourly ones would reach it by
-// mid-afternoon and stop the evening's passes altogether.
+// for good. Automatic passes of one pair start at least PASS_MIN_GAP_MS apart,
+// and further apart as they cost more (priorityPassSchedule.ts
+// passAllowedAt): the daily ceiling (priorityPassRun PRIORITY_PASS_DAILY_USD,
+// $1.50 a pair) is spread over the day rather than spent by noon. Measured on
+// prod (Nov 25-26, 26 incremental runs): $0.01 to $0.24 a run, median $0.07,
+// mean $0.10; the heaviest pair's runs cost about $0.20 each and a 3-hour
+// sweep's chain of six cost $1.25, which reached the ceiling in a day. Pins
+// from a role's standing session, a trigger's run or a workflow ask for
+// nothing (pinsAskForPass): they come round the clock.
 //
-// Leaf: the hot paths call passActivity / sessionActivity, which read one
-// index row (and, for a session, its workspace) and schedule the write only
-// when the pair's pending pass would move.
+// Leaf: the hot paths call passActivity / sessionActivity, which read the
+// pair's row (and, for a session, its workspace; with no row, whether the
+// feature is on) and schedule the write only when the pair's pending pass
+// would move.
 
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { isRunLog } from "@codecast/shared/contracts";
 import { sessionVisibility } from "./prioritySessionVisibility";
+import { isStandingSession } from "./orgOwnership";
+import { parseWorkspaceKey } from "./accessKeys";
+import { workspaceHasFeature } from "./teamFeatureGuard";
+import { isTeamMember } from "../privacy";
 
 const MINUTE = 60_000;
 export const PASS_DEBOUNCE_MS = 10 * MINUTE;
@@ -73,7 +80,10 @@ export async function passActivity(ctx: { db: any; scheduler?: any }, userId: Id
   const key = `${userId}|${workspace}`;
   if (asked.has(key)) return;
   askedIn.set(ctx.db, asked.add(key));
-  if (!nextPassDue(await scheduleRow(ctx, userId, workspace), Date.now(), PASS_DEBOUNCE_MS)) return;
+  const row = await scheduleRow(ctx, userId, workspace);
+  if (!nextPassDue(row, Date.now(), PASS_DEBOUNCE_MS)) return;
+  // A pair with a row had the feature on when it was written; one without is checked here, so the feature off costs reads and no job.
+  if (!row && !(await passOn(ctx, userId, workspace))) return;
   await ctx.scheduler.runAfter(0, (internal as any).priorityPassSchedule.request, { user_id: userId, workspace } satisfies Pair);
 }
 
@@ -81,4 +91,22 @@ export async function passActivity(ctx: { db: any; scheduler?: any }, userId: Id
 export async function sessionActivity(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">): Promise<void> {
   if (isRunLog(conv)) return;
   await passActivity(ctx, conv.user_id, await sessionVisibility(ctx).workspaceOf(conv));
+}
+
+/**
+ * Whether a session's pins ask for a pass: not a role's standing session, a
+ * trigger's run or a workflow's session. A role's recurring output never drives
+ * priorities; what the person typed there still counts, and the daily sweep
+ * (priorityPassSweep.ts) finds it.
+ */
+export const pinsAskForPass = (conv: Pick<Doc<"conversations">, "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id">): boolean =>
+  !isStandingSession(conv) && !conv.agent_task_id && !conv.workflow_run_id;
+
+/** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
+export async function passOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
+  const ws = parseWorkspaceKey(workspace);
+  if (!ws) return false;
+  // The flag first: one read, and false for nearly everyone.
+  if (ws.type === "team") return (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities")) && (await isTeamMember(ctx, userId, ws.teamId));
+  return String(ws.userId) === String(userId) && (await workspaceHasFeature(ctx, { user_id: userId }, "priorities"));
 }

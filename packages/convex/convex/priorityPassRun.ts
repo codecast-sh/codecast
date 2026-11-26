@@ -20,8 +20,7 @@ import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
-import { isTeamMember } from "./privacy";
-import { workspaceHasFeature } from "./lib/teamFeatureGuard";
+import { passOn } from "./lib/priorityPassSchedule";
 import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
@@ -76,7 +75,11 @@ const minutes = (ms: number) => Math.max(1, Math.ceil(ms / MINUTE));
 type BlockerKind = "busy" | "daily_ceiling" | "throttled";
 type Reservation = { run_id: Id<"priority_pass_runs">; catch_up: boolean } | { refused: BlockerKind; reason: string };
 
-const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<Doc<"priority_pass_runs">[]> =>
+/** A run that asked the model (or settled as if it had): what the gap, the throttle and the ceiling count. */
+export const isPaidRun = (r: Doc<"priority_pass_runs">): boolean => r.status === "ok" || r.status === "error" || (r.cost_usd ?? 0) > 0;
+
+/** The pair's runs started in the last day, newest first. */
+export const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<Doc<"priority_pass_runs">[]> =>
   ctx.db
     .query("priority_pass_runs")
     .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).gte("started_at", now - DAY))
@@ -110,7 +113,7 @@ async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: st
 export async function runBlocker(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number, runNow: boolean, catchUp = false): Promise<{ kind: BlockerKind; reason: string } | { catch_up: boolean } | null> {
   const day = await runsOfDay(ctx, userId, workspace, now);
   if (day.some((r) => r.status === "running" && r.started_at > now - RESERVATION_TTL_MS)) return { kind: "busy", reason: "A pass is already running here." };
-  const paid = day.filter((r) => r.status === "ok" || r.status === "error" || (r.cost_usd ?? 0) > 0).map((r) => r.started_at);
+  const paid = day.filter(isPaidRun).map((r) => r.started_at);
   const last = paid.length ? Math.max(...paid) : null;
   if (runNow && last !== null && now - last < RUN_NOW_EVERY_MS) {
     return { kind: "throttled", reason: `A pass ran here ${plural(minutes(now - last), "minute")} ago; run it again in ${plural(minutes(last + RUN_NOW_EVERY_MS - now), "minute")}.` };
@@ -152,14 +155,6 @@ export const reserve = internalMutation({
 });
 
 type Gate = { on: boolean; cursor_at: number; budgeted: boolean };
-
-/** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
-export async function passOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
-  const ws = parseWorkspaceKey(workspace);
-  if (!ws) return false;
-  if (ws.type === "team") return (await isTeamMember(ctx, userId, ws.teamId)) && (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities"));
-  return String(ws.userId) === String(userId) && (await workspaceHasFeature(ctx, { user_id: userId }, "priorities"));
-}
 
 /** Whether the pass may write here (passOn), the cursor, and whether the workspace pays for model calls. */
 export const passGate = internalQuery({

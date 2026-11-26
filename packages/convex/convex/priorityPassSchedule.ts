@@ -1,16 +1,15 @@
 // The one pending pass per (person, workspace) that their activity asks for
 // (lib/priorityPassSchedule.ts has the timing and the hooks' side). `request`
 // writes the pair's row and its job; `fire` starts the pass once it is due
-// and the pair's last paid run (priority_pass_runs, `cast priorities run`
-// included) is PASS_MIN_GAP_MS behind, else waits.
+// and the pair's spend allows it (passAllowedAt), else waits.
 
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import { PASS_DEBOUNCE_MS, PASS_MIN_GAP_MS, nextPassDue, pending, scheduleRow } from "./lib/priorityPassSchedule";
-import { RESERVATION_TTL_MS, recentRuns } from "./priorityPassInputs";
-import { passOn } from "./priorityPassRun";
+import type { Doc, Id } from "./_generated/dataModel";
+import { PASS_DEBOUNCE_MS, PASS_MIN_GAP_MS, nextPassDue, passOn, pending, scheduleRow } from "./lib/priorityPassSchedule";
+import { DAY, MINUTE, RESERVATION_TTL_MS } from "./priorityPassInputs";
+import { PRIORITY_PASS_DAILY_USD, isPaidRun, runsOfDay } from "./priorityPassRun";
 
 // Codegen catches up on the next push.
 const self = (internal as any).priorityPassSchedule;
@@ -18,12 +17,49 @@ const run = (internal as any).priorityPassRun;
 
 const pair = { user_id: v.id("users"), workspace: v.string() };
 
-/** When the pair's next pass may start by the gap: PASS_MIN_GAP_MS after the last run that asked the model or still holds the pair. */
+/** Runs that start within this of the run before are one pass: a chain's runs start seconds apart. */
+const PASS_SPAN_MS = 10 * MINUTE;
+/** The share of the daily ceiling automatic passes pace to; the rest is room for a long chain or a manual run. */
+export const PASS_PACE_SHARE = 0.8;
+
+/**
+ * When the pair's next automatic pass may start, from its runs of the last
+ * day (newest first): PASS_MIN_GAP_MS after the last run that asked the model
+ * or still holds the pair, widened so the day's passes spread over the day
+ * when they cost enough that hourly ones would spend past PASS_PACE_SHARE of
+ * PRIORITY_PASS_DAILY_USD (a pass's cost is its runs' mean over the day, a
+ * chain counted as one), and never before the spend that the next pass would
+ * take past the ceiling has aged out of the day. Catch-up runs spend their own
+ * allowance and count only as the last run.
+ */
+export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number): number {
+  const last = day.find((r) => isPaidRun(r) || (r.status === "running" && r.started_at > now - RESERVATION_TTL_MS));
+  if (!last) return -Infinity;
+  const paid = day.filter((r) => isPaidRun(r) && !r.catch_up).reverse();
+  let passes = 0;
+  let spent = 0;
+  let prev = -Infinity;
+  for (const r of paid) {
+    if (r.started_at - prev > PASS_SPAN_MS) passes++;
+    prev = r.started_at;
+    spent += r.cost_usd ?? 0;
+  }
+  const perPass = passes ? spent / passes : 0;
+  const gap = Math.min(DAY, Math.max(PASS_MIN_GAP_MS, (perPass * DAY) / (PASS_PACE_SHARE * PRIORITY_PASS_DAILY_USD)));
+  // Oldest first, the spend that leaves the day until the next pass fits under the ceiling.
+  let over = spent + perPass - PRIORITY_PASS_DAILY_USD;
+  let back = -Infinity;
+  for (const r of paid) {
+    if (over <= 0) break;
+    over -= r.cost_usd ?? 0;
+    back = r.started_at + DAY;
+  }
+  return Math.max(last.started_at + gap, back);
+}
+
+/** When the pair's next pass may start by its spend (passAllowedAt). */
 export async function gapEnds(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<number> {
-  const last = (await recentRuns(ctx, userId, workspace)).find(
-    (r) => r.status === "ok" || r.status === "error" || (r.cost_usd ?? 0) > 0 || (r.status === "running" && r.started_at > now - RESERVATION_TTL_MS),
-  );
-  return last ? last.started_at + PASS_MIN_GAP_MS : -Infinity;
+  return passAllowedAt(await runsOfDay(ctx, userId, workspace, now), now);
 }
 
 /** When the pair's pending pass runs, or null when none is pending. */
