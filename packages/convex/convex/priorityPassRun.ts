@@ -451,13 +451,17 @@ export const applyPlan = internalMutation({
         if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key) held.add(conv.priority_step_key);
       }
       const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
+      // Its tombstones as the row has them now (one the person dropped after the plan's input was read included), unless the survivor holds that drop already.
+      const tombstones = row.steps.filter((st) => st.dropped && !intoRow.steps.some((x) => x.dropped && x.title === st.title));
       let survivor = intoRow;
-      if (carried.length) {
+      if (carried.length || tombstones.length) {
         let next = stepKeyMax(intoRow.steps, await stepKeyMark(ctx, intoRow));
-        const added = carried.map((st) => {
+        const added = [...carried, ...tombstones].map((st) => {
           const key = `s${++next}`;
-          step_keys[st.key] = key;
-          survivorLive.add(key);
+          if (!st.dropped) {
+            step_keys[st.key] = key;
+            survivorLive.add(key);
+          }
           return { ...st, key };
         });
         survivor = { ...intoRow, steps: [...intoRow.steps, ...added], step_key_max: next };

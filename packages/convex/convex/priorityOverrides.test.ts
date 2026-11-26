@@ -302,6 +302,27 @@ describe("a pass merge keeps a placed session's milestone", () => {
   });
 });
 
+describe("a pass merge carries the absorbed priority's drops as they are now", () => {
+  test("a milestone the person drops after the plan's input was read is still a tombstone on the survivor", async () => {
+    const w = await seeded();
+    await w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id: "pri-2", title: "Auth", summary: "", status: "active", ai_rank: 2,
+      steps: [{ key: "s1", title: "Auth rewrite", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
+      first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1, session_count: 0,
+    } as any));
+    // The plan was made while pri-2/s1 was live; the person drops it before it lands.
+    await as(w, w.ana).mutation(pri.dropStep, { short_id: "pri-2", step_key: "s1" });
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [{ short_id: "pri-2", merged_into: "pri-1", step_keys: {} }], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    const survivor = await byShort(w, "pri-1");
+    expect(survivor.steps.filter((s: any) => s.dropped).map((s: any) => [s.key, s.title])).toEqual([["s4", "Auth rewrite"]]);
+    // Its key is spent like any other.
+    expect(survivor.step_key_max).toBe(4);
+  });
+});
+
 describe("a pass merge reads the absorbed priority's sessions itself", () => {
   test("a placed session older than the newest eight the plan saw keeps its milestone: the survivor gains it", async () => {
     const w = await seeded();
