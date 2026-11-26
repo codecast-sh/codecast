@@ -5,6 +5,9 @@ import { Button } from "./button"
 
 type Icon = React.ComponentType<{ className?: string }>
 
+/** A press 44px tall under a coarse pointer, its look kept on a mouse. */
+const COARSE_TALL = "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11"
+
 /** A press: a label and a handler, with an optional leading icon. */
 export interface EmptyStateAction {
   label: string
@@ -44,7 +47,8 @@ function Press({ action, look }: { action: EmptyStateAction | React.ReactElement
       variant={variant}
       size={look === "primary" ? "sm" : "xs"}
       onClick={onClick}
-      className={look === "secondary" ? "text-sol-text-muted hover:text-sol-text" : undefined}
+      // A finger's 44px under a coarse pointer; the Modern style sizes buttons itself, so it is named too.
+      className={cn(COARSE_TALL, look === "secondary" && "text-sol-text-muted hover:text-sol-text")}
     >
       {ActionIcon && <ActionIcon />}
       {label}

@@ -23,7 +23,7 @@ import { rankLabelOf, sortByPriority, type PriorityRankLabel, type PriorityStand
 // went ahead on a default) are not in the queue; they fold into one row. In
 // the inbox's Priorities view each asking session leads with the rank of the
 // viewer's priority it serves, and the groups sort by it as every other
-// section does (store/priorityOrder); each ask keeps its place number.
+// section does (store/priorityOrder), numbered in the order they show.
 
 const advisoryWhere = (d: SessionDecisionItem) => d.status === "pending" && !d.trial && !isStackedAsk(d);
 const advisorySig = (d: SessionDecisionItem) => `${d.status}:${d.blocking ? 1 : 0}:${d.stack_id ?? ""}:${d.in_queue === false ? 0 : 1}:${(d.asked_user_ids ?? []).join(",")}`;
@@ -91,7 +91,10 @@ export function InboxDecisionQueue({
       g.asks.push({ item, n });
     });
     const all = [...byConv.values()];
-    return priorityPlaceOf ? sortByPriority(all, (g) => placeOfConv(g.conversationId, g.session)) : all;
+    if (!priorityPlaceOf) return all;
+    // Sorted by rank, the asks are numbered in the order they show.
+    let n = 0;
+    return sortByPriority(all, (g) => placeOfConv(g.conversationId, g.session)).map((g) => ({ ...g, asks: g.asks.map((a) => ({ ...a, n: ++n })) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- placeOfConv reads the store; priorityPlaceOf changes with every link it reads
   }, [numbered, priorityPlaceOf]);
   // The first groups up to SHOWN_ASKS decisions, plus the lit one wherever it sits.

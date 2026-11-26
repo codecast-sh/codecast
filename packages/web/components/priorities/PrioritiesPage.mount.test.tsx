@@ -492,6 +492,11 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
   try {
     expect(describeFailures(missing)).toBe("");
     expect(missing.text()).toContain("Priorities didn't load");
+    // Try again and the Details disclosure are 44px under a coarse pointer.
+    const tryAgain = [...missing.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Try again"))!;
+    expect(tryAgain.className).toContain("[@media(pointer:coarse)]:h-11");
+    expect(tryAgain.className).toContain("[@media(pointer:coarse)]:modern:h-11");
+    expect(missing.container.querySelector("details summary")!.className).toContain("[@media(pointer:coarse)]:min-h-11");
   } finally {
     await missing.unmount();
   }
@@ -500,6 +505,8 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
   try {
     expect(empty.text()).toContain("No priorities yet");
     expect(empty.container.querySelector("[data-next-pass]")!.textContent).toMatch(/^Next pass /);
+    const runNow = [...empty.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Run now"))!;
+    expect(runNow.className).toContain("[@media(pointer:coarse)]:h-11");
   } finally {
     await empty.unmount();
   }
@@ -647,7 +654,7 @@ test("the progress button shows the done critical milestones, and hides them aga
   }
 }, 60_000);
 
-test("every priority says how many landed and how long since, on every layout; a phone's compact line drops today and the strip", async () => {
+test("every priority says how many landed and how long since, on every layout; a phone's compact line keeps today and drops the strip", async () => {
   for (const layout of ["wide", "phone"] as const) {
     const page = await mount(view({ layout }));
     try {
@@ -660,11 +667,22 @@ test("every priority says how many landed and how long since, on every layout; a
   const compact = await mount(view({ layout: "phone", compact: true }));
   try {
     const head = block(compact.container, "pri-1").querySelector("[data-priority-head]")!;
-    expect(head.textContent).not.toContain("today");
+    expect(head.textContent).toContain("4 today");
     expect(head.querySelector("[data-day-strip]")).toBeNull();
+    expect(head.querySelector("[data-momentum-words]")).toBeNull();
     expect(head.querySelector("[data-action]")).not.toBeNull();
   } finally {
     await compact.unmount();
+  }
+  // Daylight's compact view (a narrow wide list) says them in the meta slot under the strip; a wider one beside it.
+  const wideCompact = await mount(view({ compact: true }));
+  try {
+    const words = block(wideCompact.container, "pri-5").querySelector("[data-priority-head] [data-momentum-words]")!;
+    expect(words.textContent).toBe("1 landed · last 2d");
+    expect(words.className).toContain("row-start-2");
+    expect(words.className).toContain("[@container(min-width:44rem)]:hidden");
+  } finally {
+    await wideCompact.unmount();
   }
 }, 60_000);
 
@@ -709,6 +727,87 @@ test("a narrow window takes the desktop grid on a touch screen at least 900px wi
   } finally {
     (window as any).matchMedia = realMatch;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: realWidth });
+  }
+}, 60_000);
+
+test("a milestone line's chips use the today and momentum columns, its today count sits in the line, and a plan outranks the \"in ‹session›\" words", async () => {
+  const history = { ...HISTORY, sessions: { jx7crfl: at(3) } };
+  const page = await mount(view({ history }));
+  try {
+    const grid = block(page.container, "pri-1").querySelector('[data-milestone="s2"] [role=button] > div')!;
+    expect(grid.className).toContain("col-end-6");
+    // The line's today count is inside the line, not a column of its own.
+    expect(block(page.container, "pri-1").querySelector('[data-milestone="s2"] [data-line-today]')!.textContent).toBe("3 today");
+    // pri-3: the Open action, then its plan, then the words that give way first.
+    const chips = [...block(page.container, "pri-3").querySelector('[data-milestone="s1"] [data-line-chips]')!.children];
+    const at3 = (pred: (el: Element) => boolean) => chips.findIndex(pred);
+    const act = at3((el) => !!el.querySelector('[data-action="open"]'));
+    const plan = at3((el) => !!el.querySelector('[data-chip="plan"]'));
+    const words = at3((el) => el.textContent === "in Eval cost reduction");
+    expect([act, plan, words]).toEqual([0, 1, 2]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("Daylight's coarse pointer puts a line's marks under its title; compact moves the row's pending mark to the meta line", async () => {
+  const marked = row(8, "Marked", 1, [step("s1", "A milestone", "critical"), step("s2", "Another", "critical")], {
+    correction_pending: true,
+    links: [links("s1", [], { looks_done: true }), links("s2", [])],
+  });
+  const page = await mount(view({ rows: [marked] }));
+  try {
+    const marks = block(page.container, "pri-8").querySelector('[data-milestone="s1"] [data-milestone-marks]')!;
+    expect(marks.querySelector("[data-looks-done]")).not.toBeNull();
+    // The title and the marks share one box that stacks them under a coarse pointer and sits them side by side on a mouse.
+    expect(marks.parentElement!.className).toContain("[@media(pointer:coarse)]:flex-col");
+    // The expand chevron shows wherever nothing hovers.
+    expect(block(page.container, "pri-8").querySelector('[data-milestone="s1"] [data-line-chevron]')!.getAttribute("class")).toContain("[@media(hover:none)]:opacity-100");
+    // The row's own pending correction sits by the title in the full view.
+    expect(block(page.container, "pri-8").querySelector("[data-priority-head] [data-correction-pending]")!.closest("[data-meta]")).toBeNull();
+  } finally {
+    await page.unmount();
+  }
+  const compact = await mount(view({ rows: [marked], compact: true }));
+  try {
+    expect(block(compact.container, "pri-8").querySelector("[data-priority-head] [data-correction-pending]")!.closest("[data-meta]")).not.toBeNull();
+  } finally {
+    await compact.unmount();
+  }
+}, 60_000);
+
+test("\"Part of ‹plan› (140 tasks)\" is one chip; No priority is a real button", async () => {
+  const page = await mount(view());
+  const { act } = React as any;
+  try {
+    const pri3 = block(page.container, "pri-3");
+    await act(async () => { (pri3.querySelector("[data-polish]") as HTMLElement).click(); });
+    await act(async () => { (pri3.querySelector('[data-milestone="s2"] [role=button]') as HTMLElement).click(); });
+    const chip = [...pri3.querySelectorAll('[data-milestone-detail] [data-chip="plan"]')].find((c) => c.textContent?.includes("Part of"))!;
+    expect(chip.querySelector("[data-plan-size]")!.textContent).toBe("(140 tasks)");
+    expect(pri3.querySelector("[data-milestone-detail]")!.textContent).not.toMatch(/\)\s*140 tasks/);
+    expect(page.container.querySelector('[data-today-seg="none"]')!.tagName).toBe("BUTTON");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a linked session's branch and a PR's state repaint their chips when they change", async () => {
+  seedKinds();
+  const page = await mount(view({ rows: [KINDS], filters: ALL_KINDS }));
+  const { act } = React as any;
+  try {
+    const b = block(page.container, "pri-9");
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
+    expect(b.querySelector('[data-chip="branch"]')!.textContent).toBe("feat/every-link");
+    await act(async () => {
+      useInboxStore.getState().syncTable("sessions", [{ _id: fixtureId("kinds2"), title: "Kinds helper", worktree_branch: "feat/renamed", updated_at: NOW }] as any, { isDelta: true });
+      useInboxStore.setState((s: any) => ({ pullRequests: { ...s.pullRequests, pr4580: { _id: "pr4580", repository: "codecast-sh/codecast", number: 4580, state: "merged" } } }));
+    });
+    await page.waitFor(() => b.querySelector('[data-chip="branch"]')?.textContent === "feat/renamed");
+    await page.waitFor(() => !!b.querySelector('[data-chip="pr"]')?.textContent?.includes("merged"));
+  } finally {
+    await page.unmount();
   }
 }, 60_000);
 

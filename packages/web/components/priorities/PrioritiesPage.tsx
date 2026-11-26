@@ -28,13 +28,13 @@ import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
 import {
-  LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, TABLET_QUERY, localDayKey, readFilters, todayOf, waitingOf,
+  COARSE_TALL, LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, TABLET_QUERY, localDayKey, readFilters, todayOf, waitingOf,
   type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
 } from "../../lib/priorityList";
 import { useInboxStore, type ClientUI } from "../../store/inboxStore";
 import { cn } from "../../lib/utils";
 import { PriorityBlock, type RankDrag } from "./PriorityBlock";
-import { linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
+import { linkedPrRefs, linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
 import { StatsLine } from "./StatsLine";
 import { WaitingOnYou } from "./Waiting";
 
@@ -78,7 +78,7 @@ export default function PrioritiesPage() {
     body = (
       <EmptyState icon={AlertTriangle} title="Priorities didn't load" action={{ label: "Try again", onClick: feed.retry }}>
         <details className="max-w-md text-meta text-sol-text-dim">
-          <summary className="cursor-pointer">Details</summary>
+          <summary className="cursor-pointer [@media(pointer:coarse)]:flex [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:items-center">Details</summary>
           <p className="mt-1 break-words">{feed.error.message}</p>
         </details>
       </EmptyState>
@@ -156,11 +156,11 @@ const RUN_LEDGER: SwitchLedger = {
 export function NoPrioritiesYet({ nextPass, running, onRun }: { nextPass: string | null; running: boolean; onRun: (() => void) | null }) {
   const [reviewing, setReviewing] = useState(false);
   const action = running ? (
-    <Button size="sm" variant="secondary" disabled data-priorities-running>
+    <Button size="sm" variant="secondary" disabled data-priorities-running className={COARSE_TALL}>
       <Loader2 className="animate-spin" /> Running
     </Button>
   ) : onRun ? (
-    <Button size="sm" variant="primary" onClick={() => setReviewing(true)}>
+    <Button size="sm" variant="primary" onClick={() => setReviewing(true)} className={COARSE_TALL}>
       <Play /> Run now
     </Button>
   ) : undefined;
@@ -196,7 +196,8 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
   const today = useMemo(() => todayOf(history, rows, now), [history, rows, now]);
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
 
-  const lookups = usePriorityLookups();
+  const prs = useMemo(() => linkedPrRefs(visible), [visible]);
+  const lookups = usePriorityLookups(ids, prs);
   const writes = usePriorityWrites();
   // A drag of the viewer's rank on a desktop list: which row, and where it would land.
   const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);

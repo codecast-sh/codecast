@@ -4,7 +4,7 @@
 // sessions) and the inbox's live session states. Nothing here is stored:
 // next actions, the bracket rail, momentum, today's shares, waiting on you.
 import type { PriorityHistory, PriorityLinkedSession, PriorityPlanRef, PriorityRow, PrioritySessionState, PriorityStep } from "@codecast/shared/contracts/priorities";
-import { asksPerson, isClosedSession, nextActionOf, orderSessions, type NextAction } from "@codecast/shared/contracts/priorityDerive";
+import { asksPerson, bestSession, isClosedSession, nextActionOf, orderSessions, type NextAction } from "@codecast/shared/contracts/priorityDerive";
 import type { SessionStatus } from "./sessionStatus";
 
 export const LIST_DAYS = 10;
@@ -198,6 +198,18 @@ export function buildModels(
   });
 }
 
+/**
+ * The session a milestone line names when the priority's action is not on
+ * it: one that asks, else the best, preferring sessions other than the one
+ * the action (or the bracket's driver) already names, as the list's bracket
+ * does, so the list, the phone and the page name the same one.
+ */
+export function lineSession(model: Pick<PriorityModel, "action" | "rail">, m: Pick<MilestoneModel, "sessions">): SessionLine | undefined {
+  const named = new Set([model.action?.session?.conversation_id, model.rail?.session.conversation_id].filter(Boolean));
+  const own = m.sessions.filter((s) => !named.has(s.conversation_id));
+  return own.find(asksPerson) ?? bestSession(own) ?? m.sessions.find(asksPerson) ?? bestSession(m.sessions);
+}
+
 /** Something waiting on the viewer: a session asking on an open milestone of one of their active priorities. */
 export type WaitingItem = { key: string; priority: string; rank: number | null; milestone: string; session: SessionLine };
 
@@ -338,6 +350,9 @@ export type ListLayout = "phone" | "wide";
  * between it and its line may clip it.
  */
 export const TOUCH_AREA = "relative [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:top-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:bottom-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:left-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:right-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:content-['']";
+
+/** A button 44px tall under a coarse pointer, its look kept on a mouse (the Modern style sizes buttons itself, so it is named too). */
+export const COARSE_TALL = "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11";
 
 /** The polish link's slot in a wide row's progress column: one width on every row and on the column head, so the pips line up. */
 export const POLISH_SLOT = "flex w-[5.25rem] shrink-0 justify-start";

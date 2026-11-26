@@ -135,13 +135,14 @@ export function ActionButton({ row, action, tall, showSession = true }: { row: P
   );
 }
 
-function InSession({ s }: { s: SessionLine }) {
+/** "in ‹session›": where the action acts, as quiet words. */
+export function InSession({ s }: { s: SessionLine }) {
   const label = useSessionLabel(s);
   return <span className="min-w-0 truncate text-meta text-sol-text-dim" title={label}>in <span className="text-sol-text-muted">{label}</span></span>;
 }
 
 /** A plan: square corners and a hairline, a target glyph, its title, a small bar and the count. */
-export function PlanChip({ plan, prefix, className }: { plan: PriorityPlanRef; prefix?: string; className?: string }) {
+export function PlanChip({ plan, prefix, showSize, className }: { plan: PriorityPlanRef; prefix?: string; showSize?: boolean; className?: string }) {
   const pct = plan.total ? Math.round((plan.done / plan.total) * 100) : 0;
   return (
     <Link
@@ -158,6 +159,8 @@ export function PlanChip({ plan, prefix, className }: { plan: PriorityPlanRef; p
         <span className="absolute inset-y-0 left-0 bg-sol-text-muted" style={{ width: `${pct}%` }} />
       </span>
       <span className="shrink-0 tabular-nums text-sol-text-dim">{plan.done}/{plan.total}</span>
+      {/* A big plan a milestone is part of says how big, inside its chip: "Part of Platform program (140 tasks)". */}
+      {showSize && <span data-plan-size className="shrink-0 tabular-nums text-sol-text-dim">({plan.size} tasks)</span>}
     </Link>
   );
 }

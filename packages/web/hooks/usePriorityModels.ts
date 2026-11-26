@@ -87,8 +87,27 @@ export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, da
   return useMemo(() => buildModels([row], history, live, days, now)[0], [row, history, live, days, now]);
 }
 
-export function usePriorityLookups(): LinkLookups {
+/** Every pull request (`owner/repo#N`) the milestones of `rows` name, sorted, once each. */
+export function linkedPrRefs(rows: ReadonlyArray<{ steps: ReadonlyArray<{ refs: ReadonlyArray<{ kind: string; id: string }> }> }>): string[] {
+  return [...new Set(rows.flatMap((r) => r.steps.flatMap((st) => st.refs.filter((x) => x.kind === "pr").map((x) => x.id))))].sort();
+}
+
+/**
+ * The lookups for the linked sessions (`sessionIds`) and pull requests
+ * (`prRefs`) a surface draws. One subscription to a signature of just their
+ * branches and states, so a branch or a PR's state changing repaints its
+ * chip, and nothing else in those collections wakes it.
+ */
+export function usePriorityLookups(sessionIds: readonly string[], prRefs: readonly string[]): LinkLookups {
   const deploys = useWorkspaceCollection<TeamDeployRow>("teamDeploys", (d) => `${d.status}:${d.live_at ?? ""}:${d.sessions.length}:${d.tasks?.length ?? 0}`);
+  const ids = sessionIds.join(",");
+  const prs = prRefs.join(",");
+  const sig = useInboxStore((s) => {
+    const sessions = s.sessions as Record<string, any>;
+    const branches = ids ? ids.split(",").map((id) => sessions[id]?.worktree_branch || sessions[id]?.git_branch || "").join(",") : "";
+    const states = prs ? prs.split(",").map((ref) => prStateIn(s.pullRequests as Record<string, any>, ref) ?? "").join(",") : "";
+    return `${branches}|${states}`;
+  });
   return useMemo<LinkLookups>(() => ({
     branchOf: (id) => {
       const row = (useInboxStore.getState().sessions as Record<string, any>)[id];
@@ -96,5 +115,6 @@ export function usePriorityLookups(): LinkLookups {
     },
     prState: (ref) => prStateIn(useInboxStore.getState().pullRequests as Record<string, any>, ref),
     deploysOf: (m) => deploysFor(m, deploys),
-  }), [deploys]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature is what the getState() reads above wake on
+  }), [deploys, sig]);
 }

@@ -124,18 +124,25 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
     <Popover open={noneOpen} onOpenChange={setNoneOpen}>
       <PopoverAnchor asChild>
         <span data-today-bar className={cn("relative flex shrink-0 gap-px", full ? "h-3 w-full" : "h-[10px] w-[72px]")}>
-          {today.segments.map((s) => (
-            <span
-              key={s.key}
-              data-today-seg={s.tone === "none" ? "none" : s.key}
-              role={s.tone === "none" ? "button" : undefined}
-              aria-label={s.tone === "none" ? "Today's sessions outside every priority" : undefined}
-              onClick={s.tone === "none" ? () => setNoneOpen(true) : undefined}
-              title={`${s.title} · ${s.count} messages`}
-              className={cn("block h-full first:rounded-l-[2px] last:rounded-r-[2px]", s.tone === "none" && cn("cursor-pointer border border-sol-text-dim/50", TOUCH_AREA))}
-              style={{ flexGrow: s.count, flexBasis: 0, minWidth: 4, background: FILL[s.tone] }}
-            />
-          ))}
+          {today.segments.map((s) => {
+            const style = { flexGrow: s.count, flexBasis: 0, minWidth: 4, background: FILL[s.tone] };
+            const look = "block h-full first:rounded-l-[2px] last:rounded-r-[2px]";
+            // No priority opens its sessions: a real button, so a keyboard reaches it too.
+            return s.tone === "none" ? (
+              <button
+                key={s.key}
+                type="button"
+                data-today-seg="none"
+                aria-label="Today's sessions outside every priority"
+                onClick={() => setNoneOpen(true)}
+                title={`${s.title} · ${s.count} messages`}
+                className={cn(look, "cursor-pointer border border-sol-text-dim/50 p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50", TOUCH_AREA)}
+                style={style}
+              />
+            ) : (
+              <span key={s.key} data-today-seg={s.key} title={`${s.title} · ${s.count} messages`} className={look} style={style} />
+            );
+          })}
         </span>
       </PopoverAnchor>
       <PopoverContent align="start" className="w-[22rem] bg-sol-card p-1.5">

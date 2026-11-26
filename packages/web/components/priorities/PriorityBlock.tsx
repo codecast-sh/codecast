@@ -18,12 +18,12 @@ import { ChevronRight } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { asksPerson, bestSession, isClosedSession } from "@codecast/shared/contracts/priorityDerive";
 import { milestoneHref, pastBadge, rankProvenance, type PriorityRow } from "../../lib/priorities";
-import { LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, lineSession, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { usePriorityWrites } from "../../hooks/usePriorities";
 import type { LinkKind } from "./parts";
-import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
+import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, InSession, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 import { LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
 
 /** A desktop drag of the owner's rank (PrioritiesView): this row's part in it. */
@@ -262,12 +262,11 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         <span title={row.summary || row.title} className={cn("min-w-0 font-semibold", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", untouched ? "text-sol-text-muted" : "text-sol-text")}>
           {row.title}
         </span>
-        {/* A phone's compact line keeps its width for the title. */}
-        {!wide && !compact && model.today > 0 && <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
+        {!wide && model.today > 0 && <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
         {/* Where the momentum column has no room for words (a narrow list, a phone), Stalled sits by the title. */}
         {model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
-        {/* On a phone the title keeps the row's width; the mark goes on the meta line below. */}
-        {wide && pending && <PendingMark />}
+        {/* On a phone and in the compact view the title keeps the row's width; the mark goes on the meta line below. */}
+        {wide && !compact && pending && <PendingMark />}
         {compact && model.action && <span data-compact-action className="ml-auto flex shrink-0"><ActionButton row={row} action={model.action} showSession={false} /></span>}
       </span>
       {/* The pips end at one x on every wide row, polish or not: the polish link has a slot of its own. */}
@@ -314,8 +313,9 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           <PlanChip plan={plan} className="min-w-[7rem] max-w-[22rem]" />
         </div>
       )}
-      {/* A narrow wide list (Daylight beside the inbox) has no room for the words beside the strip: they go on the meta line under it. */}
-      {wide && !compact && <MomentumWords model={model} className="col-start-3 col-end-6 row-start-2 justify-self-end [@container(min-width:44rem)]:hidden" />}
+      {wide && compact && pending && <span data-meta className="col-start-2 col-end-3 row-start-2 flex min-w-0 items-center"><PendingMark /></span>}
+      {/* A narrow wide list (Daylight beside the inbox) has no room for the words beside the strip: they go on the meta line under it, compact or not. */}
+      {wide && <MomentumWords model={model} className="col-start-3 col-end-6 row-start-2 justify-self-end [@container(min-width:44rem)]:hidden" />}
     </div>
   );
 }
@@ -342,7 +342,14 @@ function lineChips({ model, m, railed, filters, lookups }: {
   const mine = action?.milestone.key === m.key ? action : null;
   const chips: ReactNode[] = [];
   let shown: SessionLine | undefined;
-  if (mine) {
+  const planChip = filters.show.plans && m.plan ? <span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span> : null;
+  if (mine && planChip) {
+    // The action's "in ‹session›" words give way to the line's plan: they come after it, so they are what a narrow line clips.
+    chips.push(<ActionButton key="act" row={model.row} action={mine} showSession={false} />, planChip);
+    if (mine.session) chips.push(<span key="in" className="flex h-6 min-w-[6rem] shrink items-center"><InSession s={mine.session} /></span>);
+    shown = mine.session;
+  } else if (mine) {
+    // With no plan the words ride the button and truncate there.
     chips.push(<ActionButton key="act" row={model.row} action={mine} />);
     shown = mine.session;
   } else if (driver && railed === "head") {
@@ -351,7 +358,7 @@ function lineChips({ model, m, railed, filters, lookups }: {
     shown = own.find(asksPerson) ?? bestSession(own);
     if (shown) chips.push(<SessionSlot key="s" s={shown} className="min-w-[4.5rem] max-w-[15rem]" />);
   }
-  if (filters.show.plans && m.plan) chips.push(<span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span>);
+  if (planChip && !mine) chips.push(planChip);
   const others = own.filter((s) => s !== shown).length + m.more;
   if (filters.show.sessions && !m.done && others > 0 && !hasKinds(m, filters, lookups)) {
     chips.push(<span key="o" data-more-sessions className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1.5 text-meta tabular-nums text-sol-text-dim">+{others} {others === 1 ? "session" : "sessions"}</span>);
@@ -425,11 +432,15 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
       {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. A teammate's is a status mark, nothing to press. */}
       {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:h-11" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneMark done={step.done} />}
       {wide ? (
-        <>
-          {name}
-          {!renaming && <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />}
-          {marks}
-        </>
+        // Under a coarse pointer (Daylight) the marks go on a line of their own under the title, as on a phone.
+        <span className="flex min-w-0 items-center gap-2 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:gap-0.5 [@media(pointer:coarse)]:py-1">
+          <span className="flex min-w-0 max-w-full items-center gap-2">
+            {name}
+            {/* Shown while the line is hovered, and always where nothing hovers. */}
+            {!renaming && <ChevronRight aria-hidden data-line-chevron className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100 [@media(hover:none)]:opacity-100", open && "rotate-90 opacity-100")} />}
+          </span>
+          {marks && <span data-milestone-marks className="flex shrink-0 items-center gap-2 [@media(pointer:coarse)]:flex-wrap">{marks}</span>}
+        </span>
       ) : (
         // A phone keeps the title's width: its marks go on a line of their own under it.
         <span className="flex min-w-0 flex-col py-1">
@@ -451,7 +462,8 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
       >
         {wide ? (
           <>
-            <div className="col-start-2 col-end-4 row-start-1 grid min-w-0 grid-cols-[minmax(40%,1fr)_minmax(0,1fr)] items-center gap-x-3">
+            {/* Title and chips take the line up to its menu: a milestone line has no strip, so its chips use the today and momentum columns too. */}
+            <div className="col-start-2 col-end-6 row-start-1 grid min-w-0 grid-cols-[minmax(max(40%,8rem),1fr)_minmax(0,1fr)] items-center gap-x-3">
               {title}
               {/* Chips that would wrap are clipped away. Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside the clip, and a wrapped row sits far enough below that none of its press area reaches back in. */}
               <span className="flex min-w-0 items-start gap-1.5">
@@ -460,9 +472,9 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
                   {lineChips({ model, m, railed: rail, filters, lookups })}
                 </span>
                 {!m.done && lineKinds(m, filters, lookups)}
+                {m.today > 0 && <span data-line-today className="flex h-8 shrink-0 items-center whitespace-nowrap text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today} today</span>}
               </span>
             </div>
-            <span className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text-muted">{m.today > 0 ? m.today : ""}</span>
             {row.mine && <MilestoneMenu row={row} step={step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" className={C_MENU} />}
           </>
         ) : (
@@ -485,10 +497,9 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
 function phoneTrail(model: PriorityModel, m: MilestoneModel): ReactNode {
   if (m.done) return null;
   if (model.action?.milestone.key === m.key) return <ActionButton row={model.row} action={model.action} tall showSession={false} />;
-  const asking = m.sessions.find(asksPerson);
-  if (asking) return <AnswerSecondary s={asking} showName={false} tall />;
-  const best = bestSession(m.sessions);
-  return best ? <span className="text-meta text-sol-text-dim">{STATE_WORD[best.state]}</span> : null;
+  const s = lineSession(model, m);
+  if (!s) return null;
+  return asksPerson(s) ? <AnswerSecondary s={s} showName={false} tall /> : <span className="text-meta text-sol-text-dim">{STATE_WORD[s.state]}</span>;
 }
 
 /** One session in an open milestone: Answer when it asks, else its chip; its state in words and its age; the owner's ⋯ to fix its link. */
@@ -558,8 +569,7 @@ export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
   const rows = [
     plans.length > 0 && (
       <TypeRow key="plan" label="Plan">
-        {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} className="max-w-[24rem]" />)}
-        {m.partOf.length > 0 && <span className="text-meta text-sol-text-dim">{m.partOf.map((p) => `${p.size} tasks`).join(", ")}</span>}
+        {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className="max-w-[24rem]" />)}
       </TypeRow>
     ),
     m.tasks.length > 0 && <TypeRow key="tasks" label="Tasks">{m.tasks.map((t) => <TaskChip key={t} id={t} className="max-w-[24rem]" />)}</TypeRow>,

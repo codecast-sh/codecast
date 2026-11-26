@@ -19,15 +19,20 @@ import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
-import { TOUCH_AREA, type SessionLine } from "../../lib/priorityList";
+import { COARSE_TALL, TOUCH_AREA, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { MilestoneBox } from "./parts";
 
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
 /** Opens a popover after the menu that asked for it has closed, so the menu's own close does not take its focus. */
 const afterMenu = (open: () => void) => () => { setTimeout(open, 0); };
-/** A button 44px tall under a coarse pointer, its look kept on a mouse (the Modern style sizes buttons itself, so it is named too). */
-const COARSE_TALL = "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11";
+/**
+ * A submenu of names (Merge into…, Move to…): never wider than the screen
+ * leaves beside its parent menu, 8px clear of the edge, its names wrapping.
+ */
+const SUB_LIST = "max-h-[60vh] max-w-[min(20rem,var(--radix-dropdown-menu-content-available-width))] overflow-y-auto";
+const SUB_PROPS = { collisionPadding: 8 } as const;
+const WRAP = "min-w-0 whitespace-normal break-words";
 /** On a touch screen every menu row is a 44px target. */
 const TOUCH_ITEMS = "[@media(pointer:coarse)]:[&_[role=menuitem]]:min-h-11";
 
@@ -205,11 +210,11 @@ function OwnerPriorityItems({ row, onCorrect, onMerge }: { row: PriorityRow; onC
       {row.status === "active" && others.length > 0 && (
         <DropdownMenuSub>
           <DropdownMenuSubTrigger data-act="merge">Merge into…</DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className={cn("max-h-[60vh] max-w-[20rem] overflow-y-auto", TOUCH_ITEMS)} onClick={stop}>
+          <DropdownMenuSubContent {...SUB_PROPS} data-sub-list="merge" className={cn(SUB_LIST, TOUCH_ITEMS)} onClick={stop}>
             {others.map((r) => (
-              <DropdownMenuItem key={r.short_id} data-merge-into={r.short_id} onSelect={() => onMerge(r)}>
+              <DropdownMenuItem key={r.short_id} data-merge-into={r.short_id} onSelect={() => onMerge(r)} className="items-start">
                 <span className="w-6 shrink-0 text-right tabular-nums text-sol-text-dim">{r.rank}</span>
-                <span className="min-w-0 truncate">{r.title}</span>
+                <span className={WRAP}>{r.title}</span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuSubContent>
@@ -282,7 +287,7 @@ export function SessionMenu({ row, s, stepKey, touch }: { row: PriorityRow; s: P
           <DropdownMenuItem data-act="not-priority" onSelect={() => writes.sessionNotThis(s.short_id, row.short_id)}>Not this priority</DropdownMenuItem>
           <DropdownMenuSub>
             <DropdownMenuSubTrigger data-act="move-session">Move to…</DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className={cn("max-h-[60vh] max-w-[20rem] overflow-y-auto", TOUCH_ITEMS)} onClick={stop}>
+            <DropdownMenuSubContent {...SUB_PROPS} data-sub-list="move-session" className={cn(SUB_LIST, TOUCH_ITEMS)} onClick={stop}>
               <MoveTargets row={row} session={s.short_id} stepKey={stepKey} />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
@@ -292,28 +297,37 @@ export function SessionMenu({ row, s, stepKey, touch }: { row: PriorityRow; s: P
   );
 }
 
-/** Where a session can move: this priority's other milestones, then each of the owner's other active priorities and its milestones. */
+/**
+ * Where a session can move: this priority's other milestones under its name
+ * (critical, then polish after a separator), then each of the owner's other
+ * active priorities and its milestones.
+ */
 function MoveTargets({ row, session, stepKey }: { row: PriorityRow; session: string; stepKey: string | null }) {
   const writes = usePriorityWrites();
   const others = useOwnActive(row).filter((r) => r.short_id !== row.short_id);
-  const steps = (r: PriorityRow) => r.steps.filter((st) => !st.done);
+  const steps = (r: PriorityRow) => r.steps.filter((st) => !st.done && !st.dropped);
   const item = (to: PriorityRow, st: PriorityStep) => (
     <DropdownMenuItem key={`${to.short_id}/${st.key}`} data-move-session-to={`${to.short_id}/${st.key}`} onSelect={() => writes.moveSession(session, row.short_id, to.short_id, st.key)}>
-      <span className="min-w-0 truncate">{st.title}</span>
+      <span className={WRAP}>{st.title}</span>
     </DropdownMenuItem>
   );
   const here = steps(row).filter((st) => st.key !== stepKey);
+  const critical = here.filter((st) => st.tier === "critical");
+  const polish = here.filter((st) => st.tier === "polish");
   return (
     <>
-      {here.map((st) => item(row, st))}
+      {here.length > 0 && <DropdownMenuLabel data-move-here className="text-mark font-semibold uppercase tracking-wide text-sol-text-dim">{row.title}</DropdownMenuLabel>}
+      {critical.map((st) => item(row, st))}
+      {critical.length > 0 && polish.length > 0 && <DropdownMenuSeparator data-move-polish />}
+      {polish.map((st) => item(row, st))}
       {here.length > 0 && others.length > 0 && <DropdownMenuSeparator />}
       {others.map((r) => (
         <DropdownMenuSub key={r.short_id}>
-          <DropdownMenuSubTrigger data-move-session-priority={r.short_id}>
+          <DropdownMenuSubTrigger data-move-session-priority={r.short_id} className="items-start">
             <span className="w-5 shrink-0 text-right tabular-nums text-sol-text-dim">{r.rank}</span>
-            <span className="min-w-0 truncate">{r.title}</span>
+            <span className={WRAP}>{r.title}</span>
           </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className={cn("max-h-[60vh] max-w-[20rem] overflow-y-auto", TOUCH_ITEMS)} onClick={stop}>
+          <DropdownMenuSubContent {...SUB_PROPS} className={cn(SUB_LIST, TOUCH_ITEMS)} onClick={stop}>
             {steps(r).length ? steps(r).map((st) => item(r, st)) : <DropdownMenuLabel className="text-meta font-normal text-sol-text-dim">No open milestones</DropdownMenuLabel>}
           </DropdownMenuSubContent>
         </DropdownMenuSub>

@@ -166,6 +166,27 @@ test("pri-N alone on its line is the card its pill opens", async () => {
   }
 });
 
+test("a page line's secondary Answer names a session other than the one Next already answers, as the list does; a phone's actions start at one x", async () => {
+  const both = [sess("build", "Priorities feature build", "needs_you", 3), sess("evalmap", "Session mapping eval", "needs_you", 7)];
+  answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s4" ? { ...l, sessions: both } : l)) };
+  const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  try {
+    await page.waitFor(() => !!page.container.querySelector('[data-critical-path] [data-milestone="s4"] [data-answer="secondary"]'));
+    // Next answers the build session (on s2); s4 names the other asking session, not the build again.
+    expect(page.container.querySelector("[data-priority-next] [data-action=answer]")!.getAttribute("href")).toBe(`/conversation/${fixtureId("build")}`);
+    expect(page.container.querySelector('[data-critical-path] [data-milestone="s4"] [data-answer="secondary"]')!.getAttribute("href")).toBe(`/conversation/${fixtureId("evalmap")}`);
+    // On a phone each row's chips take a line of their own under the title, from one x.
+    for (const chips of page.container.querySelectorAll("[data-critical-path] [data-line-chips]")) {
+      expect(chips.className).toContain("max-sm:order-last");
+      expect(chips.className).toContain("max-sm:ml-[24px]");
+      expect(chips.className).toContain("max-sm:justify-start");
+    }
+  } finally {
+    answers["priorities:show"] = DETAIL;
+    await page.unmount();
+  }
+}, 60_000);
+
 test("the page opens at the milestone its address names (the list's \"+N older sessions\"), and at none otherwise", async () => {
   const at = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60?milestone=s4");
   try {

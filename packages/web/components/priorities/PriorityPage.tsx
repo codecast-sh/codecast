@@ -17,10 +17,10 @@ import { AlertTriangle, ArrowLeft, ChevronRight, PencilLine, Target, X } from "l
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { PriorityHistory, PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import type { PriorityView } from "../../lib/priorityDetail";
-import { asksPerson, bestSession } from "@codecast/shared/contracts/priorityDerive";
+import { asksPerson } from "@codecast/shared/contracts/priorityDerive";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { usePriorityDetail, useSyncPriorityDetail } from "../../hooks/usePriorityDetail";
-import { branchesOf, usePriorityLookups, usePriorityModel, type LinkLookups } from "../../hooks/usePriorityModels";
+import { branchesOf, linkedPrRefs, linkedSessionIds, usePriorityLookups, usePriorityModel, type LinkLookups } from "../../hooks/usePriorityModels";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useSearchParams } from "next/navigation";
@@ -30,7 +30,7 @@ import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame } from "../ui/page-header";
 import { pastBadge, priorityHref, rankProvenance } from "../../lib/priorities";
-import { LIST_DAYS, TOUCH_AREA, lastDays, localDayKey, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { LIST_DAYS, TOUCH_AREA, lastDays, lineSession, localDayKey, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { ActionButton, AnswerSecondary, BranchChip, DeployChip, MilestoneMark, PlanChip, PrChip, SessionChip } from "./parts";
 import { MilestoneDetail, PendingMark, SessionRow, TypeRow, WorkflowRuns } from "./PriorityBlock";
@@ -76,7 +76,8 @@ function PriorityBody({ row }: { row: PriorityView }) {
     { remember: true },
   ).data as PriorityHistory | undefined;
   const model = usePriorityModel(row, history, days);
-  const lookups = usePriorityLookups();
+  const linked = useMemo(() => ({ ids: linkedSessionIds([row]), prs: linkedPrRefs([row]) }), [row]);
+  const lookups = usePriorityLookups(linked.ids, linked.prs);
   const { action } = model;
   // Everything else asking the person here, past the one the action answers.
   const waiting = useMemo(() => waitingOf([model]).filter((w) => w.session.conversation_id !== action?.session?.conversation_id).map((w) => ({ ...w, rank: null })), [model, action]);
@@ -260,7 +261,7 @@ function MilestoneChips({ model, m }: { model: PriorityModel; m: MilestoneModel 
     chip = <ActionButton row={model.row} action={mine} />;
     shown = mine.session;
   } else {
-    shown = m.sessions.find(asksPerson) ?? bestSession(m.sessions);
+    shown = lineSession(model, m);
     if (shown) chip = asksPerson(shown) ? <AnswerSecondary s={shown} /> : <SessionChip s={shown} className="max-w-[16rem]" />;
   }
   const others = m.sessions.filter((s) => s !== shown).length + m.more;
@@ -307,16 +308,24 @@ function MilestoneRow({ model, m, open, onToggle, now, lookups }: { model: Prior
         <span className={cn("flex flex-1 items-center gap-2.5", m.done ? "min-w-0" : "min-w-[12rem]")}>
           {/* The owner's box takes the row's left edge as its press area, 44px tall. */}
           {row.mine ? <MilestoneToggle row={row} step={m.step} className={cn("-my-1.5 -ml-3 h-11 pl-3 pr-1", TOUCH_AREA)} /> : <MilestoneMark done={m.done} />}
-          {renaming
-            ? <MilestoneTitleInput title={m.step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, m.key, next); }} />
-            : <span className={cn("min-w-0 text-ui", m.done ? "text-sol-text-muted" : "text-sol-text")}>{m.step.title}</span>}
-          {m.looksDone && <LooksDone row={row} step={m.step} />}
-          {m.correctionPending && <PendingMark />}
+          {/* On a phone the marks go on a line of their own under the title, as on the list. */}
+          <span className="flex min-w-0 flex-1 items-center gap-2.5 max-sm:flex-col max-sm:items-start max-sm:gap-0.5">
+            {renaming
+              ? <MilestoneTitleInput title={m.step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, m.key, next); }} />
+              : <span data-milestone-title className={cn("min-w-0 text-ui", m.done ? "text-sol-text-muted" : "text-sol-text")}>{m.step.title}</span>}
+            {(m.looksDone || m.correctionPending) && (
+              <span data-milestone-marks className="flex flex-wrap items-center gap-2">
+                {m.looksDone && <LooksDone row={row} step={m.step} />}
+                {m.correctionPending && <PendingMark />}
+              </span>
+            )}
+          </span>
         </span>
         {m.done ? (
           <span className="ml-auto shrink-0 text-meta tabular-nums text-sol-text-dim">{m.step.done_at ? `Landed ${shortDate(m.step.done_at)}` : "Done"}</span>
         ) : (
-          <span data-line-chips className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5"><MilestoneChips model={model} m={m} /></span>
+          // On a phone every row's action starts at one x, under its title, on a line of its own below the ⋯.
+          <span data-line-chips className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5 max-sm:order-last max-sm:ml-[24px] max-sm:basis-[calc(100%-24px)] max-sm:justify-start"><MilestoneChips model={model} m={m} /></span>
         )}
         {row.mine && <MilestoneMenu row={row} step={m.step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" />}
       </div>
@@ -354,7 +363,7 @@ function Linked({ model, now, lookups }: { model: PriorityModel; now: number; lo
           </div>
         </TypeRow>
       )}
-      {plans.length > 0 && <TypeRow label="Plan">{plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} className="max-w-[24rem]" />)}</TypeRow>}
+      {plans.length > 0 && <TypeRow label="Plan">{plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className="max-w-[24rem]" />)}</TypeRow>}
       {prs.length > 0 && <TypeRow label="PRs">{prs.map((p) => <PrChip key={p} pr={p} state={lookups.prState(p)} />)}</TypeRow>}
       {branches.length > 0 && <TypeRow label="Branches">{branches.map((b) => <BranchChip key={b} name={b} />)}</TypeRow>}
       {deploys.length > 0 && <TypeRow label="Deploys">{deploys.map((d) => <DeployChip key={d.id} d={d} now={now} />)}</TypeRow>}

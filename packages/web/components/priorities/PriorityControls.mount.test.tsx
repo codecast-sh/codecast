@@ -584,3 +584,31 @@ test("Correct…'s Cancel and Save are 44px under a coarse pointer", async () =>
     await page.unmount();
   }
 }, 60_000);
+
+test("Move to… lists this priority's milestones under its name, polish after a separator; Merge into… and Move to… fit the screen, their names wrapping", async () => {
+  const r1 = stored("pri-1");
+  useInboxStore.getState().syncTable("priorities", [{ ...r1, steps: [...r1.steps, step("p1", "Request digest", "polish")], links: [...r1.links, links("p1", [])] }] as any, { isDelta: true });
+  const page = await mount(<Live />);
+  try {
+    await press(line("pri-1", "s1").querySelector('[role="button"]')!);
+    await page.waitFor(() => !!line("pri-1", "s1").querySelector("[data-milestone-detail]"));
+    await openSub(line("pri-1", "s1").querySelector(`[data-session-menu="${FEED.short_id}"]`)!, '[data-act="move-session"]');
+    const list = document.querySelector('[data-sub-list="move-session"]')!;
+    const parts = [...list.children].map((n) => n.hasAttribute("data-move-here") ? `head:${n.textContent}` : n.hasAttribute("data-move-polish") ? "polish-sep" : n.getAttribute("data-move-session-to") ?? (n.getAttribute("role") === "separator" ? "sep" : n.querySelector("[data-move-session-priority]")?.getAttribute("data-move-session-priority") ?? n.getAttribute("data-move-session-priority") ?? n.tagName));
+    expect(parts).toEqual(["head:Cam's eval requests flow", "pri-1/s2", "polish-sep", "pri-1/p1", "sep", "pri-2", "pri-3"]);
+    // Never wider than the room beside its parent menu, and its names wrap rather than clip.
+    expect(list.className).toContain("max-w-[min(20rem,var(--radix-dropdown-menu-content-available-width))]");
+    expect(list.querySelector('[data-move-session-to="pri-1/p1"] span')!.className).toContain("whitespace-normal");
+  } finally {
+    await page.unmount();
+  }
+  const merge = await mount(<Live />);
+  try {
+    await openSub(priorityMenu("pri-3"), '[data-act="merge"]');
+    const list = document.querySelector('[data-sub-list="merge"]')!;
+    expect(list.className).toContain("max-w-[min(20rem,var(--radix-dropdown-menu-content-available-width))]");
+    expect(list.querySelector("[data-merge-into] span:last-child")!.className).toContain("whitespace-normal");
+  } finally {
+    await merge.unmount();
+  }
+}, 60_000);
