@@ -118,7 +118,8 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     session = {
       conversation_id: key, short_id: key.slice(0, 7), title: readable?.title ?? null,
       ...(readable?.user_id ? { user_id: String(readable.user_id) } : {}),
-      ...(priority ? { priority } : {}),
+      // Always said, null when none: the web store merges rows, and an absent key would keep a removed priority.
+      priority,
       ...(owner.via === "task" ? { via: "task" as const } : {}),
     };
   }

@@ -152,7 +152,7 @@ describe("the waiting queue (DP12)", () => {
       ["s:conv_api_work", [["04", "failed"], ["02", "passed"]], "failed"],
       ["none", [["05", "running"]], "running"],
     ]);
-    expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals", user_id: "user_me" });
+    expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals", user_id: "user_me", priority: null });
     // Main's order rides each commit, and a branch looked up and not found reads null, never absent.
     for (const c of backend.queue.groups.flatMap((g: any) => g.commits)) {
       expect(typeof c.main_at).toBe("number");
@@ -173,8 +173,8 @@ describe("the waiting queue (DP12)", () => {
       const [c] = backend.queue.groups[0].commits;
       return { session: c.session, branch: c.branch };
     };
-    expect(await sessionOf(TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: null }, branch: null });
-    expect(await sessionOf(BO_TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: "Bo's private fix", user_id: BO }, branch: "bo/secret" });
+    expect(await sessionOf(TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: null, priority: null }, branch: null });
+    expect(await sessionOf(BO_TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: "Bo's private fix", user_id: BO, priority: null }, branch: "bo/secret" });
   });
 
   test("a deploy going live records the commits it carried, the sessions and tasks behind them, and what came after", async () => {

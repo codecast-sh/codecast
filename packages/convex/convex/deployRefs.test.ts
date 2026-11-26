@@ -79,17 +79,18 @@ describe("deployRefs.recentForTeam", () => {
 
   test("each session names its owner; a session the viewer may not read names nobody", async () => {
     const [mate] = await run(ANA);
-    expect(mate.sessions).toEqual([{ conversation_id: "conv_open", short_id: "conv_op", title: "Shared fix", user_id: BEN, task_short_ids: ["ct-1"] }]);
+    expect(mate.sessions).toEqual([{ conversation_id: "conv_open", short_id: "conv_op", title: "Shared fix", user_id: BEN, priority: null, task_short_ids: ["ct-1"] }]);
     const [own] = await run(BEN);
     expect(own.sessions.map((s: any) => s.user_id)).toEqual([BEN, BEN]);
   });
 
   test("a session's priority shows only while the team has priorities on, to a viewer who may read it", async () => {
     const [off] = await run(BEN);
-    expect(off.sessions.find((s: any) => s.conversation_id === "conv_private").priority).toBeUndefined();
+    // Said as null, never left out: the web store merges rows, and a missing key would keep a removed priority.
+    expect(off.sessions.find((s: any) => s.conversation_id === "conv_private").priority).toBeNull();
     const [on] = await run(BEN, { priorities: true });
     expect(on.sessions.find((s: any) => s.conversation_id === "conv_private").priority).toEqual({ id: "pri-4", title: "Ship the board" });
-    expect(on.sessions.find((s: any) => s.conversation_id === "conv_open").priority).toBeUndefined();
+    expect(on.sessions.find((s: any) => s.conversation_id === "conv_open").priority).toBeNull();
   });
 
   test("each session names the tasks its commits carry, only those the viewer may read", async () => {

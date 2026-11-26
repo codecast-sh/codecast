@@ -71,7 +71,7 @@ export const recentForTeam = query({
           const short = (await taskOf(t as Id<"tasks">))?.short_id;
           if (short) task_short_ids.push(short);
         }
-        sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, ...(c.priority ? { priority: c.priority } : {}), task_short_ids });
+        sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, priority: c.priority, task_short_ids });
       }
       const taskIds = [...new Set([...d.carries.map((c) => String(c.task_id)), ...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String))])];
       const taskRows = [];

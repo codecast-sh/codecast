@@ -364,9 +364,9 @@ export type QueueCommit = {
   author: string | null;
   /**
    * The session that wrote it: its Codecast-Session trailer, or (`via: "task"`) the newest session on the task it names.
-   * `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may read it.
+   * `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may read it, else null.
    */
-  session: { conversation_id: string; short_id: string | null; title: string | null; user_id?: string; priority?: { id: string; title: string | null }; via?: "task" } | null;
+  session: { conversation_id: string; short_id: string | null; title: string | null; user_id?: string; priority?: { id: string; title: string | null } | null; via?: "task" } | null;
   tasks: Array<{ task_id: string; short_id: string | null; title: string | null }>;
   /** The branch the change came from: its pull request's head, else the branch its session worked on (never the default branch). */
   branch?: string | null;
