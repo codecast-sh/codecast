@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { InboxView } from '@/app/(tabs)/inbox';
 import { goToTab } from '@/lib/tabNavigation';
+import { setAppMenuOpen } from '@/lib/appMenu';
 import { bindFocusedUndoBarOpen } from '@/lib/undoBar';
 
 const DrawerContext = createContext<{ open: () => void } | null>(null);
@@ -44,6 +45,12 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
   useFocusEffect(useCallback(() => bindFocusedUndoBarOpen(openSession), [openSession]));
 
   const exit = useCallback(() => goToTab(router, '/(tabs)/inbox'), [router]);
+  // The app menu lives behind the tabs: leave for them with it open, so the
+  // places that are not tabs are one press from any conversation.
+  const openMenu = useCallback(() => {
+    goToTab(router, '/(tabs)/inbox');
+    setAppMenuOpen(true);
+  }, [router]);
 
   const drawer = useMemo(() => ({ open: () => setOpen(true) }), [setOpen]);
 
@@ -53,7 +60,7 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
       enabled
       open={open}
       setOpen={setOpen}
-      drawer={<InboxView panel currentId={id} onOpenSession={openSession} onExit={exit} />}
+      drawer={<InboxView panel currentId={id} onOpenSession={openSession} onExit={exit} onOpenMenu={openMenu} />}
     >
       {children}
     </SlideOutDrawer>

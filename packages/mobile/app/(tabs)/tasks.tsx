@@ -1,3 +1,4 @@
+import { MenuButton } from "@/components/nav/MenuButton";
 import {
   useState,
   useEffect,
@@ -664,6 +665,7 @@ export default function TasksScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <RNView style={styles.header}>
         <RNView style={styles.headerLeft}>
+          <MenuButton />
           <RNText style={styles.headerTitle}>
             {SEGMENT_LABELS[segment]}
           </RNText>

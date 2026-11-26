@@ -8,7 +8,9 @@ import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { projectColor } from '@/components/SessionItem';
 import { labelHexColor } from '@/lib/labelColors';
 import { showActionSheet } from '@/lib/popups';
-import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
+import { useRouter } from 'expo-router';
+import { setAppMenuOpen } from '@/lib/appMenu';
+import { goToTab } from '@/lib/tabNavigation';
 import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
 import { DrawerHeading as Heading, DrawerRow as Row } from '@/components/nav/DrawerRow';
 import { Places } from '@/components/nav/Places';
@@ -18,15 +20,16 @@ import {
 import { inboxViewOptions } from '@/lib/inboxViews';
 import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 
-
 // The find field shows once the two lists outgrow a screen.
 const FIND_AT = 10;
 
-/** The inbox's slide-out panel: every way to narrow the inbox (all, a label,
- *  a project) as a list with counts, the places that are not tabs, and the
- *  view lens. Picking a filter applies it and slides the inbox back. */
-export function InboxDrawer() {
+/** The app menu, the slide-out behind every tab: the places that are not
+ *  tabs, then every way to narrow the inbox (all, a label, a project) with
+ *  counts, and the inbox's view lens. Picking a filter applies it and shows
+ *  the inbox, from whichever tab the menu was opened on. */
+export function AppMenu() {
   const Theme = useTheme();
+  const router = useRouter();
   const { placed, labels, bucketCounts, projectCounts } = useInboxFilterCounts();
   const buckets = useInboxStore((s) => s.buckets);
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
@@ -47,7 +50,8 @@ export function InboxDrawer() {
     void Haptics.selectionAsync();
     apply();
     setFind('');
-    setInboxDrawerOpen(false);
+    setAppMenuOpen(false);
+    goToTab(router, '/(tabs)/inbox');
   };
   const store = () => useInboxStore.getState();
 
@@ -79,7 +83,7 @@ export function InboxDrawer() {
             onPress={() => pick(() => { store().setActiveBucketFilter(null); store().setActiveProjectFilter(null); })}
           />
         )}
-        {!q && <Places onLeave={() => setInboxDrawerOpen(false)} />}
+        {!q && <Places onLeave={() => setAppMenuOpen(false)} />}
         {shownLabels.length > 0 && <Heading>Labels</Heading>}
         {shownLabels.map((b) => {
           const selected = activeBucketFilter === b._id;

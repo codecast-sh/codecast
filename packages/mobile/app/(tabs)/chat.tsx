@@ -14,6 +14,7 @@ import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatHomeList } from '@/components/chat/ChannelList';
 import { TeamActivityList } from '@/components/team/TeamActivityList';
 import { useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
+import { MenuButton } from '@/components/nav/MenuButton';
 import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
 import { showActionSheet } from '@/lib/popups';
@@ -79,7 +80,8 @@ export default function ChatScreen() {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
         <RNView style={styles.header}>
-          <RNText style={styles.headerTitle}>Chat</RNText>
+          <MenuButton />
+        <RNText style={styles.headerTitle}>Chat</RNText>
         </RNView>
         <RNView style={styles.emptyContainer}>
           <FontAwesome name="comments-o" size={30} color={Theme.textMuted0} />
@@ -98,6 +100,7 @@ export default function ChatScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <RNView style={[styles.header, activeTeamId ? { borderBottomWidth: 0 } : null]}>
+        <MenuButton />
         <RNText style={styles.headerTitle}>{segment === 'activity' ? 'Activity' : 'Chat'}</RNText>
         {activeTeam && (
           <TouchableOpacity

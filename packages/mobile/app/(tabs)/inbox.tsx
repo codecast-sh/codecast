@@ -29,7 +29,8 @@ import { TriggerDock } from '@/components/TriggerDock';
 import { useQuery } from 'convex/react';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
-import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
+import { setAppMenuOpen } from '@/lib/appMenu';
+import { MenuButton } from '@/components/nav/MenuButton';
 import { closeWithAdvice, holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
 import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
 import { closeDetail, reviewedKill } from '@/lib/sessionVerbs';
@@ -87,12 +88,14 @@ const inboxItemKey = (item: InboxListItem) => item.key;
 /** The inbox list. The tab shows it whole; a conversation's slide-out panel
  *  shows it as `panel`, where a row opens in place of the conversation
  *  (`onOpenSession`) and `currentId`'s row is marked as the one on screen. */
-export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
+export function InboxView({ panel = false, currentId, onOpenSession, onExit, onOpenMenu }: {
   panel?: boolean;
   currentId?: string;
   onOpenSession?: (conversationId: string, messageId?: string) => void;
   /** The panel's title leaves for the inbox tab. */
   onExit?: () => void;
+  /** The panel's ☰ leaves for the app menu. */
+  onOpenMenu?: () => void;
 } = {}) {
   if (PERF_PROBE) probeRender('InboxView');
   const Theme = useTheme();
@@ -654,29 +657,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     <InboxRowEnvProvider viewableOwners>
     <SafeAreaView style={styles.container} edges={panel ? ['top', 'bottom', 'left'] : ['top']}>
       <RNView style={styles.header}>
-        {panel ? <TouchableOpacity
-          style={styles.menuBtn}
-          onPress={() => { void Haptics.selectionAsync(); onExit?.(); }}
-          activeOpacity={0.6}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-          accessibilityRole="button"
-          accessibilityLabel="Open the full inbox"
-        >
-          <Feather name="maximize-2" size={19} color={Theme.text} />
-        </TouchableOpacity> : <TouchableOpacity
-          style={styles.menuBtn}
-          onPress={() => { void Haptics.selectionAsync(); setInboxDrawerOpen(true); }}
-          activeOpacity={0.6}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 4 }}
-          accessibilityRole="button"
-          accessibilityLabel="Projects, labels and views"
-        >
-          <Feather name="menu" size={21} color={Theme.text} />
-        </TouchableOpacity>}
+        {/* The ☰ opens the app menu. In a conversation's panel the menu sits
+            behind the tabs, so it leaves for the inbox tab with it open. */}
+        <MenuButton onPress={panel ? onOpenMenu : undefined} />
         {filterName ? (
           <RNView style={styles.filterTitle}>
             <RNView style={[styles.filterDot, { backgroundColor: filterColor }]} />
-            <RNText style={[styles.headerTitle, styles.headerTitleShrink]} numberOfLines={1} onPress={panel ? onExit : () => setInboxDrawerOpen(true)}>{filterName}</RNText>
+            <RNText style={[styles.headerTitle, styles.headerTitleShrink]} numberOfLines={1} onPress={panel ? onExit : () => setAppMenuOpen(true)}>{filterName}</RNText>
             {shownCount > 0 && !isSearching && <RNText style={styles.headerCount}>{shownCount}</RNText>}
             <TouchableOpacity onPress={clearFilter} hitSlop={10} accessibilityLabel="Show all sessions">
               <Feather name="x-circle" size={17} color={Theme.textMuted0} />
@@ -817,13 +804,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: '500',
     color: Theme.textMuted0,
     fontVariant: ['tabular-nums'],
-  },
-  menuBtn: {
-    width: 32,
-    height: 32,
-    marginLeft: -6,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   filterTitle: {
     flexDirection: 'row',
