@@ -201,6 +201,13 @@ describe("rate limit", () => {
     near(allowed([at(H, 0.6)], now), now + (0.6 / (0.9 / 24) - 1) * H);
     // A catch-up spends its own allowance.
     expect(allowed([at(H, 2, true)], now)).toBe(now - H + PASS_MIN_GAP_MS);
+    // A pass at or past the whole ceiling: the refill is clamped to 5% of it a day, so the wait is long but finite and ahead.
+    for (const cost of [1.5, 3]) {
+      const next = allowed([at(H, cost)], now);
+      expect(Number.isFinite(next)).toBe(true);
+      expect(next).toBeGreaterThan(now);
+      near(next, now + (cost / (0.05 * 1.5 / 24) - 1) * H);
+    }
   });
 });
 

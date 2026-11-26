@@ -23,6 +23,8 @@ const PASS_SPAN_MS = 10 * MINUTE;
 export const PASS_PACE_SHARE = 0.8;
 /** The bucket holds about this many passes, so a burst of work gets a few hourly passes before the pace sets in. */
 export const PASS_BUCKET_PASSES = 3;
+/** The slowest the bucket refills, as a share of the ceiling a day: a pass dearer than the whole ceiling still waits a finite time. */
+export const PASS_MIN_REFILL_SHARE = 0.05;
 
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -39,7 +41,8 @@ const median = (xs: number[]) => {
  * holds PASS_BUCKET_PASSES expected passes, but never more than the ceiling
  * leaves beside a day's refill (capacity + a day's refill <= the ceiling, so
  * no day's spend reaches it), and never less than one pass (the refill slows
- * instead). Its level is replayed from the day's runs, full a day ago, so it
+ * instead, never below PASS_MIN_REFILL_SHARE of the ceiling a day, so a
+ * median pass at or past the ceiling waits days, not forever). Its level is replayed from the day's runs, full a day ago, so it
  * needs no stored state. Catch-up runs spend their own allowance and count
  * only as the last run.
  */
@@ -56,7 +59,7 @@ export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number, cei
   }
   const expected = median(passes);
   const capacity = Math.max(expected, Math.min(PASS_BUCKET_PASSES * expected, (1 - PASS_PACE_SHARE) * ceiling));
-  const perMs = Math.min(PASS_PACE_SHARE * ceiling, ceiling - capacity) / DAY;
+  const perMs = Math.max(PASS_MIN_REFILL_SHARE * ceiling, Math.min(PASS_PACE_SHARE * ceiling, ceiling - capacity)) / DAY;
   let level = capacity;
   let at = now - DAY;
   for (const r of paid) {
