@@ -33,7 +33,6 @@ import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
 import { sessionStartupState } from "./sessionLifecycle";
-import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 
 export const SESSION_STATUSES = ["needs_you", "error", "working", "starting", "done", "dormant", "idle", "stashed", "killed"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
@@ -130,6 +129,8 @@ export type StatusRow = {
   agent_status?: string | null;
   is_subagent?: boolean | null;
   parent_conversation_id?: string | null;
+  /** Set on a parent link the person made (a fork, an agent switch, a plan handoff): that row is no subagent. */
+  parent_message_uuid?: string | null;
   spawned_by_conversation_id?: string | null;
   agent_type?: string | null;
   updated_at?: number;
@@ -278,9 +279,10 @@ function overlaidBucket(bucket: string, row: StatusRow, now: number, live: Statu
 /** The one state a session shows. */
 export function sessionStatusOf({ row, section, placement, now, live = {}, hosted = false, nested = false }: SessionStatusInput): SessionStatus {
   const where = section ?? (placement ? sectionOfBucket(overlaidBucket(placement.bucket, row, now, live)) : null);
-  // A Claude Code subagent drawn under its parent (the shared
-  // isSubagentConversation: the flag, or a parent pointer on a row that lacks
-  // it) runs inside its parent's turn and hands its result back there; it has
+  // A Claude Code subagent drawn under its parent (the server's rule: the
+  // flag, or a parent pointer with no parent message; an agent-switch
+  // continuation or a plan handoff carries one and is the person's own
+  // session) runs inside its parent's turn and hands its result back there; it has
   // no live status of its own. It is producing while its last output is
   // within the grace the server's parent park uses (SUBAGENT_PRODUCING_GRACE_MS,
   // so a long tool call stays Working), and Done once it completed or fell
@@ -290,7 +292,7 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   // row still decide. A spawned worker, and a subagent standing as its own
   // card, read their placement like any session.
   const inParentsTurn = nested && !section && (row.message_count ?? 0) > 0
-    && isSubagentConversation({ is_subagent: row.is_subagent === true, parent_conversation_id: row.parent_conversation_id })
+    && (row.is_subagent === true || (!!row.parent_conversation_id && !row.parent_message_uuid))
     && !row.spawned_by_conversation_id && !row.agent_status && !live.asking && !live.pendingSend
     && where !== "dismissed" && where !== "stashed" && where !== "snoozed" && where !== "questions"
     && !row.inbox_killed_at && !row.inbox_dismissed_at && !row.inbox_stashed_at;

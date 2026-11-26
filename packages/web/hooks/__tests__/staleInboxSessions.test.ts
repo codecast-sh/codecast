@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { staleInboxSessions } from "../useCardSubagents";
+import { blockedInboxSessions, staleInboxSessions } from "../useCardSubagents";
 import type { InboxSession } from "../../store/inboxStore";
 
 // The rail's stale sweep counts and dismisses inbox rows. Under the owners
@@ -45,5 +45,32 @@ describe("staleInboxSessions", () => {
     };
     const ids = staleInboxSessions(more, LEAD, CUTOFF).map((s) => s._id);
     expect(ids.sort()).toEqual([MINE, LEGACY].sort());
+  });
+});
+
+// The blocked pill and the fleet revive banner count only inbox rows: a child
+// its session owns rides its owner's card and is in nobody's inbox.
+describe("blockedInboxSessions", () => {
+  const blocked = { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000, updated_at: NOW - 60_000 } as Partial<InboxSession>;
+  const sessions = Object.fromEntries([
+    row(LEAD, { owners_model: true, owned_by_me: true, ...blocked } as any),
+    row(OWNED, { owners_model: true, owned_by_me: false, owner_session_id: LEAD, parent_conversation_id: LEAD, is_subagent: true, ...blocked } as any),
+    row(MINE, { owners_model: true, owned_by_me: true, owner_session_id: LEAD, parent_conversation_id: LEAD, is_subagent: true, ...blocked } as any),
+    row(LEGACY, { parent_conversation_id: LEAD, is_subagent: true, ...blocked } as any),
+  ].map((s) => [s._id, s]));
+
+  it("skips a child its session owns", () => {
+    const ids = blockedInboxSessions(sessions, undefined, NOW).map((s) => s._id);
+    expect(ids.sort()).toEqual([LEAD, MINE, LEGACY].sort());
+  });
+
+  it("drops a row just told to revive, a stale block and a row with no block", () => {
+    const more = {
+      ...sessions,
+      old: row("old", { ...blocked, pending_api_error_at: NOW - 30 * 24 * 3600_000, updated_at: NOW - 30 * 24 * 3600_000 } as any),
+      fine: row("fine", { updated_at: NOW }),
+    };
+    const ids = blockedInboxSessions(more, { [LEGACY]: NOW - 1000 }, NOW).map((s) => s._id);
+    expect(ids.sort()).toEqual([LEAD, MINE].sort());
   });
 });

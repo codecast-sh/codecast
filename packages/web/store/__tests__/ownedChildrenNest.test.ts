@@ -1,5 +1,7 @@
-import { describe, expect, it } from "bun:test";
-import { __resetInboxPlacementCacheForTests, computeVisualOrder, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
+import { describe, expect, it, setSystemTime } from "bun:test";
+import { SUBAGENT_PRODUCING_GRACE_MS } from "@codecast/shared/contracts";
+import { __resetInboxPlacementCacheForTests, computeVisualOrder, drawnUnderParentIds, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
+import { coarseNowOf, INBOX_CLOCK_MS, subscribeCoarseTick, tickCoarseClocks } from "../../hooks/useCoarseNow";
 import { placeSections } from "./placeTestHarness";
 
 // Under the owners model a subagent belongs to the session that started it, so
@@ -132,6 +134,15 @@ describe("flat views list owned children under their card", () => {
     expect(flat(p, { full: true, filter: "active_done" })).toContain(ORPHAN);
   });
 
+  // A row listed under its card reads as drawn there (the card's and the
+  // phone row's nested state); one whose card is off the list stands alone.
+  it("says which listed rows are drawn under their card", () => {
+    const p = place([lead(), busy(CHILD, PARENT), finished(ORPHAN, PARENT)]);
+    const list = flatViewSessions(p.sorted, p.subsByParent, { mode: "recent", showSubagents: true, keepSub: () => true });
+    expect([...drawnUnderParentIds(list, p.subsByParent)].sort()).toEqual([CHILD, ORPHAN].sort());
+    expect(drawnUnderParentIds(list.filter((s) => s._id !== PARENT), p.subsByParent).size).toBe(0);
+  });
+
   it("the other modes list only the open one, under its card", () => {
     const p = place([row(OTHER, { updated_at: T0 - 1000 }), lead(), finished(CHILD, PARENT)], { currentSessionId: CHILD });
     const ids = flat(p, { full: false, focusedId: CHILD });
@@ -157,6 +168,42 @@ describe("keyboard order in a flat view follows Which ones", () => {
   it("walks only the nested cards the filter keeps", () => {
     expect(order("active")).toEqual([PARENT, CHILD]);
     expect(order("all").sort()).toEqual([PARENT, CHILD, ORPHAN].sort());
+  });
+});
+
+// The list is drawn on the inbox clock (useCoarseNow(INBOX_CLOCK_MS)), which
+// lags the wall clock by up to a tick: a subagent quiet just under its
+// producing grace there is Working, and kept, while the wall clock already
+// calls it Done. The keyboard order reads the same clock.
+describe("keyboard order in a flat view reads the clock the list is drawn on", () => {
+  it("walks a quiet subagent the drawn list keeps, near the producing grace", () => {
+    setSystemTime(new Date(T0));
+    const stop = subscribeCoarseTick(INBOX_CLOCK_MS, () => {});
+    try {
+      tickCoarseClocks();
+      const drawnAt = coarseNowOf(INBOX_CLOCK_MS);
+      const quietAt = drawnAt - SUBAGENT_PRODUCING_GRACE_MS + 5_000;
+      const quiet = owned(CHILD, PARENT, { agent_status: undefined, is_idle: undefined, status: "active", updated_at: quietAt, agent_status_updated_at: quietAt } as any);
+      // Past the grace on the wall clock; the inbox clock has not ticked.
+      setSystemTime(new Date(drawnAt + 10_000));
+      expect(subagentKeepOf("active", drawnAt, null, {})(quiet)).toBe(true);
+      __resetInboxPlacementCacheForTests();
+      const ids = computeVisualOrder({
+        sessions: Object.fromEntries([lead(), quiet].map((s) => [s._id, s])),
+        sessionsWithQueuedMessages: new Set<string>(),
+        pendingMessages: {},
+        currentSessionId: null,
+        pendingSessionCreates: {},
+        bucketAssignments: {},
+        buckets: {},
+        currentUser: { _id: ME },
+        clientState: { ui: { inbox_view_mode: "recent", subagent_rows: "full", subagent_filter: "active", inbox_show_old: true } },
+      }).map((s) => s._id);
+      expect(ids).toEqual([PARENT, CHILD]);
+    } finally {
+      stop();
+      setSystemTime();
+    }
   });
 });
 

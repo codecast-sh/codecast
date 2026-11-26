@@ -290,6 +290,18 @@ describe("a nested subagent whose turn ended", () => {
     expect(status(quiet(75_000, { status: "completed" }))).toBe("done");
   });
 
+  // A parent link the person made (an agent switch, a plan handoff) carries a
+  // parent message: that row is a full session of theirs, waiting on them.
+  test("an agent-switch continuation or a plan-handoff child waiting on the person keeps Needs you", () => {
+    for (const uuid of ["agent-switch", "plan-handoff"]) {
+      const child = row({ parent_conversation_id: "jx7parent", parent_message_uuid: uuid, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 });
+      expect(railRowPlacement(child, NOW).bucket).toBe("needs_input");
+      expect(status(child)).toBe("needs_you");
+    }
+    // A Claude Code subagent's parent pointer has no parent message.
+    expect(status(row({ parent_conversation_id: "jx7parent", parent_message_uuid: null, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 }))).toBe("done");
+  });
+
   test("a subagent standing as its own card reads its placement", () => {
     const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
     expect(status(sub, undefined, false)).toBe("needs_you");

@@ -3,7 +3,7 @@ import {
   useInboxStore, placeInboxRows, sessionsWakeSig, pendingSendWakeSig, resolveShowOld,
   teamInboxIdsOf,
 } from '@codecast/web/store/inboxStore';
-import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
+import { INBOX_CLOCK_MS, useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 
 /** The inbox's rows as the shared chokepoint places them (store
  *  placeInboxRows): the exact computation web runs, so the inbox, its
@@ -19,7 +19,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 export function useInboxPlacement() {
   const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
   const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
-  const coarseNow = useCoarseNow(15_000);
+  const coarseNow = useCoarseNow(INBOX_CLOCK_MS);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const pendingSessionCreates = useInboxStore((s) => s.pendingSessionCreates);
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);

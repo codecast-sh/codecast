@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket, Lock, Users } from "lucide-react";
-import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden, underOwnersModel } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden } from "@codecast/shared/contracts";
 import { shipHref } from "../../lib/ship/sessionShip";
 import { closedBackWords } from "@codecast/shared/contracts/closeKind";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -14,7 +14,7 @@ import { formatDateFull } from "../../lib/utils";
 import { sessionIdentity } from "../../lib/sessionIdentity";
 import { SESSION_STATUS, sessionStatusOf, type StatusSection } from "../../lib/sessionStatus";
 import { sessionCardLine } from "../../lib/sessionCardLine";
-import { getProjectName, isFork, showsBlockedBadge, railRowPlacement, isOwnedChildRow } from "../../store/inboxStore";
+import { getProjectName, isFork, showsBlockedBadge, railRowPlacement } from "../../store/inboxStore";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import { ImageLightbox } from "../ImageGallery";
 import { ViewerFaces } from "../presence/ViewerFaces";
@@ -89,6 +89,7 @@ export function ModernSessionCardView({
   sectionStatus,
   forkColorKey,
   subRow,
+  underParent = false,
   roleSessions = 0,
   roleAbove = null,
   now,
@@ -141,9 +142,11 @@ export function ModernSessionCardView({
   const isPendingSend = liveness.pendingSend;
   const blocked = showsBlockedBadge(session.pending_api_error, isPendingSend, liveness.blockedReviveAt, now);
   // The state: the section decides it for a top-level card (so the word agrees
-  // with the header above it); a nested row and a list with no sections read
-  // the row's own placement, the verdict the rail would file it under.
-  const section = nested ? null : sectionOfProps(variant, sectionStatus);
+  // with the header above it), a subagent standing as its own card included; a
+  // row drawn under another card and a list with no sections read the row's
+  // own placement, the verdict the rail would file it under.
+  const drawnUnder = nested && (underParent || !!subRow);
+  const section = drawnUnder ? null : sectionOfProps(variant, sectionStatus);
   const status = sessionStatusOf({
     row: session,
     section,
@@ -151,9 +154,10 @@ export function ModernSessionCardView({
     now,
     live: { pendingSend: isPendingSend, blocked, stopped: !!liveness.stopped, asking: !!liveness.asking || !!liveness.asksOk },
     hosted,
-    // Drawn under its parent: under the owners model only a child its session
-    // owns is; one the viewer owns stands as its own card.
-    nested: nested && (!underOwnersModel(session) || isOwnedChildRow(session)),
+    // Drawn under its parent's card, where the nesting site says so: a child
+    // standing as its own card (an escalated wait, open while its parent is
+    // off the list) reads its section.
+    nested: nested && underParent,
   });
   const meta = SESSION_STATUS[status];
   // Under the owners model a wait its agent owner answers says who has it.

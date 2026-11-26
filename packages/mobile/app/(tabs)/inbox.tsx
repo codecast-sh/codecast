@@ -14,7 +14,7 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type BucketItem,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, subagentKeepOf, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, subagentKeepOf, flatViewSessions, drawnUnderParentIds, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
@@ -81,7 +81,7 @@ const FIRST_PAINT_ROWS = 14;
  *  lines near the screen are mounted, whatever the account holds. */
 type InboxListItem =
   | { kind: 'header'; key: string; section: string; label: string; color?: string; count: number; collapsed: boolean }
-  | { kind: 'row'; key: string; session: InboxSession }
+  | { kind: 'row'; key: string; session: InboxSession; underParent?: boolean }
   | { kind: 'node'; key: string; node: ReactNode };
 
 const inboxItemKey = (item: InboxListItem) => item.key;
@@ -361,7 +361,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
 
   const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
 
-  const renderSessionItem = useCallback((s: InboxSession) => {
+  const renderSessionItem = useCallback((s: InboxSession, underParent = false) => {
     const row = (
     <SwipeableSessionItem
       key={s._id}
@@ -378,6 +378,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
       placedBucket={placed.placements.get(s._id)?.bucket}
       placedState={placed.placements.get(s._id)?.work_state}
       pendingSend={pendingSendIds.has(s._id)}
+      underParent={underParent}
       priorityRank={priorityView ? priorityView.rankOf(s) : undefined}
       subagents={subagentLinesByParent?.get(s._id)}
     />
@@ -394,19 +395,19 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number): InboxListItem[] => {
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number, underParent?: ReadonlySet<string>): InboxListItem[] => {
     if (items.length === 0) return [];
     const key = collapseKey ?? label;
     const collapsed = !!collapsedSections?.[key];
     const out: InboxListItem[] = [{ kind: 'header', key: `h:${key}`, section: key, label, color, count: count ?? items.length, collapsed }];
-    if (!collapsed) for (const session of items) out.push({ kind: 'row', key: `${key}:${session._id}`, session });
+    if (!collapsed) for (const session of items) out.push({ kind: 'row', key: `${key}:${session._id}`, session, underParent: underParent?.has(session._id) });
     return out;
   }, [collapsedSections]);
 
   // One heading for every lens: sentence case in the interface face, muted
   // ink, the count beside it, and a dot in the section's colour.
   const renderListItem = useCallback<ListRenderItem<InboxListItem>>(({ item }) => {
-    if (item.kind === 'row') return renderSessionItem(item.session);
+    if (item.kind === 'row') return renderSessionItem(item.session, item.underParent);
     if (item.kind === 'node') return <>{item.node}</>;
     const { section, label, color, count, collapsed } = item;
     return (
@@ -511,7 +512,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         // Full rows: the nested ones the filter keeps, as the rail lists them.
         keepSub: showSubagents ? subagentKeepOf(subagentFilter, coarseNow, currentSessionId) : undefined,
       });
-      return renderSection("All", flat, Theme.cyan, "all");
+      // A subagent hoisted under its card reads as drawn there (rowWithOwner).
+      return renderSection("All", flat, Theme.cyan, "all", undefined, drawnUnderParentIds(flat, subsByParent));
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled

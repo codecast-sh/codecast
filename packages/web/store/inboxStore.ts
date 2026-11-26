@@ -348,7 +348,7 @@ export { isConvexId };
 export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLiveTasks } from "../lib/liveEntities";
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { feedCoverMetaKey } from "../lib/feedCatchup";
-import { tickCoarseClocks } from "../hooks/useCoarseNow";
+import { coarseNowOf, INBOX_CLOCK_MS, tickCoarseClocks } from "../hooks/useCoarseNow";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import type { AgentChainSpec, AgentDefinitionSpec } from "@codecast/shared/contracts";
@@ -6316,6 +6316,16 @@ export function flatViewSessions(
   return nestOwnedChildren(hoisted, subsByParent, keepOwned);
 }
 
+/** The rows of a flat list (flatViewSessions) drawn under their parent's card:
+ *  nested under a card (subsByParent) the list also holds, where the list
+ *  hoists them. The rest stand as cards of their own. */
+export function drawnUnderParentIds(list: readonly InboxSession[], subsByParent: ReadonlyMap<string, readonly InboxSession[]>): Set<string> {
+  const present = new Set(list.map((s) => s._id));
+  const out = new Set<string>();
+  for (const [parent, subs] of subsByParent) if (present.has(parent)) for (const sub of subs) if (present.has(sub._id)) out.add(sub._id);
+  return out;
+}
+
 // A child its session owns (owners model) is in nobody's inbox, so the list
 // holds at most the open one, at its own slot; placeInboxRows nests every one
 // under its owner's card (subsByParent). Each one `keep` passes goes directly
@@ -6627,12 +6637,12 @@ function visualOrderOf(state: {
     // row and the panel's auto-reveal effect force-expands the section).
     if (collapsed["all"]) return [];
     // Full rows list only the nested rows the "Which ones" filter keeps, as
-    // the panel draws them.
+    // the panel draws them, on the clock the panel draws on.
     const showSubagents = resolveShowSubagents(state.clientState.ui);
     const flat = flatViewSessions(placed.sorted, placed.subsByParent, {
       mode,
       showSubagents,
-      keepSub: showSubagents ? subagentKeepOf(resolveSubagentFilter(state.clientState.ui), Date.now(), focusedId, state) : undefined,
+      keepSub: showSubagents ? subagentKeepOf(resolveSubagentFilter(state.clientState.ui), coarseNowOf(INBOX_CLOCK_MS), focusedId, state) : undefined,
       focusedId,
       manualOrder: state.clientState.ui?.inbox_manual_order,
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,

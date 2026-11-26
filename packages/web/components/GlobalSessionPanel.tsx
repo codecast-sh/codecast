@@ -22,18 +22,18 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem, isOwnedChildRow } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
-import { useCoarseNow } from "../hooks/useCoarseNow";
+import { INBOX_CLOCK_MS, useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { useKillWithReview } from "../hooks/useKillWithReview";
-import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
-import { isClosedSession, withSafetyBlock } from "@codecast/shared/contracts";
+import { isClosedSession } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
@@ -76,7 +76,7 @@ import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { railRowSelector } from "../lib/subagentRows";
-import { staleInboxSessions, useCardSubagents } from "../hooks/useCardSubagents";
+import { blockedInboxSessions, staleInboxSessions, useCardSubagents } from "../hooks/useCardSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "../store/browserTabsView";
@@ -1874,7 +1874,7 @@ function SessionListPanelImpl({
   // is time-driven, not field-driven — so feed it a coarse clock to keep that
   // sweep alive without coupling it back to heartbeat churn. 15s is well under the
   // minutes-scale TTL. See useCoarseNow / store/wakeSig.ts.
-  const coarseNow = useCoarseNow(15_000);
+  const coarseNow = useCoarseNow(INBOX_CLOCK_MS);
   // THE PLACEMENT CHOKEPOINT (store placeInboxRows, sync-convergence C5):
   // scope → shared working-set selection → fold → shared per-row placement →
   // sections, in ONE call every counting surface shares. Team mode renders the
@@ -2288,24 +2288,11 @@ function SessionListPanelImpl({
   // never count — claude only, dismissed excluded), plus the same window
   // (isCurrentBlock, judged on when the block landed), so the count shown
   // always matches what a revive would act on.
-  const blockedSessions = useMemo(() => {
-    const now = Date.now();
-    // A session the user just told to continue/switch (fresh revive stamp) is
-    // out of the blocked set immediately — the pill count drops and the banner
-    // clears on the click, not on the daemon round trip. The server flag only
-    // resets once the agent resumes; if that never happens the stamp expires
-    // and the session re-enters here (coarseNow keeps the TTL live).
-    const reviving = freshReviveRequestIds(s.blockedReviveRequestedAt, now);
-    return (Object.values(s.sessions) as InboxSession[]).filter(
-      (sess) =>
-        !isSessionHidden(sess) &&
-        !isOwnedChildRow(sess) &&
-        !reviving.has(sess._id) &&
-        isCurrentBlock(sess, now),
-    ).map(withSafetyBlock).filter(
-      (sess) => isBlockedConversation(sess.agent_type != null ? sess : { ...sess, agent_type: "claude_code" }),
-    );
-  }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
+  // (blockedInboxSessions; coarseNow keeps a revive stamp's TTL live).
+  const blockedSessions = useMemo(
+    () => blockedInboxSessions(s.sessions as Record<string, InboxSession>, s.blockedReviveRequestedAt, Date.now()),
+    [s.sessions, s.blockedReviveRequestedAt, coarseNow],
+  );
   // A fleet of nothing but blocked subagent workers doesn't earn the amber
   // pill: their parents have moved on, so there's no one waiting on a revive.
   // It gets the quiet pill instead, the way back to the banner after its X.
@@ -2928,6 +2915,7 @@ function SessionListPanelImpl({
                     onKill={onKill}
                     variant={variant}
                     subRow={subRowOf(sub)}
+                    underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -3073,6 +3061,7 @@ function SessionListPanelImpl({
           // row of its own (hoistNestedUnderParent), so it takes the small row
           // there too; with the role's card absent it stays a full card.
           const flatNestParentOf = flat ? inboxNestParentOf(items, nestWorkers) : null;
+          const flatUnderParent = flat ? drawnUnderParentIds(items, globalSubByParent) : null;
           return (<>
           {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level
@@ -3156,6 +3145,7 @@ function SessionListPanelImpl({
                   forkColorKey={forkColorKeyOf(session)}
                   roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
+                  underParent={!!flatUnderParent?.has(session._id)}
                   sessionLabel={labelByConv[session._id] ?? null}
                   priorityRank={priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined}
                   isUnread={!!unreadByConv[session._id]}
@@ -3198,6 +3188,7 @@ function SessionListPanelImpl({
                     onClose={handleAnimatedClose}
                     variant={sectionVariant || "default"}
                     subRow={subRowOf(sub)}
+                    underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}

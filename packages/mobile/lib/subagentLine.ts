@@ -24,7 +24,8 @@ const groupsSig = (groups: readonly SubagentStateGroup[]) =>
  *  out `omitId` (the open one, when it is a row of its own). Only parents
  *  with a line are in the map, never a role lead's card. A parent's array
  *  from `prev` is reused while it draws the same line, so a memoized row does
- *  not re-render for an unchanged line. */
+ *  not re-render for an unchanged line, and `prev` itself comes back when no
+ *  line changed, so the list built from it is not rebuilt. */
 export function subagentLines(
   childrenByParent: readonly ReadonlyMap<string, readonly InboxSession[]>[],
   parentOf: (id: string) => InboxSession | undefined,
@@ -32,7 +33,7 @@ export function subagentLines(
   filter: SubagentFilter,
   prev?: ReadonlyMap<string, SubagentStateGroup[]>,
   omitId?: string | null,
-): Map<string, SubagentStateGroup[]> {
+): ReadonlyMap<string, SubagentStateGroup[]> {
   const children = new Map<string, InboxSession[]>();
   for (const byParent of childrenByParent)
     for (const [id, subs] of byParent) children.set(id, [...(children.get(id) ?? []), ...(omitId ? subs.filter((sub) => sub._id !== omitId) : subs)]);
@@ -45,6 +46,7 @@ export function subagentLines(
     const old = prev?.get(id);
     out.set(id, old && groupsSig(old) === groupsSig(groups) ? old : groups);
   }
+  if (prev && prev.size === out.size && [...out].every(([id, groups]) => prev.get(id) === groups)) return prev;
   return out;
 }
 

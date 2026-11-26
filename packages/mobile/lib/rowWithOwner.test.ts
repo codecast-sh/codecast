@@ -21,16 +21,23 @@ beforeEach(() => {
   } as any);
 });
 
-const labelOf = (row: Record<string, unknown>) => {
+const labelOf = (row: Record<string, unknown>, place: { placedBucket?: string; underParent?: boolean } = { underParent: true }) => {
   useInboxStore.setState({ sessions: { [LEAD]: lead, [KID]: row } } as any);
-  return rowWithOwnerLabel(useInboxStore.getState(), row as never, {}, Date.now());
+  return rowWithOwnerLabel(useInboxStore.getState(), row as never, place, Date.now());
 };
 
-test('a finished owned subagent reads Done on its own row, as web\'s card does: no "With <lead>"', () => {
+test('a finished owned subagent drawn under its lead reads Done, as web\'s nested card does: no "With <lead>"', () => {
   expect(labelOf(child({ status: 'completed', is_idle: true, updated_at: Date.now() - 3 * 3600_000 }))).toBeNull();
 });
 
 test('an owned subagent still producing reads Working "With <lead>"', () => {
   expect(labelOf(child({ status: 'active', is_idle: false, updated_at: Date.now() }))).toBe('Ship the cards');
+});
+
+// Standing as its own row (an escalated wait seats it, or its lead is off the
+// list), it reads where the list placed it, never the nested Done/Working.
+test('an owned subagent standing as its own row reads its placement', () => {
+  expect(labelOf(child({ status: 'active', is_idle: false, updated_at: Date.now() }), { placedBucket: 'needs_input' })).toBeNull();
+  expect(labelOf(child({ status: 'completed', is_idle: true, updated_at: Date.now() - 3 * 3600_000 }), {})).toBe('Ship the cards');
 });
 

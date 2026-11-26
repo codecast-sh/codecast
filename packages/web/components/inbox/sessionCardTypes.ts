@@ -100,6 +100,10 @@ export type SessionCardViewProps = {
   // under its spawner's card in Modern (inboxStore.nestsWorkers). On its own
   // row it stays a full card.
   subRow?: "trigger" | "role" | "worker";
+  /** Drawn under its parent's card (the panel's nested cards): a Claude Code
+   *  subagent there reads Done once its turn ended. Standing as its own card,
+   *  it reads its section like any session. */
+  underParent?: boolean;
   /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
   roleSessions?: number;
   /** On a "role" sub row: the role above it, which its arrow names. */

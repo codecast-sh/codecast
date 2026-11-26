@@ -257,6 +257,17 @@ describe("the Modern session card", () => {
     expect(html).not.toContain('data-mc-chip="project"');
   });
 
+  // Where the card is drawn decides, not what the row is: under its parent's
+  // card a subagent whose turn ended is Done; standing as its own card (an
+  // escalated wait seats it, or it is open with its parent off the list) it
+  // reads the section it sits in.
+  test("an owned subagent reads Done under its parent's card and its section standing alone", () => {
+    const kid = { _id: "c-owned", is_subagent: true, parent_conversation_id: "c-lead", owners_model: true, owned_by_me: false, owner_session_id: "c-lead", agent_status: undefined, status: "completed" } as never;
+    expect(word(render(kid, { variant: "default", underParent: true }))).toBe("Done");
+    expect(word(render(kid, { sectionStatus: "blocked" }))).toBe("Needs you");
+    expect(word(render(kid, { variant: "working" }))).toBe("With Webhook retry rewrite");
+  });
+
   test("a flow station the person adopted draws as a full card named by its flow", () => {
     const html = render({ _id: "c-station", is_subagent: true, parent_conversation_id: "c-runlog", inbox_adopted_at: NOW - 10 * MIN, flow_name: "Union fix flow", flow_run_id: "run_1" } as never);
     expect(html).not.toContain('data-mc="nested"');

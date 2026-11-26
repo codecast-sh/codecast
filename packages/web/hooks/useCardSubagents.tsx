@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo } from "react";
-import { fullRowsCounts, isOwnedChildRow, isSessionHidden, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
+import { freshReviveRequestIds, fullRowsCounts, isOwnedChildRow, isSessionHidden, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
 import { awaitingOkIds } from "../lib/decisionQueue";
+import { withSafetyBlock } from "@codecast/shared/contracts";
+import { isBlockedConversation, isCurrentBlock } from "@codecast/convex/convex/ccAccountsShared";
 import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { CardSubagentRows, CardSubagentsLine } from "../components/inbox/SessionCardParts";
 
@@ -33,6 +35,22 @@ export function staleInboxSessions(sessions: Record<string, InboxSession>, activ
         !!sess.updated_at && sess.updated_at < cutoff,
     )
     .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+}
+
+/** Sessions parked on a limit/auth/connection banner: the fleet revive
+ *  banner's and the blocked pill's input, by the server selection's predicate
+ *  and window (isBlockedConversation, isCurrentBlock). A session the person
+ *  just told to continue or switch (a fresh revive stamp) is out at once, not
+ *  on the daemon round trip; if it never resumes the stamp expires and it
+ *  comes back. A child its session owns (isOwnedChildRow) rides its owner's
+ *  card, in nobody's inbox, so it never counts. */
+export function blockedInboxSessions(sessions: Record<string, InboxSession>, reviveRequestedAt: Record<string, number> | undefined, now: number): InboxSession[] {
+  const reviving = freshReviveRequestIds(reviveRequestedAt, now);
+  return Object.values(sessions).filter(
+    (sess) => !isSessionHidden(sess) && !isOwnedChildRow(sess) && !reviving.has(sess._id) && isCurrentBlock(sess, now),
+  ).map(withSafetyBlock).filter(
+    (sess) => isBlockedConversation(sess.agent_type != null ? sess : { ...sess, agent_type: "claude_code" }),
+  );
 }
 
 export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeSessionId, onOpen }: {

@@ -9,7 +9,8 @@ import { drawsSubagentLine, subagentLines } from '@/lib/subagentLine';
  *  (lib/subagentLine), or none at all, and the section counts the cards
  *  drawn (Full rows take the filtered-out nested rows off, as web does). The
  *  previous map rides along so an unchanged line keeps its array and the
- *  memoized row does not re-render. In a flat view the open subagent is a row
+ *  memoized row does not re-render, and comes back whole when no line
+ *  changed, so the list's data is not rebuilt. In a flat view the open subagent is a row
  *  of its own under its card, so its card's line leaves it out, as web's does. */
 export function useSubagentLines(
   placed: Pick<PlacedInbox, 'subsByParent' | 'workersNeedingYouByParent' | 'counts' | 'nestedSectionOf'>,
@@ -24,7 +25,7 @@ export function useSubagentLines(
   const pendingMessages = useInboxStore((s) => s.pendingMessages);
   const reviveAt = useInboxStore((s) => s.blockedReviveRequestedAt);
   const stopsSig = useInboxStore((s) => hostedStopsSig(s.sessions as never, s.messages as never));
-  const prev = useRef<Map<string, SubagentStateGroup[]> | undefined>(undefined);
+  const prev = useRef<ReadonlyMap<string, SubagentStateGroup[]> | undefined>(undefined);
   const omitId = flatView ? currentSessionId ?? null : null;
   const lines = useMemo(() => {
     if (!drawsSubagentLine(subagentRows, flatView)) return null;

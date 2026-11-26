@@ -192,21 +192,21 @@ function RowCoOwners({ id }: { id: string }) {
 /** Where the list placed a row (store placedRailPlacement) and whether a send
  *  of yours waits on it locally: the facts the row's state reads, as web's
  *  card reads its section. A list that places nothing leaves them out. */
-export type RowPlacementProps = { placedBucket?: string; placedState?: string; pendingSend?: boolean };
+export type RowPlacementProps = { placedBucket?: string; placedState?: string; pendingSend?: boolean; underParent?: boolean };
 
 /** "With <owner>": who answers the row's wait, its role and owning session as
  *  the owners read says them, drawn only while the row reads working (web's
  *  sessionStatusOf and withOwnerShown). `line` draws it as the row's only
  *  detail line, with no separator after it. */
-function RowWithOwner({ session, line = false, placedBucket, placedState, pendingSend }: { session: SessionData; line?: boolean } & RowPlacementProps) {
+function RowWithOwner({ session, line = false, placedBucket, placedState, pendingSend, underParent }: { session: SessionData; line?: boolean } & RowPlacementProps) {
   const Theme = useTheme();
-  const label = useInboxStore((s) => rowWithOwnerLabel(s, session as any, { placedBucket, placedState, pendingSend }, Date.now()));
+  const label = useInboxStore((s) => rowWithOwnerLabel(s, session as any, { placedBucket, placedState, pendingSend, underParent }, Date.now()));
   if (!label) return null;
   const lead = <RNText style={{ color: Theme.green, fontWeight: '600' }} testID="row-with-owner">With {label}{line ? null : <RNText style={{ color: Theme.textMuted0, fontWeight: '400' }}> · </RNText>}</RNText>;
   return line ? <RNText style={styles.summaryText} numberOfLines={1}>{lead}</RNText> : lead;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank, subagents, onOpenSubagent }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel; subagents?: readonly SubagentStateGroup[]; onOpenSubagent?: (conversationId: string) => void } & RowPlacementProps) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, underParent, priorityRank, subagents, onOpenSubagent }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel; subagents?: readonly SubagentStateGroup[]; onOpenSubagent?: (conversationId: string) => void } & RowPlacementProps) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   const { projectFilter, showImageThumb } = useRowEnv();
@@ -249,7 +249,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   // answers its wait ("With <owner>"), each in a child mounted only for such a
   // row: a row off the model reads nothing of the owners.
   const ownersModel = underOwnersModel(session as any);
-  const place = { placedBucket, placedState, pendingSend };
+  const place = { placedBucket, placedState, pendingSend, underParent };
   const withLead = ownersModel ? <RowWithOwner session={session} {...place} /> : null;
 
   return (
@@ -396,7 +396,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank, subagents }: RowPlacementProps & {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, underParent, priorityRank, subagents }: RowPlacementProps & {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -535,7 +535,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} priorityRank={priorityRank} subagents={subagents} onOpenSubagent={onPress} />
+      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} underParent={underParent} priorityRank={priorityRank} subagents={subagents} onOpenSubagent={onPress} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );

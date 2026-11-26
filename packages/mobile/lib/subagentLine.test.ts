@@ -82,6 +82,15 @@ describe('subagentLines', () => {
     const changed = subagentLines([new Map([[parent._id, [working()]]])], parentOf, NOW, 'all', first);
     expect(changed.get(parent._id)).not.toBe(first.get(parent._id)!);
   });
+
+  // The list's data is built from the map: an unchanged map keeps it.
+  test('no line changed: the previous map comes back, so the list is not rebuilt', () => {
+    const subs = new Map([[parent._id, [working(), finished()]]]);
+    const first = subagentLines([subs], parentOf, NOW, 'all');
+    expect(subagentLines([subs], parentOf, NOW, 'all', first)).toBe(first);
+    expect(subagentLines([subs], parentOf, NOW, 'active', first)).not.toBe(first);
+    expect(subagentLines([new Map()], parentOf, NOW, 'all', first)).not.toBe(first);
+  });
 });
 
 // The phone's flat Full rows: the shared flatViewSessions with the store's
