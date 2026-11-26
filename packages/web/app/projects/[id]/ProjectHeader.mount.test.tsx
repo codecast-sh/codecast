@@ -90,7 +90,8 @@ async function verifyProjectHeader() {
   mock.module("../../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => collections[key] ?? [] }));
   mock.module("../../../hooks/useCollectionRows", () => ({ useCollectionRows: (key: string, opts: any = {}) => (collections[key] ?? []).filter(opts.where ?? (() => true)).sort(opts.sort ?? (() => 0)) }));
   mock.module("../../../hooks/useWorkspaceArgs", () => ({ useWorkspaceArgs: () => ({ workspace: "team", team_id: "fixture-team" }), workspaceStamp: (a: any) => ({ workspace: a.workspace, team_id: a.team_id }) }));
-  mock.module("../../../hooks/useIsPhone", () => ({ useIsPhone: () => env.phone, useMinWidth: () => !env.phone, PHONE_MAX_WIDTH: 768 }));
+  const realPhone = { ...(await import("../../../hooks/useIsPhone")) };
+  mock.module("../../../hooks/useIsPhone", () => ({ ...realPhone, useIsPhone: () => env.phone, useMinWidth: () => !env.phone }));
   const realNow = { ...(await import("../../../hooks/useCoarseNow")) };
   mock.module("../../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => NOW, useNowWhen: () => NOW }));
   // The per view query: asked only with a real id, and answering with whatever the server last said.

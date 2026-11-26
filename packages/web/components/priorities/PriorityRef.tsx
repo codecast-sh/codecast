@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { HoverCard } from "../ui/HoverCard";
 import { Sheet, SheetContent, SheetTitle } from "../ui/sheet";
-import { useCoarsePointer } from "../../hooks/useIsPhone";
+import { useCoarsePointer } from "../../hooks/useCoarsePointer";
 import { usePriorityModel } from "../../hooks/usePriorityModels";
 import { publicUrl } from "@codecast/shared/entities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";

@@ -2,7 +2,8 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, 
 import { Button } from "../ui/button";
 import { Loader2 } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { BELOW_SM, useMediaQuery } from "../../hooks/useIsPhone";
+import { BELOW_SM } from "../../hooks/useIsPhone";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { usePressOutside } from "../../hooks/usePressOutside";
 import { useMountEffect } from "../../hooks/useMountEffect";

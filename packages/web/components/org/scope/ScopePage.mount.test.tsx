@@ -78,7 +78,8 @@ function world() {
     mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined }) }));
     mock.module("../../../hooks/useOrgSessionsUnder", () => ({ useOrgSessionsUnder: () => ({ data: undefined }) }));
     mock.module("../../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => collections[key] ?? [] }));
-    mock.module("../../../hooks/useIsPhone", () => ({ useIsPhone: () => env.phone, useMinWidth: () => env.wide, PHONE_MAX_WIDTH: 768 }));
+    const realPhone = { ...(await import("../../../hooks/useIsPhone")) };
+    mock.module("../../../hooks/useIsPhone", () => ({ ...realPhone, useIsPhone: () => env.phone, useMinWidth: () => env.wide }));
     const realNow = { ...(await import("../../../hooks/useCoarseNow")) };
     mock.module("../../../hooks/useCoarseNow", () => ({ ...realNow, useCoarseNow: () => T0 }));
     mock.module("../../../hooks/useScopeQueries", () => ({

@@ -121,7 +121,7 @@ import "../../components/calls/callMedia.css";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMediaMoment } from "../../hooks/useMediaMoment";
-import { useCoarsePointer } from "../../hooks/useIsPhone";
+import { useCoarsePointer } from "../../hooks/useCoarsePointer";
 import { callLineEl, seekCallMedia, showCallLine, useCallMomentLanding, type CallMediaTarget } from "../../hooks/useCallMomentLanding";
 import { RecordingMark } from "../../components/calls/RecordingMark";
 import { RecorderMic } from "../../components/calls/RecorderMic";
