@@ -46,12 +46,19 @@ export function nextPassLabel(at: number | null | undefined, now: number): strin
   return `Next pass ${sameDay ? time : `${when.toLocaleDateString("en-US", { weekday: "short" })} ${time}`}`;
 }
 
-/** Where a priority opens: its row on /priorities, expanded. */
+/** Where a priority opens: its own page. */
 export function priorityHref(shortId: string): string {
-  return `/priorities?open=${encodeURIComponent(shortId)}`;
+  return `/priorities/${encodeURIComponent(shortId)}`;
 }
 
 export type { PriorityDetail, PriorityHistory, PriorityHistoryLane };
+
+/** Who set the rank, in words: the person's own placement, or the pass's. */
+export function rankProvenance(row: Pick<PriorityRow, "rank" | "rank_set_by" | "mine" | "owner">): string | null {
+  if (row.rank == null) return null;
+  if (row.rank_set_by !== "person") return "ranked by AI";
+  return row.mine ? "you placed it" : `${row.owner || "owner"} placed it`;
+}
 
 
 

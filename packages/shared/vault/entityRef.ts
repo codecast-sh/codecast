@@ -118,6 +118,8 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   secret: /^sec-\d+$/i,
   // A flow of the pool, by its slug (flow:change).
   flow: new RegExp(`^${FLOW_REF_SOURCE}$`, "i"),
+  // A priority (pri-60).
+  priority: /^pri-\d+$/i,
   // Repository objects: `owner/repo#482`, `owner/repo@sha`.
   pr: new RegExp(`^${PR_REF_SOURCE}$`, "i"),
   commit: new RegExp(`^${COMMIT_REF_SOURCE}$`, "i"),
@@ -326,4 +328,5 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   deploy: "--sol-green",
   secret: "--sol-yellow",
   flow: "--sol-cyan",
+  priority: "--sol-orange",
 };

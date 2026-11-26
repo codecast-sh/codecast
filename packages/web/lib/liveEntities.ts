@@ -540,6 +540,8 @@ const TYPE_BY_COLLECTION: Array<[string, EntityType]> = [
   ["commits", "commit"],
   ["opsSources", "source"],
   ["opsReplays", "replay"],
+  ["priorityDetails", "priority"],
+  ["priorities", "priority"],
 ];
 
 export function entityTypeInStore(state: any, convexId: string): EntityType | undefined {
@@ -624,6 +626,9 @@ export function findEntityInStore(
       // The line's deploys (lineDeploys), then the Deploys page's (teamDeploys), by `dp-N` or the Actions run that carries it.
       return (Object.values(state.lineDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))
         ?? Object.values(state.teamDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))) as StoreEntitySeed | undefined;
+    case "priority":
+      // A priority a page or card opened (priorityDetails), else the workspace list's row, by `pri-N` or Convex id.
+      return lookup(state.priorityDetails, rawId) ?? lookup(state.priorities, rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.

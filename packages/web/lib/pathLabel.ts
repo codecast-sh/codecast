@@ -67,6 +67,7 @@ export function pathLabel(path: string): string {
   if (clean.startsWith("/projects/") && clean.split("/")[2]) return "Project";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
+  if (clean.startsWith("/priorities/") && clean.split("/")[2]) return "Priority";
   // A company object on the Org screen titles by its kind and the handle
   // people quote (`Goal in-2`, `Role or-7`, `@samvit`); tabTitle upgrades it
   // to the object's name from the store. A project's is not readable, so it

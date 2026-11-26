@@ -45,6 +45,30 @@ export { GALLERY_FLOW };
 import { CONVERSATION_FENCE_LANG } from "./conversationFence";
 import { DIFF_FENCE } from "./castDiff";
 
+// A priority (pri-N): its pill in a sentence (critical meter, card on hover,
+// sheet on a tap) and its card alone on a line. The loader seeds the row into
+// priorityDetails for the viewer, with one milestone whose session asks them,
+// so the card shows Next with its Answer.
+export const GALLERY_PRIORITY = { id: "gallerypriority000000001", short: "pri-90001" } as const;
+
+function priorityRecord(now: number, viewerId: string, workspace: string, conversationId: string) {
+  const hour = 3_600_000;
+  const step = (key: string, title: string, tier: "critical" | "polish", done: boolean, at?: number) =>
+    ({ key, title, tier, tier_set_by: "pass", refs: [], done, ...(done && at ? { done_at: at } : {}), sessions: [] });
+  const session = { short_id: conversationId.slice(0, 7), conversation_id: conversationId, title: "Priorities feature build", state: "needs_you", mine: true, workflow: false, why: ["mapped"], last_active_at: now - 3 * hour };
+  const link = (key: string, sessions: unknown[]) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false });
+  return {
+    _id: GALLERY_PRIORITY.id, short_id: GALLERY_PRIORITY.short, title: "Priorities for Union",
+    summary: "Priorities is live on Union; session mapping sits around 0.65, short of the 0.75 bar, and calibration waits on one answer.",
+    status: "active", rank: 7, rank_set_by: "pass", status_set_by: "pass", serves: null,
+    steps: [step("s1", "Priorities live behind a flag", "critical", true, now - 20 * hour), step("s2", "Calibrate goal finding and session mapping", "critical", false), step("s3", "Turn on for the Union team", "critical", true, now - 6 * hour), step("s4", "Session mapping reaches 0.75", "critical", false), step("s5", "Priorities page redesign", "polish", false)],
+    counts: { critical_done: 2, critical_total: 4 }, workspace, user_id: viewerId, owner: "You", mine: true,
+    first_seen_at: now - 30 * hour, last_active_at: now - hour, done_at: null, session_count: 1, session_count_more: false, sessions: [], correction_pending: false,
+    links: [link("s1", []), link("s2", [session]), link("s3", []), link("s4", []), link("s5", [])], plan: null,
+    other_sessions: [], corrections: [],
+  };
+}
+
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
 export const GALLERY_ID_PREFIX = "gallery-";
 
@@ -200,6 +224,7 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
       options: [{ label: "Keep it", description: "One release, then delete" }, { label: "Delete now", description: "No fallback" }],
     }],
     ...deployRecords(now, workspace),
+    priorityDetails: [priorityRecord(now, viewerId, workspace, conversationId)],
     pipelines: [{ ...PIPELINE, _id: GALLERY_FLOW.pipeline, workspace, published_at: now - 3_600_000 }],
     sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
   };
@@ -477,6 +502,7 @@ export function renderGalleryMessages(now: number): Row[] {
   user("> Replays your commits on top of main\n\nCan we rebase instead of merging here?");
   asst(REFS);
   asst(`A proposal and a decision alone on their lines draw with their answers, and one change of a proposal is its pill.\n\n${GALLERY_ORG.proposalShort}\n\n${GALLERY_ORG.decisionShort}\n\nThe role in ${GALLERY_ORG.proposalShort}#1 is new.\n\n${GALLERY_ORG.proposalShort}#2`);
+  asst(`A priority in a sentence is its pill, with its critical meter: can you pick up ${GALLERY_PRIORITY.short} next? Alone on its line it is the card its pill opens:\n\n${GALLERY_PRIORITY.short}`);
   asst(`A message naming two open decisions gets one review under it: ${GALLERY_ORG.decisionShort} first, then ${GALLERY_ORG.decision2Short}.`);
   asst(FENCES);
   asst(`<div style="padding:8px"><h3>A whole-HTML reply</h3><p>An agent wrote raw HTML without a fence.</p></div>`);

@@ -83,6 +83,9 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   // A project and a goal have screens of their own (app/project, app/goal).
   project: '/project',
   initiative: '/goal',
+  // A priority (`pri-N`) has a screen of its own (app/priority); the web's
+  // /priorities list is not one priority and has no route here.
+  priority: '/priority',
 };
 
 /** The mobile route for an object id, or null when that type has no screen.
@@ -108,6 +111,7 @@ export function mobileEntityRoute(type: EntityType, id: string): string | null {
     const slug = flowSlugOf(/^flow:/i.test(id) ? id : `flow:${id}`);
     return slug ? `${base}/${slug}` : null;
   }
+  if (type === 'priority') return `${base}/${id.toLowerCase()}`;
   if (type === 'proposal') {
     const change = parseProposalChangeRef(id);
     return change ? `${base}/${change.proposal}?focus=${change.seq}` : `${base}/${id.toLowerCase()}`;

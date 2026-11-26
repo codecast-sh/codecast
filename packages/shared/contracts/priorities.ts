@@ -142,7 +142,7 @@ export type PriorityRow = {
   sessions: PrioritySession[];
   /** The owner wrote a correction no pass has read yet (always false for a teammate). */
   correction_pending: boolean;
-  /** A list's links per step (priorityDerive), on the viewer's own active rows only; absent elsewhere and from a server that predates them. */
+  /** Links per step (priorityDerive): a list carries them on the viewer's own active rows only, `show` on every priority; absent from a server that predates them. */
   links?: PriorityMilestoneLinks[];
   /** The plan holding tasks from at least half the task-bearing steps (attributePlans); absent as above. */
   plan?: PriorityPlanRef | null;

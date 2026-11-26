@@ -472,8 +472,11 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
   const corrections = await correctionsOf(ctx, viewer, p);
   const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), steps, mapped, corrections.some((c) => c.status === "pending"));
   const sessions = row.sessions;
+  // The page and the reference card draw each step's sessions and plans as the list does, for any priority the viewer can read.
+  const linked = await linksFor(r, linkReads(ctx, r), p, steps, Date.now());
   return {
     ...row,
+    ...linked,
     steps: steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
     other_sessions: sessions.filter((c) => !steps.some((s) => s.key === c.step_key)),
     corrections: corrections.map(correctionOut),

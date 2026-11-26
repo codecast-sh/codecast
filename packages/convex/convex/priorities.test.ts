@@ -254,6 +254,11 @@ describe("reads", () => {
     expect(theirs.links).toBeUndefined();
     const past = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-4");
     expect(past.links).toBeUndefined();
+    // `show` (the page and the reference card) carries the same links and plan, on any priority the viewer can read.
+    const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
+    expect(shown.links).toEqual(row.links);
+    expect(shown.plan).toEqual(row.plan);
+    expect(Array.isArray((await as(ada).query(pri.show, { short_id: "pri-4" })).links)).toBe(true);
   });
 
   test("history names today's sessions no priority holds, for the No priority share", async () => {

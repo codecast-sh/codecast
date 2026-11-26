@@ -14,9 +14,9 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, Check, ChevronDown, Loader2, Play, Rows3, Target } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import type { PriorityHistory, PrioritySessionState } from "@codecast/shared/contracts/priorities";
+import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useActiveWorkspaceKey, useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
 import { usePriorities, usePriorityListMeta, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -28,17 +28,15 @@ import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type PriorityRow } from "../../lib/priorities";
 import {
-  LIST_DAYS, LIST_GRID, SHOW_KINDS, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, localDayKey, readFilters, stateOfStatus, todayOf, waitingOf,
-  type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type ShowKind,
+  LIST_DAYS, LIST_GRID, SHOW_KINDS, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, localDayKey, readFilters, todayOf, waitingOf,
+  type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
 } from "../../lib/priorityList";
-import { sessionStatusOf } from "../../lib/sessionStatus";
-import type { TeamDeployRow } from "../../lib/deploys/targets";
-import { railRowPlacement, useInboxStore, type ClientUI } from "../../store/inboxStore";
+import { useInboxStore, type ClientUI } from "../../store/inboxStore";
 import { cn } from "../../lib/utils";
-import { PriorityBlock, type LinkLookups } from "./PriorityBlock";
+import { PriorityBlock } from "./PriorityBlock";
+import { linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
 import { StatsLine } from "./StatsLine";
 import { WaitingOnYou } from "./Waiting";
-import type { DeployInfo } from "./parts";
 
 const api = _api as any;
 
@@ -172,53 +170,6 @@ export function NoPrioritiesYet({ nextPass, running, onRun }: { nextPass: string
   );
 }
 
-/**
- * The inbox's verdict for each linked session the store holds, by
- * conversation id. One subscription to a signature of just those rows'
- * states, so a heartbeat elsewhere wakes nothing.
- */
-function useLiveStates(ids: readonly string[], now: number): (conversationId: string) => PrioritySessionState | undefined {
-  const key = ids.join(",");
-  const sig = useInboxStore((s) => {
-    const out: string[] = [];
-    for (const id of key.split(",")) {
-      const row = (s.sessions as Record<string, any>)[id];
-      if (row) out.push(`${id}:${stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }))}`);
-    }
-    return out.join(",");
-  });
-  return useMemo(() => {
-    const states = new Map(sig.split(",").filter(Boolean).map((p) => p.split(":") as [string, PrioritySessionState]));
-    return (id: string) => states.get(id);
-  }, [sig]);
-}
-
-const prIndexes = new WeakMap<object, Map<string, string>>();
-/** A pull request's state by "owner/repo#N", from the rows the store holds. */
-function prStateIn(coll: Record<string, any> | undefined, ref: string): string | undefined {
-  if (!coll) return undefined;
-  let idx = prIndexes.get(coll);
-  if (!idx) {
-    idx = new Map();
-    for (const pr of Object.values(coll)) idx.set(`${String(pr.repository).toLowerCase()}#${pr.number}`, pr.state ?? "open");
-    prIndexes.set(coll, idx);
-  }
-  return idx.get(ref.toLowerCase());
-}
-
-/** The newest deploy per target that shipped one of a milestone's tasks or carried one of its sessions' commits. */
-function deploysFor(m: MilestoneModel, deploys: readonly TeamDeployRow[]): DeployInfo[] {
-  const tasks = new Set(m.tasks);
-  const sessions = new Set(m.sessions.map((s) => s.conversation_id));
-  const out: DeployInfo[] = [];
-  const hits = deploys
-    .filter((d) => (d.tasks ?? []).some((t) => t.short_id && tasks.has(t.short_id)) || d.sessions.some((x) => sessions.has(x.conversation_id)))
-    .map((d) => ({ id: d._id, target: d.target, status: d.status, at: d.live_at ?? d.finished_at ?? d.created_at }))
-    .sort((a, b) => b.at - a.at);
-  for (const d of hits) if (!out.some((x) => x.target === d.target)) out.push(d);
-  return out;
-}
-
 export function PrioritiesView({ rows, history, now, layout, filters, onFilters, compact, onCompact }: {
   rows: PriorityRow[];
   history: PriorityHistory | undefined;
@@ -233,23 +184,15 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
   const visible = useMemo(() => scoped.filter((r) => !filters.hideDone || r.status === "active"), [scoped, filters.hideDone]);
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
-  const ids = useMemo(() => [...new Set(visible.flatMap((r) => (r.links ?? []).flatMap((l) => l.sessions.map((s) => s.conversation_id))))].sort(), [visible]);
-  const live = useLiveStates(ids, now);
+  const ids = useMemo(() => linkedSessionIds(visible), [visible]);
+  const live = usePriorityLiveStates(ids, now);
   const models = useMemo(() => buildModels(visible, history, live, days, now), [visible, history, live, days, now]);
   const waiting = useMemo(() => waitingOf(models), [models]);
   const landed = useMemo(() => landedByDay(scoped, days), [scoped, days]);
   const today = useMemo(() => todayOf(history, rows, now), [history, rows, now]);
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
 
-  const deploys = useWorkspaceCollection<TeamDeployRow>("teamDeploys", (d) => `${d.status}:${d.live_at ?? ""}:${d.sessions.length}:${d.tasks?.length ?? 0}`);
-  const lookups = useMemo<LinkLookups>(() => ({
-    branchOf: (id) => {
-      const row = (useInboxStore.getState().sessions as Record<string, any>)[id];
-      return row?.worktree_branch || row?.git_branch || null;
-    },
-    prState: (ref) => prStateIn(useInboxStore.getState().pullRequests as Record<string, any>, ref),
-    deploysOf: (m) => deploysFor(m, deploys),
-  }), [deploys]);
+  const lookups = usePriorityLookups();
 
   const groups = ownerGroups(visible);
   const byId = new Map(models.map((m) => [m.row.short_id, m]));

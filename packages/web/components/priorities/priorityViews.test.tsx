@@ -15,7 +15,7 @@ describe("PriorityPinLineView", () => {
       <PriorityPinLineView line={{ short_id: "pri-4", title: "Trusted evals", rank: 1, critical_done: 3, critical_total: 6, step_title: "Grader faults under 10%" }} />,
     );
     expect(html).toContain(`href="${priorityHref("pri-4")}"`);
-    expect(priorityHref("pri-4")).toBe("/priorities?open=pri-4");
+    expect(priorityHref("pri-4")).toBe("/priorities/pri-4");
     const text = html.replace(/<[^>]+>/g, "");
     expect(text).toBe("↳#1 Trusted evals · 3/6 · Grader faults under 10%");
   });

@@ -244,6 +244,7 @@ describe('redirectSystemPath (+native-intent)', () => {
 
   test('the app scheme speaks the same vocabulary', () => {
     expect(redirectSystemPath({ path: 'codecast://tasks/ct-4102', initial: false })).toBe('/task/ct-4102');
+    expect(redirectSystemPath({ path: 'https://codecast.sh/priorities/pri-60', initial: false })).toBe('/priority/pri-60');
     expect(redirectSystemPath({ path: 'codecast://share/abc123def', initial: false })).toBe('/share/abc123def');
   });
 
@@ -290,6 +291,27 @@ describe('flow and proposal links', () => {
     expect(mobileEntityRoute('proposal', 'OP-55#3')).toBe('/proposal/op-55?focus=3');
     expect(mobileRouteForUrl('https://codecast.sh/org?proposal=op-55')).toBe('/proposal/op-55');
     expect(mobileRouteForUrl('https://codecast.sh/org?proposal=op-55&focus=3')).toBe('/proposal/op-55?focus=3');
+  });
+});
+
+describe('priority links', () => {
+  test('a priority opens the phone priority screen from its reference, its page and a notification', () => {
+    expect(mobileEntityRoute('priority', 'pri-60')).toBe('/priority/pri-60');
+    expect(mobileEntityRoute('priority', 'PRI-60')).toBe('/priority/pri-60');
+    expect(mobileRouteForUrl('https://codecast.sh/priorities/pri-60')).toBe('/priority/pri-60');
+    expect(mobileRouteForUrl('/priorities/pri-60')).toBe('/priority/pri-60');
+    expect(mobileNotificationRoute({ link: '/priorities/pri-60' })).toBe('/priority/pri-60');
+  });
+
+  test('a bare pri-N reference is a priority', () => {
+    const { entityTypeFromId, isEntityId } = require('@codecast/shared/entities');
+    expect(isEntityId('pri-60')).toBe(true);
+    expect(entityTypeFromId('pri-60')).toBe('priority');
+  });
+
+  test('the priorities list is not a priority', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/priorities') ?? '').not.toMatch(/^\/priority\//);
+    expect(mobileRouteForUrl('/priorities/') ?? '').not.toMatch(/^\/priority\//);
   });
 });
 

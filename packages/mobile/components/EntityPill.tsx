@@ -6,6 +6,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEntities';
 import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
+import { useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import Octicons from '@expo/vector-icons/Octicons';
@@ -54,6 +55,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   person: 'Person',
   secret: 'Secret',
   flow: 'Flow',
+  priority: 'Priority',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -78,6 +80,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   person: Theme.green,
   secret: Theme.yellow,
   flow: Theme.cyan,
+  priority: Theme.orange,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -100,6 +103,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   person: 'user',
   secret: 'key',
   flow: 'git-merge',
+  priority: 'crosshair',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
@@ -221,7 +225,12 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   useSyncOrgProposal(proposalRef);
   const proposal = useInboxStore((s) => (proposalRef ? findEntityInStore(s, 'proposal', rawId) : undefined));
 
-  const served: any = type === 'proposal' ? proposal : type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : type === 'replay' ? replay : type === 'deploy' ? deploy : undefined;
+  // A priority (`pri-N`) is store-fed the same way: priorities.show into
+  // priorityDetails (or the workspace list's row), read back from the store.
+  useSyncPriorityDetail(type === 'priority' && !named ? rawId : null);
+  const priority = useInboxStore((s) => (type === 'priority' ? findEntityInStore(s, 'priority', rawId) : undefined));
+
+  const served: any = type === 'priority' ? priority : type === 'proposal' ? proposal : type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : type === 'replay' ? replay : type === 'deploy' ? deploy : undefined;
 
   const entity: any = served ?? seed;
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;
@@ -252,7 +261,9 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  }) + (entity ? callRefLabelSuffix(callRef) + replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
+  }) + (entity ? callRefLabelSuffix(callRef) + replayRefLabelSuffix(replayRef) : '') + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null)
+    // A priority reads as its title and how many critical milestones are done.
+    + (type === 'priority' && entity?.counts?.critical_total ? ` ${entity.counts.critical_done}/${entity.counts.critical_total}` : '');
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.

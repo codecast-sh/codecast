@@ -17,14 +17,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { pastBadge, priorityHref } from "../../lib/priorities";
 import { LIST_GRID, STATE_WORD, ago, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
-import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, MilestoneBox, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip, type DeployInfo } from "./parts";
-
-/** What a line's links need from the store around the row: branches by session, a PR's state, deploys. */
-export type LinkLookups = {
-  branchOf: (conversationId: string) => string | null;
-  prState: (ref: string) => string | undefined;
-  deploysOf: (m: MilestoneModel) => DeployInfo[];
-};
+import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
+import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, MilestoneBox, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 
 const C_RANK = "col-start-1 row-start-1 text-right text-ui font-semibold tabular-nums text-sol-text-dim";
 const C_TITLE = "col-start-2 row-start-1 min-w-0";
@@ -32,8 +26,6 @@ const C_PROGRESS = "col-start-3 row-start-1 justify-self-end";
 const C_META = "col-start-2 col-end-6 row-start-2 min-w-0";
 const C_MENU = "col-start-6 row-start-1 justify-self-end";
 const C_MENU_PHONE = "col-start-5 row-start-1 justify-self-end";
-
-const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD", "develop"]);
 
 export function PriorityBlock({ model, layout, compact, filters, todayIndex, peak, now, lookups }: {
   model: PriorityModel;
@@ -132,7 +124,7 @@ function StalledMark({ days, className }: { days: number; className?: string }) 
 }
 
 /** "correction pending": the person's correction waits for the next pass. */
-function PendingMark() {
+export function PendingMark() {
   return <span data-correction-pending title="Your correction waits for the next pass" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-sol-text-dim"><i aria-hidden className="block size-[5px] rounded-full border border-sol-text-dim" />correction pending</span>;
 }
 
@@ -278,9 +270,6 @@ function lineChips({ model, m, railed, filters, now, lookups }: {
   return chips;
 }
 
-const branchesOf = (m: MilestoneModel, lookups: LinkLookups) =>
-  [...new Set(m.sessions.map((s) => lookups.branchOf(s.conversation_id)).filter((b): b is string => !!b && !DEFAULT_BRANCHES.has(b)))];
-
 const RAIL: Record<RailPart, string> = {
   head: "top-1/2 bottom-0 border-t-2 rounded-tl-[3px]",
   mid: "inset-y-0",
@@ -355,7 +344,7 @@ function phoneTrail(model: PriorityModel, m: MilestoneModel): ReactNode {
 }
 
 /** One session in an open milestone: Answer when it asks, else its chip; its state in words and its age. */
-function SessionRow({ s, now }: { s: SessionLine; now: number }) {
+export function SessionRow({ s, now }: { s: SessionLine; now: number }) {
   const asks = asksPerson(s);
   return (
     <li data-session-row={s.conversation_id} className="flex min-w-0 items-center gap-2 py-0.5">
@@ -369,7 +358,7 @@ function SessionRow({ s, now }: { s: SessionLine; now: number }) {
   );
 }
 
-function WorkflowRuns({ runs, now }: { runs: SessionLine[]; now: number }) {
+export function WorkflowRuns({ runs, now }: { runs: SessionLine[]; now: number }) {
   const [open, setOpen] = useState(false);
   if (runs.length === 0) return null;
   const waiting = runs.filter(asksPerson).length;
@@ -385,7 +374,7 @@ function WorkflowRuns({ runs, now }: { runs: SessionLine[]; now: number }) {
   );
 }
 
-function TypeRow({ label, children }: { label: string; children: ReactNode }) {
+export function TypeRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div data-type-row={label} className="flex min-w-0 items-start gap-2 py-0.5">
       <span className="flex h-6 w-20 shrink-0 items-center text-mark font-semibold uppercase tracking-wide text-sol-text-dim">{label}</span>
@@ -395,7 +384,7 @@ function TypeRow({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** An open milestone: its sessions (people's first, workflow runs folded), then the links the Show filter asks for. */
-function MilestoneDetail({ model, m, filters, now, lookups }: { model: PriorityModel; m: MilestoneModel; filters: ListFilters; now: number; lookups: LinkLookups }) {
+export function MilestoneDetail({ model, m, filters, now, lookups }: { model: PriorityModel; m: MilestoneModel; filters: ListFilters; now: number; lookups: LinkLookups }) {
   const people = m.sessions.filter((s) => !s.workflow);
   const runs = m.sessions.filter((s) => s.workflow);
   const plans: Array<{ plan: PriorityPlanRef; prefix?: string }> = [

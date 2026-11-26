@@ -120,6 +120,7 @@ import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 import { actionsRunKey } from "@codecast/shared/contracts/deploys";
 import { DeployPillSuffix } from "./deploys/deployRefLook";
+import { PriorityPill } from "./priorities/PriorityRef";
 import { DeployHoverContent, ProductionReach } from "./deploys/DeployHoverContent";
 import { RefChangeSegment } from "./changes/RefChangeSegment";
 import { usePrPillLook } from "../hooks/useRefLifecycle";
@@ -1192,6 +1193,8 @@ export function EntityIdPill({
               ? Film
             : type === "flow"
               ? Workflow
+            : type === "priority"
+              ? Target
             : deployV
               ? deployV.Icon
             : isPr
@@ -1236,6 +1239,9 @@ export function EntityIdPill({
             // A flow wears the cyan of plans: both say the way the work goes, step by step.
             : type === "flow"
               ? "bg-sol-cyan/[0.08] text-sol-cyan hover:bg-sol-cyan/[0.16]"
+            // A priority wears orange, a target with its critical meter (components/priorities/PriorityRef).
+            : type === "priority"
+              ? "bg-sol-orange/[0.08] text-sol-orange hover:bg-sol-orange/[0.16]"
             : deployV
               ? deployV.chrome
             : isPr
@@ -1306,6 +1312,8 @@ export function EntityIdPill({
   if ((isPr || isCommit) && !entity && !certain) return fallback !== undefined ? <>{fallback}</> : <span className="modern:font-mono">{rawId}</span>;
   // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
   if (type === "deploy" && !entity && runRefKey(rawId)) return <>{fallback}</>;
+  // A priority in hand is its own pill: the critical meter on the line, the card on hover, a sheet on a tap.
+  if (type === "priority" && entity) return <PriorityPill row={entity} href={href} label={pillLabel} suffix={suffix} />;
 
   // Quiet chrome: the reference sits IN the sentence — same size as the
   // prose, no border, a faint tint of the type's color, the way a mention

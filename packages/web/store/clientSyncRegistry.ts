@@ -448,6 +448,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
     feeds: ["priorities.list"],
   },
+  // One priority as its page and its reference card draw it (convex
+  // priorities.show, PriorityDetail): every milestone's links and sessions,
+  // its plan and the owner's corrections, one row per priority a surface
+  // opened, keyed by the priority's _id. Delta: each surface feeds its own.
+  priorityDetails: {
+    persistence: { kind: "collection", key: "priorityDetails" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["steps", "counts", "sessions", "links", "plan", "other_sessions", "corrections"] },
+    feeds: ["priorities.show"],
+  },
   // "Handled without you": decisions a role answered under a grant in the
   // last 14 days, with the role and grant for disagree / reopen. Snapshot.
   handledDecisions: {
@@ -2422,6 +2432,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   workflowRuns: "shared",
   weeklyCards: "shared",
   priorities: "shared",
+  priorityDetails: "shared",
   signals: "shared",
   lineLabels: "shared",
   stationInputs: "shared",
