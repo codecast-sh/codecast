@@ -281,7 +281,12 @@ problem runs on the line like any other.
 Everything above is a line's deploy of fixes. A repository also has targets
 of its own, each a place its code goes live on its own clock. Codecast's are
 the backend (Convex), web (Railway), the CLI release, the mobile OTA and the
-desktop app. They are declared once, in the checkout:
+desktop app. A codecast change's Ship run sends each one its files touch
+(DP15): the backend at Merge, before the merge (its `ship` step); the CLI and
+mobile as `release` targets; web deploys itself on push. Desktop is `press`:
+its release signs with a Developer ID certificate on the machine that runs it,
+builds that checkout's working tree and pushes its own version bump, so a
+person sends it and the run waits. They are declared once, in the checkout:
 
 - A `[[target]]` table of `.codecast/deploy.toml` is one. `name` names it,
   `run` is the command that sends it (from the checkout's root; `$sha`,

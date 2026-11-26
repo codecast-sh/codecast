@@ -103,6 +103,15 @@ A repo without a profile gets the defaults: `cast ws check`, no prove or eval
 command (the stations pass with a note saying so), codecast's prompting
 standard, and the shared principles with no project file.
 
+`ci_paths` names, beyond `.github/**` and `.codecast/**`, the files that
+decide what CI runs, read from the base. A change touching one is a change CI
+cannot vouch for, so a person answers its Ship card (flows.md FL4). That gate
+guards against honest mistakes, not an adversarial change: every station runs
+bun from the change's worktree, and a root `bunfig.toml` preload runs the
+change's code inside any station. The adversarial backstop is GitHub:
+CODEOWNERS with code-owner review required on the judged paths, and the bot
+out of the bypass list.
+
 ## LP3. Finders are declared
 
 A finder is whatever writes signals for the team: a backend job, a trigger,

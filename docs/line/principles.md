@@ -54,7 +54,7 @@ Evidence: 3 corrections across 3 sessions: codecast/6d66a45e, codecast/1adfe699,
 
 ### CC-ship-1 The backend ships before the client that calls it
 
-Convex ships only when a person runs `packages/convex/deploy.sh`, and web ships on every push, so a commit that adds a function and the code calling it deploys convex first, from a tree that contains origin/main, and pushes after. Never deploy from a tree behind origin/main, by any other route, because a deploy is a whole-tree snapshot that deletes what it lacks. A query that only enriches a surface tolerates a missing function, and code that reaches mobile works on binaries built before a native module it uses was added.
+Convex ships only when `packages/convex/deploy.sh` runs, and web ships on every push, so a commit that adds a function and the code calling it deploys convex first, from a tree that contains origin/main, and merges after: Ship's Merge does this for every change, deploying from the change rebased onto origin/main before it merges. Never deploy from a tree behind origin/main, by any other route, because a deploy is a whole-tree snapshot that deletes what it lacks. A query that only enriches a surface tolerates a missing function, and code that reaches mobile works on binaries built before a native module it uses was added.
 
 Why: every gap between the two clocks took a live surface down: deploys from stale trees deleted production functions three times in one day, and a client asking for a function prod lacked took out the whole conversation header.
 
@@ -62,7 +62,7 @@ Evidence [PR-product-4, PR-code-5]: 9 corrections across 8 sessions, 7 of them c
 
 ### CC-ship-2 Process weight matches the work
 
-Work happens in the main checkout, with no branch, pull request or worktree unless someone asks for one, and a change is done when it is validated in the working tree. Agents decide how much ceremony a change needs: track only what benefits from tracking, extend an existing task instead of filing a duplicate, and when a gate or rule has no clear origin or purpose, find out why it exists and propose removing it rather than obeying it out of habit. Other sessions' uncommitted work in the tree is theirs: read it before editing a shared file and never revert it.
+Work happens in the main checkout, with no branch, pull request or worktree unless someone asks for one: Ship cuts the change's branch and pull request itself, and a change is done when Ship has it live. Agents decide how much ceremony a change needs: track only what benefits from tracking, extend an existing task instead of filing a duplicate, and when a gate or rule has no clear origin or purpose, find out why it exists and propose removing it rather than obeying it out of habit. Other sessions' uncommitted work in the tree is theirs: read it before editing a shared file and never revert it.
 
 Why: mandatory overhead on every task and inherited gates slowed the owner's main-branch workflow and buried the board in noise.
 

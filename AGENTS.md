@@ -33,11 +33,11 @@ Convex deploys push whole-tree snapshots: a tree behind origin/main doesn't just
 
 ### Deploy convex BEFORE you push
 
-The two halves ship on different clocks. Railway rebuilds web on every push to main. Convex ships only when a person runs `deploy.sh`. A push therefore delivers the new client immediately and the new backend not at all.
+The two halves ship on different clocks. Railway rebuilds web on every push to main. Convex ships only when `deploy.sh` runs. A push therefore delivers the new client immediately and the new backend not at all.
 
 Any commit that adds a convex function AND the web code calling it opens a gap. Inside it the live site asks for a function prod does not have, and convex answers "Could not find public function". Convex treats that as terminal, so `useQuery` re-throws during render and the component that subscribed drops into its ErrorBoundary. On 2026-08-11 that took out the entire conversation header, because a header pill asked for `devices.getConversationMachine`.
 
-So run `packages/convex/deploy.sh` **before** pushing such a commit, then push. Deploying a tree that is AHEAD of origin/main is safe and expected — `deploy.sh` refuses only trees that are behind. Ordering it this way costs nothing and closes the gap entirely.
+Ship closes the gap itself. Codecast ships through the library change flow (`.codecast/workspace.toml` `[ship] flow = "change"`): its Merge runs `deploy.sh` from the change rebased onto origin/main before it merges, and its Deploy sends every other target the change touches (`.codecast/deploy.toml`). A commit pushed by hand outside the flow does the same: run `packages/convex/deploy.sh` **before** pushing it, then push. Deploying a tree that is AHEAD of origin/main is safe and expected — `deploy.sh` refuses only trees that are behind.
 
 Web carries a second layer of defence. A query that merely ENRICHES a surface goes through `useQueryNoThrow` (`packages/web/hooks/useQueryNoThrow.ts`), never plain `useQuery` — pills, badges, chips and name lookups all qualify. The test is what the component should show if the answer never arrives: if it can still render something honest, use the hook; if the surface is meaningless without the data, plain `useQuery` is right and the ErrorBoundary is the intended outcome.
 

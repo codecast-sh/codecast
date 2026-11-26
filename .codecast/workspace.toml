@@ -54,15 +54,19 @@ memory_gb = 12
 flow = "change"
 level = true
 
+# Before-merge steps (stage = "before_push"): the flow's Merge runs each one whose
+# paths the change touches, from the change rebased onto main, before it merges.
 # The composer typing budget (packages/web/scripts/typing-guard.sh): a change
-# that makes typing slow again stops the ship here, before anything deploys.
+# that makes typing slow again stops at Merge, before anything deploys.
 [[ship.deploy]]
 name = "typing-guard"
 when = ["packages/web/**", "packages/shared/**", "platform/**"]
 run = "packages/web/scripts/typing-guard.sh"
 stage = "before_push"
 
-# Convex: its deploy target, the backend, is declared in .codecast/deploy.toml.
+# Convex goes out before the merge, because web rebuilds the moment main moves
+# (CLAUDE.md "Deploy convex BEFORE you push"); its deploy target, the backend, is
+# declared in .codecast/deploy.toml. Its own typecheck is off: CI ran it.
 [[ship.deploy]]
 name = "convex"
 when = ["packages/convex/**", "packages/shared/**", "platform/**"]

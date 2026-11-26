@@ -89,6 +89,11 @@ Pass each worker:
 - The plan doc content (key constraints and decisions)
 - Any relevant context from previous attempts
 
+Three rules for the briefs, each learned at the cost of several review rounds:
+- **Safety-critical judgments decide from complete, authoritative data.** For logic that decides whether code merges, deploys or blames someone, have the worker build it on the source of truth: GitHub's own run conclusion, the jobs API, a server record. Never on parsed logs or local files a process can write. Clever "excusing" or "matching" logic built on partial data kept producing wrong greens and wrong blame. Make it fail closed: an uncertain case holds or waits, never passes.
+- **Fakes must enforce the real contract.** When workers build stations that call each other, each e2e fake must check what the real counterpart checks (heads, green, required flags). Otherwise the seams break unnoticed until integration. Name the exact command lines and payloads one station passes another in both briefs.
+- **Integration runs what CI runs.** An integration or landing check that runs only the test files the branches touched misses the suites that import the changed modules: coverage lists, generated snapshots, graph-shape tests. Three such tests once nearly turned main red. Brief the integrator to run each package's actual CI test command once at the tip, and to compare every failure by name against main.
+
 ## Handling completion
 
 When a worker returns, check the task state:
