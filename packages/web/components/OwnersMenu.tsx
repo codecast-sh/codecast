@@ -13,11 +13,13 @@
  * teammates) and applies nothing until Save, which sends the whole change in
  * one store action (applySessionOwners) with the change that puts it back, so
  * its toast offers Undo. Arrows walk the owners then the candidates, Enter
- * adds, ⌘↵ saves, Escape closes. A staged change survives a stray tap outside.
+ * adds, ⌘↵ saves, Escape closes. A staged change survives a stray tap outside,
+ * and is saved to its own session (with Undo) when the menu leaves that session
+ * while still open: a sidebar row pressed with a change staged.
  * A viewer who may not edit reads the owners, and may only add themselves.
  */
 
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, Plus, Search, Users, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { teamMembersOf } from "../lib/activeTeam";
@@ -93,6 +95,8 @@ export function OwnersSegment({ conversationId }: { conversationId: string }) {
   const view = useSessionOwners(conversationId);
   const [open, setOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
   if (!view.on) return null;
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setDirty(false); }}>
@@ -103,7 +107,7 @@ export function OwnersSegment({ conversationId }: { conversationId: string }) {
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-[23rem] max-w-[calc(100vw-2rem)] p-1" onOpenAutoFocus={(e) => e.preventDefault()} onInteractOutside={(e) => { if (dirty) e.preventDefault(); }}>
         {/* Keyed: a staged draft belongs to the session it was opened on. */}
-        <OwnersMenuBody key={conversationId} conversationId={conversationId} view={view} onClose={() => { setDirty(false); setOpen(false); }} onDirty={setDirty} />
+        <OwnersMenuBody key={conversationId} conversationId={conversationId} view={view} onClose={() => { setDirty(false); setOpen(false); }} onDirty={setDirty} stillOpen={() => openRef.current} />
       </PopoverContent>
     </Popover>
   );
@@ -147,18 +151,20 @@ function OwnersItemWhenHidden({ conversationId, onOpen }: { conversationId: stri
 export function OwnersSheet({ conversationId, open, onOpenChange }: { conversationId: string; open: boolean; onOpenChange: (open: boolean) => void }) {
   const view = useSessionOwners(conversationId);
   const [dirty, setDirty] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
   if (!view.on) return null;
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) setDirty(false); onOpenChange(o); }}>
       <SheetContent side="bottom" hideClose aria-describedby={undefined} className="p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] border-sol-border bg-sol-card" data-owners-sheet onOpenAutoFocus={(e) => e.preventDefault()} onInteractOutside={(e) => { if (dirty) e.preventDefault(); }}>
         <SheetTitle className="sr-only">Owners</SheetTitle>
-        {open && <OwnersMenuBody key={conversationId} conversationId={conversationId} view={view} onClose={() => { setDirty(false); onOpenChange(false); }} onDirty={setDirty} touch />}
+        {open && <OwnersMenuBody key={conversationId} conversationId={conversationId} view={view} onClose={() => { setDirty(false); onOpenChange(false); }} onDirty={setDirty} stillOpen={() => openRef.current} touch />}
       </SheetContent>
     </Sheet>
   );
 }
 
-export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch = false }: { conversationId: string; view: SessionOwnersView; onClose: () => void; onDirty: (dirty: boolean) => void; /** A phone's sheet: no key caps. */ touch?: boolean }) {
+export function OwnersMenuBody({ conversationId, view, onClose, onDirty, stillOpen, touch = false }: { conversationId: string; view: SessionOwnersView; onClose: () => void; onDirty: (dirty: boolean) => void; /** Whether the menu is still open as this body goes: true when it left its session (the key changed, or the header went), false when the menu closed. */ stillOpen?: () => boolean; /** A phone's sheet: no key caps. */ touch?: boolean }) {
   useSyncOrgTreeFeeder();
   const m = useOwnersMenu(conversationId, view, { open: true });
   const roster = useInboxStore(teamMembersOf) as any[];
@@ -182,6 +188,11 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
     const label = m.chips.map((c) => (c.label === "You leave" ? "You left" : c.gone ? `${c.label} removed` : `${c.label.replace(/^\+ /, "")} added`)).join(" · ");
     if (m.save((change, inverse) => applyOwnersWithToast(conversationId, change, inverse, label))) onClose();
   };
+  // Leaving the session with a change staged saves it there, through Save's
+  // own path with its Undo toast; closing the menu (Cancel, Escape) discards it.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => () => { if (stillOpen?.()) saveRef.current(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const addMe = () => {
     if (!m.meId) return;
     applyOwnersWithToast(conversationId, { add: [m.meId] }, { remove: [m.meId] }, "In your inbox");

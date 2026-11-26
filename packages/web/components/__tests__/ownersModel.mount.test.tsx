@@ -300,6 +300,22 @@ describe("ct-101903: a staged owner change is not dropped when the person goes t
     expect(ownerIdsOf(useInboxStore.getState() as any, OTHER)).toEqual(["me"]);
     await render(null);
   });
+
+  test("a change closed away with Escape or Cancel is discarded, not saved on the way out", async () => {
+    await render(page(S));
+    await click($("[data-owners-seg]"));
+    await click($('[data-owner-candidate="p:ashot"] .own-plus'));
+    await key($("[data-owners-menu]")!, "Escape");
+    await settle();
+    expect($("[data-owners-menu]")).toBeNull();
+    await click($("[data-owners-seg]"));
+    await click($('[data-owner-candidate="p:ashot"] .own-plus'));
+    await click([...$$("[data-owners-foot] button")].find((b) => b.textContent === "Cancel")!);
+    await render(page(OTHER));
+    await settle();
+    expect(ownersSent()).toEqual([]);
+    await render(null);
+  });
 });
 
 describe("a narrow header: Owners in the session menu opens the owners sheet", () => {
