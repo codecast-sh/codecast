@@ -358,6 +358,10 @@ the last round's `ci.json`, `review.json`, `merge.json` and `rebase.json` from
 the run's directory, pushes the run's change branch and opens its pull
 request, or finds the open one the push just updated, and writes `pr.json` =
 {url, number, head_sha, branch, round}, where `round` is a fresh random nonce.
+It records the pull request and that head on the run, since an approval status
+reads a pull request no run reported as a bot's; a line whose own script opens
+the pull request runs `cast flow record-pr --number <n> --head <sha>` for the
+same report. A report that fails is printed and never fails the station.
 A branch goes up as a fast forward, or with `--force-with-lease` over exactly
 the head this run last pushed there (a branch frozen from a session's edits is
 the run's own, and a session's fix may rebase someone's branch); a head anyone

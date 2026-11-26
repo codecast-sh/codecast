@@ -12,11 +12,11 @@ import { sessionIdFromEnv } from "./sessionIdentity";
 // The line as change/review.md writes it.
 const REVIEW_MD_LINE = `cast flow review-verdict --verdict changes --head "$pr.json.head_sha" --round "$pr.json.round"`;
 
-function cast(env: NodeJS.ProcessEnv) {
+function cast(env: NodeJS.ProcessEnv, cliPost?: FlowDeps["cliPost"]) {
   const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
   const refuse = (what: string) => () => { throw new Error(`the review verdict should not reach ${what}`); };
   const deps: FlowDeps = {
-    cliPost: async (path, body) => { posts.push({ path, body: structuredClone(body) }); return { run_id: "run_1", node_id: "review__review", attempt: 1 }; },
+    cliPost: cliPost ?? (async (path, body) => { posts.push({ path, body: structuredClone(body) }); return { run_id: "run_1", node_id: "review__review", attempt: 1 }; }),
     // How `cast` names the session it runs inside: from the agent's own environment.
     callingSession: () => sessionIdFromEnv(env) ?? undefined,
     realCwd: () => process.cwd(),
@@ -49,6 +49,30 @@ describe("cast flow review-verdict", () => {
     const { program, posts } = cast({ CODECAST_SESSION_ID: "rev-agent-uuid" });
     await program.parseAsync(["node", "cast", "flow", "review-verdict", "--verdict", "ship", "--head", "d".repeat(40), "--run", "run_9", "--node", "review__review"]);
     expect(posts[0].body).toEqual({ session_id: "rev-agent-uuid", verdict: "ship", head_sha: "d".repeat(40), run_id: "run_9", node_id: "review__review" });
+  });
+});
+
+describe("cast flow record-pr", () => {
+  test("a repository's own PR station records its pull request on $run_id, and a failed report only prints", async () => {
+    const head = "e".repeat(40);
+    const line = ["node", "cast", "flow", "record-pr", "--number", "4923", "--head", head, "--repository", "Union-AI/Union-Mobile"];
+    const { program, posts } = cast({});
+    const logged: string[] = [];
+    const error = console.error;
+    const runId = process.env.run_id;
+    console.error = (l: string) => { logged.push(l); };
+    process.env.run_id = "run_7";
+    try {
+      await program.parseAsync(line);
+      expect(posts).toEqual([{ path: "/cli/workflow-runs/pr", body: { run_id: "run_7", repository: "Union-AI/Union-Mobile", number: 4923, head_sha: head } }]);
+
+      const refused = cast({}, async () => { throw new Error("/cli/workflow-runs/pr answered 502"); });
+      await refused.program.parseAsync(line);
+      expect(logged).toEqual(["the pull request was not recorded on the run: /cli/workflow-runs/pr answered 502"]);
+    } finally {
+      console.error = error;
+      if (runId === undefined) delete process.env.run_id; else process.env.run_id = runId;
+    }
   });
 });
 
