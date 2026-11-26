@@ -380,12 +380,22 @@ export interface LineProfileEditResult {
  * The profile text after `edits` (or the whole replacement `content`),
  * validated by the loader. Throws LineProfileError with the loader's message
  * when the result is not a valid profile; nothing is written either way.
+ * The loader only warns on a key it does not know, so a file carrying a newer
+ * cast's keys still reads; a write refuses any unknown key it would add.
  */
 export function editLineProfile(opts: { root: string; current: string; edits?: LineProfileEdit[]; content?: string }): LineProfileEditResult {
   const file = path.join(opts.root, LINE_PROFILE_REL_PATH);
   const content = typeof opts.content === "string" ? opts.content : applyLineProfileEdits(opts.current, opts.edits ?? []);
-  const { values, warnings } = parseLineProfileText(content, file);
+  const { values, warnings, unknownKeys } = parseLineProfileText(content, file);
+  const had = new Set(unknownKeysOf(opts.current));
+  const added = unknownKeys.filter((k) => !had.has(k));
+  if (added.length) throw new LineProfileError(`unknown key${added.length > 1 ? "s" : ""} ${added.join(", ")}: a typo, or a key this cast does not know`, file);
   return { content, changed: content !== opts.current, resolved: resolveLineProfile(values, { root: opts.root, file, warnings }) };
+}
+
+/** The unknown keys the text already carries; none when it does not parse. */
+function unknownKeysOf(text: string): string[] {
+  try { return parseLineProfileText(text).unknownKeys; } catch { return []; }
 }
 
 export interface LineProfileEditArgs {

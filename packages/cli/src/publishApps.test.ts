@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   appDeepLink,
   appInstallLine,
+  declaredApp,
   desktopAppPaths,
   desktopUserDataDir,
   formatInstalledApps,
@@ -18,7 +19,7 @@ import {
   type AppsEnv,
   type OpenerCommand,
 } from "./publishApps";
-import { buildPublishPayload, declaredApp, printPublishResult } from "./publish";
+import { buildPublishPayload, printPublishResult } from "./publish";
 
 const SITE = "https://codecast.sh";
 

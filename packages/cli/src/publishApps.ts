@@ -10,11 +10,12 @@
 // The pure parts (link building, opener per OS, registry path and parse) are
 // exported for publishApps.test.ts; the run* functions own IO and output.
 
-import { spawn } from "node:child_process";
+import { spawn } from "./proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { APP_PERMISSION_LABEL, APP_PERMISSIONS, type AppPermission, type PageApp } from "@codecast/shared/contracts/pageApp";
+import { APP_PERMISSION_LABEL, APP_PERMISSIONS, appIconProblem, type AppPermission, type PageApp } from "@codecast/shared/contracts/pageApp";
+import { parsePageDataDeclaration } from "@codecast/shared/contracts/pageData";
 import { fmt, icons } from "./colors.js";
 import { pageSlugFromRef } from "./publishCommand.js";
 
@@ -258,4 +259,33 @@ export function runPublishApps(siteUrl: string, json: boolean, appsEnv: AppsEnv 
     return;
   }
   for (const line of formatInstalledApps(rows, siteUrl)) console.log(line);
+}
+
+/** The server's icon refusal for this payload, read from the files on disk, so a bad icon fails before anything uploads. */
+export async function localAppIconProblem(payload: { data?: unknown; files?: Array<{ path: string }>; source_path: string; kind?: string }): Promise<string | null> {
+  const app = declaredApp(payload.data);
+  if (!app) return null;
+  const dir = payload.kind === "bundle" ? payload.source_path : path.dirname(payload.source_path);
+  const files = (payload.files ?? []).map((f) => ({ path: f.path, content_type: /\.png$/i.test(f.path) ? "image/png" : "" }));
+  const problem = await appIconProblem(app, files, async (f) => {
+    try {
+      const fd = fs.openSync(path.join(dir, f.path), "r");
+      try {
+        const head = Buffer.alloc(24);
+        return head.subarray(0, fs.readSync(fd, head, 0, 24, 0));
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  });
+  return problem ? `cast-data.json: ${problem}` : null;
+}
+
+/** The app block a page's declaration carries, checked; null without one. */
+export function declaredApp(data: unknown): PageApp | null {
+  if (!data) return null;
+  const parsed = parsePageDataDeclaration(data);
+  return parsed.ok ? (parsed.app ?? null) : null;
 }

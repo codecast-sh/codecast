@@ -152,6 +152,13 @@ describe("unknown keys are refused", () => {
     expect(() => editLineProfile({ root: "/r", current: REPO, content: "[line]\nwatch_days = -1\n" })).toThrow(/watch_days must be a positive integer/);
   });
 
+  test("a key the file already carries from a newer cast does not block a write", () => {
+    const newer = `${REPO}\n[line.extra]\nx = 1\n`;
+    const out = editLineProfile({ root: "/r", current: newer, edits: [{ op: "set", key: "watch_days", value: 9 }] });
+    expect(out.changed).toBe(true);
+    expect(out.resolved.warnings.some((w) => w.includes('"extra"'))).toBe(true);
+  });
+
   test("a value of the wrong type fails the loader with its message", () => {
     expect(() => editLineProfile({ root: "/r", current: REPO, edits: [{ op: "set", key: "size_budget", value: "big" }] }))
       .toThrow(/\/r\/\.codecast\/line\.toml: \[line\] size_budget must be a positive integer/);

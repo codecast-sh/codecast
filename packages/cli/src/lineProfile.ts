@@ -89,8 +89,9 @@ const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x ==
  * added while an older cast (another device, a stale tree) reads it. Refusing
  * would stop every line run on that machine until it upgrades.
  */
-function warnUnknown(table: Record<string, unknown>, known: readonly string[], where: string, warnings: string[]): void {
+function warnUnknown(table: Record<string, unknown>, known: readonly string[], where: string, warnings: string[], unknownKeys: string[]): void {
   const bad = Object.keys(table).filter((k) => !known.includes(k));
+  unknownKeys.push(...bad.map((k) => `${where} "${k}"`));
   if (bad.length) warnings.push(`${where} has unknown key${bad.length > 1 ? "s" : ""} ${bad.map((k) => `"${k}"`).join(", ")}, ignored: a typo, or a key from a newer cast (known: ${known.join(", ")})`);
 }
 
@@ -128,7 +129,8 @@ export function parseFinderKind(value: unknown, where: string, warnings: string[
 }
 
 /** Parse and validate `.codecast/line.toml` text: the values it sets, and the warnings. */
-export function parseLineProfileText(textIn: string, file?: string): { values: LineProfileValues; warnings: string[] } {
+/** `unknownKeys` names each ignored key by where it sits (`[line] "extra"`), so a writer can refuse the ones it adds. */
+export function parseLineProfileText(textIn: string, file?: string): { values: LineProfileValues; warnings: string[]; unknownKeys: string[] } {
   let raw: unknown;
   try {
     raw = Bun.TOML.parse(textIn);
@@ -136,13 +138,14 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
     throw new LineProfileError(`invalid TOML: ${err instanceof Error ? err.message : String(err)}`, file);
   }
   const warnings: string[] = [];
+  const unknownKeys: string[] = [];
   try {
     if (!isTable(raw)) throw new LineProfileError("must be a TOML table");
-    warnUnknown(raw, ["line"], "the file", warnings);
-    if (raw.line === undefined) return { values: {}, warnings };
+    warnUnknown(raw, ["line"], "the file", warnings, unknownKeys);
+    if (raw.line === undefined) return { values: {}, warnings, unknownKeys };
     if (!isTable(raw.line)) throw new LineProfileError("[line] must be a table");
     const line = raw.line;
-    warnUnknown(line, LINE_KEYS, "[line]", warnings);
+    warnUnknown(line, LINE_KEYS, "[line]", warnings, unknownKeys);
     const values: LineProfileValues = {};
     if (line.team !== undefined) values.team = text(line.team, "[line] team");
     if (line.project !== undefined) values.project = text(line.project, "[line] project");
@@ -158,13 +161,13 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
     if (line.watch_days !== undefined) values.watch_days = count(line.watch_days, "[line] watch_days");
     if (line.commands !== undefined) {
       if (!isTable(line.commands)) throw new LineProfileError("[line.commands] must be a table");
-      warnUnknown(line.commands, COMMAND_KEYS, "[line.commands]", warnings);
+      warnUnknown(line.commands, COMMAND_KEYS, "[line.commands]", warnings, unknownKeys);
       values.commands = {};
       for (const k of COMMAND_KEYS) if (line.commands[k] !== undefined) values.commands[k] = text(line.commands[k], `[line.commands] ${k}`);
     }
     if (line.caps !== undefined) {
       if (!isTable(line.caps)) throw new LineProfileError("[line.caps] must be a table");
-      warnUnknown(line.caps, [...CAPS_KEYS, "stations"], "[line.caps]", warnings);
+      warnUnknown(line.caps, [...CAPS_KEYS, "stations"], "[line.caps]", warnings, unknownKeys);
       values.caps = {};
       if (line.caps.cards !== undefined) values.caps.cards = count(line.caps.cards, "[line.caps] cards");
       if (line.caps.stations !== undefined) {
@@ -178,7 +181,7 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
     }
     if (line.merge !== undefined) {
       if (!isTable(line.merge)) throw new LineProfileError("[line.merge] must be a table");
-      warnUnknown(line.merge, MERGE_KEYS, "[line.merge]", warnings);
+      warnUnknown(line.merge, MERGE_KEYS, "[line.merge]", warnings, unknownKeys);
       values.merge = {};
       if (line.merge.auto !== undefined) {
         if (typeof line.merge.auto !== "boolean") throw new LineProfileError("[line.merge] auto must be true or false");
@@ -192,7 +195,7 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
     }
     if (line.deploy !== undefined) {
       if (!isTable(line.deploy)) throw new LineProfileError("[line.deploy] must be a table");
-      warnUnknown(line.deploy, LINE_DEPLOY_KEYS, "[line.deploy]", warnings);
+      warnUnknown(line.deploy, LINE_DEPLOY_KEYS, "[line.deploy]", warnings, unknownKeys);
       values.deploy = {};
       if (line.deploy.command !== undefined) values.deploy.command = text(line.deploy.command, "[line.deploy] command");
       if (line.deploy.target !== undefined) values.deploy.target = normalizeDeployTarget(text(line.deploy.target, "[line.deploy] target"));
@@ -218,7 +221,7 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
       values.finders = line.finders.map((f, i) => {
         const where = `[[line.finders]] #${i + 1}`;
         if (!isTable(f)) throw new LineProfileError(`${where} must be a table`);
-        warnUnknown(f, FINDER_KEYS, where, warnings);
+        warnUnknown(f, FINDER_KEYS, where, warnings, unknownKeys);
         const id = text(f.id, `${where} id`);
         if (seen.has(id)) throw new LineProfileError(`${where} repeats id "${id}"`);
         seen.add(id);
@@ -245,7 +248,7 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
         return finder;
       });
     }
-    return { values, warnings };
+    return { values, warnings, unknownKeys };
   } catch (err) {
     if (err instanceof LineProfileError && file) throw new LineProfileError(err.message, file);
     throw err;

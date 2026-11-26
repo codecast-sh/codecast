@@ -1,12 +1,10 @@
 /**
  * The command groups that load only when you name them.
  *
- * fastPath.ts describes the shape of the problem: ES imports are hoisted, so a
- * static `import` in index.ts is paid by every invocation, including the ones
- * that never reach the command it registers. index.ts is 18k lines and its
- * static graph was 260 source files and 5.5 MB — `cast --help`, `cast state`
- * and a mistyped verb each loaded the browser engine, the worktree backends,
- * the ssh host plumbing and the capability walkers before printing anything.
+ * ES imports are hoisted (fastPath.ts), so a static `import` in index.ts is
+ * paid by every invocation: `cast --help`, `cast state` and a mistyped verb once
+ * each loaded the browser engine, worktree backends, ssh plumbing and
+ * capability walkers before printing anything.
  *
  * So a group is split in two. Here: the token, its aliases, the positional
  * terms the root help prints, and the description — enough to render
@@ -29,10 +27,9 @@
  *
  * Adding a group is one entry: its token, its description moved here out of the
  * module, and a `load()` that imports the register function, in place of the
- * `registerXCommand(program)` line index.ts had (`cast computer`, ct-49521, and
- * `cast guide`, ct-49544, joined that way). A register function under
- * `computer/` or in `guide.ts` that index.ts also calls directly fails
- * commandGroups.guard.test.ts. ct-49546, ct-49848, ct-49849.
+ * `registerXCommand(program)` line index.ts had (ct-49521, ct-49544). A register
+ * function under `computer/` or in `guide.ts` that index.ts also calls directly
+ * fails commandGroups.guard.test.ts. ct-49546, ct-49848, ct-49849.
  */
 
 import type { Command } from "commander";

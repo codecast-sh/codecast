@@ -42,11 +42,11 @@ import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
 import { verbTypoNextStep } from "./commandSuggestion.js";
 import { runPublishUnwatch, runPublishWatch } from "./publishWatch.js";
 import { jsonText, parseKeyValue, readInlinePageData, readPageData, runPublishData, runPublishState, type StateWrite } from "./publishData.js";
-import { PAGE_DATA_FILE, parsePageDataDeclaration } from "@codecast/shared/contracts/pageData";
+import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
 import { captureThumb } from "./publishThumb.js";
-import { appInstallLine, parsePageTarget, runPublishApps, runPublishInstall, runPublishUninstall, type GateKeys } from "./publishApps.js";
-import { appIconProblem, type PageApp } from "@codecast/shared/contracts/pageApp";
+import { appInstallLine, declaredApp, localAppIconProblem, parsePageTarget, runPublishApps, runPublishInstall, runPublishUninstall, type GateKeys } from "./publishApps.js";
+import type { PageApp } from "@codecast/shared/contracts/pageApp";
 
 const WATCH_DEBOUNCE_MS = 400;
 
@@ -652,35 +652,6 @@ export async function publishOnce(
   );
   const page = payload.content ?? (payload.entryHtmlPath ? fs.readFileSync(payload.entryHtmlPath, "utf-8") : "");
   return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [], app: declaredApp(payload.data) };
-}
-
-/** The server's icon refusal for this payload, read from the files on disk, so a bad icon fails before anything uploads. */
-export async function localAppIconProblem(payload: Pick<PublishPayload, "data" | "files" | "source_path" | "kind">): Promise<string | null> {
-  const app = declaredApp(payload.data);
-  if (!app) return null;
-  const dir = payload.kind === "bundle" ? payload.source_path : path.dirname(payload.source_path);
-  const files = (payload.files ?? []).map((f) => ({ path: f.path, content_type: /\.png$/i.test(f.path) ? "image/png" : "" }));
-  const problem = await appIconProblem(app, files, async (f) => {
-    try {
-      const fd = fs.openSync(path.join(dir, f.path), "r");
-      try {
-        const head = Buffer.alloc(24);
-        return head.subarray(0, fs.readSync(fd, head, 0, 24, 0));
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return null;
-    }
-  });
-  return problem ? `cast-data.json: ${problem}` : null;
-}
-
-/** The app block a page's declaration carries, checked; null without one. */
-export function declaredApp(data: unknown): PageApp | null {
-  if (!data) return null;
-  const parsed = parsePageDataDeclaration(data);
-  return parsed.ok ? (parsed.app ?? null) : null;
 }
 
 const EDGE_WARM_TIMEOUT_MS = 3_000;

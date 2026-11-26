@@ -12,7 +12,7 @@ import { WebSocket } from "ws";
 import { VAULT_MAX_SERVE_BYTES } from "@codecast/shared/contracts";
 import type { VaultScanResponse, VaultWriteResponse, VaultWsEvent } from "@codecast/shared/contracts";
 import { attachTerminalServer } from "../terminal/terminalServer.js";
-import { createVaultFile } from "./vaultFs.js";
+import { createVaultFile, osTrashDir } from "./vaultFs.js";
 import { addVault } from "./vaultRegistry.js";
 import { clearRepoScopeCache } from "./vaultScope.js";
 import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vaultServer.js";
@@ -519,7 +519,8 @@ describe("POST /vault/op", () => {
     expect(fs.readFileSync(path.join(root, "src/bar.ts"), "utf-8")).toBe("export const a = 1;\r\n");
 
     const home = path.join(base, "home-src");
-    fs.mkdirSync(path.join(home, ".Trash"), { recursive: true });
+    const trash = osTrashDir(home)!;
+    fs.mkdirSync(trash, { recursive: true });
     process.env.HOME = home;
     try {
       expect((await postOp({ op: "delete", path: "src/bar.ts" })).status).toBe(200);
@@ -527,7 +528,7 @@ describe("POST /vault/op", () => {
       process.env.HOME = REAL_HOME;
     }
     expect(fs.existsSync(path.join(root, "src/bar.ts"))).toBe(false);
-    expect(fs.readFileSync(path.join(home, ".Trash", "bar.ts"), "utf-8")).toBe("export const a = 1;\r\n");
+    expect(fs.readFileSync(path.join(trash, "bar.ts"), "utf-8")).toBe("export const a = 1;\r\n");
   });
 
   test("a file cannot be renamed to a binary name", async () => {
@@ -623,7 +624,7 @@ describe("POST /vault/op", () => {
 
   test("delete moves the file to the OS trash instead of unlinking it", async () => {
     const home = path.join(base, "home");
-    const trash = path.join(home, process.platform === "darwin" ? ".Trash" : ".local/share/Trash/files");
+    const trash = osTrashDir(home)!;
     fs.mkdirSync(trash, { recursive: true });
     process.env.HOME = home;
     try {

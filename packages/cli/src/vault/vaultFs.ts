@@ -151,6 +151,13 @@ async function writeInPlace(abs: string, data: Buffer | string): Promise<fs.Stat
   }
 }
 
+/** Where this platform's trash keeps files under `home`; null where there is none. */
+export function osTrashDir(home: string): string | null {
+  if (process.platform === "darwin") return path.join(home, ".Trash");
+  if (process.platform === "linux") return path.join(home, ".local", "share", "Trash", "files");
+  return null;
+}
+
 /**
  * Move a path out of the vault instead of deleting it. A vault is the user's
  * writing; an unlink here is unrecoverable data loss from a stray click in a
@@ -162,13 +169,7 @@ export function moveToTrash(vaultRoot: string, abs: string): string {
   const base = path.basename(abs);
   // $HOME, not os.homedir(): the rest of the CLI resolves the home directory the
   // same way, and bun's os.homedir() is fixed at process start regardless of it.
-  const home = process.env.HOME || os.homedir();
-  const osTrash =
-    process.platform === "darwin"
-      ? path.join(home, ".Trash")
-      : process.platform === "linux"
-        ? path.join(home, ".local", "share", "Trash", "files")
-        : null;
+  const osTrash = osTrashDir(process.env.HOME || os.homedir());
 
   const attempt = (dir: string): string | null => {
     try {

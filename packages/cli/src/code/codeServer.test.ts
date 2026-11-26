@@ -16,7 +16,7 @@ import type {
   CodeSearchEvent,
   CodeVimrcResponse,
 } from "@codecast/shared/contracts";
-import { execFileSync } from "../proc.js";
+import { execFileSync, TOOL_PATH, whichBin } from "../proc.js";
 import { pollUntil } from "../test-helpers/pollUntil.js";
 import { addVault } from "../vault/vaultRegistry.js";
 import { clearRepoScopeCache } from "../vault/vaultScope.js";
@@ -164,12 +164,14 @@ describe("envelope", () => {
   });
 });
 
+// The rg engine runs only where ripgrep is installed; the fallbacks run everywhere.
+const rgBin = whichBin("rg", TOOL_PATH);
 for (const [engine, pinned] of [
   ["rg", undefined],
   ["git-grep", { rg: null }],
   ["walk", { rg: null, gitGrep: false }],
 ] as const) {
-  describe(`search via ${engine}`, () => {
+  describe.skipIf(engine === "rg" && !rgBin)(`search via ${engine}`, () => {
     beforeAll(() => {
       engines = pinned;
     });

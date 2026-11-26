@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildPublishPayload, describeEvidence, localAppIconProblem, pathsToUpload, publishRequestBody, showsManageLink, walkBundleDir } from "./publish";
+import { buildPublishPayload, describeEvidence, pathsToUpload, publishRequestBody, showsManageLink, walkBundleDir } from "./publish";
+import { localAppIconProblem } from "./publishApps";
 import { findChrome, thumbArgs } from "./publishThumb";
 
 let dir: string;
