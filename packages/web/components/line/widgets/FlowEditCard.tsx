@@ -34,8 +34,6 @@ function useMadeAt(conversationId: string | null, ref: string | null): number | 
   }, [conversationId, ref]);
 }
 
-/** `madeBy`: the tool call that printed the edit, when it is a `cast flow edit` card; else the message the fence is in.
- *  `dryRun`: `--dry-run` wrote nothing, so nothing ships; the card is the preview. */
 /** Where a shipped edit stands: Live opens its deploy, and a word about a landed commit opens the Deploys page at it. */
 function FlowEditState({ live, dp, ship }: { live: boolean; dp: string | null; ship: SessionShip | null }) {
   const tone = live ? "passed" : ship?.tone === "bad" ? "failed" : ship?.tone === "you" || ship?.tone === "wait" ? "waiting" : undefined;
@@ -46,6 +44,8 @@ function FlowEditState({ live, dp, ship }: { live: boolean; dp: string | null; s
     : <span className="lw-flow-state" data-tone={tone}>{words}</span>;
 }
 
+/** `madeBy`: the tool call that printed the edit, when it is a `cast flow edit` card; else the message the fence is in.
+ *  `dryRun`: `--dry-run` wrote nothing, so nothing ships; the card is the preview. */
 export const FlowEditCard = memo(function FlowEditCard({ edit, diff = null, conversationId: convProp, madeBy = null, dryRun = false }: { edit: FlowEdit; diff?: string | null; conversationId?: string | null; madeBy?: string | null; dryRun?: boolean }) {
   const identity = useContext(MessageIdentity);
   const conversationId = convProp ?? identity?.conversationId ?? null;

@@ -40,10 +40,10 @@ export function OnItsWay({ repository, filters, onFilters, me, focus, onFocusFou
   }, [rows, filters.mine, me, now, focused]);
   // What is really on its way: not live, not closed, and not parked.
   const coming = rows.filter((r) => isComing(r) && !isParked(r, now)).length;
-  // A linked row counts only where the grid draws it: on its way, or parked (still open, nothing moving it); a closed
-  // or live one is not on its way, and with nothing coming the grid draws nothing.
-  const hit = focused && coming ? shown.find((r) => focused(r) && isComing(r)) : undefined;
-  const found: FocusComing = !hit ? null : isParked(hit, now) ? "parked" : "coming";
+  // A linked row counts where the grid draws it, by the group it draws it in: parked, or any group it shows; a live or
+  // closed one is hidden, and with nothing coming the grid draws nothing.
+  const group = focused && coming ? shown.filter(focused).map((r) => groupOf(r, now)).find((g) => !!g && !HIDE.includes(g as (typeof HIDE)[number])) ?? null : null;
+  const found: FocusComing = !group ? null : group === "parked" ? "parked" : "coming";
   // eslint-disable-next-line no-restricted-syntax -- reports a match up to the page's focus chip, which draws outside this grid
   useEffect(() => onFocusFound?.(found), [found, onFocusFound]);
   if (ready && !coming) return null;
