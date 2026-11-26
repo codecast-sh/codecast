@@ -6,7 +6,7 @@ import { memo } from "react";
 import { usePresence } from "../../../lib/code/agent/agentStore";
 import { openBeside, sessionPanePath } from "../../../lib/stage";
 import { tabNavigate } from "../../../src/compat/tabRouting";
-import { useSessionFace } from "./SessionMark";
+import { useSessionFace } from "../../../hooks/useSessionFace";
 
 export const PresenceDot = memo(function PresenceDot({ vaultId, path }: { vaultId: string | null | undefined; path: string }) {
   const sessionId = usePresence(vaultId, path);

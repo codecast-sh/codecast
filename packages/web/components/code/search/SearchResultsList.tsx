@@ -9,27 +9,14 @@ import { ChevronRight, Replace, ReplaceAll, X } from "lucide-react";
 import type { ResultRow } from "../../../lib/code/search/model";
 import { previewLine, type ReplaceOptions } from "../../../lib/code/search/replace";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { leadStart } from "../../../lib/code/search/leadStart";
 
-export const FILE_ROW_HEIGHT = 24;
-export const MATCH_ROW_HEIGHT = 22;
+const FILE_ROW_HEIGHT = 24;
+const MATCH_ROW_HEIGHT = 22;
 /** Characters of a line shown before its match, at most. */
 const LEAD_CHARS = 14;
 /** Characters a match row shows at the Search pane's default width. */
 const ROW_CHARS = 20;
-
-/**
- * Where a row's text starts: up to `budget` characters before the match, moved
- * forward to the start of a word so the row never opens mid-word, and never
- * into the indentation. A window with no word start shows no lead at all.
- */
-export function leadStart(text: string, start: number, budget: number): number {
-  const indent = /^\s*/.exec(text)![0].length;
-  if (start - budget <= indent) return Math.min(indent, start);
-  for (let i = start - budget; i < start; i++) {
-    if (/\W/.test(text[i - 1]) && /\w/.test(text[i])) return i;
-  }
-  return start;
-}
 
 export interface ReplacePreview {
   re: RegExp;
@@ -151,7 +138,7 @@ const MatchRow = memo(function MatchRow({
       aria-selected={active}
       onClick={() => actions.onOpen(row, false)}
       onDoubleClick={() => actions.onOpen(row, true)}
-      className={`group relative flex h-full cursor-pointer items-center pl-5 pr-1.5 font-mono text-[11.5px] [font-variant-ligatures:none] ${active ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt"}`}
+      className={`group relative flex h-full cursor-pointer items-center pl-5 pr-1.5 font-mono text-meta [font-variant-ligatures:none] ${active ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt"}`}
     >
       <span className="min-w-[4ch] shrink-0 pr-1.5 text-right text-mark tabular-nums text-sol-text-dim">{line}</span>
       <span className="min-w-0 flex-1 truncate whitespace-pre text-sol-text-muted">

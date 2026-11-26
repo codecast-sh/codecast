@@ -8,31 +8,16 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { relTimeShort } from "../../lib/utils";
 import { HealthPill, MetricChart } from "./MetricChart";
-import { cardWindow, changeAmount, changeTone, chartPoints, changeSpan, type WindowDelta, type OpsWatchSeries, type SeriesPt } from "./metricSeries";
+import { changeAmount, changeTone, changeSpan, type WindowDelta } from "./metricSeries";
 import { watchErrorText } from "./metricEvents";
-import { fitStart, formatPct, formatValue, inWindow, spanLabel, watchHealth, type MetricRange, type Win } from "./metricModel";
+import { formatPct, formatValue, spanLabel, watchHealth, type MetricRange } from "./metricModel";
 import { opsHref } from "./opsPaths";
 import { ProviderIcon } from "./parts";
+import { drawnFor, lineTag, watchHref, type Drawn } from "./watchDrawn";
 import { useReadNow } from "./useReadNow";
 import type { OpsSource, OpsWatch } from "./opsTypes";
 import "./ops.css";
 import "./metrics.css";
-
-/** A watch's page opened on the overview's range, so the change it reads is the one the card showed. */
-export function watchHref(shortId: string, range: MetricRange): string {
-  return range === "all" ? opsHref.metric(shortId) : `${opsHref.metric(shortId)}?range=${range}`;
-}
-
-/** What one watch draws in a window: the server's history for it, else the row's own newest values. `step` is the spacing its line expects. */
-export type Drawn = { win: Win; fitted: number | null; points: SeriesPt[]; visible: SeriesPt[]; step: number };
-
-export function drawnFor(w: OpsWatch, series: OpsWatchSeries | undefined, win: Win): Drawn {
-  const points = chartPoints(series, w.points);
-  const step = Math.max(w.interval_ms, series?.step_ms ?? 0);
-  // The card fits the stretch the watch really holds: a lone value weeks before the rest does not widen it.
-  const fit = cardWindow(win, fitStart(points.filter((p) => p.at >= win.from), step));
-  return { ...fit, points, step, visible: inWindow(points, fit.win).filter((p) => p.at >= fit.win.from && p.at <= fit.win.to) };
-}
 
 /** The newest span's mean against the period before it (periodChange), inked by whether it moved toward the line; nothing without values on both sides. */
 export function Delta({ watch, d, span, blank }: { watch: OpsWatch; d: WindowDelta | null; span: number; blank?: boolean }) {
@@ -44,10 +29,6 @@ export function Delta({ watch, d, span, blank }: { watch: OpsWatch; d: WindowDel
       {d.pct === null ? changeAmount(d.change, d.base, watch.unit) : <>{d.change > 0 ? "▲" : "▼"} {formatPct(d.pct)}</>}
     </span>
   );
-}
-
-export function lineTag(w: OpsWatch): string | null {
-  return w.threshold === undefined ? null : `${w.direction === "above" ? ">" : "<"} ${formatValue(w.threshold, w.unit)}`;
 }
 
 export function WatchCard({ watch: w, range, drawn, change, now, since, issue, provider, cursor }: { watch: OpsWatch; range: MetricRange; drawn: Drawn; change: WindowDelta | null; now: number; since: number | null; issue?: string; provider?: OpsSource["provider"]; cursor: boolean }) {

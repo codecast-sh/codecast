@@ -16,18 +16,9 @@ import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../../ui/con
 import { withShortcut } from "../../../shortcuts";
 import type { WsGroup, WsTab } from "../../../lib/code/workspace/model";
 import { PresenceDot } from "../agent/PresenceDot";
+import { endTabDrag, isDraggingTab, startTabDrag, takeTabDrag } from "../../../lib/code/workspace/tabDrag";
 
-/** The tab being dragged, readable on dragover (dataTransfer is not). */
-let dragging: { groupId: string; path: string } | null = null;
 const DRAG_TYPE = "application/x-codecast-tab";
-
-/** The tab being dragged, for drop targets outside the strip; taking it ends the drag. */
-export function takeTabDrag(): { groupId: string; path: string } | null {
-  const d = dragging;
-  dragging = null;
-  return d;
-}
-export const isDraggingTab = () => dragging !== null;
 
 export interface TabBarProps {
   vaultId: string;
@@ -141,7 +132,7 @@ const Tab = memo(function Tab({
       onDragStart={(e) => events.dragStart(e, tab.path)}
       onDragOver={(e) => events.dragOver(e, tab.path)}
       onDrop={(e) => events.drop(e, tab.path)}
-      onDragEnd={() => (dragging = null)}
+      onDragEnd={endTabDrag}
       className={`group/tab relative flex h-full shrink-0 cursor-default select-none items-center gap-1.5 border-r border-sol-border/30 pl-2.5 pr-1 text-meta transition-colors ${
         active ? "bg-sol-bg text-sol-text" : "text-sol-text-dim hover:bg-sol-bg/50 hover:text-sol-text-muted"
       }`}
@@ -237,14 +228,13 @@ export const TabBar = memo(function TabBar({
     return indexOf(path) + (e.clientX > r.left + r.width / 2 ? 1 : 0);
   };
   const accept = (e: React.DragEvent) => {
-    if (!dragging) return false;
+    if (!isDraggingTab()) return false;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     return true;
   };
   const drop = (index: number) => {
-    const d = dragging;
-    dragging = null;
+    const d = takeTabDrag();
     setDropAt(null);
     if (d) onMove(d.groupId, d.path, group.id, index);
   };
@@ -258,7 +248,7 @@ export const TabBar = memo(function TabBar({
       keep: (path) => latest.current.onKeep(latest.current.group.id, path),
       context: (e, path) => latest.current.menu.open(e, path, { force: true }),
       dragStart: (e, path) => {
-        dragging = { groupId: latest.current.group.id, path };
+        startTabDrag({ groupId: latest.current.group.id, path });
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData(DRAG_TYPE, path);
         e.dataTransfer.setData("text/plain", path);
@@ -267,7 +257,7 @@ export const TabBar = memo(function TabBar({
         if (latest.current.accept(e)) setDropAt(latest.current.dropIndex(e, path));
       },
       drop: (e, path) => {
-        if (!dragging) return;
+        if (!isDraggingTab()) return;
         e.preventDefault();
         e.stopPropagation();
         latest.current.drop(latest.current.dropIndex(e, path));
@@ -295,7 +285,7 @@ export const TabBar = memo(function TabBar({
           if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropAt(null);
         }}
         onDrop={(e) => {
-          if (!dragging) return;
+          if (!isDraggingTab()) return;
           e.preventDefault();
           drop(e.target === e.currentTarget ? group.tabs.length : (dropAt ?? group.tabs.length));
         }}

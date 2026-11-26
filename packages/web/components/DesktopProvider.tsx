@@ -115,7 +115,7 @@ export function DesktopProvider() {
   const shellVersion = useRef(desktopShellVersion()).current;
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   // Installed apps cover themselves while Codecast is signed out (installed-apps.md): main learns it from here.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!authLoading) desktopApps()?.setSignedIn?.(isAuthenticated);
   }, [authLoading, isAuthenticated]);
   const floor = useQueryNoThrow(api.systemConfig.getMinDesktopVersion, shellVersion ? {} : "skip").data ?? null;

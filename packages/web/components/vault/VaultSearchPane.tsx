@@ -44,10 +44,9 @@ import {
   CodeSearchToggles,
   ProjectSearchPanel,
   ReplaceDisclosure,
-  handleSearchOptionKey,
-  openActiveOrFirst,
-  useProjectSearch,
 } from "../code/search/ProjectSearchPanel";
+import { useProjectSearch } from "../../hooks/useProjectSearch";
+import { handleSearchOptionKey, openActiveOrFirst } from "../../lib/code/search/panelKeys";
 import { KeyCap } from "../KeyCap";
 import { BookmarkToggle } from "./VaultBookmarksPane";
 import { noteDisplayName } from "./VaultExplorer";

@@ -12,7 +12,7 @@ import { PROFILE_ABOUT_MAX, PROFILE_FOCUS_MAX, PROFILE_TITLE_MAX, normalizeLabel
 import { useInboxStore } from "../../store/inboxStore";
 import { orgPersonReparentMakesCycle, windowOrgTree } from "../../store/orgSlice";
 import { useOrgPersonDetail, useSyncOrgPerson } from "../../hooks/useSyncOrgPerson";
-import { teamMembersOf } from "../../lib/activeTeam";
+import { usePersonHref } from "../../hooks/usePersonHref";
 import { cn } from "../../lib/utils";
 import { sameParent, type OrgParentRef, type OrgPerson, type OrgRole, type OrgTree } from "./orgTypes";
 import { InlineEdit } from "./scope/ScopeEditors";
@@ -24,12 +24,6 @@ import { Avatar } from "../tasks/TaskCommentStream";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 const MAX_MANAGERS = 6;
-
-/** A person's page link by their GitHub handle, else their id. */
-export function usePersonHref(): (userId: string) => string {
-  const members = useInboxStore(teamMembersOf) as Array<{ _id: string; github_username?: string }> | undefined;
-  return useCallback((id: string) => `/team/${encodeURIComponent(members?.find((m) => String(m._id) === id)?.github_username || id)}`, [members]);
-}
 
 export function PersonProfile({ userId }: { userId: string }) {
   const tree = useInboxStore(windowOrgTree);

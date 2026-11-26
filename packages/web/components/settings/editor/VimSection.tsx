@@ -11,7 +11,8 @@ import { hasVimConfig, setEditorSetting, vimModeOn, type ExplicitEditorSettings,
 import type { VimConfigReport, VimReportCounts } from "../../../lib/code/vim/types";
 import type { EndpointState } from "./useEditorEndpoint";
 import type { VimConfigState } from "./useVimConfig";
-import { STATUS_TONE, VimReportTable } from "./VimReportTable";
+import { VimReportTable } from "./VimReportTable";
+import { STATUS_TONE } from "../../../lib/code/vim/reportTone";
 import { lineCount } from "./vimReportRows";
 
 const VimOverlayEditor = lazy(() => import("./VimOverlayEditor"));

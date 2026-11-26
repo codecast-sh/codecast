@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { leadStart } from "../SearchResultsList";
+import { leadStart } from "../../../../lib/code/search/leadStart";
 
 const lead = (text: string, hit: string, budget: number) => {
   const start = text.indexOf(hit);

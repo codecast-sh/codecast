@@ -9,13 +9,8 @@ import { RefreshCw, Search } from "lucide-react";
 import { cn } from "../../../lib/utils";
 import { modernChip } from "../../ui/modernLook";
 import type { VimConfigReport, VimDirectiveStatus } from "../../../lib/code/vim/types";
+import { STATUS_TONE } from "../../../lib/code/vim/reportTone";
 import { countRows, EMPTY_FILTER, filterRows, reportRows, toggleStatus, type VimReportFilter } from "./vimReportRows";
-
-export const STATUS_TONE: Record<VimDirectiveStatus, { text: string; dot: string; chip: string }> = {
-  applied: { text: "text-sol-green", dot: "bg-sol-green", chip: "border-sol-green/60 bg-sol-green/10 text-sol-green" },
-  translated: { text: "text-sol-cyan", dot: "bg-sol-cyan", chip: "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan" },
-  skipped: { text: "text-sol-yellow", dot: "bg-sol-yellow", chip: "border-sol-yellow/60 bg-sol-yellow/10 text-sol-yellow" },
-};
 
 const STATUSES: VimDirectiveStatus[] = ["applied", "translated", "skipped"];
 const ROW_PX = 24;

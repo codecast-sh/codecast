@@ -8,7 +8,8 @@ import { useWatchSeries } from "../../hooks/useSyncOpsMetrics";
 import { currentEpisodeSince } from "./metricEvents";
 import { rangeWindow, type MetricRange } from "./metricModel";
 import { CARD_BUCKETS, changeRange, rangeChange } from "./metricSeries";
-import { WatchCard, drawnFor } from "./WatchCard";
+import { WatchCard } from "./WatchCard";
+import { drawnFor } from "./watchDrawn";
 import type { OpsWatch } from "./opsTypes";
 
 /** The window an inline card reads: the overview's default. */

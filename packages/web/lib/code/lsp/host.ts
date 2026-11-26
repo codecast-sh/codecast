@@ -9,6 +9,7 @@ import { LSPPlugin } from "@codemirror/lsp-client";
 import { bufferKey, codeBuffers, type CodeBuffer } from "../buffers";
 import { applyToBuffer } from "../fileSync";
 import { runCodeCommand } from "../commands";
+import { focusedEditorView } from "../features";
 import { readVaultFile, writeVaultFile } from "../../vault/client";
 import { filesHref } from "../../vault/vaultHref";
 import { requestEndpointOf, useVaultStore } from "../../../store/vaultStore";
@@ -25,13 +26,7 @@ const endpoint = () => {
 };
 
 /** The editor the person is in, for notices about work started elsewhere. */
-let lastView: EditorView | null = null;
-export function noteActiveView(view: EditorView): void {
-  lastView = view;
-}
-export function activeView(): EditorView | null {
-  return lastView && lastView.dom.isConnected ? lastView : null;
-}
+export const activeView = focusedEditorView;
 
 /** Open a vault file at an LSP position through the shell's tabs. Without a
  *  shell mounted, Files' own URL does it. */

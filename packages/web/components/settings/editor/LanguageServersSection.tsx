@@ -19,7 +19,7 @@ import type { EndpointState } from "./useEditorEndpoint";
 type Load = { vaultId: string | null } & ({ status: "loading" } | { status: "ok"; servers: LspServerInfo[] } | { status: "error"; message: string });
 
 /** The install command alone: the daemon's hint reads "Install it with: <cmd>". */
-export function installCommand(hint: string): string {
+function installCommand(hint: string): string {
   return hint.replace(/^install it with:\s*/i, "").trim();
 }
 

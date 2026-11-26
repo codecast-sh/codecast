@@ -27,7 +27,7 @@ import { configureLspPool, getLspClient, lspClientsFor } from "./pool";
 import { lspCompletion } from "./completion";
 import { forgetClientDiagnostics, handlePublishDiagnostics } from "./diagnostics";
 import { applyWorkspaceEdit, offsetIn } from "./edits";
-import { activeView, editTarget, noteActiveView, workspaceHost } from "./host";
+import { activeView, editTarget, workspaceHost } from "./host";
 import {
   closeCursorHover,
   codeActions,
@@ -93,7 +93,6 @@ const autoSync = ViewPlugin.fromClass(
     timer: ReturnType<typeof setTimeout> | null = null;
     constructor(readonly view: EditorView) {}
     update(u: ViewUpdate) {
-      if (u.focusChanged && u.view.hasFocus) noteActiveView(u.view);
       if (!u.docChanged) return;
       if (this.timer) clearTimeout(this.timer);
       this.timer = setTimeout(() => {

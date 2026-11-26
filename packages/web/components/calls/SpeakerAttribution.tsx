@@ -273,7 +273,7 @@ function PickerFace({ item }: { item: SpeakerPickerItem }) {
         alt=""
         className="h-5 w-5 shrink-0 rounded-full object-cover"
         fallback={
-          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sol-bg-highlight font-mono text-[10px] text-sol-text-muted">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sol-bg-highlight font-mono text-mark text-sol-text-muted">
             {(item.person.name || "?").charAt(0).toUpperCase()}
           </span>
         }

@@ -9,7 +9,6 @@ app/admin/daemon-logs/page.tsx 4
 app/auth/cli/page.tsx 1
 app/explore/page.tsx 1
 app/join/[code]/page.tsx 2
-app/plans/[id]/page.tsx 1
 app/sessions/page.tsx 1
 app/settings/profile/page.tsx 1
 app/settings/team/join/page.tsx 1
@@ -23,6 +22,5 @@ components/ConfigEditor.tsx 2
 components/CreateTaskModal.tsx 1
 components/GlobalSessionPanel.tsx 1
 components/OrchestrationDashboard.tsx 5
-components/PlanDetailPanel.tsx 1
 components/PlanTaskHoverCard.tsx 1
 components/editor/CollabDocEditor.tsx 1

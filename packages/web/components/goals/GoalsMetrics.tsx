@@ -193,7 +193,7 @@ function MetricCard({ card, now, span }: { card: Card; now: number; span: number
       <div className="flex min-w-0 items-center gap-1.5 text-[12px]">
         <MetricStandingDot standing={r.standing} />
         <span className="truncate" style={{ color: "var(--sol-text)" }}>{r.name}</span>
-        {r.guardrail && <span className="rounded px-1 text-[10px] uppercase tracking-wide" style={{ color: DIM, border: `1px solid ${RULE}` }}>guardrail</span>}
+        {r.guardrail && <span className="rounded px-1 text-mark uppercase tracking-wide" style={{ color: DIM, border: `1px solid ${RULE}` }}>guardrail</span>}
         <span className="flex-1" />
         {word && <span className="whitespace-nowrap text-meta" style={{ color: r.standing === "unknown" ? DIM : STANDING_COLOR[r.standing] }}>{word}</span>}
       </div>
@@ -210,7 +210,7 @@ function MetricCard({ card, now, span }: { card: Card; now: number; span: number
     <div className="min-w-0 rounded-xl border px-3 pb-1.5 pt-2.5" style={{ borderColor: RULE }} data-metric-card={r.key} data-metric-standing={r.standing}>
       {r.series ? <Link href={opsHref.metric(r.series)} className="block no-underline" title={`Open ${r.series}`}>{head}</Link> : head}
       <GoalMetricChart points={points} target={target} standing={r.standing} unit={unit} now={now} span={span} />
-      <div className="mt-0.5 flex items-center gap-2 text-[11px]" style={{ color: DIM }}>
+      <div className="mt-0.5 flex items-center gap-2 text-meta" style={{ color: DIM }}>
         {from ? <Link href={from.href} className="truncate no-underline hover:underline" style={{ color: DIM }}>{from.title}</Link> : <span>{r.live ? r.series : "reported"}</span>}
         <span className="flex-1" />
         {r.observed_at && <span className="tabular-nums">{r.live ? "read" : "reported"} {pointDay(r.observed_at)}</span>}

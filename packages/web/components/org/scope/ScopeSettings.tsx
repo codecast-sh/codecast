@@ -26,7 +26,8 @@ import { goalsOnlyFor, lineIntentEchoed, rolePeopleOnTree, type OrgIntent, type 
 import { SelectBox } from "../../ui/select-box";
 import { roleManagers } from "@codecast/shared/contracts/orgLead";
 import { roleManagerAllowed } from "../../../store/orgRoleManagers";
-import { ManagerChips, usePersonHref } from "../PersonProfile";
+import { ManagerChips } from "../PersonProfile";
+import { usePersonHref } from "../../../hooks/usePersonHref";
 import { GatedScopeEditor, InlineEdit } from "./ScopeEditors";
 import { type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";

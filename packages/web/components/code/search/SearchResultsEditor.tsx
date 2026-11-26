@@ -43,7 +43,8 @@ import {
   type SourceLocation,
 } from "../../../lib/code/search/multibuffer";
 import type { FileEditOutcome } from "../../../lib/code/search/writeBack";
-import { FileFailures, needsAttention } from "./FileFailures";
+import { FileFailures } from "./FileFailures";
+import { needsAttention } from "../../../lib/code/search/fileOutcomes";
 import { codeMirrorUndoGuard } from "../../vault/codeMirrorUndo";
 import { KeyCap } from "../../KeyCap";
 import { isMac } from "../../../shortcuts/registry";
@@ -79,7 +80,7 @@ async function loadSources(results: SearchResults): Promise<{ sources: ExcerptSo
       const i = next++;
       const f = take[i];
       const b = codeBuffers.get(bufferKey(activeVaultId, f.path));
-      const text = b ? currentState(b).doc.toString() : (await readVaultFile(endpoint, activeVaultId, f.path).catch(() => null))?.content.replace(/^﻿/, "");
+      const text = b ? currentState(b).doc.toString() : (await readVaultFile(endpoint, activeVaultId, f.path).catch(() => null))?.content.replace(/^\uFEFF/, "");
       if (text !== undefined && text !== null) out[i] = { path: f.path, text, lines: f.lines };
     }
   };
@@ -244,7 +245,7 @@ export default function SearchResultsEditor({ onClose, onRebuild }: { onClose():
     <div className="flex h-full min-h-0 flex-col bg-sol-bg">
       <div className="flex h-[30px] shrink-0 items-center gap-2 border-b border-sol-border/40 px-2 text-meta">
         <FileStack className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
-        <span className="min-w-0 truncate rounded-sm bg-sol-yellow/15 px-1 font-mono text-[11.5px] text-sol-text" title={query}>
+        <span className="min-w-0 truncate rounded-sm bg-sol-yellow/15 px-1 font-mono text-meta text-sol-text" title={query}>
           {query}
         </span>
         {!status.loading && !status.error && (

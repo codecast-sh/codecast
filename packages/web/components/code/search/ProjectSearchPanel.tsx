@@ -7,7 +7,7 @@
 // Writes (replace) load lib/code/search/runReplace on demand, which reaches the
 // editor's buffers; nothing CodeMirror joins the Files page bundle.
 
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { CaseSensitive, ChevronRight, ChevronsDownUp, ChevronsUpDown, EyeOff, FileStack, ListFilter, Regex, ReplaceAll, WholeWord, X } from "lucide-react";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { SwitchReview, type SwitchLedger } from "../../consequential/ConsequentialSwitch";
@@ -22,30 +22,14 @@ import { compileQuery, searchErrorText, type ProjectQuery } from "../../../lib/c
 import type { MatchTarget } from "../../../lib/code/search/replace";
 import type { ReplaceOutcome } from "../../../lib/code/search/runReplace";
 import { SearchResultsList, type ReplacePreview, type ResultsListActions } from "./SearchResultsList";
-import { FileFailures, needsAttention } from "./FileFailures";
+import { FileFailures } from "./FileFailures";
+import { needsAttention } from "../../../lib/code/search/fileOutcomes";
+import { useProjectSearch } from "../../../hooks/useProjectSearch";
+import { handleSearchOptionKey, openActiveOrFirst } from "../../../lib/code/search/panelKeys";
 
 type MatchRow = Extract<ResultRow, { kind: "match" }>;
 
-/** The controller's state, re-read whenever it notifies. */
-export function useProjectSearch(): ProjectSearchState {
-  useSyncExternalStore(projectSearch.subscribe, projectSearch.getVersion, projectSearch.getVersion);
-  return projectSearch.get();
-}
-
 const loadReplace = () => import("../../../lib/code/search/runReplace");
-
-/** Alt-C, Alt-W, Alt-R toggle case, word and regex from any search field
- *  (VS Code's keys; `code` because Option on a Mac types a character). */
-export function handleSearchOptionKey(e: React.KeyboardEvent): boolean {
-  if (!e.altKey || e.metaKey || e.ctrlKey) return false;
-  const o = projectSearch.get().options;
-  const flip = { KeyC: { caseSensitive: !o.caseSensitive }, KeyW: { word: !o.word }, KeyR: { regex: !o.regex } }[e.code];
-  if (!flip) return false;
-  e.preventDefault();
-  projectSearch.set({ options: flip });
-  projectSearch.rerun();
-  return true;
-}
 
 const toggleClass = (on: boolean) =>
   `flex h-[20px] w-[20px] items-center justify-center rounded-sm transition-colors ${
@@ -366,7 +350,7 @@ export function ProjectSearchPanel({
               className={inputClass}
             />
             <OptionToggle on={state.preserveCase} label="Preserve case" onPress={() => projectSearch.set({ preserveCase: !state.preserveCase })}>
-              <span className="text-[10px] font-semibold leading-none">AB</span>
+              <span className="text-mark font-semibold leading-none">AB</span>
             </OptionToggle>
           </div>
           <ShortcutTooltip label="Replace all" accel="meta+enter">
@@ -425,7 +409,7 @@ export function ProjectSearchPanel({
       )}
 
       {(regexError || error) && (
-        <div role="alert" className="mx-2 mb-1.5 truncate rounded-sm bg-sol-red/10 px-1.5 py-0.5 font-mono text-[11px] text-sol-red" title={error ?? regexError ?? undefined}>
+        <div role="alert" className="mx-2 mb-1.5 truncate rounded-sm bg-sol-red/10 px-1.5 py-0.5 font-mono text-meta text-sol-red" title={error ?? regexError ?? undefined}>
           {error ?? regexError}
         </div>
       )}
@@ -475,7 +459,7 @@ export function ProjectSearchPanel({
               {counts.files < 1000 && (counts.files === 1 ? " file" : " files")}
             </span>
             {summary?.truncated && (
-              <span className="rounded-sm bg-sol-orange/15 px-1 leading-[16px] text-sol-orange" title="The search stopped at its result cap">
+              <span className="rounded-sm bg-sol-orange/15 px-1 leading-[16px] text-sol-orange" title="The search stopped at its result limit">
                 capped
               </span>
             )}
@@ -533,13 +517,4 @@ function compactCount(n: number): string {
 function countsTitle(counts: { matches: number; files: number }, firstResultMs: number | null): string {
   const base = `${counts.matches.toLocaleString()} matches in ${counts.files.toLocaleString()} files`;
   return firstResultMs !== null ? `${base} · first result ${Math.round(firstResultMs)} ms` : base;
-}
-
-/** Enter in the search box: open the selected match, else the first. */
-export function openActiveOrFirst(state: ProjectSearchState): boolean {
-  const matches = state.results?.matches() ?? [];
-  const m = matches.find((x) => x.key === state.active) ?? matches[0];
-  if (!m) return false;
-  projectSearch.open(m as MatchRow);
-  return true;
 }

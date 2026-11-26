@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Bot, X } from "lucide-react";
-import { toastWriteError } from "../../lib/dispatchBinding";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { sendBotToMeeting } from "../../lib/meetingBots";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMeetingBots } from "../../hooks/useMeetingBots";
 import { MeetingCalendarList } from "./MeetingCalendarList";
@@ -82,19 +83,6 @@ function MeetingBotRow({ bot }: { bot: MeetingBot }) {
   );
 }
 
-/** Send a bot to a meeting link: its row paints at once (a stub the server
- *  row folds into), and a link the server refuses takes the row back and says
- *  the server's words. `onRefused` lets the caller put the link back. */
-export function sendBotToMeeting(url: string, onRefused?: () => void): void {
-  const clientKey = crypto.randomUUID();
-  const store = useInboxStore.getState();
-  store.sendMeetingBot(url, clientKey).catch((err: unknown) => {
-    store.discardMeetingBotStub(clientKey);
-    onRefused?.();
-    toastWriteError(err, "the bot could not be sent");
-  });
-}
-
 /** The Calls page's meeting section: the link field with the bots it sent,
  *  and the calendar's meetings. Opened as /calls?bot=1 (the palette and New
  *  menu's "Send a bot to a meeting") it takes the cursor. */
@@ -116,7 +104,7 @@ export function MeetingBotField() {
   const [link, setLink] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const asked = useSearchParams()?.get("bot") === "1";
-  useEffect(() => {
+  useWatchEffect(() => {
     if (asked) inputRef.current?.focus();
   }, [asked]);
   const bots = useMeetingBots();

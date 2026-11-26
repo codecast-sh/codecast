@@ -10,7 +10,7 @@ import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { sessionDmAccessLedger } from "../consequential/ledgers";
 import { Switch } from "../ui/switch";
 
-export function useSessionDmAccess(): [boolean, (on: boolean) => void] {
+function useSessionDmAccess(): [boolean, (on: boolean) => void] {
   const { user } = useCurrentUser();
   const update = useInboxStore((s) => s.updateNotificationSettings);
   return [!!(user as any)?.sessions_read_dms, (on) => update({ sessions_read_dms: on })];

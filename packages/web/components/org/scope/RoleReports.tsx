@@ -18,7 +18,7 @@ export type RoleReportsList = { roles: OrgRole[]; people: OrgPerson[] };
 
 /** The roles and people that report to `roleId`, along any of their equal
  *  lines (org-people.md P3). Retired roles are gone from the chart and here. */
-export function roleReportsOf(tree: Pick<OrgTree, "roles" | "people">, roleId: string): RoleReportsList {
+function roleReportsOf(tree: Pick<OrgTree, "roles" | "people">, roleId: string): RoleReportsList {
   const roles = tree.roles
     .filter((r) => r._id !== roleId && r.status !== "retired" && roleManagers(r).some((m) => m.kind === "role" && m.role_id === roleId))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -48,7 +48,7 @@ export function RoleReports({ tree, role, now, label }: { tree: OrgTree; role: O
         {reports.people.map((p) => (
           <li key={p.user_id}>
             <OrgObjectLink kind="person" objRef={p.user_id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl hover:bg-sol-bg-highlight/70 no-underline" data-report-person={p.user_id}>
-              {p.image ? <img src={p.image} alt="" className="w-6 h-6 rounded-full shrink-0" /> : <span className="w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-[11px] font-semibold" style={{ background: "var(--sol-bg-alt)", color: "var(--sol-text-muted)" }}>{p.name.slice(0, 1).toUpperCase()}</span>}
+              {p.image ? <img src={p.image} alt="" className="w-6 h-6 rounded-full shrink-0" /> : <span className="w-6 h-6 rounded-full shrink-0 inline-flex items-center justify-center text-mark font-semibold" style={{ background: "var(--sol-bg-alt)", color: "var(--sol-text-muted)" }}>{p.name.slice(0, 1).toUpperCase()}</span>}
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{p.name}</span>
                 {(p.title || p.focus) && <span className="block truncate text-meta" style={{ color: "var(--sol-text-muted)" }}>{p.title || p.focus}</span>}

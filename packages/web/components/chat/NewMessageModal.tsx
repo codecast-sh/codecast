@@ -29,7 +29,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { teamMembersOf } from "../../lib/activeTeam";
 import { meetingLinkIn } from "@codecast/shared/contracts/meetingLinks";
-import { sendBotToMeeting } from "../calls/MeetingBotField";
+import { sendBotToMeeting } from "../../lib/meetingBots";
 
 // New message / new huddle.
 //

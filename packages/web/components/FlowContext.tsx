@@ -191,7 +191,7 @@ function StationPeek({ s, onClose }: { s: FlowStation; onClose: () => void }) {
         <button type="button" onClick={onClose} className="ml-auto p-0.5 rounded text-sol-text-dim hover:text-sol-text" aria-label="Close"><X className="w-3 h-3" /></button>
       </div>
       {s.output
-        ? <pre className="max-h-60 overflow-auto px-2 pb-2 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-snug text-sol-text-muted">{s.output}</pre>
+        ? <pre className="max-h-60 overflow-auto px-2 pb-2 whitespace-pre-wrap break-words font-mono text-meta leading-snug text-sol-text-muted">{s.output}</pre>
         : <div className="px-2 pb-2 text-sol-text-dim">{s.state === "next" ? "Not reached yet" : "Printed nothing"}</div>}
     </div>
   );
