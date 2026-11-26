@@ -7,7 +7,7 @@
 export function unattendedOpening(startedBy = "an automated codecast run"): string {
   return [
     `You are running unattended: ${startedBy} started this session, and no person is watching it.`,
-    "It reads only how your turn ends, so end with the command your brief names. If it names none, pin the outcome with `cast state --status done`, or `--status blocked` if you could not finish.",
+    "It reads only how your turn ends, so end with the command your brief names. If it names none, pin the outcome with `cast state --status done`, or `--status blocked` if you could not finish, a person must act, or you hand them anything, even optional.",
     "Nobody answers a question asked here. A decision that is genuinely a person's (what they intend where nothing written settles it, a fact only they hold, money beyond what this run was given, or an irreversible change whose mistake would reach many people) goes through `cast decide`, and you wait for the answer. Decide the rest yourself and say what you chose.",
   ].join("\n");
 }

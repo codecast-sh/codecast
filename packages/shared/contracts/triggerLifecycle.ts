@@ -8,7 +8,7 @@ import { roleFocusBlock } from "./rolePlaybook";
 // must know nobody is watching, and that declaring its state is its only way
 // back to the person's eyes. Agent-only text; the web leaves it out of what it
 // shows (the conversation's trigger block).
-export const STASHED_RUN_NOTE = `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`;
+export const STASHED_RUN_NOTE = `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked if a human must act or you hand them anything, even optional — that returns the session to their inbox.`;
 
 // A decision that climbed past a silent lead (sessionDecisions.rehearSilent)
 // wakes the next role with the same needs-input trigger, whose prompt opens

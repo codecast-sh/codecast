@@ -276,7 +276,7 @@ describe("dispatchCloudTriggers", () => {
     Object.assign(tables.conversations[0], { inbox_stashed_at: 100, inbox_stash_hidden: hidden });
     await dispatch(ctx);
     expect(tables.pending_messages[0].content).toEndWith(
-      "\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.</scheduled-task>",
+      "\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked if a human must act or you hand them anything, even optional — that returns the session to their inbox.</scheduled-task>",
     );
     expect(tables.conversations[0].inbox_stashed_at).toBe(hidden ? 100 : undefined);
   });

@@ -3,10 +3,10 @@
 
 Pin a short state on this session saying where the work stands. The human sees it above the composer and on the inbox card, so they learn the situation without reading back.
 
-**End every turn by declaring who acts next** with `--status`. It decides where the session files in the human's inbox, and it is how you keep from becoming noise:
+**End every turn by declaring who acts next** with `--status`. It decides where the session files in the human's inbox:
 
-- `blocked`: a human must act first (answer, grant, decide). Files under **Needs You** and claims their eyes, so declare it only when true.
-- `done`: delivered, nothing stalled; read at leisure.
+- `blocked`: a human must act first, or you hand them anything, even optional (answer, grant, decide, take up a follow-up, do a step outside the session). Files under **Needs You**.
+- `done`: delivered, nothing for them to do; read at leisure.
 - `dormant`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time, or a wait you set on another task while holding yours). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
 - `working` (the default): still moving.
 
@@ -14,7 +14,7 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 The first line says where the work stands **now**, for a reader with no context: one thought, about 60 characters, plain words; if it waits on someone, name them. Then up to three lines, one line each, only when they carry something:
 
-- `You:` what the human must do or decide: the card, link or choice, never a command to type
+- `You:` what the human must do or decide: the card, link or choice, never a command to type; never with `done`
 - `Done:` what is finished, short items joined by ` · `; proof counts ("tests green")
 - `Next:` what happens next and when, in local time: the running job, your next step, or what wakes you
 
