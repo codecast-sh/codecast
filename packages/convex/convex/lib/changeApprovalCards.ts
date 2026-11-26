@@ -7,8 +7,10 @@
 //   no run         codecast's automatic review read it (changeApprovals.ts): judged files, a mechanism, an objection
 //                  (changes or rejected) or no answer at all go to the area's owner, never a commit's Requested-by;
 //                  a run that ended with no mechanism answer: whoever a mechanism goes to.
-//   the area       the owners file's person for it; else the pull request's author when codecast knows them; else,
-//                  for a bot's or a stranger's pull request, the workspace's admins, so a card always reaches someone.
+//   the area       the owners file's person for it (an id this deployment does not know is no owner); else the pull
+//                  request's author when they are a person on the team, never for a mechanism or an objection on a
+//                  pull request no run is behind (the author wrote it); else the workspace's admins. A card always
+//                  lands: with no session to ask from, it is asked from its person's own, else they are notified.
 //   Cam's changes  the engineer whose yes came before the build; else the area's owner, else the first engineer;
 //                  never Cam.
 // A review that gave no mechanism answer is asked again, never carded. One card per judged diff and question, and at
@@ -21,6 +23,7 @@ import { enqueuePendingMessage } from "../pendingMessages";
 import { findConversationByAnyRef } from "../conversationSessionLookup";
 import { isCam } from "./changeApprovalRows";
 import { withdrawCore } from "../sessionDecisions";
+import { emitNotification } from "../notificationRouter";
 
 export type CardReason = "judged" | "mechanism" | "review" | "unreadable" | "objection";
 /** `also`: others asked the same card beside the holder (a workspace's admins, when no one person owns the area). */
@@ -48,10 +51,13 @@ async function memberNamed(ctx: { db: any }, teamId: Id<"teams"> | undefined, na
   return null;
 }
 
-async function githubUser(ctx: { db: any }, login: string | null | undefined): Promise<Person | null> {
-  if (!login) return null;
+/** The pull request's author, when codecast knows them as a person on the team: never a bot, never a stranger. */
+async function teamAuthor(ctx: { db: any }, teamId: Id<"teams"> | undefined, login: string | null | undefined): Promise<Person | null> {
+  if (!login || !teamId) return null;
   const u: any = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", login)).first();
-  return u ? { user_id: u._id, name: nameOfUser(u) } : { user_id: null, name: login };
+  if (!u || u.is_bot) return null;
+  const member = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", u._id).eq("team_id", teamId)).first();
+  return member ? { user_id: u._id, name: nameOfUser(u) } : null;
 }
 
 /** The workspace's admins, people only, oldest member first. */
@@ -66,7 +72,7 @@ async function workspaceAdmins(ctx: { db: any }, teamId: Id<"teams"> | undefined
   return people;
 }
 
-/** Who each question goes to, as people (an unresolved name keeps its words and no user, so it is said, never carded). */
+/** Who each question goes to, as people: someone who can be carded whenever the workspace has one (`nobody` only when it has no admin). */
 export async function cardPeople(ctx: { db: any }, a: {
   teamId: Id<"teams"> | undefined;
   run: any | null;
@@ -78,16 +84,19 @@ export async function cardPeople(ctx: { db: any }, a: {
   engineers: Array<{ user_id: string; name: string }>;
   engineerYes: { user_id: Id<"users"> } | null;
 }): Promise<Record<CardReason, Person>> {
-  // The owners file names its person by codecast user id: one this deployment does not know is said, never carded.
-  const owner = a.area_owner ? (await personOf(ctx, a.area_owner.user_id)) ?? { user_id: null, name: a.area_owner.name } : null;
-  const author = await githubUser(ctx, a.author_login);
+  // The owners file names its person by codecast user id: one this deployment does not know is no owner.
+  const owner = a.area_owner ? await personOf(ctx, a.area_owner.user_id) : null;
+  const author = await teamAuthor(ctx, a.teamId, a.author_login);
   const nobody: Person = { user_id: null, name: "a person" };
   const press: any = a.run?.pressed_approval_id ? await ctx.db.get(a.run.pressed_approval_id) : null;
   const presser = press ? await personOf(ctx, press.user_id) : null;
   const engineer = (p: Person | null) => !!p?.user_id && a.engineers.some((e) => e.user_id === String(p.user_id));
-  // No owner, and an author codecast does not know (a bot's pull request, a stranger's): the workspace's admins.
-  const admins = !owner && !author?.user_id ? await workspaceAdmins(ctx, a.teamId) : [];
-  const area = owner ?? (author?.user_id ? author : null) ?? (admins.length ? { ...admins[0], also: admins.slice(1).map((p) => p.user_id!) } : null) ?? author ?? nobody;
+  // No owner: the author when they are on the team, else the workspace's admins (a bot's pull request, a stranger's).
+  const admins = owner ? [] : await workspaceAdmins(ctx, a.teamId);
+  const adminCard: Person | null = admins.length ? { ...admins[0], also: admins.slice(1).map((p) => p.user_id!) } : null;
+  const area = owner ?? author ?? adminCard ?? nobody;
+  // What the author must never approve themselves: a mechanism or an objection on a pull request no run is behind.
+  const areaNotAuthor = owner ?? adminCard ?? nobody;
   if (a.camAsked) {
     const firstEngineer = a.engineers.length ? (await personOf(ctx, a.engineers[0].user_id)) ?? { user_id: null, name: a.engineers[0].name } : null;
     const camOwner = owner && !isCam(owner) ? owner : null;
@@ -97,9 +106,9 @@ export async function cardPeople(ctx: { db: any }, a: {
   const spawner: any = a.run?.spawner_conversation_id ? await ctx.db.get(a.run.spawner_conversation_id) : null;
   const asker = a.requested_by ? (await memberNamed(ctx, a.teamId, a.requested_by)) ?? { user_id: null, name: a.requested_by } : null;
   const judged = presser ?? asker ?? (spawner ? await personOf(ctx, spawner.user_id) : null) ?? area;
-  const mechanism = engineer(presser) ? presser! : area;
+  const mechanism = engineer(presser) ? presser! : a.run ? area : areaNotAuthor;
   // The change read whole: with no run, the area's owner; a run whose review never answered, whoever reads a mechanism.
-  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area, objection: area };
+  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area, objection: areaNotAuthor };
 }
 
 /** The review's own words on the run's task, newest first, cut to fit a card. */
@@ -111,15 +120,24 @@ async function reviewWords(ctx: { db: any }, run: any | null): Promise<string | 
   return review ? String(review.text).slice(0, 1500) : null;
 }
 
-/** Where the card is asked from: the run's own log, else the pull request's session, else the team's agent's session. */
-async function askingConversation(ctx: { db: any }, run: any | null, pr: any | null): Promise<any | null> {
+/**
+ * Where the card is asked from: the run's own log, else the pull request's session, else the team's agent's session,
+ * where the team's other approval cards with no run go; else its person's own agent, else their newest session.
+ */
+async function askingConversation(ctx: { db: any }, run: any | null, pr: any | null, holder: Id<"users">): Promise<any | null> {
   for (const id of [run?.primary_conversation_id, pr?.shepherd_conversation_id, ...(pr?.linked_session_ids ?? [])]) {
     const c = id ? await ctx.db.get(id) : null;
     if (c) return c;
   }
   const teamId = pr?.team_id ?? run?.team_id;
-  const anchor: any = teamId ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).first() : null;
-  return anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+  for (const anchor of [
+    teamId ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).first() : null,
+    await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", holder)).first(),
+  ]) {
+    const c = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+    if (c) return c;
+  }
+  return await ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", holder)).order("desc").first();
 }
 
 const WHY: Record<CardReason, string> = {
@@ -156,21 +174,29 @@ export async function withdrawApprovalCard(ctx: { db: any; scheduler: any }, car
 
 /**
  * Posts the one approval card a pending status owes `to`, unless one was already posted for this judged diff and
- * question (`card_key`). Returns the key and card, or null when nothing was posted (no such person, nowhere to ask,
- * or already asked).
+ * question (`card_key`). Returns the key and card (no card when its people were notified instead, having no session
+ * to ask from), or null when nothing was posted (no such person, or already asked).
  */
 export async function postApprovalCard(ctx: { db: any }, a: {
   repository: string; pr_number: number; head_sha: string; /** The diff its yes approves (changeApprovals.settle). */ key: string; judged: string[];
   reason: CardReason; to: Person; run: any | null; pr: Doc<"pull_requests"> | null; title: string; before_key?: string; now: number;
   /** The review's words when no run holds them (codecast's automatic review). */
   words?: string;
-}): Promise<{ card_key: string; card_id: Id<"session_decisions"> } | null> {
+}): Promise<{ card_key: string; card_id?: Id<"session_decisions"> } | null> {
   const card_key = cardKeyOf(a.key, a.reason);
   if (!a.to.user_id || a.before_key === card_key) return null;
-  const conversation = await askingConversation(ctx, a.run, a.pr);
-  if (!conversation) return null;
-  const review = a.words ?? await reviewWords(ctx, a.run);
   const asked = [a.to.user_id, ...(a.to.also ?? [])];
+  const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id);
+  if (!conversation) {
+    // Nowhere to ask from (its person has no session at all): they are told, once per question, so it still lands.
+    await emitNotification(ctx as any, {
+      event_type: "card_waiting", actor_name: "Codecast", entity_type: "code", entity_id: `${a.repository}#${a.pr_number}`,
+      message: `${a.repository}#${a.pr_number} waits for your approval: ${WHY[a.reason]}`,
+      link: `https://github.com/${a.repository}/pull/${a.pr_number}`, recipient_ids: asked,
+    });
+    return { card_key };
+  }
+  const review = a.words ?? await reviewWords(ctx, a.run);
   const files = a.judged.length ? a.judged.map((f) => `- \`${f}\``).join("\n") : "_(no judged files)_";
   const context_md = [
     WHY[a.reason],

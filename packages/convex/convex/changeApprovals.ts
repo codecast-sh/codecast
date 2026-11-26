@@ -17,8 +17,9 @@
 //              the run's own rebase made of it). Until one exists the status is pending: there is no default.
 //   no run     a pull request no codecast run is behind (Dependabot's, a bot's, one opened in GitHub's UI) is read by
 //              codecast's automatic review (lib/automaticReview.ts), one model call on the server over the diff of the
-//              head being evaluated. Its answer counts for that head alone; with none (too large, a failure, no
-//              budget) the area's owner reads it whole, and a verdict other than ship is theirs to read too.
+//              head being evaluated. One evaluation claims the head (claimAutomaticReview) and the first answer stored
+//              for it counts; with none (no mechanism file, too large, a failure, no budget) a person reads it whole,
+//              and a mechanism or a verdict other than ship holds for every later head of the pull request.
 //   revert     a Release Captain's revert (the run's role, and git's revert line on its commits) merges on CI's
 //              required checks alone; no revert is recognised from its diff.
 //   who        the status names the person a card goes to: a judged file the press did not list, the person who
@@ -41,7 +42,7 @@ import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
 import { approvalContext, askerOf, changeJudgedFiles, gateOf, isCam, isReleaseCaptain, mayReadGate, preBuildYes } from "./lib/changeApprovalRows";
 import { askReviewForMechanism, cardPeople, cardStale, postApprovalCard, withdrawApprovalCard, type CardReason } from "./lib/changeApprovalCards";
-import { reviewHead, type AutomaticReview } from "./lib/automaticReview";
+import { AUTOMATIC_REVIEW_CLAIM_MS, MECHANISM_FILE, reviewHead, type AutomaticReview } from "./lib/automaticReview";
 import { automaticReviewValidator } from "./lib/automaticReviewValidator";
 import type { CallScope } from "./modelCalls";
 import { diffKey, isJudged, judgedPaths, keyChanged, keyEntriesFor, ownerOf, parseJudges, parseOwners, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./lib/judgedDiff";
@@ -73,12 +74,14 @@ export type ApprovalFacts =
       review_failed?: string;
       /** The automatic review's verdict was not ship: a person reads it whole, with its reason. */
       objection?: "changes" | "rejected";
+      /** An earlier head's automatic review called it a mechanism or objected: every later head is a person's to read. */
+      held?: string;
       /** A person's yes on a card that read the change whole, for this whole diff: it covers a mechanism too. */
       card?: { who: string; ref: string } | null;
       /** What covers this judged diff's files, never a mechanism: a Ship press, a card that asked about them, an engineer's pre-build yes. */
       press?: { who: string; ref?: string } | null;
       /** Who a card goes to, by name, for each question a person may be asked. */
-      needs: { judged: string; mechanism: string; review: string };
+      needs: { judged: string; mechanism: string; review: string; objection?: string };
     };
 
 export type ApprovalVerdict = { state: "success" | "pending"; description: string };
@@ -107,11 +110,11 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   const approved = (c: { who: string; ref: string }): ApprovalVerdict => ({ state: "success", description: fit(`approved by ${c.who} (${c.ref})`) });
   if ("unreadable" in f) return f.card ? approved(f.card) : { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
   if (f.captain_revert) return { state: "success", description: "the Release Captain's revert: CI's required checks decide" };
-  // No codecast run, so no review gave a mechanism answer. Judged files: the area's owner reads it whole (the card).
-  // Otherwise it waits for the automatic review, and nobody is asked.
+  // No codecast run, and no automatic review has answered for this head yet (another evaluation is reading it): it waits,
+  // and nobody is asked. A review that never answers fails closed (claimAutomaticReview), never waits for ever.
   if (!f.run) {
     if (f.card) return approved(f.card);
-    return { state: "pending", description: f.judged.length ? fit(`needs a review by ${f.needs.review}: no codecast run reviewed it`) : "waiting for an automatic review: no codecast run reviewed it" };
+    return { state: "pending", description: "waiting for codecast's automatic review" };
   }
   if (f.mechanism === null) {
     if (f.run === "live") return { state: "pending", description: "waiting for the review's mechanism answer" };
@@ -120,7 +123,8 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
     if (f.card) return approved(f.card);
     return { state: "pending", description: fit(`needs a review by ${f.needs.review}: ${f.review_failed ? `the automatic review could not answer (${f.review_failed})` : "the review gave no mechanism answer"}`) };
   }
-  if (f.objection) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.review}: the automatic review ${f.objection === "rejected" ? "rejected it" : "asked for changes"}`) };
+  if (f.objection) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: the automatic review ${f.objection === "rejected" ? "rejected it" : "asked for changes"}`) };
+  if (f.held) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: ${f.held}`) };
   if (!f.judged.length && !f.mechanism) return { state: "success", description: f.automatic ? "no judged paths; the automatic review: not a mechanism" : "no judged paths; the review: not a mechanism" };
   if (f.card) return approved(f.card);
   if (f.mechanism) return { state: "pending", description: fit(`needs ${f.needs.mechanism}: the review called it a mechanism`) };
@@ -133,15 +137,15 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
 /**
  * The question a pending status puts to a person, which their approval card asks, or null when it waits on nobody: a
  * review that can still give its mechanism answer is asked again, never a person, and a pull request no run is behind
- * waits for the automatic review unless it edits judged files. A review that can no longer answer is a person's card.
+ * waits for the automatic review's answer. A review that can no longer answer is a person's card.
  */
 export function cardReason(f: ApprovalFacts): CardReason | null {
   if (!f.opted || f.card) return null;
   if ("unreadable" in f) return "unreadable";
   if (f.captain_revert) return null;
-  if (!f.run) return f.judged.length ? "review" : null;
+  if (!f.run) return null;
   if (f.mechanism === null) return f.run === "ended" ? "review" : null;
-  if (f.objection) return "objection";
+  if (f.objection || f.held) return "objection";
   if (f.mechanism) return "mechanism";
   return f.judged.length && !f.press ? "judged" : null;
 }
@@ -269,7 +273,12 @@ export type PullPeople = {
 export type PullRead =
   | { open: false }
   | { open: true; head_sha: string; unreadable: string; judges?: string[]; people: PullPeople }
-  | { open: true; head_sha: string; judged: string[]; key: string; whole_key?: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople; base_sha: string; paths: string[] };
+  | {
+      open: true; head_sha: string; judged: string[]; key: string; whole_key?: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople;
+      base_sha: string; paths: string[]; default_branch: string;
+      /** Where main's mechanism file is (lib/automaticReview MECHANISM_FILE, beside the judges file): read only when the automatic review runs. */
+      mechanism_path: string;
+    };
 
 /** Main's engineers file: `<codecast user id> <name>` a line, blank and "#" lines skipped. */
 export function parseEngineers(text: string): Array<{ user_id: string; name: string }> {
@@ -318,7 +327,10 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const messages = await prMessages(repository, token, prNumber);
     const asker = requestedBy(messages);
     // The Captain's exemption is for a pull request of reverts only: one other commit and it is judged like any.
-    return { open: true, head_sha: head, judged, key, ...(whole_key ? { whole_key } : {}), judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people, base_sha: mb, paths: changed };
+    return {
+      open: true, head_sha: head, judged, key, ...(whole_key ? { whole_key } : {}), judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people,
+      base_sha: mb, paths: changed, default_branch: main, mechanism_path: beside(MECHANISM_FILE),
+    };
   } catch (error) {
     return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})`, people };
   }
@@ -342,6 +354,16 @@ async function headDiff(repository: string, base: string, head: string, token: s
   return { error };
 }
 
+/** A file on the default branch: its text, null when it is not there, or why it could not be read. */
+async function mainFile(repository: string, main: string, path: string, token: string): Promise<string | null | { error: string }> {
+  try {
+    const r = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(path)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
+    return r.status === 404 ? null : r.text ?? "";
+  } catch (e) {
+    return { error: (e instanceof Error ? e.message : String(e)).slice(0, 200) };
+  }
+}
+
 /** Why a token cannot post statuses, or null when it can or nobody recorded what it may do. */
 export function statusesRefusal(permissions: Record<string, string> | undefined): string | null {
   if (!permissions) return null;
@@ -359,12 +381,17 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   const minted: { token: string; permissions?: Record<string, string> } = await ctx.runAction(internal.githubApp.getInstallationToken, { installation_id: gate.installation_id });
   const read = await readPull(repository, args.pr_number, minted.token, gate.judges_path);
   if (!read.open) return { opted: true, open: false };
-  // No codecast run behind it: the automatic review reads this head, once (its answer is kept for the head).
+  // No codecast run behind it: the automatic review reads this head, once. The evaluation that claims the head calls the
+  // model; one that loses the claim settles as waiting, and a claim that never finished fails closed.
   let automatic: AutomaticReview | undefined;
   if (!("unreadable" in read)) {
-    const need: { run_behind: boolean; kept: AutomaticReview | null; scope: CallScope | null } = await ctx.runQuery(internal.changeApprovals.automaticReviewNeed, { repository, pr_number: args.pr_number, head_sha: read.head_sha });
-    if (!need.run_behind) {
-      automatic = need.kept ?? await reviewHead(ctx, need.scope, { repository, head_sha: read.head_sha, files: read.paths, diff: await headDiff(repository, read.base_sha, read.head_sha, minted.token) }, Date.now());
+    const claim: Claim = await ctx.runMutation(internal.changeApprovals.claimAutomaticReview, { repository, pr_number: args.pr_number, head_sha: read.head_sha });
+    if (claim.action === "stale") automatic = claim.record;
+    if (claim.action === "claimed") {
+      automatic = await reviewHead(ctx, claim.scope, {
+        repository, head_sha: read.head_sha, listed: read.paths, diff: await headDiff(repository, read.base_sha, read.head_sha, minted.token),
+        mechanism_definition: await mainFile(repository, read.default_branch, read.mechanism_path, minted.token), mechanism_path: read.mechanism_path,
+      }, Date.now());
     }
   }
   const verdict: ApprovalVerdict & { context: string } = await ctx.runMutation(internal.changeApprovals.settle, {
@@ -464,23 +491,51 @@ export const openNumbers = internalQuery({
   },
 });
 
+type Claim =
+  | { action: "run_behind" | "kept" | "waiting" }
+  | { action: "stale"; record: AutomaticReview }
+  | { action: "claimed"; scope: CallScope | null };
+
+/** What an earlier head's answer holds over the next head: a mechanism or an objection, never a failure. */
+export function heldBy(prior: AutomaticReview | undefined): string | undefined {
+  if (!prior) return undefined;
+  if (prior.held) return prior.held;
+  if (prior.pending || prior.failed) return undefined;
+  const said = prior.mechanism ? "called it a mechanism" : prior.verdict === "rejected" ? "rejected it" : prior.verdict === "changes" ? "asked for changes" : null;
+  return said ? `the automatic review of an earlier head (${prior.head_sha.slice(0, 10)}) ${said}` : undefined;
+}
+
 /**
- * Whether the automatic review reads this pull request (no codecast run is behind it), the answer already kept for this
- * head, and the budget it is charged to: the opted-in installation's workspace.
+ * One evaluation claims a head before it calls the model, so a pull request's two webhooks at once (Dependabot's opened
+ * and labeled), or an author re-triggering it, buy one answer, and the first stands. With a run behind the pull request,
+ * nothing to do; an answer or failure already stored for the head is kept; a fresh claim of another evaluation waits;
+ * a claim older than AUTOMATIC_REVIEW_CLAIM_MS never finished and fails closed. The claim carries what an earlier
+ * head's answer holds.
  */
-export const automaticReviewNeed = internalQuery({
+export const claimAutomaticReview = internalMutation({
   args: { repository: v.string(), pr_number: v.number(), head_sha: v.string() },
-  handler: async (ctx, args): Promise<{ run_behind: boolean; kept: AutomaticReview | null; scope: CallScope | null }> => {
+  handler: async (ctx, args): Promise<Claim> => {
     const repository = normalizeRepository(args.repository);
+    const now = Date.now();
     const run = await ctx.db.query("workflow_runs").withIndex("by_pr", (q) => q.eq("pr.repository", repository).eq("pr.number", args.pr_number)).first();
-    if (run) return { run_behind: true, kept: null, scope: null };
-    const pr = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).first();
-    const kept = pr?.approval?.automatic?.head_sha === args.head_sha ? pr.approval.automatic : null;
+    if (run) return { action: "run_behind" };
+    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
+    const stored = rows[0]?.approval?.automatic;
+    if (stored?.head_sha === args.head_sha) {
+      if (!stored.pending) return { action: "kept" };
+      if (now - stored.at < AUTOMATIC_REVIEW_CLAIM_MS) return { action: "waiting" };
+      return { action: "stale", record: { head_sha: args.head_sha, failed: true, reason: "the automatic review that took this head never finished", ...(stored.held ? { held: stored.held } : {}), at: now } };
+    }
+    const held = heldBy(stored);
+    const claim: AutomaticReview = { head_sha: args.head_sha, pending: true, reason: "reading", ...(held ? { held } : {}), at: now };
+    for (const row of rows) {
+      await patchPullRequest(ctx, row._id, { approval: { ...(row.approval ?? { head_sha: args.head_sha, state: "pending" as const, description: "waiting for codecast's automatic review" }), automatic: claim } });
+    }
     const gate = await gateOf(ctx, repository);
     const installation: any = gate ? await ctx.db.get(gate.installation_row) : null;
     const scope: CallScope | null = installation?.team_id ? { workspace: `team:${installation.team_id}`, team_id: installation.team_id }
       : installation?.scope_user_id ? { workspace: `user:${installation.scope_user_id}` } : null;
-    return { run_behind: false, kept, scope };
+    return { action: "claimed", scope };
   },
 });
 
@@ -599,11 +654,15 @@ export const settle = internalMutation({
       // With no run behind it the area's owner is asked: a commit's Requested-by line is an agent's word, not codecast's record.
       requested_by: run ? args.requested_by : undefined, author_login: args.people?.author_login, engineers, engineerYes,
     });
-    const needs = { judged: to.judged.name, mechanism: to.mechanism.name, review: to.review.name };
+    const needs = { judged: to.judged.name, mechanism: to.mechanism.name, review: to.review.name, objection: to.objection.name };
     const role: any = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
     const captainRevert = !!args.reverts && isReleaseCaptain(role);
-    // With no run behind it, the automatic review's answer stands in for a run's, for the head it read alone.
-    const auto = !run && args.automatic?.head_sha === args.head_sha ? args.automatic : undefined;
+    // With no run behind it, the automatic review's answer stands in for a run's, for the head it read alone. The first
+    // answer stored for a head stands: a later one (a second evaluation, a re-run) never replaces it.
+    const kept = before?.automatic?.head_sha === args.head_sha ? before.automatic : undefined;
+    const given = args.automatic?.head_sha === args.head_sha && !args.automatic.pending ? args.automatic : undefined;
+    const answer = kept && !kept.pending ? kept : given ? { ...given, ...(kept?.held && !given.held ? { held: kept.held } : {}) } : undefined;
+    const auto = !run ? answer : undefined;
     const mechanism = run ? mechanismOf(run, args.head_sha) : auto && !auto.failed && typeof auto.mechanism === "boolean" ? auto.mechanism : null;
     // A reviewer records its answer only while its run is pending or running (orgLineMerge.recordReviewVerdictCore).
     const runState = !run ? (auto ? "ended" : false) : run.status === "pending" || run.status === "running" ? "live" : "ended";
@@ -614,6 +673,7 @@ export const settle = internalMutation({
       : {
           opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), run: runState, mechanism, card, press, needs,
           ...(auto ? { automatic: true } : {}), ...(auto?.failed ? { review_failed: auto.reason } : {}), ...(objection ? { objection } : {}),
+          ...(auto?.held && !auto.failed ? { held: auto.held } : {}),
         };
     const verdict = decide(facts)!;
     const now = Date.now();
@@ -631,7 +691,7 @@ export const settle = internalMutation({
       repository, pr_number: args.pr_number, head_sha: args.head_sha, key: cardKey, judged, reason, to: to[reason], run, pr,
       title: args.people?.title ?? pr?.title ?? "", before_key: before?.card_key, now,
       // The automatic review's own words are what the card shows, its reason or why it gave none.
-      ...(auto ? { words: `${auto.failed ? "The automatic review could not answer" : `The automatic review (${auto.verdict}, ${auto.mechanism ? "a mechanism" : "not a mechanism"})`}: ${auto.reason}` } : {}),
+      ...(auto ? { words: [auto.held ? `Held: ${auto.held}.` : null, `${auto.failed ? "The automatic review could not answer" : `The automatic review of this head (${auto.verdict}, ${auto.mechanism ? "a mechanism" : "not a mechanism"})`}: ${auto.reason}`].filter(Boolean).join("\n\n") } : {}),
     }) : null;
 
     for (const row of rows) {
@@ -643,10 +703,10 @@ export const settle = internalMutation({
           ...(run ? { run_id: run._id } : {}),
           ...(typeof mechanism === "boolean" ? { mechanism } : {}),
           ...(captainRevert ? { captain_revert: true } : {}),
-          ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : before?.card_key && !stale ? { card_key: before.card_key, ...(before.card_id ? { card_id: before.card_id } : {}) } : {}),
+          ...(posted ? { card_key: posted.card_key, ...(posted.card_id ? { card_id: posted.card_id } : {}) } : before?.card_key && !stale ? { card_key: before.card_key, ...(before.card_id ? { card_id: before.card_id } : {}) } : {}),
           ...(askedReview ? { review_asked: args.head_sha } : before?.review_asked ? { review_asked: before.review_asked } : {}),
           ...(before?.engineer_told ? { engineer_told: true } : {}),
-          ...(auto ? { automatic: auto } : before?.automatic ? { automatic: before.automatic } : {}),
+          ...(answer ? { automatic: answer } : before?.automatic ? { automatic: before.automatic } : {}),
         },
       });
     }
