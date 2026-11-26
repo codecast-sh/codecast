@@ -15,7 +15,9 @@ import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../
 import { useRunFlow } from "../../../hooks/useFlowObject";
 import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
 import { appPool, previewsPersonal, shipPicks, type AppFlow } from "../../../lib/line/flowPool";
-import { journeyOf, journeyStages, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { journeyOf, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { roundsOnOwnResults } from "../../../lib/ship/ownRound";
+import { stagePathWords } from "@codecast/shared/contracts/flowStagePlan";
 import { journeyWords } from "../../../lib/ship/journeyWords";
 import { approvalOf, approvalWords, shipConfirms } from "../../../lib/ship/approval";
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
@@ -285,7 +287,7 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
               <input type="radio" className="shp-radio" name={`ship-flow-${conversationId}`} value={f.slug} checked={f.slug === flow.slug}
                 onChange={() => setPicked(f.slug)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRun(f); } }} />
               <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
-              <span className="shp-path">{journeyStages(f).map((s) => s.label).join(" → ")}</span>
+              <span className="shp-path">{stagePathWords(f, { personal: roundsOnOwnResults(f) })}</span>
               <Asks flow={f} />
             </label>
           ))}

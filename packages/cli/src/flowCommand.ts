@@ -420,7 +420,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         : pass ? `Ship the shared checkout: ${passFiles} file${passFiles === 1 ? "" : "s"} in ${pass.groups.length} commit${pass.groups.length === 1 ? "" : "s"}`
         : sessionTitle ?? `Change from session ${preview?.session ?? "here"}`);
       if (opts.dryRun) {
-        console.log(`${bold(found.label)}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
+        console.log([bold(found.label), (await import("./flowStagePath.js")).flowStagePath(found)].filter(Boolean).join(": "));
         console.log(`on ${branch ? `branch ${branch}` : preview ? `session ${preview.session}'s own edits` : pass ? "the shared checkout's uncommitted pass" : `task ${task}`}, bound to ${task ?? `a new task "${changeTitle}"`}`);
         for (const g of pass?.groups ?? []) {
           const who = g.session ? `session ${g.session.id ?? g.session.conversation_id?.slice(0, 7) ?? g.id.slice(2)}${g.session.title ? ` (${g.session.title})` : ""}` : "no session's edit names these";
@@ -558,7 +558,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       }
       const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(placed ? { device: placed.device_id } : {}) };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
-      console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
+      const stages = (await import("./flowStagePath.js")).flowStagePath(found);
+      console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}${stages ? `: ${stages}` : ""}`);
       if (change?.source === "session") {
         console.log(`  ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} from session ${change.session} on ${change.branch}`);
         for (const s of change.shared) console.log(`  ${s.path} also holds edits from ${s.also.join(", ")}`);

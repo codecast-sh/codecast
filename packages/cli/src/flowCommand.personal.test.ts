@@ -242,7 +242,7 @@ describe("a directory established as personal, whatever team is active", () => {
     const r = await castFlow(repo(), ["run", "--library", "--branch", "feature", "--dry-run"], PERSONAL);
     expect(r.code).toBeNull();
     expect(r.out).toMatch(/^Ship: PR\b/);
-    expect(r.out).not.toContain("Find check");
+    expect(r.out).not.toContain("Check + Review → Land");
   });
 
   test("--library runs the library's change by its name, never the personal Ship", async () => {
@@ -250,9 +250,9 @@ describe("a directory established as personal, whatever team is active", () => {
     expect(r.code).toBeNull();
     expect(r.err).not.toContain("personal Ship");
     expect(r.out).toMatch(/^Ship: PR\b/);
-    expect(r.out).not.toContain("Find check");
+    expect(r.out).not.toContain("Check + Review → Land");
     // Without --library the same name runs the personal Ship here.
-    expect((await castFlow(repo(), ["run", "change", "--branch", "feature", "--dry-run"], PERSONAL)).out).toContain("Find check");
+    expect((await castFlow(repo(), ["run", "change", "--branch", "feature", "--dry-run"], PERSONAL)).out).toContain("Check + Review → Land");
   });
 
   test("a run of a team's task, or of a task that cannot be read, is not personal", async () => {
@@ -335,7 +335,7 @@ describe("in a personal workspace", () => {
     const named = await castFlow(clone, ["run", "personal", "--library", "--branch", "feature", "--dry-run"], PERSONAL);
     expect([named.code, named.err]).toEqual([1, expect.stringContaining("predates the repo's own change flow")]);
     const nameless = await castFlow(clone, ["run", "--library", "--branch", "feature", "--dry-run"], PERSONAL);
-    expect(nameless.out).not.toContain("Find check");
+    expect(nameless.out).not.toContain("Check + Review → Land");
   });
 
   test("with a repo's own change, the shipped personal Ship is not offered beside it", () => {
@@ -431,7 +431,7 @@ describe("a team's pool keeps what it had before the personal Ship", () => {
       expect([team.code, team.err]).toEqual([1, expect.stringContaining("not established as personal")]);
       const mine = await castFlow(repo(), ["run", file, "--branch", "feature", "--dry-run"], PERSONAL);
       expect(mine.code).toBeNull();
-      expect(mine.out).toContain("Find check");
+      expect(mine.out).toContain("Check + Review → Land");
     });
   }
 
@@ -441,7 +441,7 @@ describe("a team's pool keeps what it had before the personal Ship", () => {
     expect(team.out).toBe("");
     const mine = await castFlow(repo(), ["run", "personal", "--branch", "feature", "--dry-run"], { ...PERSONAL, poolRows: [teamPersonal] });
     expect(mine.code).toBeNull();
-    expect(mine.out).toContain("Find check");
+    expect(mine.out).toContain("Check + Review → Land");
     expect(mine.out).not.toContain("Team review");
   });
 
@@ -543,7 +543,7 @@ describe("a team's pool keeps what it had before the personal Ship", () => {
     expect([team.code, team.err]).toEqual([1, expect.stringContaining("fast is built on the personal Ship, and this checkout is not established as personal")]);
     const mine = await castFlow(root, ["run", "fast", "--branch", "feature", "--dry-run"], PERSONAL);
     expect(mine.code).toBeNull();
-    expect(mine.out).toContain("Find check");
+    expect(mine.out).toContain("Check + Review → Land");
   });
 
   test("reachesShippedFlow walks extends: the shipped personal at any depth, never a team's own personal or change", async () => {

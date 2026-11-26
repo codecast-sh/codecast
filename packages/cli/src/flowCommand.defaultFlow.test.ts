@@ -144,7 +144,8 @@ describe("cast flow run with no flow named", () => {
   test("runs Change when the workspace set no default", async () => {
     const r = await castFlow(repo(), ["run", "--branch", "feature", "--dry-run"], null);
     expect(r.err).toContain("running change, the workspace's default");
-    expect(r.out).toContain("on branch feature");
+    // Its stages as the picker and run card name them, never every station its segments expand into.
+    expect(r.out).toMatch(/^Ship: PR → CI \+ Review → Merge → Deploy → Live\non branch feature/);
   });
 
   test("reads the default of the team this directory is mapped to, as session start does, not the active team's", async () => {
