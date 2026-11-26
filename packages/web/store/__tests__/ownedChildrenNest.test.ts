@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { computeVisualOrder, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
+import { __resetInboxPlacementCacheForTests, computeVisualOrder, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
 import { placeSections } from "./placeTestHarness";
 
 // Under the owners model a subagent belongs to the session that started it, so
@@ -54,13 +54,25 @@ describe("a subagent its session owns rides that session's card", () => {
     expect(sectioned(p)).toEqual([]);
   });
 
-  it("a closed or killed child is not drawn", () => {
+  it("a closed, killed, stashed or snoozed child is not drawn", () => {
     const p = place([
       row(PARENT, { owners_model: true, owned_by_me: true }),
       owned(CHILD, PARENT, { inbox_killed_at: T0 - 1000 } as any),
       owned(ORPHAN, PARENT, { inbox_dismissed_at: T0 - 1000, inbox_closed_at: T0 - 1000 } as any),
+      owned(WORKER, PARENT, { inbox_stashed_at: T0 - 1000 } as any),
+      owned(OTHER, PARENT, { inbox_snoozed_until: T0 + 3_600_000 } as any),
     ]);
     expect(p.subsByParent.get(PARENT) ?? []).toEqual([]);
+  });
+
+  it("only the newest 20 children by start, as the inbox read sends them", () => {
+    const kids = Array.from({ length: 22 }, (_, i) => owned(`k${String(i).padStart(2, "0")}`.padEnd(32, "0"), PARENT, { started_at: T0 - 3_600_000 + i * 1000, updated_at: T0 - (i === 0 ? 1000 : 60_000) } as any));
+    const p = place([lead(), ...kids]);
+    const nested = (p.subsByParent.get(PARENT) ?? []).map((s) => s._id);
+    expect(nested).toHaveLength(20);
+    // The two started first are past the horizon, however recently one moved.
+    expect(nested).not.toContain(kids[0]._id);
+    expect(nested).not.toContain(kids[1]._id);
   });
 });
 
@@ -69,6 +81,17 @@ describe("owned children stay on their session's card", () => {
     const p = place([lead(), owned(CHILD, PARENT)], { scope: "team", teamInboxIds: new Set([PARENT, CHILD]) });
     expect(sectioned(p)).toContain(PARENT);
     expect(sectioned(p)).not.toContain(CHILD);
+  });
+
+  it("the team board keeps a spawned worker the session owns as a card of its own", () => {
+    const worker = owned(WORKER, PARENT, { parent_conversation_id: undefined, is_subagent: false, spawned_by_conversation_id: PARENT } as any);
+    const p = place([lead(), worker], { scope: "team", teamInboxIds: new Set([PARENT, WORKER]) });
+    expect(sectioned(p)).toContain(WORKER);
+  });
+
+  it("the team board keeps an owned child whose session's card is not on it", () => {
+    const p = place([owned(CHILD, PARENT)], { scope: "team", teamInboxIds: new Set([CHILD]) });
+    expect(sectioned(p)).toContain(CHILD);
   });
 
   it("a spawned worker the session owns is not nested: it has no parent pointer", () => {
@@ -134,5 +157,30 @@ describe("keyboard order in a flat view follows Which ones", () => {
   it("walks only the nested cards the filter keeps", () => {
     expect(order("active")).toEqual([PARENT, CHILD]);
     expect(order("all").sort()).toEqual([PARENT, CHILD, ORPHAN].sort());
+  });
+});
+
+describe("keyboard order from an open owned child in a grouped view", () => {
+  const order = (currentSessionId: string | null) => {
+    __resetInboxPlacementCacheForTests();
+    return computeVisualOrder({
+      sessions: Object.fromEntries([lead(), row(OTHER, { updated_at: T0 - 120_000 }), finished(CHILD, PARENT)].map((s) => [s._id, s])),
+      sessionsWithQueuedMessages: new Set<string>(),
+      pendingMessages: {},
+      currentSessionId,
+      pendingSessionCreates: {},
+      bucketAssignments: {},
+      buckets: {},
+      currentUser: { _id: ME },
+      clientState: { ui: { inbox_view_mode: "grouped", subagent_rows: "folded", inbox_show_old: true } },
+    }).map((s) => s._id);
+  };
+
+  it("walks on from right after its session's card", () => {
+    const closed = order(null);
+    expect(closed).not.toContain(CHILD);
+    const open = order(CHILD);
+    expect(open.indexOf(CHILD)).toBe(open.indexOf(PARENT) + 1);
+    expect(open.filter((id) => id !== CHILD)).toEqual(closed);
   });
 });

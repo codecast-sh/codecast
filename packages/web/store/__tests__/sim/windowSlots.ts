@@ -87,6 +87,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:HELD_IN_NEW": CONSTANT,
   "store/inboxStore.ts:QUIET_BUCKETS": CONSTANT,
   "store/inboxStore.ts:SURFACED_PLAN_STATES": CONSTANT,
+  "store/inboxStore.ts:SET_ASIDE_STATUSES": CONSTANT,
 
   // the rest of store/
   "store/gestureBridge.ts:sourceToken": "window",

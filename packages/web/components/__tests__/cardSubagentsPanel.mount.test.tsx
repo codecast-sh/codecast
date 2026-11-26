@@ -11,6 +11,8 @@
 //   flat       Recent draws the Folded line and the Compact rows under each
 //              card, and Full rows there follow the filter
 //   scroll     opening a subagent in Compact rows scrolls to its row
+//   reveal     opening a subagent its session owns opens the collapsed
+//              section that holds its session's card
 //
 // Run: bun test components/__tests__/cardSubagentsPanel.mount.test.tsx
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -260,5 +262,18 @@ test("opening a subagent in Compact rows scrolls to its row", async () => {
   expect(target!.hasAttribute("data-session-id")).toBe(false);
   expect(cardOf(m.host, FINISHED)).toBeNull();
   expect(scrolledTo).toContain(target!);
+  await m.unmount();
+});
+
+test("opening a subagent its session owns opens the collapsed section that holds its session's card", async () => {
+  const OWNED = id("owned");
+  seed([
+    row(PARENT, { title: "Parent session", owners_model: true, agent_status: "working", is_idle: false, updated_at: NOW - 5_000 }),
+    row(OWNED, { title: "Owned subagent", owners_model: true, owned_by_me: false, owner_session_id: PARENT, is_subagent: true, parent_conversation_id: PARENT, agent_status: "working", is_idle: false, updated_at: NOW - 4_000 }),
+  ], { subagent_rows: "folded", subagent_filter: "all" });
+  useInboxStore.setState({ collapsedSections: { working: true } } as any);
+  const m = await mountInbox(OWNED);
+  expect(useInboxStore.getState().collapsedSections.working).toBeFalsy();
+  expect(cardOf(m.host, PARENT)).not.toBeNull();
   await m.unmount();
 });

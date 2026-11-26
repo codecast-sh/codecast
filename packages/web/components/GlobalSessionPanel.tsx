@@ -24,7 +24,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -2776,7 +2776,7 @@ function SessionListPanelImpl({
     // subagent (or nested teammate) renders under its parent's card, so the
     // parent's membership decides which section hosts the row.
     const activeRow = s.sessions[activeSessionId];
-    const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) : null;
+    const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) ?? cardOfNested(globalSubByParent, activeSessionId) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
     const sections: [InboxSession[], string][] = flatView
       ? [[flatList, "all"]]
@@ -2830,7 +2830,7 @@ function SessionListPanelImpl({
     if (inList(filteredDismissed) && !openBuckets.dismissed) {
       setOpenBuckets((o) => ({ ...o, dismissed: true }));
     }
-  }, [activeSessionId, sortedSessions, s.collapsedSections, openBuckets, viewMode]);
+  }, [activeSessionId, sortedSessions, globalSubByParent, s.collapsedSections, openBuckets, viewMode]);
 
   // Shared renderer for the two hidden buckets at the bottom of the list —
   // Stashed (set aside, agent alive) above Killed (retired, agent torn down;

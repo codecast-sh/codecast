@@ -2115,8 +2115,8 @@ export type ClientUI = {
   // The bars under inbox cards — triggers, workflow runs, monitors and
   // background commands — as one family with one control: "strip" folds each
   // card's bars to a one-line summary (the resting state), "full" shows every
-  // bar as its own row, "hidden" removes them entirely (the same gesture the
-  // subagent toggle offers). Absent = show_triggers legacy, then "strip".
+  // bar as its own row, "hidden" removes them entirely (as Hidden does for
+  // subagent_rows). Absent = show_triggers legacy, then "strip".
   card_bars?: "strip" | "full" | "hidden";
   // A card's subagents and workers: "folded" is one line of state marks and
   // counts, "compact" one short row each, "full" a card each, "hidden" none.
@@ -2923,11 +2923,13 @@ function computeInboxScope(
 ): Record<string, InboxSession> {
   if (scope === "team" && teamInboxIds.size > 0) {
     const out: Record<string, InboxSession> = {};
+    const ownedIds = ownedChildrenOf(sessions).ids;
     for (const id in sessions) {
       if (!Object.hasOwn(sessions, id)) continue;
       const s = sessions[id];
-      // A child its session owns rides that card (ownedChildrenOf), never a card of its own.
-      if (id !== focusedId && isOwnedChildRow(s)) continue;
+      // A child its session owns rides that card (ownedChildrenOf), never a
+      // card of its own, while that card is on the board to carry it.
+      if (id !== focusedId && ownedIds.has(id) && (teamInboxIds.has(String(s.owner_session_id)) || String(s.owner_session_id) === focusedId)) continue;
       if (teamInboxIds.has(id) || id === focusedId || !isConvexId(id)) out[id] = s;
     }
     return out;
@@ -4494,26 +4496,46 @@ export function lastPlacedInbox(
   return _placedMemo.get(`${scope}\x1f${opts.focusedId ?? ""}`)?.val ?? null;
 }
 
-// Rows a session owns under the owners model (owner_session_id), live and not
-// closed, read once per sessions object: the rail nests them under that
-// session's card even though they are in nobody's inbox.
-const ownedChildrenCache = new WeakMap<object, InboxSession[]>();
+// Rows a session owns under the owners model (owner_session_id), read once
+// per sessions object: the rail nests them under that session's card even
+// though they are in nobody's inbox, and the team board gives them no card of
+// their own. Only what the inbox read sends with the parent (its newest
+// OWNED_CHILD_HORIZON children by creation, enrichInboxSessionRow; the cache
+// keeps older ones), and never a killed, closed or stashed one. A snoozed one
+// is skipped where it nests (placeInboxRows), since snoozing ends on a clock.
+const OWNED_CHILD_HORIZON = 20;
+type OwnedChildren = { list: InboxSession[]; ids: ReadonlySet<string> };
+const ownedChildrenCache = new WeakMap<object, OwnedChildren>();
 /** A row its session owns rather than the viewer (owners model): it rides
  *  that session's card, never a card of its own. */
 export function isOwnedChildRow(s: InboxSession): boolean {
   return !!s.owner_session_id && underOwnersModel(s) && !s.owned_by_me && !s.implicit_owner;
 }
-function ownedChildrenOf(sessions: Record<string, InboxSession>): InboxSession[] {
+function ownedChildrenOf(sessions: Record<string, InboxSession>): OwnedChildren {
   const hit = ownedChildrenCache.get(sessions);
   if (hit) return hit;
-  const out: InboxSession[] = [];
+  const byParent = new Map<string, InboxSession[]>();
   for (const id in sessions) {
     if (!Object.hasOwn(sessions, id)) continue;
     const s = sessions[id];
-    // Only a child nested under its owner: the inbox sends those with their
-    // parent, live; a spawned worker reaches the store only as a stale crawl row.
-    if (s.owner_session_id && String(s.parent_conversation_id ?? "") === String(s.owner_session_id) && underOwnersModel(s) && !s.inbox_killed_at && !isClosedSession(s)) out.push(s);
+    const parent = s.parent_conversation_id ? String(s.parent_conversation_id) : "";
+    if (!parent) continue;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent)!.push(s);
   }
+  const list: InboxSession[] = [];
+  const created = (s: InboxSession) => s.started_at ?? s.updated_at ?? 0;
+  for (const [parent, kids] of byParent) {
+    if (kids.length > OWNED_CHILD_HORIZON) kids.sort((a, b) => created(b) - created(a));
+    for (const s of kids.slice(0, OWNED_CHILD_HORIZON)) {
+      // Only a child nested under its owner: the inbox sends those with their
+      // parent; a spawned worker reaches the store only as a stale crawl row.
+      if (String(s.owner_session_id ?? "") !== parent || !isOwnedChildRow(s)) continue;
+      if (s.inbox_killed_at || s.inbox_stashed_at || isClosedSession(s)) continue;
+      list.push(s);
+    }
+  }
+  const out = { list, ids: new Set(list.map((s) => s._id)) };
   ownedChildrenCache.set(sessions, out);
   return out;
 }
@@ -4794,10 +4816,10 @@ export function placeInboxRows(
   // one is in scope (computeInboxScope keeps it) and still rides the card;
   // with the card absent it stands as its own row, so it never vanishes.
   const ownedNested = new Set<string>();
-  for (const child of ownedChildrenOf(state.sessions)) {
+  for (const child of ownedChildrenOf(state.sessions).list) {
     const owner = String(child.owner_session_id);
     if (!allIds.has(owner) || nestedUnder.has(child._id)) continue;
-    if (scoped[child._id] && !(child._id === focusedId && isOwnedChildRow(child))) continue;
+    if (child._id !== focusedId && (scoped[child._id] || (child.inbox_snoozed_until ?? 0) > now)) continue;
     ownedNested.add(child._id);
     const top = topCardOf(owner);
     nestedUnder.set(child._id, owner);
@@ -5975,6 +5997,23 @@ export function subagentKeepOf(filter: SubagentFilter, now: number, focusedId?: 
   return (s) => s._id === focusedId || subagentKept(s, subagentStatusOf(s, now, subagentLiveOf(s, now, state)), now, filter);
 }
 
+/** The section header counts under Full rows: placeInboxRows counts every
+ *  nested row it placed, and Full rows draw only those `keep` passes (the
+ *  filter's, the open one), so the rest come off. Web and the phone read it. */
+export function fullRowsCounts(placed: Pick<PlacedInbox, "counts" | "nestedSectionOf" | "subsByParent">, keep: (s: InboxSession) => boolean): Record<InboxSectionKey, number> {
+  let counts = placed.counts;
+  if (placed.nestedSectionOf.size === 0) return counts;
+  const subs = new Map<string, InboxSession>();
+  for (const list of placed.subsByParent.values()) for (const sub of list) subs.set(sub._id, sub);
+  for (const [id, k] of placed.nestedSectionOf) {
+    const sub = subs.get(id);
+    if (!sub || keep(sub)) continue;
+    if (counts === placed.counts) counts = { ...counts };
+    counts[k]--;
+  }
+  return counts;
+}
+
 export type SubagentRow = { session: InboxSession; status: SessionStatus };
 
 /** A card's children with their states: each once, only those the filter
@@ -6359,8 +6398,9 @@ export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = fa
     return runHosts.get(runId) ?? null;
   };
   return (s) => {
-    // Under the owners model a row stands alone in its owners' inboxes; the
-    // agents a session started are listed in that conversation instead.
+    // Under the owners model a row stands alone in its owners' inboxes; a
+    // child its session owns rides that card by owner_session_id
+    // (ownedChildrenOf), never by this parent pointer.
     if (underOwnersModel(s)) return null;
     const shared = nestParentIdOf(s);
     if (shared) return shared;
@@ -6516,7 +6556,7 @@ export function inboxMemberRows(state: PlaceInboxState, focusedId: string | null
   return out;
 }
 
-export function computeVisualOrder(state: {
+function visualOrderOf(state: {
   sessions: Record<string, InboxSession>;
   sessionsWithQueuedMessages: Set<string>;
   blockedReviveRequestedAt?: Record<string, number>;
@@ -6571,16 +6611,7 @@ export function computeVisualOrder(state: {
   // visualOrderSessions. Every mode honors it, so a jump lands on the first
   // such card the user can see, whatever lens or flat view is up.
   walk?: InboxWalk;
-} = {}): InboxSession[] {
-  // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
-  // the shelf, not the active desk underneath it.
-  // ONE placement for every branch below: the chokepoint (placeInboxRows) is
-  // membership, fold, sections and the questions predicate in one call —
-  // exactly what the panel renders, so nav can never walk a row the render
-  // dropped (with "show old sessions" off a folded row is hidden on screen,
-  // and Ctrl+J/K must skip it too).
-  const focusedId = state.currentSessionId ?? null;
-  const placed = placeInboxRows(state as PlaceInboxState, { focusedId });
+}, placed: PlacedInbox, focusedId: string | null): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
@@ -6692,6 +6723,36 @@ export function computeVisualOrder(state: {
     ];
   }
   return base;
+}
+
+export function computeVisualOrder(state: Parameters<typeof visualOrderOf>[0], opts: Parameters<typeof visualOrderOf>[1] = {}): InboxSession[] {
+  // ONE placement for every branch (visualOrderOf): the chokepoint
+  // (placeInboxRows) is membership, fold, sections and the questions predicate
+  // in one call, exactly what the panel renders, so nav can never walk a row
+  // the render dropped (with "show old sessions" off a folded row is hidden on
+  // screen, and Ctrl+J/K must skip it too).
+  const focusedId = state.currentSessionId ?? null;
+  const placed = placeInboxRows(state as PlaceInboxState, { focusedId });
+  const order = visualOrderOf(state, opts, placed, focusedId);
+  return opts.walk || state.showFavorites ? order : withOpenOwnedChild(order, placed.subsByParent, focusedId);
+}
+
+// The open subagent its session owns rides that session's card (placeInboxRows
+// ownedNested), so no section lists it; the flat views list it under the card
+// (nestOwnedChildren). Every other order puts it right after its card, so
+// Ctrl+J/K from it walks on from where it is drawn instead of the first row.
+function withOpenOwnedChild(order: InboxSession[], subsByParent: Map<string, InboxSession[]>, focusedId: string | null): InboxSession[] {
+  if (!focusedId || order.some((s) => s._id === focusedId)) return order;
+  const parent = cardOfNested(subsByParent, focusedId);
+  const open = parent ? subsByParent.get(parent)?.find((sub) => sub._id === focusedId) : undefined;
+  const at = open && underOwnersModel(open) ? order.findIndex((s) => s._id === parent) : -1;
+  return at < 0 ? order : [...order.slice(0, at + 1), open!, ...order.slice(at + 1)];
+}
+
+/** The card a nested row is drawn under (PlacedInbox.subsByParent), or null. */
+export function cardOfNested(subsByParent: ReadonlyMap<string, readonly InboxSession[]>, id: string): string | null {
+  for (const [parent, subs] of subsByParent) if (subs.some((sub) => sub._id === id)) return parent;
+  return null;
 }
 
 // Advance past a removed set: the first session below the current one in the

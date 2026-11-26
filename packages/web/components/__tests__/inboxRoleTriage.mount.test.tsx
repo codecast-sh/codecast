@@ -188,7 +188,7 @@ test("a role's sessions are subagent rows under the role's card, with a count on
   expect(headerCount(m.host, "dormant")).toBe("1");
   await m.unmount();
 
-  // The subagent toggle hides them like any other subagent row.
+  // Unless subagents are Full rows, no card draws them, like any other subagent row.
   useInboxStore.setState({ clientState: { ui: { inbox_scope: "mine", show_old: true, subagent_rows: "folded" } } } as any);
   const hidden = await mountInbox();
   for (const sid of [WAITING, WORKING]) expect(cardOf(hidden.host, sid)).toBeNull();

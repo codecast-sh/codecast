@@ -975,7 +975,7 @@ Hands, wakes and tokens per day stay as the bound that keeps a runaway role from
 
 ### S23.3 A role's sessions are the role's
 
-A role's sessions are subagent rows under the role's card: the same small row a Task subagent gets, hidden and shown by the same subagent toggle, with no gesture of their own. The card also carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is what the role raises in its own thread (S28), and nothing else. (Revised 2026-09-24: the first cut drew no rows at all, and the founder read the count alone as hiding the reports.)
+A role's sessions are subagent rows under the role's card: the same small row a Task subagent gets, drawn only when the rail's "Subagents on cards" pick is Full rows (and only those its "Which ones" keeps), with no gesture of their own. The card also carries a count, **3 sessions**, that opens the role's page, where the sessions are the panel's business (F4). What reaches the person from under a role is what the role raises in its own thread (S28), and nothing else. (Revised 2026-09-24: the first cut drew no rows at all, and the founder read the count alone as hiding the reports.)
 
 ### S23.4 The line a person reads names who did it
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from "react";
-import { resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
+import { fullRowsCounts, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
 import { awaitingOkIds } from "../lib/decisionQueue";
 import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { CardSubagentRows, CardSubagentsLine } from "../components/inbox/SessionCardParts";
@@ -75,16 +75,12 @@ export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeS
   };
   // Full rows draw only the nested rows the filter keeps, so the header
   // counts only those.
-  const droppedBySection = useMemo(() => {
-    const out = new Map<InboxSectionKey, number>();
-    if (!showSubagents) return out;
-    for (const [id, k] of nestedSectionOf) {
-      if (id !== activeSessionId && !keptSubIds.has(id)) out.set(k, (out.get(k) ?? 0) + 1);
-    }
-    return out;
-  }, [showSubagents, nestedSectionOf, keptSubIds, activeSessionId]);
+  const fullCounts = useMemo(
+    () => showSubagents ? fullRowsCounts({ counts, nestedSectionOf, subsByParent }, (sub) => sub._id === activeSessionId || keptSubIds.has(sub._id)) : counts,
+    [showSubagents, counts, nestedSectionOf, subsByParent, keptSubIds, activeSessionId],
+  );
   const countOf = (shown: InboxSession[], full: InboxSession[], key: InboxSectionKey) =>
-    sectionHeaderCount(shown, full, counts[key] - (droppedBySection.get(key) ?? 0), showSubagents);
+    sectionHeaderCount(shown, full, fullCounts[key], showSubagents);
   // Compact rows in a flat view: the open subagent is listed as its own row,
   // but when its parent's card is listed too, the parent's Compact row for it
   // stands in, as in the grouped view.

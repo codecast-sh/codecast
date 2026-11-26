@@ -178,7 +178,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // its wake rides a stringified key (ref may flip without content change).
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
   // How cards show their subagents and which ones, and each card's line.
-  const { subagentFilter, showSubagents, lines: subagentLinesByParent } = useSubagentLines(placed, coarseNow, viewMode === 'recent' || viewMode === 'time');
+  const { subagentFilter, showSubagents, lines: subagentLinesByParent, sectionCounts } = useSubagentLines(placed, coarseNow, viewMode === 'recent' || viewMode === 'time', currentSessionId);
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
@@ -541,17 +541,17 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
     // The header number is the section COUNT while no chip narrows the list
     // and the nested rows are on screen; shared sectionHeaderCount, so this
     // inbox and the web panel can't drift.
-    sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
-    sections.push(renderSection('New', statusNew, Theme.blue, "New", countOf(statusNew, newSessions, placed.counts.newSessions)));
+    sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, sectionCounts.pinned)));
+    sections.push(renderSection('New', statusNew, Theme.blue, "New", countOf(statusNew, newSessions, sectionCounts.newSessions)));
     // Top-down "who acts next": you (Needs You, Done to review), the agent
     // (Working), a machine (Sleeping) — same order as the web panel.
-    sections.push(renderSection('Needs You', statusNeedsInput, Theme.accent, "Needs You", countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
-    sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
-    sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
-    sections.push(renderSection('Sleeping', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
+    sections.push(renderSection('Needs You', statusNeedsInput, Theme.accent, "Needs You", countOf(statusNeedsInput, needsInput, sectionCounts.needsInput)));
+    sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, sectionCounts.done)));
+    sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, sectionCounts.working)));
+    sections.push(renderSection('Sleeping', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, sectionCounts.dormant)));
     return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, statusNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, subagentFilter, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, statusNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, subagentFilter, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, sectionCounts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Closed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

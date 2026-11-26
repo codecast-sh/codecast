@@ -126,11 +126,15 @@ it skips the children scan and the liveness read, because a current
 escalation waits on a person by definition.
 
 A listed session's children that it still owns (no role, not released) come
-with it as child rows stamped `owner_session_id` and `owned_by_me: false`, at
-no extra read. They are members of nobody's inbox: the client drops them from
-the viewer's scope and nests them under that session's card only
-(`ownedChildrenOf` in web `store/inboxStore.ts`), where the card's subagent
-line and rows draw them.
+with it as child rows stamped `owner_session_id` and `owned_by_me: false`, in
+the viewer's own inbox read only (not the team board or the CLI's list). They
+are the children scan the read already runs for each listed row (its newest 20
+on `by_parent_conversation_id`); each one still costs its own row build and
+owner-row read. They are members of nobody's inbox: the client nests them
+under that session's card only (`ownedChildrenOf` in web
+`store/inboxStore.ts`, which keeps the same newest 20 and skips killed, closed,
+stashed and snoozed ones), where the card's subagent line and rows draw them,
+and the team board gives them no card of their own while that card is on it.
 
 The scan and `getInboxSessionsByIds` admit an escalated row only through
 `checkConversationAccess` (`privacy.conversationAccessMemo` for the scan, the

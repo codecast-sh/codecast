@@ -20,20 +20,22 @@ const groupsSig = (groups: readonly SubagentStateGroup[]) =>
   groups.map((g) => `${g.status}:${g.count}:${g.newest._id}`).join('|');
 
 /** Each card's folded line: its subagents and the workers waiting on the
- *  person, one group per state the filter keeps, most urgent first. Only
- *  parents with a line are in the map, never a role lead's card. A parent's
- *  array from `prev` is reused while it draws the same line, so a memoized row
- *  does not re-render for an unchanged line. */
+ *  person, one group per state the filter keeps, most urgent first, leaving
+ *  out `omitId` (the open one, when it is a row of its own). Only parents
+ *  with a line are in the map, never a role lead's card. A parent's array
+ *  from `prev` is reused while it draws the same line, so a memoized row does
+ *  not re-render for an unchanged line. */
 export function subagentLines(
   childrenByParent: readonly ReadonlyMap<string, readonly InboxSession[]>[],
   parentOf: (id: string) => InboxSession | undefined,
   now: number,
   filter: SubagentFilter,
   prev?: ReadonlyMap<string, SubagentStateGroup[]>,
+  omitId?: string | null,
 ): Map<string, SubagentStateGroup[]> {
   const children = new Map<string, InboxSession[]>();
   for (const byParent of childrenByParent)
-    for (const [id, subs] of byParent) children.set(id, [...(children.get(id) ?? []), ...subs]);
+    for (const [id, subs] of byParent) children.set(id, [...(children.get(id) ?? []), ...(omitId ? subs.filter((sub) => sub._id !== omitId) : subs)]);
   const out = new Map<string, SubagentStateGroup[]>();
   for (const [id, subs] of children) {
     const parent = parentOf(id);

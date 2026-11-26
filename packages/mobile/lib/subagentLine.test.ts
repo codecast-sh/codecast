@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { flatViewSessions, subagentKeepOf, type InboxSession } from '@codecast/web/store/inboxStore';
+import { flatViewSessions, fullRowsCounts, subagentKeepOf, type InboxSectionKey, type InboxSession } from '@codecast/web/store/inboxStore';
 import { drawsSubagentLine, subagentGroupWords, subagentLines } from './subagentLine';
 
 const NOW = 1_700_000_000_000;
@@ -67,6 +67,13 @@ describe('subagentLines', () => {
     expect(lines.has(lead._id)).toBe(false);
   });
 
+  test('leaves out the open one, a row of its own in a flat view', () => {
+    const open = working();
+    const subs = new Map([[parent._id, [working(), open]]]);
+    expect(subagentLines([subs], parentOf, NOW, 'all').get(parent._id)!.map((g) => g.count)).toEqual([2]);
+    expect(subagentLines([subs], parentOf, NOW, 'all', undefined, open._id).get(parent._id)!.map((g) => g.count)).toEqual([1]);
+  });
+
   test('an unchanged line keeps its array, so the row stays memoized', () => {
     const subs = new Map([[parent._id, [working(), finished()]]]);
     const first = subagentLines([subs], parentOf, NOW, 'all');
@@ -94,6 +101,18 @@ describe('flat Full rows', () => {
     expect(flat('active_done', null)).toHaveLength(4);
     expect(flat('all', null)).toHaveLength(4);
   });
+});
+
+// The section headers under Full rows: web's rule, so phone and rail agree.
+test('Full rows section counts leave out the nested rows the filter hides', () => {
+  const parent = row({ is_subagent: false });
+  const quiet = finished({ parent_conversation_id: parent._id });
+  const busy = working({ parent_conversation_id: parent._id });
+  const counts = { questions: 0, pinned: 0, newSessions: 0, needsInput: 0, done: 3, dormant: 0, working: 0 } as Record<InboxSectionKey, number>;
+  const placed = { counts, nestedSectionOf: new Map<string, InboxSectionKey>([[quiet._id, 'done'], [busy._id, 'done']]), subsByParent: new Map([[parent._id, [quiet, busy]]]) };
+  expect(fullRowsCounts(placed, subagentKeepOf('active', NOW, null, {})).done).toBe(2);
+  expect(fullRowsCounts(placed, subagentKeepOf('active', NOW, quiet._id, {})).done).toBe(3);
+  expect(fullRowsCounts(placed, subagentKeepOf('all', NOW, null, {}))).toBe(counts);
 });
 
 test('subagentGroupWords says the count in words', () => {
