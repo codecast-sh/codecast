@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
-import { persistDraftImages, restoreDraftImages, settleComposerAttachments, settleDraftImageUpload, pendingImageUploads, type PastedImage } from "../draftImages";
+import { persistDraftImages, restoreDraftImages, settleComposerAttachments, settleDraftImageUpload, staleDraftPreviewIds, pendingImageUploads, type PastedImage } from "../draftImages";
 
 const pastedImage = (over: Partial<PastedImage> = {}): PastedImage => ({
   file: new File([], "shot.png", { type: "image/png" }),
@@ -109,6 +109,19 @@ describe("draftImages", () => {
       { storage_id: "storage-ready", mime: "image/png" },
       { storage_id: "storage-pending", mime: "image/jpeg" },
     ]);
+    pendingImageUploads.clear();
+  });
+
+  it("keeps a live blob as the picture's address once its upload lands, so pins on it count as one picture", () => {
+    pendingImageUploads.clear();
+    pendingImageUploads.set("blob:live", Promise.resolve("storage-live"));
+    expect(staleDraftPreviewIds([
+      { previewUrl: "blob:live", storageId: "storage-live" },
+      { previewUrl: "blob:dead", storageId: "storage-dead" },
+      { previewUrl: "", storageId: "storage-empty" },
+      { previewUrl: "https://host/x.png", storageId: "storage-hosted" },
+      { previewUrl: "blob:uploading" },
+    ])).toEqual(["storage-dead", "storage-empty"]);
     pendingImageUploads.clear();
   });
 });
