@@ -100,7 +100,7 @@ export function useSyncRunGraph(runId: string | null | undefined) {
   return useSyncCollection(
     "workflows",
     api.workflow_runs.graphOfRun,
-    runId ? { run_id: runId } : "skip",
+    entityIdArgs("run_id", runId ?? undefined),
     ONE_ROW,
   );
 }
@@ -127,7 +127,7 @@ export function useSyncWorkflowRuns(workflowId: string | null | undefined) {
   return useSyncCollection(
     "workflowRuns",
     api.workflow_runs.listForWorkflow,
-    workflowId ? { workflow_id: workflowId } : "skip",
+    entityIdArgs("workflow_id", workflowId ?? undefined),
   );
 }
 
@@ -136,7 +136,7 @@ export function useSyncWorkflowRun(runId: string | null | undefined) {
   return useSyncCollection(
     "workflowRuns",
     api.workflow_runs.get,
-    runId ? { id: runId } : "skip",
+    entityIdArgs("id", runId ?? undefined),
     // A single row → the collection's overlay takes an array.
     ONE_ROW,
   );
@@ -210,7 +210,7 @@ const pinOf = (run: PinnedRun | null | undefined) => run?.flow_versions?.[0]?.ve
  */
 export function useRunWorkflow(run: PinnedRun | null | undefined): any | null | undefined {
   const pin = pinOf(run);
-  const { ready, error } = useSyncCollection("runGraphs", api.workflow_runs.pinnedGraphOfRun, pin && run ? { run_id: run._id } : "skip", RUN_GRAPH_FEED);
+  const { ready, error } = useSyncCollection("runGraphs", api.workflow_runs.pinnedGraphOfRun, pin && run ? entityIdArgs("run_id", run._id) : "skip", RUN_GRAPH_FEED);
   // The card on screen holds its graph against the collection's cap.
   useWatchEffect(() => (pin ? pinDetailRows("runGraphs", [pin]) : undefined), [pin]);
   // A refusal answers as "no pinned graph" does: a backend without the query yet, or a version that kept no content
