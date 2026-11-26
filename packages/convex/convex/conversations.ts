@@ -167,6 +167,7 @@ import {
   toggleFavoriteWithRevision,
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
+import { inheritLink, sessionEvidence } from "./lib/priorityLinks";
 export { generateShareToken, isNonEmptyMessage };
 
 // Single relevance-ranked search-index lookup shared by every message-search
@@ -1641,6 +1642,8 @@ export const createConversation = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
     if (forkOrigin) await recordFork(ctx, args.user_id, forkOrigin, conversationId);
+    // A subagent works on what its parent works on (lib/priorityLinks); a fork inherits in recordFork.
+    await inheritLink(ctx, conversationId, parentConversationId);
     // Funnel: the user's first synced session ever. Stamped on the users doc so
     // this stays an O(1) check instead of a conversations scan per create.
     const creator = await ctx.db.get(args.user_id);
@@ -5925,6 +5928,7 @@ async function recordFork(
 ) {
   if (opts.counted !== false) await ctx.db.patch(origin._id, { fork_count: (origin.fork_count ?? 0) + 1 });
   await inheritLabelAssignment(ctx, userId, origin._id, forkId);
+  await inheritLink(ctx, forkId, origin._id);
 }
 
 export const forkConversation = mutation({
@@ -12475,6 +12479,8 @@ export async function performSetThreadState(
   if (text !== conv.thread_state || status !== conv.thread_state_status) {
     await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status });
   }
+  // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
+  if (status === "done") await sessionEvidence(ctx, conv, at);
   // A `blocked` declaration from a HIDDEN session is a claim on the user's
   // eyes — the same claim `cast trigger complete --needs-attention` makes,
   // cleared the same way (agentTasks.completeTaskRun). If the session is

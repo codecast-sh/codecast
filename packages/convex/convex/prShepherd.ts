@@ -10,6 +10,7 @@ import { recordExternalEvent } from "./externalEvents";
 import { foldChecksState, foldShepherdState, isTaskLinkable, prUrl } from "./lib/gitRefs";
 import { QUIET_REASONS, TERMINAL_REASONS, buildWakePrompt, isCurrentWakeReason, pickWakeReason, type CommentLine } from "./lib/prWakePrompt";
 import { syncPullRequestSessions } from "./lib/prSessions";
+import { pullRequestMerged } from "./lib/priorityLinks";
 
 const SHEPHERD_MAX_RUNTIME_MS = 30 * 60 * 1000;
 const WAKE_RETRY_MS = 20 * 1000;
@@ -103,6 +104,7 @@ export async function patchPullRequest(
   if (after.state === "merged" || after.state === "closed") {
     await closeOutShepherd(ctx, after, after.state);
   }
+  if (after.state === "merged" && before.state !== "merged") await pullRequestMerged(ctx, after);
   // Tasks waiting on this PR settle in a transaction of their own, from every
   // path that moves it (webhook, refresh, reconcile): task-graph.md TG2.
   if (after.waiting_task_ids?.length && (after.state !== before.state || after.checks_state !== before.checks_state)) {

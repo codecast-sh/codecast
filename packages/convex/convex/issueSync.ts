@@ -55,6 +55,8 @@ import {
 } from "./tasks";
 import { afterStatusEdges } from "./taskLinks";
 import { recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
+import { closesOrReopens } from "./lib/taskWrite";
+import { taskStatusChanged } from "./lib/priorityLinks";
 import { verifyApiToken } from "./apiTokens";
 import { resolveTaskSpawnDevice } from "./spawn";
 import { connectionReaches, githubDeliveryServesSource, hasPersonalConnection, linearDeliveryServesSource, resolveLinearLabelIds } from "./lib/issueSyncAccess";
@@ -702,6 +704,7 @@ async function updateTaskFromIssue(
   const fields = (["status", "title", "assignee", "priority"] as const).filter((f) => diff[f] !== undefined);
   await recordTaskChange(ctx, task._id, SYNC, fields.map((f): TaskFieldChange => [f, task[f], diff[f]]), now);
   await ctx.db.patch(task._id, patch);
+  if (closesOrReopens(task, patch)) await taskStatusChanged(ctx, task);
 
   if (diff.status && task.plan_id) {
     await recalcPlanProgress(ctx, task.plan_id, task._id, diff.status);

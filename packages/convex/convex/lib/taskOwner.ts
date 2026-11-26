@@ -10,6 +10,7 @@
 import type { Id } from "../_generated/dataModel";
 import { HEARTBEAT_ALIVE_MS } from "../inboxFilters";
 import { isHandoffComment } from "./runAgentSessions";
+import { linkFromTask } from "./priorityLinks";
 
 // A session that touched the conversation this recently is treated as working
 // even without a daemon heartbeat (a cloud agent, a session between turns).
@@ -119,5 +120,7 @@ export async function claimTaskOwnership(
   if (String(conv.active_task_id ?? "") !== String(task._id)) {
     await ctx.db.patch(conv._id, { active_task_id: task._id });
   }
+  // A task a milestone names maps its session to that milestone (lib/priorityLinks).
+  await linkFromTask(ctx, conv, task);
   return { released: refs };
 }

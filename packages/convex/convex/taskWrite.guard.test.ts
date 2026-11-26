@@ -89,7 +89,12 @@ describe("patchTask", () => {
     const patched: any[] = [];
     const scheduled: any[] = [];
     const ctx = {
-      db: { patch: async (id: any, p: any) => { patched.push([id, p]); } },
+      db: {
+        patch: async (id: any, p: any) => { patched.push([id, p]); },
+        // A close looks for the milestones naming the task (lib/priorityLinks): none here.
+        query: () => ({ withIndex: () => ({ take: async () => [] }) }),
+        get: async () => null,
+      },
       scheduler: { runAfter: async (_ms: number, _fn: any, args: any) => { scheduled.push(args); } },
     };
     return { ctx, patched, scheduled, task };

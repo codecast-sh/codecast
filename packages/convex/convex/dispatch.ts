@@ -1,5 +1,6 @@
 import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { requestDeployCore } from "./deploys";
+import { linkFromStart } from "./lib/priorityLinks";
 import { requestTargetDeployCore } from "./deployTargetRequest";
 import { liftFor, pauseFor } from "./deployPause";
 import { rollbackFor } from "./deployRollback";
@@ -1169,7 +1170,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; description?: string; team_id?: string } }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; description?: string; team_id?: string }; priority?: string; priority_step?: string }]) => {
     // A hosted conversation (the simple lane's assistant) runs in this
     // backend: no device, no daemon command. Its start queues the first
     // message in the same transaction, idempotent on session_id like below.
@@ -1194,6 +1195,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
           await (ctx as any).scheduler?.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: started.conversation_id });
         }
       }
+      if (opts.priority) await linkFromStart(ctx, userId, started.conversation_id, opts.priority, opts.priority_step);
       return started.conversation_id;
     }
     const sessionId = opts.session_id || crypto.randomUUID();
@@ -1397,6 +1399,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       );
     }
     if (handThread) await handThreadToSession(ctx as any, userId, (await ctx.db.get(conversationId))!, handThread);
+    // Started from a milestone's Start: mapped to it now, after any task link, so the milestone the person chose wins (lib/priorityLinks).
+    if (opts.priority) await linkFromStart(ctx, userId, conversationId, opts.priority, opts.priority_step);
 
     const daemonType = fromConvexAgentType(agentType);
     // Per-session model/effort (validated against the shared contract; "default"

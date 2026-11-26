@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { claimShareToken } from "./lib/shareToken";
+import { linkFromPlan } from "./lib/priorityLinks";
 import { charterPatch, planCharterArgs } from "./lib/orgCharter";
 import { resolveActor } from "./lib/actor";
 import { mutation, query } from "./functions";
@@ -628,6 +629,8 @@ export const bindSession = mutation({
     // the pointer only while the old plan still points back at this
     // conversation, so once the old plan moved on, nothing could ever flip it.
     await ctx.db.patch(conv._id, { plan_ids: planIds, active_plan_id: plan._id });
+    // A plan that is one milestone's plan maps a session mapped nowhere yet to it (lib/priorityLinks).
+    await linkFromPlan(ctx, conv, plan);
     // The binding may file the session under the lead that owns the plan (S35).
     await ctx.scheduler.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: conv._id });
 
