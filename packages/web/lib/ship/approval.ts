@@ -1,7 +1,8 @@
 // Who says yes before a flow's change lands (pl-1075), read from the flow's graph: the chip on a Ship press, and
 // whether that press confirms first. journey.ts draws where a run of the flow stands.
 import { asksIfOf } from "./segmentInside";
-import { journeyStages, LANDING_STEP } from "./journey";
+import { LANDING_STEP } from "@codecast/shared/contracts/flowStagePlan";
+import { journeyStages } from "./journey";
 
 type Graph = Parameters<typeof journeyStages>[0];
 

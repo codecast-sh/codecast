@@ -9,7 +9,8 @@
 // record: "You" only for an open card the viewer may answer, landed only with a
 // merged sha on the run. Pure, with relative imports only: the web's Ship panel
 // and run card, the inbox card and the phone's run card all read a run here.
-import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { inGroup, inStage, isSubject, planStages, type FlowStage, type StageRole } from "@codecast/shared/contracts/flowStagePlan";
 import { insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
 import { stationResult } from "./stationResult";
@@ -31,9 +32,7 @@ export type StageWho = "session" | "agent" | "you" | "person" | "auto";
  * outcome `skipped` (no checks documented, no deploy documented; stationResult.ts).
  */
 export type StageState = "idle" | "active" | "back" | "waiting" | "done" | "routed" | "stopped" | "skipped" | "nothing" | "unknown";
-/** What a stage is for, read from the graph: a fan-out, the station that lands the change (one holding the runner's
- *  `shipped` or `landed` step), Deploy, Live, or any other step. */
-export type StageRole = "step" | "parallel" | "land" | "deploy" | "live";
+export type { StageRole };
 
 export type JourneyStage = {
   /** The station's id in the run's graph; `deploy` and `live` for the two stages after the flow. */
@@ -179,16 +178,9 @@ export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "
 /** A step's report that carries the reviewer's ship into its round (the change flow's PR station, prStation.ts). */
 const KEPT_SHIP = /"reviewed"\s*:\s*\{[^{}]*"verdict"\s*:\s*"ship"/;
 
-/** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
-export const LANDING_STEP = /(^|__)(shipped|landed)$/;
+/** A planned stage (flowStagePlan.ts) with who acts there, its ways back to the session and its inside. */
+type Base = Omit<FlowStage, "branches"> & Pick<JourneyStage, "who" | "loops"> & { branches?: Base[]; inside?: { path: Base[]; routes: RouteBase[]; end: string | null } };
 
-/** `tail`: bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). `head`: bookkeeping
- *  before the flow's first stage that opens it (a round that freezes the change, a read of the docs). */
-type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches" | "inside"> & { members: string[]; kind: string; branches?: Base[]; tail?: string[]; head?: string[]; inside?: { path: Base[]; routes: RouteBase[]; end: string | null } };
-
-const isSubject = (n: FlowNodeIn | undefined) => n?.backend === "subject";
-const inGroup = (stageId: string, nodeId: string) => nodeId === stageId || nodeId.startsWith(`${stageId}${SEGMENT_SEP}`);
-const inStage = (s: Pick<Base, "members">, nodeId: string) => s.members.some((m) => inGroup(m, nodeId));
 /** Whether a step is bookkeeping a stage holds around its own work (its head or its tail), not one of its branches. */
 const holds = (s: Pick<Base, "head" | "tail">, nodeId: string | null | undefined) => !!nodeId && (!!s.tail?.includes(nodeId) || !!s.head?.includes(nodeId));
 
@@ -204,12 +196,6 @@ function whoOf(graph: Graph, ids: string[]): StageWho {
 }
 
 const WHO_RANK: StageWho[] = ["person", "agent", "session", "auto"];
-
-/** Whether a station is the flow's Deploy stage (the deploy segment: it waits for the change to go live). */
-const isDeployStage = (n: FlowNodeIn | undefined) => n?.segment_flow === "deploy" || n?.id === "deploy";
-
-/** A route a run takes when a step failed: never the way a passing run goes on. */
-const failureRoute = (e: FlowEdgeIn) => /\boutcome\s*(=\s*failure|!=\s*success)\b/.test(e.condition ?? "");
 
 /**
  * The steps a passing run takes through a station: the station alone, or for a segment its entry and then, step by
@@ -236,19 +222,8 @@ function passingSteps(graph: Graph, id: string): FlowNodeIn[] {
  *  segment's own steps, whose segments read as one step each. */
 function planOf(graph: Graph, withTargets = false, nested = false): Base[] {
   const personal = roundsOnOwnResults(graph);
-  const folded = foldFlow(graph.nodes, graph.edges);
+  const { stages, onPath } = planStages(graph, { personal, withTargets });
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const station = new Map(folded.stations.map((s) => [s.id, s]));
-  const walk = (folded.path ?? folded.stations.filter((s) => s.main).map((s) => s.id)).filter((id) => station.has(id) && !isSubject(byId.get(id)));
-  // The walk ends before a station only a failure reaches (a later deploy after a failed one): a passing run never goes there.
-  const failedInto = (id: string, i: number) => {
-    const into = graph.edges.filter((e) => segmentTopOf(e.to) === id && walk.slice(0, i).includes(segmentTopOf(e.from)));
-    return into.length > 0 && into.every(failureRoute);
-  };
-  const end = walk.findIndex((id, i) => i > 0 && failedInto(id, i));
-  const order = end < 0 ? walk : walk.slice(0, end);
-  const at = new Map(order.map((id, i) => [id, i]));
-  const onPath = new Set(folded.path ?? order);
   // A stage's ways back to the session: the subject stations its edges reach, directly or through side steps on no
   // stage (a brief written before the session hears it), never through a stage or an exit.
   const loopsOf = (members: string[]) => {
@@ -269,78 +244,19 @@ function planOf(graph: Graph, withTargets = false, nested = false): Base[] {
     }
     return found.map((n) => ({ id: n.id, label: n.label, max: n.max_visits ?? null }));
   };
-  const stageOf = (members: string[], label: string): Base => {
-    const node = byId.get(members[0]);
-    const deploy = members.length === 1 && isDeployStage(node);
-    const inside = !nested && members.length === 1 ? insideOf(graph, members[0], INSIDE_READERS) : undefined;
-    return {
-      ...(inside ? { inside } : {}),
-      id: members[0],
-      label,
-      role: deploy ? "deploy" : "step",
-      kind: station.get(members[0])?.kind ?? "agent",
-      // The Deploy stage only waits: each target goes out by its own policy, and a press is the Deploys page's. The
-      // personal Ship's Deploy is an agent that deploys itself, by the project's docs.
-      who: deploy && !(personal && node?.type === "agent") ? "auto" : whoOf(graph, members),
-      loops: loopsOf(members),
-      members,
-    };
+  // Who acts at a stage and its inside are read off its own stations, never the bookkeeping it holds around them.
+  const decorate = ({ branches: planned, ...s }: FlowStage): Base => {
+    const branches = planned?.map(decorate);
+    const own = s.members.filter((m) => !s.head?.includes(m) && !s.tail?.includes(m));
+    const inside = !nested && s.role !== "parallel" && own.length === 1 ? insideOf(graph, own[0], INSIDE_READERS) : undefined;
+    // The Deploy stage only waits: each target goes out by its own policy, and a press is the Deploys page's. The
+    // personal Ship's Deploy is an agent that deploys itself, by the project's docs.
+    const who: StageWho = branches ? WHO_RANK.find((w) => branches.some((b) => b.who === w)) ?? "auto"
+      : s.role === "live" || (s.role === "deploy" && !(personal && byId.get(own[0])?.type === "agent")) ? "auto"
+      : whoOf(graph, own);
+    return { ...s, ...(inside ? { inside } : {}), ...(branches ? { branches } : {}), who, loops: loopsOf(s.members) };
   };
-  const labelOf = (id: string) => station.get(id)?.label ?? id;
-  const stages: Base[] = [];
-  const taken = new Set<string>();
-  // A personal Ship's bookkeeping before its first stage (a round that freezes the change, a read of the docs) opens the
-  // stage after it.
-  let head: string[] = [];
-  const push = (stage: Base) => {
-    if (head.length) { stage.members.push(...head); stage.head = head; stage.loops = loopsOf(stage.members); head = []; }
-    stages.push(stage);
-  };
-  for (const id of order) {
-    if (taken.has(id)) continue;
-    taken.add(id);
-    const s = station.get(id)!;
-    if (s.kind === "join") continue;
-    const prev = stages[stages.length - 1];
-    // Bookkeeping (`fold=true`) is the stage before it finishing its work, not a stage of its own.
-    if (byId.get(id)?.fold && (prev || personal)) {
-      if (!prev) { head.push(id); continue; }
-      prev.members.push(id);
-      prev.tail = [...(prev.tail ?? []), id];
-      prev.loops = loopsOf(prev.members);
-      continue;
-    }
-    if (s.kind !== "parallel") { push(stageOf([id], labelOf(id))); continue; }
-    // A fan-out and its branches are one stage, through the join where they meet: what the join sends back is theirs.
-    // A branch runs every station the main walk took after its first, up to the join.
-    let join: string | undefined;
-    const branches = s.next.map((n) => n.toId).filter((t) => station.get(t)?.main && !isSubject(byId.get(t))).map((first) => {
-      const members: string[] = [];
-      for (let cur: string | undefined = first; cur && !taken.has(cur); ) {
-        if (station.get(cur)?.kind === "join") { join ??= cur; break; }
-        members.push(cur);
-        taken.add(cur);
-        const from: string = cur;
-        cur = station.get(from)?.next.map((n) => n.toId).find((t) => station.get(t)?.main && (at.get(t) ?? -1) > (at.get(from) ?? -1) && (station.get(t)?.kind === "join" || !taken.has(t)));
-      }
-      return stageOf(members, members.map(labelOf).join(" → "));
-    }).filter((b) => b.members.length);
-    if (join) taken.add(join);
-    const members = [id, ...branches.flatMap((b) => b.members), ...(join ? [join] : [])];
-    push({ id, label: branches.map((b) => b.label).join(" + "), role: "parallel", kind: "parallel", who: WHO_RANK.find((w) => branches.some((b) => b.who === w)) ?? "auto", loops: loopsOf(members), members, branches });
-  }
-  // The stage holding the runner's landing step lands the change; with none, no stage claims it.
-  const land = stages.findIndex((s) => s.role === "step" && graph.nodes.some((n) => LANDING_STEP.test(n.id) && inStage(s, n.id)));
-  if (land >= 0) stages[land] = { ...stages[land], role: "land" };
-  // Deploy and Live are the flow's own when it has a Deploy step; a flow without one ends where it lands, unless the
-  // caller knows where its landed commit went out (deploy reach targets).
-  const deploys = stages.some((s) => s.role === "deploy");
-  if (!deploys && !withTargets) return stages;
-  return [
-    ...stages,
-    ...(deploys ? [] : [{ id: "deploy", label: "Deploy", role: "deploy" as const, kind: "segment", who: "auto" as const, loops: [], members: [] }]),
-    { id: "live", label: "Live", role: "live", kind: "live", who: "auto", loops: [], members: [] },
-  ];
+  return stages.map(decorate);
 }
 
 const idleStage = (b: Base): JourneyStage => ({ ...strip(b), state: "idle", round: null });

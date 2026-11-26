@@ -297,6 +297,10 @@ a run with none stops with it, as any run with no subject does. The writers
 are other people's sessions in a shared checkout, so nothing parks or retires
 them, nor the subject of a checkout's change.
 
+When a run starts, `cast flow run` names the flow's stages (PR → CI + Review →
+Merge → Deploy → Live for the library change flow), the same path the picker
+and the run card show, from one planner (shared `contracts/flowStagePlan.ts`).
+
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of
 the change; the session that made it stays linked to it.
