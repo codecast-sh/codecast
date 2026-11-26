@@ -27,6 +27,8 @@ export type ChangeRow = {
   /** What a link can name it by: a branch, a pull request, its commits. */
   refs?: { branch: string | null; pr: number | null; shas: ReadonlyArray<string> };
   owner?: ChangeOwner | null;
+  /** When the viewer set it aside (useChangesSetAside): parked, whatever it waits on, until they bring it back. */
+  set_aside?: number | null;
 };
 
 /** The person reading: who "mine" means. */
@@ -100,11 +102,6 @@ const TONE_RANK: Record<ChangeTone, number> = { red: 0, blue: 1, orange: 2, yell
 /** A rollback is nobody's work in progress: it waits on a person to fix forward or ship again. */
 export const groupTone = (l: Lifecycle): ChangeTone => (l.now.stage === "live" && l.now.state === "back" ? "red" : l.now.tone);
 
-/**
- * Whether a change is parked at `now`: nothing is moving it (not shipped, or pushed and not checked), or it is not yet on
- * main, not in motion, nobody's turn, and nobody's work touched it in PARKED_AFTER_MS (or ever, as far as anything
- * reports). A landed change is never parked: where it stands in production always matters.
- */
 /** Whether a change still has somewhere to go: not live (green) and not set aside (dim). */
 export function isComing(r: ChangeRow): boolean {
   return r.lifecycle.now.tone !== "green" && r.lifecycle.now.tone !== "dim";
@@ -116,11 +113,25 @@ export function attentionTone(r: ChangeRow) {
   return g === "red" || g === "blue" ? g : undefined;
 }
 
+/**
+ * Whether a change is parked at `now`: not yet on main, not in motion, not closed, and either the viewer set it aside,
+ * nothing is moving it (not shipped, or pushed and not checked), or nobody's work touched it in PARKED_AFTER_MS (or
+ * ever, as far as anything reports). A failure or a person's turn parks by the same clock: a pull request nobody has
+ * touched in days is abandoned, not waiting on anyone. A landed change is never parked: where it stands in production
+ * always matters.
+ */
 export function isParked(r: ChangeRow, now: number): boolean {
   const n = r.lifecycle.now;
-  // A person's turn and a failure wait on someone: their age is the reason to look, never a reason to fold them away.
-  if (r.reach_ref || n.state === "active" || n.state === "stopped" || n.tone === "blue" || n.tone === "red") return false;
-  return !!n.parked || !r.updated_at || now - r.updated_at > PARKED_AFTER_MS;
+  if (r.reach_ref || n.state === "active" || n.state === "stopped") return false;
+  return !!r.set_aside || !!n.parked || !r.updated_at || now - r.updated_at > PARKED_AFTER_MS;
+}
+
+/** Why a parked row is parked, as its row reads it: `set aside`, `untouched 9d`, its now's word (`not shipped`). */
+export function parkedReason(r: ChangeRow, now: number): string | null {
+  if (!isParked(r, now)) return null;
+  if (r.set_aside) return "set aside";
+  if (r.updated_at && now - r.updated_at > PARKED_AFTER_MS) return `untouched ${Math.floor((now - r.updated_at) / 86_400_000)}d`;
+  return r.lifecycle.now.parked ? r.lifecycle.now.word : "never touched";
 }
 
 /** A group's name: the failures and turns read "Needs you" once the grid holds only the viewer's changes. */

@@ -84,8 +84,14 @@ the writer sessions, and links to the pull request, run and deploys.
   and a rollback), Moving (yellow, orange), Waiting, Live, then Parked and Closed
   folded. A change is parked when nothing is moving it: committed and never
   shipped, pushed and never checked, or untouched for three days (a session's
-  write, a push, a commit). A landed change, a failure and a person's turn are
-  never parked. Below the grid, every branch GitHub lists, each with its chip.
+  write, a push, a commit). A failure and a person's turn park by the same
+  clock: a pull request nobody has touched in three days is abandoned, not
+  waiting on anyone. A landed change, one in motion and a closed one are never
+  parked. Each Parked row says why (`untouched 9d`, `not shipped`, `set
+  aside`). On the Deploys page a row's hover card offers Set aside, which
+  parks it at once for the viewer on every device (`clientState.ui
+  .changes_set_aside`, `hooks/useChangesSetAside.ts`); its Parked row's card
+  offers Bring back. Below the grid, every branch GitHub lists, each with its chip.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
   without Live and Closed, for every change of that repository not yet on
   main. What has landed and waits to go out is "Waiting on main", beside it.

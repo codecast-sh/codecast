@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { assemble, type ChangePullRequest } from "../assemble";
 import { changeLifecycle } from "../lifecycle";
-import { groupChanges, groupOf, isParked, type ChangeRow } from "../rows";
+import { groupChanges, groupOf, isComing, isParked, parkedReason, type ChangeRow } from "../rows";
 
 const now = 1_790_000_000_000;
 const MIN = 60_000;
@@ -50,5 +50,17 @@ describe("stale pull requests leave Needs attention (ct-101824)", () => {
   test("the Needs attention count holds only the fresh ones", () => {
     const you = groupChanges(rows, now).find((g) => g.id === "you");
     expect(you?.rows.map((r) => changes[rows.indexOf(r)]!.refs.pr).sort((a, b) => a! - b!)).toEqual([11, 12, 13]);
+  });
+
+  test("the On its way count (OnItsWay's rule) holds only the fresh ones", () => {
+    expect(rows.filter((r) => isComing(r) && !isParked(r, now)).length).toBe(3);
+  });
+
+  test("a parked row says why: a stale failure by its age, a dismissed one as set aside", () => {
+    expect(parkedReason(row(1), now)).toBe("untouched 9d");
+    const dismissed = { ...row(11), set_aside: now - MIN };
+    expect(groupOf(dismissed, now)).toBe("parked");
+    expect(parkedReason(dismissed, now)).toBe("set aside");
+    expect(parkedReason(row(11), now)).toBeNull();
   });
 });

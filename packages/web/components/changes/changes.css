@@ -167,6 +167,13 @@ a.chg:hover, .chg:focus-visible, [data-state="open"] > .chg {
 .chj-action[data-tone="muted"], .chj-action[data-tone="green"], .chj-action[data-tone="yellow"], .chj-action[data-tone="dim"] {
   color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-dim) 14%, transparent);
 }
+/* Set aside / Bring back: a quiet second action under the change's own. */
+.chj-aside {
+  align-self: flex-start; height: 24px; padding: 0 10px; border-radius: 6px; cursor: pointer;
+  font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted);
+  background: transparent; border: 1px solid var(--sol-border);
+}
+.chj-aside:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent); }
 
 /* The lifecycle grid (changes.md CH4): every change a row, the five stages its
    columns, one continuous track across them, grouped by who acts next. */
@@ -191,6 +198,7 @@ a.chb-row:hover { background: color-mix(in srgb, var(--sol-text-dim) 6%, transpa
 .chb-name span[data-mono] { flex: none;  font-family: var(--font-mono); font-size: var(--fs-meta); font-weight: 550; letter-spacing: -0.01em; }
 .chb-sub { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 20px; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; }
 .chb-sub span { overflow: hidden; text-overflow: ellipsis; }
+.chb-why { flex: none; color: var(--sol-text-muted); }
 .chb-more { flex: none; }
 .chb-writer { display: inline-flex; min-width: 0; align-items: center; gap: 4px; }
 .chb-writer i { width: 5px; height: 5px; border-radius: 999px; background: var(--sol-text-dim); flex: none; }

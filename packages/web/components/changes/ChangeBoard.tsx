@@ -13,12 +13,15 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useChangeReach } from "../../hooks/useRepoChanges";
 import { ChangeChip, ChangeJourney } from "./ChangeChip";
 import { VEHICLE_GLYPH } from "../../lib/changes/vehicleGlyph";
-import { PICKABLE_GROUPS, attentionTone, groupChanges, groupLabel, type ChangeGroupId, type ChangeRow } from "../../lib/changes/rows";
+import { PICKABLE_GROUPS, attentionTone, groupChanges, groupLabel, parkedReason, type ChangeGroupId, type ChangeRow } from "../../lib/changes/rows";
 import "./changes.css";
 
 const MONO = new Set(["branch", "pr", "commit"]);
 
-const Row = memo(function Row({ row, at, focused }: { row: ChangeRow; at: number; focused: boolean }) {
+/** Set a change aside (true) or bring it back (false), by its key. */
+type OnSetAside = (key: string, aside: boolean) => void;
+
+const Row = memo(function Row({ row, at, focused, why, onSetAside }: { row: ChangeRow; at: number; focused: boolean; why: string | null; onSetAside?: OnSetAside }) {
   const l = row.lifecycle;
   const v = l.vehicle;
   const Glyph = VEHICLE_GLYPH[v.kind];
@@ -26,16 +29,21 @@ const Row = memo(function Row({ row, at, focused }: { row: ChangeRow; at: number
   const writers = row.writers ?? [];
   // Sessions the viewer's store names come first; the rest only count.
   const named = writers.filter((w) => w.title);
+  // Anything not already parked by its own state can be set aside; a set-aside row can be brought back.
+  const aside = !onSetAside ? undefined
+    : row.set_aside ? { label: "Bring back", onPress: () => onSetAside(row.key, false) }
+    : why ? undefined : { label: "Set aside", onPress: () => onSetAside(row.key, true) };
   const body = (
     <>
       <div className="chb-who">
-        <HoverCard card={<ChangeJourney lifecycle={l} links={row.links} writers={row.writers} />} className="w-[340px] p-0" triggerClassName="chb-name">
+        <HoverCard card={<ChangeJourney lifecycle={l} links={row.links} writers={row.writers} aside={aside} />} className="w-[340px] p-0" triggerClassName="chb-name">
           <Glyph className="chg-glyph" aria-hidden />
           <span data-mono={MONO.has(v.kind) ? "" : undefined}>{vehicleName(v)}</span>
           {v.kind === "pr" && v.title ? <span className="chb-title">{v.title}</span> : null}
         </HoverCard>
-        {row.where || writers.length ? (
+        {why || row.where || writers.length ? (
           <div className="chb-sub">
+            {why ? <span className="chb-why" data-change-parked-why>{why}</span> : null}
             {row.where ? <span>{row.where}</span> : null}
             {named.slice(0, 1).map((w, i) => <span key={i} className="chb-writer" data-state={w.state}><i aria-hidden />{w.title}</span>)}
             {writers.length > Math.min(1, named.length) ? <span className="chb-more">{named.length ? "+" : ""}{writers.length - Math.min(1, named.length)} {named.length ? "" : writers.length === 1 ? "session" : "sessions"}</span> : null}
@@ -58,7 +66,8 @@ const Row = memo(function Row({ row, at, focused }: { row: ChangeRow; at: number
     </>
   );
   const aria = `${vehicleName(v)}: ${l.now.word}`;
-  const attn = attentionTone(row);
+  // A parked row waits on nobody: it wears no attention edge.
+  const attn = why ? undefined : attentionTone(row);
   const focus = focused ? "" : undefined;
   return row.links?.href
     ? <Link href={row.links.href} className="chb-row" data-tone={l.now.tone} data-attn={attn} data-focus={focus} aria-label={aria} data-change-row={row.key}>{body}</Link>
@@ -72,7 +81,7 @@ function ReachFeed({ refId }: { refId: string }) {
 }
 
 /** The grid. `at` freezes its clock (a preview); otherwise it ticks each half minute. */
-export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups = [], mine = false, pick, focused }: {
+export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups = [], mine = false, pick, focused, onSetAside }: {
   rows: ReadonlyArray<ChangeRow>;
   at?: number;
   empty?: string;
@@ -85,6 +94,8 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
   pick?: { group: ChangeGroupId | null; onPick: (g: ChangeGroupId | null) => void };
   /** The row a link points at, highlighted. */
   focused?: (r: ChangeRow) => boolean;
+  /** A surface that lets a person set a change aside: each row's hover card offers it, and a set-aside row's brings it back. */
+  onSetAside?: OnSetAside;
 }) {
   const tick = useCoarseNow(30_000);
   const now = at ?? tick;
@@ -117,7 +128,7 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
                   return next;
                 })} data-change-fold={g.id}>{head}<ChevronRight className="chb-chevron" aria-hidden /></button>
               ) : <div className="chb-group-head">{head}</div>}
-              {folded ? null : g.rows.length ? <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} focused={!!focused?.(r)} />)}</div>
+              {folded ? null : g.rows.length ? <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} focused={!!focused?.(r)} why={g.id === "parked" ? parkedReason(r, groupClock) : null} onSetAside={onSetAside} />)}</div>
                 : g.id === picked ? <div className="chb-rows"><div className="chb-empty">{empty}</div></div> : null}
             </section>
           );

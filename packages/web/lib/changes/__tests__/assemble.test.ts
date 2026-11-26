@@ -214,11 +214,13 @@ describe("the grid's Parked group, for what nothing is moving", () => {
     expect(isParked(rowOf(c), now)).toBe(false);
     expect(isParked(rowOf(c), now + 4 * DAY)).toBe(true);
   });
-  test("a person's turn and a failure never park, however old", () => {
-    const old = (number: number, over: Partial<ChangePullRequest>) => pr({ number, state: "open", head_ref: `x/${number}`, created_at: now - 9 * DAY, files_synced_at: now - 9 * DAY, ...over });
-    const got = assemble({ repository: repo, now, pullRequests: [old(91, { checks_state: "success", review_decision: "REVIEW_REQUIRED" }), old(92, { checks_state: "failure" }), old(93, { draft: true, checks_state: "success" })] });
+  test("a person's turn and a failure park once nobody has touched them in three days (ct-101824)", () => {
+    const at = (number: number, age: number, over: Partial<ChangePullRequest>) => pr({ number, state: "open", head_ref: `x/${number}`, created_at: now - age, files_synced_at: now - age, ...over });
+    const review = { checks_state: "success", review_decision: "REVIEW_REQUIRED" } as const;
+    const failed = { checks_state: "failure" } as const;
+    const got = assemble({ repository: repo, now, pullRequests: [at(91, 9 * DAY, review), at(92, 9 * DAY, failed), at(93, 9 * DAY, { draft: true, checks_state: "success" }), at(94, DAY, review), at(95, DAY, failed)] });
     const parked = (n: number) => isParked(rowOf(got.find((x) => x.refs.pr === n)!), now);
-    expect([parked(91), parked(92), parked(93)]).toEqual([false, false, true]);
+    expect([parked(91), parked(92), parked(93), parked(94), parked(95)]).toEqual([true, true, true, false, false]);
   });
 });
 
