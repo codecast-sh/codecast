@@ -8,7 +8,7 @@ import { runEnv } from "./envCommand";
 
 const ok = `
 [[env]]
-key = "union/unit-smoke"
+key = "acme/unit-smoke"
 title = "Pricing unit tests"
 level = "L0"
 command = "bun run x.ts --candidate {candidate} --split {split} --out {out} \${HOME}"
@@ -19,7 +19,7 @@ predicts = "L5:intros_a_week"
 
 describe("parseEnvsText", () => {
   test("reads a declaration; splits default to dev", () => {
-    expect(parseEnvsText(ok)).toEqual([{ key: "union/unit-smoke", title: "Pricing unit tests", level: "L0", command: "bun run x.ts --candidate {candidate} --split {split} --out {out} ${HOME}", splits: ["dev", "held"], cost_usd: 0, predicts: "L5:intros_a_week" }]);
+    expect(parseEnvsText(ok)).toEqual([{ key: "acme/unit-smoke", title: "Pricing unit tests", level: "L0", command: "bun run x.ts --candidate {candidate} --split {split} --out {out} ${HOME}", splits: ["dev", "held"], cost_usd: 0, predicts: "L5:intros_a_week" }]);
     expect(parseEnvsText(`[[env]]\nkey="a/b"\ntitle="t"\nlevel="L1"\ncommand="true"`)[0].splits).toEqual(["dev"]);
     expect(parseEnvsText("")).toEqual([]);
   });
@@ -31,7 +31,7 @@ describe("parseEnvsText", () => {
     expect(() => parseEnvsText(one("").replace("{candidate}", "{candiate}"))).toThrow(/unknown placeholder \{candiate\}/);
     expect(() => parseEnvsText(one("").replace(`level="L1"`, `level="L7"`))).toThrow(/level must be one of/);
     expect(() => parseEnvsText(one(`splits=["test"]`))).toThrow(/must be one of dev, held, fresh/);
-    expect(() => parseEnvsText(one("", "Union Smoke"))).toThrow(/<product>\/<name>/);
+    expect(() => parseEnvsText(one("", "Acme Smoke"))).toThrow(/<product>\/<name>/);
     expect(() => parseEnvsText(one("") + "\n" + one(""))).toThrow(/a\/b is declared twice/);
     expect(() => parseEnvsText(one(`predicts="L1:x/y"`))).toThrow(/not above L1/);
     expect(() => parseEnvsText(one(`cost_usd=-2`))).toThrow(/cost_usd/);
@@ -72,7 +72,7 @@ describe("loading and running in a repo", () => {
   const repo = () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "envs-repo-"));
     execFileSync("git", ["init", "-q", dir]);
-    execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:Acme/Union.git"]);
+    execFileSync("git", ["-C", dir, "remote", "add", "origin", "git@github.com:Acme/Acme.git"]);
     fs.mkdirSync(path.join(dir, ".codecast"));
     return dir;
   };
@@ -85,7 +85,7 @@ describe("loading and running in a repo", () => {
 
   test("the repo is named by its remote; no file is no envs", () => {
     const dir = repo();
-    expect(repoIdentity(dir)).toBe("github.com/acme/union");
+    expect(repoIdentity(dir)).toBe("github.com/acme/acme");
     expect(loadEnvDeclarations(dir)).toMatchObject({ file: null, envs: [] });
   });
 

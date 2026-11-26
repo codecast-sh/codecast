@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 const cands = [
-  { kind: "linear_team", external_id: "uuid-1", external_key: "ASH", name: "ASH · Ashot" },
+  { kind: "linear_team", external_id: "uuid-1", external_key: "ASH", name: "ASH · Dev" },
   { kind: "linear_project", external_id: "uuid-2", name: "Wedding" },
   { kind: "github_repo", external_id: "codecast-sh/codecast", name: "codecast-sh/codecast" },
   { kind: "github_repo", external_id: "codecast-sh/codecast-docs", name: "codecast-sh/codecast-docs" },
@@ -94,7 +94,7 @@ describe("candidates", () => {
   test("reads a bare array from the route", async () => {
     answer = () => cands;
     await run("candidates", "linear");
-    expect(logs.join("\n")).toContain("ASH · Ashot");
+    expect(logs.join("\n")).toContain("ASH · Dev");
     expect(logs.join("\n")).not.toContain("Nothing importable");
   });
   test("still reads a { candidates } wrapper", async () => {
@@ -107,9 +107,9 @@ describe("candidates", () => {
 describe("import", () => {
   test("posts the matched candidate and prints the server's source id", async () => {
     answer = (path) => (path.endsWith("/candidates") ? cands : { id: "src_123", project_id: "p1", existing: false });
-    await run("import", "linear", "ASH", "--project", "Ashot");
+    await run("import", "linear", "ASH", "--project", "Dev");
     const add = calls.find((c) => c.path === "/cli/integrations/add-source")!;
-    expect(add.body).toMatchObject({ provider: "linear", kind: "linear_team", external_id: "uuid-1", project_id: "proj:Ashot" });
+    expect(add.body).toMatchObject({ provider: "linear", kind: "linear_team", external_id: "uuid-1", project_id: "proj:Dev" });
     const out = logs.join("\n");
     expect(out).toContain("src_123");
     expect(out).not.toContain("undefined");

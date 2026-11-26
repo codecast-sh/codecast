@@ -57,7 +57,7 @@ describe("cast flow record-pr and record-rebase", () => {
   test("a repository's own station scripts record its pull request and rebases on $run_id, and a failed report only prints", async () => {
     const head = "e".repeat(40);
     const rebased = "f".repeat(40);
-    const line = ["node", "cast", "flow", "record-pr", "--number", "4923", "--head", head, "--repository", "Union-AI/Union-Mobile"];
+    const line = ["node", "cast", "flow", "record-pr", "--number", "4923", "--head", head, "--repository", "Acme-AI/Acme-Mobile"];
     const rebaseLine = ["node", "cast", "flow", "record-rebase", "--from", head, "--to", rebased];
     const { program, posts } = cast({});
     const logged: string[] = [];
@@ -69,7 +69,7 @@ describe("cast flow record-pr and record-rebase", () => {
       await program.parseAsync(line);
       await program.parseAsync(rebaseLine);
       expect(posts).toEqual([
-        { path: "/cli/workflow-runs/pr", body: { run_id: "run_7", repository: "Union-AI/Union-Mobile", number: 4923, head_sha: head } },
+        { path: "/cli/workflow-runs/pr", body: { run_id: "run_7", repository: "Acme-AI/Acme-Mobile", number: 4923, head_sha: head } },
         { path: "/cli/workflow-runs/rebase", body: { run_id: "run_7", from: head, to: rebased } },
       ]);
 

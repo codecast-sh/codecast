@@ -125,12 +125,12 @@ describe("OpenAI Agents API transcript", () => {
 
   test("a sandbox that could not be set up says why, and that the clone reaches public repositories only", () => {
     const log = emptyAgentsLog();
-    log.session = { ...SESSION, status: "failed", error: "Session failed", metadata: { repo: "ashot/private" } };
+    log.session = { ...SESSION, status: "failed", error: "Session failed", metadata: { repo: "dev/private" } };
     applyAgentsEvent(log, { type: "agent.session.environment.failed", environment: { status: "failed", error: { message: "setup command exited with status 128" } } }, CREATED_MS);
     const last = render(log).msgs.at(-1)!;
     expect(last.content).toContain("OpenAI Agents API session failed: Session failed.");
     expect(last.content).toContain("setup command exited with status 128");
-    expect(last.content).toContain("clones ashot/private from GitHub without credentials, so it reaches public repositories only");
+    expect(last.content).toContain("clones dev/private from GitHub without credentials, so it reaches public repositories only");
   });
 });
 
@@ -349,11 +349,11 @@ describe("OpenAI Agents API adapter", () => {
 
   test("a private repository is refused before a session is created, with the repository card the web gives this lane", async () => {
     const calls: Call[] = [];
-    const fetchImpl = fakeFetch({ "GET /ashot/private.git/info/refs": () => new Response("", { status: 401 }), "POST /v1/agents/sessions": stream(CREATE) }, calls);
-    const err = await adapter(fetchImpl).create(api(fetchImpl), { model: "", repoUrl: "https://github.com/ashot/private", repo: { owner: "ashot", name: "private" } }, "hi").catch((e) => e);
+    const fetchImpl = fakeFetch({ "GET /dev/private.git/info/refs": () => new Response("", { status: 401 }), "POST /v1/agents/sessions": stream(CREATE) }, calls);
+    const err = await adapter(fetchImpl).create(api(fetchImpl), { model: "", repoUrl: "https://github.com/dev/private", repo: { owner: "dev", name: "private" } }, "hi").catch((e) => e);
     expect(err).toBeInstanceOf(CloudAgentSetupError);
     expect(err.kind).toBe("repo");
-    expect(err.message).toContain("ashot/private");
+    expect(err.message).toContain("dev/private");
     expect(cloudAgentCardOf(CLOUD_AGENT_PROVIDERS.codex_api, err.cardKey("c"), err.message)).toEqual({ kind: "setup", problem: "repo" });
     // The other lane the web offers on it: Codex Cloud reaches private repositories.
     expect(cloudAgentOtherLanes(CLOUD_AGENT_PROVIDERS.codex_api).map((l) => l.id)).toEqual(["codex"]);

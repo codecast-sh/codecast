@@ -6,7 +6,7 @@
 // (e.g. a previous prompt recalled via Up arrow, or a partial draft). The
 // injected paste-buffer content is then appended to whatever was left over,
 // and the trailing Enter submits the concatenated result as a single user
-// message. The exact pattern Samvit reported on 2026-05-19 in the
+// message. The exact pattern Sam reported on 2026-05-19 in the
 // "AI landing site setup" session — long original prompt visibly merging
 // with later one-line follow-ups like "update the plan" and
 // "ask me any remaining questions" — was this bug.

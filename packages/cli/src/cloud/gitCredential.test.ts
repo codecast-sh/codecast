@@ -13,7 +13,7 @@ import {
 import { isCredentialHelperFastPath } from "../fastPath.js";
 import { CREDENTIAL_HELPER_VERB } from "./hostGit.js";
 
-const REQUEST = "protocol=https\nhost=github.com\npath=ashot/codecast.git\n\n";
+const REQUEST = "protocol=https\nhost=github.com\npath=dev/codecast.git\n\n";
 const TOKEN = { username: "x-access-token", password: "ghs_secret", expires_at: 1_700_000_000_000 };
 
 function helper(input: string, answer: CredentialAnswer | Error, extra: Partial<GitCredentialDeps> = {}) {
@@ -36,7 +36,7 @@ function helper(input: string, answer: CredentialAnswer | Error, extra: Partial<
 
 describe("the request git writes", () => {
   test("key=value lines up to the blank line; later lines belong to no request", () => {
-    expect(parseCredentialInput(REQUEST)).toEqual({ protocol: "https", host: "github.com", path: "ashot/codecast.git" });
+    expect(parseCredentialInput(REQUEST)).toEqual({ protocol: "https", host: "github.com", path: "dev/codecast.git" });
     expect(parseCredentialInput("host=github.com\n\nhost=evil.example\n")).toEqual({ host: "github.com" });
   });
 
@@ -52,20 +52,20 @@ describe("the request git writes", () => {
 
 describe("which repository the request is about", () => {
   test("the path git sends, with or without .git and leading slashes", async () => {
-    expect(await credentialRepository({ path: "ashot/codecast.git" })).toBe("ashot/codecast");
-    expect(await credentialRepository({ path: "/ashot/codecast/" })).toBe("ashot/codecast");
+    expect(await credentialRepository({ path: "dev/codecast.git" })).toBe("dev/codecast");
+    expect(await credentialRepository({ path: "/dev/codecast/" })).toBe("dev/codecast");
   });
 
   test("a path that is not owner/name names no repository", async () => {
-    expect(await credentialRepository({ path: "ashot" })).toBeUndefined();
-    expect(await credentialRepository({ path: "ashot/codecast/pull/1" })).toBeUndefined();
+    expect(await credentialRepository({ path: "dev" })).toBeUndefined();
+    expect(await credentialRepository({ path: "dev/codecast/pull/1" })).toBeUndefined();
     expect(await credentialRepository({ path: "../etc/passwd" })).toBeUndefined();
   });
 
   test("without a path the repository comes from the origin git is standing in", async () => {
-    expect(await credentialRepository({}, () => "git@github.com:ashot/codecast.git")).toBe("ashot/codecast");
-    expect(await credentialRepository({}, async () => "https://github.com/ashot/codecast")).toBe("ashot/codecast");
-    expect(await credentialRepository({}, () => "git@gitlab.example:ashot/codecast.git")).toBeUndefined();
+    expect(await credentialRepository({}, () => "git@github.com:dev/codecast.git")).toBe("dev/codecast");
+    expect(await credentialRepository({}, async () => "https://github.com/dev/codecast")).toBe("dev/codecast");
+    expect(await credentialRepository({}, () => "git@gitlab.example:dev/codecast.git")).toBeUndefined();
     expect(await credentialRepository({}, () => undefined)).toBeUndefined();
   });
 });
@@ -86,7 +86,7 @@ describe("one run of the helper", () => {
     const h = helper(REQUEST, TOKEN);
     expect(await runGitCredential("get", h.deps)).toBe(0);
     expect(h.stdout()).toBe("username=x-access-token\npassword=ghs_secret\npassword_expiry_utc=1700000000\n");
-    expect(h.asked).toEqual([{ host: "github.com", repository: "ashot/codecast" }]);
+    expect(h.asked).toEqual([{ host: "github.com", repository: "dev/codecast" }]);
   });
 
   test("store and erase do nothing, quietly and successfully", async () => {
@@ -99,7 +99,7 @@ describe("one run of the helper", () => {
   });
 
   test("a refusal prints nothing at all and exits non-zero", async () => {
-    const h = helper(REQUEST, { reason: "the codecast GitHub App is not installed on ashot/codecast for you" });
+    const h = helper(REQUEST, { reason: "the codecast GitHub App is not installed on dev/codecast for you" });
     expect(await runGitCredential("get", h.deps)).toBe(1);
     expect(h.stdout()).toBe("");
     expect(h.errors).toEqual([]);
@@ -129,9 +129,9 @@ describe("one run of the helper", () => {
   });
 
   test("a request with no path falls back to the repository's own origin", async () => {
-    const h = helper("protocol=https\nhost=github.com\n\n", TOKEN, { originRepository: () => "git@github.com:ashot/codecast.git" });
+    const h = helper("protocol=https\nhost=github.com\n\n", TOKEN, { originRepository: () => "git@github.com:dev/codecast.git" });
     expect(await runGitCredential("get", h.deps)).toBe(0);
-    expect(h.asked).toEqual([{ host: "github.com", repository: "ashot/codecast" }]);
+    expect(h.asked).toEqual([{ host: "github.com", repository: "dev/codecast" }]);
   });
 
   test("a fetch that throws is a refusal, not a stack trace in git's output", async () => {

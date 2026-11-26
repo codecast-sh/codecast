@@ -68,7 +68,7 @@ describe("fallback sites keep their fallback but re-raise auth expiry", () => {
 // updateSessionId repoints conversations.session_id at the live session uuid.
 // It used to swallow failures (`catch {}`), which stranded conversations on
 // their spawn-time stub id: every session-bound `cast` write then failed
-// "Conversation not found" with zero trace (union-mobile fleet, 2026-08-29).
+// "Conversation not found" with zero trace (acme-mobile fleet, 2026-08-29).
 // The contract now is: reject on failure so the daemon can queue a durable
 // retry (pushSessionIdBinding).
 describe("updateSessionId error contract", () => {

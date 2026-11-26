@@ -471,27 +471,27 @@ test("a socket named by a home instruction file is skipped by the home walk, not
 
 test("a file behind a tracked linked folder is named once by its real path, in the project or in home, even when a reference reaches it before the walk; an untracked link keeps its own name", async () => {
   execFileSync("git", ["init", "-q", root]);
-  write("src/repo/outreach/.claude/skills/flags/SKILL.md", "untracked skill\n");
-  fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
-  execFileSync("git", ["-C", root, "add", "outreach/.agents"]);
+  write("src/repo/server/.claude/skills/flags/SKILL.md", "untracked skill\n");
+  fs.symlinkSync(".claude", path.join(root, "server/.agents"));
+  execFileSync("git", ["-C", root, "add", "server/.agents"]);
   // The host has no untracked link, so its receiver can write this name.
-  fs.mkdirSync(path.join(root, "outreach/.gemini"));
-  fs.symlinkSync("../.claude/skills", path.join(root, "outreach/.gemini/skills"));
-  // AGENTS.md sorts before outreach/, so this reference is visited first.
-  write("src/repo/AGENTS.md", "See [flags](outreach/.agents/skills/flags/SKILL.md).\n");
+  fs.mkdirSync(path.join(root, "server/.gemini"));
+  fs.symlinkSync("../.claude/skills", path.join(root, "server/.gemini/skills"));
+  // AGENTS.md sorts before server/, so this reference is visited first.
+  write("src/repo/AGENTS.md", "See [flags](server/.agents/skills/flags/SKILL.md).\n");
   write("shared-agents/skills/team/SKILL.md", "shared skill\n");
-  fs.symlinkSync(path.join(home, "shared-agents"), path.join(root, "outreach/.codex"));
+  fs.symlinkSync(path.join(home, "shared-agents"), path.join(root, "server/.codex"));
   // A tracked link leaving the project: the host's checkout recreates it, so
   // its files go by their home path, never through the link.
-  fs.symlinkSync("../../../shared-agents", path.join(root, "outreach/.cursor"));
-  execFileSync("git", ["-C", root, "add", "outreach/.cursor"]);
+  fs.symlinkSync("../../../shared-agents", path.join(root, "server/.cursor"));
+  execFileSync("git", ["-C", root, "add", "server/.cursor"]);
   const sync = collectProjectContext({ root, home, includeAncestors: false });
   expect(await collectProjectContextAsync({ root, home, includeAncestors: false })).toEqual(sync);
   const project = sync.files.filter((f) => f.scope === "project").map((f) => f.relativePath).sort();
-  expect(project).toEqual(["AGENTS.md", "outreach/.claude/skills/flags/SKILL.md", "outreach/.codex/skills/team/SKILL.md", "outreach/.gemini/skills/flags/SKILL.md"]);
-  expect(sync.files.find((f) => f.relativePath === "outreach/.claude/skills/flags/SKILL.md")?.sourcePath).toBe(path.join(root, "outreach/.claude/skills/flags/SKILL.md"));
+  expect(project).toEqual(["AGENTS.md", "server/.claude/skills/flags/SKILL.md", "server/.codex/skills/team/SKILL.md", "server/.gemini/skills/flags/SKILL.md"]);
+  expect(sync.files.find((f) => f.relativePath === "server/.claude/skills/flags/SKILL.md")?.sourcePath).toBe(path.join(root, "server/.claude/skills/flags/SKILL.md"));
   expect(sync.files.filter((f) => f.scope === "home").map((f) => ({ path: f.relativePath, source: f.sourcePath, link: f.throughLink }))).toEqual([
-    { path: "shared-agents/skills/team/SKILL.md", source: path.join(home, "shared-agents/skills/team/SKILL.md"), link: { path: path.join(root, "outreach/.cursor"), target: "../../../shared-agents", real: path.join(home, "shared-agents") } },
+    { path: "shared-agents/skills/team/SKILL.md", source: path.join(home, "shared-agents/skills/team/SKILL.md"), link: { path: path.join(root, "server/.cursor"), target: "../../../shared-agents", real: path.join(home, "shared-agents") } },
   ]);
 });
 
@@ -541,14 +541,14 @@ test("settings behind a tracked `.claude` link to a folder not named like one st
 
 test("a tracked link behind another tracked link is located at its real path too", async () => {
   execFileSync("git", ["init", "-q", root]);
-  write("src/repo/outreach/.codex/skills/f/SKILL.md", "untracked skill\n");
-  fs.mkdirSync(path.join(root, "outreach/.claude"));
-  fs.symlinkSync("../.codex/skills", path.join(root, "outreach/.claude/skills"));
-  fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
-  execFileSync("git", ["-C", root, "add", "outreach/.agents", "outreach/.claude/skills"]);
+  write("src/repo/server/.codex/skills/f/SKILL.md", "untracked skill\n");
+  fs.mkdirSync(path.join(root, "server/.claude"));
+  fs.symlinkSync("../.codex/skills", path.join(root, "server/.claude/skills"));
+  fs.symlinkSync(".claude", path.join(root, "server/.agents"));
+  execFileSync("git", ["-C", root, "add", "server/.agents", "server/.claude/skills"]);
   const sync = collectProjectContext({ root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true });
   expect(await collectProjectContextAsync({ root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true })).toEqual(sync);
-  expect(sync.files.map((f) => f.relativePath)).toEqual(["outreach/.codex/skills/f/SKILL.md"]);
+  expect(sync.files.map((f) => f.relativePath)).toEqual(["server/.codex/skills/f/SKILL.md"]);
 });
 
 test("agent context behind a tracked link to a folder outside agent context is left to the folder sync; behind an untracked link it travels by its link name", async () => {

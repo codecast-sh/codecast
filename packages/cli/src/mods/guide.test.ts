@@ -4,7 +4,7 @@ import { formatModGuide } from "./guide";
 describe("mod guide for agents", () => {
   test("an external kind is named by id with nothing to create; a stored kind keeps its create verb", () => {
     const text = formatModGuide([{
-      name: "union", title: "Union", fences: [],
+      name: "acme", title: "Acme", fences: [],
       objects: [
         { prefix: "contact", title: "Contact", fields: ["role"], external: true },
         { prefix: "bug", title: "Bug", fields: [] },

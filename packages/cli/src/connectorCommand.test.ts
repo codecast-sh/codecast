@@ -5,14 +5,14 @@ import { callArgs, formatActions, formatCallResult, splitArg, type Capabilities 
 import { SCOPE, useCliHarness } from "./externalDataCli.testHarness.js";
 
 const MANIFEST = {
-  name: "union",
+  name: "acme",
   version: "1",
   readers: [{ name: "history.search", title: "Search history", method: "GET", path: "/codecast/history", input: { type: "object", properties: { q: { type: "string" }, limit: { type: "integer" } }, required: ["q"] } }],
   actions: [{ name: "jobs.rerun", title: "Rerun a job", method: "POST", path: "/codecast/jobs/rerun", input: { type: "object", properties: { id: { type: "string" } } }, idempotent: false, risk: "high" }],
   watches: [],
 };
 const CAPS: Capabilities = {
-  source: { short_id: "src-5", name: "union", status: "active" },
+  source: { short_id: "src-5", name: "acme", status: "active" },
   manifest_json: JSON.stringify(MANIFEST),
   manifest_fetched_at: 0,
   grants: [],
@@ -52,23 +52,23 @@ describe("cast connector on the wire", () => {
 
   test("read with --arg reads the manifest for types, then posts the args as JSON", async () => {
     h.answer = (p) => (p === "/cli/connector/capabilities" ? CAPS : { ok: true, text: "[]" });
-    await h.run("read", "union", "history.search", "--arg", "q=refund", "--arg", "limit=3");
+    await h.run("read", "acme", "history.search", "--arg", "q=refund", "--arg", "limit=3");
     expect(h.calls.map((c) => c.path)).toEqual(["/cli/connector/capabilities", "/cli/connector/read"]);
-    expect(h.calls[1].body).toEqual({ source: "union", reader: "history.search", args_json: JSON.stringify({ q: "refund", limit: 3 }), ...SCOPE });
+    expect(h.calls[1].body).toEqual({ source: "acme", reader: "history.search", args_json: JSON.stringify({ q: "refund", limit: 3 }), ...SCOPE });
   });
 
   test("do sends --yes and the idempotency key; a refusal exits 1", async () => {
     h.answer = () => ({ ok: false, denied: true, error: "jobs.rerun is not granted" });
-    await expect(h.run("do", "union", "jobs.rerun", "--args", '{"id":"j1"}', "--yes", "--idempotency-key", "k1")).rejects.toThrow(/exit 1/);
-    expect(h.calls).toEqual([{ path: "/cli/connector/do", body: { source: "union", action: "jobs.rerun", args_json: '{"id":"j1"}', yes: true, idempotency_key: "k1", ...SCOPE } }]);
+    await expect(h.run("do", "acme", "jobs.rerun", "--args", '{"id":"j1"}', "--yes", "--idempotency-key", "k1")).rejects.toThrow(/exit 1/);
+    expect(h.calls).toEqual([{ path: "/cli/connector/do", body: { source: "acme", action: "jobs.rerun", args_json: '{"id":"j1"}', yes: true, idempotency_key: "k1", ...SCOPE } }]);
     expect(h.out()).toContain("not granted");
   });
 
   test("ls keeps only app sources; readers lists the manifest", async () => {
-    h.answer = (p) => (p === "/cli/sources/list" ? [{ short_id: "src-1", name: "web", provider: "sdk", status: "active" }, { short_id: "src-5", name: "union", provider: "app", status: "active" }] : CAPS);
+    h.answer = (p) => (p === "/cli/sources/list" ? [{ short_id: "src-1", name: "web", provider: "sdk", status: "active" }, { short_id: "src-5", name: "acme", provider: "app", status: "active" }] : CAPS);
     await h.run("ls", "--json");
-    await h.run("readers", "union");
-    expect(JSON.parse(h.logs[0]).map((s: any) => s.name)).toEqual(["union"]);
+    await h.run("readers", "acme");
+    expect(JSON.parse(h.logs[0]).map((s: any) => s.name)).toEqual(["acme"]);
     expect(h.out()).toContain("history.search");
   });
 
@@ -76,12 +76,12 @@ describe("cast connector on the wire", () => {
     h.answer = () => CAPS;
     for (const verb of ["grant", "revoke"]) {
       h.logs.length = 0;
-      await expect(h.run(verb, "union", "jobs.rerun")).rejects.toThrow(/exit 1/);
+      await expect(h.run(verb, "acme", "jobs.rerun")).rejects.toThrow(/exit 1/);
       expect(h.out()).toContain("is a person's call, made in the browser");
       expect(h.out()).toMatch(/https?:\/\/\S+\/ops\/apps\?app=src-5/);
     }
     h.logs.length = 0;
-    await expect(h.run("grant", "union", "db.drop")).rejects.toThrow(/exit 1/);
+    await expect(h.run("grant", "acme", "db.drop")).rejects.toThrow(/exit 1/);
     expect(h.out()).toContain("has no action db.drop (it has: jobs.rerun)");
     expect(h.calls.every((c) => c.path === "/cli/connector/capabilities")).toBe(true);
   });

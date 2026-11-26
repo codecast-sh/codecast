@@ -99,7 +99,7 @@ describe("REACH_REMOTE_SCRIPT", () => {
     fs.mkdirSync(bin, { recursive: true });
     fs.writeFileSync(path.join(bin, "sshfs"), `#!/bin/bash\nprintf '%s\\n' "$@" > ${JSON.stringify(log)}\nexit 0\n`, { mode: 0o755 });
   }, 60_000);
-  const run = (mp: string, withSshfs = true) => spawnSync("bash", ["-c", REACH_REMOTE_SCRIPT, REACH_ARGV0, mp, "/laptop/notes", "Ashot's Mac"], {
+  const run = (mp: string, withSshfs = true) => spawnSync("bash", ["-c", REACH_REMOTE_SCRIPT, REACH_ARGV0, mp, "/laptop/notes", "Dev's Mac"], {
     encoding: "utf-8",
     env: { ...process.env, PATH: withSshfs ? `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` : "/usr/bin:/bin:/usr/sbin:/sbin" },
   });
@@ -115,7 +115,7 @@ describe("REACH_REMOTE_SCRIPT", () => {
     const args = fs.readFileSync(log, "utf-8").trim().split("\n");
     expect(args.slice(0, 3)).toEqual([":/laptop/notes", mp, "-f"]);
     expect(args.join(" ")).toContain("-o slave -o idmap=user");
-    expect(fs.readFileSync(path.join(mp, REACH_NOTE), "utf-8")).toContain("/laptop/notes on Ashot's Mac");
+    expect(fs.readFileSync(path.join(mp, REACH_NOTE), "utf-8")).toContain("/laptop/notes on Dev's Mac");
     expect(fs.statSync(mp).mode & 0o222).toBe(0);
     // A second run (the laptop reconnecting) reopens it and finds only its own note.
     expect(run(mp).status).toBe(0);

@@ -20,7 +20,7 @@ const repo = (dir: string) => {
 beforeEach(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "attr-relpaths-")));
   root = path.join(tmp, "app");
-  other = path.join(tmp, "union");
+  other = path.join(tmp, "acme");
   repo(root);
   repo(other);
 });

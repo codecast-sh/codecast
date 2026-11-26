@@ -23,13 +23,13 @@ beforeEach(() => {
   git(repoRoot, "init", "-q", "-b", "main");
   git(repoRoot, "config", "user.email", "t@t.t");
   git(repoRoot, "config", "user.name", "t");
-  fs.mkdirSync(path.join(repoRoot, "outreach"));
-  fs.writeFileSync(path.join(repoRoot, "outreach", "app.ts"), "export const v = 1;\n");
+  fs.mkdirSync(path.join(repoRoot, "server"));
+  fs.writeFileSync(path.join(repoRoot, "server", "app.ts"), "export const v = 1;\n");
   git(repoRoot, "add", ".");
   git(repoRoot, "commit", "-qm", "init");
   // The run built its change on its branch in its own worktree, then waited at its card.
   git(repoRoot, "worktree", "add", "-q", "-b", BRANCH, tree());
-  fs.writeFileSync(path.join(tree(), "outreach", "app.ts"), "export const v = 2;\n");
+  fs.writeFileSync(path.join(tree(), "server", "app.ts"), "export const v = 2;\n");
   git(tree(), "commit", "-qam", "the built change");
 });
 
@@ -44,10 +44,10 @@ describe("a resumed run's worktree", () => {
   test("removed by hand while the run waited, it comes back on the run's branch with the built change", async () => {
     const built = git(repoRoot, "rev-parse", BRANCH);
     fs.rmSync(tree(), { recursive: true, force: true });
-    expect(await restoreRunWorktree(path.join(repoRoot, "outreach"), NAME, BRANCH)).toBe("restored");
+    expect(await restoreRunWorktree(path.join(repoRoot, "server"), NAME, BRANCH)).toBe("restored");
     expect(git(tree(), "rev-parse", "HEAD")).toBe(built);
     expect(git(tree(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
-    expect(fs.readFileSync(path.join(tree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 2;\n");
+    expect(fs.readFileSync(path.join(tree(), "server", "app.ts"), "utf8")).toBe("export const v = 2;\n");
     expect(await restoreRunWorktree(repoRoot, NAME, BRANCH)).toBe("present");
   });
 
@@ -160,8 +160,8 @@ describe("a resumed run's worktree", () => {
   });
 
   // Nov 20 and Nov 23: every line run built its tree at Start, and the 300+ runs waiting at Queue for 4 build places
-  // filled the Union line hosts' disks. A run now starts with its branch alone (lineTrialBranch.ts freshRunBranch).
-  // Shaped like Union's onefix: Problem and Harm are scripts, Triage a session in the checkout, Queue a long wait, and
+  // filled the Acme line hosts' disks. A run now starts with its branch alone (lineTrialBranch.ts freshRunBranch).
+  // Shaped like Acme's onefix: Problem and Harm are scripts, Triage a session in the checkout, Queue a long wait, and
   // Build the one isolated station. A probe records, without naming $worktree, whether the run's tree exists.
   const RUN = "line-ct-9";
   const probe = (at: string) => `mkdir -p $run_dir && { test -d "$(git rev-parse --show-toplevel)/.codecast/worktrees/${RUN}" && echo tree || echo none; } > $run_dir/${at}.txt`;
@@ -305,20 +305,20 @@ describe("a run's end", () => {
     fs.mkdirSync(runDir, { recursive: true });
     const tip = git(repoRoot, "rev-parse", BRANCH);
     fs.writeFileSync(path.join(runDir, "change.json"), JSON.stringify({ worktree: NAME, branch: BRANCH, tip }));
-    fs.writeFileSync(path.join(tree(), "outreach", "app.ts"), "export const v = 3;\n");
+    fs.writeFileSync(path.join(tree(), "server", "app.ts"), "export const v = 3;\n");
     await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME, branch: BRANCH, run_dir: runDir }));
     expect(git(repoRoot, "rev-parse", BRANCH)).toBe(tip);
-    expect(git(tree(), "status", "--porcelain")).toBe("M outreach/app.ts");
+    expect(git(tree(), "status", "--porcelain")).toBe("M server/app.ts");
   }, 60_000);
 
   test("keeps a tree that is off its run's branch while it holds work main lacks, and commits nothing", async () => {
     withOrigin();
     git(tree(), "switch", "-q", "-c", "feature/elsewhere");
-    fs.writeFileSync(path.join(tree(), "outreach", "app.ts"), "export const v = 3;\n");
+    fs.writeFileSync(path.join(tree(), "server", "app.ts"), "export const v = 3;\n");
     const tips = git(repoRoot, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/");
     await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME }));
-    expect(fs.readFileSync(path.join(tree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 3;\n");
-    expect(git(tree(), "status", "--porcelain")).toBe("M outreach/app.ts");
+    expect(fs.readFileSync(path.join(tree(), "server", "app.ts"), "utf8")).toBe("export const v = 3;\n");
+    expect(git(tree(), "status", "--porcelain")).toBe("M server/app.ts");
     expect(git(repoRoot, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/")).toBe(tips);
   }, 60_000);
 });
@@ -332,7 +332,7 @@ describe("a run that ends without landing", () => {
   const graphOf = (body: string) => parseWorkflowSource(`digraph codecast_fix {
     start [shape=Mdiamond]
     build [label="Build", backend=session, agent=claude, prompt="build it", isolated=true]
-    leave [shape=parallelogram, script="cd \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/$worktree\\" && printf 'export const v = 3;\\n' > outreach/app.ts && printf 'half a note\\n' > NOTES.md"]
+    leave [shape=parallelogram, script="cd \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/$worktree\\" && printf 'export const v = 3;\\n' > server/app.ts && printf 'half a note\\n' > NOTES.md"]
     exit [shape=Msquare]
     ${body}
   }`);
@@ -360,7 +360,7 @@ describe("a run that ends without landing", () => {
     git(repoRoot, "commit", "-qm", "manifest");
     const { acquireWorkspace } = await import("../workspace/lifecycle.js");
     await acquireWorkspace(repoRoot, FIX, { ...OPTS, skipPool: true });
-    fs.writeFileSync(path.join(fixTree(), "outreach", "app.ts"), "export const v = 2;\n");
+    fs.writeFileSync(path.join(fixTree(), "server", "app.ts"), "export const v = 2;\n");
     git(fixTree(), "commit", "-qam", "the built change");
   });
 
@@ -380,7 +380,7 @@ describe("a run that ends without landing", () => {
     expect(git(repoRoot, "worktree", "list")).not.toContain(FIX);
     const branch = `codecast/${FIX}`;
     expect(git(repoRoot, "log", "-1", "--format=%s", branch)).toBe("Left uncommitted when the run on ct-7 ended (run run-7)");
-    expect(git(repoRoot, "show", `${branch}:outreach/app.ts`)).toBe("export const v = 3;");
+    expect(git(repoRoot, "show", `${branch}:server/app.ts`)).toBe("export const v = 3;");
     expect(git(repoRoot, "show", `${branch}:NOTES.md`)).toBe("half a note");
     expect(git(repoRoot, "rev-parse", "main")).toBe(main);
     // Its port slot is free: another workspace takes the host's one port.
@@ -393,14 +393,14 @@ describe("a run that ends without landing", () => {
     expect(back.workspace.path).toBe(fixTree());
     expect(git(fixTree(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
     expect(git(fixTree(), "status", "--porcelain")).toBe("");
-    expect(fs.readFileSync(path.join(fixTree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 3;\n");
+    expect(fs.readFileSync(path.join(fixTree(), "server", "app.ts"), "utf8")).toBe("export const v = 3;\n");
     expect(fs.readFileSync(path.join(fixTree(), "NOTES.md"), "utf8")).toBe("half a note\n");
   }, 90_000);
 
   test("parked at its gate when its runner went away, its tree is released and the resume with the answer restores the same content", async () => {
     const graph = graphOf(`
       decide [label="Decide", shape=hexagon]
-      ship [shape=parallelogram, script="mkdir -p $run_dir && cd \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/$worktree\\" && cat outreach/app.ts NOTES.md > $run_dir/shipped.txt && git status --porcelain -uall > $run_dir/status.txt"]
+      ship [shape=parallelogram, script="mkdir -p $run_dir && cd \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/$worktree\\" && cat server/app.ts NOTES.md > $run_dir/shipped.txt && git status --porcelain -uall > $run_dir/status.txt"]
       start -> build -> leave -> decide
       decide -> ship [label="[S] Ship"]
       ship -> exit`);

@@ -17,7 +17,7 @@ const notes = path.join(home, "notes", "health");
 fs.mkdirSync(path.join(repo, ".git", "worktrees", "wt"), { recursive: true });
 fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
 // A stray .git folder (hooks and info only) inside the checkout is not a repository.
-fs.mkdirSync(path.join(repo, "outreach", ".git", "hooks"), { recursive: true });
+fs.mkdirSync(path.join(repo, "server", ".git", "hooks"), { recursive: true });
 fs.writeFileSync(path.join(repo, ".git", "config"), '[core]\n\tbare = false\n[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
 fs.mkdirSync(worktree, { recursive: true });
 fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${repo}/.git/worktrees/wt\n`);
@@ -50,7 +50,7 @@ describe("checkoutOf", () => {
   test("a subfolder and a linked worktree fold into the checkout, with its repository", () => {
     expect(checkoutOf(path.join(repo, "packages", "web"))).toEqual({ root: repo, repository: "acme/app", exists: true, git: true });
     expect(checkoutOf(worktree).root).toBe(repo);
-    expect(checkoutOf(path.join(repo, "outreach")).root).toBe(repo);
+    expect(checkoutOf(path.join(repo, "server")).root).toBe(repo);
     expect(checkoutOf(notes)).toEqual({ root: notes, exists: true, git: false });
   });
 });

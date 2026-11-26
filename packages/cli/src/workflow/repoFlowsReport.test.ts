@@ -36,12 +36,12 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
-const REMOTE = "git@github.com:Union-AI/union-mobile.git";
+const REMOTE = "git@github.com:Acme-AI/acme-mobile.git";
 
 describe("a checkout's own flows", () => {
   test("a repo flow that extends another reports the whole graph under its repository", () => {
     const r = repoFlowsReport(root, REMOTE)!;
-    expect(r.repository.toLowerCase()).toBe("union-ai/union-mobile");
+    expect(r.repository.toLowerCase()).toBe("acme-ai/acme-mobile");
     expect(r.flows.map((f) => [f.slug, f.kind, f.label, f.takes.join(",")])).toEqual([["change", "line", "Change", "task,branch"]]);
     const nodes = new Map(r.flows[0].nodes.map((n) => [n.id, n]));
     expect(nodes.get("checks")?.type).toBe("parallel_fanout");
@@ -93,7 +93,7 @@ describe("a checkout's own flows", () => {
   });
 });
 
-/** A git checkout with Union's origin. Git's own env from a calling hook (GIT_DIR, say) is dropped, or `git init`
+/** A git checkout with Acme's origin. Git's own env from a calling hook (GIT_DIR, say) is dropped, or `git init`
  *  reinitialises that repository instead of this directory. */
 function gitInit(dir: string) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))) as Record<string, string>;

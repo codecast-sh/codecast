@@ -218,7 +218,7 @@ function identityRoot(): string {
         last_used: "Profile 9",
         last_active_profiles: ["Default", "Profile 9"],
         info_cache: {
-          Default: { name: "Ashot", gaia_id: "111", user_name: "ashot@example.com", gaia_name: "Ashot P", is_consented_primary_account: true },
+          Default: { name: "Dev", gaia_id: "111", user_name: "dev@example.com", gaia_name: "Dev P", is_consented_primary_account: true },
           "Profile 9": { name: "Other", gaia_id: "222", user_name: "other@example.com" },
         },
       },
@@ -228,7 +228,7 @@ function identityRoot(): string {
     path.join(profile, "Preferences"),
     JSON.stringify({
       profile: { exit_type: "Crashed" },
-      account_info: [{ account_id: "111", email: "ashot@example.com" }],
+      account_info: [{ account_id: "111", email: "dev@example.com" }],
       gaia_cookie: { hash: "abc" },
       google: { services: { last_gaia_id: "111", signin_scoped_device_id: "dev-1", consented_to_sync: true }, other: 1 },
     }),

@@ -61,7 +61,7 @@ export function seedHost(): void {
   write(".codecast/config.json", JSON.stringify({ user_id: "u1" }));
 }
 
-export const source = (device_id = "laptop-1") => ({ device_id, user_id: "u1", home: "/Users/ashot", platform: "darwin", cast_version: "1" });
+export const source = (device_id = "laptop-1") => ({ device_id, user_id: "u1", home: "/Users/dev", platform: "darwin", cast_version: "1" });
 
 export async function bundleOf(entries: BundleInput[], opts: { device?: string; takeOver?: boolean; userId?: string; targetHome?: string; features?: Record<string, boolean | string> } = {}) {
   const built = buildMirrorBundle(entries, {
@@ -72,7 +72,7 @@ export async function bundleOf(entries: BundleInput[], opts: { device?: string; 
   return parseMirrorBundle(built.bytes);
 }
 
-export const laptopUserMd = "# Ashot's rules\n\nAlways run the tests.\n\n## Memory\n\nMy own notes.\n";
+export const laptopUserMd = "# Dev's rules\n\nAlways run the tests.\n\n## Memory\n\nMy own notes.\n";
 export function laptopEntries(): BundleInput[] {
   return [
     { path: ".claude/CLAUDE.md", kind: "claude-md", mode: "0600", bytes: Buffer.from(laptopUserMd) },

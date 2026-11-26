@@ -57,26 +57,26 @@ describe("projectsTouching", () => {
       const wt = path.join(tmp, "line-ct-1");
       run(main, "worktree", "add", "-q", "-b", "line", wt);
       const projects = [
-        { name: "backend", tsconfig: "outreach/backend/tsconfig.json" },
-        { name: "mobile", tsconfig: "outreach/mobile/tsconfig.json" },
+        { name: "backend", tsconfig: "server/backend/tsconfig.json" },
+        { name: "mobile", tsconfig: "server/mobile/tsconfig.json" },
       ];
       const info = (name: string, files: string[]) => {
         const dir = watchDir(main, name);
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(buildInfoPath(dir), JSON.stringify({ fileNames: files.map((f) => path.relative(dir, path.join(main, f))) }));
       };
-      info("backend", ["outreach/backend/src/needs.ts"]);
-      info("mobile", ["outreach/mobile/app.tsx", "outreach/backend/src/needs.ts"]);
-      expect(projectsTouching(wt, projects, ["outreach/backend/src/needs.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
+      info("backend", ["server/backend/src/needs.ts"]);
+      info("mobile", ["server/mobile/app.tsx", "server/backend/src/needs.ts"]);
+      expect(projectsTouching(wt, projects, ["server/backend/src/needs.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
       // A new file in a folder mobile already imports from counts for mobile too: the next import of it needs no new list.
-      expect(projectsTouching(wt, projects, ["outreach/backend/src/other.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
-      expect(projectsTouching(wt, projects, ["outreach/backend/scripts/tool.ts"]).map((p) => p.name)).toEqual(["backend"]);
+      expect(projectsTouching(wt, projects, ["server/backend/src/other.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
+      expect(projectsTouching(wt, projects, ["server/backend/scripts/tool.ts"]).map((p) => p.name)).toEqual(["backend"]);
       // The lists are pooled: this tree's own, newer and without the import, does not hide the main checkout's.
       const own = watchDir(wt, "mobile");
       fs.mkdirSync(own, { recursive: true });
-      fs.writeFileSync(buildInfoPath(own), JSON.stringify({ fileNames: [path.relative(own, path.join(wt, "outreach/mobile/app.tsx"))] }));
-      expect(programFiles(wt, projects[1]!)).toEqual(new Set(["outreach/mobile/app.tsx", "outreach/backend/src/needs.ts"]));
-      expect(projectsTouching(wt, projects, ["outreach/backend/src/needs.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
+      fs.writeFileSync(buildInfoPath(own), JSON.stringify({ fileNames: [path.relative(own, path.join(wt, "server/mobile/app.tsx"))] }));
+      expect(programFiles(wt, projects[1]!)).toEqual(new Set(["server/mobile/app.tsx", "server/backend/src/needs.ts"]));
+      expect(projectsTouching(wt, projects, ["server/backend/src/needs.ts"]).map((p) => p.name)).toEqual(["backend", "mobile"]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

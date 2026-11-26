@@ -29,9 +29,9 @@ describe("resolveStableHostname", () => {
       resolveStableHostname({
         platform: "darwin",
         osHostname: () => "Xiaomi-12-Lite",
-        scutil: scutilOf({ HostName: "ashots-mac", LocalHostName: "MacBook-Pro-7" }),
+        scutil: scutilOf({ HostName: "devs-mac", LocalHostName: "MacBook-Pro-7" }),
       }),
-    ).toBe("ashots-mac");
+    ).toBe("devs-mac");
   });
 
   test("macOS falls back to os.hostname() when scutil yields nothing", () => {

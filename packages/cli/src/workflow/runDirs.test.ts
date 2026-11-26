@@ -14,14 +14,14 @@ afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 describe("lineRunsRoot", () => {
   test("a checkout's root and any folder in it keep their runs under the repository's own .git", () => {
-    const sub = path.join(dir, "outreach");
+    const sub = path.join(dir, "server");
     fs.mkdirSync(sub);
     expect(lineRunsRoot(dir)).toBe(path.join(dir, ".git", "cast-line"));
     expect(lineRunsRoot(sub)).toBe(path.join(dir, ".git", "cast-line"));
   });
 
   test("a bare .git a Claude Code session left in a subfolder is not the repository's", () => {
-    const sub = path.join(dir, "outreach");
+    const sub = path.join(dir, "server");
     fs.mkdirSync(path.join(sub, ".git", "info"), { recursive: true });
     fs.writeFileSync(path.join(sub, ".git", "info", "exclude"), "# claude-code-runtime\n");
     expect(lineRunsRoot(sub)).toBe(path.join(dir, ".git", "cast-line"));

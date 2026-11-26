@@ -398,28 +398,28 @@ describe("awaitDeploy", () => {
   });
 });
 
-// ct-98114, Nov 20: union-mobile dropped aivery-operator from deploy.toml, and a change landed on top of that removal
+// ct-98114, Nov 20: acme-mobile dropped aivery-operator from deploy.toml, and a change landed on top of that removal
 // still waited 23h for it, because the wait read its targets from somewhere other than the commit it landed.
 describe("a target the landed commit no longer declares", () => {
-  const PROD = `[[target]]\nname = "production"\nwhen = ["outreach/backend/**"]\nrun = "./deploy.sh"\nlive = "json:https://api.example.com/health#gitSha"\n`;
-  const AIVERY = `[[target]]\nname = "aivery-operator"\nwhen = ["outreach/backend/**"]\nrun = "./deploy.sh --components aivery"\nlive = "json:https://aivery.example.com/health#gitSha"\n`;
+  const PROD = `[[target]]\nname = "production"\nwhen = ["server/backend/**"]\nrun = "./deploy.sh"\nlive = "json:https://api.example.com/health#gitSha"\n`;
+  const AIVERY = `[[target]]\nname = "aivery-operator"\nwhen = ["server/backend/**"]\nrun = "./deploy.sh --components aivery"\nlive = "json:https://aivery.example.com/health#gitSha"\n`;
 
   test("the wait's duties come from the landed commit, not a shared checkout's working tree", async () => {
     const repo = path.join(dir, "shared");
     execFileSync("git", ["init", "-q", "-b", "main", repo], { env: ENV });
     write(repo, ".codecast/deploy.toml", PROD + AIVERY);
-    write(repo, "outreach/backend/a.ts", "a1\n");
+    write(repo, "server/backend/a.ts", "a1\n");
     git(repo, "add", "-A");
     git(repo, "commit", "-qm", "both targets");
     write(repo, ".codecast/deploy.toml", PROD);
     git(repo, "commit", "-qam", "remove aivery-operator");
-    write(repo, "outreach/backend/a.ts", "a2\n");
+    write(repo, "server/backend/a.ts", "a2\n");
     git(repo, "commit", "-qam", "the change");
     const landed = git(repo, "rev-parse", "HEAD");
     // The shared checkout's files read as they did before the removal (another session's tree, a ref moved under it).
     write(repo, ".codecast/deploy.toml", PROD + AIVERY);
 
-    const plan = await landedDuties(repo, { sha: landed, files: ["outreach/backend/a.ts"] }, {});
+    const plan = await landedDuties(repo, { sha: landed, files: ["server/backend/a.ts"] }, {});
     expect(plan.duties.map((d) => d.target)).toEqual(["production"]);
   });
 

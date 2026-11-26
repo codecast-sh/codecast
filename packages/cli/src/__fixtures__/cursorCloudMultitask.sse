@@ -622,7 +622,7 @@ data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"FINISHED"}
 
 id: 1790662745139-0
 event: result
-data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"FINISHED","durationMs":29722,"git":{"branches":[{"repoUrl":"https://github.com/union-ai/union-mobile"}]}}
+data: {"runId":"run-e3dd96f7-9663-4b1d-bc74-5d445a7bb666","status":"FINISHED","durationMs":29722,"git":{"branches":[{"repoUrl":"https://github.com/acme-ai/acme-mobile"}]}}
 
 id: 1790662745139-0
 event: done

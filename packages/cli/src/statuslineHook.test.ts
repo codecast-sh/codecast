@@ -108,8 +108,8 @@ for (const shellBin of SHELLS) describe(`codecast statusline hook (${shellBin})`
   // user's own theme — so the line carries no escape sequence and no glyph the
   // font may not have.
   test("the line is plain text: no colour, no emoji, one line", () => {
-    const out = run(payload(), { CODECAST_CC_ACCOUNT: "union" }).stdout;
-    expect(out).toBe("union \u00b7 session 0%, resets in 1h \u00b7 week 32%, resets in 3d\n");
+    const out = run(payload(), { CODECAST_CC_ACCOUNT: "acme" }).stdout;
+    expect(out).toBe("acme \u00b7 session 0%, resets in 1h \u00b7 week 32%, resets in 3d\n");
     expect(out).not.toContain("\u001b");
     expect(out.split("\n").filter(Boolean)).toHaveLength(1);
   });
@@ -154,7 +154,7 @@ for (const shellBin of SHELLS) describe(`codecast statusline hook (${shellBin})`
     const noLimits = JSON.parse(payload());
     delete noLimits.rate_limits;
     const body = JSON.stringify(noLimits);
-    expect(run(body, { CODECAST_CC_ACCOUNT: "union" }).stdout).toBe("union\n");
+    expect(run(body, { CODECAST_CC_ACCOUNT: "acme" }).stdout).toBe("acme\n");
     expect(run(body).stdout).toBe("");
     expect(calls("curl")).toEqual([]);
   });
@@ -275,9 +275,9 @@ for (const shellBin of SHELLS) describe(`codecast statusline hook (${shellBin})`
   });
 
   test("carries the session's account when one was pinned", () => {
-    const r = run(payload(), { CODECAST_CC_ACCOUNT: "union" });
-    expect(calls("curl")[0]).toContain("?account=union");
-    expect(r.stdout.startsWith("union \u00b7 ")).toBe(true);
+    const r = run(payload(), { CODECAST_CC_ACCOUNT: "acme" });
+    expect(calls("curl")[0]).toContain("?account=acme");
+    expect(r.stdout.startsWith("acme \u00b7 ")).toBe(true);
   });
 
   test("drops an account name that could not be a profile", () => {

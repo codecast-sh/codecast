@@ -12,7 +12,7 @@ import { PRESENTER_BASE, lineRunDir, runWorkflow } from "./runner";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { unattendedOpening } from "../unattended";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
-import { UNION_PROFILE } from "../test-helpers/unionLineProfile";
+import { ACME_PROFILE } from "../test-helpers/acmeLineProfile";
 isolateCodecastDirEachTest("cast-wf-state-");
 
 // ── Offline runs through the session path ────────────────────────────────────
@@ -161,12 +161,12 @@ describe("line.cast offline run through the session path", () => {
   test("the runner loads the repo's profile: a project with a ship command ships and watches without the merge step", async () => {
     spawnSync("git", ["init", "-q", tmpDir]);
     fs.mkdirSync(path.join(tmpDir, ".codecast"));
-    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), UNION_PROFILE);
+    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), ACME_PROFILE);
     gateAnswers = ["S"];
     const outcome = await runWorkflow(offlineLine(tmpDir), opts({ runId: "run_1" }));
     expect(outcome).toBe("completed");
     const s = spawns();
-    expect(s.find((x) => x.station === "implement")!.prompt).toContain("outreach/docs/line/principles.md");
+    expect(s.find((x) => x.station === "implement")!.prompt).toContain("server/docs/line/principles.md");
     const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
     expect(ran.slice(-3)).toEqual(["ship", "watch", "exit"]);
     expect(ran).not.toContain("merge");

@@ -716,7 +716,7 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(ctx["died.exit_code"]).toBe("143");
   }, 15000);
 
-  // A daemon restart stopped the runners on Union's line-1 and left their Queue station's poller (onefix-nodes.ts
+  // A daemon restart stopped the runners on Acme's line-1 and left their Queue station's poller (onefix-nodes.ts
   // queue) running under init for hours, beside the one each resumed run started (Nov 15). A resumed run runs its
   // station again, so a script still running when its runner is stopped ends with the runner.
   test("a station's script still running when its runner is stopped ends with the runner", async () => {
@@ -1002,7 +1002,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   }, 30000);
 
   test("a hand whose start failed fails the station with the error, not at the node's timeout", async () => {
-    // Union's Prove, 2026-10-14: the isolated hand's cloud preparation failed
+    // Acme's Prove, 2026-10-14: the isolated hand's cloud preparation failed
     // in six minutes and the row read idle, never live, until prove's
     // three-hour timeout killed it.
     const failed = { id: "conv_hand", work_state: "idle", is_live: false, message_count: 0, session_error: "cloud host preparation failed (exit 1): setup 'install' failed" };
@@ -1215,7 +1215,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   }, 30000);
 
   test("a station routes on its result even when the pinned text was cut short", async () => {
-    // Union's prove station (2026-10-07): its pin ran past the 1200-character
+    // Acme's prove station (2026-10-07): its pin ran past the 1200-character
     // display cap, the cut fell inside the JSON block, and the run failed with
     // no outgoing edge although the hand had proven its cause.
     pinned = { state: `Proven.\n\n\`\`\`json\n{ "outcome": "red", "evidence": "${"x".repeat(1200)}…`, status: "done", result: '{ "outcome": "red", "evidence": "long" }' };
@@ -1232,7 +1232,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
   }, 30000);
 
   test("a gate taken back without an answer follows none of its choices", async () => {
-    // Union 2026-10-08: a card withdrawn (sd-512) left the gate with no answer,
+    // Acme 2026-10-08: a card withdrawn (sd-512) left the gate with no answer,
     // and the run went down its first choice, Ship, recording an approval no
     // person gave.
     gateReply = { status: "running", gate_response: null };

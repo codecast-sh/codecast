@@ -158,8 +158,8 @@ describe("arms", () => {
       fs.writeFileSync(path.join(dir, "said.json"), JSON.stringify(["Done.\n```json\n{\"outcome\": \"red\"}\n```"]));
       return 0;
     };
-    await runReplay({ root, cast: "line/g.cast", station: "work", cases: [{ run: "run1", expect: { outcome: "red" } }], base: null, reps: 1, out, concurrency: 1, account: "apetrosian" }, { harness, harnessScript: "h.ts" });
-    expect(accounts).toEqual(["apetrosian"]);
+    await runReplay({ root, cast: "line/g.cast", station: "work", cases: [{ run: "run1", expect: { outcome: "red" } }], base: null, reps: 1, out, concurrency: 1, account: "adev" }, { harness, harnessScript: "h.ts" });
+    expect(accounts).toEqual(["adev"]);
   });
 });
 

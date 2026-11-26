@@ -128,7 +128,7 @@ describe.skipIf(!CAN_RUN)("a claude composer holding two copies is never submitt
   // how the union of the two fixes reopened the doubling: the gate refused the
   // doubled composer, and the check in front of it never let the gate see it.
   test("a composer already holding two copies is not submitted as one message", async () => {
-    const payload = `union-${randomUUID().slice(0, 8)}: follow-up content`;
+    const payload = `acme-${randomUUID().slice(0, 8)}: follow-up content`;
     const marker = payload.split(":")[0];
     const endpoint = await startFakeModelEndpoint();
     endpoint.reject();

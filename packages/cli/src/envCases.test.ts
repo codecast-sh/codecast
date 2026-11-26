@@ -33,25 +33,25 @@ describe("withCaseFile", () => {
   test("writes every page to a private file for the run and removes it after", async () => {
     const { post, calls } = fakeServer();
     let seen = "";
-    const out = await withCaseFile(post, "union/x", "held", { session_id: "jx1", task_id: "ct-2" }, async (file, { version, read }) => {
+    const out = await withCaseFile(post, "acme/x", "held", { session_id: "jx1", task_id: "ct-2" }, async (file, { version, read }) => {
       seen = file;
       expect(read).toBe("r1");
       expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
       expect((fs.statSync(path.dirname(file)).mode & 0o777).toString(8)).toBe("700");
       const body = JSON.parse(fs.readFileSync(file, "utf8"));
-      expect(body).toMatchObject({ env: "union/x", split: "held", version, meta: { seed: "s" } });
+      expect(body).toMatchObject({ env: "acme/x", split: "held", version, meta: { seed: "s" } });
       expect(body.cases.map((c: any) => c.id)).toEqual(["case-0", "case-1"]);
       return 7;
     });
     expect(out).toBe(7);
     expect(fs.existsSync(path.dirname(seen))).toBe(false);
-    expect(calls[0]).toMatchObject({ url: "/cli/envs/cases/open", body: { env: "union/x", split: "held", session_id: "jx1", task_id: "ct-2" } });
+    expect(calls[0]).toMatchObject({ url: "/cli/envs/cases/open", body: { env: "acme/x", split: "held", session_id: "jx1", task_id: "ct-2" } });
   });
 
   test("removes the file when the run throws", async () => {
     const { post } = fakeServer();
     let seen = "";
-    await expect(withCaseFile(post, "union/x", "held", {}, async (file) => { seen = file; throw new Error("boom"); })).rejects.toThrow("boom");
+    await expect(withCaseFile(post, "acme/x", "held", {}, async (file) => { seen = file; throw new Error("boom"); })).rejects.toThrow("boom");
     expect(fs.existsSync(path.dirname(seen))).toBe(false);
   });
 });
@@ -64,22 +64,22 @@ describe("runEnv with a held file", () => {
 const f = process.env.${CASES_FILE_ENV};
 const split = process.argv[2];
 const ids = f ? JSON.parse(require("fs").readFileSync(f, "utf8")).cases.map(c => c.id) : ["dev-a"];
-console.log(JSON.stringify({ env: "union/x", env_version: split === "held" ? "abcd1234" : (f ? "saw-held" : "v1"), level: "L2", candidate: { label: "base" }, split,
+console.log(JSON.stringify({ env: "acme/x", env_version: split === "held" ? "abcd1234" : (f ? "saw-held" : "v1"), level: "L2", candidate: { label: "base" }, split,
   cases: ids.map(id => ({ id, score: 0.5 })), summary: { n: ids.length, mean: 0.5 }, started_at: "2026-11-17T10:00:00Z", finished_at: "2026-11-17T10:00:01Z" }));
 `);
-  const decl: EnvDeclaration = { key: "union/x", title: "x", level: "L2", command: `node ${runner} {split}`, splits: ["dev", "held"] };
+  const decl: EnvDeclaration = { key: "acme/x", title: "x", level: "L2", command: `node ${runner} {split}`, splits: ["dev", "held"] };
 
   test("a held run reads the file and files only hashed ids", async () => {
     const file = path.join(dir, "held.json");
-    fs.writeFileSync(file, JSON.stringify({ env: "union/x", version: "v", cases: [{ id: "case-0", payload: SECRET }] }));
+    fs.writeFileSync(file, JSON.stringify({ env: "acme/x", version: "v", cases: [{ id: "case-0", payload: SECRET }] }));
     const r = await runEnv(decl, { dir, candidate: "base", split: "held", casesFile: file, quiet: true });
     if (!r.ok) throw new Error(r.error);
-    expect(r.result.cases).toEqual([{ id: await heldCaseId("union/x", "case-0"), score: 0.5 }]);
+    expect(r.result.cases).toEqual([{ id: await heldCaseId("acme/x", "case-0"), score: 0.5 }]);
     expect(JSON.stringify(r.result)).not.toContain(SECRET);
   });
 
   test("a held runner's stderr is withheld; a runner's own h: ids are kept", async () => {
-    const noisy: EnvDeclaration = { ...decl, command: `node -e 'console.error("${SECRET}"); console.log(JSON.stringify({ env: "union/x", env_version: "abcd1234", level: "L2", candidate: { label: "base" }, split: "held", cases: [{ id: "h:0123456789abcdef", score: 1 }], summary: { n: 1, mean: 1 }, started_at: "2026-11-17T10:00:00Z", finished_at: "2026-11-17T10:00:01Z" }))'` };
+    const noisy: EnvDeclaration = { ...decl, command: `node -e 'console.error("${SECRET}"); console.log(JSON.stringify({ env: "acme/x", env_version: "abcd1234", level: "L2", candidate: { label: "base" }, split: "held", cases: [{ id: "h:0123456789abcdef", score: 1 }], summary: { n: 1, mean: 1 }, started_at: "2026-11-17T10:00:00Z", finished_at: "2026-11-17T10:00:01Z" }))'` };
     const lines: string[] = [];
     const orig = console.error;
     console.error = (...a: unknown[]) => { lines.push(a.join(" ")); };
@@ -97,7 +97,7 @@ console.log(JSON.stringify({ env: "union/x", env_version: split === "held" ? "ab
   test("a runner's leftover children end with it", async () => {
     const marker = path.join(dir, "late.txt");
     fs.rmSync(marker, { force: true });
-    const lingering: EnvDeclaration = { ...decl, command: `(sleep 2; echo late > ${marker}) & echo '{"env":"union/x","env_version":"v1","level":"L2","candidate":{"label":"base"},"split":"dev","cases":[{"id":"a","score":1}],"summary":{"n":1,"mean":1},"started_at":"2026-11-17T10:00:00Z","finished_at":"2026-11-17T10:00:01Z"}'` };
+    const lingering: EnvDeclaration = { ...decl, command: `(sleep 2; echo late > ${marker}) & echo '{"env":"acme/x","env_version":"v1","level":"L2","candidate":{"label":"base"},"split":"dev","cases":[{"id":"a","score":1}],"summary":{"n":1,"mean":1},"started_at":"2026-11-17T10:00:00Z","finished_at":"2026-11-17T10:00:01Z"}'` };
     const r = await runEnv(lingering, { dir, candidate: "base", split: "dev", quiet: true });
     expect(r.ok).toBe(true);
     await new Promise((res) => setTimeout(res, 3000));
@@ -127,8 +127,8 @@ describe("an interrupted run", () => {
 import { withCaseFile } from ${JSON.stringify(path.join(src, "envCases.ts"))};
 import { runEnv } from ${JSON.stringify(path.join(src, "envCommand.ts"))};
 const post = async (url: string) => url.endsWith("/open") ? { read: "r", version: "0123456789abcdef", size: 1 } : { cases: [{ id: "a", payload: "1" }], next: null };
-const decl = { key: "union/x", title: "x", level: "L2", command: "echo $CODECAST_ENV_CASES > ${seen}; sleep 3; echo late > ${marker}", splits: ["held"] } as any;
-await withCaseFile(post as any, "union/x", "held", {}, (file) => runEnv(decl, { dir: ${JSON.stringify(dir)}, candidate: "base", split: "held", casesFile: file, quiet: true }));
+const decl = { key: "acme/x", title: "x", level: "L2", command: "echo $CODECAST_ENV_CASES > ${seen}; sleep 3; echo late > ${marker}", splits: ["held"] } as any;
+await withCaseFile(post as any, "acme/x", "held", {}, (file) => runEnv(decl, { dir: ${JSON.stringify(dir)}, candidate: "base", split: "held", casesFile: file, quiet: true }));
 `);
     const child = Bun.spawn([process.execPath, script], { cwd: dir, stdout: "ignore", stderr: "ignore" });
     for (let i = 0; i < 100 && !fs.existsSync(seen); i++) await new Promise((r) => setTimeout(r, 50));
@@ -157,7 +157,7 @@ describe("heldTreeProblem", () => {
     git(dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base");
     return { dir, base: execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim() };
   }
-  const decl: EnvDeclaration = { key: "union/x", title: "x", level: "L2", command: "true", splits: ["held"], protects: ["eval/**"] };
+  const decl: EnvDeclaration = { key: "acme/x", title: "x", level: "L2", command: "true", splits: ["held"], protects: ["eval/**"] };
 
   test("a held run needs protected paths, and the base's runner", () => {
     const { dir, base } = repo();
@@ -204,16 +204,16 @@ describe("putCaseSet", () => {
   test("uploads in chunks and returns only the count and version", async () => {
     const { post, calls } = fakeServer();
     const text = JSON.stringify({ label: "frozen", meta: { seed: "s" }, cases: [{ id: "a", payload: { pitch: SECRET } }] });
-    const out = await putCaseSet(post, "union/x", "held", text, { scope: { workspace: "team", team_id: "t" } });
+    const out = await putCaseSet(post, "acme/x", "held", text, { scope: { workspace: "team", team_id: "t" } });
     expect(out).toMatchObject({ size: 1, workspace: "team:t" });
     expect(out.version).toMatch(/^[0-9a-f]{16}$/);
     expect(JSON.stringify(out)).not.toContain(SECRET);
-    expect(calls[0].body).toMatchObject({ env: "union/x", split: "held", size: 1, label: "frozen", workspace: "team" });
+    expect(calls[0].body).toMatchObject({ env: "acme/x", split: "held", size: 1, label: "frozen", workspace: "team" });
   });
 
   test("refuses a malformed set before any call", async () => {
     const { post, calls } = fakeServer();
-    await expect(putCaseSet(post, "union/x", "held", JSON.stringify({ cases: [{ id: "a" }] }), {})).rejects.toThrow(/no payload/);
+    await expect(putCaseSet(post, "acme/x", "held", JSON.stringify({ cases: [{ id: "a" }] }), {})).rejects.toThrow(/no payload/);
     expect(calls).toEqual([]);
   });
 });
@@ -222,16 +222,16 @@ describe("putCaseSetMeta", () => {
   test("sends the meta only, as a deliberate replacement, and refuses a file that carries cases", async () => {
     const calls: any[] = [];
     const post = async (url: string, body: any) => { calls.push({ url, body: structuredClone(body) }); return { version: "2222222222222222", size: 3, workspace: "team:t" }; };
-    const out = await putCaseSetMeta(post, "union/x", "held", JSON.stringify({ meta: { calibration: { a: 1 } }, label: "recal" }), {});
+    const out = await putCaseSetMeta(post, "acme/x", "held", JSON.stringify({ meta: { calibration: { a: 1 } }, label: "recal" }), {});
     expect(out).toMatchObject({ version: "2222222222222222", size: 3 });
     expect(calls[0]).toMatchObject({ url: "/cli/envs/cases/put", body: { split: "held", keep_cases: true, replace: true, meta: JSON.stringify({ calibration: { a: 1 } }), label: "recal", cases: [] } });
-    await expect(putCaseSetMeta(post, "union/x", "held", JSON.stringify({ meta: {}, cases: [{ id: "a", payload: 1 }] }), {})).rejects.toThrow(/\{ meta, label\? \}/);
+    await expect(putCaseSetMeta(post, "acme/x", "held", JSON.stringify({ meta: {}, cases: [{ id: "a", payload: 1 }] }), {})).rejects.toThrow(/\{ meta, label\? \}/);
   });
 });
 
 describe("what the CLI and web can print", () => {
   test("caseSetLines prints counts, versions and the log", () => {
-    const lines = caseSetLines(plain, { dev: { version: "fedcba9876543210", size: 218, uploaded_at: 1, reads: 5, unfiled: 0 }, held: { version: "0123456789abcdef", size: 154, uploaded_at: 1, reads: 2, unfiled: 1, last_attempt: { short_id: "ea-4", candidate: "base", n: 60, mean: 0.41, finished_at: 2 } }, reads: [{ kind: "run", split: "held", version: "0123456789abcdef", by: "ashot", session_id: "jx1", task_id: "ct-2", at: 3 }] }, () => "now").join("\n");
+    const lines = caseSetLines(plain, { dev: { version: "fedcba9876543210", size: 218, uploaded_at: 1, reads: 5, unfiled: 0 }, held: { version: "0123456789abcdef", size: 154, uploaded_at: 1, reads: 2, unfiled: 1, last_attempt: { short_id: "ea-4", candidate: "base", n: 60, mean: 0.41, finished_at: 2 } }, reads: [{ kind: "run", split: "held", version: "0123456789abcdef", by: "dev", session_id: "jx1", task_id: "ct-2", at: 3 }] }, () => "now").join("\n");
     expect(lines).toContain("154 cases");
     expect(lines).toContain("ea-4");
     expect(lines).toContain("jx1");
@@ -267,15 +267,15 @@ describe("runWithCases", () => {
 const fs = require("fs");
 const f = process.env.${CASES_FILE_ENV};
 const v = f ? JSON.parse(fs.readFileSync(f, "utf8")).split + "-" + JSON.parse(fs.readFileSync(f, "utf8")).cases.length : process.env.${LOCAL_CASES_ENV} === "1" ? "local" : "none";
-console.log(JSON.stringify({ env: "union/x", env_version: v, level: "L2", candidate: { label: "base" }, split: "dev", cases: [{ id: "a", score: 1 }], summary: { n: 1, mean: 1 }, started_at: "2026-11-17T10:00:00Z", finished_at: "2026-11-17T10:00:01Z" }));
+console.log(JSON.stringify({ env: "acme/x", env_version: v, level: "L2", candidate: { label: "base" }, split: "dev", cases: [{ id: "a", score: 1 }], summary: { n: 1, mean: 1 }, started_at: "2026-11-17T10:00:00Z", finished_at: "2026-11-17T10:00:01Z" }));
 `);
-  const decl: EnvDeclaration = { key: "union/x", title: "x", level: "L2", command: `node ${runner}`, splits: ["dev"] };
+  const decl: EnvDeclaration = { key: "acme/x", title: "x", level: "L2", command: `node ${runner}`, splits: ["dev"] };
   const server = (dev: boolean) => {
     const calls: string[] = [];
     const post = async (url: string, body: any) => {
       calls.push(`${url}:${body.split ?? ""}`);
       if (url === "/cli/envs/cases/open") {
-        if (!dev) throw new Error("union/x has no dev set in this workspace: the product's runner uploads one");
+        if (!dev) throw new Error("acme/x has no dev set in this workspace: the product's runner uploads one");
         return { read: "rd", version: "1111111111111111", size: 2 };
       }
       if (url === "/cli/envs/cases/page") return { cases: [{ id: "a", payload: "1" }, { id: "b", payload: "2" }], next: null };

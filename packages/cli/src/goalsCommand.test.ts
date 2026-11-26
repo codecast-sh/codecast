@@ -75,9 +75,9 @@ describe("cast goals", () => {
     expect(calls[0].body.project).toBe("pj-3");
     calls.length = 0;
     fs.mkdirSync(path.join(repo, ".codecast"));
-    fs.mkdirSync(path.join(repo, "outreach"));
-    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nproject = "Agent Quality"\nprinciples = ["outreach/principles.md"]\n`);
-    fs.writeFileSync(path.join(repo, "outreach", "principles.md"), "UN-1 Project one.\n");
+    fs.mkdirSync(path.join(repo, "server"));
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nproject = "Agent Quality"\nprinciples = ["server/principles.md"]\n`);
+    fs.writeFileSync(path.join(repo, "server", "principles.md"), "UN-1 Project one.\n");
     out = "";
     await run("--json");
     expect(calls[0].body.project).toBe("Agent Quality");

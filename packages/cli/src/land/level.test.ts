@@ -92,7 +92,7 @@ describe("levelCheckout", () => {
     expect(read(shared, "y.ts")).toBe("y\n");
   });
 
-  // Union's main turned two repro scripts from 755 to 644 (Nov 6). The blob was unchanged, so the level absorbed it
+  // Acme's main turned two repro scripts from 755 to 644 (Nov 6). The blob was unchanged, so the level absorbed it
   // and every levelled line checkout read the files as changed.
   test("a mode-only change upstream moves the file's mode, and a local mode change stands", async () => {
     const { shared, other, upstream } = setup({ "run.sh": "echo hi\n", "own.sh": "echo own\n" });

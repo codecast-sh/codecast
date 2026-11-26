@@ -11,7 +11,7 @@ import { lineCommandEnv } from "../lineProfile.js";
 // for a prompt cause: red runs the project's prove command on the base, and
 // that command keeps the prove hand's recorded replays only when it measures
 // on the base the hand measured on. The stub prove command records the base
-// the way Union's does (the merge base with origin/<default branch>).
+// the way Acme's does (the merge base with origin/<default branch>).
 
 const SCRIPT = fs.readFileSync(path.join(import.meta.dir, "templates/line/red.sh"), "utf-8");
 const PROVE = 'git merge-base origin/main HEAD >> "$run_dir/bases"';

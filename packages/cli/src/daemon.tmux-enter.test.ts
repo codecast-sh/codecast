@@ -6,7 +6,7 @@ import {
 
 describe("tmuxPromptStillHasInput", () => {
   test("hi in the footer does not keep a submitted message stuck", () => {
-    const pane = (draft: string) => `❯ ${draft}\n────────────────────\n  ashot\n  bypass permissions on (shift+tab to cycle)`;
+    const pane = (draft: string) => `❯ ${draft}\n────────────────────\n  dev\n  bypass permissions on (shift+tab to cycle)`;
     expect(tmuxPromptStillHasInput(pane("hi"), "hi")).toBe(true);
     expect(tmuxPromptStillHasInput(pane(""), "hi")).toBe(false);
   });

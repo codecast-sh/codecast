@@ -26,7 +26,7 @@ function fakeIdToken(claims: Record<string, unknown>): string {
 }
 
 function authJson(opts: { email?: string; accountId?: string; plan?: string; lastRefresh?: string; tokens?: boolean } = {}): string {
-  const { email = "ashot@almostcandid.com", accountId = "acct-1", plan = "pro", lastRefresh = "2026-07-30T00:00:00Z", tokens = true } = opts;
+  const { email = "dev@almostcandid.com", accountId = "acct-1", plan = "pro", lastRefresh = "2026-07-30T00:00:00Z", tokens = true } = opts;
   return JSON.stringify({
     auth_mode: tokens ? "chatgpt" : "apikey",
     OPENAI_API_KEY: tokens ? null : "sk-test",
@@ -83,7 +83,7 @@ describe("codexAccounts", () => {
   describe("decodeCodexAuth", () => {
     it("extracts email, plan, account id, and last_refresh", () => {
       const s = decodeCodexAuth(authJson());
-      expect(s.email).toBe("ashot@almostcandid.com");
+      expect(s.email).toBe("dev@almostcandid.com");
       expect(s.plan).toBe("pro");
       expect(s.account_id).toBe("acct-1");
       expect(s.last_refresh).toBe(Date.parse("2026-07-30T00:00:00Z"));
@@ -101,7 +101,7 @@ describe("codexAccounts", () => {
     it("saveCodexProfile snapshots auth.json + index metadata", () => {
       writeActiveAuth(authJson());
       const saved = saveCodexProfile("almostcandid");
-      expect(saved.email).toBe("ashot@almostcandid.com");
+      expect(saved.email).toBe("dev@almostcandid.com");
       expect(saved.plan).toBe("pro");
       const stored = fs.readFileSync(path.join(profileDir("almostcandid"), "auth.json"), "utf-8");
       expect(JSON.parse(stored).tokens.account_id).toBe("acct-1");
@@ -115,16 +115,16 @@ describe("codexAccounts", () => {
 
     it("auto-save enrolls once, derives the local-part name, then no-ops", () => {
       writeActiveAuth(authJson());
-      expect(autoSaveActiveCodexProfile()?.name).toBe("ashot");
+      expect(autoSaveActiveCodexProfile()?.name).toBe("dev");
       expect(autoSaveActiveCodexProfile()).toBeNull();
     });
 
     it("migrates legacy domain-derived names, moving the snapshot dir", () => {
       writeActiveAuth(authJson());
-      saveCodexProfile("almostcandid"); // old auto-derived name for ashot@almostcandid.com
-      expect(migrateLegacyCodexProfileNames()).toEqual([{ from: "almostcandid", to: "ashot" }]);
-      expect(Object.keys(readProfileIndex().profiles)).toEqual(["ashot"]);
-      expect(fs.existsSync(path.join(profileDir("ashot"), "auth.json"))).toBe(true);
+      saveCodexProfile("almostcandid"); // old auto-derived name for dev@almostcandid.com
+      expect(migrateLegacyCodexProfileNames()).toEqual([{ from: "almostcandid", to: "dev" }]);
+      expect(Object.keys(readProfileIndex().profiles)).toEqual(["dev"]);
+      expect(fs.existsSync(path.join(profileDir("dev"), "auth.json"))).toBe(true);
       expect(fs.existsSync(profileDir("almostcandid"))).toBe(false);
       // Idempotent, and hand-picked names stay.
       expect(migrateLegacyCodexProfileNames()).toEqual([]);
@@ -144,7 +144,7 @@ describe("codexAccounts", () => {
   describe("refreshCodexUsageSnapshots", () => {
     it("probes the active account via the real home, dormant via snapshot dirs, and skips the covered profile", async () => {
       // Dormant profile for a second account.
-      writeActiveAuth(authJson({ email: "ashot@footage.com", accountId: "acct-2", plan: "plus" }));
+      writeActiveAuth(authJson({ email: "dev@footage.com", accountId: "acct-2", plan: "plus" }));
       saveCodexProfile("footage");
       // Active login is a different account (auto-enrolled by the refresh).
       writeActiveAuth(authJson());
@@ -165,7 +165,7 @@ describe("codexAccounts", () => {
       expect(cache.accounts["acct-1"].weekly?.percent).toBe(15);
       expect(cache.accounts["acct-2"].weekly?.percent).toBe(40);
       // The refresh auto-enrolled the active login as a profile.
-      expect(readProfileIndex().profiles.ashot.account_id).toBe("acct-1");
+      expect(readProfileIndex().profiles.dev.account_id).toBe("acct-1");
     });
 
     it("throttles per-account probes within minIntervalMs", async () => {
@@ -259,11 +259,11 @@ describe("codexAccounts", () => {
       writeActiveAuth(authJson());
       await refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => rpcResult(15, "pro") });
       const payload = getCodexAccountsHeartbeatPayload()!;
-      expect(payload.active_email).toBe("ashot@almostcandid.com");
+      expect(payload.active_email).toBe("dev@almostcandid.com");
       expect(payload.active_uuid).toBe("acct-1");
       expect(payload.profiles).toHaveLength(1);
       const p = payload.profiles[0];
-      expect(p.name).toBe("ashot");
+      expect(p.name).toBe("dev");
       expect(p.subscription).toBe("pro"); // RPC's live plan reading
       expect(p.usage?.weekly?.percent).toBe(15);
       expect(p.usage?.reset_credits).toEqual({ available: 1 });
@@ -278,10 +278,10 @@ describe("codexAccounts", () => {
   describe("resolveCodexAccount", () => {
     it("reads the ACTIVE account through the real codex home, never a snapshot", async () => {
       writeActiveAuth(authJson());
-      saveCodexProfile("ashot");
+      saveCodexProfile("dev");
       await refreshCodexUsageSnapshots({ now: NOW, rpcFetch: async () => rpcResult(80, "pro") });
-      for (const target of [resolveCodexAccount(), resolveCodexAccount("ashot")]) {
-        expect(target.name).toBe("ashot");
+      for (const target of [resolveCodexAccount(), resolveCodexAccount("dev")]) {
+        expect(target.name).toBe("dev");
         expect(target.account).toBe("acct-1");
         expect(target.active).toBe(true);
         // The live grant rotates; a copy of it goes stale. Both spellings of
@@ -293,12 +293,12 @@ describe("codexAccounts", () => {
 
     it("reads a DORMANT profile through its own snapshot dir", () => {
       writeActiveAuth(authJson());
-      saveCodexProfile("ashot");
+      saveCodexProfile("dev");
       writeActiveAuth(authJson({ email: "other@x.com", accountId: "acct-2" }));
       saveCodexProfile("other");
-      const target = resolveCodexAccount("ashot");
+      const target = resolveCodexAccount("dev");
       expect(target.active).toBe(false);
-      expect(target.home).toBe(profileDir("ashot"));
+      expect(target.home).toBe(profileDir("dev"));
     });
 
     it("names what is missing rather than guessing", () => {

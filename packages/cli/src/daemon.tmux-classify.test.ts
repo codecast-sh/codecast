@@ -597,7 +597,7 @@ codecast@ip-172-31-36-163 codecast-mv-a9dad4b2 % . '/Users/codecast/.codecast/la
 test("workspace trust prompt classifies as trust, not rewind", () => {
   const region = [
     " Accessing workspace:",
-    " /Users/ashot/src/products/web",
+    " /Users/dev/src/products/web",
     " Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
     " Claude Code'll be able to read, edit, and execute files here.",
     " ❯ 1. Yes, I trust this folder",
@@ -884,7 +884,7 @@ describe("noteUnresolvablePane", () => {
 // another name. Both keys act on a selection nobody read.
 const TRUST_DIALOG = [
   " Accessing workspace:",
-  " /Users/ashot/src/bookmark",
+  " /Users/dev/src/bookmark",
   " Quick safety check: Is this a project you created or one you trust?",
   " Claude Code'll be able to read, edit, and execute files here.",
   " Security guide",
@@ -1339,7 +1339,7 @@ describe("a composer scrolled past its ❯ row", () => {
   ];
   const pane = (top: string, bottom = rule) => [
     "❯ continue",
-    "⏺ Both launch cards are now current and waiting on Ashot's yes.",
+    "⏺ Both launch cards are now current and waiting on Dev's yes.",
     "✻ Churned for 32s · done Monday 5:29 PM",
     "",
     top,

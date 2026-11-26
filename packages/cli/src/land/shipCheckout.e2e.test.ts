@@ -262,31 +262,31 @@ describe("cast ship checkout, direct mode", () => {
 
   test("a big genuine edit with a stale hunk inside is held and names the commit it reverts; a partial removal from a new file ships", async () => {
     const base = Array.from({ length: 20 }, (_, i) => `export const l${i} = ${i};`);
-    const w = world({ "outreach.ts": base.join("\n") + "\n" }, DIRECT);
+    const w = world({ "server.ts": base.join("\n") + "\n" }, DIRECT);
     const { shared } = w;
     // Upstream replaces one line and inserts a block; another commit creates a file.
     const upstreamVersion = [...base.slice(0, 5), `export const l5 = "prospect";`, ...base.slice(6, 11), "export function prospect() {", "  return findPeopleOutsideNetwork();", "}", ...base.slice(11)];
-    w.upstream({ "outreach.ts": upstreamVersion.join("\n") + "\n" }, "feat: cockpit prospecting");
+    w.upstream({ "server.ts": upstreamVersion.join("\n") + "\n" }, "feat: cockpit prospecting");
     const fresh = Array.from({ length: 5 }, (_, i) => `export const fresh${i} = ${i};`);
     w.upstream({ "fresh.ts": fresh.join("\n") + "\n" }, "feat: fresh file");
     sh(shared, "pull", "-q", "--rebase");
     // A session's large real edit, written on top of the version before the prospecting commit.
     const edited = base.map((l, i) => (i % 3 === 0 && i !== 5 ? l.replace(" = ", " = 100 + ") : l));
-    write(shared, "outreach.ts", [...edited, ...Array.from({ length: 20 }, (_, i) => `export const market${i} = ${i};`)].join("\n") + "\n");
+    write(shared, "server.ts", [...edited, ...Array.from({ length: 20 }, (_, i) => `export const market${i} = ${i};`)].join("\n") + "\n");
     // A real edit to the new file: two of its lines go, one is added.
     write(shared, "fresh.ts", [...fresh.slice(0, 3), "export const fresher = 1;"].join("\n") + "\n");
-    transcript("sess-h", "jx7hhhhhhhhhhhhhhhhhhhhhhhhhhhhh", [edit(shared, "outreach.ts", 30_000), edit(shared, "fresh.ts", 20_000)]);
+    transcript("sess-h", "jx7hhhhhhhhhhhhhhhhhhhhhhhhhhhhh", [edit(shared, "server.ts", 30_000), edit(shared, "fresh.ts", 20_000)]);
 
     const plan = await makePlan(shared, {});
     const stale = plan.groups.find((g) => g.id === "stale")!;
-    expect(stale.paths).toEqual(["outreach.ts"]);
-    expect(stale.note).toMatch(/outreach\.ts: undoes 2 hunk\(s\) of 1 later commit\(s\).*feat: cockpit prospecting/);
+    expect(stale.paths).toEqual(["server.ts"]);
+    expect(stale.note).toMatch(/server\.ts: undoes 2 hunk\(s\) of 1 later commit\(s\).*feat: cockpit prospecting/);
     expect(plan.groups.find((g) => g.id === "s:jx7hhhh")!.paths).toEqual(["fresh.ts"]);
 
     const r = await runPlan(plan);
     expect(r.reason).toBeUndefined();
     expect(r.ok).toBe(true);
-    expect(w.originFile("outreach.ts")).toContain("findPeopleOutsideNetwork");
+    expect(w.originFile("server.ts")).toContain("findPeopleOutsideNetwork");
     expect(w.originFile("fresh.ts")).toContain("fresher");
   });
 

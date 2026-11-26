@@ -73,7 +73,7 @@ describe("a failed run resumed onto the default branch", () => {
   });
 
   test("a branch behind the default branch is put on it and pushed, and the check is left to the station it resumes at", () => {
-    // The default branch moved on, as Union main did with the line's new eval.
+    // The default branch moved on, as Acme main did with the line's new eval.
     commit(project, "b.txt", "two\n", "main moved");
     git(project, "push", "-q", "origin", "main");
     // A check that would fail here proves it is not run by the catch-up.

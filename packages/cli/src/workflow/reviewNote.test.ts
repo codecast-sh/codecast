@@ -19,8 +19,8 @@ describe("the change card's words come from the approving note", () => {
 
   test("decide.cast asks the note's question and shows the rest", () => {
     const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.decide);
-    const payload = gatePayload(graph.nodes.get("decide")!, graph, { review_question: "Ship the fix that tags Samvit again?", review_body: "His reminders tag him again." });
-    expect(payload.prompt.split("\n")[0]).toBe("Ship the fix that tags Samvit again?");
+    const payload = gatePayload(graph.nodes.get("decide")!, graph, { review_question: "Ship the fix that tags Sam again?", review_body: "His reminders tag him again." });
+    expect(payload.prompt.split("\n")[0]).toBe("Ship the fix that tags Sam again?");
     expect(payload.doc_md).toBe("His reminders tag him again.");
   });
 });

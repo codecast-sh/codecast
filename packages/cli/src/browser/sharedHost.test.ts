@@ -33,9 +33,9 @@ describe("generated scripts", () => {
   const all: Array<[string, string]> = [
     ["shared host mark", sharedHostMarkScript()],
     ["shared host setup", sharedHostSetupScript()],
-    ["add user (root, github)", addUserRootScript("cam", "cameron417")],
+    ["add user (root, github)", addUserRootScript("cam", "pat417")],
     ["add user (root, no github)", addUserRootScript("cam")],
-    ["add user (root, team join)", addUserRootScript("cam", "cameron417", { lenientKeys: true, owner: "jh7abc123" })],
+    ["add user (root, team join)", addUserRootScript("cam", "pat417", { lenientKeys: true, owner: "jh7abc123" })],
     ["add user (self)", addUserSelfScript({ claude: "2.1.301", codex: "0.150.0" })],
     ["enable daemon", enableUserDaemonScript("cam")],
     ["owner daemon unit (shared)", daemonUnitScript({ shared: true })],
@@ -277,11 +277,11 @@ describe("the steps a person runs", () => {
 
 describe("joining and leaving", () => {
   test("a join from the web tolerates a GitHub account with no keys, and adds the joining laptop's key", () => {
-    const s = addUserRootScript("ashot", "ashot", { pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc ashot@laptop", lenientKeys: true });
+    const s = addUserRootScript("dev", "dev", { pubkey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc dev@laptop", lenientKeys: true });
     expect(s).not.toContain("has no public ssh keys");
-    expect(s).toContain("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc ashot@laptop");
+    expect(s).toContain("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc dev@laptop");
     expect(parses(s)).toBe("");
-    expect(() => addUserRootScript("ashot", undefined, { pubkey: "x'; rm -rf /" })).toThrow("not an ssh public key");
+    expect(() => addUserRootScript("dev", undefined, { pubkey: "x'; rm -rf /" })).toThrow("not an ssh public key");
   });
 
   // F28: a join adopts an existing Linux account only when it was made for
@@ -338,10 +338,10 @@ getent() { echo "cam:x:1001:1001::${home}/cam:/bin/bash"; }
   });
 
   test("a removal stops and disables their daemon and locks the login, and keeps their home", () => {
-    const s = removeUserRootScript("ashot");
-    expect(s).toContain("rm -f /home/ashot/.codecast/daemon.wanted");
-    expect(s).toContain("systemctl disable --now codecast-daemon-user@ashot.path");
-    expect(s).toContain("usermod -L -e 1 ashot");
+    const s = removeUserRootScript("dev");
+    expect(s).toContain("rm -f /home/dev/.codecast/daemon.wanted");
+    expect(s).toContain("systemctl disable --now codecast-daemon-user@dev.path");
+    expect(s).toContain("usermod -L -e 1 dev");
     expect(s).not.toMatch(/userdel|rm -rf \/home/);
     expect(parses(s)).toBe("");
   });

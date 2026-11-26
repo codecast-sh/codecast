@@ -2,18 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { ownersLine, ownersView } from "./ownersView.js";
 
 const ME = { name: "Jason Benn", email: "jason@x.ai" };
-const MATE = { name: null, email: "ashot@x.ai" };
+const MATE = { name: null, email: "dev@x.ai" };
 const ROLE = { handle: "eval", name: "Eval lead" };
 const PARENT = { short_id: "jxpar01", title: "The lead" };
 
 describe("ownersLine", () => {
   test("without the feature it names the people as before", () => {
-    expect(ownersLine({ owners: [ME, MATE] })).toBe("Jason Benn, ashot@x.ai");
+    expect(ownersLine({ owners: [ME, MATE] })).toBe("Jason Benn, dev@x.ai");
     expect(ownersLine({ owners: [] })).toBe("nobody");
   });
 
   test("with the feature: people, the implicit starter, the role, the parent session", () => {
-    expect(ownersLine({ session_owners: true, people: [ME, MATE], role: ROLE, parent_session: PARENT })).toBe("Jason Benn, ashot@x.ai, @eval, session jxpar01");
+    expect(ownersLine({ session_owners: true, people: [ME, MATE], role: ROLE, parent_session: PARENT })).toBe("Jason Benn, dev@x.ai, @eval, session jxpar01");
     expect(ownersLine({ session_owners: true, people: [], implicit_starter: ME })).toBe("Jason Benn");
     expect(ownersLine({ session_owners: true, people: [] })).toBe("nobody");
   });

@@ -1,4 +1,4 @@
-// union-line-1, 2026-11-24: a day-old cached "nothing newer" answered two
+// acme-line-1, 2026-11-24: a day-old cached "nothing newer" answered two
 // `cast devices update` presses made after 1.1.273 shipped, and the daemon
 // never read the manifest for either. A request now gets a read of its own,
 // and the beat names it only once that read happened.

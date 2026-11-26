@@ -54,5 +54,5 @@ test("a review session may reach the gateway's loopback port, and only loopback 
   const { gatewayPorts } = await import("./agentReviewsHost");
   expect(gatewayPorts({ XRUN_API_URL: "http://127.0.0.1:4100", XRUN_INTERNAL_KEY: "gateway" })).toEqual([4100]);
   expect(gatewayPorts({ A: "http://localhost:5200/x", B: "http://127.0.0.1:5200" })).toEqual([5200]);
-  expect(gatewayPorts({ XRUN_API_URL: "https://outreach-api.fly.dev", OTHER: "http://10.0.0.5:4100", K: "secret" })).toEqual([]);
+  expect(gatewayPorts({ XRUN_API_URL: "https://server-api.fly.dev", OTHER: "http://10.0.0.5:4100", K: "secret" })).toEqual([]);
 });

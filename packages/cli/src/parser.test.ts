@@ -363,7 +363,7 @@ describe("extractCodexForkRoot - collapsing resume/fork chains", () => {
       payload: {
         id,
         ...(forkedFrom ? { forked_from_id: forkedFrom } : {}),
-        cwd: "/Users/ashot/src/codecast",
+        cwd: "/Users/dev/src/codecast",
         originator: "Codex Desktop",
         source: "vscode",
       },

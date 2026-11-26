@@ -143,7 +143,7 @@ describe("enforcement decision", () => {
     expect(checkUrl(policyOf(), "about:blank").allowed).toBe(true);
   });
 
-  test("union across sources: either file can allow", () => {
+  test("acme across sources: either file can allow", () => {
     const p: SitePolicy = {
       sources: [
         { file: "/proj/workspace.toml", key: "[browser] allow", patterns: ["github.com"] },

@@ -49,8 +49,8 @@ describe("test-run sync exclusion", () => {
       expect(isTestArtifactPath(decodeProjectDir(encodeProjectDir(project)))).toBe(true);
     }
     // Real projects are untouched.
-    expect(isTestArtifactPath("/Users/ashot/src/codecast")).toBe(false);
-    expect(isTestArtifactPath("/Users/ashot/src/fork-test-ideas")).toBe(false);
+    expect(isTestArtifactPath("/Users/dev/src/codecast")).toBe(false);
+    expect(isTestArtifactPath("/Users/dev/src/fork-test-ideas")).toBe(false);
     expect(isTestArtifactPath("")).toBe(false);
   });
 
@@ -67,7 +67,7 @@ describe("test-run sync exclusion", () => {
     for (const project of [scratchProject, harnessProject, shimProject]) {
       expect(isTestProjectDir(encodeProjectDir(project))).toBe(true);
     }
-    expect(isTestProjectDir("-Users-ashot-src-codecast")).toBe(false);
+    expect(isTestProjectDir("-Users-dev-src-codecast")).toBe(false);
   });
 
   test("the startup/wake sweep refuses them from the file path alone", () => {
@@ -86,6 +86,6 @@ describe("test-run sync exclusion", () => {
   });
 
   test("real projects still sync under sync_mode:all", () => {
-    expect(isProjectAllowedToSync("/Users/ashot/src/codecast", { sync_mode: "all" } as any)).toBe(true);
+    expect(isProjectAllowedToSync("/Users/dev/src/codecast", { sync_mode: "all" } as any)).toBe(true);
   });
 });

@@ -305,7 +305,7 @@ describe("collectMirrorFiles", () => {
   });
 
   test("gitconfig is rendered from the global config, identity reported but not shipped, global ignore rides along", async () => {
-    fs.writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Ashot\n\temail = a@b.c\n[alias]\n\tst = status\n[core]\n\texcludesfile = ~/.gitignore_global\n[credential]\n\thelper = osxkeychain\n");
+    fs.writeFileSync(path.join(home, ".gitconfig"), "[user]\n\tname = Dev\n\temail = a@b.c\n[alias]\n\tst = status\n[core]\n\texcludesfile = ~/.gitignore_global\n[credential]\n\thelper = osxkeychain\n");
     write(".gitignore_global", ".DS_Store\n");
     execFileSync("git", ["--version"]);
     const inv = await collect();
@@ -313,7 +313,7 @@ describe("collectMirrorFiles", () => {
     expect(gc?.kind).toBe("gitconfig");
     expect(gc!.bytes.toString()).toBe("[alias]\n\tst = status\n[core]\n\texcludesfile = /home/ubuntu/.gitignore_global\n");
     expect(gc!.bytes.toString()).not.toContain("a@b.c");
-    expect(inv.gitIdentity).toEqual({ name: "Ashot", email: "a@b.c" });
+    expect(inv.gitIdentity).toEqual({ name: "Dev", email: "a@b.c" });
     expect(inv.entries.find((e) => e.path === ".gitignore_global")).toMatchObject({ kind: "gitignore" });
   });
 

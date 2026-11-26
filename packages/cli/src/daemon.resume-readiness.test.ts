@@ -64,13 +64,13 @@ test("a resume that exited to a bare shell classifies as 'exited' (fast-fail tri
     "",
     "Resume this session with: claude --resume 4958b319-906c-47a9-acc2-e389c8d52bdc",
     "",
-    "ashot@mac codecast %",
+    "dev@mac codecast %",
   ].join("\n");
   expect(classify(pane)).toBe("exited");
 });
 
 test("a failed launch (shell command-not-found) classifies as 'exited'", () => {
-  const pane = ["ashot@mac codecast % claude --resume abc", "-bash: claude: command not found", "ashot@mac codecast %"].join("\n");
+  const pane = ["dev@mac codecast % claude --resume abc", "-bash: claude: command not found", "dev@mac codecast %"].join("\n");
   expect(classify(pane)).toBe("exited");
 });
 
@@ -78,7 +78,7 @@ test("the resume command line typed at boot does NOT false-trigger 'exited'", ()
   // First poll iterations: the command we just sent is on screen, agent still booting.
   // Must NOT be treated as exited, or we'd abort every cold boot before it starts.
   const pane = [
-    "ashot@mac codecast %  CLAUDECODE= claude --resume 4958b319 --dangerously-skip-permissions --chrome",
+    "dev@mac codecast %  CLAUDECODE= claude --resume 4958b319 --dangerously-skip-permissions --chrome",
     "",
     "Loading…",
   ].join("\n");

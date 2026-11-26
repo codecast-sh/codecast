@@ -28,7 +28,7 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cckeychain-"));
   process.env.HOME = tmp;
   process.env.PATH = path.join(tmp, "empty-path");
-  process.env.USER = "ashot";
+  process.env.USER = "dev";
   delete process.env.USERNAME;
   delete process.env.CLAUDE_CONFIG_DIR;
 });
@@ -46,7 +46,7 @@ const scoped = (dir: string) =>
 
 describe("ccKeychainReadItems", () => {
   it("is the legacy item alone when no config dir is set", () => {
-    expect(ccKeychainReadItems()).toEqual([{ service: LEGACY_CC_KEYCHAIN_SERVICE, account: "ashot" }]);
+    expect(ccKeychainReadItems()).toEqual([{ service: LEGACY_CC_KEYCHAIN_SERVICE, account: "dev" }]);
   });
 
   it("names the item Claude Code 2.1 actually reads", () => {
@@ -113,7 +113,7 @@ describe("ccKeychainReadItems", () => {
   });
 
   it("matches on service alone — an old item can carry an account our rule never picks", () => {
-    expect(ccKeychainReadArgs({ service: "svc", account: "ashot" })).toEqual([
+    expect(ccKeychainReadArgs({ service: "svc", account: "dev" })).toEqual([
       "find-generic-password",
       "-s",
       "svc",
@@ -124,8 +124,8 @@ describe("ccKeychainReadItems", () => {
 
 describe("ccKeychainAccount", () => {
   it("is $USER when the keychain rule accepts it", () => {
-    process.env.USER = "ashot.dev_1-x";
-    expect(ccKeychainAccount()).toBe("ashot.dev_1-x");
+    process.env.USER = "dev.dev_1-x";
+    expect(ccKeychainAccount()).toBe("dev.dev_1-x");
   });
 
   it("falls back to claude-code-user for an SSO-style name", () => {
@@ -153,13 +153,13 @@ describe("ccKeychainAccount", () => {
 
 describe("ccKeychainWriteItem", () => {
   it("is the legacy item when no config dir is set", () => {
-    expect(ccKeychainWriteItem()).toEqual({ service: LEGACY_CC_KEYCHAIN_SERVICE, account: "ashot" });
+    expect(ccKeychainWriteItem()).toEqual({ service: LEGACY_CC_KEYCHAIN_SERVICE, account: "dev" });
   });
 
   it("writes ONLY the scoped item, never the machine login too", () => {
     const dir = path.join(tmp, "config");
     fs.mkdirSync(dir);
-    expect(ccKeychainWriteItem(dir)).toEqual({ service: scoped(dir), account: "ashot" });
+    expect(ccKeychainWriteItem(dir)).toEqual({ service: scoped(dir), account: "dev" });
   });
 
   it("writes the spelling it was given — that is the one the session set", () => {

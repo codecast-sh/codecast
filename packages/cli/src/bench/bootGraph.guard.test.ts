@@ -557,7 +557,7 @@ describe("command groups stay off the boot graph", () => {
   test("the daemon carries no CLI command group either", () => {
     const graph = assertOffGraph(path.join(SRC, "daemon.ts"));
     assertLazyProviderModulesOffGraph(graph, path.join(SRC, "daemon.ts"));
-    // 273 measured on the union (ct-49848). The daemon is the process that RUNS
+    // 273 measured on the acme (ct-49848). The daemon is the process that RUNS
     // the workers, so all 26 `workers/*` modules are work it actually does
     // rather than a graph it carries by accident (ct-49758) — but the command
     // groups are not its work, which is what assertOffGraph checks above.

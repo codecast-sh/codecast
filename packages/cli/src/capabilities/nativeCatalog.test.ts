@@ -53,7 +53,7 @@ describe("parsePluginListJson", () => {
   test("keeps the checkout a project scoped install belongs to", () => {
     const playground = list.installed.find((p) => p.name === "playground");
     expect(playground?.scope).toBe("project");
-    expect(playground?.projectPath).toBe("/Users/ashot/src/union-mobile/outreach");
+    expect(playground?.projectPath).toBe("/Users/dev/src/acme-mobile/server");
   });
 
   test("normalises available rows, including install counts", () => {
@@ -524,7 +524,7 @@ describe("loadNativeCatalog", () => {
 
   test("an old binary that ignores --available still yields a catalog, and says why counts are gone", async () => {
     // `claude plugin list --json` without `--available` answers with a bare array
-    // of installed rows. The union covers the catalog; the phrase covers the UI.
+    // of installed rows. The acme covers the catalog; the phrase covers the UI.
     const home = makeHome();
     const listed = JSON.parse(fixture("claude-plugin-list.json")) as { installed: unknown[] };
     const catalog = await loadNativeCatalog({
@@ -633,6 +633,6 @@ test("toInventoryItems produces rows the fleet diff already understands", () => 
   expect(playground?.meta).toMatchObject({
     plugin: "playground",
     marketplace: "claude-plugins-official",
-    projectPath: "/Users/ashot/src/union-mobile/outreach",
+    projectPath: "/Users/dev/src/acme-mobile/server",
   });
 });

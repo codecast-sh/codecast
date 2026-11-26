@@ -153,14 +153,14 @@ describe("cast events on the wire", () => {
   });
 
   // eg-N is global; --team narrows the lookup and refuses a group elsewhere before any write.
-  const ROSTER = { teams: [{ _id: "team1", name: "Union" }], user_id: "u1" };
+  const ROSTER = { teams: [{ _id: "team1", name: "Acme" }], user_id: "u1" };
   const inTeam = { ...group, workspace: "team:team1" };
 
   test("--team on show, resolve and ignore scopes the lookup to that workspace", async () => {
     h.answer = (path) => (path === "/cli/teams" ? ROSTER : path === "/cli/events/group" ? { group: inTeam, samples: [], source: null } : { group: inTeam });
-    await h.run("show", "eg-4", "--team", "union");
-    await h.run("resolve", "eg-4", "--team", "union");
-    await h.run("ignore", "eg-4", "--team", "union");
+    await h.run("show", "eg-4", "--team", "acme");
+    await h.run("resolve", "eg-4", "--team", "acme");
+    await h.run("ignore", "eg-4", "--team", "acme");
     const posts = h.calls.filter((c) => c.path !== "/cli/teams");
     const TEAM = { workspace: "team", team_id: "team1" };
     expect(posts).toEqual([
@@ -189,16 +189,16 @@ describe("cast events on the wire", () => {
 
   test("a group outside the --team workspace is refused in one line and nothing is written", async () => {
     h.answer = (path) => (path === "/cli/teams" ? ROSTER : { group: { ...group, workspace: "user:u1" }, samples: [], source: null });
-    await expect(h.run("resolve", "eg-4", "--team", "union")).rejects.toThrow(/exit 1/);
+    await expect(h.run("resolve", "eg-4", "--team", "acme")).rejects.toThrow(/exit 1/);
     expect(h.calls.some((c) => c.path === "/cli/events/set-status")).toBe(false);
-    expect(h.out()).toContain("eg-4 is not in the union workspace");
+    expect(h.out()).toContain("eg-4 is not in the acme workspace");
   });
 });
 
 describe("groupScopeProblem", () => {
   test("a team scope matches only that team's key; personal matches a user key", () => {
-    expect(groupScopeProblem({ short_id: "eg-1", workspace: "team:t1" }, { workspace: "team", team_id: "t1" }, "union")).toBeNull();
-    expect(groupScopeProblem({ short_id: "eg-1", workspace: "team:t2" }, { workspace: "team", team_id: "t1" }, "union")).toContain("not in the union workspace");
+    expect(groupScopeProblem({ short_id: "eg-1", workspace: "team:t1" }, { workspace: "team", team_id: "t1" }, "acme")).toBeNull();
+    expect(groupScopeProblem({ short_id: "eg-1", workspace: "team:t2" }, { workspace: "team", team_id: "t1" }, "acme")).toContain("not in the acme workspace");
     expect(groupScopeProblem({ short_id: "eg-1", workspace: "user:u1" }, { workspace: "personal" }, "personal")).toBeNull();
     expect(groupScopeProblem({ short_id: "eg-1", workspace: "team:t1" }, { workspace: "personal" }, "personal")).toContain("your personal workspace");
   });

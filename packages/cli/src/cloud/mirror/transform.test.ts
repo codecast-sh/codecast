@@ -7,7 +7,7 @@ import {
   transformGeminiSettings, transformGrokToml, transformHooksJson, transformOpencodeJson, transformTomlRemap,
 } from "./transform";
 
-const ctx = { fromHome: "/Users/ashot", toHome: "/home/ubuntu" };
+const ctx = { fromHome: "/Users/dev", toHome: "/home/ubuntu" };
 
 test("credential tripwire distinguishes runtime references from literal credentials without a minimum password length", () => {
   for (const source of ['apiKey: env.API_KEY', 'apiKey: ctx.env.OPENAI_API_KEY', 'api_key = os.environ["OPENAI_API_KEY"]', 'token = process.env.TOKEN', '{"apiKey":"env.API_KEY"}', '{"password":"YOUR_PASSWORD"}']) {
@@ -36,8 +36,8 @@ test("documentation and scripts that only show the shape of a secret travel; a p
 });
 
 test("Claude MCP projection remaps project keys and refuses raw auth or history state", () => {
-  const input = { mcpServers: { local: { command: "/Users/ashot/scripts/run" } }, projects: { "/Users/ashot/src/repo": { mcpServers: { project: { command: "/Users/ashot/src/repo/mcp" } } } } };
-  const result = JSON.parse(transformByKind("claude-mcp", Buffer.from(JSON.stringify(input)), { ...ctx, pathMappings: [{ from: "/Users/ashot/src/repo", to: "/home/ubuntu/work/repo" }] }).bytes.toString());
+  const input = { mcpServers: { local: { command: "/Users/dev/scripts/run" } }, projects: { "/Users/dev/src/repo": { mcpServers: { project: { command: "/Users/dev/src/repo/mcp" } } } } };
+  const result = JSON.parse(transformByKind("claude-mcp", Buffer.from(JSON.stringify(input)), { ...ctx, pathMappings: [{ from: "/Users/dev/src/repo", to: "/home/ubuntu/work/repo" }] }).bytes.toString());
   expect(result.projects["/home/ubuntu/work/repo"].mcpServers.project.command).toBe("/home/ubuntu/work/repo/mcp");
   expect(result.mcpServers.local.command).toBe("/home/ubuntu/scripts/run");
   expect(() => transformByKind("claude-mcp", Buffer.from('{"oauthAccount":{"token":"private"}}'), ctx)).toThrow("invalid Claude MCP projection");
@@ -51,10 +51,10 @@ export function laptopClaudeMd(): string {
 }
 
 describe("remapHome", () => {
-  test("replaces the laptop home when followed by /, a quote, whitespace or the end — not /Users/ashot2", () => {
-    const text = `a=/Users/ashot/x b="/Users/ashot" c='/Users/ashot' d=/Users/ashot2/y e=/Users/ashot`;
+  test("replaces the laptop home when followed by /, a quote, whitespace or the end — not /Users/dev2", () => {
+    const text = `a=/Users/dev/x b="/Users/dev" c='/Users/dev' d=/Users/dev2/y e=/Users/dev`;
     expect(remapHome(text, ctx.fromHome, ctx.toHome))
-      .toBe(`a=/home/ubuntu/x b="/home/ubuntu" c='/home/ubuntu' d=/Users/ashot2/y e=/home/ubuntu`);
+      .toBe(`a=/home/ubuntu/x b="/home/ubuntu" c='/home/ubuntu' d=/Users/dev2/y e=/home/ubuntu`);
   });
   test("identical homes are a no-op", () => {
     expect(remapHome("/home/ubuntu/x", "/home/ubuntu", "/home/ubuntu")).toBe("/home/ubuntu/x");
@@ -119,34 +119,34 @@ describe("scrubSecrets", () => {
 
 describe("transformClaudeSettings", () => {
   const laptop = {
-    apiKeyHelper: "/Users/ashot/bin/key.sh", awsAuthRefresh: "x", awsCredentialExport: "y", otelHeadersHelper: "z",
+    apiKeyHelper: "/Users/dev/bin/key.sh", awsAuthRefresh: "x", awsCredentialExport: "y", otelHeadersHelper: "z",
     forceLoginMethod: "console", forceLoginOrgUUID: "u", sandbox: { enabled: true },
     enableAllProjectMcpServers: true, enabledMcpjsonServers: ["a"], disabledMcpjsonServers: ["b"],
     includeCoAuthoredBy: false,
     model: "opus",
     enabledPlugins: { "x@y": true },
     permissions: {
-      allow: ["Bash(git *)"], deny: ["Read(/Users/ashot/.ssh/**)"],
-      additionalDirectories: ["/Users/ashot/notes"], disableBypassPermissionsMode: "disable",
+      allow: ["Bash(git *)"], deny: ["Read(/Users/dev/.ssh/**)"],
+      additionalDirectories: ["/Users/dev/notes"], disableBypassPermissionsMode: "disable",
     },
     env: {
-      CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_BASE_URL: "https://proxy", AWS_PROFILE: "p", CLAUDE_CONFIG_DIR: "/Users/ashot/.cc",
+      CLAUDE_CODE_USE_BEDROCK: "1", ANTHROPIC_BASE_URL: "https://proxy", AWS_PROFILE: "p", CLAUDE_CONFIG_DIR: "/Users/dev/.cc",
       HTTPS_PROXY: "http://p", ANTHROPIC_API_KEY: "sk-ant-x", GITHUB_TOKEN: "ghp_x", CLAUDE_CODE_SKIP_LOGIN: "1",
-      OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer x", MY_URL: "https://u:p@h", MY_VAR: "/Users/ashot/data",
+      OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer x", MY_URL: "https://u:p@h", MY_VAR: "/Users/dev/data",
       CLAUDECODE: "1", CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: "1",
     },
-    statusLine: { type: "command", command: "/Users/ashot/.claude/statusline.sh --short" },
+    statusLine: { type: "command", command: "/Users/dev/.claude/statusline.sh --short" },
     hooks: {
       SessionStart: [{ matcher: "", hooks: [
-        { type: "command", command: "/Users/ashot/.claude/hooks/stable-feed.sh", timeout: 30 },
-        { type: "command", command: "/Users/ashot/.claude/hooks/session-register.sh" },
-        { type: "command", command: "/Users/ashot/.claude/hooks/my-hook.sh" },
+        { type: "command", command: "/Users/dev/.claude/hooks/stable-feed.sh", timeout: 30 },
+        { type: "command", command: "/Users/dev/.claude/hooks/session-register.sh" },
+        { type: "command", command: "/Users/dev/.claude/hooks/my-hook.sh" },
       ] }],
-      Stop: [{ matcher: "", hooks: [{ type: "command", command: "/Users/ashot/.claude/hooks/thread-state.sh" }] }],
+      Stop: [{ matcher: "", hooks: [{ type: "command", command: "/Users/dev/.claude/hooks/thread-state.sh" }] }],
       UserPromptSubmit: [{ matcher: "", hooks: [
-        { type: "command", command: "/Users/ashot/.claude/hooks/codecast-status.sh" },
-        { type: "command", command: "/Users/ashot/.claude/hooks/task-pulse.sh" },
-        { type: "command", command: "/Users/ashot/.codecast/hooks/stable-feed-codex.sh" },
+        { type: "command", command: "/Users/dev/.claude/hooks/codecast-status.sh" },
+        { type: "command", command: "/Users/dev/.claude/hooks/task-pulse.sh" },
+        { type: "command", command: "/Users/dev/.codecast/hooks/stable-feed-codex.sh" },
       ] }],
       SubagentStop: [{ matcher: "implementer|reviewer|critic", hooks: [{ type: "command", command: "~/.codecast/orchestration/scripts/agent-complete.sh" }] }],
     },
@@ -177,7 +177,7 @@ describe("transformClaudeSettings", () => {
     expect(scrubbed).toContain("env.GITHUB_TOKEN");
     expect(scrubbed).toContain("env.MY_URL");
     expect(scrubbed).toContain("permissions.disableBypassPermissionsMode");
-    expect(JSON.stringify(settings)).not.toContain("/Users/ashot");
+    expect(JSON.stringify(settings)).not.toContain("/Users/dev");
   });
 
   test("a laptop with Bedrock env and disableBypassPermissionsMode yields settings that still launch in bypass mode", () => {
@@ -190,7 +190,7 @@ describe("TOML", () => {
   const codex = `model = "gpt-5"
 api_key = "secret"
 
-[projects."/Users/ashot/src/app"]
+[projects."/Users/dev/src/app"]
 trust_level = "trusted"
 
 [mcp_servers.linear]
@@ -212,7 +212,7 @@ X-Trace = "on"
 hooks = true
 
 [notify]
-command = "/Users/ashot/bin/notify.sh"
+command = "/Users/dev/bin/notify.sh"
 `;
 
   test("splitTomlTables round-trips byte for byte", () => {
@@ -231,7 +231,7 @@ command = "/Users/ashot/bin/notify.sh"
     expect(text).toContain('X-Trace = "on"');
     expect(text).toContain("[features]\nhooks = true");
     expect(text).toContain('command = "/home/ubuntu/bin/notify.sh"');
-    expect(scrubbed).toContain('[projects."/Users/ashot/src/app"]');
+    expect(scrubbed).toContain('[projects."/Users/dev/src/app"]');
     expect(scrubbed).not.toContain("[mcp_servers.linear]");
     expect(scrubbed).toContain("mcp_servers.linear.env.LINEAR_API_KEY");
     expect(scrubbed).toContain("api_key");
@@ -248,7 +248,7 @@ command = "/Users/ashot/bin/notify.sh"
 
 describe("JSON kinds", () => {
   test("transformGeminiSettings retains mcpServers and scrubs a nested authToken", () => {
-    const { value, scrubbed } = transformGeminiSettings({ theme: "dark", mcpServers: { a: {} }, x: { authToken: "t", path: "/Users/ashot/p" } }, ctx);
+    const { value, scrubbed } = transformGeminiSettings({ theme: "dark", mcpServers: { a: {} }, x: { authToken: "t", path: "/Users/dev/p" } }, ctx);
     expect(value).toEqual({ theme: "dark", mcpServers: { a: {} }, x: { path: "/home/ubuntu/p" } });
     expect(scrubbed).toEqual(["x.authToken"]);
   });
@@ -259,15 +259,15 @@ describe("JSON kinds", () => {
   });
   test("transformHooksJson drops codecast entries and remaps the rest", () => {
     const { value } = transformHooksJson({ hooks: { SessionStart: [{ hooks: [
-      { type: "command", command: "/Users/ashot/.codecast/hooks/stable-feed-codex.sh" },
-      { type: "command", command: "/Users/ashot/bin/mine.sh" },
+      { type: "command", command: "/Users/dev/.codecast/hooks/stable-feed-codex.sh" },
+      { type: "command", command: "/Users/dev/bin/mine.sh" },
     ] }] } }, ctx);
     expect(value).toEqual({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "/home/ubuntu/bin/mine.sh" }] }] } });
   });
   test("transformHooksJson handles cursor's flat hooks.json entries the same way", () => {
     const { value } = transformHooksJson({ version: 1, hooks: {
-      sessionStart: [{ command: "/Users/ashot/.codecast/hooks/stable-feed-cursor.sh", timeout: 30 }],
-      stop: [{ command: "/Users/ashot/.cursor/hooks/done.sh" }],
+      sessionStart: [{ command: "/Users/dev/.codecast/hooks/stable-feed-cursor.sh", timeout: 30 }],
+      stop: [{ command: "/Users/dev/.cursor/hooks/done.sh" }],
     } }, ctx);
     expect(value).toEqual({ version: 1, hooks: { stop: [{ command: "/home/ubuntu/.cursor/hooks/done.sh" }] } });
   });
@@ -275,7 +275,7 @@ describe("JSON kinds", () => {
 
 describe("renderGitconfig", () => {
   const pairs = [
-    { key: "user.name", value: "Ashot" }, { key: "user.email", value: "a@b.c" }, { key: "user.signingkey", value: "K" },
+    { key: "user.name", value: "Dev" }, { key: "user.email", value: "a@b.c" }, { key: "user.signingkey", value: "K" },
     { key: "alias.st", value: "status" }, { key: "alias.lg", value: "log --oneline # x" },
     { key: "core.excludesfile", value: "~/.gitignore_global" }, { key: "core.sshcommand", value: "ssh -i k" },
     { key: "pull.rebase", value: "true" }, { key: "push.default", value: "current" }, { key: "push.autosetupremote", value: "true" },
@@ -313,21 +313,21 @@ describe("renderGitconfig", () => {
 
 describe("transformByKind: instruction files", () => {
   test("claude-md / agents-md are section-stripped AND home-remapped; portable text kinds are home-remapped too", () => {
-    const md = Buffer.from(`# Mine\n\nNotes live in /Users/ashot/notes, never /Users/ashot2.\n${laptopClaudeMd().slice("# My rules\n\nAlways run the tests.\n".length)}`);
+    const md = Buffer.from(`# Mine\n\nNotes live in /Users/dev/notes, never /Users/dev2.\n${laptopClaudeMd().slice("# My rules\n\nAlways run the tests.\n".length)}`);
     const out = transformByKind("claude-md", md, ctx).bytes.toString();
-    expect(out).toContain("Notes live in /home/ubuntu/notes, never /Users/ashot2.");
+    expect(out).toContain("Notes live in /home/ubuntu/notes, never /Users/dev2.");
     expect(out).not.toContain("<!-- /codecast-");
-    expect(transformByKind("agents-md", Buffer.from("see /Users/ashot/x\n"), ctx).bytes.toString()).toBe("see /home/ubuntu/x\n");
-    expect(transformByKind("verbatim", Buffer.from("see /Users/ashot/x\n"), ctx).bytes.toString()).toBe("see /home/ubuntu/x\n");
+    expect(transformByKind("agents-md", Buffer.from("see /Users/dev/x\n"), ctx).bytes.toString()).toBe("see /home/ubuntu/x\n");
+    expect(transformByKind("verbatim", Buffer.from("see /Users/dev/x\n"), ctx).bytes.toString()).toBe("see /home/ubuntu/x\n");
   });
 });
 
 describe("transformForHost (workspace staging)", () => {
   test("settings get the scrub/remap, codex config the table rules, portable support text remapped, unparseable → null", () => {
-    const settings = Buffer.from(JSON.stringify({ env: { ANTHROPIC_API_KEY: "x", P: "/Users/ashot/p" } }));
+    const settings = Buffer.from(JSON.stringify({ env: { ANTHROPIC_API_KEY: "x", P: "/Users/dev/p" } }));
     expect(JSON.parse(transformForHost(".claude/settings.local.json", settings, ctx)!.toString())).toEqual({ env: { P: "/home/ubuntu/p" } });
     expect(transformForHost(".codex/config.toml", Buffer.from('[mcp_servers.a]\nx = 1\n[features]\nhooks = true\n'), ctx)!.toString()).toBe("[mcp_servers.a]\nx = 1\n[features]\nhooks = true\n");
-    const md = Buffer.from("# /Users/ashot stays\n");
+    const md = Buffer.from("# /Users/dev stays\n");
     expect(transformForHost("CLAUDE.local.md", md, ctx)!.toString()).toBe("# /home/ubuntu stays\n");
     expect(transformForHost(".claude/settings.json", Buffer.from("{nope"), ctx)).toBeNull();
   });

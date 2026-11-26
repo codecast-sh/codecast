@@ -41,7 +41,7 @@ describe("the base presenter", () => {
 
   test("the base is product-neutral, short, and written without emdashes", () => {
     expect(PRESENTER_BASE).toContain("cast decide");
-    expect(PRESENTER_BASE).not.toMatch(/Union|AgentWatch|codecast's line/);
+    expect(PRESENTER_BASE).not.toMatch(/Acme|AgentWatch|codecast's line/);
     expect(PRESENTER_BASE).not.toContain("\u2014");
     expect(PRESENTER_BASE.split(/\s+/).length).toBeLessThan(1100);
     // The base reads no run variables: a line's addendum names its own record.

@@ -44,7 +44,7 @@ async function post(query: string, body: string): Promise<number> {
 // waiting on a disk. Reads of the cache therefore have to wait for the write.
 async function cacheSettles(session = 41, weekly = 62): Promise<void> {
   for (let i = 0; i < 100; i++) {
-    const snap = readUsageCache().accounts["uuid-union"];
+    const snap = readUsageCache().accounts["uuid-acme"];
     if (snap?.source === "live-session" && snap.session?.percent === session && snap.weekly?.percent === weekly) return;
     await new Promise((r) => setTimeout(r, 20));
   }
@@ -53,7 +53,7 @@ async function cacheSettles(session = 41, weekly = 62): Promise<void> {
 function seedUsage(): void {
   fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
     accounts: {
-      "uuid-union": {
+      "uuid-acme": {
         fetched_at: Date.now() - 1_000,
         session: { percent: 40, resets_at: SESSION_RESET * 1_000 },
         weekly: { percent: 61, resets_at: WEEKLY_RESET * 1_000 },
@@ -69,7 +69,7 @@ beforeEach(async () => {
   fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
   fs.writeFileSync(
     path.join(home, ".codecast", "cc-accounts.json"),
-    JSON.stringify({ profiles: { union: { uuid: "uuid-union", email: "u@x.com" } } }),
+    JSON.stringify({ profiles: { acme: { uuid: "uuid-acme", email: "u@x.com" } } }),
   );
   fs.writeFileSync(path.join(home, ".codecast", "cc-active.json"), JSON.stringify({ key: "uuid-active", since: 1 }));
   server = http.createServer((req, res) => handleStatusLinePost(req, res));
@@ -87,9 +87,9 @@ afterEach(async () => {
 describe("/hook/statusline", () => {
   test("files a post under the account whose reset windows match", async () => {
     seedUsage();
-    expect(await post("?account=union", PAYLOAD)).toBe(200);
+    expect(await post("?account=acme", PAYLOAD)).toBe(200);
     await cacheSettles();
-    const snap = readUsageCache().accounts["uuid-union"];
+    const snap = readUsageCache().accounts["uuid-acme"];
     expect(snap?.session?.percent).toBe(41);
     expect(snap?.weekly?.percent).toBe(62);
     expect(snap?.source).toBe("live-session");
@@ -99,18 +99,18 @@ describe("/hook/statusline", () => {
     seedUsage();
     expect(await post("", PAYLOAD)).toBe(200);
     await cacheSettles();
-    expect(readUsageCache().accounts["uuid-union"]?.session?.percent).toBe(41);
+    expect(readUsageCache().accounts["uuid-acme"]?.session?.percent).toBe(41);
     expect(readUsageCache().accounts["uuid-active"]).toBeUndefined();
   });
 
   test("a delayed post cannot reopen an exhausted account before its reset", async () => {
     seedUsage();
-    expect(await post("?account=union", payload(102, 62))).toBe(200);
+    expect(await post("?account=acme", payload(102, 62))).toBe(200);
     await cacheSettles(102, 62);
-    expect(readUsageCache().accounts["uuid-union"]?.session?.percent).toBe(102);
-    expect(await post("?account=union", payload(96, 63))).toBe(200);
+    expect(readUsageCache().accounts["uuid-acme"]?.session?.percent).toBe(102);
+    expect(await post("?account=acme", payload(96, 63))).toBe(200);
     await cacheSettles(102, 63);
-    const snap = readUsageCache().accounts["uuid-union"];
+    const snap = readUsageCache().accounts["uuid-acme"];
     expect(snap?.session?.percent).toBe(102);
     expect(snap?.weekly?.percent).toBe(63);
   });
@@ -119,7 +119,7 @@ describe("/hook/statusline", () => {
   // throw out of the request — a payload it cannot use is simply dropped.
   test("answers and changes nothing for a body it cannot use", async () => {
     for (const body of ["", "not json", "{}", JSON.stringify({ rate_limits: null })]) {
-      expect(await post("?account=union", body), body).toBe(200);
+      expect(await post("?account=acme", body), body).toBe(200);
     }
     // Nothing to wait for, and nothing may appear: settle a real post's worth
     // of event-loop turns first so a late write would be caught.
@@ -135,7 +135,7 @@ describe("/hook/statusline", () => {
 
   test("refuses an oversized body instead of buffering it", async () => {
     const fat = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 1 } }, pad: "x".repeat(200_000) });
-    const res = await fetch(`${base}/hook/statusline?account=union`, { method: "POST", body: fat }).catch(() => null);
+    const res = await fetch(`${base}/hook/statusline?account=acme`, { method: "POST", body: fat }).catch(() => null);
     expect(res === null || res.status === 413).toBe(true);
     await new Promise((r) => setTimeout(r, 200));
     expect(readUsageCache().accounts).toEqual({});

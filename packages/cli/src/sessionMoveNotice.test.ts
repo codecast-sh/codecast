@@ -27,7 +27,7 @@ describe("reorientationNotice", () => {
   test("a fresh clone warns that only pushed work is here, and names the branch", () => {
     const n = reorientationNotice({
       ...base,
-      oldCwd: "/Users/ashot/src/app on macOS - laptop",
+      oldCwd: "/Users/dev/src/app on macOS - laptop",
       checkout: { cwd: base.newCwd, cloned: true, remote: "git@github.com:acme/app.git", branch: "main" },
     })!;
     expect(n).toContain("fresh clone");
@@ -35,7 +35,7 @@ describe("reorientationNotice", () => {
     expect(n).toContain("branch main");
     expect(n).toContain("committed but not pushed");
     expect(n).toContain("If you were on a different branch, you are not on it now");
-    expect(n).toContain("(previously /Users/ashot/src/app on macOS - laptop)");
+    expect(n).toContain("(previously /Users/dev/src/app on macOS - laptop)");
   });
 
   test("a reused checkout does NOT claim only-pushed-work — it is a different world", () => {
@@ -52,7 +52,7 @@ describe("reorientationNotice", () => {
     const n = reorientationNotice({
       ...base,
       newCwd: "/home/cam",
-      oldCwd: "/Users/ashot on MacBook-Pro-182",
+      oldCwd: "/Users/dev on MacBook-Pro-182",
       checkout: { cwd: "/home/cam", cloned: false, homeFolder: true },
     })!;
     expect(n).toContain("this machine's home folder");
@@ -64,14 +64,14 @@ describe("reorientationNotice", () => {
     const n = reorientationNotice({
       ...base,
       checkout: { cwd: base.newCwd, cloned: true, branch: "main" },
-      account: { fromUser: "Ashot", toUser: "Samvit" },
+      account: { fromUser: "Dev", toUser: "Sam" },
     })!;
-    expect(n).toContain("under Samvit's account, not Ashot's");
-    expect(n).toContain("belongs to Samvit");
+    expect(n).toContain("under Sam's account, not Dev's");
+    expect(n).toContain("belongs to Sam");
     expect(n).toContain("your personal config did not travel");
     // Project rules DO travel with the repo — the agent must not assume otherwise.
     expect(n).toContain("CLAUDE.md and AGENTS.md came with the repo");
-    expect(n).toContain("Credentials here are Samvit's");
+    expect(n).toContain("Credentials here are Sam's");
   });
 
   test("a same-user move stays silent about accounts", () => {
@@ -84,7 +84,7 @@ describe("reorientationNotice", () => {
     const n = reorientationNotice({
       ...base,
       checkout: { cwd: base.newCwd, cloned: true, branch: "main" },
-      account: { fromUser: "Ashot", toUser: "Samvit" },
+      account: { fromUser: "Dev", toUser: "Sam" },
     })!;
     expect(n.toLowerCase()).not.toContain("transcript");
     expect(n.toLowerCase()).not.toContain("trimmed");
@@ -109,7 +109,7 @@ describe("reorientationNotice", () => {
     const n = reorientationNotice({
       destination: "m1@51.159.120.28",
       newCwd: "/Users/m1/src/app",
-      oldCwd: "/Users/ashot/src/app on laptop",
+      oldCwd: "/Users/dev/src/app on laptop",
       machineChanged: true,
       verification: "branch main at 1a2b3c4d, destination HEAD matches, working tree identical to the source's",
     })!;
@@ -127,28 +127,28 @@ describe("reorientationNotice", () => {
 // reparentSessionToDevice (devices.ts) emits them, plus what this machine found
 // when it prepared the checkout. Kept in step with devices.reparent.test.ts.
 describe("reparentNotice (daemon mapping)", () => {
-  const clone = { cwd: "/Users/samvit/.codecast/reparented/app-1a2b", cloned: true, remote: "git@github.com:acme/app.git", branch: "main" };
+  const clone = { cwd: "/Users/sam/.codecast/reparented/app-1a2b", cloned: true, remote: "git@github.com:acme/app.git", branch: "main" };
 
   test("the cross-account payload produces the full account warning", () => {
     const n = reparentNotice({
-      destinationLabel: "macOS - samvit-mbp",
-      priorCwd: "/Users/ashot/src/app",
+      destinationLabel: "macOS - sam-mbp",
+      priorCwd: "/Users/dev/src/app",
       checkout: clone,
       command: {
-        reparented: true, device_changed: true, from_device: "macOS - ashot-laptop",
-        cross_user: true, from_user: "Ashot", to_user: "Samvit",
+        reparented: true, device_changed: true, from_device: "macOS - dev-laptop",
+        cross_user: true, from_user: "Dev", to_user: "Sam",
       } as any,
     })!;
-    expect(n).toContain("macOS - samvit-mbp");
-    expect(n).toContain("(previously /Users/ashot/src/app on macOS - ashot-laptop)");
-    expect(n).toContain("under Samvit's account, not Ashot's");
+    expect(n).toContain("macOS - sam-mbp");
+    expect(n).toContain("(previously /Users/dev/src/app on macOS - dev-laptop)");
+    expect(n).toContain("under Sam's account, not Dev's");
     expect(n).toContain("fresh clone");
   });
 
   test("the same-user payload omits account facts entirely", () => {
     const n = reparentNotice({
       destinationLabel: "macOS - m1",
-      priorCwd: "/Users/ashot/src/app",
+      priorCwd: "/Users/dev/src/app",
       checkout: clone,
       command: { reparented: true, device_changed: true, from_device: "macOS - laptop" } as any,
     })!;
@@ -159,8 +159,8 @@ describe("reparentNotice (daemon mapping)", () => {
   test("device_changed:false reports a directory move, not a machine move", () => {
     const n = reparentNotice({
       destinationLabel: "macOS - m1",
-      priorCwd: "/Users/ashot/src/app",
-      checkout: { cwd: "/Users/ashot/.codecast/reparented/app-1a2b", cloned: true },
+      priorCwd: "/Users/dev/src/app",
+      checkout: { cwd: "/Users/dev/.codecast/reparented/app-1a2b", cloned: true },
       command: { reparented: true, device_changed: false } as any,
     })!;
     expect(n).toContain("moved to a different directory");
@@ -172,7 +172,7 @@ describe("reparentNotice (daemon mapping)", () => {
     // a reparent is a machine move by construction.
     const n = reparentNotice({
       destinationLabel: "macOS - m1",
-      priorCwd: "/Users/ashot/src/app",
+      priorCwd: "/Users/dev/src/app",
       checkout: clone,
       command: { reparented: true } as any,
     })!;
@@ -180,13 +180,13 @@ describe("reparentNotice (daemon mapping)", () => {
     expect(n).toContain("fresh clone");
     expect(n).not.toContain("account");
     // No from_device: name the path alone rather than inventing a machine.
-    expect(n).toContain("(previously /Users/ashot/src/app)");
+    expect(n).toContain("(previously /Users/dev/src/app)");
   });
 
   test("garbage in the payload is coerced, never interpolated", () => {
     const n = reparentNotice({
       destinationLabel: "macOS - m1",
-      priorCwd: "/Users/ashot/src/app",
+      priorCwd: "/Users/dev/src/app",
       checkout: clone,
       command: { cross_user: "yes", from_user: 42, to_user: null, from_device: {} } as any,
     })!;
@@ -217,7 +217,7 @@ describe("reparentNotice (daemon mapping)", () => {
 // the agent wakes in is a reproduction of the one it left — so the notice must
 // NOT claim only pushed work is here. Different facts, different sentence.
 describe("reorientationNotice with a restored snapshot", () => {
-  const cwd = "/Users/samvit/.codecast/reparented/app-1a2b";
+  const cwd = "/Users/sam/.codecast/reparented/app-1a2b";
 
   test("work restored: says the tree was rebuilt, never 'only pushed work'", () => {
     const n = reorientationNotice({

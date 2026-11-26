@@ -1,7 +1,7 @@
 // `cast climb experiment` sizes a production test from the reading every
 // surface shows (metricReadings over the goal's live series), never from a
 // copy of the level logic. The row below has the shape `/cli/initiatives/get`
-// serves for a goal like Union's in-9 (`cast goal show in-9 --json`): a ratio
+// serves for a goal like Acme's in-9 (`cast goal show in-9 --json`): a ratio
 // metric pooled over a count's series, a count with a dispersion, live series
 // with cohort weeks and polled points, and a failing source. The numbers are
 // synthetic: this repository is public.

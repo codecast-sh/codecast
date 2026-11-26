@@ -131,14 +131,14 @@ describe("rewriteFugitiveBlame", () => {
   // original-line column sits between sha and `(`, and must survive untouched.
   const PORCELAIN_TWO =
     `bcc05bee702a2ae1a58c6dc535b3fd6901a45759 1 1 1\n` +
-    `author Ashot Petrosian\nauthor-time 1766628673\nauthor-tz -0800\nsummary init\nfilename p.json\n` +
+    `author Alexandra Smith\nauthor-time 1766628673\nauthor-tz -0800\nsummary init\nfilename p.json\n` +
     `\t{\n` +
     `cd2bb1509c85ca18c85f54c6358aface4f3398dd 5 2 1\n` +
-    `author Ashot Petrosian\nauthor-time 1774318626\nauthor-tz -0500\nsummary license\nfilename p.json\n` +
+    `author Alexandra Smith\nauthor-time 1774318626\nauthor-tz -0500\nsummary license\nfilename p.json\n` +
     `\t  "license": "MIT",\n`;
   const STANDARD_TWO =
-    `bcc05bee7  1 (Ashot Petrosian 2025-12-24 18:11:13 -0800  1) {\n` +
-    `cd2bb1509  5 (Ashot Petrosian 2026-03-23 21:17:06 -0500  2)   "license": "MIT",\n`;
+    `bcc05bee7  1 (Alexandra Smith 2025-12-24 18:11:13 -0800  1) {\n` +
+    `cd2bb1509  5 (Alexandra Smith 2026-03-23 21:17:06 -0500  2)   "license": "MIT",\n`;
 
   const resolution: BlameResolution = {
     bySha: new Map([
@@ -153,7 +153,7 @@ describe("rewriteFugitiveBlame", () => {
     // Resolved line: author → session label; everything else byte-identical.
     expect(lines[1]).toBe("cd2bb1509  5 (jx7lic9 License prep 2026-03-23 21:17:06 -0500  2)   \"license\": \"MIT\",");
     // Unresolved line keeps its git author, re-padded to the new column width.
-    expect(lines[0]).toBe("bcc05bee7  1 (Ashot Petrosian      2025-12-24 18:11:13 -0800  1) {");
+    expect(lines[0]).toBe("bcc05bee7  1 (Alexandra Smith      2025-12-24 18:11:13 -0800  1) {");
     // Author columns align (both whos padded to the same width).
     expect(lines[0].indexOf("2025")).toBe(lines[1].indexOf("2026"));
   });
@@ -256,9 +256,9 @@ describe("sessionLabel", () => {
       sessionLabel({
         conversation_id: "jx74qbm93yrmevd4m1stg74cnh86mp7x",
         title: "Agent prompt guardrails",
-        author_name: "Samvit Ramadurgam",
+        author_name: "Sam Ramadurgam",
       }),
-    ).toBe("jx74qbm Samvit Agent prompt guardrails");
+    ).toBe("jx74qbm Sam Agent prompt guardrails");
   });
 });
 
@@ -349,7 +349,7 @@ describe("augmentPorcelain", () => {
       bySha: new Map([
         [
           "0734898927ee6bfd79c0619b2b6cea59d2ba235f",
-          { conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Organize commits", author_name: "Samvit Ramadurgam" },
+          { conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Organize commits", author_name: "Sam Ramadurgam" },
         ],
       ]),
       byLine: new Map(),
@@ -357,7 +357,7 @@ describe("augmentPorcelain", () => {
     const lines = augmentPorcelain(PORCELAIN, withAuthor).split("\n");
     const i = lines.indexOf("summary two");
     expect(lines[i + 3]).toBe("codecast-title Organize commits");
-    expect(lines[i + 4]).toBe("codecast-author Samvit Ramadurgam");
+    expect(lines[i + 4]).toBe("codecast-author Sam Ramadurgam");
     expect(lines[i + 5]).toBe("codecast-url https://codecast.sh/conversation/jx7bcdsm572w8abpms5vanx0ms88dvxv");
   });
 });

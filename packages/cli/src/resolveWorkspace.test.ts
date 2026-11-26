@@ -17,15 +17,15 @@ import {
 // The CLI used to answer "which workspace" in two places at once: pass --team
 // through if given, else send nothing and let the server read
 // users.active_team_id. The two disagreed — `cast chat new` with no --team put
-// a channel in team Union while the shell said codecast. One resolver, one
+// a channel in team Acme while the shell said codecast. One resolver, one
 // canonical pointer, and a WRITE that refuses to guess.
 
-const UNION = "t_union";
+const ACME = "t_acme";
 const CODECAST = "t_codecast";
 
 const roster = (over: Partial<WorkspaceRoster> = {}): WorkspaceRoster => ({
   teams: [
-    { _id: UNION, name: "Union" },
+    { _id: ACME, name: "Acme" },
     { _id: CODECAST, name: "Codecast Labs" },
   ],
   activeTeamId: CODECAST,
@@ -37,9 +37,9 @@ beforeEach(clearWorkspaceCache);
 describe("roster loading", () => {
   test("carries the canonical pointer, and an absent one means personal", async () => {
     const a = await loadWorkspaceRoster(async () => ({
-      teams: [{ _id: UNION, name: "Union" }], active_team_id: UNION,
+      teams: [{ _id: ACME, name: "Acme" }], active_team_id: ACME,
     }));
-    expect(a.activeTeamId).toBe(UNION);
+    expect(a.activeTeamId).toBe(ACME);
     clearWorkspaceCache();
     const b = await loadWorkspaceRoster(async () => ({ teams: [], active_team_id: null }));
     expect(b.activeTeamId).toBeNull();
@@ -48,7 +48,7 @@ describe("roster loading", () => {
 
   test("one fetch per TTL, then refetched — a team switch in the web app must land", async () => {
     let calls = 0;
-    const fetcher = async () => { calls++; return { teams: [], active_team_id: UNION }; };
+    const fetcher = async () => { calls++; return { teams: [], active_team_id: ACME }; };
     await loadWorkspaceRoster(fetcher, 1_000);
     await loadWorkspaceRoster(fetcher, 1_000 + WORKSPACE_TTL_MS - 1);
     expect(calls).toBe(1);
@@ -59,9 +59,9 @@ describe("roster loading", () => {
 
 describe("--team matching", () => {
   test("resolves by id, exact name, or the name as typed", () => {
-    expect(matchTeam(roster(), UNION)?._id).toBe(UNION);
-    expect(matchTeam(roster(), "Union")?._id).toBe(UNION);
-    expect(matchTeam(roster(), "union")?._id).toBe(UNION);
+    expect(matchTeam(roster(), ACME)?._id).toBe(ACME);
+    expect(matchTeam(roster(), "Acme")?._id).toBe(ACME);
+    expect(matchTeam(roster(), "acme")?._id).toBe(ACME);
     expect(matchTeam(roster(), "codecast-labs")?._id).toBe(CODECAST);
     expect(matchTeam(roster(), "Codecast  Labs")?._id).toBe(CODECAST);
     expect(matchTeam(roster(), "nope")).toBeNull();
@@ -70,7 +70,7 @@ describe("--team matching", () => {
 
 describe("READS may default", () => {
   test("no --team follows the canonical pointer, not the first team", () => {
-    // teams[0] is Union; the pointer says Codecast. The old CLI default was
+    // teams[0] is Acme; the pointer says Codecast. The old CLI default was
     // teams[0], which is exactly the disagreement this replaces.
     expect(resolveWorkspaceForRead(roster())).toEqual({
       kind: "team", teamId: CODECAST, name: "Codecast Labs",
@@ -78,8 +78,8 @@ describe("READS may default", () => {
   });
 
   test("an explicit --team wins over the pointer", () => {
-    const ws = resolveWorkspaceForRead(roster(), "Union");
-    expect(ws.kind === "team" && ws.teamId).toBe(UNION);
+    const ws = resolveWorkspaceForRead(roster(), "Acme");
+    expect(ws.kind === "team" && ws.teamId).toBe(ACME);
   });
 
   test("no pointer at all reads the personal workspace, and sends no team", () => {
@@ -108,7 +108,7 @@ describe("WRITES must be explicit", () => {
     } catch (e: any) {
       expect(e).toBeInstanceOf(WorkspaceUnresolved);
       expect(e.message).toContain("ghost");
-      expect(e.message).toContain("Union");
+      expect(e.message).toContain("Acme");
       expect(e.message).toContain("Codecast Labs");
     }
   });
@@ -120,7 +120,7 @@ describe("WRITES must be explicit", () => {
     } catch (e: any) {
       expect(e).toBeInstanceOf(WorkspaceUnresolved);
       expect(e.message).toContain("--team");
-      expect(e.message).toContain(UNION);
+      expect(e.message).toContain(ACME);
     }
   });
 
@@ -177,10 +177,10 @@ describe("--team personal", () => {
 });
 
 describe("a name that lives in another workspace", () => {
-  const roster = { teams: [{ _id: "tU", name: "Union" }, { _id: "tC", name: "Codecast" }, { _id: "tA", name: "Acme Labs" }], activeTeamId: "tU" };
+  const roster = { teams: [{ _id: "tU", name: "Acme" }, { _id: "tC", name: "Codecast" }, { _id: "tA", name: "Acme Labs" }], activeTeamId: "tU" };
   test("probes every other workspace and names the one that has it", async () => {
     const probed: string[] = [];
-    const hits = await otherWorkspacesWith(roster, { kind: "team", teamId: "tU", name: "Union" }, async (ws) => {
+    const hits = await otherWorkspacesWith(roster, { kind: "team", teamId: "tU", name: "Acme" }, async (ws) => {
       probed.push(workspaceLabel(ws));
       if (ws.kind === "team" && ws.teamId === "tA") throw new Error("forbidden");
       return ws.kind === "team" && ws.teamId === "tC";

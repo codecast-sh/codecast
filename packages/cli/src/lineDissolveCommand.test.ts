@@ -3,7 +3,7 @@ import { dissolveClose, fixLandedAt, namedChange } from "./lineDissolveCommand";
 
 describe("dissolve close", () => {
   test("the judge was wrong: dropped", () => {
-    expect(dissolveClose("judge_defect", "", "Union waited as asked.", null)).toEqual({ outcome: "dropped", note: "Dropped: the judge was wrong. Union waited as asked." });
+    expect(dissolveClose("judge_defect", "", "Acme waited as asked.", null)).toEqual({ outcome: "dropped", note: "Dropped: the judge was wrong. Acme waited as asked." });
   });
   test("another problem holds it: merged into that problem", () => {
     expect(dissolveClose("known_cause", "ct-59434", "same opener", null)).toMatchObject({ outcome: "merged", into: "ct-59434" });

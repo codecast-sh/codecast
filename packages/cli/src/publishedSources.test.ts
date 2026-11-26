@@ -18,13 +18,13 @@ describe("archivePublished", () => {
     const judge = ".codecast/judges/comms.md";
     fs.writeFileSync(path.join(root, judge), "first words\n");
     const v1 = blob(path.join(root, judge));
-    const first = archivePublished(root, "union-moments", [{ path: judge, version: v1 }], dir);
+    const first = archivePublished(root, "acme-moments", [{ path: judge, version: v1 }], dir);
     expect(first.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect(archivePublished(root, "union-moments", [{ path: judge, version: v1 }], dir).commit).toBeNull();
+    expect(archivePublished(root, "acme-moments", [{ path: judge, version: v1 }], dir).commit).toBeNull();
 
     fs.writeFileSync(path.join(root, judge), "second words\n");
     const v2 = blob(path.join(root, judge));
-    expect(archivePublished(root, "union-moments", [{ path: judge, version: v2 }], dir).commit).not.toBeNull();
+    expect(archivePublished(root, "acme-moments", [{ path: judge, version: v2 }], dir).commit).not.toBeNull();
     // The checkout loses the file; both versions still read back by id.
     fs.rmSync(root, { recursive: true, force: true });
     const cat = (v: string) => spawnSync("git", ["-C", dir, "cat-file", "-p", v], { encoding: "utf8" }).stdout;
@@ -34,7 +34,7 @@ describe("archivePublished", () => {
     const other = fs.mkdtempSync(path.join(os.tmpdir(), "pubsrc-root-"));
     fs.mkdirSync(path.join(other, ".codecast/judges"), { recursive: true });
     fs.writeFileSync(path.join(other, judge), "third\n");
-    expect(() => archivePublished(other, "union-moments", [{ path: judge, version: v1 }], dir)).toThrow(/not the published/);
+    expect(() => archivePublished(other, "acme-moments", [{ path: judge, version: v1 }], dir)).toThrow(/not the published/);
     fs.rmSync(other, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   });

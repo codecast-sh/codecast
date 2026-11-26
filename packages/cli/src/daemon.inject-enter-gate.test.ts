@@ -473,9 +473,9 @@ describe("awaitTmuxComposerPayload — real client composers", () => {
 // copies and this one matching a bare prefix, so the composer the gate refused
 // as doubled was the same composer this one waved through to Enter.
 describe("tmuxComposerHoldsPayload", () => {
-  const withFooter = (draft: string) => `${BOX(draft)}  ashot\n  shift+tab to cycle`;
+  const withFooter = (draft: string) => `${BOX(draft)}  dev\n  shift+tab to cycle`;
 
-  test.each(["hi", "on", "ashot"])("%s in the footer is not a duplicate draft", (payload) => {
+  test.each(["hi", "on", "dev"])("%s in the footer is not a duplicate draft", (payload) => {
     expect(tmuxComposerHoldsPayload(withFooter(payload), payload)).toBe(true);
     expect(tmuxComposerHoldsPayload(withFooter(""), payload)).toBe(false);
     expect(tmuxComposerHoldsPayload(withFooter(`${payload} ${payload}`), payload)).toBe(false);

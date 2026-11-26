@@ -22,12 +22,12 @@ const outcome = <T>(value: Promise<T>) => value.then(result => ({ result }), err
 
 test('Codex project metadata survives long session headers on initial and incremental reads', async () => {
   for (const bytes of [22 * 1024, 96 * 1024]) {
-    const head = row({ type: 'session_meta', payload: { id: 'codex-thread', cwd: '/Users/ashot/src/codecast', originator: 'codex-tui', source: 'cli', base_instructions: { text: 'x'.repeat(bytes) } } });
+    const head = row({ type: 'session_meta', payload: { id: 'codex-thread', cwd: '/Users/dev/src/codecast', originator: 'codex-tui', source: 'cli', base_instructions: { text: 'x'.repeat(bytes) } } });
     const message = row({ type: 'response_item', timestamp: '2026-09-07T22:42:00Z', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Check browser routing' }] } });
     await fixture(head + message, async job => {
       for (const offset of [0, Buffer.byteLength(head)]) {
         const result = await readIngestJob({ ...job, client: 'codex', offset });
-        expect(result.metadata.cwd).toBe('/Users/ashot/src/codecast');
+        expect(result.metadata.cwd).toBe('/Users/dev/src/codecast');
         expect(result.metadata.codex?.originator).toBe('codex-tui');
         expect(result.messages[0].content).toBe('Check browser routing');
       }
@@ -354,6 +354,6 @@ test('job settlement waits for actual held close and then observes the same dead
 
 test('generateTitleFromMessage unwraps a message that is all pasted content', async () => {
   const { generateTitleFromMessage } = await import('./ingestMetadata.js');
-  const title = generateTitleFromMessage('\n\n<pasted_content id="375a">\nRequested by Ashot (#team, Nov 3 2026). Action needed.\n</pasted_content id="375a">\n');
-  expect(title).toBe('Requested by Ashot (#team, Nov 3 2026). Action nee...');
+  const title = generateTitleFromMessage('\n\n<pasted_content id="375a">\nRequested by Alice (#team, Nov 3 2026). Action needed.\n</pasted_content id="375a">\n');
+  expect(title).toBe('Requested by Alice (#team, Nov 3 2026). Action nee...');
 });

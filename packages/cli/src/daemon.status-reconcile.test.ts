@@ -660,7 +660,7 @@ describe("started session is pane-tracked for the interactive-prompt sweep", () 
 // it skips cleanly on machines/CI without the fixture. Proves the structural parse
 // works on actual Claude JSONL bytes, not just synthesized fixtures.
 describe("classifyTranscriptTail on real transcripts", () => {
-  const dir = `${process.env.HOME}/.claude/projects/-Users-ashot-src-codecast`;
+  const dir = `${process.env.HOME}/.claude/projects/-Users-dev-src-codecast`;
   const present = (() => { try { return fs.existsSync(dir); } catch { return false; } })();
   test.if(present)("every local transcript classifies to a known turn-state", () => {
     const files = fs.readdirSync(dir).filter(f => f.endsWith(".jsonl")).slice(0, 12);

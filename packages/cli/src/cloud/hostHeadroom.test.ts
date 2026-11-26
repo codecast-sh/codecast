@@ -164,7 +164,7 @@ test("autoscale launches a host big enough for the repo; a shared checkout lands
 
 test("a host reserved for one job is never the fallback, awake or asleep", () => {
   const roomy = { fit: true, memoryAvailable: 30 * 1024 ** 3 };
-  const d = deps([host("full"), host("line", { reservedFor: "Union line" }), host("line-asleep", { reservedFor: "Union line" })], {
+  const d = deps([host("full"), host("line", { reservedFor: "Acme line" }), host("line-asleep", { reservedFor: "Acme line" })], {
     full: { fit: false, why: "memory pressure critical" },
     line: roomy,
   }, ["line-asleep"]);

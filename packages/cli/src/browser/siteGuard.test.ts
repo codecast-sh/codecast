@@ -77,7 +77,7 @@ describe("signInHost", () => {
   });
   test("leaves ordinary pages alone", () => {
     expect(signInHost("https://ads.google.com/aw/overview")).toBeNull();
-    expect(signInHost("https://github.com/ashot/codecast")).toBeNull();
+    expect(signInHost("https://github.com/dev/codecast")).toBeNull();
     expect(signInHost("https://example.com/blog/how-we-login-users")).toBeNull();
     expect(signInHost("id.example")).toBeNull(); // two labels: "id" is the site, not a front door
     expect(signInHost("not a url at all ::")).toBeNull();
@@ -96,7 +96,7 @@ describe("signInLandingNote", () => {
     expect(signInLandingNote("https://github.com/login", google, { real: false })).toContain("were carried");
   });
   test("is silent off a sign-in page", () => {
-    expect(signInLandingNote("https://github.com/ashot", google, { real: false })).toBeNull();
+    expect(signInLandingNote("https://github.com/dev", google, { real: false })).toBeNull();
   });
   test("carries the real Chrome hint when the session is on the clone", () => {
     const note = signInLandingNote("https://github.com/login", google, { real: false, realHint: "your real Chrome holds this login: pair the extension" })!;

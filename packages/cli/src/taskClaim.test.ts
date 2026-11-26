@@ -144,15 +144,15 @@ describe("a role as assignee in the CLI (org-roles-run-work.md R5)", () => {
     const role = (handle: string) => ({ kind: "role" as const, name: handle, handle, avatar: "fox" as any, role_id: handle, role_short_id: `or-${handle}` });
     const rows = [
       { short_id: "ct-3", assignee: "r2", assignee_name: "@seo", assignee_info: role("seo") },
-      { short_id: "ct-1", assignee: "u1", assignee_name: "Ashot", assignee_info: { name: "Ashot" } },
+      { short_id: "ct-1", assignee: "u1", assignee_name: "Dev", assignee_info: { name: "Dev" } },
       { short_id: "ct-2", assignee: "r1", assignee_name: "@ads", assignee_info: role("ads") },
-      { short_id: "ct-4", assignee: "u1", assignee_name: "Ashot", assignee_info: { name: "Ashot" } },
+      { short_id: "ct-4", assignee: "u1", assignee_name: "Dev", assignee_info: { name: "Dev" } },
       // A person whose display name starts with "@" is still a person.
       { short_id: "ct-5", assignee: "u2", assignee_name: "@dawn", assignee_info: { name: "@dawn" } },
     ];
     expect(groupTasksByAssignee(rows).map((g) => [g.label, g.role, g.tasks.map((t) => t.short_id)])).toEqual([
       ["@dawn", false, ["ct-5"]],
-      ["Ashot", false, ["ct-1", "ct-4"]],
+      ["Dev", false, ["ct-1", "ct-4"]],
       ["@ads", true, ["ct-2"]],
       ["@seo", true, ["ct-3"]],
     ]);

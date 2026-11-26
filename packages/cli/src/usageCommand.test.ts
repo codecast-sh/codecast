@@ -166,7 +166,7 @@ describe("auto-switch ranking vs extra spend", () => {
     const r = buildUsageReport(
       [
         {
-          name: "union",
+          name: "acme",
           email: "u@x.com",
           active: true,
           usage: {

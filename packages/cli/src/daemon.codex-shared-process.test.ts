@@ -66,7 +66,7 @@ const CLAUDE_SESSION = "5b1c47b3-16c0-42d5-a6d2-82459a01f640";
 function metaLine(sessionId: string, payload: Record<string, unknown>): string {
   return JSON.stringify({
     type: "session_meta",
-    payload: { id: sessionId, cwd: "/Users/jasonbenn/code/codecast", ...payload },
+    payload: { id: sessionId, cwd: "/Users/dev/code/codecast", ...payload },
   });
 }
 
@@ -113,11 +113,11 @@ beforeAll(() => {
   EXEC_SUBAGENTS.forEach(writeExecSubagent);
   writeRollout(ROOT_SIBLING, { originator: "codex_cli_rs", source: "cli" }, "14-18-01");
 
-  const claudeDir = path.join(tmpHome, ".claude", "projects", "-Users-jasonbenn-code-codecast");
+  const claudeDir = path.join(tmpHome, ".claude", "projects", "-Users-dev-code-codecast");
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.writeFileSync(
     path.join(claudeDir, `${CLAUDE_SESSION}.jsonl`),
-    JSON.stringify({ type: "user", cwd: "/Users/jasonbenn/code/codecast" }) + "\n",
+    JSON.stringify({ type: "user", cwd: "/Users/dev/code/codecast" }) + "\n",
   );
 });
 
@@ -176,11 +176,11 @@ describe("sessionProcessOwnership — the incident's own sessions", () => {
     // gesture guard #2 exists for), a reset cache, or the startup race.
     const MAT = "019fc292-0000-7000-8000-00000000000b";
     writeThreadSubagent(MAT, "/root/materialized");
-    const matDir = path.join(tmpHome, ".claude", "projects", "-Users-jasonbenn-code-codecast");
+    const matDir = path.join(tmpHome, ".claude", "projects", "-Users-dev-code-codecast");
     fs.mkdirSync(matDir, { recursive: true });
     fs.writeFileSync(
       path.join(matDir, `${MAT}.jsonl`),
-      JSON.stringify({ type: "user", cwd: "/Users/jasonbenn/code/codecast" }) + "\n",
+      JSON.stringify({ type: "user", cwd: "/Users/dev/code/codecast" }) + "\n",
     );
 
     expect(await sessionProcessOwnership(MAT)).toBe("borrowed");

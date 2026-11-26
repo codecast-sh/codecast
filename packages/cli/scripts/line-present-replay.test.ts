@@ -199,7 +199,7 @@ describe("the preview", () => {
   const decision = captureDecision([{
     n: 1, stdin: null, files: {},
     argv: ["decide", "Ship the <fix>?", "-o", "Ship :: recorded as approved", "-o", "Send it back: lead with the intro :: goes to the builder", "--context",
-      "I would **ship**. See union:conversation/3f2a9c1e-aaaa-bbbb-cccc-1234567890ab@2026-10-09T14:03:00Z for the case.\n\n> Just tried you by phone\n\n```cast-canvas\n<div data-canvas-title=\"Before and after\"><b style=\"color:var(--sol-red)\">before</b></div>\n```\n\nAfter the canvas."],
+      "I would **ship**. See acme:conversation/3f2a9c1e-aaaa-bbbb-cccc-1234567890ab@2026-10-09T14:03:00Z for the case.\n\n> Just tried you by phone\n\n```cast-canvas\n<div data-canvas-title=\"Before and after\"><b style=\"color:var(--sol-red)\">before</b></div>\n```\n\nAfter the canvas."],
   }])!;
 
   test("the question, the rendered context, each answer and the free answer are on the page", () => {
@@ -219,8 +219,8 @@ describe("the preview", () => {
   });
 
   test("a product view reference in a sentence becomes a pill; a url stays a url", () => {
-    const html = renderDecisionMarkdown("Read union:conversation/3f2a9c1e-aaaa-bbbb-cccc-1234567890ab@2026-10-09T14:03:00Z and https://codecast.sh/a/slug-12345678.");
-    expect(html).toContain('<span class="pv" title="union:conversation/3f2a9c1e-aaaa-bbbb-cccc-1234567890ab@2026-10-09T14:03:00Z">union conversation as of 2026-10-09 14:03Z</span>');
+    const html = renderDecisionMarkdown("Read acme:conversation/3f2a9c1e-aaaa-bbbb-cccc-1234567890ab@2026-10-09T14:03:00Z and https://codecast.sh/a/slug-12345678.");
+    expect(html).toContain('<span class="pv" title="acme:conversation/3f2a9c1e-aaaa-bbbb-cccc-1234567890ab@2026-10-09T14:03:00Z">acme conversation as of 2026-10-09 14:03Z</span>');
     expect(html).toContain("https://codecast.sh/a/slug-12345678");
   });
 

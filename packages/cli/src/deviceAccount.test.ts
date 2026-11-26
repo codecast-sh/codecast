@@ -13,17 +13,17 @@ import {
 
 describe("device account switch", () => {
   test("a changed user id is a restart, the same id is not", () => {
-    expect(accountSwitchRestartReason("ashot", "aivery")).toMatch(/ashot/);
-    expect(accountSwitchRestartReason("ashot", "ashot")).toBeNull();
+    expect(accountSwitchRestartReason("dev", "aivery")).toMatch(/dev/);
+    expect(accountSwitchRestartReason("dev", "dev")).toBeNull();
     expect(accountSwitchRestartReason(null, "aivery")).toBeNull();
   });
 
   test("the stamp names the previous account only when it differs", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "device-account-"));
     expect(readDeviceAccountStamp(dir)).toBeNull();
-    writeDeviceAccountStamp(dir, "ashot");
-    expect(readDeviceAccountStamp(dir)).toBe("ashot");
-    expect(previousAccountToClaim("ashot", "aivery")).toBe("ashot");
+    writeDeviceAccountStamp(dir, "dev");
+    expect(readDeviceAccountStamp(dir)).toBe("dev");
+    expect(previousAccountToClaim("dev", "aivery")).toBe("dev");
     expect(previousAccountToClaim("aivery", "aivery")).toBeNull();
     expect(fs.statSync(path.join(dir, "device-account.json")).mode & 0o077).toBe(0);
   });
@@ -33,12 +33,12 @@ describe("device account switch", () => {
   test("the stamp keeps the account's token encrypted and hands back the bearer", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "device-account-"));
     expect(readDeviceAccountBearer(dir)).toBeUndefined();
-    writeDeviceAccountStamp(dir, "ashot", "plain-secret-token");
+    writeDeviceAccountStamp(dir, "dev", "plain-secret-token");
     const raw = fs.readFileSync(path.join(dir, "device-account.json"), "utf8");
     expect(raw).not.toContain("plain-secret-token");
-    expect(readDeviceAccountStamp(dir)).toBe("ashot");
+    expect(readDeviceAccountStamp(dir)).toBe("dev");
     expect(readDeviceAccountBearer(dir)).toBe("plain-secret-token");
-    writeDeviceAccountStamp(dir, "ashot");
+    writeDeviceAccountStamp(dir, "dev");
     expect(readDeviceAccountBearer(dir)).toBeUndefined();
   });
 

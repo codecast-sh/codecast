@@ -85,7 +85,7 @@ describe("applyTemplateEdit", () => {
     expect(applyTemplateEdit(OLD, OLD, brief)).toEqual({ ok: true, text: brief, hunks: 0 });
   });
 
-  const REAL = "/Users/ashot/src/union-mobile/outreach/line/agentwatch/investigate.md";
+  const REAL = "/Users/dev/src/acme-mobile/server/line/agentwatch/investigate.md";
   test.skipIf(!fs.existsSync(REAL))("AgentWatch's investigate prompt: an edit lands as the runner would render it", () => {
     const template = fs.readFileSync(REAL, "utf8");
     const lines = template.split("\n");
