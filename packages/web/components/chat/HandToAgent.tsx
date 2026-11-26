@@ -29,15 +29,19 @@ function threadFacts(channelId: string, rootKey: string) {
   const me = String(st.currentUser?._id ?? "");
   const priorRow = priorKey ? ((st.sessions as any)[priorKey] ?? (st.conversations as any)[priorKey] ?? (st.sessions as any)[prior!]) : null;
   const rootIsMine = !!root && root.origin !== "agent" && String(root.user_id) === me;
-  const priorTheirs = !!priorKey && !rootIsMine && (priorRow
-    ? !!priorRow.user_id && String(priorRow.user_id) !== me && String(priorRow.author_user_id ?? "") !== me && !priorRow.inbox_killed_at
+  const priorMine = !!priorRow && (String(priorRow.user_id ?? "") === me || String(priorRow.author_user_id ?? "") === me);
+  // Only a hand holds a thread (chatHandoff.assertMayBind): a teammate's agent that posted it does not.
+  const priorTheirs = !!priorKey && !!root?.bound_session_id && !rootIsMine && (priorRow
+    ? !!priorRow.user_id && !priorMine && !priorRow.inbox_killed_at
     : true);
+  // A teammate's agent that only posted the root keeps posting there; nothing of mine is rebound.
+  const rebinds = !!priorKey && !priorTheirs && (!!root?.bound_session_id || priorMine);
   return {
     place: channel?.kind === "dm" ? "Direct message" : `#${channel?.name ?? "channel"}`,
     teamId: channel?.team_id ?? null,
     preview: root?.content ?? "",
     lines: Math.max(lines, 1),
-    rebind: priorKey && !priorTheirs ? (priorRow?.short_id ? `Session ${priorRow.short_id}` : "Another session") : null,
+    rebind: rebinds ? (priorRow?.short_id ? `Session ${priorRow.short_id}` : "Another session") : null,
     held: priorTheirs,
     privateRoom: channel?.kind === "private" || channel?.kind === "dm",
     folder: defaultNewSessionPath(st as any, channel?.team_id ?? null),

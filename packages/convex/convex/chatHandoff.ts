@@ -36,6 +36,7 @@ export async function handableThread(ctx: MutationCtx, userId: Id<"users">, mess
 
 export const handIsPrivate = (channel: Pick<Doc<"chat_channels">, "kind">) => channel.kind === "private" || channel.kind === "dm";
 
+// The session replies to the thread go to: the one it was handed to, else the agent that posted it.
 const holderOf = (root: Doc<"chat_messages">) => root.bound_session_id ?? (root.origin === "agent" ? root.origin_session_id : undefined);
 
 export const HAND_HOLD_IDLE_MS = 24 * 60 * 60_000;
@@ -45,14 +46,25 @@ export function holdsThread(conv: Pick<Doc<"conversations">, "inbox_killed_at" |
   return !conv.inbox_killed_at && conv.status === "active" && now - (conv.updated_at ?? 0) < HAND_HOLD_IDLE_MS;
 }
 
+/**
+ * Only a hand holds a thread against other people. An agent posting a root
+ * does not: anyone who can read it may hand it to a session of their own, and
+ * the posting agent keeps posting there (handThreadToSession leaves it be).
+ */
 export async function assertMayBind(ctx: MutationCtx, userId: Id<"users">, root: Doc<"chat_messages">, sessionId?: string) {
-  const holder = holderOf(root);
+  const holder = root.bound_session_id;
   if (!holder || holder === sessionId) return;
   if (root.origin !== "agent" && String(root.user_id) === String(userId)) return;
   const conv = await findConversationByAnyRefWhere(ctx, holder, () => true);
-  const alive = conv && (root.bound_session_id ? holdsThread(conv) : !conv.inbox_killed_at);
-  if (!alive || mayHandTo(userId, conv)) return;
+  if (!conv || !holdsThread(conv) || mayHandTo(userId, conv)) return;
   throw new Error("This thread is already handed to someone else's session");
+}
+
+/** A hand closes out the session that held the thread, unless that is only a teammate's agent that posted it. */
+async function mayClose(ctx: MutationCtx, userId: Id<"users">, root: Doc<"chat_messages">, prior: string): Promise<boolean> {
+  if (root.bound_session_id) return true;
+  const conv = await findConversationByAnyRefWhere(ctx, prior, () => true);
+  return !conv || mayHandTo(userId, conv);
 }
 
 export async function handThreadToSession(
@@ -68,7 +80,7 @@ export async function handThreadToSession(
   await assertMayBind(ctx, userId, root, sessionId);
   if (root.bound_session_id !== sessionId) {
     const prior = holderOf(root);
-    if (prior && prior !== sessionId) await closeSessionRepliesIn(ctx, prior, channel._id, root._id);
+    if (prior && prior !== sessionId && (await mayClose(ctx, userId, root, prior))) await closeSessionRepliesIn(ctx, prior, channel._id, root._id);
     await patchChat(ctx, root._id, { bound_session_id: sessionId });
   }
 

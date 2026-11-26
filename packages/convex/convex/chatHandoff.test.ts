@@ -322,13 +322,36 @@ describe("hand a chat thread to a new agent", () => {
     expect(rows(db).find((r) => String(r._id) === String(root.message_id)).bound_session_id).toBe(bobs);
   });
 
-  test("the agent that posted a thread keeps it while alive, however long it idles", async () => {
+  test("a teammate's agent-posted thread can be handed to my own session; the answer lands there and the poster keeps posting", async () => {
     const db = seed({
-      conversations: [{ _id: "conv-poster", user_id: ALICE, session_id: "sess-poster", short_id: "jx7post", status: "active", updated_at: 1, agent_type: "claude_code" }],
+      conversations: [{ _id: "conv-poster", user_id: ALICE, session_id: "sess-poster", short_id: "jx7post", status: "active", updated_at: Date.now(), agent_type: "claude_code" }],
       session_owners: [{ _id: "so-1", conversation_id: "conv-poster", user_id: ALICE, added_at: 1 }],
     });
-    const root = await call(sendMessage, ctxAs(db, ALICE), { channel_id: CHANNEL, content: "which flag should we flip?", origin: "agent", origin_session_id: "sess-poster" });
-    await expect(hand(db, BOB, root.message_id, "stub-bob")).rejects.toThrow("already handed");
+    const report = `Here are two codecast account bugs I hit today. ${"The sign-in loop repeats after the token refresh. ".repeat(60)}End of report.`;
+    const root = await call(sendMessage, ctxAs(db, ALICE), { channel_id: CHANNEL, content: report, origin: "agent", origin_session_id: "sess-poster" });
+    rows(db).push({ _id: "chat_messages_poster_thinking", channel_id: CHANNEL, user_id: ALICE, content: "", thread_root_id: root.message_id, origin: "agent", origin_session_id: "sess-poster", agent_status: "thinking", created_at: Date.now() });
+
+    const bobs = String(await hand(db, BOB, root.message_id, "stub-bob"));
+    expect(convFor(db, "stub-bob").user_id).toBe(BOB);
+    expect(rows(db).find((r) => String(r._id) === String(root.message_id)).bound_session_id).toBe(bobs);
+    const brief = db._tables.pending_messages.find((p: any) => String(p.conversation_id) === bobs);
+    expect(brief.content).toContain("End of report.");
+    expect(brief.content).toContain(`cast chat send --channel ${CHANNEL} --thread ${root.message_id}`);
+
+    // The teammate's agent is not closed out of its own thread.
+    const posterRow = rows(db).find((r) => r._id === "chat_messages_poster_thinking");
+    expect(posterRow.agent_status).toBe("thinking");
+    expect(posterRow.deleted_at).toBeUndefined();
+    const posterReply = await call(sendMessage, ctxAs(db, ALICE), {
+      channel_id: CHANNEL, content: "one more detail: it started Tuesday", thread_root_id: root.message_id, origin: "agent", origin_session_id: "sess-poster",
+    });
+    expect(rows(db).find((r) => String(r._id) === String(posterReply.message_id))).toBeTruthy();
+
+    const answer = await call(sendMessage, ctxAs(db, BOB), {
+      channel_id: CHANNEL, content: "both come from the refresh race; fix incoming", thread_root_id: root.message_id, origin: "agent", origin_session_id: bobs,
+    });
+    expect(rows(db).find((r) => String(r._id) === String(answer.message_id))).toMatchObject({ origin_session_id: bobs, user_id: BOB });
+    expect(String(rows(db).find((r) => String(r._id) === String(answer.message_id)).thread_root_id)).toBe(String(root.message_id));
   });
 
   test("community rooms refuse hands", async () => {
