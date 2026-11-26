@@ -17,6 +17,8 @@ export const GALLERY_FLOW = {
   hash: "galleryflowhash1",
   // A session's change on its way to live (components/ship/Journey): sent back to the session, at Decide, waiting on a deploy, live.
   shipBack: "galleryshiprunback000001",
+  // The session sent back pinned blocked to ask the viewer with a card: the run waits on that answer (ct-99051).
+  shipAsks: "galleryshiprunasks000001",
   shipDecide: "galleryshiprundecide0001",
   shipDeploy: "galleryshiprundeploy0001",
   shipLive: "galleryshiprunlive000001",
@@ -108,6 +110,11 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
     { ...fan, _id: GALLERY_FLOW.shipBack, status: "running", current_node_id: "brief",
       waiting_on_session: { node_id: "brief", conversation_id: conversationId, since: now - 240_000, note: "CI red on #12: 2 failures in test-web. The reviewer asked for changes: the divider's label repeats the bucket name; say how many sessions are below it instead." },
       node_statuses: [...round, verdicts("brief", "red", "changes", "CI is red: 2 failures this change causes; the reviewer asked for changes"), { ...status("brief", "running"), visits: 2 }] },
+    // The session pinned blocked to ask with a card (the gallery's open decision in this conversation): the run waits on
+    // the viewer's answer, and the card is answered right on the run's.
+    { ...fan, _id: GALLERY_FLOW.shipAsks, status: "running", current_node_id: "brief",
+      waiting_on_session: { node_id: "brief", conversation_id: conversationId, since: now - 90_000, note: "Waiting for you: ship the mobile renderer behind a flag?", blocked: true },
+      node_statuses: [...round, verdicts("brief", "green", "changes", "The reviewer asked for changes"), { ...status("brief", "running"), visits: 1 }] },
     // Another person's card: the viewer reads who it waits on, never "You".
     { ...branching, ...card, _id: GALLERY_FLOW.shipDecide, user_id: "galleryuser0000000000002", gate_decision_id: "gallerydecision000000009", gate_decision_short_id: "sd-90009",
       node_statuses: [...routed, { ...status("decide__decide", "running"), started_at: now - 20_000 }] },

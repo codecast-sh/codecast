@@ -39,6 +39,8 @@ export type ReportRun = {
   gate_answer?: string;
   gate_decision_short_id?: string;
   gate_decision_status?: string;
+  /** The run waits on its session; `blocked`: that session asks a person (flows.md FL4). */
+  waiting_on_session?: { blocked?: boolean } | null;
   card_billed_usd?: number;
   card_list_usd?: number;
   graph_hash?: string;
@@ -769,6 +771,8 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
   }
   // Ship answered and the runner has not moved on: approved, waiting on the ship step, not working.
   if (run.status === "running" && run.current_node_id === CARD_GATE_NODE_ID && run.gate_answer && optionIsShip(choiceWords(run.gate_answer))) return { tone: "waiting", end, text: APPROVED_WORDS };
+  // The session the run waits on asked a person: the run waits for that answer, it did not stop.
+  if (run.status === "running" && run.waiting_on_session?.blocked) return { tone: "waiting", end, text: "Waiting for an answer to the session's question." };
   if (run.status === "running") return { tone: "live", end, text: `Working: at ${at}.` };
   // A Workflow tool run has no end of its own to name: its last agent is just the last to finish.
   if (run.run_kind === "workflow" && run.status === "completed") {

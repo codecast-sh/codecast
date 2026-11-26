@@ -20,6 +20,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useRunWorkflow, useWorkflowRun, useWorkflowRuns } from '@codecast/web/hooks/useSyncWorkflows';
 import { useSyncRuns } from '@codecast/web/hooks/useSyncRuns';
 import { useDecisionDetail, useSyncDecisionDetail } from '@codecast/web/hooks/useSyncDecisionDetail';
+import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 import { answererNameOf } from '@codecast/web/lib/decisionLinks';
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from '@codecast/web/lib/workflowRun';
 import {
@@ -121,6 +122,8 @@ export default function RunScreen() {
 
   const [gateText, setGateText] = useState('');
   const respondToGate = useInboxStore((s) => s.respondToGate);
+  // The session the run waits on asks a person: its card, answered on the decision's own screen.
+  const ask = useJourneyViewer(run as any).ask ?? null;
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -219,6 +222,7 @@ export default function RunScreen() {
         {live || behind ? (
           <RNView style={objectStyles.verbs}>
             {waitingOnCard ? <ActionButton icon="question-circle" label="Answer it" color={Theme.yellow} filled onPress={() => go(`/decisions/${run.gate_decision_short_id ?? run.gate_decision_id}`)} testID="run-answer" /> : null}
+            {ask?.open ? <ActionButton icon="question-circle" label={ask.mine ? 'Answer it' : 'Open card'} color={Theme.yellow} filled={ask.mine} onPress={() => go(`/decisions/${ask.id}`)} testID="run-session-ask" /> : null}
             {behind ? <ActionButton icon="code-fork" label={`Rebase and land on ${behind}`} color={Theme.green} filled onPress={land} testID="run-land" /> : null}
             {live ? <ActionButton icon="stop" label="Stop the run" color={Theme.red} onPress={stop} testID="run-stop" /> : null}
           </RNView>

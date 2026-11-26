@@ -104,6 +104,11 @@ function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
 /** The press that can work for where the run stands, as a native screen: the viewer's card, the run, the session, the deploy. */
 function nowAction(now: JourneyNow, run: RunRow): { label: string; href: string } | null {
   if (now.kind === 'gate' && now.decisionId) return { label: now.mine ? 'Answer' : 'Open card', href: `/decisions/${now.decisionId}` };
+  // The session asks a person: its card, else the session where it asked in words.
+  if (now.kind === 'session' && now.blocked) {
+    if (now.ask) return { label: now.ask.mine ? 'Answer' : 'Open card', href: `/decisions/${now.ask.id}` };
+    return now.conversation ? { label: 'Open session', href: `/session/${now.conversation}` } : null;
+  }
   if (now.kind === 'unlanded') return { label: 'Open run', href: `/run/${run._id}` };
   if (now.kind !== 'stopped' && now.kind !== 'failed') return null;
   if (now.fix === 'session' && now.session) return { label: 'Open session', href: `/session/${now.session}` };
@@ -126,7 +131,7 @@ function NowLine({ now, run }: { now: JourneyNow; run: RunRow }) {
       case 'idle': return ['', null, Theme.textMuted];
       case 'starting': return ['Starting', null, Theme.blue];
       case 'working': return [now.stage, waits(now.waits, now.stage), now.who === 'agent' ? Theme.orange : Theme.blue];
-      case 'session': return [sentBackWords(now), now.note || null, Theme.violet];
+      case 'session': return [sentBackWords(now), now.ask?.question ?? (now.note || null), now.blocked ? Theme.yellow : Theme.violet];
       case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder, now.who), now.prompt ?? now.stage, Theme.yellow];
       case 'landed': return [`Merged ${now.sha.slice(0, 7)} · ${holdWords(now.hold).words}`, waits(now.waits, 'Deploy') ?? now.line, Theme.green];
       case 'merged': return [`Merged ${now.sha.slice(0, 7)}`, null, Theme.green];

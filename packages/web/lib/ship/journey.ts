@@ -12,6 +12,7 @@
 import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { asksIfOf, insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
+import type { SessionAsk } from "./sessionAsk";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
@@ -60,8 +61,9 @@ export type JourneyNow =
   | { kind: "starting" }
   | { kind: "working"; stage: string; verb: string | null; role: StageRole; who: StageWho; waits: JourneyWait[]; session: { id: string; title: string | null } | null }
   /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). `blocked`: the session
-   *  pinned blocked, so the run waits for a person, `note` then that pin. */
-  | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null; blocked: boolean }
+   *  pinned blocked, so the run waits for a person, `note` then that pin, and `ask` the card it asked with when the
+   *  store holds it (sessionAsk.ts). `conversation`: the session. */
+  | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null; blocked: boolean; ask: SessionAsk | null; conversation: string | null }
   | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; who: string | null; decisionId: string | null; prompt: string | null; since: number | null }
   /** Merged, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
   | { kind: "landed"; sha: string; at: number | null; line: string | null; hold: DeployHold; waits: JourneyWait[] }
@@ -112,7 +114,7 @@ export type JourneyRun = {
   created_at?: number;
   updated_at?: number;
   merge?: { sha: string; at?: number } | null;
-  waiting_on_session?: { node_id: string; since: number; note: string; blocked?: boolean } | null;
+  waiting_on_session?: { node_id: string; conversation_id?: string; since: number; note: string; blocked?: boolean } | null;
   node_statuses?: ReadonlyArray<NodeStatus> | null;
 };
 
@@ -125,8 +127,9 @@ export type GateDecision = {
 };
 
 /** Who looks at the run, and the run's open card when the store holds it. */
-/** `holder_name`: who answers the open card, by name, when the store knows them. */
-export type JourneyViewer = { id: string | null; decision?: GateDecision | null; holder_name?: string | null };
+/** `holder_name`: who answers the open card, by name, when the store knows them. `ask`: what the session the run waits
+ *  on asks a person, when it pinned blocked. */
+export type JourneyViewer = { id: string | null; decision?: GateDecision | null; holder_name?: string | null; ask?: SessionAsk | null };
 
 /**
  * Whether the viewer may answer a decision: the person it was passed to, else its user holder and the people it was
@@ -575,7 +578,10 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   else if (live && backStage) {
     const loop = plan.find((s) => s.id === backStage)!.loops.find((l) => l.id === segmentTopOf(waitingOn?.node_id ?? at ?? ""));
     const node = statusOf(waitingOn?.node_id ?? at);
-    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null, blocked: !!waitingOn?.blocked };
+    // A card the session asked with and that a person has since answered ends the wait on a person: the session goes on.
+    const ask = waitingOn?.blocked ? viewer?.ask ?? null : null;
+    const blocked = !!waitingOn?.blocked && ask?.open !== false;
+    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null, blocked, ask: blocked ? ask : null, conversation: waitingOn?.conversation_id ?? null };
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.
     const onStage = gateNode ? stageOf(gateNode) : null;
@@ -696,8 +702,9 @@ export function stopWords(n: { stage: string | null; end: string | null }): stri
   return n.stage ? `Stopped at ${n.stage}` : "Stopped";
 }
 
-/** Who sent the work back, in the bar's words. */
-export const sentBackWords = (n: { stage: string; by: string | null; blocked?: boolean }) => (n.blocked ? "Waiting for a person" : n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
+/** Who sent the work back, in the bar's words; while the session waits on a person, whom it waits on. */
+export const sentBackWords = (n: { stage: string; by: string | null; blocked?: boolean; ask?: SessionAsk | null }) =>
+  (n.blocked ? (n.ask?.mine ? "Waiting on you" : "Waiting for a person") : n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
 
 /** A landed change's Deploy in a pill's words: "Deploying" only while a deploy carries it. */
 export function holdWords(hold: DeployHold, roles?: ReadonlyArray<{ handle?: string; name?: string }>): { words: string; tone: "working" | "wait" } {
@@ -720,7 +727,7 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
       return { words: n.stage, tone };
     }
     case "starting": return { words: "Starting", tone: "working" };
-    case "session": return n.blocked ? { words: "Waiting for a person", tone: "wait" } : { words: "Fixing", tone: "session" };
+    case "session": return n.blocked ? { words: sentBackWords(n), tone: n.ask?.mine ? "you" : "wait" } : { words: "Fixing", tone: "session" };
     case "gate": return n.mine ? { words: "Your call", tone: "you" } : { words: gateWaitWords(n.holder, n.who), tone: "wait" };
     case "landed": return holdWords(n.hold);
     case "deploying": return { words: "Deploying", tone: "working" };

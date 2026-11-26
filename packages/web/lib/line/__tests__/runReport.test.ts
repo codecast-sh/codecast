@@ -156,6 +156,8 @@ describe("runOutcome", () => {
     expect(runOutcome(ends(["prove", "dissolve"])).text).toBe("Closed without a change: the problem did not reproduce.");
     expect(runOutcome(ends(["park"]), { status: "open", readiness_note: "No goal named" }).text).toBe("Parked: the problem is not ready to build. No goal named.");
     expect(runOutcome({ ...shippedRun, status: "running", current_node_id: "implement" }).text).toBe("Working: at Implement.");
+    // Its session asks a person (ct-99051): the run waits for the answer, it never reads as working or stopped.
+    expect(runOutcome({ ...shippedRun, status: "running", current_node_id: "implement", waiting_on_session: { blocked: true } })).toMatchObject({ tone: "waiting", text: "Waiting for an answer to the session's question." });
     expect(runOutcome({ ...shippedRun, status: "paused", gate_node_id: "decide" }).text).toBe("Waiting for your decision.");
     expect(runOutcome({ ...stopped, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: Prove ended without a report; start again or close the problem.");
     expect(runOutcome({ ...stopped, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)", node_statuses: [{ node_id: "prove", status: "failed", session: { _id: "s", state: "Reproduced the miss." } }] } as never).text).toBe("Stopped at Prove: Prove finished; review it or close the problem.");

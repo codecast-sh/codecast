@@ -9,6 +9,7 @@ import { policyTeamOf } from "@codecast/shared/contracts";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
+import { RunSessionAsk } from "../../../../components/ship/Journey";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from "../../../../lib/workflowRun";
 import { WorkflowGraphView, type WFNode, type NodeStatus } from "../../../../components/WorkflowGraphView";
@@ -58,6 +59,7 @@ interface WorkflowRun {
   gate_response?: string;
   gate_answer?: string;
   gate_node_id?: string;
+  waiting_on_session?: { node_id: string; conversation_id: string; since: number; note: string; blocked?: boolean } | null;
   task_id?: string;
   task_short_id?: string;
   task_title?: string;
@@ -108,7 +110,7 @@ function RunDetailContent({ runId }: { runId: string }) {
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const causeRuns = useCauseRuns(run?.task_id);
   // Re-render each minute so the outcome's watch day stays true.
-  useCoarseNow(60_000);
+  const nowMs = useCoarseNow(60_000);
   // Who answered the card, named in the path's Decide row.
   const answeredBy = detail?.decision?.status === "answered" ? answererNameOf(detail, meId) : null;
   const phases = useMemo(() => (run ? runPath(run as ReportRun, workflow, task, { answeredBy }) : []), [run, workflow, task, answeredBy]);
@@ -271,6 +273,8 @@ function RunDetailContent({ runId }: { runId: string }) {
               )}
             </div>
           </section>
+
+          {isActive && run.waiting_on_session?.blocked ? <RunSessionAsk run={run} now_ms={nowMs} /> : null}
 
           {run.status === "paused" && run.gate_decision_id && (
             <RunGate run={run} className="rounded-xl border border-sol-yellow/30 bg-sol-yellow/5 p-3" />
