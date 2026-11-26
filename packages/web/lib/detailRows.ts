@@ -57,7 +57,7 @@ type Row = Record<string, any>;
 // `priorityDetails` holds what only priorities.show returns for a priority a
 // page or a reference opened (lib/priorityDetail), pinned by its reader
 // (hooks/usePriorityDetail).
-export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12, deployReach: 300, runGraphs: 40, deployDetails: 50, deployLines: 100, priorityDetails: 50 } as const;
+export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 40, deployReach: 300, runGraphs: 40, deployDetails: 50, deployLines: 100, priorityDetails: 50 } as const;
 export type DetailKey = keyof typeof DETAIL_ROW_CAPS;
 export const isDetailKey = (key: string): key is DetailKey => Object.prototype.hasOwnProperty.call(DETAIL_ROW_CAPS, key);
 

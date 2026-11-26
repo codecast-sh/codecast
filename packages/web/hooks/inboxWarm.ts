@@ -39,7 +39,7 @@ import { buildDecisionQueue } from "./useDecisionQueue";
  *  same window a cold open would have fetched. */
 export const WARM_DEEP_ROWS = 200;
 /** How many rows from the top of the rendered list get the deep window. */
-export const WARM_DEEP_RANKS = 40;
+export const WARM_DEEP_RANKS = 80;
 /** Newest-page size for every row below the deep tier: the slice the
  *  conversation view paints on open, so the click is instant. */
 export const WARM_TAIL_ROWS = 60;
@@ -49,9 +49,9 @@ export const WARM_FEED_ROWS = 30;
 /** Cold warms started per pass — a freshly loaded inbox must not fire a query
  *  per row at once; the rest drain over later passes (every list change, every
  *  view change, and the 15s recovery poll). */
-export const MAX_COLD_WARM_PER_PASS = 60;
+export const MAX_COLD_WARM_PER_PASS = 100;
 /** Deepen fetches started per pass. */
-export const MAX_DEEPEN_PER_PASS = 10;
+export const MAX_DEEPEN_PER_PASS = 20;
 
 export type WarmAction =
   | { kind: "row"; id: string }

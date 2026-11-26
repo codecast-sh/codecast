@@ -51,6 +51,7 @@ export const DATA_SCOPE = {
   priorityDetails: "entity",
   handledDecisions: "viewer",
   decisionDetails: "entity",
+  planDetails: "entity",
   decisionThreads: "entity",
   decisionComments: "entity",
   sideAnswers: "entity",
@@ -215,6 +216,8 @@ export const DATA_SCOPE = {
   // recording is the viewer's wherever it started.
   callRooms: "viewer",
   callStagePins: "entity",
+  // The viewer's own sessions' tabs, on every machine.
+  browserTabs: "viewer",
   roomKnocks: "viewer",
   guestsWaiting: "viewer",
   guestLinks: "entity",

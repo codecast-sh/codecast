@@ -1,6 +1,8 @@
 import { useMemo } from "react";
+import { useConvex } from "convex/react";
+import { useWatchEffect } from "./useWatchEffect";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
+import { applyCollectionFeed, entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -57,6 +59,39 @@ export function useCallDetail(transcriptId: string | undefined): any | null | un
   );
   const row = useInboxStore((s: any) => (transcriptId ? s.callDetails?.[transcriptId] : undefined));
   return useMemo(() => (refused ? null : row ?? undefined), [row, refused]);
+}
+
+/** The calls page's own list size, so the two share one subscription. */
+const PREFETCHED_CALL_LIST = 100;
+/** Newest calls whose transcripts are read ahead of any open. */
+const PREFETCHED_CALL_DETAILS = 5;
+const callDetailRead = new Set<string>();
+
+/** Feeder, sync host: the call list and the newest calls' transcripts, so
+ *  the calls page and a call opened from a pill, a task or chat paint at once.
+ *  Transcripts are one-shot reads; the open call's own feeder keeps it live. */
+export function useSyncCallsAhead(): void {
+  const convex = useConvex();
+  const { calls } = useCallList(PREFETCHED_CALL_LIST);
+  const newest = calls.slice(0, PREFETCHED_CALL_DETAILS).map((c: any) => String(c._id)).filter(isConvexId).join(",");
+  useWatchEffect(() => {
+    const held = (useInboxStore.getState() as any).callDetails ?? {};
+    const need = newest ? newest.split(",").filter((id) => !held[id] && !callDetailRead.has(id)) : [];
+    let cancelled = false;
+    void (async () => {
+      for (const id of need) {
+        if (cancelled) return;
+        callDetailRead.add(id);
+        try {
+          const row = await convex.query(api.transcripts.webGetCall, { transcript_id: id } as any);
+          if (!cancelled && row) applyCollectionFeed("callDetails", row, SELECT_ONE.select);
+        } catch {
+          callDetailRead.delete(id);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [convex, newest]);
 }
 
 const NO_PLACES: Record<string, CallPlace | null> = {};

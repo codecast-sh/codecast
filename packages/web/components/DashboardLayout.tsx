@@ -2,7 +2,7 @@ import { SeatKillDialog } from "./org/SeatKillDialog";
 import { PendingAgentFeatures } from "./onboarding/usePendingAgentFeatures";
 import { LiveRunsCheck } from "../hooks/useLiveRunsCheck";
 import { useSyncMetricSeries, useSyncMetricWindows } from "../hooks/useMetricSeries";
-import { useSessionCardBuckets, useSyncSessionCardBucket } from "../hooks/useSyncTimeline";
+import { useSessionCardBuckets, useSyncSessionCardBucket, usePrefetchOpenPullRequestDetails } from "../hooks/useSyncTimeline";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncVisibleSessionOwners } from "../hooks/useSyncVisibleSessionOwners";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
@@ -23,6 +23,7 @@ import { useConvex, useMutation } from "convex/react";
 import { startWarmLoop } from "../hooks/inboxWarm";
 import { useAuthGate } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useSyncBrowserTabs } from "../hooks/useSyncBrowserTabs";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
 import { Sidebar } from "./Sidebar";
 import { MobileDrawer } from "./MobileDrawer";
@@ -108,6 +109,8 @@ import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
 import { useSyncLineDecisionsEverywhere } from "../hooks/useSyncSessionDecisions";
 import { useSyncOpenDecisionDetails } from "../hooks/useSyncDecisionDetail";
 import { DecisionPagesFeeder, DecisionFramesPreload } from "./decisions/DecisionPagePrefetch";
+import { useSyncCallsAhead } from "../hooks/useSyncCalls";
+import { useSyncPlanDetailsAhead } from "../hooks/useSyncPlans";
 import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
@@ -505,6 +508,8 @@ function HostFeeders() {
   useSyncIssueSyncSources();
   // Codecast mods: every mod the viewer can see; ModRuntimes runs the enabled ones.
   useSyncMods();
+  // The browser tabs the viewer's sessions have open: the inbox's Browser view.
+  useSyncBrowserTabs();
   // The workspace's metric series: the live numbers goals and projects read
   // wherever they are drawn (hooks/useMetricSeries), one subscription for all.
   useSyncMetricSeries();
@@ -545,7 +550,7 @@ function HostFeeders() {
   // live; a leaf of its own, so its wakes re-render nothing here.
   // Machine resource reports (one feeder per device): the pressure notice and /resources read them.
   // Installed apps: each one's page facts (version, relation, policy) handed to the desktop's main process, which has no sign-in.
-  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /><SessionCardPullRequestsFeeder /><InstalledAppsFacts /><DecisionPagesFeeder /></>;
+  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /><SessionCardPullRequestsFeeder /><InstalledAppsFacts /><DecisionPagesFeeder /><CallsAheadFeeder /><PlanDetailsAheadFeeder /></>;
 }
 
 // The pull requests every session card draws as chips (lib/sessionPullRequests):
@@ -560,6 +565,25 @@ function SessionCardPullRequestsFeeder() {
 const SessionCardBucketFeeder = memo(function SessionCardBucketFeeder({ ids }: { ids: readonly string[] }) {
   useSyncSessionCardBucket(ids);
   return null;
+});
+
+/** Sync host: the call list and the newest transcripts (hooks/useSyncCalls). A leaf, so the list's updates repaint nothing else. */
+const CallsAheadFeeder = memo(function CallsAheadFeeder() {
+  useSyncCallsAhead();
+  return null;
+});
+
+/** Sync host: the open plans' page joins (charter, comments, sessions), read ahead. A leaf, like the calls. */
+const PlanDetailsAheadFeeder = memo(function PlanDetailsAheadFeeder() {
+  useSyncPlanDetailsAhead();
+  return null;
+});
+
+/** Reads ahead that each window keeps for itself (its detail rows and frames
+ *  do not replicate): open pull requests' diffs, the leading decisions' reports. */
+const WindowPrefetch = memo(function WindowPrefetch() {
+  usePrefetchOpenPullRequestDetails();
+  return <DecisionFramesPreload />;
 });
 
 /** The store's feeders and write wiring for one window. An embedded pane
@@ -588,7 +612,7 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
     <LandedReachFeeder />
     <VisibleOwnersFeeder />
     <InboxWarmLoop />
-    <DecisionFramesPreload />
+    <WindowPrefetch />
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}

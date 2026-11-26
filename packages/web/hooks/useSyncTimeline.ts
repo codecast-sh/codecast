@@ -2,6 +2,7 @@
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import { useCallback, useMemo, useState } from "react";
+import { useConvex } from "convex/react";
 import { applyCollectionFeed, useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
@@ -73,6 +74,45 @@ export function useSyncPullRequest(args: { repository: string; number: number } 
  *  the diff is open. */
 export function useSyncPullRequestDetail(id: string | undefined) {
   return useSyncCollection("pullRequestDetails", api.pull_requests.webGet, entityIdArgs("id", id), ONE_DETAIL);
+}
+
+/** Open pull requests whose files, commits and checks each window reads ahead of any open. */
+const PREFETCHED_PR_DETAILS = 20;
+const prDetailRead = new Map<string, number>();
+const openPrSig = (p: any) => (p?.state === "open" ? `${p.updated_at ?? 0}` : "");
+const isOpenPr = (p: any) => p?.state === "open" && isConvexId(String(p._id));
+
+/** Feeder, every window (the detail rows are per window): the newest open
+ *  pull requests' details, read once per update with one-shot reads, so a PR
+ *  opened from a card, the timeline or a link shows its diff at once. */
+export function usePrefetchOpenPullRequestDetails(): void {
+  const convex = useConvex();
+  const open = useCollectionRows<any>("pullRequests", { where: isOpenPr, sig: openPrSig, sort: byUpdatedDesc });
+  useWatchEffect(() => {
+    const held = ((useInboxStore.getState() as any).pullRequestDetails ?? {}) as Record<string, PullRequestDetailRow>;
+    const need = open.slice(0, PREFETCHED_PR_DETAILS).filter((p) => {
+      const id = String(p._id);
+      const at = p.updated_at ?? 0;
+      if (prDetailRead.get(id) === at) return false;
+      return !held[id] || ((held[id] as any)._cachedAt ?? 0) < at;
+    });
+    if (!need.length) return;
+    let cancelled = false;
+    void (async () => {
+      for (const p of need) {
+        if (cancelled) return;
+        const id = String(p._id);
+        prDetailRead.set(id, p.updated_at ?? 0);
+        try {
+          const row = await convex.query(api.pull_requests.webGet, { id });
+          if (!cancelled && row) applyCollectionFeed("pullRequestDetails", row, oneDetail);
+        } catch {
+          prDetailRead.delete(id);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [convex, open]);
 }
 
 /** A pull request's files, commits and checks from the store; undefined until
