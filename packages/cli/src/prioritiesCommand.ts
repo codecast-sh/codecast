@@ -72,7 +72,7 @@ export function formatPriorityLines(rows: PriorityRow[], now = Date.now()): stri
 export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): string[] {
   const facts = [
     p.status === "done" && p.done_at ? `✓ done ${day(p.done_at)}` : STATUS_WORD[p.status] ?? p.status,
-    p.rank != null && p.status === "active" ? `#${p.rank}` : null,
+    p.rank != null && p.status === "active" ? `#${p.rank} ${p.rank_source === "person" ? "(you placed it)" : "(ranked by AI)"}` : null,
     `critical ${p.counts.critical_done}/${p.counts.critical_total}`,
     p.serves ? `serves ${p.serves}` : null,
     p.session_count ? `${p.session_count}${p.session_count_more ? "+" : ""} session${p.session_count === 1 && !p.session_count_more ? "" : "s"}` : null,
@@ -170,12 +170,12 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
 
   pri
     .command("rank <id> <n>")
-    .description("Pin a priority at position n among your active ones; the pass keeps it there")
+    .description("Place a priority at position n among your active ones; the pass never moves it after")
     .option("--json", "The updated priority as JSON")
     .action(async (id: string, n: string, options: { json?: boolean }) => {
       const rank = Number(n);
       if (!Number.isInteger(rank) || rank < 1) fail(`a rank is a whole number from 1, got "${n}"`);
-      const row: PriorityRow = await apiPost(deps, "/cli/priorities/rank", { short_id: priorityId(id), rank });
+      const row: PriorityRow = await apiPost(deps, "/cli/priorities/move", { short_id: priorityId(id), to: rank });
       if (options.json) return console.log(JSON.stringify(row, null, 2));
       console.log(`ok ${row.short_id} now #${row.rank}`);
     });

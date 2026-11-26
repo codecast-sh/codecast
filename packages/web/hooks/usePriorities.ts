@@ -55,7 +55,7 @@ export function usePriorityWrites(rows: PriorityRow[]): PriorityWrites {
     };
     const st = () => useInboxStore.getState();
     return {
-      rank: (id, rank) => run(() => st().rankPriority(id, rank)),
+      move: (id, to) => run(() => st().movePriority(id, to)),
       setStepTier: (id, key, tier) => run(() => st().setPriorityStepTier(id, key, tier)),
       setAside: (id) => run(() => st().setPriorityAside(id)),
       restore: (id) => run(() => st().restorePriority(id)),

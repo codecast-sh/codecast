@@ -43,7 +43,7 @@ async function world() {
     }
     const ws = `user:${ada}`;
     const p1 = await ctx.db.insert("priorities", {
-      user_id: ada, workspace: ws, short_id: "pri-1", title: "Ship it", summary: "", status: "active", rank: 1, rank_set_by: "pass",
+      user_id: ada, workspace: ws, short_id: "pri-1", title: "Ship it", summary: "", status: "active", ai_rank: 1,
       steps: [
         step("s1", [{ kind: "task", id: "ct-1" }]), step("s2", [{ kind: "pr", id: `${REPO}#5` }]), step("s3"), step("s4"),
         step("s5", [{ kind: "task", id: "ct-3" }, { kind: "task", id: "ct-4" }]), step("s6", [{ kind: "task", id: "ct-5" }]), step("s7", [{ kind: "pr", id: `${REPO}#6` }]),
@@ -51,7 +51,7 @@ async function world() {
       first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW, session_count: 2,
     } as any);
     const p9 = await ctx.db.insert("priorities", {
-      user_id: bea, workspace: `user:${bea}`, short_id: "pri-9", title: "Bea's", summary: "", status: "active", rank: 1, rank_set_by: "pass",
+      user_id: bea, workspace: `user:${bea}`, short_id: "pri-9", title: "Bea's", summary: "", status: "active", ai_rank: 1,
       steps: [step("s1")], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW, session_count: 0,
     } as any);
     const conv = (short_id: string, fields: Record<string, unknown> = {}) => ctx.db.insert("conversations", {
@@ -164,7 +164,7 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
       const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } });
       await ctx.db.insert("team_memberships", { user_id: ada, team_id: acme, role: "member", joined_at: 1 });
       const p = await ctx.db.insert("priorities", {
-        user_id: ada, workspace: `team:${acme}`, short_id: "pri-3", title: "Team PRs", summary: "", status: "active", rank: 1, rank_set_by: "pass",
+        user_id: ada, workspace: `team:${acme}`, short_id: "pri-3", title: "Team PRs", summary: "", status: "active", ai_rank: 1,
         steps: [step("s1", [{ kind: "pr", id: `${REPO}#7` }, { kind: "pr", id: `${REPO}#8` }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
       });
       const priv = await ctx.db.insert("conversations", {
@@ -217,7 +217,7 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
       await ctx.db.insert("team_memberships", { user_id: ada, team_id: acme, role: "member", joined_at: 1 });
       const ws = `team:${acme}`;
       const p = await ctx.db.insert("priorities", {
-        user_id: ada, workspace: ws, short_id: "pri-2", title: "Team", summary: "", status: "active", rank: 1, rank_set_by: "pass",
+        user_id: ada, workspace: ws, short_id: "pri-2", title: "Team", summary: "", status: "active", ai_rank: 1,
         steps: [step("s1", [{ kind: "task", id: "ct-20" }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
       });
       const c = await ctx.db.insert("conversations", {
@@ -452,7 +452,7 @@ describe("an inbound issue sync closing or reopening a task", () => {
       conversations: [], entity_conversations: [],
       priorities: [{
         _id: "pri_1", user_id: "user_owner", workspace: "team:team_cc", short_id: "pri-1", title: "Sync", summary: "", status: "active",
-        rank_set_by: "pass", steps: [step("s1", [{ kind: "task", id: "ct-1" }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
+        steps: [step("s1", [{ kind: "task", id: "ct-1" }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
       }],
     });
     await apply(ctx, { source_id: "src_1", issue: sameIssue({ state: { id: "s_done", name: "Done", type: "completed" } }) });

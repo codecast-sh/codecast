@@ -1,12 +1,13 @@
 // The inbox's Priorities order: each status section sorted by the viewer's
 // priority a session serves (its rank, then the milestone's place in that
 // priority), every other session after, in the order it already had. A leaf
-// (types only) so the store and the panel share it without a cycle.
-import type { PriorityRow } from "@codecast/shared/contracts/priorities";
+// (no store imports) so the store and the panel share it without a cycle.
+import { priorityPositions, type PriorityRow } from "@codecast/shared/contracts/priorities";
 import { makeCollectionSig } from "./wakeSig";
 
 type PriorityLinked = { priority_id?: string | null; priority_step_key?: string | null };
-type RankedRow = Pick<PriorityRow, "rank" | "user_id" | "steps">;
+type RankedRow = Pick<PriorityRow, "_id" | "status" | "person_pos" | "ai_rank" | "last_active_at" | "user_id" | "workspace" | "steps">;
+type Ranks = Map<string, number>;
 
 /** Where a session sits in the viewer's order: the priority's rank, then its milestone's index. */
 export type PriorityPlace = { rank: number; step: number };
@@ -16,9 +17,14 @@ export function sessionPriorityOf(s: PriorityLinked): { priorityId: string; step
   return s.priority_id ? { priorityId: s.priority_id, stepKey: s.priority_step_key ?? null } : null;
 }
 
+/** Every loaded priority's position among its owner's active ones (1 = first), by _id: the effective order the server's list reads too. */
+export function priorityRanks(priorities: Record<string, RankedRow> | undefined): Ranks {
+  return priorityPositions(Object.values(priorities ?? {}), (r) => String(r._id));
+}
+
 /** A priority's position among its owner's active priorities (1 = first), or null when it has none. */
-export function priorityRankOf(row: Pick<PriorityRow, "rank">): number | null {
-  return row.rank ?? null;
+export function priorityRankOf(row: Pick<PriorityRow, "_id">, ranks: Ranks): number | null {
+  return ranks.get(String(row._id)) ?? null;
 }
 
 /** Linked to a priority this window has not loaded: the feeder holds only the
@@ -36,13 +42,14 @@ export function sessionPriorityPlace(
   s: PriorityLinked,
   priorities: Record<string, RankedRow> | undefined,
   viewerId: string | null | undefined,
+  ranks: Ranks = priorityRanks(priorities),
 ): PriorityStanding {
   const link = sessionPriorityOf(s);
   if (!link) return null;
   const row = priorities?.[link.priorityId];
   if (!row) return PRIORITY_ELSEWHERE;
   if (!viewerId || String(row.user_id) !== viewerId) return null;
-  const rank = priorityRankOf(row);
+  const rank = priorityRankOf(row, ranks);
   if (rank == null) return null;
   const step = link.stepKey ? row.steps.findIndex((st) => st.key === link.stepKey) : -1;
   return { rank, step: step < 0 ? Infinity : step };
@@ -58,7 +65,8 @@ export function priorityPlaceReader(
   viewerId: string | null | undefined,
 ): (s: PriorityLinked) => PriorityStanding {
   const viewer = viewerId ? String(viewerId) : null;
-  return (s) => sessionPriorityPlace(s, priorities, viewer);
+  const ranks = priorityRanks(priorities);
+  return (s) => sessionPriorityPlace(s, priorities, viewer, ranks);
 }
 
 /** Stable: ranked rows by rank then milestone, every other row after in its given order. */
@@ -76,6 +84,7 @@ export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => Priori
 }
 
 // What the order reads, as two digests for a list's wake deps: each session's
-// link, and each priority's owner, rank and milestone keys.
+// link, and each priority's owner, what its rank is read from and its milestone keys.
 export const sessionPriorityLinkSig = makeCollectionSig((s: PriorityLinked) => (s.priority_id ? `${s.priority_id}:${s.priority_step_key ?? ""}` : null));
-export const priorityRanksSig = makeCollectionSig((p: RankedRow) => `${p.user_id}:${priorityRankOf(p) ?? ""}:${p.steps.map((st) => st.key).join(",")}`);
+export const priorityRanksSig = makeCollectionSig((p: RankedRow) =>
+  `${p.user_id}:${p.workspace}:${p.status}:${p.person_pos ?? ""}:${p.ai_rank ?? ""}:${p.last_active_at}:${p.steps.map((st) => st.key).join(",")}`);

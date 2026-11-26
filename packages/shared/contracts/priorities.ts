@@ -5,7 +5,7 @@
 // and down, through its milestones (stored as `steps`), at tasks, sessions,
 // PRs and commits. One level only, and never across workspaces. The person's
 // own settings always win over the pass, enforced where the pass writes
-// (priorityPassRun applyPlan): rank; a milestone's tier, title, done state and
+// (priorityPassRun applyPlan): a placed rank; a milestone's tier, title, done state and
 // drop; a priority's set aside, done and merge; a session's move and "not
 // this". The person's corrections are read by every later pass.
 
@@ -17,6 +17,8 @@ export type PriorityStepTier = "critical" | "polish";
 
 /** Who last decided a field the person can also set. The pass never overwrites "person". */
 export type PrioritySetBy = "pass" | "person";
+
+export type PriorityRankSource = "person" | "ai";
 
 export type PriorityRefKind = "task" | "session" | "pr" | "commit";
 /**
@@ -61,7 +63,7 @@ export type PriorityProposal = {
   merges?: string[];
   /** An initiative short id ("in-5") it serves, or null for maintenance, workflow or personal work. */
   serves: string | null;
-  /** Proposed position among the person's active priorities (1 = first); ignored once the person ranked it. */
+  /** Proposed position among the person's active priorities (1 = first); a priority the person placed keeps its place whatever this says. */
   rank: number;
   steps: Array<{ key?: string; title: string; tier: PriorityStepTier; refs: PriorityRef[]; done_judged?: boolean }>;
   /** Conversation short ids the pass maps to this priority, each with the step it serves (a step key or title). */
@@ -103,9 +105,14 @@ export type PriorityRow = {
   title: string;
   summary: string;
   status: PriorityStatus;
-  /** Its position among the owner's active priorities in its workspace (null unless active). */
+  /** Its position among the owner's active priorities in its workspace (null unless active): priorityPositions over the rows' keys. */
   rank: number | null;
-  rank_set_by: PrioritySetBy;
+  /** Where the person placed it, on one scale with ai_rank (null until they move it). */
+  person_pos: number | null;
+  /** Where the pass slotted it, on the same scale (read only while it is not placed). */
+  ai_rank: number | null;
+  /** "person": they placed it ("you placed it"); "ai": the pass did ("ranked by AI"). */
+  rank_source: PriorityRankSource;
   /** "person" when the person marked it done or merged it: the pass leaves its status alone. */
   status_set_by: PrioritySetBy;
   serves: string | null;
@@ -231,3 +238,77 @@ export type PriorityHistory = {
 };
 
 export type PriorityLooseSession = { short_id: string; conversation_id: string; title: string; last_active_at: number; count: number };
+
+// ── Rank: relative to the priorities the person placed ──
+
+/** What the order reads off a priority. */
+export type PriorityOrderRow = { status: PriorityStatus; person_pos?: number | null; ai_rank?: number | null; last_active_at: number };
+
+/** A priority's place on the one scale: the person's (person_pos), else the pass's (ai_rank), else none. */
+const orderKey = (r: PriorityOrderRow): number | null => r.person_pos ?? r.ai_rank ?? null;
+
+export const rankSourceOf = (r: PriorityOrderRow): PriorityRankSource => (r.person_pos != null ? "person" : "ai");
+
+/** By place on the scale, the placed one first on a tie, then the most recently active; no place last. */
+const byPlace = (a: PriorityOrderRow, b: PriorityOrderRow) =>
+  (orderKey(a) ?? Infinity) - (orderKey(b) ?? Infinity) || Number(b.person_pos != null) - Number(a.person_pos != null) || b.last_active_at - a.last_active_at;
+
+/**
+ * One person's priorities in one workspace, the active ones in the order they
+ * show. A priority the person placed keeps its place among the others they
+ * placed (person_pos); one they did not sits where the pass slotted it
+ * between them (ai_rank, on the same scale). On a tie the placed one goes
+ * first, then the most recently active; one with neither key goes last. The
+ * one order list, pin line, CLI and web all read.
+ */
+export function effectivePriorityOrder<T extends PriorityOrderRow>(rows: readonly T[]): T[] {
+  return rows.filter((r) => r.status === "active").sort(byPlace);
+}
+
+/** Each active priority's position (1 = first) among its owner's active ones in its workspace, by `id`. `rows` holds every active priority of each owner and workspace it covers. */
+export function priorityPositions<T extends PriorityOrderRow & { user_id: string; workspace: string }>(rows: Iterable<T>, id: (r: T) => string): Map<string, number> {
+  const groups = new Map<string, T[]>();
+  for (const r of rows) {
+    const k = `${r.user_id}|${r.workspace}`;
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  const out = new Map<string, number>();
+  for (const g of groups.values()) effectivePriorityOrder(g).forEach((r, i) => out.set(id(r), i + 1));
+  return out;
+}
+
+/** The pass's place for a priority that comes back active (a restore): after every active one, so no active priority is ever without a place. */
+export function lastPriorityKey(rows: readonly PriorityOrderRow[]): number {
+  return Math.max(0, ...rows.filter((r) => r.status === "active").map((r) => orderKey(r) ?? 0)) + 1;
+}
+
+export type PriorityPlacement<T> = { row: T; person_pos?: number; ai_rank?: number };
+
+/**
+ * The person moves `row` to position `to` (clamped) among the active ones of
+ * `rows`, every priority of its owner in one workspace whatever its status:
+ * its person_pos goes between its new neighbours' places. When a neighbour
+ * has no place, or the two are too close to fit one between, every priority
+ * with a place (quiet, done and set aside too, so one that comes back lands
+ * where it was) and every active one is renumbered in place order, the moved
+ * one at its new place: the placed ones' person_pos, the others' ai_rank, so
+ * nothing else moves.
+ */
+export function placePriority<T extends PriorityOrderRow>(rows: readonly T[], row: T, to: number): Array<PriorityPlacement<T>> {
+  const others = effectivePriorityOrder(rows).filter((r) => r !== row);
+  const at = Math.max(0, Math.min(others.length, Math.round(to) - 1));
+  const lo = at > 0 ? orderKey(others[at - 1]) : undefined;
+  const hi = at < others.length ? orderKey(others[at]) : undefined;
+  let pos: number | null = null;
+  if (lo === undefined && hi === undefined) pos = 1;
+  else if (lo === undefined) pos = hi === null ? null : hi! - 1;
+  else if (hi === undefined) pos = lo === null ? null : lo + 1;
+  else if (lo !== null && hi !== null) {
+    const mid = (lo + hi) / 2;
+    pos = lo < mid && mid < hi ? mid : null;
+  }
+  if (pos !== null) return [{ row, person_pos: pos }];
+  const order = rows.filter((r) => r !== row && (orderKey(r) !== null || r.status === "active")).sort(byPlace);
+  order.splice(at < others.length ? order.indexOf(others[at]) : order.indexOf(others[at - 1]) + 1, 0, row);
+  return order.map((r, i) => (r === row || r.person_pos != null ? { row: r, person_pos: i + 1 } : { row: r, ai_rank: i + 1 }));
+}

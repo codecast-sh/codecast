@@ -1,5 +1,5 @@
 // The web's priority controls ride dispatch (web store/prioritiesSlice) to the
-// API's own mutations (priorities.ts): a rank, a step's tier, set aside and
+// API's own mutations (priorities.ts): a move, a step's tier, set aside and
 // restore land as the person's, and someone else's priority is refused.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
@@ -19,8 +19,8 @@ async function world() {
     const bea = await ctx.db.insert("users", { name: "Bea" } as any);
     const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } } as any);
     for (const u of [ada, bea]) await ctx.db.insert("team_memberships", { user_id: u, team_id: acme, role: "member", joined_at: 1 } as any);
-    const insert = (short_id: string, rank: number, steps: any[] = []) => ctx.db.insert("priorities", {
-      user_id: ada, workspace: `team:${acme}`, short_id, title: short_id, summary: "", status: "active", rank, rank_set_by: "pass",
+    const insert = (short_id: string, ai_rank: number, steps: any[] = []) => ctx.db.insert("priorities", {
+      user_id: ada, workspace: `team:${acme}`, short_id, title: short_id, summary: "", status: "active", ai_rank,
       steps, first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
     } as any);
     const p1 = await insert("pri-1", 1, [step("s1", "critical")]);
@@ -39,12 +39,18 @@ const dispatch = (t: any, user: string, action: string, args: unknown[]) =>
   t.withIdentity({ subject: `${user}|session` }).mutation(api.dispatch.dispatch, { action, args });
 
 describe("priority controls ride dispatch", () => {
-  test("rank, tier, set aside and restore land as the owner's", async () => {
+  test("a move (to a position, up or down), tier, set aside and restore land as the owner's", async () => {
     const { t, ada, p1, p2 } = await world();
-    await dispatch(t, ada, "rankPriority", ["pri-2", 1]);
+    await dispatch(t, ada, "movePriority", ["pri-2", 1]);
     await dispatch(t, ada, "setPriorityStepTier", ["pri-1", "s1", "polish"]);
     let [one, two] = await t.run(async (ctx: any) => [await ctx.db.get(p1), await ctx.db.get(p2)]);
-    expect([two.rank, two.rank_set_by]).toEqual([1, "person"]);
+    expect([one.person_pos, two.person_pos]).toEqual([undefined, 0]);
+    await dispatch(t, ada, "movePriority", ["pri-1", "up"]);
+    [one] = await t.run(async (ctx: any) => [await ctx.db.get(p1)]);
+    expect(one.person_pos).toBe(-1);
+    await dispatch(t, ada, "movePriority", ["pri-1", "down"]);
+    [one] = await t.run(async (ctx: any) => [await ctx.db.get(p1)]);
+    expect(one.person_pos).toBe(1);
     expect([one.steps[0].tier, one.steps[0].tier_set_by]).toEqual(["polish", "person"]);
     await dispatch(t, ada, "setPriorityAside", ["pri-1"]);
     [one] = await t.run(async (ctx: any) => [await ctx.db.get(p1)]);
@@ -64,8 +70,8 @@ describe("priority controls ride dispatch", () => {
 
   test("a teammate's press is refused and changes nothing", async () => {
     const { t, bea, p2 } = await world();
-    await expect(dispatch(t, bea, "rankPriority", ["pri-2", 1])).rejects.toThrow(/only they can change it/);
+    await expect(dispatch(t, bea, "movePriority", ["pri-2", 1])).rejects.toThrow(/only they can change it/);
     const two = await t.run(async (ctx: any) => ctx.db.get(p2));
-    expect([two.rank, two.rank_set_by]).toEqual([2, "pass"]);
+    expect([two.person_pos, two.ai_rank]).toEqual([undefined, 2]);
   });
 });

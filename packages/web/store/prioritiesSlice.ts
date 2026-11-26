@@ -1,4 +1,4 @@
-// The person's controls over their priorities (convex priorities.ts): a rank,
+// The person's controls over their priorities (convex priorities.ts): a move,
 // a step's tier, set aside and restore. Each paints the `priorities` rows at
 // once (lib/priorities paint*) and rides `dispatch` to the side effect of the
 // same name (convex/dispatch.ts), which runs the API's own mutation. The
@@ -7,10 +7,10 @@
 // them back when the server refuses (lib/priorities writeOrRestore).
 import { asyncAction } from "./mutativeMiddleware";
 import type { PriorityRow, PriorityStepTier } from "@codecast/shared/contracts/priorities";
-import { paintRank, paintStatus, paintTier } from "../lib/priorities";
+import { paintMove, paintStatus, paintTier, type PriorityMove } from "../lib/priorities";
 
 export type PrioritiesSliceActions = {
-  rankPriority: (shortId: string, rank: number) => Promise<unknown>;
+  movePriority: (shortId: string, to: PriorityMove) => Promise<unknown>;
   setPriorityStepTier: (shortId: string, stepKey: string, tier: PriorityStepTier) => Promise<unknown>;
   setPriorityAside: (shortId: string) => Promise<unknown>;
   restorePriority: (shortId: string) => Promise<unknown>;
@@ -23,9 +23,9 @@ const rowsOf = (s: Rows): PriorityRow[] => Object.values(s.priorities ?? {});
 
 export function createPrioritiesSlice(): PrioritiesSliceActions {
   return {
-    rankPriority: asyncAction(function (this: Rows, shortId: string, rank: number) {
-      paintRank(rowsOf(this), shortId, rank);
-    }) as PrioritiesSliceActions["rankPriority"],
+    movePriority: asyncAction(function (this: Rows, shortId: string, to: PriorityMove) {
+      paintMove(rowsOf(this), shortId, to);
+    }) as PrioritiesSliceActions["movePriority"],
     setPriorityStepTier: asyncAction(function (this: Rows, shortId: string, stepKey: string, tier: PriorityStepTier) {
       const row = rowsOf(this).find((r) => r.short_id === shortId);
       if (row) paintTier(row, stepKey, tier);

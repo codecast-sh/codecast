@@ -51,8 +51,17 @@ export const priorityTables = {
     merged_into: v.optional(v.id("priorities")),
     /** "person" when the person marked it done or merged it: the pass never changes its status. */
     status_set_by: v.optional(setBy),
+    /**
+     * Rank is relative (shared/contracts/priorities effectivePriorityOrder):
+     * `person_pos` is where the person placed it, set only by their move;
+     * `ai_rank` is where the pass slotted it, on the same scale, between the
+     * placed ones. The pass never writes `person_pos`.
+     */
+    person_pos: v.optional(v.number()),
+    ai_rank: v.optional(v.number()),
+    /** The absolute rank these replaced: read and cleared by priorityRankBackfill, then deleted. */
     rank: v.optional(v.number()),
-    rank_set_by: setBy,
+    rank_set_by: v.optional(setBy),
     /** The initiative short id ("in-5") it serves, if any. */
     serves: v.optional(v.string()),
     steps: v.array(priorityStep),

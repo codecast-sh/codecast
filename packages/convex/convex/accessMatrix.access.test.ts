@@ -213,7 +213,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     for (const [place, p] of Object.entries(placements)) {
       const priority_id = await db.insert("priorities", {
         user_id: p.user_id, workspace: place === "private" ? `team:${T}` : p.workspace, short_id: `pri-${++n}`, title: `${place} row`, summary: "",
-        status: "active", rank_set_by: "pass", steps: [], first_seen_at: now, last_active_at: now, pass_at: now, created_at: now, updated_at: now,
+        status: "active", steps: [], first_seen_at: now, last_active_at: now, pass_at: now, created_at: now, updated_at: now,
       } as any);
       rows.priorities[place] = priority_id;
       const conversation_id = await db.insert("conversations", {

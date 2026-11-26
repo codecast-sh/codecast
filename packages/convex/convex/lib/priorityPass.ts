@@ -3,7 +3,7 @@
 // priorities. This module is pure: it builds the request, reads the reply and
 // plans the writes; the Convex side gathers the input and applies the plan.
 //
-// The model proposes; the person's own settings win. Ranks, a step's tier,
+// The model proposes; the person's own settings win. A placed rank, a step's tier,
 // title, done state and drop, a priority's set-aside or done status, and a
 // session's placement the person chose are never overwritten (holdPersonSteps
 // here, and again in priorityPassRun applyPlan against the rows as they are
@@ -20,6 +20,7 @@ import type {
   PriorityStep,
   PriorityStepTier,
 } from "@codecast/shared/contracts/priorities";
+import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import type { SurfaceRequest } from "./anthropic";
 import { STRONG_MODEL, parseJsonBlock } from "./anthropic";
 import { MODEL_CALL_LIMITS } from "@codecast/shared/contracts/modelCall";
@@ -93,8 +94,9 @@ export type PassPriority = {
   summary: string;
   /** Never "merged": a merged priority is not part of the pass. */
   status: Exclude<PriorityStatus, "merged">;
-  rank: number | null;
-  rank_set_by: PrioritySetBy;
+  /** Where the person placed it (the pass never moves it), and where the pass slotted it: shared/contracts/priorities effectivePriorityOrder. */
+  person_pos: number | null;
+  ai_rank: number | null;
   /** "person": they marked it done; its status stands. */
   status_set_by?: PrioritySetBy;
   serves: string | null;
@@ -143,7 +145,7 @@ A priority can also come from a call: what the person said they would do, or too
 Keeping the list:
 - Return only the priorities that changed or gained sessions: an existing one with its short_id, a new one without. A priority you leave out stays as it is. Always return a priority marked "rewrite": it lost sessions you can no longer see, so write its title and summary again from only what is shown of it now. It is the same priority when it is the same outcome, even if the words changed; rename it freely. When two existing priorities are the same thing, return one of them and list the other's short_id in merges.
 - status: "done" only when every step on its critical path is done. "quiet" when nothing in it moved for about ${QUIET_DAYS} days and it is not done. Otherwise "active". Never set a priority aside; only the person does that, and one they set aside stays set aside whatever you return.
-- rank: your proposed order among the active priorities, 1 first, by where the person is putting their time and attention. The person's own ranks stand; yours fill in after them.
+- rank: your proposed position among all the active priorities, 1 first, by where the person is putting their time and attention. A priority marked "placed by the person" keeps its place among the others they placed, whatever you return; you slot the rest anywhere between them.
 - serves: the short id of a company goal the priority clearly advances, else null. Most work serves none.
 
 Steps:
@@ -265,8 +267,8 @@ function sessionBlock(s: PassSession): string {
   return lines.join("\n");
 }
 
-function priorityBlock(p: PassPriority, taskStatus: Map<string, string>): string {
-  const rank = p.rank == null ? "unranked" : `rank ${p.rank}${p.rank_set_by === "person" ? " (set by the person)" : ""}`;
+function priorityBlock(p: PassPriority, position: number | undefined, taskStatus: Map<string, string>): string {
+  const rank = position == null ? "unranked" : `rank ${position}${p.person_pos != null ? " (placed by the person)" : ""}`;
   const hide = !!p.needs_rewrite; // its words may tell of sessions gone from view: withheld, so a rewrite cannot copy them back
   const status = p.status === "set_aside" ? "set aside by the person" : p.status_set_by === "person" ? `${p.status} (set by the person)` : p.status;
   const head = `${p.short_id} · ${hide ? "(title withheld: write it again)" : `"${p.title}"`} · ${status} · ${rank}${p.serves ? ` · serves ${p.serves}` : ""} · last active ${day(p.last_active_at)}`;
@@ -316,7 +318,8 @@ export function buildPriorityPassPrompt(input: PriorityPassInput): { system: str
   const finishedBefore = input.now - PRIORITY_PASS_CAPS.finished_days * DAY;
   const shown = input.priorities.filter((p) => p.needs_rewrite || !((p.status === "done" || p.status === "quiet") && p.last_active_at < finishedBefore));
   const hidden = input.priorities.length - shown.length;
-  const priorities = (shown.length ? shown.map((p) => priorityBlock(p, taskStatus)).join("\n\n") : "(none yet)") +
+  const position = positionsOf(input.priorities);
+  const priorities = (shown.length ? shown.map((p) => priorityBlock(p, position.get(p.short_id), taskStatus)).join("\n\n") : "(none yet)") +
     (hidden ? `\n\n(${hidden} more done or quiet for over ${PRIORITY_PASS_CAPS.finished_days} days, not shown.)` : "");
   const calls = input.calls.slice(-PRIORITY_PASS_CAPS.calls).map(callBlock).join("\n\n");
   const corrections = (input.corrections ?? []).slice(-PRIORITY_PASS_CAPS.corrections)
@@ -488,8 +491,8 @@ export type PriorityWrite = {
   title: string;
   summary: string;
   status: Exclude<PriorityStatus, "merged">;
-  rank: number | null;
-  rank_set_by: PrioritySetBy;
+  /** Where the pass slots it among the placed priorities (null when not active). The pass never writes person_pos. */
+  ai_rank: number | null;
   serves: string | null;
   steps: PriorityStep[];
   last_active_at: number;
@@ -798,16 +801,9 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       plan.notes.push(`${target}: kept active, its critical path is not done`);
     }
 
-    // Rank: the survivor's own person rank stands; else it takes the person's rank of a priority it absorbs.
-    let rank = prior?.rank ?? null;
-    let rank_set_by: PrioritySetBy = prior?.rank_set_by ?? "pass";
-    const personRanked = absorbed.filter((p) => p.rank_set_by === "person" && p.rank != null).sort((a, b) => a.rank! - b.rank!)[0];
-    if (personRanked && rank_set_by === "person") plan.notes.push(`${target}: kept its own rank; the person's rank of ${personRanked.short_id} went with the merge`);
-    else if (personRanked) { rank = personRanked.rank; rank_set_by = "person"; }
-
     rows.push({
       target, prior, proposal: prop, absorbed, remap, stepKeyFor, order,
-      write: { title: prop.title, summary: prop.summary, status, rank, rank_set_by, serves: prop.serves, steps, last_active_at: 0, done_at: null, pass_at: now },
+      write: { title: prop.title, summary: prop.summary, status, ai_rank: prior?.ai_rank ?? null, serves: prop.serves, steps, last_active_at: 0, done_at: null, pass_at: now },
     });
   }
 
@@ -823,7 +819,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     }
     rows.push({
       target: p.short_id, prior: p, proposal: null, absorbed: [], remap: new Map(), stepKeyFor: () => null, order: Infinity,
-      write: { title: p.title, summary: p.summary, status, rank: p.rank, rank_set_by: p.rank_set_by, serves: p.serves, steps, last_active_at: 0, done_at: null, pass_at: now },
+      write: { title: p.title, summary: p.summary, status, ai_rank: p.ai_rank, serves: p.serves, steps, last_active_at: 0, done_at: null, pass_at: now },
     });
   }
 
@@ -873,19 +869,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     }
   }
 
-  // Ranks: the person's stand as fixed slots; the pass's are a relative order among its own active
-  // priorities (the reply's in its proposed order, then the rest in their old order), which
-  // orderPriorities fits around the person's slots.
-  let rank = 0;
-  const order = (r: Row): [number, number, number] => (r.proposal ? [0, r.proposal.rank, r.order] : [1, r.prior?.rank ?? Number.MAX_SAFE_INTEGER, 0]);
-  const passRanked = rows.filter((r) => r.write.rank_set_by !== "person" && r.write.status === "active").sort((a, b) => {
-    const [x, y] = [order(a), order(b)];
-    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
-  });
-  for (const r of passRanked) r.write.rank = ++rank;
-  // Leaving active ends any rank, the person's too: a slot kept through done or quiet would
-  // collide with the slots they set meanwhile once the priority comes back.
-  for (const r of rows) if (r.write.status !== "active") { r.write.rank = null; r.write.rank_set_by = "pass"; }
+  slotRanks(rows, positionsOf(input.priorities), plan.notes);
 
   for (const r of rows) {
     const w = r.write;
@@ -917,35 +901,58 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
 
 // ---------------------------------------------------------------- order
 
-export type RankedRow = { status: PriorityStatus; rank?: number | null; rank_set_by: PrioritySetBy; updated_at: number; last_active_at: number };
+/** Each active priority's position (1 = first) in the input's effective order, by short id. */
+function positionsOf(priorities: PassPriority[]): Map<string, number> {
+  return new Map(effectivePriorityOrder(priorities).map((p, i) => [p.short_id, i + 1]));
+}
+
+type SlotRow = { target: string; prior: PassPriority | null; proposal: PriorityProposal | null; absorbed: PassPriority[]; order: number; write: PriorityWrite };
 
 /**
- * The display order of one person's active priorities in one workspace, each
- * with its effective position (1-based). A rank the person set is a fixed
- * slot: the priority sits at exactly that position. When two claim one slot,
- * the most recently set wins (by `updated_at`, the nearest stand-in for when
- * the rank was set) and the other moves down to the next free slot. The pass's
- * ranks are only a relative order among its own priorities, which fill the
- * free slots in that order (unranked last, the most recently active first).
- * Other statuses are left out.
+ * The pass's ranks. A priority the person placed keeps its person_pos, so its
+ * place among the others they placed: the pass never moves it. One the reply
+ * left alone keeps its ai_rank, between the same neighbours. Every other
+ * active one (the reply's, a new one, one with no place yet) is slotted in at
+ * the position it wants (the reply's rank; else where it shows now; a survivor
+ * that absorbed a placed priority takes that one's), and gets an ai_rank
+ * between the neighbours it landed between, on their scale. Leaving active
+ * ends the pass's rank.
  */
-export function orderPriorities<T extends RankedRow>(rows: T[]): Array<{ row: T; position: number }> {
-  const active = rows.filter((r) => r.status === "active");
-  const pinned = active.filter((r) => r.rank_set_by === "person" && r.rank != null)
-    .sort((a, b) => a.rank! - b.rank! || b.updated_at - a.updated_at);
-  const flowing = active.filter((r) => !pinned.includes(r))
-    .sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || b.last_active_at - a.last_active_at);
-  const slots = new Map<number, T>();
-  for (const r of pinned) {
-    let at = Math.max(1, r.rank!);
-    while (slots.has(at)) at++;
-    slots.set(at, r);
+function slotRanks(rows: SlotRow[], position: Map<string, number>, notes: string[]): void {
+  const active = rows.filter((r) => r.write.status === "active");
+  const absorbedPlace = (r: SlotRow) => Math.min(...r.absorbed.filter((a) => a.person_pos != null && position.has(a.short_id)).map((a) => position.get(a.short_id)!));
+  const placed = (r: SlotRow) => r.prior?.person_pos != null;
+  const kept = (r: SlotRow) => placed(r) || (!r.proposal && r.write.ai_rank != null && absorbedPlace(r) === Infinity);
+  const key = (r: SlotRow) => r.prior?.person_pos ?? r.write.ai_rank!;
+  const list = active.filter(kept)
+    .sort((a, b) => key(a) - key(b) || Number(placed(b)) - Number(placed(a)) || (b.prior?.last_active_at ?? 0) - (a.prior?.last_active_at ?? 0))
+    .map((r) => ({ r, kept: true }));
+  const want = (r: SlotRow): number => {
+    const took = absorbedPlace(r);
+    if (took !== Infinity) {
+      notes.push(`${r.target}: took the place of the placed priority it absorbed`);
+      return took;
+    }
+    if (r.proposal) return r.proposal.rank;
+    return (r.prior && position.get(r.prior.short_id)) ?? Infinity;
+  };
+  const slotted = active.filter((r) => !kept(r)).map((r) => ({ r, at: want(r) }))
+    .sort((a, b) => a.at - b.at || Number(!a.r.proposal) - Number(!b.r.proposal) || a.r.order - b.r.order || (b.r.prior?.last_active_at ?? 0) - (a.r.prior?.last_active_at ?? 0));
+  for (const { r, at } of slotted) list.splice(Math.min(at - 1, list.length), 0, { r, kept: false });
+  for (let k = 0; k < list.length;) {
+    if (list[k].kept) { k++; continue; }
+    let end = k;
+    while (end < list.length && !list[end].kept) end++;
+    const lo = k > 0 ? key(list[k - 1].r) : undefined;
+    const hi = end < list.length ? key(list[end].r) : undefined;
+    const run = end - k;
+    for (let t = 0; t < run; t++) {
+      list[k + t].r.write.ai_rank =
+        lo !== undefined && hi !== undefined ? lo + ((hi - lo) * (t + 1)) / (run + 1)
+          : hi !== undefined ? hi - (run - t)
+            : (lo ?? 0) + t + 1;
+    }
+    k = end;
   }
-  let next = 1;
-  for (const r of flowing) {
-    while (slots.has(next)) next++;
-    slots.set(next, r);
-  }
-  // A person's slot past the end leaves no gap: positions are dense.
-  return [...slots.entries()].sort(([a], [b]) => a - b).map(([, row], i) => ({ row, position: i + 1 }));
+  for (const r of rows) if (r.write.status !== "active") r.write.ai_rank = null;
 }

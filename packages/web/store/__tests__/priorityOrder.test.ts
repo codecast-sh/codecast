@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { computeVisualOrder, placeInboxRows, type InboxSession } from "../inboxStore";
-import { priorityPlaceReader, rankLabelOf, sortByPriority } from "../priorityOrder";
+import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority } from "../priorityOrder";
 
 // The inbox's Priorities view: the status sections stay, each sorted by the
 // viewer's priority a session serves (rank, then milestone order), every other
@@ -31,8 +31,10 @@ const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>
   ...extra,
 });
 
+// A rank here is the pass's slot (ai_rank); null is a priority set aside, which has none.
 const priority = (id: string, rank: number | null, steps: string[], user_id = ME) => ({
-  _id: id, short_id: id, rank, user_id, steps: steps.map((key) => ({ key })),
+  _id: id, short_id: id, status: rank == null ? "set_aside" : "active", ai_rank: rank, person_pos: null, workspace: "team:t1", last_active_at: 0, user_id,
+  steps: steps.map((key) => ({ key })),
 });
 const priorities = {
   pA: priority("pA", 1, ["s1", "s2"]),
@@ -103,6 +105,15 @@ describe("sortByPriority", () => {
     expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace", "s1"))))).toBe("elsewhere");
     expect(rankLabelOf(placeOf(session("x")))).toBeNull();
     expect(rankLabelOf(placeOf(session("x", link("pB", "s1"))))).toBe(2);
+  });
+});
+
+describe("priorityRanks", () => {
+  it("reads the effective order: a priority the person placed above the pass's ranks first", () => {
+    const placed = { ...priorities, pB: { ...priorities.pB, person_pos: 0.5 } };
+    expect([...priorityRanks(placed)]).toEqual([["pB", 1], ["pA", 2], ["pTheirs", 1]]);
+    const placeOf = priorityPlaceReader(placed, ME);
+    expect(sortByPriority([session("a1", link("pA", "s1")), session("bs1", link("pB", "s1"))], placeOf).map(tag)).toEqual(["bs1", "a1"]);
   });
 });
 

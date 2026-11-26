@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintRank, paintStatus, paintTier, pastBadge, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMove, paintStatus, paintTier, pastBadge, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -19,7 +19,9 @@ function row(short_id: string, over: Partial<PriorityRow> = {}): PriorityRow {
     summary: "",
     status: "active",
     rank: null,
-    rank_set_by: "pass",
+    person_pos: null,
+    ai_rank: null,
+    rank_source: "ai",
     serves: null,
     steps: [],
     counts: { critical_done: 0, critical_total: 0 },
@@ -41,13 +43,13 @@ const ids = (rows: PriorityRow[]) => rows.map((r) => r.short_id);
 describe("ownerGroups", () => {
   test("the viewer's group first, active in rank order, then done, quiet and set aside", () => {
     const rows = [
-      row("pri-3", { rank: 2 }),
-      row("pri-1", { rank: 1 }),
+      row("pri-3", { ai_rank: 2 }),
+      row("pri-1", { ai_rank: 1 }),
       row("pri-9", { status: "set_aside" }),
       row("pri-7", { status: "quiet", last_active_at: 5 }),
       row("pri-8", { status: "done", done_at: 10 }),
       row("pri-4", { status: "merged" }),
-      row("pri-5", { rank: 1, user_id: "ash" as any, owner: "Ashot", mine: false }),
+      row("pri-5", { ai_rank: 1, user_id: "ash" as any, owner: "Ashot", mine: false }),
     ];
     const groups = ownerGroups(rows);
     expect(groups.map((g) => g.owner)).toEqual(["Jason", "Ashot"]);
@@ -58,24 +60,30 @@ describe("ownerGroups", () => {
 });
 
 describe("the store actions' paints", () => {
-  const fresh = () => [row("pri-1", { rank: 1 }), row("pri-2", { rank: 2 }), row("pri-3", { rank: 3 }), row("pri-4", { rank: 1, user_id: "ash" as any, mine: false })];
+  const fresh = () => [row("pri-1", { ai_rank: 1 }), row("pri-2", { ai_rank: 2 }), row("pri-3", { ai_rank: 3 }), row("pri-4", { ai_rank: 1, user_id: "ash" as any, mine: false })];
 
-  test("a dragged rank moves the row among its owner's active ones only, and marks it the person's", () => {
+  test("a drag places the row between its new neighbours, as the server's move does, among its owner's active ones only", () => {
     const rows = fresh();
-    paintRank(rows, "pri-3", 1);
+    paintMove(rows, "pri-3", 1);
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-3", "pri-1", "pri-2"]);
-    expect(rows.find((r) => r.short_id === "pri-3")!.rank_set_by).toBe("person");
-    expect(rows.find((r) => r.short_id === "pri-4")!.rank).toBe(1);
+    expect(rows.map((r) => [r.short_id, r.rank, r.person_pos, r.rank_source])).toEqual([
+      ["pri-1", 2, null, "ai"], ["pri-2", 3, null, "ai"], ["pri-3", 1, 0, "person"], ["pri-4", null, null, "ai"],
+    ]);
   });
 
-  test("a rank past the end lands last", () => {
+  test("past the end lands last; up and down step one place", () => {
     const rows = fresh();
-    paintRank(rows, "pri-1", 99);
+    paintMove(rows, "pri-1", 99);
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-2", "pri-3", "pri-1"]);
+    paintMove(rows, "pri-1", "up");
+    expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-2", "pri-1", "pri-3"]);
+    paintMove(rows, "pri-2", "down");
+    expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-1", "pri-2", "pri-3"]);
+    expect(rows.find((r) => r.short_id === "pri-2")!.rank).toBe(2);
   });
 
   test("a step dragged across the line changes tier and the critical count follows", () => {
-    const r = row("pri-1", { rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
+    const r = row("pri-1", { ai_rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
     paintTier(r, "s2", "polish");
     expect(r.steps.map((s) => s.tier)).toEqual(["critical", "polish", "polish"]);
     expect(r.steps[1].tier_set_by).toBe("person");
