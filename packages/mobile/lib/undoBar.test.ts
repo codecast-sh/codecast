@@ -3,7 +3,7 @@ import { _resetUndoStacks, getUndoHistory, resetUndoHistory } from "@platform/en
 import { placeInboxRows, useInboxStore } from "@codecast/web/store/inboxStore";
 import type { AfterCloseResult } from "@codecast/shared/contracts/closeKind";
 import { bindCloseAdviceCall, CLOSE_ADVICE_CARD_MS, CLOSE_ADVICE_HOLD_MS } from "@codecast/web/lib/closeAdviceBar";
-import { bindUndoBarOpen, closeWithAdvice, dismissUndoBar, holdKill, leaveUndoBar, setAppActive, showNotice, UNDO_BAR_EXIT_MS, UNDO_BAR_MS, useUndoBar, type UndoBarItem } from "./undoBar";
+import { bindFocusedUndoBarOpen, bindUndoBarOpen, closeWithAdvice, dismissUndoBar, holdKill, leaveUndoBar, setAppActive, showNotice, UNDO_BAR_EXIT_MS, UNDO_BAR_MS, useUndoBar, type UndoBarItem } from "./undoBar";
 
 const A = "a".repeat(32);
 const B = "b".repeat(32);
@@ -215,6 +215,24 @@ describe("close advice on the bar", () => {
     expect(bar()?.title.startsWith("Undid")).toBe(false);
     // Open opens it; it files nothing.
     expect(row(A).inbox_rest ?? null).toBe(null);
+  });
+
+  test("Open from a focused conversation swaps it in place (its own opener), never the host's push; after it blurs, the host's", async () => {
+    const swapped: Array<[string, string | undefined]> = [];
+    const unbind = bindFocusedUndoBarOpen((id, messageId) => { swapped.push([id, messageId]); });
+    closeWithAdvice(A);
+    answer([{ session: A, verdict: "needs_you", reason: "Reply" }]);
+    await flush();
+    bar()!.action!.onPress();
+    expect(swapped).toEqual([[A, "m2"]]);
+    expect(opened).toEqual([]);
+    unbind();
+    closeWithAdvice(A);
+    answer([{ session: A, verdict: "needs_you", reason: "Reply" }]);
+    await flush();
+    bar()!.action!.onPress();
+    expect(swapped).toEqual([[A, "m2"]]);
+    expect(opened).toEqual([[A, "m2"]]);
   });
 
   test("Undo on the card takes the Close back", async () => {
