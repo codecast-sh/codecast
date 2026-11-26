@@ -22,6 +22,10 @@ export type DeployFocus =
  *  the clear button and the page's remount key never disagree about what a link is made of. */
 export const FOCUS_PARAMS = ["deploy", "pr", "sha", "task", "session", "branch"] as const satisfies ReadonlyArray<DeployFocus["kind"]>;
 
+/** What makes an address a link that opens as it names: a thing to focus, the switch's view or Mine. An address that
+ *  names none opens the view and Mine the viewer last chose (lib/rememberedFilters). */
+export const LINK_PARAMS = [...FOCUS_PARAMS, "show", "mine"] as const;
+
 type Params = { get(name: string): string | null };
 
 /** The one thing a link names, read from its address. A deploy wins, then a PR, a commit, a task, a session. */

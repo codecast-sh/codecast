@@ -20,6 +20,7 @@ import { useDeployPress } from "../../hooks/useDeployPress";
 import { FOCUS_PARAMS, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { rememberFilters } from "../../lib/rememberedFilters";
 import { DeploysBoard } from "./DeploysBoard";
 import { PageHeader } from "../ui/page-header";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
@@ -50,11 +51,19 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   const ordered = useMemo(() => orderTargets(allTargets, deploys), [allTargets, deploys]);
   // What the link pointed at stays highlighted until the viewer clears it; the switch's view and Mine ride the address.
   const [focus, setFocus] = useState<DeployFocus | null>(initialFocus ?? null);
-  const [show, setShow] = useState<BoardView>(initialShow ?? "sessions");
-  const [mine, setMine] = useState(!!initialMine);
-  // Each touch of the switch or Mine writes the address (defaults left out), so a copied link opens as they see it.
-  const pickShow = (v: BoardView) => { setShow(v); rewriteAddress({ show: v === "sessions" ? null : v }); };
-  const pickMine = (on: boolean) => { setMine(on); rewriteAddress({ mine: on ? "1" : null }); };
+  // The switch's view and Mine open as the route read them (the link's, else the viewer's last: lib/rememberedFilters).
+  // Each touch writes both to the address (defaults left out), so a copied link opens as they see it, and remembers them.
+  const [picks, setPicks] = useState<{ show: BoardView; mine: boolean } | null>(null);
+  const show = picks?.show ?? initialShow ?? "sessions";
+  const mine = picks?.mine ?? !!initialMine;
+  const pickFilters = (v: BoardView, on: boolean) => {
+    setPicks({ show: v, mine: on });
+    const set = { show: v === "sessions" ? null : v, mine: on ? "1" : null };
+    rememberFilters("deploys", set);
+    rewriteAddress(set);
+  };
+  const pickShow = (v: BoardView) => pickFilters(v, mine);
+  const pickMine = (on: boolean) => pickFilters(show, on);
   const me = useInboxStore((s) => (s.currentUser as { _id?: string } | null)?._id ?? null);
   // Shipping paints from the store; a run whose PR has not opened finds its repository by the checkout it runs in.
   // Web goes live before the backend that answers it: a failed read with nothing stored reads as unavailable.
