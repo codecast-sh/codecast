@@ -91,8 +91,13 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
 //
 // A whole take is the send: the proposal answers in the batch are applied
 // (takeProposalAnswers) and their words lead the message, then the quotes.
-export function takeReviewBatch(conversationId: string, messageId?: string, firstImageNumber?: number): string {
-  return takeBatch(conversationId, messageId, firstImageNumber, false).text;
+// The pictures a send carries, for naming them in the batch's image notes: the
+// composer's own pictures come first, as [Image 1..n], and the pictures quoted
+// from the transcript follow from `firstQuoted`.
+export type SendPictures = { composer?: readonly ComposerPicture[]; firstQuoted?: number };
+
+export function takeReviewBatch(conversationId: string, messageId?: string, pictures?: SendPictures): string {
+  return takeBatch(conversationId, messageId, pictures, false).text;
 }
 
 // The take a send makes when it carries the quote record (lib/quoteDraftWire):
@@ -100,16 +105,21 @@ export function takeReviewBatch(conversationId: string, messageId?: string, firs
 // hand the server (store sendMessage's quoteIds) so it stamps them sent. Their
 // records stay; with the record off, `quoteIds` is empty and this is
 // takeReviewBatch.
-function takeBatch(conversationId: string, messageId: string | undefined, firstImageNumber: number | undefined, sending: boolean): { text: string; quoteIds: string[] } {
+function takeBatch(conversationId: string, messageId: string | undefined, pictures: SendPictures | undefined, sending: boolean): { text: string; quoteIds: string[] } {
   const s = useInboxStore.getState();
   const answers = messageId ? "" : takeProposalAnswers(conversationId, { sentIn: conversationId });
   const taken = sortPendingComments(s
     .getReviewComments(conversationId)
     .filter((c) => !isProposalAnswer(c) && (c.body.trim() || c.quote.trim() || c.image) && (!messageId || c.messageId === messageId)));
-  const attached = firstImageNumber ? attachedImageIds(taken) : [];
+  const composer = pictures?.composer ?? [];
+  const firstQuoted = pictures?.firstQuoted;
+  const attached = firstQuoted ? attachedImageIds(taken.filter((c) => !c.image || composerPictureIndex(composer, c.image) < 0)) : [];
   const numbers = new Map(taken.flatMap((c) => {
-    const i = c.image?.storageId ? attached.indexOf(c.image.storageId) : -1;
-    return i >= 0 ? [[c.id, firstImageNumber! + i] as const] : [];
+    if (!c.image) return [];
+    const k = composerPictureIndex(composer, c.image);
+    if (k >= 0) return [[c.id, k + 1] as const];
+    const i = c.image.storageId ? attached.indexOf(c.image.storageId) : -1;
+    return i >= 0 ? [[c.id, firstQuoted! + i] as const] : [];
   }));
   const quotes = formatPendingComments(taken, numbers, pinNumbers(s.getReviewComments(conversationId)));
   const text = [answers, quotes].filter(Boolean).join("\n\n");
@@ -129,14 +139,14 @@ function takeBatch(conversationId: string, messageId: string | undefined, firstI
 // Build the outgoing message: the pending batch (if any) prepended to the typed
 // reply, clearing the batch. The composer's send path calls this so a plain send
 // carries the quotes. With nothing pending it returns `typed` untouched.
-export function attachReviewToMessage(conversationId: string, typed: string, firstImageNumber?: number): string {
-  return withReply(takeReviewBatch(conversationId, undefined, firstImageNumber), typed);
+export function attachReviewToMessage(conversationId: string, typed: string, pictures?: SendPictures): string {
+  return withReply(takeReviewBatch(conversationId, undefined, pictures), typed);
 }
 
 // attachReviewToMessage for a send that goes through store sendMessage: the
 // same text, and the recorded quotes it carries for sendMessage's quoteIds.
-export function attachReviewForSend(conversationId: string, typed: string, firstImageNumber?: number): { text: string; quoteIds: string[] } {
-  const { text, quoteIds } = takeBatch(conversationId, undefined, firstImageNumber, true);
+export function attachReviewForSend(conversationId: string, typed: string, pictures?: SendPictures): { text: string; quoteIds: string[] } {
+  const { text, quoteIds } = takeBatch(conversationId, undefined, pictures, true);
   return { text: withReply(text, typed), quoteIds };
 }
 
@@ -368,10 +378,12 @@ function attachedImageIds(comments: PendingComment[]): string[] {
 
 export type QuotedAttachment = { storageId: string; src: string; markers: ImageMarker[] };
 
-export function quotedImages(conversationId: string): QuotedAttachment[] {
+// The pictures quoted from the transcript; a note pinned on one of the
+// composer's own pictures rides with that picture instead (composerMarkers).
+export function quotedImages(conversationId: string, composer: readonly ComposerPicture[] = []): QuotedAttachment[] {
   const comments = useInboxStore.getState().getReviewComments(conversationId);
   const numbers = pinNumbers(comments);
-  const sorted = sortPendingComments(comments);
+  const sorted = sortPendingComments(comments).filter((c) => !c.image || composerPictureIndex(composer, c.image) < 0);
   return attachedImageIds(sorted).map((storageId) => {
     const pins = comments.filter((c) => c.image?.storageId === storageId);
     return {
@@ -380,6 +392,39 @@ export function quotedImages(conversationId: string): QuotedAttachment[] {
       markers: pins.flatMap((c) => (c.image!.point && numbers.has(c.id) ? [{ ...c.image!.point, number: numbers.get(c.id)! }] : [])),
     };
   });
+}
+
+// A picture attached in the composer, as the send holds it.
+export type ComposerPicture = { previewUrl: string; storageId?: string };
+
+// Which of the composer's pictures a note is pinned on: by the address it was
+// pinned at, or by its stored file once its upload has landed. -1 for none.
+export function composerPictureIndex(composer: readonly ComposerPicture[], image: QuotedImage): number {
+  return composer.findIndex((p) => (!!p.previewUrl && p.previewUrl === image.src) || (!!image.storageId && p.storageId === image.storageId));
+}
+
+// The markers to draw on each of the composer's pictures that carries pinned
+// notes, by its index: the send replaces that picture with a copy marked the
+// way a quoted transcript picture is, so [Image N] at marker M points true.
+export function composerMarkers(conversationId: string, composer: readonly ComposerPicture[]): Map<number, ImageMarker[]> {
+  const comments = useInboxStore.getState().getReviewComments(conversationId);
+  const numbers = pinNumbers(comments);
+  const out = new Map<number, ImageMarker[]>();
+  for (const c of comments) {
+    if (!c.image?.point || !numbers.has(c.id)) continue;
+    const k = composerPictureIndex(composer, c.image);
+    if (k < 0) continue;
+    out.set(k, [...(out.get(k) ?? []), { ...c.image.point, number: numbers.get(c.id)! }]);
+  }
+  return out;
+}
+
+// A picture left the composer: the notes pinned on it go with it.
+export function dropComposerPins(conversationId: string, removed: readonly ComposerPicture[]): void {
+  const s = useInboxStore.getState();
+  for (const c of s.getReviewComments(conversationId)) {
+    if (c.image && composerPictureIndex(removed, c.image) >= 0) s.removeReviewComment(conversationId, c.id);
+  }
 }
 
 // Where a gallery image came from, in words the agent can match against its
@@ -424,7 +469,8 @@ export function addImagePin(
     id,
     messageId: messageId ?? "",
     blockIndex: 0,
-    quote: describeImageSource(conversationId, image),
+    // A picture attached in the composer is named by its [Image N] alone.
+    quote: image.attached ? "" : describeImageSource(conversationId, image),
     body: "",
     createdAt: Date.now(),
     image: { ...(Object.fromEntries(Object.entries(picture).filter(([, v]) => v !== undefined)) as typeof picture), point },
@@ -465,14 +511,17 @@ export function addPageNote(
 // inline) and clear review state. The OPTIONAL "edit in input" action: sending
 // already attaches the batch via takeReviewBatch, this just materializes it as
 // editable text first. Proposal answers stay in the batch: turned into text
-// they would send words and apply nothing.
+// they would send words and apply nothing. So do notes pinned on pictures
+// attached in the composer: as text they would name no picture and lose their
+// markers, while in the batch the send numbers and marks them.
 export function submitReview(conversationId: string, populate: PopulateFn): boolean {
   const s = useInboxStore.getState();
-  const comments = s.getReviewComments(conversationId).filter((c) => !isProposalAnswer(c) && (c.body.trim() || c.quote.trim() || c.image));
+  const compiles = (c: PendingComment) => !isProposalAnswer(c) && !c.image?.attached;
+  const comments = s.getReviewComments(conversationId).filter((c) => compiles(c) && (c.body.trim() || c.quote.trim() || c.image));
   const text = formatPendingComments(sortPendingComments(comments));
   if (!text) return false;
   populate(text, { append: true });
-  for (const c of s.getReviewComments(conversationId)) if (!isProposalAnswer(c)) s.removeReviewComment(conversationId, c.id);
+  for (const c of s.getReviewComments(conversationId)) if (compiles(c)) s.removeReviewComment(conversationId, c.id);
   s.setReviewTarget(null);
   s.setReviewEditingId(null);
   return true;

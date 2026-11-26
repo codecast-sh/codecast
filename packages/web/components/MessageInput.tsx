@@ -35,7 +35,7 @@ import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
-import { attachReviewForSend, attachReviewToMessage, batchSendWords, quotedImages } from "../lib/reviewActions";
+import { attachReviewForSend, attachReviewToMessage, batchSendWords, composerMarkers, dropComposerPins, quotedImages } from "../lib/reviewActions";
 import { useShallow } from "zustand/react/shallow";
 import { uploadMarkedImage } from "../lib/markedImage";
 import { enterReviewFromComposer } from "../lib/reviewNav";
@@ -90,6 +90,7 @@ import { runningSubagents } from "../lib/runningSubagents";
 import { StopConfirm, type StopRequest } from "./conversation/StopConfirm";
 import { stopNeedsConfirm } from "../lib/stopNeedsConfirm";
 import { lazyNamed } from "../lib/lazyNamed";
+import { AttachedImage } from "./ImageGallery";
 
 const api = _typedApi as any;
 const ComposeEditor = lazyNamed(() => import("./editor/ComposeEditor"), "ComposeEditor");
@@ -1545,6 +1546,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Renumber first: persistDraftImages below snapshots messageRef, so the
     // draft must already carry the corrected text.
     removeImagePlaceholder(index + 1);
+    const removed = pastedImagesRef.current[index];
+    if (removed) dropComposerPins(conversationId, [removed]);
     pastedImagesRef.current = pastedImagesRef.current.filter((_, i) => i !== index);
     setPastedImages(prev => {
       const img = prev[index];
@@ -1571,6 +1574,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // revoke=false transfers blob ownership to the pending bubble (so its
   // thumbnail keeps rendering after the composer clears on send).
   const clearAllImages = useCallback((revoke = true) => {
+    dropComposerPins(conversationId, pastedImagesRef.current);
     if (revoke) pastedImages.forEach(img => {
       pendingImageUploads.delete(img.previewUrl);
       URL.revokeObjectURL(img.previewUrl);
@@ -1586,7 +1590,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     pastedImagesRef.current = [];
     setSelectedImageIndex(null);
     setLightboxImageIndex(null);
-  }, [pastedImages]);
+  }, [pastedImages, conversationId]);
 
   useWatchEffect(() => {
     if (!clearInputRef) return;
@@ -1802,7 +1806,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // the quotes, and a proposal's answers (org-staffing.md S39), lead the
       // text and are taken here, so a bare Enter with answers waiting is a
       // send. The gate's host receives the whole body and takes nothing.
-      const text = fileAttach.take(attachReviewToMessage(conversationId, message)).trim();
       // Same reconcile as the main path: the durable draft is the record of
       // pasted images, memory can lose rows across a remount (jx7byyk).
       const gateDraftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
@@ -1810,7 +1813,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const gateDraftOnly = gateDraftRows.filter(
         row => row.storageId && !gateMemory.some(img => img.storageId === row.storageId)
       ) as typeof gateMemory;
-      const gateImages = [...gateMemory, ...gateDraftOnly].map(img => ({
+      const gatePictures = [...gateMemory, ...gateDraftOnly];
+      // Notes pinned on these pictures name them by place, and each pinned
+      // picture goes as its marked copy, as on the main send.
+      const gateMarked = composerMarkers(conversationId, gatePictures);
+      const text = fileAttach.take(attachReviewToMessage(conversationId, message, { composer: gatePictures })).trim();
+      const gateImages = gatePictures.map(img => ({
         storageId: img.storageId as string | undefined,
         previewUrl: img.previewUrl,
         mime: img.file?.type ?? "image/png",
@@ -1828,15 +1836,31 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // In-flight uploads go to the receiver with their blob and registry
       // entry (it releases them once settled); the settled ones are done with
       // theirs.
+      // A pinned picture keeps its blob until its marked copy is drawn from it.
+      const markedUrls = new Set([...gateMarked.keys()].map(i => gatePictures[i].previewUrl));
       pastedImagesRef.current.forEach(img => {
-        if (img.uploading) return;
+        if (img.uploading || markedUrls.has(img.previewUrl)) return;
         pendingImageUploads.delete(img.previewUrl);
         URL.revokeObjectURL(img.previewUrl);
       });
       clearAllImages(false);
       useInboxStore.getState().clearDraftFinal(conversationId);
       sendingRef.current = false;
-      await onGateSend(text, gateImages);
+      // Each pinned picture is settled here and swapped for its marked copy
+      // (the original when its upload failed), so the receiver gets a stored
+      // picture with nothing left for it to release.
+      const sentImages = await Promise.all(gateImages.map(async (img, i) => {
+        const markers = gateMarked.get(i);
+        if (!markers) return img;
+        const stored = img.storageId ?? await (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve(null));
+        // A failed upload goes on as it was: the receiver drops it and frees its blob.
+        if (!stored) return img;
+        const marked = await uploadMarkedImage(convex, { src: img.previewUrl, storageId: stored, markers });
+        pendingImageUploads.delete(img.previewUrl);
+        URL.revokeObjectURL(img.previewUrl);
+        return { storageId: marked, previewUrl: img.previewUrl, mime: "image/png", uploading: false };
+      }));
+      await onGateSend(text, sentImages);
       suggestionRef.current?.settleSend(typed);
       return;
     }
@@ -1877,10 +1901,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const forking = forkingFromSelection || (forkTail && !!onForkTail);
     // Each quoted picture is sent as a copy with its notes' points drawn on as
     // numbered markers; the bubble shows the original until that copy lands.
-    const quoted = forking ? [] : quotedImages(conversationId);
+    // Notes pinned on the composer's own pictures ride with those pictures,
+    // in their places: each goes as a copy with its markers drawn on.
+    const quoted = forking ? [] : quotedImages(conversationId, submitImages);
+    const marked = composerMarkers(conversationId, submitImages);
     // The quotes it takes ride the send as ids too, so the server stamps their
     // records sent (lib/quoteDraftWire; empty unless the person turned it on).
-    const review = attachReviewForSend(conversationId, message, quoted.length ? submitImages.length + 1 : undefined);
+    const review = attachReviewForSend(conversationId, message, { composer: submitImages, firstQuoted: quoted.length ? submitImages.length + 1 : undefined });
     message = review.text;
     const quoteIds = review.quoteIds;
     // "Send together" (lib/jointSend): others' live drafts fold in as named parts.
@@ -1894,7 +1921,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!forking) message = fileAttach.take(message);
     const quotedOriginals: OptimisticImage[] = quoted.map(q => ({ media_type: "image/png", storage_id: q.storageId }));
     const quotedUploads = quoted.map(q => uploadMarkedImage(convex, q));
-    const hasUploadingImages = submitImages.some(img => img.uploading) || quotedUploads.length > 0;
+    const hasUploadingImages = submitImages.some(img => img.uploading) || quotedUploads.length > 0 || marked.size > 0;
     const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
 
@@ -2003,13 +2030,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // survives a session switch or composer remount. The user can already
       // type/send the next message.
       void (async () => {
-        const tasks = submitImages.map(img => ({
-          previewUrl: img.previewUrl,
-          mediaType: img.file.type,
-          promise: img.storageId
+        const tasks = submitImages.map((img, i) => {
+          const stored = img.storageId
             ? Promise.resolve<string | null>(img.storageId as string)
-            : (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve<string | null>(null)),
-        }));
+            : (pendingImageUploads.get(img.previewUrl) ?? Promise.resolve<string | null>(null));
+          const markers = marked.get(i);
+          return {
+            previewUrl: img.previewUrl,
+            mediaType: markers ? "image/png" : img.file.type,
+            promise: markers
+              ? stored.then(storageId => storageId ? uploadMarkedImage(convex, { src: img.previewUrl, storageId, markers }) : null)
+              : stored,
+          };
+        });
         const settled = await Promise.all(tasks.map(t => t.promise.then(storageId => ({ ...t, storageId }))));
         const resolvedImages: OptimisticImage[] = [...settled
           .filter(t => t.storageId)
@@ -2938,7 +2971,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               the pinned state says where the work stands, the box is where you
               answer. Reading top to bottom, that is the order a person needs
               them in. */}
-          {threadStateNode}
+          {/* An opened picture lifts the whole composer over its backdrop; the
+              pinned state steps back with the rest of the chrome, or its band
+              paints across the backdrop. */}
+          {threadStateNode && <div className={lightboxImageIndex !== null ? "hidden" : undefined}>{threadStateNode}</div>}
           {composerNode}
           {acTrigger && (acItems.length > 0 || (acTrigger.type === "@" && acServerLoading && !acQuery.includes(" "))) && (() => {
             const chatKey = parseChatDraftKey(conversationId);
@@ -3108,12 +3144,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         <div className="fixed inset-0 z-[10001] flex items-center justify-center" style={{ backgroundColor: `rgba(0,0,0,${0.8 * lightboxSwipe.backdropOpacity})`, paddingBottom: reserved, paddingTop: 12 }}>
           <div className="absolute inset-0" onClick={dismissLightbox} />
           <div className="relative" onClick={(e) => e.stopPropagation()} style={lightboxSwipe.style} {...lightboxSwipe.handlers}>
-            <img
-              src={pastedImages[lightboxImageIndex].previewUrl}
-              alt="Image preview"
-              className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
-              style={available != null ? { maxHeight: available } : undefined}
-            />
+            {bareComposer ? (
+              <img
+                src={pastedImages[lightboxImageIndex].previewUrl}
+                alt="Image preview"
+                className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
+                style={available != null ? { maxHeight: available } : undefined}
+              />
+            ) : (
+              <AttachedImage
+                conversationId={conversationId}
+                picture={pastedImages[lightboxImageIndex]}
+                onNoteDone={() => textareaRef.current?.focus()}
+                className="max-w-[85vw] max-h-[70vh] object-contain rounded-lg shadow-2xl"
+                style={available != null ? { maxHeight: available } : undefined}
+              />
+            )}
             {pastedImages.length > 1 && (
               <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
                 {pastedImages.map((_, i) => (

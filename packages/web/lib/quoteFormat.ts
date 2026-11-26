@@ -82,6 +82,9 @@ export type QuotedImage = {
   point?: { x: number; y: number };
   width?: number;
   height?: number;
+  /** Pinned on a picture attached in the composer, not one in the transcript:
+   *  the send names it by its [Image N] and draws the note's marker on it. */
+  attached?: boolean;
 };
 
 // `point` is the spot on the page as fractions of the document's width and

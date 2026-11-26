@@ -72,7 +72,10 @@ export function ComposerShell({
   // "MODERN · COMPOSER"): only the conversation's docked one changes shape.
   const variant = bare ? "bare" : inline ? "inline" : hero ? "hero" : "dock";
   return (
-    <div ref={rootRef} data-sv-composer className={`shrink-0 pointer-events-none ${inline || hero ? "" : "sticky bottom-0"} ${lightboxOpen ? "z-[10002]" : "z-10"}`}>
+    // The z-index lifts the composer over an opened picture's backdrop only on
+    // a positioned box: the docked composer is sticky, and the hero and inline
+    // ones take `relative` while a picture is open, or the backdrop dims them.
+    <div ref={rootRef} data-sv-composer className={`shrink-0 pointer-events-none ${inline || hero ? (lightboxOpen ? "relative" : "") : "sticky bottom-0"} ${lightboxOpen ? "z-[10002]" : "z-10"}`}>
       {!lightboxOpen && !inline && !hero && <ComposerFade />}
       <div data-cc-composer-frame={variant} className={`${inline || hero ? "" : bare ? "pb-4" : "pb-3"} pointer-events-auto ${!lightboxOpen && !inline && !hero ? "bg-sol-bg" : ""}`}>
         <div data-cc-composer-stack={variant} className="relative">
