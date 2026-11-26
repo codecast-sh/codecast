@@ -232,3 +232,18 @@ export function startPaths(graph: WorkflowGraph): Array<{ label: string; ids: Se
 export function reviewNodeOf(graph: WorkflowGraph): string | undefined {
   return ["review", "direct_review"].find((id) => graph.nodes.has(id));
 }
+
+/** `cast workflow run`'s graph: the repository's default branch decides the start before the push, so the run's card
+ *  draws the path it takes; with the review station of that path (a direct repository's is the direct path's). A
+ *  start the facts cannot decide prints why and exits. */
+export function startGraphOrExit(source: string, dir: string | undefined, cwd: string): { graph: WorkflowGraph; reviewId: string | undefined } {
+  try {
+    const parsed = parseWorkflowSource(source, dir);
+    const graph = runGraph(parsed, factsFor(parsed, cwd));
+    return { graph, reviewId: reviewNodeOf(graph) };
+  } catch (err) {
+    if (!(err instanceof StartFactsError)) throw err;
+    console.error(`✗ ${err.message}`);
+    process.exit(1);
+  }
+}

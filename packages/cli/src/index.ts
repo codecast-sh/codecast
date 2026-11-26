@@ -22456,7 +22456,6 @@ workflow
   .addOption(new Option("--spawner <session>", "The session behind the run, named by the cast flow run that started it").hideHelp())
   .addOption(new Option("--personal-established <token>", "cast flow run established this checkout as personal before starting the personal Ship (its one-time hand-off)").hideHelp())
   .action(async (fileArg: string | undefined, options: any) => {
-    const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
     const { runWorkflow } = await import("./workflow/runner.js");
 
@@ -22502,20 +22501,7 @@ workflow
       post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()], where: groupDeps().flow.directoryWorkspace });
     if (personalRefused) { console.error(`✗ ${personalRefused}`); process.exit(1); }
     const source = resolved.source;
-    // The repository's default branch decides the start before the push, so the run's card draws the path it takes
-    // (startFacts.ts).
-    const { factsFor, reviewNodeOf, runGraph, StartFactsError } = await import("./workflow/startFacts.js");
-    let graph: ReturnType<typeof parseWorkflowSource>;
-    try {
-      const parsed = parseWorkflowSource(source, resolved.dir);
-      graph = runGraph(parsed, factsFor(parsed, process.cwd()));
-    } catch (err) {
-      if (!(err instanceof StartFactsError)) throw err;
-      console.error(`✗ ${err.message}`);
-      process.exit(1);
-    }
-    // The review station of the path the run takes: a direct repository's is the direct path's.
-    const reviewId = reviewNodeOf(graph);
+    const { graph, reviewId } = (await import("./workflow/startFacts.js")).startGraphOrExit(source, resolved.dir, process.cwd());
     // A role running the line (org-roles-standing.md T4, the-line.md L3):
     // the review station takes the role's own review backend, and the run is
     // A role whose switch is off starts nothing.
