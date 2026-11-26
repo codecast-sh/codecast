@@ -320,9 +320,8 @@ export const CollabComposer = memo(function CollabComposer({
   // (convex teamSuggestions.ts). The roster says so before the press; the
   // server decides at send time.
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  // An assigned owner steers with owner rights, and an admin of the session's
-  // team outranks its owner: their words go straight in.
-  const steeringOwnerId = useInboxStore((s) => (level === "team" ? attendingOwnerId(teamMembersOf(s), conversation as any, meId, s.teams) : null));
+  // An assigned owner steers with owner rights: their words go straight in.
+  const steeringOwnerId = useInboxStore((s) => (level === "team" ? attendingOwnerId(teamMembersOf(s), conversation as any, meId) : null));
   const steeringName = useInboxStore((s) => {
     if (!steeringOwnerId) return null;
     const m = teamMembersOf(s).find((x: any) => String(x?._id) === steeringOwnerId);

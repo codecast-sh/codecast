@@ -3,7 +3,7 @@ import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { performSessionSend } from "./pendingMessages";
 import { dismissGuestSuggestionFor, listPending, sendGuestSuggestionFor } from "./guestSuggestions";
-import { getPendingPermissions, updatePermissionStatus } from "./permissions";
+import { getPendingPermissions } from "./permissions";
 import {
   PROPOSAL_TTL_MS,
   TEAM_PENDING_MAX,
@@ -19,8 +19,7 @@ import {
 
 const run = (fn: any) => fn._handler ?? fn.handler;
 
-// Riley runs c1, shared with team t1; Jordan is on the team; Avery is the
-// team's admin; Sam is not on it.
+// Riley runs c1, shared with team t1; Jordan is on the team; Sam is not.
 function world(opts: { rileyHere?: boolean; rileyIdle?: boolean; conv?: Record<string, any> } = {}) {
   const now = Date.now();
   let clock = 1_000_000;
@@ -28,7 +27,6 @@ function world(opts: { rileyHere?: boolean; rileyIdle?: boolean; conv?: Record<s
     users: [
       { _id: "uRiley", name: "Riley", active_team_id: "t1" },
       { _id: "uJordan", name: "Jordan", active_team_id: "t1" },
-      { _id: "uAvery", name: "Avery", active_team_id: "t1" },
       { _id: "uSam", name: "Sam", active_team_id: "t1" },
       { _id: "uBot", name: "Bot", is_bot: true },
     ],
@@ -37,7 +35,6 @@ function world(opts: { rileyHere?: boolean; rileyIdle?: boolean; conv?: Record<s
       { _id: "m1", user_id: "uRiley", team_id: "t1", role: "member", visibility: "full" },
       { _id: "m2", user_id: "uJordan", team_id: "t1", role: "member", visibility: "full" },
       { _id: "m3", user_id: "uBot", team_id: "t1", role: "member", visibility: "full" },
-      { _id: "m4", user_id: "uAvery", team_id: "t1", role: "admin", visibility: "full" },
     ],
     conversations: [{
       _id: "c1", user_id: "uRiley", team_id: "t1", short_id: "jxriley", session_id: "s1", title: "Fix the build",
@@ -529,97 +526,4 @@ test("a refused prose answer says why", async () => {
   await ask(w);
   await expect(proposeAnswerFor(w.as("uJordan") as any, "uJordan" as any, "c1", "toolu_1", JSON.stringify({ __cc_poll: true, text: "/tmp is fine" }))).rejects.toThrow(/can't start with/);
   await expect(proposeAnswerFor(w.as("uJordan") as any, "uJordan" as any, "c1", "toolu_1", JSON.stringify({ __cc_poll: true, text: "x".repeat(1001) }))).rejects.toThrow(/under 1000/);
-});
-
-// An admin of the session's team outranks its runner there: they never
-// suggest or propose, while a member still does.
-describe("an admin of the session's team steers it directly", () => {
-  const permission = (w: ReturnType<typeof world>) => w.db.insert("pending_permissions", {
-    conversation_id: "c1", session_id: "s1", tool_name: "Bash", arguments_preview: "rm -rf dist", status: "pending", created_at: Date.now(),
-  });
-  const answer = (w: ReturnType<typeof world>, who: string, pid: any, extra: Record<string, unknown> = {}) =>
-    run(updatePermissionStatus)(w.as(who), { permission_id: pid, status: "approved", ...extra });
-
-  test("their message goes straight in while the owner is attending; a member's still waits", async () => {
-    const w = world();
-    const admin = await send(w, "uAvery", "ship it");
-    expect(admin.suggestion_id).toBeUndefined();
-    expect(admin.message_id).toBeTruthy();
-    expect((await w.db.query("pending_messages").collect()).map((r: any) => r.from_user_id)).toEqual(["uAvery"]);
-    const member = await send(w, "uJordan", "wait");
-    expect(member.message_id).toBeNull();
-    expect(member.suggestion_id).toBeTruthy();
-  });
-
-  test("they answer the open question themselves and are refused as a proposer", async () => {
-    const w = world();
-    await ask(w);
-    await expect(proposeAnswerFor(w.as("uAvery") as any, "uAvery" as any, "c1", "toolu_1", pick("1"))).rejects.toThrow(/admin.*directly/);
-    expect(await w.db.query("guest_suggestions").collect()).toEqual([]);
-    // A member still proposes.
-    await proposeAnswerFor(w.as("uJordan") as any, "uJordan" as any, "c1", "toolu_1", pick("1"));
-  });
-
-  test("they approve or deny a pending permission directly; a member must propose", async () => {
-    const w = world();
-    const pid = await permission(w);
-    await expect(proposePermissionFor(w.as("uAvery") as any, "uAvery" as any, String(pid), "approved")).rejects.toThrow(/admin.*directly/);
-    await expect(answer(w, "uJordan", pid)).rejects.toThrow(/Unauthorized/);
-    await proposePermissionFor(w.as("uJordan") as any, "uJordan" as any, String(pid), "approved");
-    await answer(w, "uAvery", pid);
-    const row = await w.db.get(pid);
-    expect([row.status, row.resolved_by]).toEqual(["approved", "uAvery"]);
-    // The member's matching proposal settles as it does when the runner answers.
-    expect((await run(listMine)(w.as("uJordan"), { conversation_id: "c1" })).map((r: any) => r.status)).toEqual(["sent"]);
-  });
-
-  test("keeping a rule stays the runner's; a summary-level session's prompts stay out of reach", async () => {
-    const w = world();
-    const pid = await permission(w);
-    await expect(answer(w, "uAvery", pid, { remember: true })).rejects.toThrow(/runner/);
-    expect((await w.db.get(pid)).status).toBe("pending");
-    const s = world({ conv: { team_visibility: "summary" } });
-    await expect(answer(s, "uAvery", await permission(s))).rejects.toThrow(/Unauthorized/);
-  });
-
-  test("they read the runner's prompt rows without the rule data or secrets; a member reads the redacted ones", async () => {
-    const w = world();
-    const secret = "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH' x";
-    await w.db.insert("pending_permissions", {
-      conversation_id: "c1", session_id: "s1", tool_name: "Bash", arguments_preview: secret, status: "pending", created_at: Date.now(),
-      safety_check: true, removals: [{ path: "dist" }], intent: "clean the build", subagent_type: "builder",
-      suggestions: [{ rule: 1 }], rule_request: { permission: "bash", always: ["rm *"] },
-    });
-    const [admin] = await run(getPendingPermissions)(w.as("uAvery"), { conversation_id: "c1", as_proposer: true });
-    expect([admin.safety_check, admin.removals, admin.intent, admin.subagent_type])
-      .toEqual([true, [{ path: "dist" }], "clean the build", "builder"]);
-    expect(admin.arguments_preview).toContain("curl -H 'Authorization: Bearer");
-    expect(admin.arguments_preview).not.toContain("sk-ant-api03-abcdefghijklmnopqrstuvwxyz");
-    expect("suggestions" in admin || "rule_request" in admin).toBe(false);
-    const [member] = await run(getPendingPermissions)(w.as("uJordan"), { conversation_id: "c1", as_proposer: true });
-    expect([member.safety_check, member.intent]).toEqual([undefined, undefined]);
-    expect(member.arguments_preview).not.toContain("sk-ant-api03-abcdefghijklmnopqrstuvwxyz");
-  });
-
-  test("a bot-run session's prompts stay its runner's: the admin neither sees nor answers them", async () => {
-    const w = world({ conv: { user_id: "uBot", owner_user_id: "uRiley" } });
-    const pid = await permission(w);
-    expect(await run(getPendingPermissions)(w.as("uAvery"), { conversation_id: "c1", as_proposer: true })).toEqual([]);
-    await expect(answer(w, "uAvery", pid)).rejects.toThrow(/Unauthorized/);
-    expect((await w.db.get(pid)).status).toBe("pending");
-  });
-
-  test("on a role's standing session the admin proposes like any teammate", async () => {
-    const w = world({ conv: { standing_role_id: "role1" } });
-    await ask(w);
-    await proposeAnswerFor(w.as("uAvery") as any, "uAvery" as any, "c1", "toolu_1", pick("1"));
-    await expect(answer(w, "uAvery", await permission(w))).rejects.toThrow(/Unauthorized/);
-  });
-
-  test("an admin of another team is a member here", async () => {
-    const w = world();
-    await w.db.patch("m4", { role: "member" });
-    await w.db.insert("team_memberships", { user_id: "uAvery", team_id: "t2", role: "admin", visibility: "full" });
-    expect((await send(w, "uAvery", "x")).suggestion_id).toBeTruthy();
-  });
 });
