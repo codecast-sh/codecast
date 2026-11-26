@@ -25,7 +25,7 @@ import { askRerun } from "./lib/priorityClassifierHook";
 import { recomputeStepDone } from "./lib/priorityLinks";
 import { stepKeyMark } from "./lib/priorityGroup";
 import { PRIORITY_PASS_MODEL, mergePriorities, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
-import { stepKeyMax, holdPersonSteps } from "./lib/priorityPassSteps";
+import { stepKeyMax, holdPersonSteps, isPersonHeld, withPersonFields } from "./lib/priorityPassSteps";
 import { SESSION_PAGE, clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
@@ -376,6 +376,16 @@ export const applyPlan = internalMutation({
           moved.set(st.key, `s${++next}`);
           return { ...st, key: moved.get(st.key)! };
         });
+        // A milestone carried in from a priority this plan merges stands as the person left it there since the input was read: dropped, renamed, re-tiered or done.
+        for (const m of plan.merges) {
+          const absorbed = m.merged_into === row.short_id ? await mine(m.short_id) : null;
+          for (const [from, to] of absorbed ? Object.entries(m.step_keys ?? {}) : []) {
+            const was = absorbed!.steps.find((st) => st.key === from);
+            const key = moved.get(to) ?? to;
+            const i = steps.findIndex((st) => st.key === key);
+            if (was && i >= 0 && isPersonHeld(was)) steps[i] = withPersonFields(steps[i], { ...was, key });
+          }
+        }
         // A milestone a session the person placed, or a known link, sits on stays: read its sessions only when the plan would remove one.
         const proposedKeys = new Set([...steps, ...unseen].filter((st) => !st.dropped).map((st) => st.key));
         const removing = new Set(row.steps.filter((st) => !st.dropped && !proposedKeys.has(st.key)).map((st) => st.key));

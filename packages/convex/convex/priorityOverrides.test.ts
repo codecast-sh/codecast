@@ -552,3 +552,41 @@ describe("corrections", () => {
     await expect(as(w, w.ana).mutation(pri.correct, { short_id: "pri-1", text: "  " })).rejects.toThrow("a correction is 1 to 2000 characters");
   });
 });
+
+describe("a pass merge carries the absorbed priority's milestones as the person left them during the call", () => {
+  /** pri-2 holds "Auth" (s1); the plan, read before the person's change, merges pri-2 into pri-1 carrying Auth as s4. */
+  const staleMerge = async (change: (w: World) => Promise<unknown>) => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    await w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id: "pri-2", title: "Auth", summary: "", status: "active", ai_rank: 5, step_key_max: 1,
+      steps: [{ key: "s1", title: "Auth", tier: "critical", tier_set_by: "pass", refs: [], done: false }], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1,
+    } as any));
+    await change(w);
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: {
+        creates: [], sessions: [], unmap: [], notes: [], rewritten: [],
+        updates: [{ short_id: "pri-1", seen_steps: p1.steps.map((s: any) => s.key), patch: { steps: [...p1.steps, { key: "s4", title: "Auth", tier: "critical", tier_set_by: "pass", refs: [], done: false }] } }],
+        merges: [{ short_id: "pri-2", merged_into: "pri-1", step_keys: { s1: "s4" } }],
+      },
+    });
+    return (await byShort(w, "pri-1")).steps;
+  };
+
+  test("one the person dropped stays dropped on the survivor", async () => {
+    const steps = await staleMerge((w) => as(w, w.ana).mutation(pri.dropStep, { short_id: "pri-2", step_key: "s1" }));
+    expect(steps.filter((s: any) => s.title === "Auth").map((s: any) => [s.key, !!s.dropped])).toEqual([["s4", true]]);
+  });
+
+  test("one the person renamed, re-tiered or marked done keeps what they set", async () => {
+    const steps = await staleMerge(async (w) => {
+      const me = as(w, w.ana);
+      await me.mutation(pri.renameStep, { short_id: "pri-2", step_key: "s1", title: "Auth via SSO" });
+      await me.mutation(pri.setStepTier, { short_id: "pri-2", step_key: "s1", tier: "polish" });
+      await me.mutation(pri.setStepDone, { short_id: "pri-2", step_key: "s1", done: true });
+    });
+    expect(steps.find((s: any) => s.key === "s4")).toMatchObject({ title: "Auth via SSO", title_set_by: "person", tier: "polish", tier_set_by: "person", done: true, done_set_by: "person" });
+    expect(steps.filter((s: any) => s.title === "Auth")).toEqual([]);
+  });
+});
