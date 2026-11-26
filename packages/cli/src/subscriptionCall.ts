@@ -76,7 +76,7 @@ export function callEnv(thinking: boolean): Record<string, string> {
 }
 
 /** The claude flags of a bare call: one turn, no tools, no MCP, no slash commands, settings from nowhere, and the given system prompt in place of Claude Code's. */
-export function callArgs(o: { model: string; systemFile?: string; systemText?: string; effort?: string }): string[] {
+export function callArgs(o: { model: string; systemFile?: string; systemText?: string; effort?: string; jsonSchema?: string }): string[] {
   return [
     "--setting-sources", "project",
     "-p", "--tools", "",
@@ -85,6 +85,8 @@ export function callArgs(o: { model: string; systemFile?: string; systemText?: s
     "--max-turns", "1",
     "--model", o.model,
     ...(o.effort ? ["--effort", o.effort] : []),
+    // The schema the prod call sends as output_schema (structured outputs): the answer comes back as one object of it.
+    ...(o.jsonSchema ? ["--json-schema", o.jsonSchema] : []),
     "--output-format", "stream-json", "--verbose", "--include-partial-messages",
   ];
 }

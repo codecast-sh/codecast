@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "notes": "a migration that drops the column holding who unsubscribed: consent state on records about people, gone for good",
+  "label": {
+    "mechanism": true
+  },
+  "snapshot": {
+    "repository": "acme/shop",
+    "head_sha": "abc0001111111111111111111111111111111111",
+    "files": [
+      "db/migrations/0142_simplify_customers.sql",
+      "src/db/schema.ts"
+    ],
+    "diff": "diff --git a/db/migrations/0142_simplify_customers.sql b/db/migrations/0142_simplify_customers.sql\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/db/migrations/0142_simplify_customers.sql\n@@ -0,0 +1,4 @@\n+-- The marketing prefs page reads prefs from the new preferences service now.\n+ALTER TABLE customers DROP COLUMN unsubscribed_at;\n+ALTER TABLE customers DROP COLUMN marketing_opt_in;\n+DROP INDEX IF EXISTS customers_unsubscribed_at_idx;\ndiff --git a/src/db/schema.ts b/src/db/schema.ts\nindex 2222222..3333333 100644\n--- a/src/db/schema.ts\n+++ b/src/db/schema.ts\n@@ -21,8 +21,6 @@ export const customers = table(\"customers\", {\n   email: text(\"email\").notNull(),\n   firstName: text(\"first_name\"),\n   lastOrderAt: timestamp(\"last_order_at\"),\n-  unsubscribedAt: timestamp(\"unsubscribed_at\"),\n-  marketingOptIn: boolean(\"marketing_opt_in\").default(false),\n   createdAt: timestamp(\"created_at\").defaultNow(),\n });\n",
+    "mechanism_definition": "A mechanism is a change whose mistake reaches many people at once and cannot be undone. That consequence is the test, not the kind of change: consent and unsubscribe state, a send in bulk, and a bulk write, delete or dropping migration on records about people or on data nothing can rebuild. Removing what the system regenerates or exists to discard (test fixtures, eval runs, queue jobs, caches, empty or unread columns, our own machinery's logs) is routine work, not a mechanism.",
+    "definition_from": "acme/shop:ops/mechanism.md",
+    "now": 1795000000000
+  }
+}

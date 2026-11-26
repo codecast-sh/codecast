@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "notes": "a bot's bump of a test-only dependency: no records, no sends",
+  "label": {
+    "mechanism": false
+  },
+  "snapshot": {
+    "repository": "acme/shop",
+    "head_sha": "abc0002222222222222222222222222222222222",
+    "files": [
+      "bun.lock",
+      "package.json"
+    ],
+    "diff": "diff --git a/package.json b/package.json\nindex 2222222..3333333 100644\n--- a/package.json\n+++ b/package.json\n@@ -30,7 +30,7 @@\n     \"@types/node\": \"^22.10.1\",\n     \"typescript\": \"^5.7.2\",\n-    \"vitest\": \"^3.1.4\",\n+    \"vitest\": \"^3.2.0\",\n     \"vite\": \"^6.0.3\"\n   }\ndiff --git a/bun.lock b/bun.lock\nindex 2222222..3333333 100644\n--- a/bun.lock\n+++ b/bun.lock\n@@ -812,7 +812,7 @@\n-    \"vitest\": [\"vitest@3.1.4\", \"\", { \"dependencies\": { \"@vitest/expect\": \"3.1.4\" } }, \"sha512-AAAA\"],\n+    \"vitest\": [\"vitest@3.2.0\", \"\", { \"dependencies\": { \"@vitest/expect\": \"3.2.0\" } }, \"sha512-BBBB\"],\n",
+    "mechanism_definition": "A mechanism is a change whose mistake reaches many people at once and cannot be undone. That consequence is the test, not the kind of change: consent and unsubscribe state, a send in bulk, and a bulk write, delete or dropping migration on records about people or on data nothing can rebuild. Removing what the system regenerates or exists to discard (test fixtures, eval runs, queue jobs, caches, empty or unread columns, our own machinery's logs) is routine work, not a mechanism.",
+    "definition_from": "acme/shop:ops/mechanism.md",
+    "now": 1795000000000
+  }
+}

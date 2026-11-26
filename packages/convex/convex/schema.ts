@@ -1,3 +1,4 @@
+import { automaticReviewValidator } from "./lib/automaticReviewValidator";
 import { permissionRemovalValidator } from "./lib/permissionRemoval";
 import { ruleRequestValidator } from "./lib/permissionRuleRequest";
 import { distributionValidator, updateStateValidator } from "./lib/deviceUpdate";
@@ -4016,6 +4017,12 @@ export default defineSchema({
       card_id: v.optional(v.id("session_decisions")),
       review_asked: v.optional(v.string()),
       engineer_told: v.optional(v.boolean()),
+      // With no codecast run behind it: what codecast's automatic review said about a head (lib/automaticReview.ts),
+      // kept so each head is read once.
+      automatic: v.optional(automaticReviewValidator),
+      // An automatic review called a head of this pull request a mechanism: every head is a person's to read
+      // until a person approves it on a card (changeApprovalRows clearHold). Set by any such answer, whatever its head.
+      held: v.optional(v.string()),
     })),
   })
     .index("by_team_id", ["team_id"])
@@ -5307,7 +5314,9 @@ export default defineSchema({
     // Session-state notifications (ready / needs permission / error) replace
     // per (recipient, conversation) instead of stacking — this is the lookup
     // for the row(s) being superseded.
-    .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"]),
+    .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"])
+    // One person's notices about one thing: an approval card's notice is not repeated while one is unread (changeApprovalCards).
+    .index("by_recipient_entity", ["recipient_user_id", "entity_id"]),
 
   // "A human is at a desktop surface" — one row per user, heartbeat-written by
   // the web/Electron client while visible (pushRouter.reportPresence). This is
@@ -5545,7 +5554,10 @@ export default defineSchema({
     // What a person's Ship on this card approves (changeApprovals.ts): the run's pull request, the judged diff's key
     // and its judged files as they stood when it was asked. Absent when the run had no pull request yet.
     // whole_key: the run's card also approves the whole diff it showed, which covers a mechanism.
-    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()) })),
+    // `asked`: the people an approval card asked when codecast posted it (changeApprovalCards.postApprovalCard), the only
+    // ones whose answer counts: a pass or an escalation rewrites asked_user_ids, never this. `held`: posted while the pull
+    // request was held, so its approval clears the hold (changeApprovalRows mayClearHold).
+    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()), asked: v.optional(v.array(v.id("users"))), held: v.optional(v.boolean()) })),
     // An approval card codecast itself posted for a pull request's status (changeApprovals.ts): silent, one person's,
     // and settled by settleCardApproval from `approval` above.
     approval_card: v.optional(v.boolean()),

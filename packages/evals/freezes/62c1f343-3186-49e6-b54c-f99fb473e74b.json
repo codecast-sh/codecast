@@ -1,0 +1,26 @@
+{
+  "name": "automatic-review bulk-winback-send",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:bulk-winback-send"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "automatic-review:bulk-winback-send",
+    "title": "automatic-review bulk-winback-send"
+  },
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "trigger": {
+    "type": "automatic-review"
+  },
+  "meta": {
+    "surface": "automatic-review",
+    "visibility": "public",
+    "snapshot": "fixtures/automatic-review/bulk-winback-send.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "62c1f343-3186-49e6-b54c-f99fb473e74b",
+  "createdAt": "2026-11-26T06:04:33.263Z"
+}

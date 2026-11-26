@@ -1,0 +1,26 @@
+{
+  "name": "automatic-review prune-old-eval-runs",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:prune-old-eval-runs"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "automatic-review:prune-old-eval-runs",
+    "title": "automatic-review prune-old-eval-runs"
+  },
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "trigger": {
+    "type": "automatic-review"
+  },
+  "meta": {
+    "surface": "automatic-review",
+    "visibility": "public",
+    "snapshot": "fixtures/automatic-review/prune-old-eval-runs.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "b9d2a756-e040-49ff-9644-86c883daa43f",
+  "createdAt": "2026-11-26T06:04:34.209Z"
+}

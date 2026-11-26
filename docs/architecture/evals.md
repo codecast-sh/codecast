@@ -43,6 +43,7 @@ it stale; `index.ts` captures, replays and gates it.
 | org-review | agent | the org analyzer over a served workspace |
 | role-wake | agent | a role's trigger frame over its served reads |
 | anchor-brief | agent | a standing session's opening, and for a fixture the turns after it |
+| automatic-review | call | codecast's automatic review of a pull request no run is behind (`lib/automaticReview.ts`): one head's diff and the repository's mechanism definition, labelled with the mechanism answer a person expects |
 | card-write | agent | the line's presenting station (`workflow/presenter.md` with `line/card_write.md`), as the runner briefs it: the problem and its findings served from the record, the change built as a git repository in the rep, and the recording guard (`line-present-replay-bin/cast`) keeping the decision and the report it pins; gated on what the line itself refuses (ship over a failing check or a red proof, a finding the problem lacks) |
 | guidance | agent | the codecast sections an install writes into CLAUDE.md, loaded as the run's user-level CLAUDE.md (`prompt-dry-run.ts --claude-md`); each fixture is a request, graded on the first tool the agent reaches for |
 
@@ -60,7 +61,10 @@ inbox; see AGENTS.md "Prompt dry runs"). `--model` is always passed.
 - A call surface runs `--call`: the prompt is the whole user message, the
   system prompt is prod's (one neutral line when prod sends none), there are
   no tools and one turn, and
-  `--max-output-tokens` is prod's `max_tokens`. Three gaps remain. Temperature
+  `--max-output-tokens` is prod's `max_tokens`. A request's `output_schema`
+  goes as `--json-schema`, so a structured answer comes back as prod's does
+  (Claude Code answers it through a tool, so such a run reports two turns and
+  stop reason `tool_use`). Three gaps remain. Temperature
   is a knob `claude -p` cannot set; every `run.json` records `temperatureProd`
   (what each call sent, read from the request prod's builder made) and
   `temperatureReplay: 'cli-default'`. On a subscription login claude adds a
@@ -118,6 +122,7 @@ lists every surface's ref forms.
 | `<callId>` | call-summary | the call's end |
 | `tr-N` | role-wake | a trigger whose reads were captured within the hour by `./evals snapshot role-wake --trigger tr-N --team T --role <handle> --name n` |
 | `<session>[:<line>]` | anchor-brief | a standing session's opening, its reads captured by `./evals snapshot anchor-brief` |
+| `<owner/repo>#<n>@<owner/repo>:<path>` | automatic-review | a pull request's diff as GitHub shows it now, judged by the mechanism file the second part names on that repository's default branch; its label (`{"mechanism": true}`) is the answer a person expects |
 | `<team>:<ct-N>` | route | a task filed in a project or plan: its title and description are the request, the org tree as `cast org ls --team <team> --json` prints it is the roster, and the rule's owner for the task's anchor (`ownerOf`, which the router never sees) is the expected answer |
 | `<snapshotName>` | org-review | a served workspace under `EVALS_HOME/snapshots/org-review/`, such as `union-base8` |
 | `file:<path>` | changes-story, changes-edition | a real story or edition input, from a fixture-shaped file (`{asOf, snapshot}`) kept outside the repo: no access-checked read returns a story's gated inputs. The snapshot must carry `people` (everyone on the team) and, for a story, `withheld` (what the team gate kept out, `[]` when nothing); the no-leak gate reads both, so a file without them is refused |

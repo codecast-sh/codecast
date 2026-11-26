@@ -1,18 +1,17 @@
 // Codecast's `approval` status (ct-100350): the rule (decide), the status worked out from a mocked GitHub and posted,
-// the approvals a person's card and press make or revoke, and the merge as codecast's app.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+// the approvals a person's card and press make or revoke, and the merge as codecast's app. The automatic review of a pull
+// request no run is behind, and its hold, are changeApprovals.automatic.test.ts.
+import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
+import { actionCtx, gh, github, HEAD, installation, LAND_PATCH, MB, prRow, REPO, useMockedGitHub } from "./changeApprovals.testkit";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
 import { changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
-import { withdrawCore } from "./sessionDecisions";
+import { answerCore, withdrawCore } from "./sessionDecisions";
 
-const REPO = "union-ai/union-mobile";
-const HEAD = "a".repeat(40);
-const MB = "b".repeat(40);
 const needs = { judged: "Jason", mechanism: "an engineer or Ashot", review: "Ashot" };
 const facts = (over: Partial<Extract<ApprovalFacts, { judged: string[] }>> = {}): ApprovalFacts => ({ opted: true, judged: [], run: "live", mechanism: false, card: null, press: null, needs, ...over });
 
@@ -58,95 +57,7 @@ describe("the mechanism answer counts only from a reviewer station codecast saw 
   });
 });
 
-// ── A mocked GitHub ──
-
-type Route = { method: string; match: RegExp; reply: (url: string, body: any) => { status?: number; json?: any; text?: string } };
-let routes: Route[] = [];
-let calls: Array<{ method: string; url: string; body: any; auth?: string }> = [];
-const realFetch = globalThis.fetch;
-beforeEach(() => {
-  routes = [];
-  calls = [];
-  globalThis.fetch = (async (input: any, init: any = {}) => {
-    const url = String(input);
-    const method = init.method ?? "GET";
-    const body = init.body ? JSON.parse(init.body) : undefined;
-    calls.push({ method, url, body, auth: init.headers?.Authorization ?? init.headers?.authorization });
-    const route = routes.find((r) => r.method === method && r.match.test(url));
-    if (!route) return new Response(`no route for ${method} ${url}`, { status: 599 });
-    const r = route.reply(url, body);
-    return new Response(r.text ?? JSON.stringify(r.json ?? {}), { status: r.status ?? 200 });
-  }) as any;
-});
-afterEach(() => { globalThis.fetch = realFetch; });
-
-const LAND_PATCH = "@@ -1,2 +1,2 @@\n a\n-b\n+c";
-/** The statuses GitHub shows on the head, newest first: every POST lands on top. */
-let shown: Array<{ context: string; state: string; description: string }> = [];
-/** A pull request of 250 files: the judged one is on GitHub's third page. */
-function github(opts: { judges?: string } = {}) {
-  shown = [];
-  const files = [
-    ...Array.from({ length: 249 }, (_, i) => ({ filename: `docs/f${i}.md`, status: "modified", patch: "@@ -1 +1 @@\n-x\n+y", additions: 1, deletions: 1 })),
-    { filename: "outreach/line/change/land.cast", status: "modified", patch: LAND_PATCH, additions: 1, deletions: 1 },
-  ];
-  routes.push(
-    { method: "GET", match: /\/pulls\/7$/, reply: () => ({ json: { changed_files: files.length, state: "open", head: { sha: HEAD, ref: "feature" }, base: { ref: "main", repo: { default_branch: "main" } } } }) },
-    { method: "GET", match: /\/pulls\/7\/files\?/, reply: (url) => { const page = Number(/[?&]page=(\d+)/.exec(url)![1]); return { json: files.slice((page - 1) * 100, page * 100) }; } },
-    { method: "GET", match: /\/contents\/outreach\/line\/change\/judges\.txt\?ref=main/, reply: () => ({ text: opts.judges ?? "# judged\noutreach/line/change/\n" }) },
-    { method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ text: "outreach/line/ ash Ashot\n" }) },
-    { method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ text: "# id name\nash Ashot\n" }) },
-    { method: "GET", match: /\/compare\/main\.\.\./, reply: () => ({ json: { merge_base_commit: { sha: MB } } }) },
-    { method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: [{ commit: { message: "Edit land\n\nRequested-by: Samvit" } }] }) },
-    { method: "POST", match: /\/graphql$/, reply: (_u, body) => {
-      const data: any = {};
-      for (const [k, e] of Object.entries(body.variables)) {
-        if (!k.startsWith("e")) continue;
-        const [, path] = String(e).split(":");
-        const dir = path;
-        const names = files.filter((f) => f.filename.startsWith(dir ? `${dir}/` : "") && !f.filename.slice(dir ? dir.length + 1 : 0).includes("/")).map((f) => f.filename.split("/").pop());
-        data[`o${k.slice(1)}`] = { entries: names.map((name) => ({ name, mode: 0o100644 })) };
-      }
-      return { json: { data: { repository: data } } };
-    } },
-    { method: "POST", match: /\/statuses\//, reply: (_u, body) => { shown.unshift(body); return { status: 201, json: {} }; } },
-    { method: "GET", match: /\/commits\/[0-9a-f]{40}\/statuses/, reply: () => ({ json: shown }) },
-    { method: "PUT", match: /\/pulls\/7\/merge$/, reply: () => ({ json: { merged: true, sha: "f".repeat(40) } }) },
-  );
-}
-
-const installation = { _id: "inst1", installation_id: 42, account_login: "union-ai", repository_selection: "all", team_id: "team1", approval_gate: [{ repository: REPO, judges_path: "outreach/line/change/judges.txt", mode: "shadow" }] };
-
-/** An action ctx whose internal calls run the real handlers over one fake db. */
-function actionCtx(db: any) {
-  const scheduled: Array<{ name: string; args: any }> = [];
-  const mutCtx = { db, scheduler: { runAfter: async (_ms: number, ref: any, args: any) => { scheduled.push({ name: getFunctionName(ref), args }); } } };
-  const ctx: any = {
-    scheduler: mutCtx.scheduler,
-    runQuery: async (ref: any, args: any) => {
-      const name = getFunctionName(ref);
-      if (name === "changeApprovals:gateFor") return (await import("./lib/changeApprovalRows")).gateOf({ db }, args.repository);
-      if (name === "changeApprovals:openNumbers") return [];
-      throw new Error(`unexpected query ${name}`);
-    },
-    runMutation: async (ref: any, args: any) => {
-      const name = getFunctionName(ref);
-      const mod: any = await import("./changeApprovals");
-      if (name === "changeApprovals:settle") return mod.settle._handler(mutCtx, args);
-      if (name === "changeApprovals:noteUnposted") return mod.noteUnposted._handler(mutCtx, args);
-      throw new Error(`unexpected mutation ${name}`);
-    },
-    runAction: async (ref: any, args: any) => {
-      const name = getFunctionName(ref);
-      if (name === "githubApp:getInstallationToken") return { token: "app_tok", expires_at: 0, permissions: { statuses: "write", contents: "write" } };
-      if (name === "githubApi:mergePullRequest") return (await import("./githubApi")).mergePullRequest._handler({} as any, args);
-      throw new Error(`unexpected action ${name}`);
-    },
-  };
-  return { ctx, scheduled };
-}
-
-const prRow = { _id: "pr1", team_id: "team1", repository: REPO, number: 7, state: "open", head_sha: HEAD, title: "t", body: "", github_pr_id: 99, author_github_username: "x", linked_session_ids: [], created_at: 1, updated_at: 1 };
+useMockedGitHub();
 
 describe("the status from GitHub", () => {
   test("a push re-posts: synchronize schedules the work-out for an opted-in repository", async () => {
@@ -172,13 +83,14 @@ describe("the status from GitHub", () => {
     github();
     const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
     const { ctx } = actionCtx(db);
-    // No run behind it, so no review gave a mechanism answer: the area's owner by main's owners file reads it.
+    // No run behind it, and the automatic review has no budget to run on: it fails closed to the area's owner, here an
+    // owners file id this deployment does not know, so the status names no one in particular.
     const out: any = await (evaluate as any)._handler(ctx, { repository: REPO, pr_number: 7, post: true });
-    expect(calls.filter((c) => /\/files\?/.test(c.url)).map((c) => /[?&]page=(\d+)/.exec(c.url)![1])).toEqual(["1", "2", "3"]);
-    expect(out).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it", posted: true, context: "approval (shadow)" });
-    const post = calls.find((c) => c.method === "POST" && /statuses/.test(c.url))!;
+    expect(gh.calls.filter((c) => /\/files\?/.test(c.url)).map((c) => /[?&]page=(\d+)/.exec(c.url)![1])).toEqual(["1", "2", "3"]);
+    expect(out).toMatchObject({ state: "pending", description: "needs a review by a person: the automatic review could not answer (the team's model budget has no room for it)", posted: true, context: "approval (shadow)" });
+    const post = gh.calls.find((c) => c.method === "POST" && /statuses/.test(c.url))!;
     expect(post.url).toEndWith(`/repos/${REPO}/statuses/${HEAD}`);
-    expect(post.body).toEqual({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it", context: "approval (shadow)" });
+    expect(post.body).toEqual({ state: "pending", description: "needs a review by a person: the automatic review could not answer (the team's model budget has no room for it)", context: "approval (shadow)" });
     expect(db._tables.pull_requests[0].approval).toMatchObject({ head_sha: HEAD, state: "pending", judged_files: ["outreach/line/change/land.cast"] });
     expect(db._tables.pull_requests[0].approval.judged_key).toMatch(/^[0-9a-f]{40}$/);
     // The whole diff (all 250 files) has its own patch id.
@@ -189,12 +101,12 @@ describe("the status from GitHub", () => {
   test("a GitHub read error keeps the engineers the gate last read; a read file replaces them", async () => {
     const stored = [{ user_id: "ash", name: "Ashot" }, { user_id: "jas", name: "Jason" }];
     const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], engineers: stored }] };
-    routes.push({ method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ status: 502, text: "bad gateway" }) });
+    gh.routes.push({ method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ status: 502, text: "bad gateway" }) });
     github();
     const db = makeFakeDb({ github_app_installations: [inst], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
     expect(await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false })).toMatchObject({ state: "pending", description: expect.stringContaining("could not read GitHub") });
     expect(db._tables.github_app_installations[0].approval_gate[0].engineers).toEqual(stored);
-    routes.shift();
+    gh.routes.shift();
     await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false });
     expect(db._tables.github_app_installations[0].approval_gate[0].engineers).toEqual([{ user_id: "ash", name: "Ashot" }]);
   });
@@ -202,7 +114,7 @@ describe("the status from GitHub", () => {
   test("what GitHub shows decides whether to post: a stale status an overlapping evaluation landed last is posted over", async () => {
     github();
     const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
-    const posts = () => calls.filter((c) => c.method === "POST" && /statuses/.test(c.url)).length;
+    const posts = () => gh.calls.filter((c) => c.method === "POST" && /statuses/.test(c.url)).length;
     const evaluateNow = async () => (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
     expect(await evaluateNow()).toMatchObject({ state: "pending", posted: true });
     expect(posts()).toBe(1);
@@ -210,11 +122,11 @@ describe("the status from GitHub", () => {
     expect((await evaluateNow()).unchanged).toBe(true);
     expect(posts()).toBe(1);
     // Two evaluations of one head overlapped and the older one's success reached GitHub last.
-    shown.unshift({ context: "approval (shadow)", state: "success", description: "approved by Ashot (card sd-1)" });
+    gh.shown.unshift({ context: "approval (shadow)", state: "success", description: "approved by Ashot (card sd-1)" });
     const swept: any = await evaluateNow();
     expect(swept.unchanged).toBeUndefined();
     expect(posts()).toBe(2);
-    expect(shown[0]).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
+    expect(gh.shown[0]).toMatchObject({ state: "pending", description: "needs a review by a person: the automatic review could not answer (the team's model budget has no room for it)" });
   });
 
   test("with the review's answer in, judged files wait on the Requested-by person", async () => {
@@ -227,8 +139,8 @@ describe("the status from GitHub", () => {
 
   test("a judges file missing on main is pending, never success", async () => {
     github();
-    routes = routes.filter((r) => !/judges/.test(String(r.match)));
-    routes.unshift({ method: "GET", match: /judges\.txt/, reply: () => ({ status: 404 }) });
+    gh.routes = gh.routes.filter((r) => !/judges/.test(String(r.match)));
+    gh.routes.unshift({ method: "GET", match: /judges\.txt/, reply: () => ({ status: 404 }) });
     const db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [], change_approvals: [], users: [] });
     const out: any = await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: true });
     expect(out).toMatchObject({ state: "pending", description: "could not read outreach/line/change/judges.txt on main; a person approves" });
@@ -241,7 +153,7 @@ describe("the status from GitHub", () => {
     ctx.runAction = async () => ({ token: "app_tok", expires_at: 0, permissions: { contents: "write" } });
     const out: any = await (evaluate as any)._handler(ctx, { repository: REPO, pr_number: 7, post: true });
     expect(out.posted).toBe(false);
-    expect(calls.some((c) => /statuses/.test(c.url))).toBe(false);
+    expect(gh.calls.some((c) => /statuses/.test(c.url))).toBe(false);
     expect(db._tables.pull_requests[0].approval).toMatchObject({ state: "unposted", description: expect.stringContaining("statuses: write") });
   });
 });
@@ -336,27 +248,27 @@ describe("merging as codecast's app", () => {
     let db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [run], change_approvals: [], users: [] });
     let out: any = await (mergeAsApp as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, expected_head_sha: HEAD });
     expect(out.error).toMatch(/^not approved: needs/);
-    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    expect(gh.calls.some((c) => c.method === "PUT")).toBe(false);
 
     // Approved by a card for this key: merges as the app.
     db = makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [run], change_approvals: [card], users: [{ _id: "u1", name: "Ashot" }] });
     await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false });
     // The card answered on this judged diff: the key codecast worked out for the head.
     db._tables.change_approvals[0].judged_key = db._tables.pull_requests[0].approval.judged_key;
-    calls = [];
+    gh.calls = [];
     out = await (mergeAsApp as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, expected_head_sha: HEAD, commit_title: "Squash", commit_message: "why" });
     expect(out).toMatchObject({ merged: true });
-    const put = calls.find((c) => c.method === "PUT")!;
+    const put = gh.calls.find((c) => c.method === "PUT")!;
     expect(put.body).toMatchObject({ merge_method: "squash", sha: HEAD, commit_title: "Squash", commit_message: "why" });
     expect(put.auth).toBe("Bearer app_tok");
 
     // GitHub's status says otherwise: refused.
-    routes = routes.filter((r) => !/statuses\//.test(String(r.match)) || r.method === "POST");
-    routes.push({ method: "GET", match: /\/commits\/[0-9a-f]{40}\/statuses/, reply: () => ({ json: [{ context: "approval (shadow)", state: "pending" }] }) });
-    calls = [];
+    gh.routes = gh.routes.filter((r) => !/statuses\//.test(String(r.match)) || r.method === "POST");
+    gh.routes.push({ method: "GET", match: /\/commits\/[0-9a-f]{40}\/statuses/, reply: () => ({ json: [{ context: "approval (shadow)", state: "pending" }] }) });
+    gh.calls = [];
     out = await (mergeAsApp as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, expected_head_sha: HEAD });
     expect(out.error).toMatch(/status on .* is pending/);
-    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+    expect(gh.calls.some((c) => c.method === "PUT")).toBe(false);
   });
 });
 
@@ -427,7 +339,7 @@ test("the Release Captain's exemption needs every commit of the pull request to 
   const outcome = async (commits: any[]) => {
     github();
     // Ahead of github()'s own commits route, so this list is the one read.
-    routes.unshift({ method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: commits }) });
+    gh.routes.unshift({ method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: commits }) });
     const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [captain], org_roles: [{ _id: "role1", handle: "release", name: "Release Captain" }], change_approvals: [], users: [] }));
     return ((await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false })) as any).state;
   };
@@ -440,7 +352,9 @@ describe("the approval card", () => {
   const run = (over: Record<string, any> = {}) => ({ _id: "run1", user_id: "host", team_id: "team1", status: "running", created_at: 1, task_id: "t1", primary_conversation_id: "c_log", pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 }, ...reviewed(false), ...over });
   const users = [{ _id: "u_jason", name: "Jason Benn" }, { _id: "u_ashot", name: "Ashot" }, { _id: "u_cam", name: "Cameron" }, { _id: "host", name: "Host" }];
   const memberships = users.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id }));
-  const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" }];
+  // Each person's own session too: a card no run is behind is asked only there.
+  const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" },
+    ...["u_jason", "u_ashot", "u_cam"].map((u) => ({ _id: `c_own_${u}`, session_id: `own-${u}`, user_id: u, title: "Own", updated_at: 1, team_id: "team1" }))];
   const world = (tables: Record<string, any[]> = {}) => {
     // Every world gets its own copies: the fake db patches rows in place.
     const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], users, team_memberships: memberships, conversations, anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [{ _id: "tc1", task_id: "t1", comment_type: "review", text: "Verdict: ship. It edits land.cast.", created_at: 5 }], pending_messages: [], workflow_runs: [run()], ...tables }));
@@ -448,6 +362,8 @@ describe("the approval card", () => {
   };
   const people = { title: "Edit land", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [{ user_id: "u_jason", name: "Jason" }] };
   const args = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: ["outreach/line/change/land.cast"], key: "k1", people };
+  /** No run behind it, and the automatic review gave no answer for the head: a person reads it whole. */
+  const noAnswer = { ...args, automatic: { head_sha: HEAD, failed: true, reason: "the team's model budget has no room for it", at: 1 } };
   const cards = (db: any) => db._tables.session_decisions.filter((d: any) => d.approval_card);
 
   test("judged files a press did not list go to the presser, once per judged diff, with the files and the review's words", async () => {
@@ -494,17 +410,26 @@ describe("the approval card", () => {
     expect(cards(w.db).map((c: any) => c.status)).toEqual(["withdrawn"]);
   });
 
-  test("the area's owner is the owners file's user id; with no owners file, the pull request's author", async () => {
+  test("on a pull request no run is behind the author is asked nothing: owner, admins and installer count without them (second review round 2, finding 2)", async () => {
     const byId = world({ workflow_runs: [] });
-    await (settle as any)._handler(byId.ctx, args);
+    await (settle as any)._handler(byId.ctx, noAnswer);
     expect(cards(byId.db)[0].asked_user_ids).toEqual(["u_ashot"]);
-    const author = world({ workflow_runs: [], users: [...users, { _id: "u_gh", name: "Pat", github_username: "pat-gh" }] });
-    expect(await (settle as any)._handler(author.ctx, { ...args, people: { title: "Bump", author_login: "pat-gh", engineers: [] } })).toMatchObject({ description: "needs a review by Pat: no codecast run reviewed it" });
-    expect(cards(author.db)[0].asked_user_ids).toEqual(["u_gh"]);
-    // An id this deployment does not know is named in the status and carded to nobody.
-    const unknown = world({ workflow_runs: [] });
-    expect(await (settle as any)._handler(unknown.ctx, { ...args, people: { ...people, area_owner: { user_id: "not-an-id", name: "Samvit" } } })).toMatchObject({ description: "needs a review by Samvit: no codecast run reviewed it" });
-    expect(cards(unknown.db)).toEqual([]);
+    const admins = memberships.map((m) => (m.user_id === "u_ashot" || m.user_id === "u_jason" || m.user_id === "u_cam" ? { ...m, role: "admin", joined_at: m.user_id === "u_ashot" ? 0 : m.user_id === "u_jason" ? 1 : 2 } : m));
+    const ashotWrote = { ...people, author_login: "ashot-gh" };
+    const withLogins = users.map((u) => (u._id === "u_ashot" ? { ...u, github_username: "ashot-gh" } : u._id === "u_jason" ? { ...u, github_username: "jason-gh" } : u));
+    // The owner wrote it (Union's owners file names Ashot for everything): the admins other than Ashot, all asked.
+    const ownerWrote = world({ workflow_runs: [], users: withLogins, team_memberships: admins });
+    expect(await (settle as any)._handler(ownerWrote.ctx, { ...noAnswer, people: ashotWrote })).toMatchObject({ description: "needs a review by Jason Benn: the automatic review could not answer (the team's model budget has no room for it)" });
+    expect(cards(ownerWrote.db)[0].asked_user_ids).toEqual(["u_jason", "u_cam"]);
+    // A failure with no owner, written by a member who is an admin: every reason leaves them out.
+    const noOwner = world({ workflow_runs: [], users: withLogins, team_memberships: admins });
+    await (settle as any)._handler(noOwner.ctx, { ...noAnswer, people: { title: "Bump", author_login: "jason-gh", engineers: [] } });
+    expect(cards(noOwner.db)[0].asked_user_ids).toEqual(["u_ashot", "u_cam"]);
+    // An unknown owner id, and no admin but its author: whoever installed codecast's app.
+    const inst = { ...installation, installed_by_user_id: "u_cam" };
+    const onlyAuthor = world({ workflow_runs: [], users: withLogins, github_app_installations: [inst], team_memberships: memberships.map((m) => (m.user_id === "u_jason" ? { ...m, role: "admin" } : m)) });
+    expect(await (settle as any)._handler(onlyAuthor.ctx, { ...noAnswer, people: { ...people, author_login: "jason-gh", area_owner: { user_id: "not-an-id", name: "Samvit" } } })).toMatchObject({ description: "needs a review by Cameron: the automatic review could not answer (the team's model budget has no room for it)" });
+    expect(cards(onlyAuthor.db)[0].asked_user_ids).toEqual(["u_cam"]);
   });
 
   test("agent work with nobody's press goes to its Requested-by person; a mechanism to an engineer presser, else the area's owner", async () => {
@@ -525,10 +450,30 @@ describe("the approval card", () => {
     expect(cards(w.db)[0].asked_user_ids).toEqual(["u_jason"]);
   });
 
-  test("a pull request no codecast run is behind asks the area's owner from the team agent's session", async () => {
-    const w = world({ workflow_runs: [] });
-    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
-    expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_anchor", approval: { reason: "review" } });
+  test("a pull request no codecast run is behind asks the area's owner in their own session, never the team agent's or the pull request's", async () => {
+    const w = world({ workflow_runs: [], pull_requests: [{ ...prRow, linked_session_ids: ["c_log"] }] });
+    expect(await (settle as any)._handler(w.ctx, noAnswer)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review could not answer (the team's model budget has no room for it)" });
+    expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_own_u_ashot", approval: { reason: "review" } });
+  });
+
+  test("with no session of theirs in the repository's team, they are told and no card key is kept; the card is posted once they have one (round 4, findings 2 and 3)", async () => {
+    const own = world({ workflow_runs: [], anchors: [], conversations: [{ _id: "c_mine", session_id: "mine", user_id: "u_ashot", title: "Mine", updated_at: 5, team_id: "team1" }] });
+    await (settle as any)._handler(own.ctx, noAnswer);
+    expect(cards(own.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_mine" });
+    // Ashot's newest session is another workspace's: never used. He is told, and nothing remembers a card.
+    const elsewhere = world({ workflow_runs: [], anchors: [], notifications: [], conversations: [{ _id: "c_other_team", session_id: "other", user_id: "u_ashot", title: "Elsewhere", updated_at: 9, team_id: "team2" }] });
+    await (settle as any)._handler(elsewhere.ctx, noAnswer);
+    expect(cards(elsewhere.db)).toEqual([]);
+    expect(elsewhere.db._tables.notifications).toEqual([expect.objectContaining({ recipient_user_id: "u_ashot", type: "card_waiting" })]);
+    expect(elsewhere.db._tables.pull_requests[0].approval.card_key).toBeUndefined();
+    // The next evaluation tries again, telling him nothing new while the notice is unread.
+    await (settle as any)._handler(elsewhere.ctx, noAnswer);
+    expect(elsewhere.db._tables.notifications).toHaveLength(1);
+    // He starts a session in the team: the next evaluation posts the card there.
+    elsewhere.db._tables.conversations.push({ _id: "c_team_now", session_id: "now", user_id: "u_ashot", title: "Now", updated_at: 10, team_id: "team1" });
+    await (settle as any)._handler(elsewhere.ctx, noAnswer);
+    expect(cards(elsewhere.db)).toEqual([expect.objectContaining({ asked_user_ids: ["u_ashot"], conversation_id: "c_team_now" })]);
+    expect(elsewhere.db._tables.pull_requests[0].approval.card_key).toBeDefined();
   });
 
   // The answer path marks the card answered, then settles it.
@@ -539,21 +484,23 @@ describe("the approval card", () => {
 
   test("a no-run card approves the head it showed: a later push, even of unjudged code, asks again", async () => {
     const w = world({ workflow_runs: [] });
-    await (settle as any)._handler(w.ctx, args);
+    await (settle as any)._handler(w.ctx, noAnswer);
     const [card] = cards(w.db);
     expect(card.approval).toMatchObject({ judged_key: `head:${HEAD}`, reason: "review" });
     await answer(w, card, 20);
-    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
+    expect(await (settle as any)._handler(w.ctx, noAnswer)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
     // Same judged diff (key k1), new head: the judged-diff key no longer carries a no-run approval.
     const next = "c".repeat(40);
-    expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: next })).toMatchObject({ state: "pending", description: "needs a review by Ashot: no codecast run reviewed it" });
+    expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: next, automatic: { ...noAnswer.automatic, head_sha: next } })).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review could not answer (the team's model budget has no room for it)" });
     expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["answered", `head:${HEAD}`], ["pending", `head:${next}`]]);
   });
 
-  test("a no-run pull request with no judged file waits for the automatic review and cards nobody", async () => {
-    const w = world({ workflow_runs: [] });
-    expect(await (settle as any)._handler(w.ctx, { ...args, judged: [], key: "none" })).toEqual({ state: "pending", description: "waiting for an automatic review: no codecast run reviewed it", context: "approval (shadow)" });
-    expect(cards(w.db)).toEqual([]);
+  test("a no-run pull request with no answer yet for its head waits for the automatic review and cards nobody, judged files or not", async () => {
+    for (const over of [{ judged: [], key: "none" }, {}]) {
+      const w = world({ workflow_runs: [] });
+      expect(await (settle as any)._handler(w.ctx, { ...args, ...over })).toEqual({ state: "pending", description: "waiting for codecast's automatic review", context: "approval (shadow)" });
+      expect(cards(w.db)).toEqual([]);
+    }
   });
 
   test("an answered card on a pull request codecast could not read approves that head", async () => {
@@ -669,6 +616,14 @@ describe("the approval card", () => {
     expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(true);
     expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(false);
   });
+});
+
+test("an api-token answer to a --run card is refused, Don't run included, as on main: the asking agent holds that token too", async () => {
+  const card = { _id: "sd_run", short_id: "sd-501", status: "pending", conversation_id: "c_me", user_id: "u_me", asked_user_ids: ["u_me"], question: "Grant ads spend?", kind: "single", options: [{ label: "Approve" }, { label: "Decline" }], run: { argv: ["role", "authority"], state: "waiting", device_id: "dev", cwd: "/repo" }, created_at: 1 };
+  const db = makeFakeDb(structuredClone({ session_decisions: [card], conversations: [{ _id: "c_me", session_id: "me", user_id: "u_me" }], users: [{ _id: "u_me", name: "Me" }], decision_inbox: [] }));
+  const out = await answerCore({ db, scheduler: { runAfter: async () => {} } } as any, { userId: "u_me" as any }, { decision_id: "sd-501", answer_index: 1 });
+  expect(out).toEqual({ error: expect.stringContaining("runs a command in your name") });
+  expect(db._tables.session_decisions[0].status).toBe("pending");
 });
 
 test("Ship's list: the pull request's judged diff and the checkout's uncommitted judged files, each by the sessions that wrote it", async () => {

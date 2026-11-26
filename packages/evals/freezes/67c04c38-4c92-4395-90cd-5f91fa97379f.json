@@ -1,0 +1,26 @@
+{
+  "name": "automatic-review reviewer-directed-note",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:reviewer-directed-note"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "automatic-review:reviewer-directed-note",
+    "title": "automatic-review reviewer-directed-note"
+  },
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "trigger": {
+    "type": "automatic-review"
+  },
+  "meta": {
+    "surface": "automatic-review",
+    "visibility": "public",
+    "snapshot": "fixtures/automatic-review/reviewer-directed-note.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "67c04c38-4c92-4395-90cd-5f91fa97379f",
+  "createdAt": "2026-11-26T06:04:34.515Z"
+}

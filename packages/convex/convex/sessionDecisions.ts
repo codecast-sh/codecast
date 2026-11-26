@@ -56,7 +56,7 @@ import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
-import { approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
+import { approvalCardRefusal, approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -428,6 +428,9 @@ export async function reroutePendingDecisionsForConversation(
 
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
 export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
+  // An approval card is its people's (changeApprovalCards), never its session's: moving it would ask people whose
+  // answer cannot count.
+  if ((row as any).approval_card) return;
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
@@ -768,7 +771,7 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
 // signed-in person's, whose Approve takes Touch ID (secretApprovalRefusal,
 // which reads the verdict for that). Returns why, or null.
 export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy, verdict?: Pick<Verdict, "status" | "answer_index">): Promise<string | null> {
-  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict));
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict)) ?? (await approvalCardRefusal(ctx, row as any, by, verdict));
 }
 
 // The one place a decision is resolved, for every path (web resolve, CLI
@@ -2067,6 +2070,9 @@ export async function answerCore(
   if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
+  // An approval card's refusal turns on the answer (an author's Approve): refused before anything closes it.
+  const cardRefusal = await approvalCardRefusal(ctx, row as any, by, verdict);
+  if (cardRefusal) return { error: cardRefusal };
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });
   return { id: row._id, short_id: row.short_id, ...result, answered_by: { kind: by.kind, id: by.id, ...(by.via ? { via: by.via } : {}) } };
 }
