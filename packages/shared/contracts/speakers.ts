@@ -237,13 +237,20 @@ function activityKeyOf(activity: SpeakerActivity, s: number, e: number, prev: st
  * `words_to_lines_activity` and `words_to_lines`
  * (packages/evals/speech/lab/lab.py), kept identical by a parity fixture.
  */
+const SENTENCE_END = /[.?!]["'\u201d\u2019)]?$/;
+
 export function wordsToLines(
   words: ReadonlyArray<TimedWord>,
   turns: ReadonlyArray<SpeakerTurn>,
-  opts: { gap?: number; activity?: SpeakerActivity; floor?: number } = {},
+  opts: { gap?: number; activity?: SpeakerActivity; floor?: number; longLine?: number; maxLine?: number } = {},
 ): SpeakerLine[] {
   const gap = opts.gap ?? 1.2;
   const floor = opts.floor ?? 0.15;
+  // A monologue with no pause would otherwise be one wall of text: past
+  // `longLine` seconds a line ends at the next sentence end, and never runs past
+  // `maxLine`.
+  const longLine = opts.longLine ?? 20;
+  const maxLine = opts.maxLine ?? 40;
   const ts = [...turns].sort((a, b) => a.start - b.start);
   const lines: SpeakerLine[] = [];
   let cur: SpeakerLine | null = null;
@@ -254,7 +261,10 @@ export function wordsToLines(
       w.key !== undefined ? w.key : opts.activity ? activityKeyOf(opts.activity, s, e, prev, floor) : turnKeyOf(ts, s, e);
     prev = best;
     const word = { text: w.text, start: s, end: e };
-    if (cur && cur.key === best && s - cur.end <= gap) {
+    const lastWord = cur?.words[cur.words.length - 1];
+    const tooLong =
+      !!cur && (cur.end - cur.start >= maxLine || (cur.end - cur.start >= longLine && SENTENCE_END.test(lastWord?.text ?? "")));
+    if (cur && cur.key === best && s - cur.end <= gap && !tooLong) {
       cur.words.push(word);
       cur.end = e;
     } else {

@@ -116,7 +116,7 @@ describe("wordsToLines", () => {
     for (const c of parity.cases as any[]) {
       const words = c.words.map(([text, start, end]: any[]) => ({ text: String(text), start: Number(start), end: Number(end) }));
       const turns = c.turns.map((t: any) => ({ key: t.speaker, start: t.start, end: t.end }));
-      const got = wordsToLines(words, turns, { gap: c.gap, activity: c.activity, floor: c.floor });
+      const got = wordsToLines(words, turns, { gap: c.gap, activity: c.activity, floor: c.floor, longLine: Infinity, maxLine: Infinity });
       const want = c.lines.map((l: any) => ({
         key: l.speaker,
         start: l.start,
@@ -149,5 +149,26 @@ describe("wordsToLines", () => {
       [{ key: "spk:0", start: 0, end: 0.55 }, { key: "spk:1", start: 0.55, end: 4 }],
     );
     expect(lines.map((l) => [l.key, l.text])).toEqual([["spk:0", "a b"], ["spk:1", "c"], ["spk:1", "d"]]);
+  });
+});
+
+describe("wordsToLines on a long monologue", () => {
+  const word = (text: string, start: number) => ({ text, start, end: start + 0.4, key: "spk:0" });
+  test("a line past 20 s ends at the next sentence end, and nothing runs past 40 s", () => {
+    const words = [];
+    for (let i = 0; i < 120; i++) words.push(word(i % 10 === 9 ? `w${i}.` : `w${i}`, i * 0.5));
+    const lines = wordsToLines(words, []);
+    expect(lines.length).toBeGreaterThan(1);
+    for (const l of lines) expect(l.end - l.start).toBeLessThanOrEqual(40.4);
+    expect(lines[0].text.endsWith(".")).toBe(true);
+    expect(lines[0].end - lines[0].start).toBeGreaterThanOrEqual(20);
+    expect(lines.map((l) => l.text).join(" ")).toBe(words.map((w) => w.text).join(" "));
+  });
+  test("no sentence end: split at 40 s", () => {
+    const words = [];
+    for (let i = 0; i < 120; i++) words.push(word(`w${i}`, i * 0.5));
+    const lines = wordsToLines(words, []);
+    expect(lines.length).toBe(2);
+    expect(lines[0].end - lines[0].start).toBeGreaterThanOrEqual(40);
   });
 });
