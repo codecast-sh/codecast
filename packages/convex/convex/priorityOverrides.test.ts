@@ -345,6 +345,16 @@ describe("corrections", () => {
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });
   });
 
+  test("a delete sent before the server acknowledged the correction finds it by its client key and wins; another person's key finds nothing", async () => {
+    const w = await seeded();
+    const me = as(w, w.ana);
+    // The outbox sends the create, then the delete with the id the web painted.
+    await me.mutation(pri.correct, { short_id: "pri-1", text: "Wrong milestone", client_key: "ck-1" });
+    await expect(as(w, w.ben).mutation(pri.deleteCorrection, { correction_id: "local-correction-ck-1" })).rejects.toThrow("no correction local-correction-ck-1 of yours");
+    await me.mutation(pri.deleteCorrection, { correction_id: "local-correction-ck-1" });
+    expect(await w.t.run((ctx) => ctx.db.query("priority_corrections").collect())).toEqual([]);
+  });
+
   test("a pending correction alone puts the pair in the sweep", async () => {
     const w = await seeded();
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });

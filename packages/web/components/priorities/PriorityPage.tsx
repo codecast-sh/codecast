@@ -174,8 +174,8 @@ function PriorityBody({ row }: { row: PriorityView }) {
                   <span className="w-14 shrink-0 text-meta tabular-nums text-sol-text-dim max-sm:w-full">{shortDate(c.created_at)}</span>
                   <span data-correction-text className="min-w-0 flex-1 break-words max-sm:basis-full">{about && <span className="text-sol-text-muted">{about}: </span>}<span className="text-sol-text">{c.text}</span></span>
                   <span className="shrink-0 text-meta text-sol-text-dim max-sm:mr-auto">{c.status === "applied" ? "kept by the pass" : "waits for the next pass"}</span>
-                  {/* A correction still on its way has no id the server knows. */}
-                  {row.mine && !c._id.startsWith("local-") && (
+                  {/* One still on its way deletes by its local id: the server finds it by the client key it was written with. */}
+                  {row.mine && (
                     <button
                       type="button"
                       data-delete-correction={c._id}

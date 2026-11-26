@@ -389,11 +389,16 @@ test("the page: Correct… beside Share writes a correction that lists at once; 
     const listed = () => [...page.container.querySelectorAll("[data-correction]")].map((n) => n.textContent);
     expect(listed()[0]).toContain("Notes belong to the deploy milestone");
     expect(await dispatched("correctPriority")).toEqual([["pri-2", "Notes belong to the deploy milestone", null, expect.any(String)]]);
-    // The one still on its way has no delete yet; the stored one does.
-    expect(page.container.querySelectorAll("[data-delete-correction]")).toHaveLength(1);
+    // The one still on its way deletes by its local id (the server finds it by its client key), as the stored one does by its own.
+    const pending = [...page.container.querySelectorAll("[data-delete-correction]")].map((n) => n.getAttribute("data-delete-correction")!);
+    expect(pending).toHaveLength(2);
+    const local = pending.find((id) => id.startsWith("local-correction-"))!;
+    expect(local).toBeDefined();
     await press(page.container.querySelector(`[data-delete-correction="${fixtureId("corr1")}"]`)!);
     expect(listed().some((t) => t?.includes("Deploy notes are polish"))).toBe(false);
-    expect(await dispatched("deletePriorityCorrection")).toEqual([[fixtureId("corr1")]]);
+    await press(page.container.querySelector(`[data-delete-correction="${local}"]`)!);
+    expect(listed().some((t) => t?.includes("Notes belong to the deploy milestone"))).toBe(false);
+    expect(await dispatched("deletePriorityCorrection")).toEqual([[fixtureId("corr1")], [local]]);
   } finally {
     await page.unmount();
   }

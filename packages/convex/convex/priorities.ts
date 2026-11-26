@@ -867,9 +867,23 @@ async function doCorrect(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, sho
   return correctionOut({ _id: id, _creationTime: 0, ...row });
 }
 
+/** A web correction's id before the server acknowledged it: the writer's own client key behind this prefix (web prioritiesSlice correctPriority). */
+const LOCAL_CORRECTION = "local-correction-";
+
+/**
+ * Deletes one of the viewer's corrections, by id or, for one the web painted
+ * before the server acknowledged it, by `local-correction-<clientKey>`: the
+ * outbox sends the create first, so the delete finds it and wins.
+ */
 async function doCorrectionDelete(ctx: Ctx, viewer: Id<"users">, ref: string): Promise<Result<{ deleted: string }>> {
-  const id = ctx.db.normalizeId("priority_corrections", ref.trim());
-  const c: Doc<"priority_corrections"> | null = id ? await ctx.db.get(id) : null;
+  const r = ref.trim();
+  const id = ctx.db.normalizeId("priority_corrections", r);
+  const clientKey = r.startsWith(LOCAL_CORRECTION) ? r.slice(LOCAL_CORRECTION.length).slice(0, 100) : null;
+  const c: Doc<"priority_corrections"> | null = id
+    ? await ctx.db.get(id)
+    : clientKey
+      ? await ctx.db.query("priority_corrections").withIndex("by_user_client_key", (q: any) => q.eq("user_id", viewer).eq("client_key", clientKey)).first()
+      : null;
   if (!c || String(c.user_id) !== String(viewer)) return { error: `no correction ${ref} of yours` };
   await ctx.db.delete(c._id);
   return { deleted: c._id };
