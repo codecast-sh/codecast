@@ -37,6 +37,7 @@ import {
   AUTO_CONTINUE_WINDOW_MS,
   isAutoContinueEnabled,
   autoRecoveryEnabled,
+  withPersonRecovery,
   isBlockedConversation,
   isWorkflowRunLog,
   isCurrentBlock,
@@ -1277,26 +1278,6 @@ export const throttleContinueCheck = internalMutation({
   },
 });
 
-// The recovery toggles live on the device row because both behaviors are
-// machine-global — it's this machine's login that rotates through profiles
-// (auto-switch) or waits for its own window to reset (auto-continue). Remotes
-// mirror the primary's account, so neither applies to them.
-async function loadPrimaryForToggle(
-  ctx: { db: any },
-  userId: Id<"users">,
-  deviceId: string,
-): Promise<Doc<"devices">> {
-  const device = await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
-    .first();
-  if (!device) throw new Error("Unknown device");
-  if (device.is_remote) {
-    throw new Error("Auto-switch runs on the primary machine — remotes mirror its account");
-  }
-  return device;
-}
-
 // The primary machine's recovery flags, for the CLI (`cast usage`): what
 // happens to a session on this machine when its account hits a limit. Token
 // auth so a daemon-side caller can ask without a browser session.
@@ -1315,34 +1296,6 @@ export const recoveryStatus = query({
       mode: recoveryModeOf(primary),
       session_tokens: true,
     };
-  },
-});
-
-// The web toggle for account rotation.
-export const setAutoSwitchAccounts = mutation({
-  args: {
-    api_token: v.optional(v.string()),
-    device_id: v.string(),
-    enabled: v.boolean(),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
-    await ctx.db.patch(device._id, {
-      cc_auto_switch: args.enabled,
-      // Auto-switch and ask-first are mutually exclusive: turning rotation on
-      // clears the ask-first flag so the two can never both be set.
-      ...(args.enabled ? { cc_recovery_ask: false } : {}),
-      // A fresh toggle starts a fresh incident history either way.
-      cc_auto_switch_state: undefined,
-    });
-    // Turning it on while sessions are already parked should act now, not on
-    // the next limit event.
-    if (args.enabled) {
-      await scheduleAutoSwitchCheck(ctx, userId);
-    }
-    return { enabled: args.enabled };
   },
 });
 
@@ -1529,7 +1482,6 @@ export const setSessionTokens = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    await loadPrimaryForToggle(ctx, userId, args.device_id);
     return { enabled: true, mint: null };
   },
 });
@@ -1567,53 +1519,31 @@ export const requestUsageRefresh = mutation({
   },
 });
 
-// The web toggle for same-account resume at window reset (default on — see
-// isAutoContinueEnabled). Shares the auto-switch bookkeeping and check.
-export const setAutoContinueAccounts = mutation({
-  args: {
-    api_token: v.optional(v.string()),
-    device_id: v.string(),
-    enabled: v.boolean(),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
-    await ctx.db.patch(device._id, {
-      cc_auto_continue: args.enabled,
-      cc_auto_switch_state: undefined,
-    });
-    if (args.enabled) {
-      await scheduleAutoSwitchCheck(ctx, userId);
-    }
-    return { enabled: args.enabled };
-  },
-});
-
-// The recovery mode selector — one mutually-exclusive choice, so the three
-// flags can never contradict (auto-switch AND ask-first both on was the bug
-// this replaces). "ask" is the default a new machine gets: recommend a switch
-// and wait. "auto" rotates accounts without asking. "resume" waits for the
-// window to reset on the same account. "off" parks and does nothing. Every
-// mode keeps same-account resume unless it is "off".
+// The recovery mode selector: one mutually exclusive choice for the person,
+// so every machine they run recovers the same way (withPersonRecovery). "ask"
+// recommends a switch and waits. "auto" rotates accounts without asking.
+// "resume" waits for the window to reset on the same account. "off" parks and
+// does nothing. Every mode but "off" resumes on the same account.
 export const setRecoveryMode = mutation({
   args: {
     api_token: v.optional(v.string()),
-    device_id: v.string(),
+    // Sent by clients from before the mode was per person; ignored.
+    device_id: v.optional(v.string()),
     mode: v.union(v.literal("ask"), v.literal("auto"), v.literal("resume"), v.literal("off")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const device = await loadPrimaryForToggle(ctx, userId, args.device_id);
-    await ctx.db.patch(device._id, {
-      cc_recovery_ask: args.mode === "ask",
-      cc_auto_switch: args.mode === "auto",
-      cc_auto_continue: args.mode !== "off",
-      // A fresh mode starts a fresh incident history — no stale proposal or
-      // attempt list carries across the change.
-      cc_auto_switch_state: undefined,
-    });
+    await ctx.db.patch(userId, { cc_recovery_mode: args.mode });
+    // A fresh mode starts a fresh incident history — no stale proposal or
+    // attempt list carries across the change, on whichever machine holds one.
+    const devices: Doc<"devices">[] = await ctx.db
+      .query("devices")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    for (const d of devices) {
+      if (d.cc_auto_switch_state) await ctx.db.patch(d._id, { cc_auto_switch_state: undefined });
+    }
     // Ask and auto both act on sessions already parked: ask records a
     // recommendation now, auto switches now, rather than waiting for the next
     // limit event.
@@ -2541,10 +2471,11 @@ export const listAccountProfiles = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const now = Date.now();
-    const devices = await ctx.db
+    const user = await ctx.db.get(userId);
+    const devices = (await ctx.db
       .query("devices")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
+      .collect()).map((d) => withPersonRecovery(d, user));
     // Old daemons report only the machine-wide codex_usage snapshot; shape it
     // as a single-profile inventory so the web renders one code path. The
     // legacy field names match the new usage shape except plan_type, which

@@ -39,6 +39,7 @@ import {
   pickSignin,
   readSigninState,
   rememberJar,
+  resaveSigninCommand,
   scopedJar,
   stillSignedIn,
   writeBackJar,
@@ -253,6 +254,8 @@ export type SigninUseDeps = {
   connect?: (port: CdpEndpoint, sites: string[]) => Promise<BrowserConn>;
   /** Where this machine's sign-in memory lives (signin.ts); tests point it elsewhere. */
   stateFile?: string;
+  /** Told the sign-in when the browser goes on to the page holding it (put in now, or already there), so a login page after that can blame the saved sign-in. */
+  used?: (meta: SecretMeta) => void;
 };
 
 /**
@@ -327,6 +330,7 @@ export async function useVaultSignin(rawUrl: string, deps: SigninUseDeps): Promi
     if (memory && meta.ask_first) writeSigninMemory(meta._id, { ...memory, ...approvals(memory) }, deps.stateFile);
 
     if (memory && stillSignedIn(memory, present)) {
+      deps.used?.(meta);
       const fresh = writeBackJar(memory, aliveCookies(present, now()), now());
       if (!fresh) return;
       // A refresh replaces the whole payload: the saved jar's storage is what
@@ -361,8 +365,9 @@ export async function useVaultSignin(rawUrl: string, deps: SigninUseDeps): Promi
     // Every saved cookie has expired (or none is in scope): nothing to put in,
     // and nothing to remember, or the next open would take this browser's
     // signed-out cookies for a newer session and write them over the saved one.
-    if (!savedJar.cookies.length) return deps.log(`vault sign-in ${meta.name} has expired: save it again with cast vault save-signin ${host}`);
+    if (!savedJar.cookies.length) return deps.log(`vault sign-in ${meta.name} has expired: \`${resaveSigninCommand(host, meta)}\` asks your person to save it again from their Chrome`);
     const cookies = cookiesToPutIn(savedJar.cookies, present, memory, now());
+    deps.used?.(meta);
     if (cookies.length) {
       await putIn({ ...savedJar, cookies });
       deps.log(`signed in with vault sign-in ${meta.name}${saved.payload.account_hint ? ` (${saved.payload.account_hint})` : ""}`);
@@ -427,9 +432,11 @@ export async function bridgeBrowserConn(
  * NEEDS_APPROVAL_EXIT), so the agent never works the site signed out
  * believing it was signed in.
  */
-export async function signInOnOpen(url: string, conversation: () => string | null, log: (line: string) => void, bridge?: CdpEndpoint): Promise<void> {
+export async function signInOnOpen(url: string, conversation: () => string | null, log: (line: string) => void, bridge?: CdpEndpoint): Promise<SecretMeta | null> {
   const port = bridge ?? readState()?.port;
-  if (!port) return;
-  const held = await useVaultSignin(url, { port, conversation, log, ...(bridge ? { connect: (ep: CdpEndpoint, sites: string[]) => bridgeBrowserConn(ep, undefined, sites) } : {}) });
+  if (!port) return null;
+  let used: SecretMeta | null = null;
+  const held = await useVaultSignin(url, { port, conversation, log, used: (meta) => (used = meta), ...(bridge ? { connect: (ep: CdpEndpoint, sites: string[]) => bridgeBrowserConn(ep, undefined, sites) } : {}) });
   if (held) exitForApproval(held);
+  return used;
 }
