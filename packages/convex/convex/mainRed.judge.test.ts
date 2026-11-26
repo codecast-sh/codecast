@@ -234,28 +234,40 @@ describe("judge, on what GitHub said about two real runs", () => {
     expect(await w.t.run(async (ctx) => (await ctx.db.get(row))?.state)).toBe("rerunning");
   });
 
-  test("a red run whose only unpassed job was cancelled is never rerun: unproven on that job, and the next run passing it recovers it", async () => {
+  /** The flake run's jobs with test-web cancelled, as a job past its timeout-minutes ends; `verify`, which needs it, fails. */
+  const timedOut = (jobs: any) => ({ ...jobs, jobs: jobs.jobs.map((j: any) => (j.name === "test-web" ? { ...j, conclusion: "cancelled" } : j)) });
+
+  test("a job cancelled inside a red run timed out: it is the failed job (verify behind it is not), and its log is read and rerun", async () => {
     const w = await connected();
-    await w.base();
-    await w.commitAt(recorded.RED_SHA, 1002, "Find stations of hosted runs", "bo", w.boConv);
-    await w.commitAt(recorded.FLAKE_SHA, 1003, "next");
-    // The flake run's jobs with test-web cancelled (a person, or its timeout): `verify`, which needs it, still fails.
-    const cancelled = { ...recorded.FLAKE_JOBS_A1, jobs: recorded.FLAKE_JOBS_A1.jobs.map((j: any) => (j.name === "test-web" ? { ...j, conclusion: "cancelled" } : j)) };
-    let run: any = cancelled;
-    const gh = github({ jobs: () => run, logs: recorded.FLAKE_LOGS_A1 });
+    const gh = github({ jobs: () => timedOut(recorded.FLAKE_JOBS_A1), logs: recorded.FLAKE_LOGS_A1 });
     try {
-      const first = await w.finish(recorded.RED_RUN, recorded.RED_SHA, 1, "failure");
-      expect(first).toMatchObject({ state: "unproven", failed: ["test-web"] });
-      expect(first!.rerun_refused).toBe("every job that did not pass was cancelled (test-web), which proves nothing");
-      // No rerun, and no log read for a job that never failed.
-      expect(gh.calls.filter((c) => c.startsWith("POST") || c.includes("/logs"))).toEqual([]);
-      run = recorded.FLAKE_JOBS_A2;
-      expect(await w.finish(991, recorded.FLAKE_SHA, 1, "success")).toMatchObject({ state: "green" });
+      const first = await w.finish(recorded.FLAKE_RUN, recorded.FLAKE_SHA, 1, "failure");
+      expect(first).toMatchObject({ state: "rerunning", failed: ["test-web"] });
+      expect(first!.jobs).toContainEqual({ name: "test-web", ok: false });
+      expect(gh.calls.filter((c) => c.includes("/logs") || c.startsWith("POST"))).toEqual([
+        `GET /repos/${REPO}/actions/jobs/136247463040/logs`,
+        `POST /repos/${REPO}/actions/runs/${recorded.FLAKE_RUN}/rerun-failed-jobs`,
+      ]);
     } finally {
       gh.restore();
     }
-    expect(await w.t.run(async (ctx) => (await ctx.db.query("main_ci_runs").collect()).find((r) => r.run_id === String(recorded.RED_RUN))?.state)).toBe("recovered");
-    expect(await w.events("main_red")).toHaveLength(0);
+  });
+
+  test("a job that times out again on the rerun is red, never unproven: it names the culprit", async () => {
+    const w = await connected();
+    await w.base();
+    await w.commitAt(recorded.FLAKE_SHA, 1002, "Slow the calls page", "ana", w.anaConv);
+    let attempt = 1;
+    const gh = github({ jobs: () => timedOut(attempt === 1 ? recorded.FLAKE_JOBS_A1 : recorded.FLAKE_JOBS_A2), logs: recorded.FLAKE_LOGS_A1 });
+    try {
+      expect(await w.finish(recorded.FLAKE_RUN, recorded.FLAKE_SHA, 1, "failure")).toMatchObject({ state: "rerunning" });
+      attempt = 2;
+      expect(await w.finish(recorded.FLAKE_RUN, recorded.FLAKE_SHA, 2, "failure")).toMatchObject({ state: "red", attempt: 2, failed: ["test-web"] });
+    } finally {
+      gh.restore();
+    }
+    const [e] = await w.events("main_red");
+    expect(e.data?.main_red).toMatchObject({ culprit_sha: recorded.FLAKE_SHA, culprit_exact: true, reran: true });
     expect(await w.events("ci_flake")).toHaveLength(0);
   });
 

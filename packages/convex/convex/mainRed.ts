@@ -57,8 +57,12 @@ const RUNS_SCANNED = 60;
 const CULPRITS_READ = 50;
 const RED_SHAS_KEPT = 50;
 const CANDIDATES_KEPT = 100;
-/** Job conclusions that mean the job never ran. */
-const NOT_RUN = new Set(["skipped", "cancelled", "neutral", "stale"]);
+/**
+ * Job conclusions that mean the job never ran. A job cancelled inside a finished run is not one: a person can only
+ * cancel the whole run (NO_VERDICT drops that), so a cancelled job is one that hit its timeout-minutes, and failed.
+ */
+const NOT_RUN = new Set(["skipped", "neutral", "stale"]);
+const jobFailed = (conclusion: string | null) => isFailedConclusion(conclusion) || conclusion === "cancelled";
 /** Run conclusions that are no verdict. */
 const NO_VERDICT = new Set(["cancelled", "skipped", "neutral", "stale", "action_required"]);
 
@@ -329,19 +333,14 @@ async function judgeAttempt(ctx: any, row: Doc<"main_ci_runs">, ok: boolean): Pr
   // Every job of the run, skipped ones included, when the page holds them all: what says a culprit's job left the workflow.
   const listed = body && jobs.length >= Number(body.total_count ?? jobs.length) ? jobs.map((j) => j.name) : null;
   const ranJobs = jobs.filter((j) => j.conclusion && !NOT_RUN.has(j.conclusion));
-  const ran = ranJobs.map((j) => ({ name: j.name, ok: !isFailedConclusion(j.conclusion) }));
-  const failedJobs = jobs.filter((j) => isFailedConclusion(j.conclusion));
-  const cancelledJobs = jobs.filter((j) => j.conclusion === "cancelled");
-  // Which failed jobs only aggregate others: the workflow file at the run's commit says, or timing when it cannot.
-  // A cancelled job counts as one they need, so `verify` failing behind a cancelled job is no failure of its own.
-  const unpassed = [...failedJobs, ...cancelledJobs];
-  const aggregates = failedJobs.length && unpassed.length > 1 ? aggregateJobs(unpassed, ranJobs, await workflowFile(token, row)) : new Set<string>();
+  const ran = ranJobs.map((j) => ({ name: j.name, ok: !jobFailed(j.conclusion) }));
+  const failedJobs = jobs.filter((j) => jobFailed(j.conclusion));
+  // Which failed jobs only aggregate others (`verify` behind a timed-out job among them): the workflow file at the
+  // run's commit says, or timing when it cannot.
+  const aggregates = failedJobs.length > 1 ? aggregateJobs(failedJobs, ranJobs, await workflowFile(token, row)) : new Set<string>();
   const own = failedJobs.filter((j) => !aggregates.has(j.name));
-  // Every job that did not pass was cancelled (a person, or a job's timeout): a cancel proves nothing, so the run is
-  // unproven on those jobs and never rerun; the next run of them decides.
-  const cancelledOnly = !ok && !own.length && cancelledJobs.length > 0;
   // A red run with no failed job read (its jobs unreadable, or a workflow that failed before any job) fails as the workflow.
-  const failed = own.length ? own.map((j) => j.name) : cancelledOnly ? cancelledJobs.map((j) => j.name) : ok ? [] : [row.workflow];
+  const failed = own.length ? own.map((j) => j.name) : ok ? [] : [row.workflow];
   const settle = (verdict: "green" | "red" | "rerunning" | "unproven", failing: CiFailure[], extra: { reran?: boolean; rerun_refused?: string } = {}) =>
     ctx.runMutation(internal.mainRed.settle, {
       run: row._id, attempt: row.attempt, verdict, jobs: ran, failed, failing: kept(failing), reran: !!extra.reran,
@@ -349,11 +348,6 @@ async function judgeAttempt(ctx: any, row: Doc<"main_ci_runs">, ok: boolean): Pr
       ...(extra.rerun_refused ? { rerun_refused: extra.rerun_refused } : {}),
     });
   if (ok) return await settle("green", []);
-  if (cancelledOnly) {
-    const names = failed.join(", ");
-    const failing = cancelledJobs.map((j) => ({ job: j.name, test: null, assertion: null, file: null, line: null, excerpt: `The job was cancelled, not failed: ${j.url ?? row.url ?? ""}` }));
-    return await settle("unproven", failing, { rerun_refused: `every job that did not pass was cancelled (${names}), which proves nothing` });
-  }
   const failing: CiFailure[] = [];
   for (const job of own.slice(0, LOGS_READ)) {
     const res = await gh(token, `/repos/${row.repository}/actions/jobs/${job.id}/logs`);
