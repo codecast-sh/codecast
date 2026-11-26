@@ -153,7 +153,12 @@ test("in the Priorities view every card shows its rank or None, in rank order", 
   // A teammate's priority is not the viewer's: no rank.
   expect(rankOf(m.host, TEAMMATES)).toBe("None");
   // A priority this window has not loaded is not "None": it is elsewhere.
-  expect(rankOf(m.host, ELSEWHERE)).toBe("—");
+  // "—" on a mouse, where its tooltip says the rest; "other ws" in words on a touch screen, where nothing hovers.
+  const elsewhere = m.host.querySelector(`[data-session-id="${ELSEWHERE}"] [data-priority-rank]`)!;
+  expect([...elsewhere.children].map((c) => [c.textContent, c.className])).toEqual([
+    ["—", "[@media(pointer:coarse)]:hidden"],
+    ["other ws", "hidden [@media(pointer:coarse)]:inline"],
+  ]);
   expect(m.host.querySelector(`[data-session-id="${ELSEWHERE}"] [data-priority-rank]`)?.getAttribute("title")).toBe("In another workspace");
   const order = cardOrder(m.host);
   expect(order.indexOf(FIRST)).toBeLessThan(order.indexOf(SECOND));

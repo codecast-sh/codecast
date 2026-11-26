@@ -166,6 +166,24 @@ test("pri-N alone on its line is the card its pill opens", async () => {
   }
 });
 
+test("the page opens at the milestone its address names (the list's \"+N older sessions\"), and at none otherwise", async () => {
+  const at = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60?milestone=s4");
+  try {
+    await at.waitFor(() => !!at.container.querySelector("[data-critical-path]"));
+    const open = [...at.container.querySelectorAll("[data-critical-path] li[data-milestone]")].filter((li) => li.querySelector("[data-milestone-detail]"));
+    expect(open.map((li) => li.getAttribute("data-milestone"))).toEqual(["s4"]);
+  } finally {
+    await at.unmount();
+  }
+  const plain = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  try {
+    await plain.waitFor(() => !!plain.container.querySelector("[data-critical-path]"));
+    expect(plain.container.querySelector("[data-milestone-detail]")).toBeNull();
+  } finally {
+    await plain.unmount();
+  }
+}, 60_000);
+
 test("the page: rank once with its provenance, ten days with landings, Next and what else waits, summary folded, milestones, Linked, corrections, Share", async () => {
   const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
   try {

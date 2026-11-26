@@ -3,7 +3,7 @@
 // after, the paints the store's priority actions make and the restore when
 // the server refuses one, and the pass's timing. What the list page derives
 // from them lives in lib/priorityList.
-import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityMilestoneLinks, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import type { PriorityDetailRow } from "./priorityDetail";
 import { effectivePriorityOrder, lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -315,6 +315,11 @@ export function milestoneStartHref(
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
+/** A priority's page, open at one of its milestones (PriorityPage reads `milestone`). */
+export function milestoneHref(shortId: string, stepKey: string): string {
+  return `${priorityHref(shortId)}?milestone=${encodeURIComponent(stepKey)}`;
+}
+
 /** What a finished or past priority's row says where its count would be. */
 export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_active_at">): string {
   if (row.status === "done") return `✓ Done ${row.done_at ? shortDate(row.done_at) : ""}`.trim();
@@ -326,8 +331,12 @@ export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_ac
 export function prioritySig(r: PriorityRow): string {
   const steps = r.steps.map((s) => `${s.key}:${s.tier}:${s.done ? 1 : 0}:${s.refs.length}:${s.title}`).join(",");
   const sessions = r.sessions.map((s) => `${s.short_id}:${s.step_key ?? ""}:${s.title}`).join(",");
-  const links = (r.links ?? []).map((l) => `${l.key}:${l.correction_pending ? 1 : 0}:${l.sessions_more}:${l.plan?.short_id ?? ""}:${l.plan?.done ?? ""}:${l.part_of.length}:${l.sessions.map((x) => `${x.short_id}.${x.state}.${x.title}.${x.last_active_at}`).join(";")}`).join(",");
-  const plan = r.plan ? `${r.plan.short_id}:${r.plan.done}/${r.plan.total}` : "";
+  const planSig = (p: PriorityPlanRef | null | undefined) => (p ? `${p.short_id}.${p.title}.${p.done}/${p.total}/${p.size}` : "");
+  const links = (r.links ?? []).map((l) => [
+    l.key, l.correction_pending ? 1 : 0, l.looks_done ? 1 : 0, l.sessions_more, planSig(l.plan), l.part_of.map(planSig).join("+"),
+    l.sessions.map((x) => `${x.conversation_id}.${x.short_id}.${x.state}.${x.mine ? 1 : 0}.${x.workflow ? 1 : 0}.${x.title}.${x.last_active_at}`).join(";"),
+  ].join(":")).join(",");
+  const plan = planSig(r.plan);
   return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.correction_pending, steps, sessions, links, plan].join("|");
 }
 

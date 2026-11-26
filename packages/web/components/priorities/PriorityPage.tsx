@@ -22,6 +22,8 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { usePriorityDetail, useSyncPriorityDetail } from "../../hooks/usePriorityDetail";
 import { branchesOf, usePriorityLookups, usePriorityModel, type LinkLookups } from "../../hooks/usePriorityModels";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useSearchParams } from "next/navigation";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShareControl } from "../ShareControl";
 import { EmptyState } from "../ui/empty-state";
@@ -30,7 +32,7 @@ import { PageFrame } from "../ui/page-header";
 import { pastBadge, priorityHref, rankProvenance } from "../../lib/priorities";
 import { LIST_DAYS, TOUCH_AREA, lastDays, localDayKey, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
-import { ActionButton, AnswerSecondary, BranchChip, DeployChip, MilestoneBox, PlanChip, PrChip, SessionChip } from "./parts";
+import { ActionButton, AnswerSecondary, BranchChip, DeployChip, MilestoneMark, PlanChip, PrChip, SessionChip } from "./parts";
 import { MilestoneDetail, PendingMark, SessionRow, TypeRow, WorkflowRuns } from "./PriorityBlock";
 import { CorrectPopover, LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu } from "./controls";
 import { usePriorityWrites } from "../../hooks/usePriorities";
@@ -64,6 +66,7 @@ export default function PriorityPage({ id }: { id: string }) {
 
 function PriorityBody({ row }: { row: PriorityView }) {
   const now = useCoarseNow(30_000);
+  const focus = useSearchParams()?.get("milestone") ?? null;
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
   // Typing per day is computed on read from typed messages: the page paints without it.
@@ -148,12 +151,12 @@ function PriorityBody({ row }: { row: PriorityView }) {
 
       <section data-critical-path className="mt-5">
         <h2 className={HEAD}>Critical path <span className="font-normal normal-case tracking-normal tabular-nums">{critical.filter((m) => m.done).length}/{critical.length}</span></h2>
-        <Milestones model={model} list={critical} now={now} lookups={lookups} />
+        <Milestones model={model} list={critical} now={now} lookups={lookups} focus={focus} />
       </section>
       {polish.length > 0 && (
         <section data-polish-list className="mt-5">
           <h2 className={HEAD}>Polish <span className="font-normal normal-case tracking-normal tabular-nums">{polish.filter((m) => m.done).length}/{polish.length}</span></h2>
-          <Milestones model={model} list={polish} now={now} lookups={lookups} />
+          <Milestones model={model} list={polish} now={now} lookups={lookups} focus={focus} />
         </section>
       )}
 
@@ -270,8 +273,13 @@ function MilestoneChips({ model, m }: { model: PriorityModel; m: MilestoneModel 
 }
 
 /** Every milestone with its chips; a row opens in place to its sessions and links, as on the list. */
-function Milestones({ model, list, now, lookups }: { model: PriorityModel; list: MilestoneModel[]; now: number; lookups: LinkLookups }) {
-  const [openKey, setOpenKey] = useState<string | null>(null);
+function Milestones({ model, list, now, lookups, focus }: { model: PriorityModel; list: MilestoneModel[]; now: number; lookups: LinkLookups; focus: string | null }) {
+  // Opened at a milestone (`?milestone=`, the list's "+N older sessions"): that row open and in view.
+  const [openKey, setOpenKey] = useState<string | null>(() => (focus && list.some((m) => m.key === focus) ? focus : null));
+  useMountEffect(() => {
+    if (!openKey) return;
+    document.querySelector(`[data-priority-page] [data-milestone="${openKey.replace(/["\\]/g, "\\$&")}"]`)?.scrollIntoView?.({ block: "start" });
+  });
   return (
     <ul className="divide-y divide-sol-border/40 rounded-lg border border-sol-border/60">
       {list.map((m) => (
@@ -298,7 +306,7 @@ function MilestoneRow({ model, m, open, onToggle, now, lookups }: { model: Prior
         {/* A done row keeps its ⋯ on its line: its title wraps instead. */}
         <span className={cn("flex flex-1 items-center gap-2.5", m.done ? "min-w-0" : "min-w-[12rem]")}>
           {/* The owner's box takes the row's left edge as its press area, 44px tall. */}
-          {row.mine ? <MilestoneToggle row={row} step={m.step} className={cn("-my-1.5 -ml-3 h-11 pl-3 pr-1", TOUCH_AREA)} /> : <MilestoneBox done={m.done} />}
+          {row.mine ? <MilestoneToggle row={row} step={m.step} className={cn("-my-1.5 -ml-3 h-11 pl-3 pr-1", TOUCH_AREA)} /> : <MilestoneMark done={m.done} />}
           {renaming
             ? <MilestoneTitleInput title={m.step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, m.key, next); }} />
             : <span className={cn("min-w-0 text-ui", m.done ? "text-sol-text-muted" : "text-sol-text")}>{m.step.title}</span>}

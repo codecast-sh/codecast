@@ -12,7 +12,8 @@ import { useOpenSession } from "../hooks/useOpenSession";
 import { goBackInTrail } from "../hooks/useNavTrail";
 import { isModernStyle } from "../lib/visualStyle";
 import { usePathname, useRouter } from "next/navigation";
-import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, type InboxWalk } from "../store/inboxStore";
+import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, resolveInboxViewMode, type InboxWalk } from "../store/inboxStore";
+import { walkPick } from "../store/priorityOrder";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { isInboxRoute, isInboxSessionView } from "../lib/inboxRouting";
 import { overlayConversationId } from "../store/workspace";
@@ -161,12 +162,14 @@ export function useGlobalShortcutActions() {
   // (walkOrder): the store hands back exactly the cards the panel files there,
   // whatever view mode or old-session toggle is up. Ctrl+I is NEEDS YOU, then
   // DONE when nothing needs you; it never lands on a decision, which has its
-  // own key.
+  // own key. In the Priorities view each press walks on from the open session
+  // (walkPick), so repeated presses visit every row in rank order.
   const jumpTo = useCallback((...walks: InboxWalk[]) => {
     const store = useInboxStore.getState();
+    const walkOn = resolveInboxViewMode(store.clientState.ui) === "priorities";
     for (const walk of walks) {
-      const first = store.walkOrder(walk)[0];
-      if (first) return openSession(first._id);
+      const pick = walkPick(store.walkOrder(walk), store.currentSessionId, walkOn);
+      if (pick) return openSession(pick._id);
     }
   }, [openSession]);
   useShortcutAction('session.jumpIdle', useCallback(() => jumpTo("needsYou", "done"), [jumpTo]));

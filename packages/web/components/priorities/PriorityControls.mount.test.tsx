@@ -351,6 +351,17 @@ test("a teammate's priority shows no write control: no toggles, no milestone or 
   } finally {
     await page.unmount();
   }
+  // On the list, wide and phone, a teammate's milestone is a status mark, never a checkbox.
+  for (const layout of ["wide", "phone"] as const) {
+    const list = await mount(<Live layout={layout} />);
+    try {
+      const mate = block("pri-4");
+      expect(mate.querySelector('li[data-milestone="s1"] [data-milestone-mark="open"]')).not.toBeNull();
+      expect(mate.querySelector('[aria-label="Open"]:not([data-milestone-mark]), [aria-label="Done"]:not([data-milestone-mark])')).toBeNull();
+    } finally {
+      await list.unmount();
+    }
+  }
 }, 60_000);
 
 const DETAIL = (over: Record<string, unknown> = {}) => {
@@ -414,6 +425,9 @@ test("the page and the card of a teammate's priority show no write control", asy
     await page.waitFor(() => !!page.container.querySelector("[data-critical-path]"));
     for (const sel of ["[data-correct-priority]", "[data-milestone-toggle]", "[data-milestone-menu]", "[data-delete-correction]"]) expect(page.container.querySelector(sel)).toBeNull();
     expect(page.container.querySelector("[data-rank-by]")?.textContent).toBe("ranked by AI");
+    // Each milestone is a status mark, not a box that looks pressable.
+    expect(page.container.querySelector('[data-critical-path] [data-milestone="s1"] [data-milestone-mark="open"]')).not.toBeNull();
+    expect(page.container.querySelector('[data-critical-path] [aria-label="Open"]:not([data-milestone-mark])')).toBeNull();
   } finally {
     await page.unmount();
   }
@@ -537,6 +551,30 @@ test("Drop and Merge count linked sessions the same way, from the links; Drop sa
     await page.waitFor(() => !!document.querySelector('[data-switch-review="Merge priority"]'));
     // The feed session once across both milestones, plus the two s1 does not carry; never the server's session_count.
     expect(document.querySelector('[data-switch-review="Merge priority"]')!.textContent).toContain("3sessions move");
+    // The confirm's buttons are 44px under a coarse pointer, as every confirm's are.
+    for (const b of document.querySelectorAll("[data-switch-cancel], [data-switch-confirm]")) expect(b.className).toContain("[@media(pointer:coarse)]:h-11");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a push that changes only a milestone's looks done repaints its line", async () => {
+  const page = await mount(<Live />);
+  try {
+    expect(line("pri-3", "s1").querySelector("[data-looks-done]")).toBeNull();
+    await act(async () => { useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-3"), links: [links("s1", [], { looks_done: true })] }] as any, { isDelta: true }); });
+    await page.waitFor(() => !!line("pri-3", "s1").querySelector("[data-looks-done]"));
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("Correct…'s Cancel and Save are 44px under a coarse pointer", async () => {
+  const page = await mount(<Live />);
+  try {
+    await choose(priorityMenu("pri-2"), '[data-act="correct"]');
+    await page.waitFor(() => !!document.querySelector("[data-correct-popover]"));
+    for (const sel of ["[data-correct-cancel]", "[data-correct-save]"]) expect(document.querySelector(sel)!.className).toContain("[@media(pointer:coarse)]:h-11");
   } finally {
     await page.unmount();
   }

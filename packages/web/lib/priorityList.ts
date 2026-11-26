@@ -356,12 +356,13 @@ export const LIST_GRID: Record<ListLayout, string> = {
 };
 
 /**
- * Decided by the list's own width, not the window's: Daylight (947px, a list
- * of ~550px beside the inbox) keeps the desktop grid; only a phone-sized list
- * (~370px at 402) folds into the phone layout.
+ * The desktop grid for a list at least 520px wide, or on a touch screen at
+ * least 900px wide (Daylight, 947), however narrow its sidebars leave the
+ * list; a phone-sized list (~370px at 402) folds into the phone layout.
  */
 export const WIDE_MIN_LIST_WIDTH = 520;
-export const layoutForWidth = (width: number): ListLayout => (width >= WIDE_MIN_LIST_WIDTH ? "wide" : "phone");
+export const TABLET_QUERY = "(pointer: coarse) and (min-width: 900px)";
+export const layoutForWidth = (width: number, tablet = false): ListLayout => (tablet || width >= WIDE_MIN_LIST_WIDTH ? "wide" : "phone");
 
 /** A workflow run's sessions folded to "3 reviews · 1 run": its step words counted. */
 export function runKinds(runs: readonly Pick<SessionLine, "title">[]): string {

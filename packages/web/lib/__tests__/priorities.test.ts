@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMove, paintStatus, paintTier, pastBadge, withLiveRanks, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMove, paintStatus, paintTier, pastBadge, prioritySig, withLiveRanks, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -186,5 +186,24 @@ describe("the pass's timing", () => {
     expect(nextPassLabel(new Date(2026, 10, 26, 1, 5).getTime(), now)).toBe("Next pass Thu 1:05 AM");
     expect(nextPassLabel(now - 1, now)).toBeNull();
     expect(nextPassLabel(null, now)).toBeNull();
+  });
+});
+
+describe("prioritySig", () => {
+  const plan = (short_id: string, title: string, done = 1) => ({ short_id, title, done, total: 4, size: 4 });
+  const sess = (over: Record<string, unknown> = {}) => ({ short_id: "jx7a", conversation_id: "conv-a", title: "A session", state: "dormant", mine: true, workflow: false, why: ["mapped"], last_active_at: 1, ...over });
+  const link = (over: Record<string, unknown> = {}) => ({ key: "s1", sessions: [sess()], sessions_more: 0, plan: plan("pl-1", "The plan"), part_of: [plan("pl-2", "The program")], looks_done: false, correction_pending: false, ...over });
+  const base = row("pri-1", { steps: [step("s1", "critical")], links: [link()] as any, plan: plan("pl-3", "Priority plan") as any });
+  const changed = (links: unknown, over: Partial<PriorityRow> = {}) => prioritySig({ ...base, links: links as any, ...over }) !== prioritySig(base);
+
+  test("wakes on every field a row draws from its links: looks done, a session's identity and kind, plan titles, what a milestone is part of", () => {
+    expect(changed([link({ looks_done: true })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ conversation_id: "conv-b" })] })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ mine: false })] })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ workflow: true })] })])).toBe(true);
+    expect(changed([link({ plan: plan("pl-1", "The plan, renamed") })])).toBe(true);
+    expect(changed([link({ part_of: [plan("pl-2", "Another program")] })])).toBe(true);
+    expect(changed([link()], { plan: plan("pl-3", "Priority plan, renamed") as any })).toBe(true);
+    expect(changed([link()])).toBe(false);
   });
 });

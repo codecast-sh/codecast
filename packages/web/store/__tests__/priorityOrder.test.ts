@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { computeVisualOrder, placeInboxRows, type InboxSession } from "../inboxStore";
-import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority } from "../priorityOrder";
+import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority, walkPick } from "../priorityOrder";
 
 // The inbox's Priorities view: the status sections stay, each sorted by the
 // viewer's priority a session serves (rank, then milestone order), every other
@@ -136,6 +136,27 @@ describe("computeVisualOrder in the Priorities view", () => {
     const walked = computeVisualOrder(state("priorities"), { walk: "needsYou" }).map(tag);
     expect(walked[0]).toBe("a1");
     expect(walked).not.toContain("wka");
+  });
+
+  it("Ctrl+I in the Priorities view walks on from the open session, wrapping; other views keep the first row", () => {
+    const walked = computeVisualOrder(state("priorities"), { walk: "needsYou" });
+    const id = (t: string) => walked.find((s) => tag(s) === t)!._id;
+    const pick = (current: string | null, walkOn = true) => {
+      const s = walkPick(walked, current, walkOn);
+      return s ? tag(s) : null;
+    };
+    // Nothing open, or an open session outside the walk: the first row.
+    expect(pick(null)).toBe("a1");
+    expect(pick(cid("wka"))).toBe("a1");
+    // From a row in the walk: the next one, each press on down the order.
+    expect(pick(id("a1"))).toBe("a2");
+    expect(pick(id("a2"))).toBe("anostep");
+    // From the last row: back to the first.
+    expect(pick(walked.at(-1)!._id)).toBe("a1");
+    // Every other view keeps today's rule: the first row, wherever you are.
+    expect(pick(id("a2"), false)).toBe("a1");
+    // A walk holding only the open session gives nothing, so Ctrl+I falls through to Done.
+    expect(walkPick([walked[0]], walked[0]._id, true)).toBeUndefined();
   });
 
   it("Ctrl+I never lands on a Couldn't finish row first, however it ranks", () => {

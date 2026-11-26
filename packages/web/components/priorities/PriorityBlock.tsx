@@ -13,15 +13,17 @@
 // each session's ⋯ in an open milestone, and on a desktop list the rank as a
 // drag handle (arrow keys step it).
 import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { asksPerson, bestSession, isClosedSession } from "@codecast/shared/contracts/priorityDerive";
-import { pastBadge, rankProvenance, type PriorityRow } from "../../lib/priorities";
+import { milestoneHref, pastBadge, rankProvenance, type PriorityRow } from "../../lib/priorities";
 import { LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { usePriorityWrites } from "../../hooks/usePriorities";
-import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, MilestoneBox, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
+import type { LinkKind } from "./parts";
+import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 import { LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
 
 /** A desktop drag of the owner's rank (PrioritiesView): this row's part in it. */
@@ -321,15 +323,16 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
 /**
  * A milestone's chips on a wide line, in the order they give way: the
  * bracket's head session where the driver starts, the priority's action on its
- * line, else one session (Answer when it asks); then "+N sessions" and what
- * the Show filter asks for.
+ * line, else one session (Answer when it asks); then the plan, and "+N
+ * sessions" last, only while the line has no other kind of link the Show
+ * filter asks for (those count at the line's end, lineKinds). A chip that
+ * would wrap is clipped away.
  */
-function lineChips({ model, m, railed, filters, now, lookups }: {
+function lineChips({ model, m, railed, filters, lookups }: {
   model: PriorityModel;
   m: MilestoneModel;
   railed: RailPart | null;
   filters: ListFilters;
-  now: number;
   lookups: LinkLookups;
 }): ReactNode[] {
   const { action } = model;
@@ -348,16 +351,38 @@ function lineChips({ model, m, railed, filters, now, lookups }: {
     shown = own.find(asksPerson) ?? bestSession(own);
     if (shown) chips.push(<SessionSlot key="s" s={shown} className="min-w-[4.5rem] max-w-[15rem]" />);
   }
+  if (filters.show.plans && m.plan) chips.push(<span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span>);
   const others = own.filter((s) => s !== shown).length + m.more;
-  if (filters.show.sessions && !m.done && others > 0) {
+  if (filters.show.sessions && !m.done && others > 0 && !hasKinds(m, filters, lookups)) {
     chips.push(<span key="o" data-more-sessions className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1.5 text-meta tabular-nums text-sol-text-dim">+{others} {others === 1 ? "session" : "sessions"}</span>);
   }
-  if (filters.show.plans && m.plan) chips.push(<span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span>);
-  if (filters.show.tasks) chips.push(...m.tasks.slice(0, 1).map((t) => <TaskChip key={t} id={t} />));
-  if (filters.show.prs) chips.push(...m.prs.slice(0, 2).map((p) => <PrChip key={p} pr={p} state={lookups.prState(p)} />));
-  if (filters.show.branches) chips.push(...branchesOf(m, lookups).slice(0, 1).map((b) => <BranchChip key={b} name={b} />));
-  if (filters.show.deploys) chips.push(...lookups.deploysOf(m).slice(0, 1).map((d) => <DeployChip key={d.id} d={d} now={now} />));
   return chips;
+}
+
+/** The other kinds of link the Show filter asks for that a milestone has, each as its count. */
+function kindCounts(m: MilestoneModel, filters: ListFilters, lookups: LinkLookups): Array<{ kind: LinkKind; n: number }> {
+  return [
+    { kind: "task" as const, n: filters.show.tasks ? m.tasks.length : 0 },
+    { kind: "pr" as const, n: filters.show.prs ? m.prs.length : 0 },
+    { kind: "branch" as const, n: filters.show.branches ? branchesOf(m, lookups).length : 0 },
+    { kind: "deploy" as const, n: filters.show.deploys ? lookups.deploysOf(m).length : 0 },
+  ].filter((k) => k.n > 0);
+}
+const hasKinds = (m: MilestoneModel, filters: ListFilters, lookups: LinkLookups) => kindCounts(m, filters, lookups).length > 0;
+
+/**
+ * A closed line's other kinds of link as counts ("1 task", "2 PRs") at its
+ * end, outside the clip, so every kind asked for shows however long the
+ * session chips are; the open line lists each one.
+ */
+function lineKinds(m: MilestoneModel, filters: ListFilters, lookups: LinkLookups): ReactNode {
+  const kinds = kindCounts(m, filters, lookups);
+  if (kinds.length === 0) return null;
+  return (
+    <span data-line-kinds className="flex h-8 shrink-0 items-center gap-1 [@media(pointer:coarse)]:h-12">
+      {kinds.map((k) => <KindCount key={k.kind} kind={k.kind} n={k.n} />)}
+    </span>
+  );
 }
 
 const RAIL: Record<RailPart, string> = {
@@ -382,20 +407,36 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
   const wide = layout === "wide";
   const writes = usePriorityWrites();
   const [renaming, setRenaming] = useState(false);
-  const title = (
-    <span className="flex min-w-0 items-center gap-2">
-      {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. */}
-      {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:h-11" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneBox done={step.done} />}
-      {renaming ? (
-        <MilestoneTitleInput title={step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, step.key, next); }} />
-      ) : (
-        <span data-milestone-title title={step.title} className={cn("min-w-0 text-ui", open ? "whitespace-normal break-words" : wide ? cn("truncate", COARSE_WRAP) : "line-clamp-2", step.done ? "text-sol-text-dim line-through decoration-sol-text-dim/40" : m.tier === "polish" ? "text-sol-text-muted" : "text-sol-text")}>
-          {step.title}
-        </span>
-      )}
-      {wide && !renaming && <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />}
+  const marks = (m.looksDone || m.correctionPending) && (
+    <>
       {m.looksDone && <LooksDone row={row} step={step} />}
       {m.correctionPending && <PendingMark />}
+    </>
+  );
+  const name = renaming ? (
+    <MilestoneTitleInput title={step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, step.key, next); }} />
+  ) : (
+    <span data-milestone-title title={step.title} className={cn("min-w-0 text-ui", open ? "whitespace-normal break-words" : wide ? cn("truncate", COARSE_WRAP) : "line-clamp-2", step.done ? "text-sol-text-dim line-through decoration-sol-text-dim/40" : m.tier === "polish" ? "text-sol-text-muted" : "text-sol-text")}>
+      {step.title}
+    </span>
+  );
+  const title = (
+    <span className="flex min-w-0 items-center gap-2">
+      {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. A teammate's is a status mark, nothing to press. */}
+      {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:h-11" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneMark done={step.done} />}
+      {wide ? (
+        <>
+          {name}
+          {!renaming && <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />}
+          {marks}
+        </>
+      ) : (
+        // A phone keeps the title's width: its marks go on a line of their own under it.
+        <span className="flex min-w-0 flex-col py-1">
+          {name}
+          {marks && <span data-milestone-marks className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">{marks}</span>}
+        </span>
+      )}
     </span>
   );
   return (
@@ -413,9 +454,12 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
             <div className="col-start-2 col-end-4 row-start-1 grid min-w-0 grid-cols-[minmax(40%,1fr)_minmax(0,1fr)] items-center gap-x-3">
               {title}
               {/* Chips that would wrap are clipped away. Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside the clip, and a wrapped row sits far enough below that none of its press area reaches back in. */}
-              <span data-line-chips className="relative flex h-8 min-w-0 flex-wrap content-start items-center gap-x-1.5 gap-y-4 overflow-hidden pl-3 pt-1 [@media(pointer:coarse)]:h-12 [@media(pointer:coarse)]:gap-y-6 [@media(pointer:coarse)]:pt-2.5">
-                {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
-                {lineChips({ model, m, railed: rail, filters, now, lookups })}
+              <span className="flex min-w-0 items-start gap-1.5">
+                <span data-line-chips className="relative flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-1.5 gap-y-4 overflow-hidden pl-3 pt-1 [@media(pointer:coarse)]:h-12 [@media(pointer:coarse)]:gap-y-6 [@media(pointer:coarse)]:pt-2.5">
+                  {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
+                  {lineChips({ model, m, railed: rail, filters, lookups })}
+                </span>
+                {!m.done && lineKinds(m, filters, lookups)}
               </span>
             </div>
             <span className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text-muted">{m.today > 0 ? m.today : ""}</span>
@@ -423,7 +467,8 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
           </>
         ) : (
           <>
-            <div className={cn("col-start-2 row-start-1 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3", row.mine ? "col-end-5" : "col-end-6")}>
+            {/* The title keeps at least 8rem whatever trails it. */}
+            <div className={cn("col-start-2 row-start-1 grid min-w-0 grid-cols-[minmax(8rem,1fr)_auto] items-center gap-x-3", row.mine ? "col-end-5" : "col-end-6")}>
               {title}
               <span className="flex justify-end">{phoneTrail(model, m)}</span>
             </div>
@@ -431,7 +476,7 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
           </>
         )}
       </div>
-      {open && <div className={wide ? "pl-[26px]" : "pl-[22px]"}><MilestoneDetail model={model} m={m} now={now} lookups={lookups} touch={wide ? undefined : true} /></div>}
+      {open && <div className={wide ? "pl-[26px]" : "pl-[22px]"}><MilestoneDetail model={model} m={m} now={now} lookups={lookups} touch={wide ? undefined : true} olderHref={milestoneHref(row.short_id, m.key)} /></div>}
     </li>
   );
 }
@@ -492,7 +537,15 @@ export function TypeRow({ label, children }: { label: string; children: ReactNod
  * each with the owner's ⋯ when the session is theirs too, then every kind of
  * link it has. The Show filter governs only a closed line's chips.
  */
-export function MilestoneDetail({ model, m, now, lookups, touch }: { model: PriorityModel; m: MilestoneModel; now: number; lookups: LinkLookups; touch?: boolean }) {
+export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
+  model: PriorityModel;
+  m: MilestoneModel;
+  now: number;
+  lookups: LinkLookups;
+  touch?: boolean;
+  /** Where the sessions the list row does not carry are: the priority's page, open at this milestone. */
+  olderHref?: string;
+}) {
   const menu = (s: SessionLine) => (model.row.mine && s.mine ? <SessionMenu row={model.row} s={s} stepKey={m.key} touch={touch} /> : undefined);
   const people = m.sessions.filter((s) => !s.workflow);
   const runs = m.sessions.filter((s) => s.workflow);
@@ -518,7 +571,9 @@ export function MilestoneDetail({ model, m, now, lookups, touch }: { model: Prio
     <div data-milestone-detail className="mb-2 ml-2 border-l border-sol-border/60 pl-3 pt-1">
       {people.length > 0 && <ul>{people.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} menu={menu(s)} />)}</ul>}
       <WorkflowRuns runs={runs} now={now} menu={menu} />
-      {m.more > 0 && <div className="py-0.5 text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</div>}
+      {m.more > 0 && (olderHref
+        ? <Link href={olderHref} data-older-sessions className={cn("inline-flex min-h-7 items-center py-0.5 text-meta text-sol-text-muted hover:text-sol-text hover:underline", TOUCH_AREA)}>+{m.more} older {m.more === 1 ? "session" : "sessions"}</Link>
+        : <div className="py-0.5 text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</div>)}
       {rows.length > 0 && <div className="mt-1">{rows}</div>}
       {m.sessions.length === 0 && rows.length === 0 && <div className="py-1 text-meta text-sol-text-dim">Nothing linked yet</div>}
     </div>

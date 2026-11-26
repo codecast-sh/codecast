@@ -26,6 +26,8 @@ import { MilestoneBox } from "./parts";
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
 /** Opens a popover after the menu that asked for it has closed, so the menu's own close does not take its focus. */
 const afterMenu = (open: () => void) => () => { setTimeout(open, 0); };
+/** A button 44px tall under a coarse pointer, its look kept on a mouse (the Modern style sizes buttons itself, so it is named too). */
+const COARSE_TALL = "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11";
 /** On a touch screen every menu row is a 44px target. */
 const TOUCH_ITEMS = "[@media(pointer:coarse)]:[&_[role=menuitem]]:min-h-11";
 
@@ -74,8 +76,8 @@ export function CorrectPopover({ open, onOpenChange, subject, onSave, children }
         />
         <div className="mt-1.5 text-meta text-sol-text-dim">The next pass keeps this.</div>
         <div className="mt-2 flex justify-end gap-1.5">
-          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" variant="primary" data-correct-save onClick={save}>Save</Button>
+          <Button size="sm" variant="ghost" data-correct-cancel onClick={() => onOpenChange(false)} className={COARSE_TALL}>Cancel</Button>
+          <Button size="sm" variant="primary" data-correct-save onClick={save} className={COARSE_TALL}>Save</Button>
         </div>
       </PopoverContent>
     </Popover>

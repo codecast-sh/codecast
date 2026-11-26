@@ -25,7 +25,7 @@ import { asksPerson, bestSession, type NextAction } from '@codecast/shared/contr
 import type { PriorityHistory, PriorityPlanRef } from '@codecast/shared/contracts/priorities';
 import { ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
-import { rankProvenance } from '@codecast/web/lib/priorities';
+import { milestoneBox, nextWords, ownerWords, sessionLabel, standing, VERB } from '@/lib/priorityScreen';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import type { PriorityView } from '@codecast/web/lib/priorityDetail';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -39,16 +39,6 @@ const writes = priorityWrites((message) => Alert.alert("Couldn't save that", mes
 type Row = PriorityView;
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-
-/** What a finished or past priority says where its rank would be. */
-function pastWords(row: Row): string {
-  if (row.status === 'done') return row.done_at ? `Done ${shortDate(row.done_at)}` : 'Done';
-  if (row.status === 'quiet') return `Quiet since ${shortDate(row.last_active_at)}`;
-  if (row.status === 'merged') return 'Merged';
-  return 'Set aside';
-}
-
-const sessionLabel = (s: Pick<SessionLine, 'title'>) => s.title || 'Untitled session';
 
 export default function PriorityScreen() {
   const Theme = useTheme();
@@ -113,8 +103,9 @@ function PriorityBody({ row }: { row: Row }) {
   const critical = model.milestones.filter((m) => m.tier === 'critical');
   const polish = model.milestones.filter((m) => m.tier === 'polish');
   const { critical_done: done, critical_total: total } = row.counts;
-  const active = row.status === 'active';
-  const placed = active && row.rank != null ? `#${row.rank} · ${rankProvenance(row)}` : pastWords(row);
+  const placed = standing(row);
+  const owner = ownerWords(row);
+  const next = action ? nextWords(action) : null;
   const corrections = row.corrections;
   const linked = useMemo(() => {
     const seen = new Set<string>();
@@ -146,7 +137,7 @@ function PriorityBody({ row }: { row: Row }) {
               <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>{done}/{total}</RNText>
             </RNView>
           )}
-          <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>{row.mine ? 'You' : row.owner}</RNText>
+          {owner && <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>{owner}</RNText>}
           <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>Started {shortDate(row.first_seen_at)}</RNText>
           <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaDim}>{row.short_id}</RNText>
         </RNView>
@@ -155,14 +146,14 @@ function PriorityBody({ row }: { row: Row }) {
 
         <DayStrip model={model} />
 
-        {action && (
+        {action && next && (
           <RNView style={objectStyles.section} testID="priority-next">
             <SectionLabel>Next</SectionLabel>
             <RNView style={styles.card}>
-              <RNText style={styles.nextTitle}>{action.milestone.step.title}</RNText>
+              <RNText style={styles.nextTitle}>{next.title}</RNText>
               <RNView style={styles.nextRow}>
                 <PrimaryAction action={action} onPress={() => (action.kind === 'start' ? start(action.milestone) : openSession(action.session!))} />
-                {action.session && <RNText style={styles.inSession} numberOfLines={2}>in {sessionLabel(action.session)}</RNText>}
+                {next.session && <RNText style={styles.inSession} numberOfLines={2}>{next.session}</RNText>}
               </RNView>
             </RNView>
           </RNView>
@@ -334,7 +325,6 @@ function OwnerControls({ row }: { row: Row }) {
   );
 }
 
-const VERB = { answer: 'Answer', open: 'Open', resume: 'Resume', start: 'Start' } as const;
 
 /** The priority's one action. Answer wears its own look (a dark fill and a reply glyph) so it reads in grayscale. */
 function PrimaryAction({ action, onPress }: { action: NextAction<MilestoneModel>; onPress: () => void }) {
@@ -384,23 +374,25 @@ function Milestones({ label, list, model, onOpen, onSession, testID }: {
           const asking = m.done ? undefined : m.sessions.find(asksPerson);
           const lead = m.done ? undefined : bestSession(m.sessions);
           const isAction = model.action?.milestone.key === m.key;
+          const box = milestoneBox(model.row, m);
           return (
             <TouchableOpacity key={m.key} style={styles.line} onPress={() => onOpen(m)} activeOpacity={0.6} testID={`priority-step-${m.key}`}>
-              {model.row.mine ? (
+              {box.kind === 'toggle' ? (
                 // The owner's box is its own 44px press: Done or not, never the line's open.
                 <TouchableOpacity
-                  onPress={() => writes.setStepDone(model.row.short_id, m.key, !m.done)}
+                  onPress={() => writes.setStepDone(model.row.short_id, m.key, box.writes)}
                   style={styles.toggle}
                   hitSlop={{ top: 4, bottom: 4 }}
                   accessibilityRole="checkbox"
                   accessibilityState={{ checked: m.done }}
-                  accessibilityLabel={m.done ? `Mark ${m.step.title} not done` : `Mark ${m.step.title} done`}
+                  accessibilityLabel={box.label}
                   testID={`priority-step-toggle-${m.key}`}
                 >
                   <Feather name={m.done ? 'check-square' : 'square'} size={18} color={m.done ? Theme.green : Theme.textDim} />
                 </TouchableOpacity>
               ) : (
-                <Feather name={m.done ? 'check-square' : 'square'} size={16} color={m.done ? Theme.green : Theme.textDim} style={styles.lineIcon} />
+                // A teammate's milestone: a status mark, not a box, since nothing here is theirs to press.
+                <Feather name={m.done ? 'check' : 'circle'} size={m.done ? 16 : 10} color={m.done ? Theme.green : Theme.textDim} style={styles.lineIcon} accessibilityLabel={box.label} />
               )}
               <RNView style={styles.lineBody}>
                 <RNText style={[styles.lineTitle, m.done && { color: Theme.textMuted }]} numberOfLines={3}>{m.step.title}</RNText>

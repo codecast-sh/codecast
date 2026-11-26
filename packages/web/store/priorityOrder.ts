@@ -59,10 +59,16 @@ export function rankLabelOf(standing: PriorityStanding): PriorityRankLabel {
   return standing === PRIORITY_ELSEWHERE ? standing : standing?.rank ?? null;
 }
 
-/** A rank label in words, as both apps' rows draw it: the text and its tooltip. */
-export function rankLabelWords(rank: PriorityRankLabel): { text: string; title: string } {
-  if (typeof rank === "number") return { text: `#${rank}`, title: `Your priority #${rank}` };
-  return rank === PRIORITY_ELSEWHERE ? { text: "—", title: "In another workspace" } : { text: "None", title: "Serves none of your priorities" };
+/**
+ * A rank label in words, as both apps' rows draw it: the text, the text a
+ * touch screen shows (where nothing hovers for the tooltip, "—" alone says
+ * nothing), and the tooltip.
+ */
+export function rankLabelWords(rank: PriorityRankLabel): { text: string; touch: string; title: string } {
+  if (typeof rank === "number") return { text: `#${rank}`, touch: `#${rank}`, title: `Your priority #${rank}` };
+  return rank === PRIORITY_ELSEWHERE
+    ? { text: "—", touch: "other ws", title: "In another workspace" }
+    : { text: "None", touch: "None", title: "Serves none of your priorities" };
 }
 
 /** The standing reader the Priorities view sorts and labels by, over one state's priorities and viewer. */
@@ -87,6 +93,19 @@ export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => Priori
     return a.i - b.i;
   });
   return keyed.map((k) => k.s);
+}
+
+/**
+ * Ctrl+I's pick from one walk (walkOrder). Every view takes its first row. The
+ * Priorities view walks on: the first row after the open session, wrapping,
+ * and never the open session itself (so a walk holding only it falls through
+ * to the next one).
+ */
+export function walkPick<T extends { _id: string }>(order: readonly T[], currentId: string | null | undefined, walkOn: boolean): T | undefined {
+  if (!walkOn || !currentId) return order[0];
+  const at = order.findIndex((s) => s._id === currentId);
+  const pick = at === -1 ? order[0] : order[(at + 1) % order.length];
+  return pick?._id === currentId ? undefined : pick;
 }
 
 // What the order reads, as two digests for a list's wake deps: each session's

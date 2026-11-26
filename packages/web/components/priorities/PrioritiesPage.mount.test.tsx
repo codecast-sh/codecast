@@ -338,6 +338,8 @@ test("the inbox's live verdict for a session the store holds wins over the serve
 test("phone, Daylight and desktop: the list's own width picks the layout", async () => {
   // A 402px phone's list is ~370px; Daylight's 947px window beside the inbox leaves ~550px; a 1280px desktop ~840px.
   expect([layoutForWidth(370), layoutForWidth(550), layoutForWidth(840)]).toEqual(["phone", "wide", "wide"]);
+  // A touch screen at least 900px wide (Daylight) takes the desktop grid however narrow the list is.
+  expect([layoutForWidth(370, true), layoutForWidth(550, true)]).toEqual(["wide", "wide"]);
   const wide = await mount(view({ layout: "wide" }));
   try {
     expect(wide.container.querySelector('[data-waiting="wide"]')).not.toBeNull();
@@ -530,15 +532,81 @@ const CHIP_KINDS = ["session", "plan", "task", "pr", "branch", "deploy"];
 test("with every kind shown, each link is a chip of its own shape, labelled by its title and never a short id", async () => {
   seedKinds();
   const page = await mount(view({ rows: [KINDS], filters: ALL_KINDS }));
+  const { act } = React as any;
   try {
     expect(describeFailures(page)).toBe("");
     const b = block(page.container, "pri-9");
+    // The closed line gives way so every kind asked for shows: "+N sessions" goes first, and the other kinds
+    // count at the line's end, outside the clip that drops a chip that would wrap.
+    const s1 = b.querySelector('[data-milestone="s1"]')!;
+    expect(s1.querySelector("[data-more-sessions]")).toBeNull();
+    const kinds = s1.querySelector("[data-line-kinds]")!;
+    expect(kinds.closest("[data-line-chips]")).toBeNull();
+    expect([...kinds.querySelectorAll("[data-chip-count]")].map((c) => [c.getAttribute("data-chip-count"), c.textContent])).toEqual([
+      ["task", "1 task"], ["pr", "1 PR"], ["branch", "1 branch"], ["deploy", "1 deploy"],
+    ]);
+    expect(s1.querySelector('[data-line-chips] [data-chip="plan"]')).not.toBeNull();
+    // Open, the line lists each one as its own chip.
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
     for (const kind of CHIP_KINDS) expect(b.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
     expect(b.querySelector('[data-chip="task"]')!.textContent).toBe("Write the wiring");
     expect(b.querySelector('[data-chip="branch"]')!.textContent).toBe("feat/every-link");
     expect(page.text()).not.toMatch(/jx7|ct-|pl-/);
   } finally {
     await page.unmount();
+  }
+}, 60_000);
+
+test("on a phone, Looks done? and correction pending sit on a line under the title, which keeps its width", async () => {
+  const marked = row(8, "Marked", 1, [step("s1", "A milestone title long enough to need its two lines", "critical"), step("s2", "Corrected", "critical")], {
+    links: [links("s1", [sess("mk1", "Marked session", "needs_you", 1)], { looks_done: true, correction_pending: true }), links("s2", [])],
+  });
+  const page = await mount(view({ rows: [marked], layout: "phone" }));
+  try {
+    const line = block(page.container, "pri-8").querySelector('[data-milestone="s1"]')!;
+    const marks = line.querySelector("[data-milestone-marks]")!;
+    expect(marks.querySelector("[data-looks-done]")).not.toBeNull();
+    expect(marks.querySelector("[data-correction-pending]")).not.toBeNull();
+    // The title's own line holds the title alone, above the marks.
+    const title = line.querySelector("[data-milestone-title]")!;
+    expect(title.parentElement).toBe(marks.parentElement);
+    expect(title.nextElementSibling).toBe(marks);
+    // Whatever trails the line (here the Answer) leaves the title at least 8rem.
+    expect(title.closest(".grid")!.className).toContain("grid-cols-[minmax(8rem,1fr)_auto]");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("\"+N older sessions\" in an open milestone opens the priority's page at that milestone", async () => {
+  const page = await mount(view());
+  const { act } = React as any;
+  try {
+    const b = block(page.container, "pri-1");
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
+    const older = b.querySelector("[data-older-sessions]")!;
+    expect(older.textContent).toBe("+3 older sessions");
+    expect(older.getAttribute("href")).toBe("/priorities/pri-1?milestone=s1");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("one other kind asked for counts at the line's end too; none asked for keeps \"+N sessions\"", async () => {
+  seedKinds();
+  const prs = await mount(view({ rows: [KINDS], filters: readFilters(new URLSearchParams("show=sessions,plans,prs")) }));
+  try {
+    const s1 = block(prs.container, "pri-9").querySelector('[data-milestone="s1"]')!;
+    expect([...s1.querySelectorAll("[data-line-kinds] [data-chip-count]")].map((c) => c.textContent)).toEqual(["1 PR"]);
+    expect(s1.querySelector("[data-more-sessions]")).toBeNull();
+  } finally {
+    await prs.unmount();
+  }
+  const plain = await mount(view({ rows: [KINDS] }));
+  try {
+    expect(block(plain.container, "pri-9").querySelector('[data-milestone="s1"] [data-more-sessions]')!.textContent).toBe("+1 session");
+  } finally {
+    await plain.unmount();
   }
 }, 60_000);
 
@@ -617,6 +685,30 @@ test("under a coarse pointer every control on the list is a 44px target, at ever
     } finally {
       await page.unmount();
     }
+  }
+}, 60_000);
+
+test("a narrow window takes the desktop grid on a touch screen at least 900px wide (Daylight), and the phone layout otherwise", async () => {
+  answers["priorities:list"] = listOf(ROWS);
+  answers["priorities:history"] = HISTORY;
+  const realMatch = window.matchMedia;
+  const realWidth = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 400 });
+  const layoutWith = async (tablet: boolean) => {
+    (window as any).matchMedia = (q: string) => ({ ...realMatch(q), matches: tablet && q === "(pointer: coarse) and (min-width: 900px)" });
+    const page = await mount(<PrioritiesPage />);
+    try {
+      return page.container.querySelector("[data-priorities]")?.getAttribute("data-layout");
+    } finally {
+      await page.unmount();
+    }
+  };
+  try {
+    expect(await layoutWith(true)).toBe("wide");
+    expect(await layoutWith(false)).toBe("phone");
+  } finally {
+    (window as any).matchMedia = realMatch;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: realWidth });
   }
 }, 60_000);
 

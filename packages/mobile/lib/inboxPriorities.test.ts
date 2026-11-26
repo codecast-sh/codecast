@@ -30,11 +30,12 @@ describe('priorityInboxView', () => {
     expect(view.sort(rows).map((r) => r._id)).toEqual(['p1-s1', 'p1-s2', 'p2-s1', 'none-a', 'teammate', 'elsewhere', 'none-b']);
   });
 
-  it("labels each row with its rank, '—' for a priority not loaded here, else None", () => {
-    const words = (r: ReturnType<typeof row>) => rankLabelWords(view.rankOf(r)).text;
+  it("labels each row with its rank, 'other ws' for a priority not loaded here, else None", () => {
+    // The phone is a touch screen: it shows the touch words, never a bare "—".
+    const words = (r: ReturnType<typeof row>) => rankLabelWords(view.rankOf(r)).touch;
     expect(words(row('a', 'p1', 's2'))).toBe('#1');
     expect(words(row('b', 'p2', 's1'))).toBe('#2');
-    expect(words(row('c', 'not-loaded', 's1'))).toBe('—');
+    expect(words(row('c', 'not-loaded', 's1'))).toBe('other ws');
     expect(words(row('d', 'theirs', 's1'))).toBe('None');
     expect(words(row('e'))).toBe('None');
   });

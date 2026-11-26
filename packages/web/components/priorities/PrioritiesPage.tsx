@@ -28,7 +28,7 @@ import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
 import {
-  LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, localDayKey, readFilters, todayOf, waitingOf,
+  LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, TABLET_QUERY, localDayKey, readFilters, todayOf, waitingOf,
   type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
 } from "../../lib/priorityList";
 import { useInboxStore, type ClientUI } from "../../store/inboxStore";
@@ -102,19 +102,22 @@ export default function PrioritiesPage() {
   );
 }
 
+/** A touch screen at least 900px wide: Daylight gets the desktop grid whatever its sidebars leave the list. */
+const isTablet = () => typeof window !== "undefined" && !!window.matchMedia?.(TABLET_QUERY).matches;
+
 /**
- * The layout for the list's own width (lib/priorityList layoutForWidth),
- * first guessed from the window and then measured, re-rendering only when
- * the layout flips.
+ * The layout for the list's own width and the screen (lib/priorityList
+ * layoutForWidth), first guessed from the window and then measured,
+ * re-rendering only when the layout flips.
  */
 function useListLayout(): [(el: HTMLDivElement | null) => void, ListLayout] {
-  const [layout, setLayout] = useState<ListLayout>(() => layoutForWidth(typeof window === "undefined" ? 1280 : window.innerWidth));
+  const [layout, setLayout] = useState<ListLayout>(() => layoutForWidth(typeof window === "undefined" ? 1280 : window.innerWidth, isTablet()));
   const observer = useRef<ResizeObserver | null>(null);
   const measure = useCallback((el: HTMLDivElement | null) => {
     observer.current?.disconnect();
     observer.current = null;
     if (!el || typeof ResizeObserver === "undefined") return;
-    observer.current = new ResizeObserver(([entry]) => setLayout(layoutForWidth(entry.contentRect.width)));
+    observer.current = new ResizeObserver(([entry]) => setLayout(layoutForWidth(entry.contentRect.width, isTablet())));
     observer.current.observe(el);
   }, []);
   useMountEffect(() => () => observer.current?.disconnect());

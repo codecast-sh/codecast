@@ -5,7 +5,7 @@
 // solid tag; branch: a dashed frame in mono; deploy: a filled pill with a
 // rocket). Labels are titles, never short ids; the id is in the tooltip.
 import Link from "next/link";
-import { GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Reply, Rocket, Square, SquareCheck, Target, Workflow } from "lucide-react";
+import { Check, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Reply, Rocket, Square, SquareCheck, Target, Workflow } from "lucide-react";
 import type { PriorityPlanRef, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
 import type { NextAction } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
@@ -191,6 +191,24 @@ export function PrChip({ pr, state }: { pr: string; state?: string }) {
   );
 }
 
+export type LinkKind = "task" | "pr" | "branch" | "deploy";
+const KIND_COUNT: Record<LinkKind, { Icon: typeof Square; one: string; many: string }> = {
+  task: { Icon: Square, one: "task", many: "tasks" },
+  pr: { Icon: GitPullRequest, one: "PR", many: "PRs" },
+  branch: { Icon: GitBranch, one: "branch", many: "branches" },
+  deploy: { Icon: Rocket, one: "deploy", many: "deploys" },
+};
+
+/** How many links of one kind a closed line has ("2 PRs"), where there is no room for each: the open line lists them. */
+export function KindCount({ kind, n }: { kind: LinkKind; n: number }) {
+  const { Icon, one, many } = KIND_COUNT[kind];
+  return (
+    <span data-chip-count={kind} className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sol-text/[0.05] px-1.5 text-meta tabular-nums text-sol-text-muted">
+      <Icon className="size-3 shrink-0" aria-hidden />{n} {n === 1 ? one : many}
+    </span>
+  );
+}
+
 /** A branch: a dashed frame, the branch glyph, its name in mono. */
 export function BranchChip({ name }: { name: string }) {
   return (
@@ -213,6 +231,20 @@ export function DeployChip({ d, now }: { d: DeployInfo; now: number }) {
       {d.status !== "live" && <span data-deploy-state className="text-sol-text-muted">{d.status}</span>}
       <span className="tabular-nums text-sol-text-dim">{ago(d.at, now)}</span>
     </Link>
+  );
+}
+
+/**
+ * A teammate's milestone: a status mark, not a box, since nothing here is
+ * theirs to press. Open is a hollow ring, done a check; each says so.
+ */
+export function MilestoneMark({ done }: { done: boolean }) {
+  return (
+    <span data-milestone-mark={done ? "done" : "open"} role="img" aria-label={done ? "Done" : "Open"} title={done ? "Done" : "Open"} className="flex size-[14px] shrink-0 items-center justify-center">
+      {done
+        ? <Check className="size-3.5 text-sol-green" strokeWidth={2.5} aria-hidden />
+        : <span aria-hidden className="block size-[8px] rounded-full border-[1.5px] border-sol-text-dim" />}
+    </span>
   );
 }
 

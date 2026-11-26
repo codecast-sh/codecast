@@ -300,7 +300,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
           {/* The Priorities view only: the rank of the viewer's priority it serves (web's PriorityRankChip). */}
           {priorityRank !== undefined && (
             <RNText style={[styles.priorityRank, typeof priorityRank !== 'number' && styles.priorityRankNone]} accessibilityLabel={rankLabelWords(priorityRank).title}>
-              {rankLabelWords(priorityRank).text}
+              {rankLabelWords(priorityRank).touch}
             </RNText>
           )}
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
