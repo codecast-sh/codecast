@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from "react";
+import { useRef, useCallback } from "react";
 import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -568,22 +568,19 @@ export function useSyncInboxSessions() {
   // stuck message and is re-created instead. Server-side deletions are not
   // this sweep's job: a hard delete is a sync-log delete action, and the log
   // applier prunes the row on authorized absence (useSyncChangeFeed).
-  const [sweepNonce, setSweepNonce] = useState(0);
-  useMountEffect(() => {
-    const id = setInterval(() => setSweepNonce((n) => n + 1), STUB_SWEEP_INTERVAL_MS);
-    const offWake = onSyncWake(() => setSweepNonce((n) => n + 1));
-    return () => {
-      clearInterval(id);
-      offWake();
-    };
-  });
+  //
+  // The interval and the wake bus call the sweep directly, never through React
+  // state: a wake fires inside the window's focus/visibilitychange event, and a
+  // setState there re-rendered DashboardLayout (which mounts this hook) before
+  // the event returned, freezing the page on every return (ct-102136).
   const lastSweepRef = useRef(0);
-  useWatchEffect(() => {
-    if (!hydrated) return;
-    // Wake events can bump the nonce in bursts (cmd-tab flurries).
+  const sweepRef = useRef<() => void>(() => {});
+  sweepRef.current = () => {
+    const store = useInboxStore.getState();
+    if (!store.clientStateInitialized) return;
+    // Wake events arrive in bursts (cmd-tab flurries).
     if (Date.now() - lastSweepRef.current < 60 * 1000) return;
     lastSweepRef.current = Date.now();
-    const store = useInboxStore.getState();
     const { stubs, strandedStubs } = collectGhostSweepCandidates(store);
     if (stubs.length) store.pruneGhostSessions(stubs);
     // Stranded stubs the user typed into: re-create + re-send so a "New Session"
@@ -591,7 +588,19 @@ export function useSyncInboxSessions() {
     // permanently stuck ghost. Idempotent server-side, so a stub mid outbox
     // replay just resolves to the same row.
     for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch((err) => captureError(err, { source: "stub-heal", stubId }));
-  }, [sweepNonce, hydrated]);
+  };
+  useMountEffect(() => {
+    const sweep = () => sweepRef.current();
+    const id = setInterval(sweep, STUB_SWEEP_INTERVAL_MS);
+    const offWake = onSyncWake(sweep);
+    return () => {
+      clearInterval(id);
+      offWake();
+    };
+  });
+  useWatchEffect(() => {
+    if (hydrated) sweepRef.current();
+  }, [hydrated]);
 
   return { activeSessions: inboxSessions };
 }
