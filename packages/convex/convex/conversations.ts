@@ -113,6 +113,7 @@ import {
   type AccessLevel,
   type TeamFloor,
   matchDirectoryMapping,
+  PRIVATE_LOCK,
 } from "./privacy";
 import { currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
 import { activeTeamMembershipFor, canAccessConversation } from "./lib/access";
@@ -4140,7 +4141,7 @@ export const setPrivacy = mutation({
     // private visibility marker. Never let is_private:false and team_id diverge.
     await refuseHidingTeamSession(ctx, conversation._id, { is_private: args.is_private });
     const updates = args.is_private
-      ? { is_private: true as const, team_visibility: "private" as const }
+      ? PRIVATE_LOCK
       : await buildShareUpdate(ctx, conversation, authUserId);
 
     // Patches the conversation AND rewrites linked work items' stored access
@@ -4212,7 +4213,7 @@ export const setPrivacyBySessionId = mutation({
     // and could mint a "shared with nobody" row (non-private, teamless).
     await refuseHidingTeamSession(ctx, conversation._id, { is_private: args.is_private });
     const updates = args.is_private
-      ? { is_private: true as const, team_visibility: "private" as const }
+      ? PRIVATE_LOCK
       : await buildShareUpdate(ctx, conversation, authUserId);
     await patchConversationVisibility(ctx, conversation, updates);
     await advanceCommentsAccessRevision(ctx, conversation);
@@ -4237,7 +4238,7 @@ export const makeAllPrivate = mutation({
 
     let updated = 0;
     for (const conv of conversations) {
-      await patchConversationVisibility(ctx, conv, { is_private: true });
+      await patchConversationVisibility(ctx, conv, PRIVATE_LOCK);
       updated++;
     }
 
@@ -5968,7 +5969,10 @@ export const forkConversation = mutation({
     // not copied from the original — otherwise the fork silently carries the
     // original owner's team, and a later share (buildShareUpdate keeps an
     // existing team_id) publishes it to a team the forker may not belong to.
-    const { team_id: forkTeamId } = await resolveCreationPrivacy(
+    // A fork of your own session keeps its sharing, as a spawned child does
+    // (inheritedChildPrivacy); a fork of someone else's follows your own
+    // folder rules, as a fork from one message does.
+    const forkPrivacy = inheritedChildPrivacy(original, authUserId) ?? await resolveCreationPrivacy(
       ctx,
       authUserId,
       original.git_root || original.project_path,
@@ -5976,6 +5980,7 @@ export const forkConversation = mutation({
       undefined,
       original.git_remote_url,
     );
+    const forkTeamId = forkPrivacy.team_id;
 
     // Trust the denormalized message_count for display; the actual copy is
     // driven by advanceForkCopy walking the source by timestamp cursor and
@@ -5995,7 +6000,9 @@ export const forkConversation = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: true,
+      is_private: forkPrivacy.is_private,
+      auto_shared: forkPrivacy.auto_shared || undefined,
+      ...(forkPrivacy.team_visibility ? { team_visibility: forkPrivacy.team_visibility } : {}),
       status: "completed",
       forked_from: original._id,
       fork_status: "copying",
@@ -11653,13 +11660,7 @@ export async function collectHiddenSessionsLite(
   // scan, so cursors stay untouched, and present in the whole-set the CLEAR
   // gate checks. Bounded by the same 200-owner cap as the inbox scan.
   if (result.isDone) {
-    const ownerRows = [
-      ...await ctx.db
-        .query("session_owners")
-        .withIndex("by_user", (q: any) => q.eq("user_id", userId))
-        .take(200),
-      ...(await teamOwnerRowsForUser(ctx, userId, 200)).rows,
-    ];
+    const { rows: ownerRows } = await ownerRowsForUser(ctx, userId, 200);
     const seen = new Set(page.map((r: any) => r._id.toString()));
     for (const r of ownerRows) {
       const idStr = r.conversation_id.toString();

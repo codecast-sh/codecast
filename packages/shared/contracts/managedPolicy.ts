@@ -223,7 +223,9 @@ export function teamVisibleConvTeam<T>(conv: {
   team_visibility?: string;
 } | null | undefined): T | undefined {
   if (!conv?.team_id) return undefined;
-  if (!conv.is_private || conv.auto_shared) return conv.team_id;
+  // The session's own sharing decides. auto_shared only says a folder rule did
+  // the sharing; it never shares a session made private.
+  if (!conv.is_private) return conv.team_id;
   if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
   return undefined;
 }

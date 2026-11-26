@@ -30,6 +30,8 @@ import { SessionFlowContext } from '@/components/flow/FlowContext';
 import { useInboxStore, isConvexId, retryPendingSend } from '@codecast/web/store/inboxStore';
 import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
+import { teamShareState } from '@codecast/web/lib/teamFeedRows';
+import { teamVisibilityFor } from '@codecast/web/lib/teamVisibility';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
@@ -3398,7 +3400,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     const isOwner = !!conversation.is_own;
     const isPrivate = conversation.is_private !== false;
     const hasTeam = !!conversation.team_id;
-    const vis = conversation.team_visibility || 'summary';
+    // What the team sees, by the web's rule: the session's own level, else the
+    // member's level for the team (the server reads it the same way).
+    const vis = teamShareState(conversation, teamVisibilityFor(useInboxStore.getState().teams, String(conversation.team_id ?? ''))).mode;
     const token = conversation.share_token ?? undefined;
     const link = token ? conversationShareLink(token) : `${CODECAST_BASE_URL}/conversation/${convId}`;
 

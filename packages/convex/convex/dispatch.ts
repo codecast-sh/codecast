@@ -37,7 +37,7 @@ import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/c
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
-import { resolveTeamForPath, buildShareUpdate, isTeamMember } from "./privacy";
+import { resolveTeamForPath, buildShareUpdate, isTeamMember, PRIVATE_LOCK } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
@@ -1739,7 +1739,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // private visibility marker. Never let is_private:false and team_id diverge.
     await refuseHidingTeamSession(ctx as any, conv._id, { is_private: isPrivate });
     const updates = isPrivate
-      ? { is_private: true as const, team_visibility: "private" as const }
+      ? PRIVATE_LOCK
       : await buildShareUpdate(ctx, conv, userId);
     // Also rewrites linked work items' stored access key.
     await patchConversationVisibility(ctx, conv, updates);

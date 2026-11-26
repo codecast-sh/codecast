@@ -107,6 +107,13 @@ export async function getOwnerMembership(
 
 export { isVisibilityShareable } from "./teamVisibility";
 
+// Making a session private, in one patch for every writer: off the team, and
+// locked so a folder rule never shares it again. It also drops auto_shared,
+// which says a folder rule shared the session and is no longer true; left set,
+// a session made private still read as shared to its linked tasks, plans and
+// docs.
+export const PRIVATE_LOCK = { is_private: true, team_visibility: "private", auto_shared: undefined } as const;
+
 // ── Access control (single conversation) ──
 // is_private is the source of truth (set at creation from directory_team_mappings auto_share).
 // team_visibility is the per-conversation override. Membership visibility is user-level opt-out,

@@ -1,5 +1,6 @@
 import { deliverSessionNotification } from "./lib/sessionNotify";
 import { listSessionPartyIds } from "./sessionOwners";
+import { sessionLabel } from "./lib/sessionLabel";
 
 export async function notifySessionAssigned(
   ctx: any,
@@ -14,10 +15,7 @@ export async function notifySessionAssigned(
 
   const actor = await ctx.db.get(actorUserId);
   const actorName = actor?.name || actor?.email || "A teammate";
-  const label =
-    (conversation.title || "").trim() ||
-    conversation.short_id ||
-    "a session";
+  const label = sessionLabel(conversation, "a session");
 
   let delivered = 0;
   for (const recipientId of recipientIds) {
@@ -46,7 +44,7 @@ export async function notifySessionOwnershipChanged(
   if (!conversation) return 0;
   const actor = await ctx.db.get(actorUserId);
   const actorName = actor?.name || actor?.email || "A teammate";
-  const label = conversation.title?.trim() || conversation.short_id || "this session";
+  const label = sessionLabel(conversation, "this session");
   const added = new Set(change.added.map(String));
   const removed = new Set(change.removed.map(String));
   const names = change.owners.map((owner) => owner.name || owner.email || "a teammate");
@@ -73,7 +71,7 @@ export async function notifySessionOwnershipChanged(
 
 export async function notifySessionExecutionTaken(
   ctx: any,
-  conversation: { _id: any; user_id: any; owner_user_id?: any; title?: string; short_id?: string },
+  conversation: { _id: any; user_id: any; owner_user_id?: any; title?: string; project_path?: string },
   actorUserId: any,
   destination: string,
   source?: string,
@@ -82,7 +80,7 @@ export async function notifySessionExecutionTaken(
   if (String(conversation.user_id) === String(actorUserId)) return 0;
   const actor = await ctx.db.get(actorUserId);
   const actorName = actor?.name || actor?.email || "A teammate";
-  const label = conversation.title?.trim() || conversation.short_id || "this session";
+  const label = sessionLabel(conversation, "this session");
   const owners = await listSessionPartyIds(ctx, conversation._id);
   const recipients = new Set([conversation.user_id, conversation.owner_user_id, ...owners].filter(Boolean).map(String));
   let delivered = 0;

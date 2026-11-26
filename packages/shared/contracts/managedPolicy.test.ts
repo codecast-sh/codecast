@@ -103,7 +103,8 @@ describe("policyTeamOf", () => {
     expect(policyTeamOf("conversations", { team_id: "t1", is_private: false })).toBe("t1");
     expect(policyTeamOf("conversations", { team_id: "t1", is_private: true })).toBeNull();
     expect(policyTeamOf("conversations", { team_id: "t1", is_private: true, team_visibility: "summary" })).toBe("t1");
-    expect(policyTeamOf("conversations", { team_id: "t1", is_private: true, auto_shared: true })).toBe("t1");
+    // A folder-shared session its owner made private answers to no team.
+    expect(policyTeamOf("conversations", { team_id: "t1", is_private: true, auto_shared: true })).toBeNull();
   });
   test("any other row answers to its workspace key's team, else its team tag", () => {
     expect(policyTeamOf("tasks", { workspace: "team:t2", team_id: "t1" })).toBe("t2");

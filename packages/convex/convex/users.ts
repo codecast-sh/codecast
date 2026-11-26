@@ -29,7 +29,7 @@ import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
 import { shareImpactKey } from "@codecast/shared/team";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
-import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
+import { PRIVATE_LOCK, resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, WORK_STARTING_DAEMON_COMMANDS, isReservedDevice, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
@@ -2866,7 +2866,7 @@ export async function upsertDirectoryMapping(
     const conv = await ctx.db.get(id);
     if (!conv || conv.user_id.toString() !== userId.toString()) continue;
     if (conv.team_visibility === "private" && conv.is_private !== false) continue;
-    await patchConversationVisibility(ctx, conv, { is_private: true, team_visibility: "private" });
+    await patchConversationVisibility(ctx, conv, PRIVATE_LOCK);
   }
 
   for (const rule of duplicates) {

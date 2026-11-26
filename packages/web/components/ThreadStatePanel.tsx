@@ -9,9 +9,7 @@ import { threadStateAskParts, type ThreadStateRow } from "@codecast/shared/contr
 import { useInboxStore } from "../store/inboxStore";
 import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { BELOW_SM } from "../hooks/useIsPhone";
-import { useMediaQuery } from "../hooks/useMediaQuery";
-import { LinkedPrChips, PrStack, PrStatusChip } from "./PrStatusChip";
+import { PrStack, PrStatusChip } from "./PrStatusChip";
 import { sessionPullRequestsSig, titledSessionPullRequests, type LinkedPr } from "../lib/sessionPullRequests";
 import { TextWithMentions } from "./EntityIdPill";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";

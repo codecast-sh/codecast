@@ -494,6 +494,7 @@ import type * as lib_sessionCard from "../lib/sessionCard.js";
 import type * as lib_sessionCost from "../lib/sessionCost.js";
 import type * as lib_sessionGoalTrigger from "../lib/sessionGoalTrigger.js";
 import type * as lib_sessionIdentityFields from "../lib/sessionIdentityFields.js";
+import type * as lib_sessionLabel from "../lib/sessionLabel.js";
 import type * as lib_sessionMedia from "../lib/sessionMedia.js";
 import type * as lib_sessionMigrationPlan from "../lib/sessionMigrationPlan.js";
 import type * as lib_sessionNotify from "../lib/sessionNotify.js";
@@ -1362,6 +1363,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sessionCost": typeof lib_sessionCost;
   "lib/sessionGoalTrigger": typeof lib_sessionGoalTrigger;
   "lib/sessionIdentityFields": typeof lib_sessionIdentityFields;
+  "lib/sessionLabel": typeof lib_sessionLabel;
   "lib/sessionMedia": typeof lib_sessionMedia;
   "lib/sessionMigrationPlan": typeof lib_sessionMigrationPlan;
   "lib/sessionNotify": typeof lib_sessionNotify;

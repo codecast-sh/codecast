@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { forkFromMessage } from "./conversations";
+import { forkConversation, forkFromMessage } from "./conversations";
 
 // A fork takes the visibility a fresh session in the same project would get
 // under the FORKER's mappings. Forking a teammate's session hands over their
@@ -55,5 +55,38 @@ describe("forkFromMessage visibility for a teammate's session", () => {
     const fork = await db.get(r.conversation_id);
     expect(fork.is_private).toBe(true);
     expect(fork.team_id).toBeUndefined();
+  });
+});
+
+// Fork (by share link) of the forker's OWN session keeps its sharing, the way
+// a spawned child does; it used to come out private every time.
+describe("forkConversation of your own session", () => {
+  const owner = "users_owner" as any;
+  const team = "teams_union" as any;
+  const ctx = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: `${owner}|session` }) } });
+  const fixture = (conv: Record<string, any>) => makeFakeDb({
+    users: [{ _id: owner, team_id: team }],
+    team_memberships: [{ _id: "tm_1", team_id: team, user_id: owner, role: "admin" }],
+    conversations: [{
+      _id: "conv_parent", user_id: owner, team_id: team, session_id: "sess-parent", agent_type: "claude_code",
+      short_id: "convpar", title: "Pricing model", project_path: "/p", started_at: 1, updated_at: 1, message_count: 0,
+      share_token: "tok", ...conv,
+    }],
+    messages: [], devices: [], daemon_commands: [], pending_messages: [], directory_team_mappings: [],
+    session_owners: [], label_assignments: [], change_log: [], local_view_heads: [], rate_limits: [],
+  });
+
+  test("a session of yours shared with the team forks shared", async () => {
+    const db = fixture({ is_private: false, team_visibility: "full" });
+    const id = await (forkConversation as any)._handler(ctx(db), { share_token: "tok" });
+    const fork = await db.get(typeof id === "string" ? id : id.conversation_id ?? id._id);
+    expect(fork).toMatchObject({ user_id: owner, team_id: team, is_private: false, team_visibility: "full" });
+  });
+
+  test("a private session forks private", async () => {
+    const db = fixture({ is_private: true, team_visibility: "private" });
+    const id = await (forkConversation as any)._handler(ctx(db), { share_token: "tok" });
+    const fork = await db.get(typeof id === "string" ? id : id.conversation_id ?? id._id);
+    expect(fork.is_private).toBe(true);
   });
 });
