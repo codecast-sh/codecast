@@ -114,6 +114,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "workflow_runs.get": (ids) => Object.values(ids.rows.workflowRuns).map((id) => ({ id })),
   "workflow_runs.byIds": (ids) => [{ ids: Object.values(ids.rows.workflowRuns).map(String) }],
   "workflow_runs.listRuns": (ids) => [{}, { team_id: ids.T }, { team_id: ids.O }],
+  // The run each placement's session works in, asked of every such session: the run's own access decides.
+  "sessionFlowRuns.ofSession": (ids) => Object.values(ids.runSessions).map((conversation_id) => ({ conversation_id })),
   "conversations.getMessageFeed": (ids) => [{ filter: "team" }, { filter: "team", activeTeamId: ids.T }, { filter: "team", activeTeamId: ids.O }, { filter: "my" }],
   // Mention indexes (useSyncMentionTasks/Docs/Plans): rows land in store.mentionIndex,
   // not a registry key, so FEED_TABLE names their table.
@@ -187,6 +189,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
     const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {}, priorities: {} };
     const groupRefs: Record<string, string> = {};
+    const runSessions: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
       rows.docs[place] = await db.insert("docs", { ...p, ...base(place), content: "body", doc_type: "note", source: "human" });
@@ -195,6 +198,11 @@ async function seed(t: ReturnType<typeof convexTest>) {
       const workflow_id = await db.insert("workflows", { ...p, name: `${place} flow`, slug: `${place}-flow`, nodes: [], edges: [], created_at: now, updated_at: now } as any);
       const run = await db.insert("workflow_runs", { ...p, workflow_id, workflow_name: `${place} flow`, status: "completed", node_statuses: [], created_at: now, updated_at: now } as any);
       rows.workflowRuns[place] = run;
+      // The session that works in the run (sessionFlowRuns.ofSession reads its workflow_run_id).
+      runSessions[place] = await db.insert("conversations", {
+        user_id: p.user_id, ...(p.team_id ? { team_id: p.team_id } : {}), is_private: place !== "team" && place !== "other", workflow_run_id: run,
+        agent_type: "claude_code", session_id: `run-${place}`, started_at: now, updated_at: now, message_count: 0, status: "active",
+      } as any);
       rows.sessionFlows[place] = await db.insert("session_flows", { ...p, graph_hash: `g-${place}`, from: "graph", name: `${place} flow`, source: "", nodes: [], edges: [], file: "flow.cast", files: [], graph_nodes: [], first_run_id: run, last_run_at: now, created_at: now });
       // A live flow is a team's (createLiveFlowCore); the private one is the row its access rule must refuse.
       if (place !== "personal") rows.liveFlows[place] = await db.insert("live_flows", { ...p, workflow_id, on: false, changed_by: p.user_id, changed_at: now, created_at: now });
@@ -241,7 +249,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
         rows.teamDeploys[place] = await db.insert("deploys", { short_id: `dp-${++n}`, workspace: p.workspace, target: "web", repository: "acme/app", status: "live", trigger: "person", source: "test", event_ids: [], carries: [], created_at: now, updated_at: now } as any);
       }
     }
-    return { owner, teammate, stranger, removed, outsider, T, O, rows, groupRefs };
+    return { owner, teammate, stranger, removed, outsider, T, O, rows, groupRefs, runSessions };
   });
 }
 

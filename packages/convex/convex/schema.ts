@@ -8483,7 +8483,7 @@ export default defineSchema({
     // When the daemon last vouched for the row. A row whose daemon stopped
     // reporting reads as gone after BROWSER_TABS_STALE_MS.
     reported_at: v.number(),
-  }).index("by_user", ["user_id"]).index("by_user_device", ["user_id", "device_id"]),
+  }).index("by_user", ["user_id"]).index("by_user_device", ["user_id", "device_id"]).index("by_conversation", ["conversation_id"]),
 
   // Remote mirror of a local markdown vault: one row per registered vault the
   // user turned mirroring on for (`cast vault mirror <dir> --on`). The daemon on

@@ -430,7 +430,7 @@ describe("push", () => {
     await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
     const refresh = ctx._scheduled.filter((s: any) => s.args?.pr_ids?.includes(PR) && s.args?.attempt === 0);
     expect(refresh).toHaveLength(1);
-    expect(refresh[0].delay).toBe(15000);
+    expect(refresh[0].delay).toBe(45000);
   });
 
   test("a tag push is not a branch push: it stores no commits (changesDeploy.test.ts covers the release it records)", async () => {

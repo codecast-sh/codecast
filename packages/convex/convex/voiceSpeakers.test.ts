@@ -60,7 +60,21 @@ beforeEach(() => {
   }) as typeof fetch;
 });
 
-afterEach(() => {
+// Every test's world. A test that only asks what got scheduled leaves the
+// scheduled action to run on convex-test's real timer, where it would call this
+// file's fakes during a later test; each test's leftovers are settled here.
+const worlds: any[] = [];
+const pendingJobs = (t: any) =>
+  t.run(async (ctx: any) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.state.kind === "pending"));
+
+afterEach(async () => {
+  for (const t of worlds.splice(0)) {
+    for (let jobs = await pendingJobs(t); ; jobs = await pendingJobs(t)) {
+      await t.run(async (ctx: any) => { for (const f of jobs) await ctx.scheduler.cancel(f._id); });
+      await t.finishInProgressScheduledFunctions();
+      if (!(await pendingJobs(t)).length) break;
+    }
+  }
   globalThis.fetch = realFetch;
   for (const k of ENV) {
     if (savedEnv[k] === undefined) delete process.env[k];
@@ -70,6 +84,7 @@ afterEach(() => {
 
 async function world(opts: { feature?: boolean; liveLines?: boolean; bobPrint?: number[]; audioBytes?: number } = {}) {
   const t = convexTest(schema, allModules);
+  worlds.push(t);
   const audio = new Blob([new Uint8Array(opts.audioBytes ?? 4)], { type: "audio/mp4" });
   const ids = await t.run(async (ctx) => {
     const ann = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);

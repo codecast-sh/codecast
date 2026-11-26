@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { withUnplaced } from "./lib/orgCoverage";
 import { readUnplaced } from "./orgUnplaced";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readLanding, sessionUseOf, withLanding } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readActivityWork, readLanding, sessionUseOf, withLanding } from "./orgInit";
+import { readPeopleEvidence } from "./lib/orgPeopleEvidence";
 import { readGoalCandidates, readStatedGoals } from "./orgSaid";
 import type { AskModel } from "./lib/statedGoals";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
@@ -536,7 +537,9 @@ describe("org.analysisInputs", () => {
     const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
     const activity = await computeAnalysisActivity(ctx, ME as any, TEAM, NOW);
     const landing = await readLanding(ctx, ME as any, TEAM, NOW, activity.repos, landingRecordsOf(activity.activity));
-    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, ME as any, TEAM, NOW)), await readStatedGoals(await readGoalCandidates(ctx, ME as any, TEAM, NOW), org.sessions.long_running.rows, "Acme", goalAsk))).toEqual(whole);
+    // What each person did is its own slice, laid beside the merge (orgInit's action reads it in its own budget).
+    const people = await readPeopleEvidence(ctx, ME as any, TEAM, NOW, await readActivityWork(ctx, ME as any, TEAM, NOW));
+    expect({ ...mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, ME as any, TEAM, NOW)), await readStatedGoals(await readGoalCandidates(ctx, ME as any, TEAM, NOW), org.sessions.long_running.rows, "Acme", goalAsk)), people }).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
     expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks", "templates"]);
     // The activity block is its own slice (S9): areas, people and stale lists.

@@ -403,7 +403,7 @@ describe("a workspace with a model budget pays for its judges", () => {
       if (conv.team) {
         const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1 } as any);
         await ctx.db.insert("team_memberships", { team_id: team, user_id: s.user, role: "member", joined_at: 1 } as any);
-        await ctx.db.patch(s.conversation, { team_id: team, is_private: true, auto_shared: true } as any);
+        await ctx.db.patch(s.conversation, { team_id: team, is_private: true, team_visibility: "summary" } as any);
       }
       const c: any = await ctx.db.get(s.conversation);
       const ws = c.team_id ? `team:${c.team_id}` : `user:${s.user}`;
