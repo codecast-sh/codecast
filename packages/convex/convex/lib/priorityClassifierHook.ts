@@ -17,7 +17,7 @@
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { sessionVisibility } from "./prioritySessionVisibility";
-import { passOn, pinsAskForPass } from "./priorityPassSchedule";
+import { passOn, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
 import { parseWorkspaceKey } from "./accessKeys";
 import { workspaceHasFeature } from "./teamFeatureGuard";
 import { worstCaseCost } from "./teamBudget";
@@ -55,7 +55,8 @@ export const classifierReads = (conv: Doc<"conversations">): boolean => pinsAskF
 /** Whether the classifier may run where it would write: the priorities feature on there (passOn) and the classifier's own flag, by the same rule. */
 export async function classifierOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
   const ws = parseWorkspaceKey(workspace);
-  if (!ws) return false;
+  // The priorities flag first (one read for a team), then the classifier's, then membership.
+  if (!ws || !(await prioritiesOn(ctx, workspace))) return false;
   const flag = await workspaceHasFeature(ctx, ws.type === "team" ? { team_id: ws.teamId } : { user_id: userId }, "priority_classifier");
   return flag && (await passOn(ctx, userId, workspace));
 }
@@ -106,11 +107,11 @@ export function asksNow(asks: Array<Pick<Doc<"priority_classifications">, "statu
  * scheduler asks for nothing.
  */
 export async function askClassifier(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">, trigger: "title" | "pin"): Promise<boolean> {
-  if (!ctx.scheduler || conv.priority_id || !classifierReads(conv)) return false;
-  const asks = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).take(ASKS_READ);
-  if (!asksNow(asks, trigger)) return false;
+  if (!ctx.scheduler || conv.priority_id || !classifierReads(conv) || !(await prioritiesPossibleFor(ctx, conv))) return false;
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   if (!(await classifierOn(ctx, conv.user_id, workspace))) return false;
+  const asks = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).take(ASKS_READ);
+  if (!asksNow(asks, trigger)) return false;
   return enqueue({ db: ctx.db, scheduler: ctx.scheduler }, conv, workspace, trigger, 0, await roomToday(ctx, conv.user_id, workspace));
 }
 

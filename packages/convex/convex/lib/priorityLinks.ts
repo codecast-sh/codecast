@@ -38,10 +38,8 @@ import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/prior
 import { stepDone } from "./priorityPass";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
-import { passActivity, pinsAskForPass } from "./priorityPassSchedule";
+import { passActivity, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
 import { classifierReads } from "./priorityClassifierHook";
-import { parseWorkspaceKey } from "./accessKeys";
-import { teamHasFeature, workspaceHasFeature } from "./teamFeatureGuard";
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -198,13 +196,6 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
   for (const { user } of places) await passActivity(ctx, user, workspace);
 }
 
-/** Whether the priorities feature is on in a workspace: no priority there to recompute, and no pass to ask for, when it is off. */
-async function prioritiesOn(ctx: Ctx, workspace: string): Promise<boolean> {
-  const ws = parseWorkspaceKey(workspace);
-  if (!ws) return false;
-  return ws.type === "team" ? teamHasFeature(ctx, ws.teamId, "priorities") : workspaceHasFeature(ctx, { user_id: ws.userId }, "priorities");
-}
-
 /**
  * A pull request merged or closed unmerged (prShepherd patchPullRequest): every
  * milestone naming it, among the priorities of the people whose sessions link
@@ -212,8 +203,14 @@ async function prioritiesOn(ctx: Ctx, workspace: string): Promise<boolean> {
  * no team each person's own, wherever the linking session is listed.
  */
 export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Promise<void> {
+  // A team's PR counts only there: its flag first, one read.
+  if (pr.team_id && !(await prioritiesOn(ctx, `team:${pr.team_id}`))) return;
   const sessions = await sessionsOf(ctx, [pr.shepherd_conversation_id, ...pr.linked_session_ids]);
-  const places = sessions.map((c) => ({ user: c.user_id, workspace: pr.team_id ? `team:${pr.team_id}` : `user:${c.user_id}` }));
+  const places = [];
+  for (const c of sessions) {
+    const workspace = pr.team_id ? `team:${pr.team_id}` : `user:${c.user_id}`;
+    if (pr.team_id || (await prioritiesOn(ctx, workspace))) places.push({ user: c.user_id, workspace });
+  }
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 
@@ -272,7 +269,7 @@ export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"prioriti
   if (strengthOf(conv.priority_set_by) > STRENGTH[by] || (by === "classifier" && conv.priority_id)) return false;
   if ((conv.priority_not ?? []).some((id) => String(id) === String(priorityId))) return false;
   const priority: Priority | null = await ctx.db.get(priorityId);
-  if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id)) return false;
+  if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id) || !(await prioritiesOn(ctx, priority.workspace))) return false;
   const target = priority.steps.find((s) => s.key === step);
   if (target?.dropped) return false;
   const stepKey = target ? step : undefined;
@@ -333,7 +330,7 @@ export async function startPlanId(ctx: Ctx, shortId: string, stepKey: string | u
  * Never a role's seat, a trigger's run, a workflow's session or a subagent (classifierReads): their work is not the person's.
  */
 export async function linkFromTask(ctx: Ctx, conv: Conv, task: Pick<Doc<"tasks">, "short_id">): Promise<boolean> {
-  if (!classifierReads(conv)) return false;
+  if (!classifierReads(conv) || !(await prioritiesPossibleFor(ctx, conv))) return false;
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
     const step = p.steps.find((s) => !s.dropped && s.refs.some((r) => r.kind === "task" && r.id === task.short_id));
@@ -351,7 +348,7 @@ export async function linkFromTask(ctx: Ctx, conv: Conv, task: Pick<Doc<"tasks">
  * a session the classifier would read.
  */
 export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">, "_id" | "status">): Promise<boolean> {
-  if (conv.priority_id || plan.status === "abandoned" || !classifierReads(conv)) return false;
+  if (conv.priority_id || plan.status === "abandoned" || !classifierReads(conv) || !(await prioritiesPossibleFor(ctx, conv))) return false;
   const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).take(MILESTONE_PLAN_MAX_TASKS + 1);
   if (!tasks.length || tasks.length > MILESTONE_PLAN_MAX_TASKS) return false;
   const inPlan = new Set(tasks.map((t) => t.short_id));

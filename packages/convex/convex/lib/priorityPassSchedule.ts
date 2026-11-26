@@ -29,7 +29,7 @@ import { isRunLog } from "@codecast/shared/contracts";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { isStandingSession } from "./orgOwnership";
 import { parseWorkspaceKey } from "./accessKeys";
-import { workspaceHasFeature } from "./teamFeatureGuard";
+import { teamHasFeature, workspaceHasFeature } from "./teamFeatureGuard";
 import { isTeamMember } from "../privacy";
 
 const MINUTE = 60_000;
@@ -81,6 +81,8 @@ export async function passActivity(ctx: { db: any; scheduler?: any }, userId: Id
   const key = `${userId}|${workspace}`;
   if (asked.has(key)) return;
   askedIn.set(ctx.db, asked.add(key));
+  // The flag first: one read, and off for nearly everyone.
+  if (!(await prioritiesOn(ctx, workspace))) return;
   const row = await scheduleRow(ctx, userId, workspace);
   if (!nextPassDue(row, Date.now(), PASS_DEBOUNCE_MS)) return;
   // A pair with a row had the feature on when it was written; one without is checked here, so the feature off costs reads and no job.
@@ -90,7 +92,7 @@ export async function passActivity(ctx: { db: any; scheduler?: any }, userId: Id
 
 /** Activity in a session: its owner's pass in the workspace it counts in. A workflow's run log is never pass input. */
 export async function sessionActivity(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">): Promise<void> {
-  if (isRunLog(conv)) return;
+  if (isRunLog(conv) || !ctx.scheduler || !(await prioritiesPossibleFor(ctx, conv))) return;
   await passActivity(ctx, conv.user_id, await sessionVisibility(ctx).workspaceOf(conv));
 }
 
@@ -105,11 +107,28 @@ export const pinsAskForPass = (
   conv: Pick<Doc<"conversations">, "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id" | "is_workflow_primary" | "is_workflow_sub">,
 ): boolean => !isStandingSession(conv) && !conv.agent_task_id && !isRunLog(conv) && !conv.is_workflow_sub;
 
+/** Whether the priorities feature is on in a workspace: a team's own flag (one read), or for a personal one any of its person's teams'. */
+export async function prioritiesOn(ctx: { db: any }, workspace: string): Promise<boolean> {
+  const ws = parseWorkspaceKey(workspace);
+  if (!ws) return false;
+  return ws.type === "team" ? teamHasFeature(ctx, ws.teamId, "priorities") : workspaceHasFeature(ctx, { user_id: ws.userId }, "priorities");
+}
+
+/**
+ * Whether priorities can be on wherever a session counts, read before working
+ * out which workspace that is: its team's flag (one read) when it has a team
+ * with the feature on, else its owner's personal workspace's.
+ */
+export async function prioritiesPossibleFor(ctx: { db: any }, conv: Pick<Doc<"conversations">, "team_id" | "user_id">): Promise<boolean> {
+  if (conv.team_id && (await teamHasFeature(ctx, conv.team_id, "priorities"))) return true;
+  return workspaceHasFeature(ctx, { user_id: conv.user_id }, "priorities");
+}
+
 /** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
 export async function passOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
   const ws = parseWorkspaceKey(workspace);
   if (!ws) return false;
   // The flag first: one read, and false for nearly everyone.
-  if (ws.type === "team") return (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities")) && (await isTeamMember(ctx, userId, ws.teamId));
-  return String(ws.userId) === String(userId) && (await workspaceHasFeature(ctx, { user_id: userId }, "priorities"));
+  if (ws.type === "team") return (await prioritiesOn(ctx, workspace)) && (await isTeamMember(ctx, userId, ws.teamId));
+  return String(ws.userId) === String(userId) && (await prioritiesOn(ctx, workspace));
 }

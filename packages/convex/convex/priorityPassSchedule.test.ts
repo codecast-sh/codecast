@@ -11,7 +11,9 @@ import crons from "./crons";
 import { performSetThreadState } from "./conversations";
 import { patchTask } from "./lib/taskWrite";
 import { priorityPassRequest } from "./lib/priorityPass";
-import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS } from "./lib/priorityPassSchedule";
+import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, sessionActivity } from "./lib/priorityPassSchedule";
+import { askClassifier } from "./lib/priorityClassifierHook";
+import { linkFromPlan, linkFromTask, linkSession, pullRequestClosed } from "./lib/priorityLinks";
 import { passAllowedAt } from "./priorityPassSchedule";
 import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
 import { DAY, H, pass, stubModel, world } from "./priorityPassRun.testkit";
@@ -308,6 +310,59 @@ describe("each trigger asks for its owner's pass", () => {
     await pinAt(w, caller, Date.now(), "Ran the review workflow; two findings fixed");
     expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(1);
     expect(await scheduleOf(w, w.ana, w.team)).not.toBeNull();
+  });
+});
+
+describe("with priorities off, a pin, title, PR close or link costs about a read", () => {
+  /** Runs `fn` against a db that records each read: a get, or a query's table. */
+  async function reads(w: World, fn: (ctx: any) => Promise<unknown>): Promise<string[]> {
+    const seen: string[] = [];
+    await w.t.run(async (ctx: any) => {
+      const db = new Proxy(ctx.db, {
+        get(target: any, prop: string) {
+          if (prop === "query") return (table: string) => (seen.push(`query ${table}`), target.query(table));
+          if (prop === "get") return (id: any) => (seen.push("get"), target.get(id));
+          const value = target[prop];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      await fn({ ...ctx, db });
+    });
+    return seen;
+  }
+
+  test("Carl's team Other has priorities off and so does his personal workspace (no team of his has it on)", async () => {
+    const w = await world();
+    const { carlConv, carl, other } = w;
+    const conv = await w.conversation(carlConv);
+    // The pass: the team's flag, one read.
+    expect(await reads(w, (ctx) => passActivity(ctx, carl, `team:${other}`))).toEqual(["get"]);
+    // A session: its team's flag, then whether any team of its owner has it on; never the session's priority tables, or its owner.
+    const pinCost = await reads(w, (ctx) => sessionActivity(ctx, conv!));
+    const titleCost = await reads(w, (ctx) => askClassifier(ctx, conv!, "title"));
+    for (const cost of [pinCost, titleCost]) {
+      expect(cost.filter((r) => r !== "get" && r !== "query team_memberships")).toEqual([]);
+      expect(cost.length).toBeLessThanOrEqual(3);
+    }
+    // A team's pull request: its flag, one read.
+    const pr = await w.t.run((ctx) => ctx.db.insert("pull_requests", {
+      repository: "o/r", number: 1, github_pr_id: 1, title: "PR", body: "", state: "merged", author_github_username: "c", linked_session_ids: [carlConv], team_id: other, created_at: 1, updated_at: 1,
+    } as any));
+    const prRow = (await w.t.run((c) => c.db.get(pr)))!;
+    expect(await reads(w, (ctx) => pullRequestClosed(ctx, prRow))).toEqual(["get"]);
+    // The link writers: no priority, task or plan read.
+    const plan = await w.t.run((ctx) => ctx.db.insert("plans", { user_id: carl, workspace: `team:${other}`, short_id: "pl-9", title: "P", status: "active", source: "human", created_at: 1, updated_at: 1 } as any));
+    const planRow = (await w.t.run((c) => c.db.get(plan)))!;
+    for (const link of [(ctx: any) => linkFromTask(ctx, conv!, { short_id: "ct-9" }), (ctx: any) => linkFromPlan(ctx, conv!, planRow)]) {
+      const cost = await reads(w, link);
+      expect(cost.filter((r) => r.startsWith("query ") && r !== "query team_memberships")).toEqual([]);
+    }
+    const p = await w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: carl, workspace: `team:${other}`, short_id: "pri-9", title: "x", summary: "", status: "active", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1,
+    } as any));
+    const linkCost = await reads(w, (ctx) => linkSession(ctx, conv!, p, undefined));
+    expect(linkCost).toEqual(["get", "get"]);
+    expect((await w.conversation(carlConv))?.priority_id).toBeUndefined();
   });
 });
 
