@@ -4,7 +4,8 @@
  * once.
  */
 import { afterAll, beforeAll } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc";
+import { defaultConfigDir } from "../config/configDir";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -35,7 +36,7 @@ export const write = (dir: string, file: string, text: string) => { fs.mkdirSync
 
 // Each test its own state dir: the sync ledger store is cached per path.
 let worlds = 0;
-export const freshState = () => { process.env.CODECAST_DIR = path.join(sandbox, `.codecast-${++worlds}`); };
+export const freshState = () => { Object.assign(process.env, { CODECAST_DIR: path.join(sandbox, `.codecast-${++worlds}`) }); };
 
 /** A session's transcript, and the sync ledger naming its conversation, as the freeze reads them. */
 export function transcript(sessionId: string, conversationId: string, lines: object[]) {
@@ -43,7 +44,7 @@ export function transcript(sessionId: string, conversationId: string, lines: obj
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${sessionId}.jsonl`);
   fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-  const ledgerFile = path.join(process.env.CODECAST_DIR!, "sync-ledger.json");
+  const ledgerFile = path.join(defaultConfigDir(), "sync-ledger.json");
   fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
   const ledger = fs.existsSync(ledgerFile) ? JSON.parse(fs.readFileSync(ledgerFile, "utf-8")) : {};
   ledger[file] = { lastSyncedAt: Date.now(), lastSyncedPosition: 0, messageCount: lines.length, conversationId, sourceGeneration: { client: "claude", sessionId, dev: 0, ino: 0, birthtimeMs: 0, unit: "bytes", watermark: 0, prefixProven: true } };
