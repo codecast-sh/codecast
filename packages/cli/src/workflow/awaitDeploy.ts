@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { DEPLOY_WAIT_CAP_MS, deployDeadlineMs, releaseOrder, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
 import { mainRedSince, type MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { git, gitTry } from "../wipSnapshot.js";
+import { landsConfig, notYetHeld, republishLanded } from "./republishLanded.js";
 
 /** One deploy of a target, as the targets read lists its history. */
 export type TargetDeploy = { short_id: string; status: string; sha?: string | null; created_at?: number; live_at?: number | null; finished_at?: number | null; note?: string | null };
@@ -519,10 +520,31 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     },
     between: (wait) => cli.between({ ...wait, merged, plan } satisfies DeployPlace),
   };
+  // A change that lands the repository's line profile or deploy targets republishes them beside the wait, once this
+  // checkout holds the merged commit (republishLanded.ts): nothing else moves the server's copy.
+  const publishHere = (args: string[]) => within(castCmd.cmd, [...castCmd.prefixArgs, ...args], cwd, PUBLISH_MS, { ...process.env, CODECAST_CWD: cwd });
+  const republished = !opts.once && landsConfig(merged.files)
+    ? republishLanded(cwd, merged.sha, {
+      held: () => notYetHeld(cwd, merged.sha),
+      publish: async () => {
+        if ((await publishHere(["line", "profile", "--publish", "--json"])).code === 0) return null;
+        // A repository with no line profile still has its targets.
+        if ((await publishHere(["line", "deploy", "targets", "--publish", "--json"])).code === 0) return null;
+        return `cast line profile --publish and cast line deploy targets --publish both failed in ${cwd}`;
+      },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      now: () => Date.now(),
+    }, { intervalMs: 30_000, deadline: Date.now() + REPUBLISH_WAIT_MS })
+    : null;
   const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once, held: back?.held }, io);
-  console.log(result.line);
+  const note = republished ? await republished : null;
+  console.log(note ? `${result.line} ${note}` : result.line);
   return result.code;
 }
+
+/** How long one publish may take, and how long the station waits for its checkout to hold the merged commit. */
+const PUBLISH_MS = 120_000;
+const REPUBLISH_WAIT_MS = 10 * 60_000;
 
 /**
  * The run's duties for a merged commit, from the targets that commit declares: never the checkout's working tree or
@@ -563,9 +585,9 @@ function readMerge(file: string): { sha?: string; files?: string[] } | null {
 }
 
 /** A command's exit code and stdout, killed after `ms` so a hung fetch or read cannot hold the poll. */
-function within(cmd: string, args: string[], cwd: string, ms: number): Promise<{ code: number; out: string }> {
+function within(cmd: string, args: string[], cwd: string, ms: number, env?: NodeJS.ProcessEnv): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "ignore"], ...(env ? { env } : {}) });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), ms);
     child.stdout.on("data", (d) => { out += d; });
