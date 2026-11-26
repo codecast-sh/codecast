@@ -193,6 +193,23 @@ describe("a milestone holding a session the person placed survives the pass", ()
   });
 });
 
+describe("milestone keys are never reused", () => {
+  test("the pass removes s3; its next new milestone is s4, not s3 again", async () => {
+    const w = await seeded();
+    await w.send(w.ana, w.teamConv, late(), "grader again");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps: steps.slice(0, 2) })], unassigned: [] });
+    await run(w);
+    const after = await byShort(w, "pri-1");
+    expect([after.steps.map((s: any) => s.key), after.step_key_max]).toEqual([["s1", "s2"], 3]);
+    await w.send(w.ana, w.teamConv, late(), "grader in CI");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps: [...steps.slice(0, 2), { title: "Grader in CI", tier: "critical", refs: [] }] })], unassigned: [] });
+    await run(w);
+    const latest = await byShort(w, "pri-1");
+    expect(latest.steps.map((s: any) => [s.key, s.title])).toEqual([["s1", steps[0].title], ["s2", steps[1].title], ["s4", "Grader in CI"]]);
+    expect(latest.step_key_max).toBe(4);
+  });
+});
+
 describe("a pass merge keeps a placed session's milestone", () => {
   test("the person places a session on pri-2/s1 \"Ship the auth rewrite\"; the pass merges pri-2 into pri-1 without repeating it; the session lands on the survivor's carried milestone", async () => {
     const w = await seeded();

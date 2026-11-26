@@ -250,22 +250,20 @@ export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, s
   return { closed: true };
 }
 
-/** The most of a session's newest pins read for one that named a milestone it was just linked to. */
-const PINS_READ = 20;
-
 /**
- * A session just mapped to a milestone: its newest done pin that named that
- * milestone (`--serves pri-N/sK`, pinned before the link) counts now, at the
- * pin's own time, as it would have had the link been there.
+ * A session just mapped to a milestone: its newest pin, when that is a done
+ * pin naming that milestone (`--serves pri-N/sK`, pinned before the link),
+ * counts now, at the pin's own time, as it would have had the link been
+ * there. A later pin that moved on (working again, or naming no milestone)
+ * takes it back.
  */
 export async function replayDonePin(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, stepKey: string | undefined): Promise<void> {
   if (!stepKey || !personDriven(conv)) return;
   const p: Priority | null = await ctx.db.get(priorityId);
   if (!p) return;
   const serves = `${p.short_id}/${stepKey}`;
-  const pins: Array<Doc<"thread_state_events">> = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).order("desc").take(PINS_READ);
-  const pin = pins.find((e) => e.status === "done" && e.serves === serves);
-  if (pin) await recomputeStepDone(ctx, priorityId, stepKey, pin.at);
+  const pin: Doc<"thread_state_events"> | null = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).order("desc").first();
+  if (pin?.status === "done" && pin.serves === serves) await recomputeStepDone(ctx, priorityId, stepKey, pin.at);
 }
 
 /**

@@ -23,7 +23,7 @@ import { sessionVisibility, type SessionVisibility } from "./lib/prioritySession
 import { passOn } from "./lib/priorityPassSchedule";
 import { askRerun } from "./lib/priorityClassifierHook";
 import { recomputeStepDone, replayDonePin } from "./lib/priorityLinks";
-import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
+import { PRIORITY_PASS_MODEL, stepKeyMax, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
@@ -45,7 +45,6 @@ export const CATCH_UP_RUNS_READ = 1_000;
 export const RUN_NOW_EVERY_MS = 10 * MINUTE;
 /** A merge moves an absorbed priority's corrections to the survivor this many at a time, until none is left. */
 export const CORRECTIONS_PAGE = 100;
-const stepNumber = (key: string) => Number(/^s(\d+)$/.exec(key)?.[1] ?? 0);
 /** A priority's sessions are counted from the index up to this many; past it the stored count goes on by the moves and is flagged. */
 export const SESSION_COUNT_CAP = 500;
 /** How long the model may take: a full prompt and a long reply run minutes. */
@@ -360,6 +359,7 @@ export const applyPlan = internalMutation({
         workspace: args.workspace,
         short_id,
         session_count: 0,
+        step_key_max: stepKeyMax(w.steps),
         created_at: now,
         updated_at: now,
       });
@@ -389,7 +389,7 @@ export const applyPlan = internalMutation({
       if (patch.steps) {
         const seen = new Set(u.seen_steps ?? row.steps.map((st) => st.key));
         const unseen = row.steps.filter((st) => !seen.has(st.key));
-        let next = Math.max(0, ...[...row.steps, ...patch.steps].map((st) => stepNumber(st.key)));
+        let next = stepKeyMax([...row.steps, ...patch.steps], row.step_key_max);
         const moved = new Map<string, string>();
         const steps = patch.steps.map((st) => {
           if (!unseen.some((x) => x.key === st.key)) return st;
@@ -415,7 +415,9 @@ export const applyPlan = internalMutation({
       }
       // A rewrite the priority needed is done: its title and summary are this pass's.
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
-      await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, updated_at: now });
+      // Every key it has held stays spent: the mark only rises.
+      const mark = patch.steps ? { step_key_max: stepKeyMax([...row.steps, ...patch.steps], row.step_key_max) } : {};
+      await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, ...mark, updated_at: now });
       counts.updated++;
       // A milestone this write leaves done, or whose done state it changed, follows its tasks and pull requests as they are now
       // (lib/priorityLinks): done_at is theirs, and a plan made before a task closed, or one that flips a merged milestone, never undoes them.
@@ -443,15 +445,15 @@ export const applyPlan = internalMutation({
       const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
       let survivor = intoRow;
       if (carried.length) {
-        let next = Math.max(0, ...intoRow.steps.map((st) => stepNumber(st.key)));
+        let next = stepKeyMax(intoRow.steps, intoRow.step_key_max);
         const added = carried.map((st) => {
           const key = `s${++next}`;
           step_keys[st.key] = key;
           survivorLive.add(key);
           return { ...st, key };
         });
-        survivor = { ...intoRow, steps: [...intoRow.steps, ...added] };
-        await ctx.db.patch(into, { steps: survivor.steps, updated_at: now });
+        survivor = { ...intoRow, steps: [...intoRow.steps, ...added], step_key_max: next };
+        await ctx.db.patch(into, { steps: survivor.steps, step_key_max: next, updated_at: now });
         liveSteps.set(intoRow.short_id, survivorLive);
       }
       mergedInto.set(row._id, { into, intoRow: survivor, step_keys });

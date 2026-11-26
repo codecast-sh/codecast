@@ -768,14 +768,14 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
   const now = Date.now();
   const sessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).take(SESSION_COUNT_CAP);
   const intoSessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", into._id)).take(SESSION_COUNT_CAP);
-  let next = Math.max(0, ...into.steps.map((s) => keyNumber(s.key)), ...intoSessions.map((c) => keyNumber(c.priority_step_key)));
+  let next = Math.max(into.step_key_max ?? 0, ...into.steps.map((s) => keyNumber(s.key)), ...intoSessions.map((c) => keyNumber(c.priority_step_key)));
   const remap = new Map<string, string>();
   const carried = p.steps.map((s) => {
     const key = `s${++next}`;
     remap.set(s.key, key);
     return { ...s, key };
   });
-  await ctx.db.patch(into._id, { steps: [...into.steps, ...carried], updated_at: now });
+  await ctx.db.patch(into._id, { steps: [...into.steps, ...carried], step_key_max: next, updated_at: now });
   await ctx.db.patch(p._id, { status: "merged", merged_into: into._id, status_set_by: "person", ...UNRANKED, updated_at: now });
   const { move, recount } = sessionMover(ctx);
   for (const conv of sessions) {

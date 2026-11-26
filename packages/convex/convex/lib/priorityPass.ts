@@ -108,6 +108,8 @@ export type PassPriority = {
   sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number; by_person?: boolean; linked_by?: "link" | "classifier" }>;
   /** It lost a session that left the workspace or was deleted: the reply must write its title and summary again from what is shown. */
   needs_rewrite?: boolean;
+  /** The highest milestone key number it ever held: new keys come after it (prioritiesSchema step_key_max). */
+  step_key_max?: number;
 };
 
 export type PriorityPassInput = {
@@ -697,6 +699,9 @@ export function holdPersonSteps(current: PriorityStep[], proposed: PriorityStep[
   return out;
 }
 
+/** The highest milestone key number among `steps` and the mark a priority keeps (step_key_max). */
+export const stepKeyMax = (steps: ReadonlyArray<{ key: string }>, mark = 0): number => Math.max(mark ?? 0, 0, ...steps.map((s) => keyNumber(s.key)));
+
 const keyNumber = (key: string | null | undefined) => {
   const m = key ? /^s(\d+)$/.exec(key) : null;
   return m ? Number(m[1]) : 0;
@@ -724,7 +729,7 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
   for (const p of absorbed) for (const s of p.steps) ownerOf.set(s, p.short_id);
   const pool = [...own, ...ownerOf.keys()];
   const matched = matchSteps(pool, proposed, pool.map((s) => ownerOf.get(s) ?? target), target);
-  let next = Math.max(0, ...own.map((s) => keyNumber(s.key)), ...(prior?.sessions ?? []).map((s) => keyNumber(s.step_key)));
+  let next = Math.max(stepKeyMax(own, prior?.step_key_max), ...(prior?.sessions ?? []).map((s) => keyNumber(s.step_key)));
   const remap = new Map<string, string>();
   const keyOf = (was: PriorityStep | null) => {
     const owner = was && ownerOf.get(was);

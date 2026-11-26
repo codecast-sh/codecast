@@ -81,6 +81,8 @@ export const priorityTables = {
      * teammates until the pass writes them again (priorityPassRun applyPlan).
      */
     needs_rewrite: v.optional(v.boolean()),
+    /** The highest milestone key number it ever held ("s7": 7): a new milestone's key comes after it, so a removed one's key is never reused. */
+    step_key_max: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })

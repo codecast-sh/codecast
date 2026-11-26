@@ -474,6 +474,7 @@ export const passInputs = internalQuery({
         })),
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
+        ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),
       });
       for (const s of p.steps) for (const r of s.refs) if (r.kind === "task") stepTaskIds.add(r.id);
     }

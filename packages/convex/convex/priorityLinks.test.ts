@@ -334,6 +334,19 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await done("jx7task", "pri-1/s1")).serves_decided_by).toBe("tasks");
   });
 
+  test("a link replays a done pin only while it is the session's newest: a later working pin takes it back", async () => {
+    const { t, ada, p1, cFree } = await world();
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    await new Promise((r) => setTimeout(r, 5));
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Found a bug, back on it", status: "working" });
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [], sessions: [{ session: "jx7free", priority: "pri-1", step_key: "s3" }], unmap: [], notes: [], rewritten: [] },
+    });
+    expect((await convOf(t, cFree)).priority_step_key).toBe("s3");
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+  });
+
   test("one pass maps an unlinked session onto the milestone its done pin named and judges it done: the pin's time and mark win", async () => {
     const { t, ada, p1, cFree } = await world();
     await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
