@@ -9,6 +9,7 @@ import { ChangeBoard } from "./ChangeBoard";
 import { PICKABLE_GROUPS, changeRowOf, filterChanges, groupName, groupOf, isComing, isParked, type ChangeRow, type ChangeViewer } from "../../lib/changes/rows";
 import { changeMatches, type DeployFilters, type DeployFocus } from "../../lib/deploys/focus";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useChangesSetAside, withSetAside } from "../../hooks/useChangesSetAside";
 
 const HIDE = ["live", "closed"] as const;
 
@@ -23,7 +24,8 @@ export function OnItsWay({ repository, filters, onFilters, me, focus }: {
 }) {
   const { ready, changes } = useRepoChanges(repository);
   // What has landed waits on main, listed beside it by session: this grid is what has yet to get there.
-  const rows = useMemo(() => changes.map(changeRowOf).filter((r) => !r.reach_ref), [changes]);
+  const { marks, setAside } = useChangesSetAside(repository);
+  const rows = useMemo(() => withSetAside(changes.map(changeRowOf).filter((r) => !r.reach_ref), repository, marks), [changes, repository, marks]);
   const now = useCoarseNow(600_000);
   // A filter never hides the row a link points at.
   const focused = useMemo(() => (focus ? (r: ChangeRow) => changeMatches(r, focus) : undefined), [focus]);
@@ -35,7 +37,8 @@ export function OnItsWay({ repository, filters, onFilters, me, focus }: {
   }, [rows, filters.mine, me, now, focused]);
   // What is really on its way: not live, not closed, and not parked.
   const coming = rows.filter((r) => isComing(r) && !isParked(r, now)).length;
-  if (ready && !coming) return null;
+  // A change set aside keeps the grid on screen, so its Parked row can still be brought back.
+  if (ready && !coming && !rows.some((r) => r.set_aside)) return null;
   const pickGroup = (group: Filters["group"]) => onFilters({ ...filters, group });
   return (
     <section className="dpp-sec" data-deploy-on-its-way>
@@ -56,6 +59,7 @@ export function OnItsWay({ repository, filters, onFilters, me, focus }: {
         mine={filters.mine}
         pick={{ group: filters.group, onPick: pickGroup }}
         focused={focused}
+        onSetAside={setAside}
         empty={!ready ? "Reading what is on its way…" : filters.group ? `Nothing ${filters.mine ? "of yours " : ""}in ${groupName(filters.group, filters.mine)}` : filters.mine ? "None of yours" : "Nothing on its way"}
       />
     </section>

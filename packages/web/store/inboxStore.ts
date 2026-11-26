@@ -2025,6 +2025,10 @@ export type ClientUI = {
   // When the person last had a pull request open, by pull request id: what
   // the timeline draws its "since you last looked" line from.
   pr_last_seen?: Record<string, number>;
+  // Changes the person set aside on the Deploys page (hooks/useChangesSetAside),
+  // by "<owner/repo>:<change key>", to when: parked on every device until they
+  // bring one back.
+  changes_set_aside?: Record<string, number>;
   // When the person last left or entered each workspace ("personal" or a team
   // id): the switcher's dot lights only for threads waiting on them that
   // moved after it (useSwitchWorkspace stamps it).

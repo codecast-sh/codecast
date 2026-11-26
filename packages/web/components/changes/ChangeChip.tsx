@@ -73,8 +73,10 @@ function Stage({ s, isNow }: { s: LifecycleStage; isNow: boolean }) {
 
 
 /** The hover card: the change's journey, its writers and where to go next. */
-export function ChangeJourney({ lifecycle, links, writers, at: since = null }: {
+export function ChangeJourney({ lifecycle, links, writers, at: since = null, aside }: {
   lifecycle: Lifecycle;
+  /** Set the change aside, or bring it back (a grid's row: ChangeBoard). */
+  aside?: { label: string; onPress: () => void };
   /** The clock the lifecycle was read at, to say how long the now has lasted. */
   at?: number | null;
   links?: ChangeLinks;
@@ -104,6 +106,7 @@ export function ChangeJourney({ lifecycle, links, writers, at: since = null }: {
           ? <Link className="chj-action" href={links.action.href} data-tone={now.tone}>{links.action.label}</Link>
           : <button type="button" className="chj-action" onClick={links.action.onClick} data-tone={now.tone}>{links.action.label}</button>
       ) : null}
+      {aside ? <button type="button" className="chj-aside" onClick={aside.onPress} data-change-aside>{aside.label}</button> : null}
       {writers?.length || links?.pr || links?.run || links?.deploys?.length ? (
         <div className="chj-foot">
           {writers?.length ? (
