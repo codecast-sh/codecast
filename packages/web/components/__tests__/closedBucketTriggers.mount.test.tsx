@@ -148,3 +148,31 @@ test("a closed card's X is a Kill that asks first (it would cancel the trigger);
     useInboxStore.setState({ convCommand: realConvCommand } as any);
   }
 });
+
+// The Stashed header counts the cards it draws, as the live sections do: a
+// stashed lead's subagents fold under its card and add nothing until subagents
+// are shown. Before this, a bucket drawing 4 cards read "Stashed (46)".
+test("the Stashed count leaves out the subagents folded under a card", async () => {
+  const LEAD = id("lead");
+  const stashed = (_id: string, title: string, extra: Record<string, unknown> = {}) => {
+    const { inbox_dismissed_at: _dismissed, ...rest } = row(_id, title);
+    return { ...rest, inbox_stashed_at: NOW - 30_000, ...extra };
+  };
+  const sessions = {
+    [LEAD]: stashed(LEAD, "Stashed lead"),
+    [id("sub1")]: stashed(id("sub1"), "Worker one", { is_subagent: true, parent_conversation_id: LEAD }),
+    [id("sub2")]: stashed(id("sub2"), "Worker two", { is_subagent: true, parent_conversation_id: LEAD }),
+  };
+  const stashHead = (host: HTMLElement) => [...host.querySelectorAll("[data-sv-hidden-label]")].find((el) => el.textContent?.startsWith("Stashed"))?.textContent;
+
+  useInboxStore.setState({ sessions, agentTasks: {} } as any);
+  let m = await mountInbox();
+  expect(stashHead(m.host)).toBe("Stashed (1)");
+  await m.unmount();
+
+  __resetInboxPlacementCacheForTests();
+  useInboxStore.setState({ sessions, agentTasks: {}, clientState: { ui: { inbox_scope: "mine", show_old: true, card_bars: "full", show_subagents: true } } } as any);
+  m = await mountInbox();
+  expect(stashHead(m.host)).toBe("Stashed (3)");
+  await m.unmount();
+});
