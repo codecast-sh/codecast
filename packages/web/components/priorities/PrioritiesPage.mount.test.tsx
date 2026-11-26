@@ -128,6 +128,34 @@ test("one primary per priority by the shared rule: Answer outranks Resume, Open 
   }
 }, 60_000);
 
+test("Start's brief names the milestone's open tasks from the store, never a finished one, and its plan", async () => {
+  const { parseComposeLink } = await import("../../lib/composeLink");
+  const task = (k: string, short_id: string, title: string, status: string) => ({ _id: k, short_id, title, status });
+  const setTasks = (rows: ReturnType<typeof task>[]) => useInboxStore.setState({ tasks: Object.fromEntries(rows.map((t) => [t._id, t])) } as any);
+  setTasks([task("tk1", "ct-7001", "Old grader", "done"), task("tk2", "ct-7002", "Write the grader", "open")]);
+  const start = row(7, "Graders", 1, [step("s1", "Grader v2", "critical", false, { refs: [{ kind: "task", id: "ct-7001" }, { kind: "task", id: "ct-7002" }] })], {
+    plan: null,
+    links: [links("s1", [], { plan: PL_1075 })],
+  });
+  const page = await mount(view({ rows: [start] }));
+  const link = () => parseComposeLink(new URLSearchParams(block(page.container, "pri-7").querySelector('[data-action="start"]')!.getAttribute("href")!.split("?")[1]));
+  try {
+    expect(link()).toEqual({
+      draft: "pri-7, milestone: Grader v2\nOpen tasks:\n- ct-7002 Write the grader\nPlan: pl-1075\nRun `cast priorities show pri-7` for current detail.",
+      task: "ct-7002", priority: "pri-7", step: "s1", plan: "pl-1075",
+    });
+    // The task closing in the store takes it out of the next Start.
+    await (React as any).act(async () => setTasks([task("tk1", "ct-7001", "Old grader", "done"), task("tk2", "ct-7002", "Write the grader", "done")]));
+    expect(link()).toEqual({
+      draft: "pri-7, milestone: Grader v2\nPlan: pl-1075\nRun `cast priorities show pri-7` for current detail.",
+      priority: "pri-7", step: "s1", plan: "pl-1075",
+    });
+  } finally {
+    await page.unmount();
+    useInboxStore.setState({ tasks: {} } as any);
+  }
+}, 60_000);
+
 test("Waiting on you lists every ask, and agrees with each priority's primary", async () => {
   const page = await mount(view());
   try {

@@ -252,6 +252,72 @@ describe("a known link maps a session at creation, with no pass", () => {
     expect((await t.run((ctx: any) => ctx.db.get(p1))).session_count).toBe(3);
   });
 
+  const startIn = (t: any, ada: Id<"users">, session_id: string, start: Record<string, string>, agent_type = "claude_code") =>
+    t.withIdentity({ subject: `${ada}|session` }).mutation(api.dispatch.dispatch, { action: "createSession", args: [{ agent_type, session_id, ...start }] });
+  const bySession = (t: any, session_id: string) => t.run((ctx: any) => ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", session_id)).first());
+  const planNamed = (t: any, short_id: string) => t.run((ctx: any) => ctx.db.query("plans").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first());
+
+  test("Start with the milestone's own plan binds the session to it, as a plan bind does", async () => {
+    const { t, ada, p1 } = await world();
+    // pl-1 holds ct-3, half of s5's tasks: s5's plan by the attribution rules.
+    await startIn(t, ada, "stub-plan", { priority: "pri-1", priority_step: "s5", plan: "pl-1" });
+    const conv = await bySession(t, "stub-plan");
+    const plan = await planNamed(t, "pl-1");
+    expect(String(conv.active_plan_id)).toBe(String(plan._id));
+    expect(conv.plan_ids.map(String)).toEqual([String(plan._id)]);
+    expect(plan.session_ids.map(String)).toContain(String(conv._id));
+    expect(String(plan.current_session_id)).toBe(String(conv._id));
+    expect([String(conv.priority_id), conv.priority_step_key]).toEqual([String(p1), "s5"]);
+  });
+
+  test("a plan that is not the milestone's binds nothing, though the milestone still links", async () => {
+    const { t, ada, p1 } = await world();
+    // s2 names only a PR: no plan is its own, and pri-1 has no plan.
+    await startIn(t, ada, "stub-other-step", { priority: "pri-1", priority_step: "s2", plan: "pl-1" });
+    const conv = await bySession(t, "stub-other-step");
+    expect(conv.active_plan_id).toBeUndefined();
+    expect((await planNamed(t, "pl-1")).current_session_id).toBeUndefined();
+    expect([String(conv.priority_id), conv.priority_step_key]).toEqual([String(p1), "s2"]);
+  });
+
+  test("a teammate's team plan binds nothing", async () => {
+    const { t, ada, bea } = await world();
+    await t.run(async (ctx: any) => {
+      const team = await ctx.db.insert("teams", { name: "Acme", created_at: NOW } as any);
+      for (const u of [ada, bea]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: NOW } as any);
+      await ctx.db.insert("plans", { user_id: bea, team_id: team, workspace: `team:${team}`, short_id: "pl-9", title: "Bea's plan", status: "active", source: "human", created_at: NOW, updated_at: NOW } as any);
+    });
+    await startIn(t, ada, "stub-team-plan", { priority: "pri-1", priority_step: "s5", plan: "pl-9" });
+    expect((await bySession(t, "stub-team-plan")).active_plan_id).toBeUndefined();
+    expect((await planNamed(t, "pl-9")).current_session_id).toBeUndefined();
+  });
+
+  test("a plan with no valid priority beside it binds nothing", async () => {
+    const { t, ada } = await world();
+    await startIn(t, ada, "stub-bare-plan", { plan: "pl-1" });
+    await startIn(t, ada, "stub-bea-pri", { priority: "pri-9", priority_step: "s1", plan: "pl-1" });
+    await startIn(t, ada, "stub-no-pri", { priority: "pri-404", priority_step: "s5", plan: "pl-1" });
+    for (const id of ["stub-bare-plan", "stub-bea-pri", "stub-no-pri"]) expect((await bySession(t, id)).active_plan_id).toBeUndefined();
+    expect((await planNamed(t, "pl-1")).current_session_id).toBeUndefined();
+  });
+
+  test("a hosted Start links and binds when created, and a replayed create takes back nothing moved or rebound since", async () => {
+    const { t, ada, p1, cFree } = await world();
+    const start = { priority: "pri-1", priority_step: "s5", plan: "pl-1" };
+    await startIn(t, ada, "stub-hosted", start, "codecast");
+    const conv = await bySession(t, "stub-hosted");
+    const plan = await planNamed(t, "pl-1");
+    expect([String(conv.priority_id), conv.priority_step_key, String(conv.active_plan_id)]).toEqual([String(p1), "s5", String(plan._id)]);
+    // A pass moves the session and another session takes the plan; then the outbox re-fires the create.
+    await t.run(async (ctx: any) => {
+      await ctx.db.patch(conv._id, { priority_step_key: "s3" });
+      await ctx.db.patch(plan._id, { current_session_id: cFree });
+    });
+    await startIn(t, ada, "stub-hosted", start, "codecast");
+    expect((await bySession(t, "stub-hosted")).priority_step_key).toBe("s3");
+    expect(String((await planNamed(t, "pl-1")).current_session_id)).toBe(String(cFree));
+  });
+
   test("Start on someone else's priority maps nothing", async () => {
     const { t, ada } = await world();
     await t.withIdentity({ subject: `${ada}|session` }).mutation(api.dispatch.dispatch, { action: "createSession", args: [{ agent_type: "claude_code", session_id: "stub-other", priority: "pri-9", priority_step: "s1" }] });

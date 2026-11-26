@@ -3,8 +3,9 @@
 
 import type { Id } from "./_generated/dataModel";
 import { claimTaskOwnership } from "./lib/taskOwner";
+import { linkFromStart, startPlanId } from "./lib/priorityLinks";
 import { addConversationToWorkItem } from "./conversationLinks";
-import { canAccessTask } from "./lib/access";
+import { canAccessPlan, canAccessTask, workspaceForConversation, workspaceForResource, workspacesMatch } from "./lib/access";
 
 export type HandlerCtx = { db: any; storage?: any; runMutation?: any; runQuery?: any };
 
@@ -96,6 +97,52 @@ export async function linkConversationToObject(
     await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId);
     return;
   }
+}
+
+/**
+ * A session created from a milestone's Start (createSession `priority`,
+ * `priority_step`, `plan`): mapped to the milestone, then bound to its plan
+ * only when that mapping took. Run once, when the session is created, after
+ * any task link so the milestone the person chose wins. True when a plan was
+ * bound, for the caller's ownership reconcile.
+ */
+export async function linkStartedSession(
+  ctx: HandlerCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  opts: { priority?: string; priority_step?: string; plan?: string },
+): Promise<boolean> {
+  if (!opts.priority || !(await linkFromStart(ctx, userId, conversationId, opts.priority, opts.priority_step))) return false;
+  return !!opts.plan && bindStartPlan(ctx, userId, conversationId, { priority: opts.priority, priority_step: opts.priority_step, plan: opts.plan });
+}
+
+/**
+ * A session started from a milestone's Start, once it is linked to that
+ * milestone (linkFromStart), bound to the milestone's plan as `cast plan
+ * bind` binds one (plans.bindSession). The plan comes by short id from a
+ * link anyone could write, so it binds only the plan the attribution rules
+ * give that milestone (lib/priorityLinks startPlanId), when the starter can
+ * open it and it is in the session's own workspace; anything else leaves the
+ * session unbound.
+ */
+export async function bindStartPlan(
+  ctx: HandlerCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  start: { priority: string; priority_step?: string; plan: string },
+): Promise<boolean> {
+  const plan = await ctx.db.query("plans").withIndex("by_short_id", (q: any) => q.eq("short_id", start.plan.trim().toLowerCase())).first();
+  const conv = await ctx.db.get(conversationId);
+  if (!plan || !conv || !(await canAccessPlan(ctx as any, userId, plan))) return false;
+  if ((await startPlanId(ctx, start.priority, start.priority_step)) !== String(plan._id)) return false;
+  if (!workspacesMatch(workspaceForConversation(conv), workspaceForResource(plan))) return false;
+  await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId, { current_session_id: conversationId, updated_at: Date.now() });
+  const planIds: any[] = conv.plan_ids ?? [];
+  await ctx.db.patch(conversationId, {
+    plan_ids: planIds.some((id) => String(id) === String(plan._id)) ? planIds : [...planIds, plan._id],
+    active_plan_id: plan._id,
+  });
+  return true;
 }
 
 /** A side effect whose function answers a refusal as { error }: throw it, so the rail reads it as refused. */

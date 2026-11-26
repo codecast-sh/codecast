@@ -21,13 +21,19 @@ import { isConvexId } from "../lib/entityLinks";
 
 /** `agentType` starts the composer on that agent rather than the default
  *  (the empty inbox's "Ask the assistant" start). `linkedTask` binds the
- *  session it creates to that task (a compose link, hooks/useComposeLink). */
+ *  session it creates to that task, and `start` maps it to a priority's
+ *  milestone and binds it to a plan (a compose link, hooks/useComposeLink). */
 export type ComposeContext = {
   projectPath?: string;
   gitRoot?: string;
   agentType?: string;
   linkedTask?: { _id: string; short_id: string; title?: string; status?: string };
+  start?: SessionStart;
 };
+
+/** What a new session is born linked to besides its task: createSession's
+ *  own args, by short id, each checked by the server against the starter. */
+export type SessionStart = { priority?: string; priority_step?: string; plan?: string };
 export type ComposeInstance = {
   id: number;
   mode: "modal" | "dock";
@@ -67,6 +73,16 @@ export function bindComposeTask(
   const activeTask = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
   store.syncRecord("sessions", stubId, { _linkedObject: { type: "task", id: task._id }, active_task: activeTask });
   store.syncRecord("conversations", stubId, { active_task_id: task._id, active_task: activeTask });
+}
+
+/** A composer opened from a milestone's Start: the stub keeps what the create
+ *  links (createSessionFromStub), so a heal that re-issues it links the same. */
+export function bindComposeStart(
+  store: { syncRecord: (field: string, id: string, record: any) => void },
+  stubId: string,
+  start: SessionStart,
+): void {
+  store.syncRecord("sessions", stubId, { _start: start });
 }
 
 /** The draft content held for a compose stub, or null when there is none worth

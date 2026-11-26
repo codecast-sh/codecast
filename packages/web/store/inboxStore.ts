@@ -369,7 +369,7 @@ import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
-import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
+import { createComposeSlice, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -674,6 +674,9 @@ export type InboxSession = {
   // an outbox-cap/boot heal can reissue createSession without losing the
   // originating task/doc/plan relation; the server row never needs this field.
   _linkedObject?: { type: string; id: string };
+  // Local only: the priority milestone and plan a compose stub's create links
+  // (store/composeSlice bindComposeStart), kept for a heal like _linkedObject.
+  _start?: SessionStart;
   // Local only: a stub started from its project's own composer, so the create
   // makes it the project's canonical session (session-projects.md SP4).
   _projectDefault?: boolean;
@@ -12577,7 +12580,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // first_message/first_message_client_id ride the dispatch only: a hosted
   // conversation's start queues its first message server side, matched to
   // the optimistic bubble by its client id.
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } } & SessionStart) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -12671,6 +12674,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         agent_type: agentType,
         session_id: stubId,
         ...(cur?._linkedObject?.type && cur?._linkedObject?.id ? { linked_object: cur._linkedObject } : {}),
+        ...cur?._start,
         ...(fallback?.firstMessage
           ? { first_message: fallback.firstMessage.content, first_message_client_id: fallback.firstMessage.clientId }
           : {}),
@@ -12719,6 +12723,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
         ? { linked_object: cur._linkedObject }
         : {}),
+      ...cur?._start,
       // The project the stub was started in (session-projects.md SP1), and
       // whether it is the project's own composer (its canonical session).
       ...(cur?.project_id ? { project_id: cur.project_id, ...(cur._projectDefault ? { project_default: true } : {}) } : {}),

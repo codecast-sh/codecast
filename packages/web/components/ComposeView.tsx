@@ -16,7 +16,7 @@ import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
 import { newConversationAgentType } from "../lib/defaultAgent";
-import { bindComposeTask, composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
+import { bindComposeStart, bindComposeTask, composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { settleHostedStart } from "../lib/startHostedConversation";
 import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
@@ -171,6 +171,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
     if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
+    if (context?.start && sid !== resumeStubId) bindComposeStart(store, sid, context.start);
     setSessionId(sid);
     setRestored(sid === resumeStubId);
     setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });
