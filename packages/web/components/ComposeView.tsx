@@ -27,6 +27,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ReviewComposerContext, type ReviewComposer } from "./reviewContext";
 import { quoteToComposer, submitReview } from "../lib/reviewActions";
 import { Button } from "./ui/button";
+import { quoted } from "../store/undo/labels";
 // Every keep/confirm/prune decision reads through here, so it flushes the
 // composer's debounced write first: the last keystrokes count.
 const draftContentFor = (id: string | null) => {
@@ -34,16 +35,33 @@ const draftContentFor = (id: string | null) => {
   return composeDraftContent(useInboxStore.getState(), id);
 };
 
+// Where the person is looking: the page and the conversation open on it.
+const viewKey = () => `${window.location.pathname}${window.location.search}|${useInboxStore.getState().currentSessionId ?? ""}`;
+
+// A just-started session as the person knows it: the first message they sent
+// it (its title is still the placeholder "New session"), else that title.
+function startedSessionName(state: any, stubId: string, convexId: string): string {
+  const ids = [convexId, stubId];
+  const title = ids.map((id) => state.sessions?.[id]?.title || state.conversations?.[id]?.title).find(Boolean);
+  const first = ids
+    .flatMap((id) => (state.pendingMessages?.[id] ?? []) as Array<{ role?: string; content?: string }>)
+    .find((m) => m.role === "user" && m.content)?.content;
+  return quoted(first || title, "session");
+}
+
 /**
  * The floating new-session popup, shown in the palette window when summoned by
  * the global "New Session" shortcut. It reuses NewSessionView — the exact same
  * null-state surface (project picker + agent picker + message input) the in-app
  * empty conversation shows — so there is one component, not a parallel form.
- * Sending routes through onSubmitWithIntent:
+ * Sending routes through onSubmitWithIntent. In the palette window:
  *   - Enter      → fire-and-forget: start the session, hide the popup, never
  *                  bring Codecast to the front.
  *   - Cmd+Enter  → send & open: start the session and switch into Codecast on
  *                  the new conversation.
+ * In the app (onClose set) the two swap: the person is already in Codecast and
+ * just asked for this session, so Enter opens it and Cmd+Enter keeps them
+ * where they were, with a toast that names it and opens it.
  *
  * Lifecycle (one contract, two hosts): opening seeds a DEFERRED local stub — no
  * server session yet. The first send COMMITS it (materialize); every other
@@ -297,8 +315,6 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   const hosted = isHostedAgentType(liveAgentType);
   // The new project switch (NewSessionProjectToggle) on this composer's stub.
   const startsProject = useInboxStore((s) => (sessionId ? !!s.sessions[sessionId]?._newProject : false));
-  const hostedRef = useRef(hosted);
-  hostedRef.current = hosted;
 
   // The hosted path of a send. MessageInput's gate hands over the text once it
   // has emptied the composer; the optimistic bubble goes on the stub and its
@@ -497,14 +513,14 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       });
     }
     // In-app overlay: dismiss now (the session create + first send finish durably
-    // in the background). "Send & open" then routes onto the new conversation once
-    // its real id resolves; plain Enter leaves the user where they were.
+    // in the background). Plain Enter then routes onto the new conversation once
+    // its real id resolves; Cmd+Enter leaves the user where they were.
     if (onClose) {
       onClose();
-      // In the app, a hosted ask opens its conversation on plain Enter: the
-      // person is waiting for the answer, not filing work for later. Cmd+Enter
-      // keeps them where they were.
-      const open = hostedRef.current ? !navigate : navigate;
+      // In the app, plain Enter opens what was just started: the person is
+      // waiting to see their new session, and losing it in a list cost them
+      // minutes (ct-101512). Cmd+Enter keeps them where they were.
+      const open = !navigate;
       // A new project opens on its page; started without opening, it says so
       // with the way there.
       if (projectKey) {
@@ -516,7 +532,16 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         }
         return;
       }
-      if (open) void resolveConvexId().then((convexId) => { if (convexId) router.push(`/conversation/${convexId}`); });
+      // The id may still be in flight. A person who has moved on by the time
+      // it lands is not pulled away: they get the toast instead.
+      const here = viewKey();
+      void resolveConvexId().then((convexId) => {
+        if (!convexId) return;
+        const href = `/conversation/${convexId}`;
+        if (open && viewKey() === here) { router.push(href); return; }
+        const name = startedSessionName(useInboxStore.getState(), sessionId, convexId);
+        toast.success(`Started ${name}`, { action: { label: "Open", onClick: () => router.push(href) } });
+      });
       return;
     }
     if (isElectron()) {
@@ -692,6 +717,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           onGateSend={recipient ? async (text, images) => { await wakeRole(text, images); } : hosted ? startHosted : undefined}
           composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "Ask anything, or hand me a chore" : startsProject ? "What is the project for? Its first line names it" : undefined}
           onSubmitWithIntent={handleSubmit}
+          sendWords={onClose && !recipient ? "Send and open" : undefined}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
           escapeOwnedRef={escapeOwnedRef}
           clearInputRef={clearInputRef}

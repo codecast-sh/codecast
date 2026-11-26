@@ -2,7 +2,8 @@ import { dom, w, restoreGlobals } from "./fixtures/composeDom";
 import { afterAll, expect, mock, test } from "bun:test";
 
 const toasts: string[] = [];
-const record = (kind: string) => (msg: any) => { toasts.push(`${kind}:${String(msg)}`); return 1; };
+const toastActions: Array<{ label: string; onClick: () => void }> = [];
+const record = (kind: string) => (msg: any, opts?: any) => { toasts.push(`${kind}:${String(msg)}`); if (opts?.action) toastActions.push(opts.action); return 1; };
 mock.module("sonner", () => ({
   toast: Object.assign(record("toast"), { error: record("error"), info: record("info"), success: record("success"), warning: record("warning"), dismiss: () => {}, loading: record("loading"), custom: record("custom"), promise: (p: any) => p }),
   Toaster: () => null,
@@ -58,7 +59,8 @@ function typeInto(el: HTMLTextAreaElement, value: string) {
   (el as any)[propsKey!]?.onChange?.({ target: el, currentTarget: el, nativeEvent: new w.Event("input") });
 }
 
-async function sendFromPopup(mods: KeyboardEventInit) {
+async function sendFromPopup(mods: KeyboardEventInit, opts: { createDelayMs?: number; afterEnter?: () => void } = {}) {
+  w.history.replaceState({}, "", "/inbox");
   useInboxStore.setState({
     currentUser: { _id: "user_enter_test", name: "Tester" } as any,
     drafts: {}, sessions: {}, conversations: {}, pendingMessages: {}, pendingSessionCreates: {}, composes: [],
@@ -68,7 +70,10 @@ async function sendFromPopup(mods: KeyboardEventInit) {
   const calls: string[] = [];
   (useInboxStore.getState() as any)._setDispatch(async (action: string) => {
     calls.push(action);
-    if (action === "createSession") return REAL_ID;
+    if (action === "createSession") {
+      if (opts.createDelayMs) await tick(opts.createDelayMs);
+      return REAL_ID;
+    }
     return undefined;
   });
 
@@ -87,6 +92,7 @@ async function sendFromPopup(mods: KeyboardEventInit) {
   await act(() => {
     textarea.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...mods }));
   });
+  opts.afterEnter?.();
   // Wait for the send to commit and the create to resolve the real id.
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline && !(calls.includes("createSession") && useInboxStore.getState().getConvexId?.(stubId))) await flush(20);
@@ -108,14 +114,41 @@ async function sendFromPopup(mods: KeyboardEventInit) {
   return shown;
 }
 
+const reset = () => { pushes.length = 0; toasts.length = 0; toastActions.length = 0; };
+
 test("plain Enter in the in-app new-session popup puts the new session in front of the person", async () => {
-  pushes.length = 0; toasts.length = 0;
+  reset();
   expect(await sendFromPopup({})).toBe(true);
+  expect(pushes).toEqual([`/conversation/${REAL_ID}`]);
 }, 60_000);
 
-// Control: "send & open" already lands on the new conversation, so the test
-// can see the navigation it asks plain Enter for.
-test("control: Cmd/Ctrl+Enter in the popup opens the new session", async () => {
-  pushes.length = 0; toasts.length = 0;
-  expect(await sendFromPopup({ metaKey: true, ctrlKey: true })).toBe(true);
+// Enter lands while the server create is still in flight: the popup closes at
+// once, and the view moves onto the conversation when its real id arrives.
+test("plain Enter with the create still in flight opens the session once its id resolves", async () => {
+  reset();
+  expect(await sendFromPopup({}, { createDelayMs: 300 })).toBe(true);
+  expect(pushes).toEqual([`/conversation/${REAL_ID}`]);
+}, 60_000);
+
+// Cmd/Ctrl+Enter keeps the person where they were, and is never silent: a
+// toast names the session and opens it.
+test("Cmd/Ctrl+Enter keeps the person in place and names the session with an Open action", async () => {
+  reset();
+  expect(await sendFromPopup({ metaKey: true, ctrlKey: true })).toBe(false);
+  expect(pushes).toEqual([]);
+  expect(toasts).toContain("success:Started “start building sharing”");
+  expect(toastActions.map((a) => a.label)).toEqual(["Open"]);
+  toastActions[0]!.onClick();
+  expect(pushes).toEqual([`/conversation/${REAL_ID}`]);
+}, 60_000);
+
+// The person moves to another view after Enter, before the id resolves: they
+// are not pulled away, and get the same toast instead.
+test("plain Enter, then moving elsewhere before the id resolves, toasts instead of pulling the person back", async () => {
+  reset();
+  expect(await sendFromPopup({}, { createDelayMs: 300, afterEnter: () => w.history.pushState({}, "", "/tasks") })).toBe(false);
+  expect(pushes).toEqual([]);
+  expect(toasts).toContain("success:Started “start building sharing”");
+  toastActions[0]!.onClick();
+  expect(pushes).toEqual([`/conversation/${REAL_ID}`]);
 }, 60_000);
