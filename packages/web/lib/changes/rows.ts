@@ -60,6 +60,18 @@ export function changeAction(c: RepoChange): ChangeLinks["action"] {
 
 /** A repository's change as the grid and the chip draw it. */
 export function changeRowOf(c: RepoChange): ChangeRow {
+  // useRepoChanges keeps a change's object while its facts hold still; its row keeps its object with it, so a
+  // memoized grid row draws again only when its own change moved.
+  const held = rowOf.get(c);
+  if (held) return held;
+  const row = buildRow(c);
+  rowOf.set(c, row);
+  return row;
+}
+
+const rowOf = new WeakMap<RepoChange, ChangeRow>();
+
+function buildRow(c: RepoChange): ChangeRow {
   return {
     key: c.key,
     lifecycle: c.lifecycle,
