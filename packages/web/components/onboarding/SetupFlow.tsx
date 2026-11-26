@@ -43,6 +43,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { cn } from "../../lib/utils";
 import { FeatureStep } from "./FeatureStep";
 import { ConnectStep } from "./ConnectStep";
+import { useDevices } from "../DeviceBadge";
 import { useAgentFeatureChoice } from "../../hooks/useAgentFeatureChoice";
 import { useSetupFeatures } from "../../hooks/useSetupFeatures";
 import { DomainTeams } from "./DomainTeams";
@@ -126,6 +127,10 @@ export function SetupFlow({ mode }: { mode: SetupFlowMode }) {
   const save = useSaveTeamSetup();
 
   const agents = useAgentFeatureChoice();
+  // Finishing setup with no computer of the person's online lands them in an
+  // inbox with nothing in it, so the Agents step's primary waits for one and
+  // leaving without it is a skip that says so.
+  const machineOnline = useDevices().onlineLocals.length > 0;
   const features = useSetupFeatures(teamId);
 
   const trimmed = name.trim();
@@ -371,10 +376,11 @@ export function SetupFlow({ mode }: { mode: SetupFlowMode }) {
         onStepSelect={selectStep}
         heading="Connect your agents"
         description={solo ? "Sessions from this computer sync, and your agents learn to use Codecast." : "Sessions from this computer sync, and agents learn to use everything you just turned on."}
-        onSkip={agents.allChosen ? undefined : () => leaveAgents()}
-        skipLabel={`Continue with ${agents.chosen.size} agent ${agents.chosen.size === 1 ? "feature" : "features"}`}
+        onSkip={!machineOnline || !agents.allChosen ? () => leaveAgents() : undefined}
+        skipLabel={!machineOnline ? "Skip, connect later" : `Continue with ${agents.chosen.size} agent ${agents.chosen.size === 1 ? "feature" : "features"}`}
         onContinue={() => leaveAgents(true)}
-        continueLabel={agents.allChosen ? (solo ? "Finish" : "Continue") : `Turn on all ${agents.total}`}
+        continueLabel={!machineOnline ? "Waiting for this computer" : agents.allChosen ? (solo ? "Finish" : "Continue") : `Turn on all ${agents.total}`}
+        continueDisabled={!machineOnline}
         enterAdvances
       >
         <ConnectStep choice={agents} />
