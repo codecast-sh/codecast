@@ -22,9 +22,11 @@ export type FrozenChange = {
   /** Origin's tip of the branch when the change was last frozen, if origin has it: origin holds a fix only once it
    *  moves off this, so a copy pushed before a local rebase never replaces the change. */
   remote_tip?: string;
-  /** A change frozen again from a checkout carries the edits its subject made in the run's worktree on top of the
-   *  freeze (refreezeSessionChange); this is the freeze's own tip, under them, so the next refreeze carries them too. */
+  /** A change frozen again from a checkout carries what its subject left in the run's worktree on top of the freeze
+   *  (refreezeSessionChange): the freeze's own tip, under it, so the next refreeze carries it too. */
   frozen_tip?: string;
+  /** The files that carry changes over `frozen_tip`. Kept apart from `paths`, which a checkout's refreeze reads from the shared checkout. */
+  carried?: string[];
   /**
    * Set when the change could not be replayed onto upstream, so it stays on HEAD, behind that upstream commit: it
    * `conflict`s there in `conflicts`, or the checkout's history is `unreplayable` (a merge commit). `reason` says it whole.
@@ -119,7 +121,7 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       ...(change.session ? { change_session: change.session } : {}),
       ...(change.conversation ? { change_conversation: change.conversation } : {}),
       // No paths is a change whose files were not read: left unset, so `touches` reads it as unknown.
-      ...(change.paths?.length ? { change_files: change.paths.join(" ") } : {}),
+      ...(change.paths?.length ? { change_files: [...new Set([...change.paths, ...(change.carried ?? [])])].join(" ") } : {}),
       // Where a reviewer's diff starts: a session's change sits on the upstream it was cut onto, which the local default branch may lag.
       ...((change.source === "session" || change.source === "checkout") && change.base ? { diff_base: change.base } : {}),
       change_return: changeReturnWords(change),

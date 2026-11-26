@@ -458,6 +458,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
   // Quiet: a subject stashed out of sight while the run went on stays there; it surfaces itself if it pins blocked.
   if (!options.runSession) console.log(`${c.dim}  this run has no session of its own, so the brief to ${subject.shortId} cannot go quietly: it brings it back to the inbox${c.reset}`);
+  await recordBriefTree(cwd, context);
   // Taken before the send: only a pin the session sets after this can be its answer (waitOnStation).
   const sentAt = Date.now();
   const sent = await sendToSubject(options, subject, brief, subjectSendKey(options, context, node.id), true);
@@ -479,7 +480,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   if (outcome !== "success") return outcome;
   try {
     const { refreezeSessionChange } = await import("./flowChange.js");
-    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { briefedAt: sentAt });
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
     Object.assign(context, frozenChangeContext(context["run_dir"]));
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
     if (change.landed) context["change_landed"] = change.landed;
@@ -541,6 +542,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     if (!row) return dead(`${w.shortId}, who wrote ${w.files.join(", ") || "none of the named files"}, cannot be read, so nobody can work on what the run found.`);
     rows.push(row);
   }
+  await recordBriefTree(cwd, context);
   const waits: Array<Writer & { sentAtCount: number; sentAt: number; awaitDelivery: true }> = [];
   for (const [i, w] of writers.entries()) {
     const sentAt = Date.now();
@@ -586,7 +588,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
     // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
     const since = Math.min(...waits.map((w) => w.sentAt));
-    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since, briefedAt: since });
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
     if (change.landed) context["change_landed"] = change.landed;
@@ -600,6 +602,16 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     return dead(`Could not freeze the checkout's change again: ${err instanceof Error ? err.message : String(err)}`);
   }
   return "success";
+}
+
+/** The run's worktree as a brief finds it (snapshotRunTree): the refreeze carries what the session changes there after. */
+async function recordBriefTree(cwd: string, context: Record<string, string>): Promise<void> {
+  const tree = await runWorktreePath(cwd, context["worktree"]);
+  if (!tree || !context["run_dir"]) return;
+  const { snapshotRunTree } = await import("./flowChange.js");
+  await snapshotRunTree(tree, context["run_dir"]).catch((err: Error) => {
+    console.log(`${c.yellow}  could not record the run's worktree before the brief (${err.message.split("\n")[0]}): the refreeze carries every uncommitted file there${c.reset}`);
+  });
 }
 
 /** What a send of the run to its subject is, as the start of its client_id: the run, and what is sent (a station, an answer, the end). */
