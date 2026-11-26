@@ -143,6 +143,13 @@ describe("the Modern card, mounted", () => {
     expect(calls).toEqual([`select ${ID} click`, `select ${ID} key`, `menu ${ID} false`]);
   });
 
+  test("Enter on something inside the card (a chip's link) is that thing's, never the card's", async () => {
+    calls.length = 0;
+    const inner = host.querySelector("[data-session-id] > [role=button] [data-sv-title]")!;
+    await act(async () => { inner.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    expect(calls).toEqual([]);
+  });
+
   test("unread draws the edge bar; read does not", async () => {
     expect(host.querySelector("[data-mc-unread-bar]")).toBeNull();
     await act(async () => { root.render(card({ isUnread: true })); });

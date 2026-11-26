@@ -7,14 +7,24 @@
 import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployReach";
 import { sessionsOf, type TeamDeployRow } from "../deploys/targets";
+import { deploysFocusHref, runTeam } from "../deploys/focus";
+import { entityRoute } from "@codecast/shared/entities";
 import { canAnswer, deployHold, gateOpen, gateWaitWords, holderOf, holdWords, type GateDecision, type TargetState } from "./journey";
 import { landedSha as mergedSha } from "./runRecord";
 
 export type ShipTone = "working" | "agent" | "session" | "you" | "ok" | "bad" | "wait";
-export type SessionShip = { words: string; tone: ShipTone; deploy?: string | null; run?: string | null };
+/** `sha`: the commit the run landed on main, and `team` the run's team, so a word about deploying it opens that team's Deploys page at the commit. */
+export type SessionShip = { words: string; tone: ShipTone; deploy?: string | null; run?: string | null; sha?: string | null; team?: string | null };
+
+/** Where a card's ship word opens: the deploy it names, else its team's Deploys page at the commit it landed (a personal run has none); otherwise it stays put. */
+export function shipHref(ship: Pick<SessionShip, "deploy" | "sha" | "team">): string | null {
+  if (ship.deploy) return entityRoute("deploy", ship.deploy);
+  return ship.sha && ship.team ? deploysFocusHref({ team: ship.team, focus: { kind: "sha", sha: ship.sha.toLowerCase() } }) : null;
+}
 
 type Run = {
   _id: string;
+  workspace?: string | null;
   spawner_conversation_id?: string | null;
   /** Stamped by the server: the run's flow takes a session's change and lands it. A session's other runs (a deploy, an eval) are not its ship. */
   takes_change?: boolean;
@@ -63,12 +73,12 @@ export function reachTargets(reach: Pick<DeployReach, "targets"> | null | undefi
 }
 
 /** Where a landed change is, from its deploy reach: the state that needs the eye most, and the targets in it. */
-export function reachShip(reach: Pick<DeployReach, "state" | "targets">, run: string | null = null): SessionShip {
+export function reachShip(reach: Pick<DeployReach, "state" | "targets">, run: string | null = null, sha: string | null = null, team: string | null = null): SessionShip {
   const { words, tone } = REACH_WORDS[reach.state];
   const speaking = reach.targets.filter((t) => !t.dormant);
   const at = (speaking.length ? speaking : reach.targets).filter((t) => t.state === reach.state);
   const deploy = at.find((t) => t.deploy)?.deploy?.short_id ?? null;
-  return { words: at.length ? `${words} · ${at.map((t) => t.target).join(", ")}` : words, tone, deploy, run };
+  return { words: at.length ? `${words} · ${at.map((t) => t.target).join(", ")}` : words, tone, deploy, run, sha, team };
 }
 
 /**
@@ -88,14 +98,14 @@ export function runShip(run: Run, viewer: string | null = null, decision: GateDe
   if (live && top === "deploy") {
     // "Deploying" only while a deploy carries it; held on main CI or waiting for a person otherwise, as the Deploy line says.
     const line = (run.node_statuses ?? []).filter((n) => segmentTopOf(n.node_id) === "deploy" && n.result_preview).sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))[0]?.result_preview;
-    return { ...holdWords(deployHold(line)), run: run._id };
+    return { ...holdWords(deployHold(line)), run: run._id, sha, team: runTeam(run) };
   }
   if (live) return { words: run.current_node_label ?? "Shipping", tone: "working", run: run._id };
   if (run.status === "completed") {
     // A run is live only past a Deploy station of its own; a flow that ends at Land leaves its change on main for a deploy.
     if (deployedBy(run)) return { words: "Live", tone: "ok", run: run._id };
     // A finished run with no merge on it (a merge nobody recorded) says it finished, never that it did not land.
-    return sha ? { words: "Merged", tone: "ok", run: run._id } : { words: "Done", tone: "ok", run: run._id };
+    return sha ? { words: "Merged", tone: "ok", run: run._id, sha, team: runTeam(run) } : { words: "Done", tone: "ok", run: run._id };
   }
   if (/^Stopped: The deploy that carried/.test(run.fail_reason ?? "")) return { words: "Deploy failed", tone: "bad", run: run._id };
   // Not merged is said only of a run that ended at Deploy with no merge on it.
@@ -154,7 +164,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
     if (sha) {
       onlyReach.add(id);
       const known = reach[sha];
-      out.set(id, known?.targets?.length ? reachShip(known, r._id) : s!);
+      out.set(id, known?.targets?.length ? reachShip(known, r._id, sha, runTeam(r)) : s!);
       continue;
     }
     if (r.status === "completed" && !deployedBy(r)) after.set(id, r.updated_at ?? r.created_at ?? 0);

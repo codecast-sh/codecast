@@ -248,11 +248,16 @@ export function deploysFocusHref(o: { team?: string | null; repository?: string 
  * target), else the commit it landed, else its session.
  */
 export function deploysHref(run: any, words?: string | null): string {
-  const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
+  const team = runTeam(run);
   const named = words?.match(/(?:\b([a-z][a-z0-9-]{0,31}) )?\b(dp-\d+)/);
   // "going out in dp-13" names a deploy but not its target; the page finds that from the deploy.
   const target = named?.[1] && named[1] !== "in" ? named[1] : null;
   return deploysFocusHref({ team, target, focus: named ? { kind: "deploy", id: named[2]! } : runFocus(run) });
+}
+
+/** The team a run belongs to (its workspace `team:<id>`), null for a personal one. */
+export function runTeam(run: { workspace?: unknown } | null | undefined): string | null {
+  return typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
 }
 
 /** What a run's change is on the Deploys page: the commit it landed on main, else the session that started it. */

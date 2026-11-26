@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket, Lock, Users } from "lucide-react";
 import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
-import { entityRoute } from "@codecast/shared/entities";
+import { shipHref } from "../../lib/ship/sessionShip";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
 import { sessionCardSummary } from "../../lib/sessionSummary";
@@ -213,7 +213,7 @@ export function ModernSessionCardView({
   const device = chrome.showDeviceIcon !== false && placeDevice
     ? { icon: <DeviceIcon d={placeDevice} className="w-3 h-3 shrink-0" />, name: deviceDisplayName(placeDevice), title: placeDevice.is_remote ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}` : `Runs on ${deviceDisplayName(placeDevice)}, not this machine` }
     : null;
-  const shipHref = ship?.deploy ? entityRoute("deploy", ship.deploy) : null;
+  const shipLink = ship ? shipHref(ship) : null;
   const chips: React.ReactNode[] = [];
   if (!nested) {
     chips.push(
@@ -232,8 +232,8 @@ export function ModernSessionCardView({
   }
   if (session.flow_run_id) chips.push(<ModernFlowChip key="flow" session={session} className="shrink-[200]" />);
   if (ship) {
-    chips.push(shipHref
-      ? <Link key="ship" href={shipHref} data-mc-chip="ship" title={ship.words} onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></Link>
+    chips.push(shipLink
+      ? <Link key="ship" href={shipLink} data-mc-chip="ship" title={ship.words} onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></Link>
       : <ModernFactChip key="ship" kind="ship" title={ship.words} className="shrink-[100]"><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></ModernFactChip>);
   } else {
     chips.push(<ModernBranchChip key="branch" session={session} showBranch={chrome.showBranchPill} className="shrink-[100] min-w-[3rem]" />);
@@ -315,7 +315,7 @@ export function ModernSessionCardView({
         tabIndex={0}
         aria-label={`${displayTitle}, ${withOwner ?? meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
         onClick={(e) => onSelect(session, e)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
+        onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className={`block w-full cursor-pointer text-left ${nested ? "py-1.5 pl-6 pr-3" : "py-2 pl-3 pr-3"} outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--focus-ring)]`}
       >
         <div data-mc-line1 className="flex min-w-0 items-center gap-2">

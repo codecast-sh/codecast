@@ -25,6 +25,7 @@ import { useDeployReach } from "../../hooks/useDeployReach";
 import { repoObjectId } from "../../lib/entityLinks";
 import { REACH_LOOK } from "../../lib/deploys/deployPill";
 import { FAILED_ICON, REACH_ICON, TONE_TEXT } from "../../lib/deploys/deployLook";
+import { deploysFocusHref } from "../../lib/deploys/focus";
 
 type Filter = "open" | "merged" | "closed" | "mine" | "shepherded";
 
@@ -39,17 +40,17 @@ const isShepherded = (pull: RepoPull) => !!pull.shepherd_enabled || !!pull.conve
 /** Merged this recently, a row reads its reach: a reader scans for what is not live yet, and older merges are. */
 const REACH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
-/** A merged row's reach: live, or what holds it. Nothing for a change no target deploys. */
+/** A merged row's reach: live, or what holds it, opening the Deploys page at the PR. Nothing for a change no target deploys. */
 function RowReach({ repository, number }: { repository: string; number: number }) {
   const reach = useDeployReach(repoObjectId({ type: "pr", repository, number }));
   if (!reach) return null;
   const look = REACH_LOOK[reach.state];
   const Icon = REACH_ICON[reach.state];
   return (
-    <span data-pull-reach={reach.state} className={`inline-flex items-center gap-1 ${TONE_TEXT[look.tone]}`} title="Where this change runs in production">
+    <Link href={deploysFocusHref({ repository, focus: { kind: "pr", pr: number } })} data-pull-reach={reach.state} className={`inline-flex items-center gap-1 no-underline hover:underline ${TONE_TEXT[look.tone]}`} title="Open on the Deploys page">
       <Icon aria-hidden className={`size-3 shrink-0 ${reach.state === "failed" ? FAILED_ICON : ""}`} />
       {look.word}
-    </span>
+    </Link>
   );
 }
 

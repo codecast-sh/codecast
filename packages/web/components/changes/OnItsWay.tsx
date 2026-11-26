@@ -3,38 +3,15 @@
 // change of a target's repository not yet live, on the lifecycle grid, beside
 // the commits already waiting on main. Its own filters narrow it: the
 // viewer's own (Mine) and one group, picked here or by the group's name.
-import { useMemo } from "react";
-import { useRepoChanges } from "../../hooks/useRepoChanges";
 import { ChangeBoard } from "./ChangeBoard";
-import { PICKABLE_GROUPS, changeRowOf, filterChanges, groupName, groupOf, isComing, isParked, type ChangeRow, type ChangeViewer } from "../../lib/changes/rows";
-import { changeMatches, type DeployFilters, type DeployFocus } from "../../lib/deploys/focus";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
-
-const HIDE = ["live", "closed"] as const;
+import { PICKABLE_GROUPS, groupName } from "../../lib/changes/rows";
+import type { DeployFilters } from "../../lib/deploys/focus";
+import { HIDE, type OnItsWayModel } from "../../hooks/useOnItsWay";
 
 type Filters = DeployFilters["coming"];
 
-export function OnItsWay({ repository, filters, onFilters, me, focus }: {
-  repository: string;
-  filters: Filters;
-  onFilters: (f: Filters) => void;
-  me: ChangeViewer;
-  focus: DeployFocus | null;
-}) {
-  const { ready, changes } = useRepoChanges(repository);
-  // What has landed waits on main, listed beside it by session: this grid is what has yet to get there.
-  const rows = useMemo(() => changes.map(changeRowOf).filter((r) => !r.reach_ref), [changes]);
-  const now = useCoarseNow(600_000);
-  // A filter never hides the row a link points at.
-  const focused = useMemo(() => (focus ? (r: ChangeRow) => changeMatches(r, focus) : undefined), [focus]);
-  const shown = useMemo(() => filterChanges(rows, filters, me, now, focused), [rows, filters, me, now, focused]);
-  // Each group's count under Mine alone, so a group's button says what pressing it shows.
-  const counts = useMemo(() => {
-    const mineRows = filterChanges(rows, { mine: filters.mine, group: null }, me, now, focused);
-    return new Map(PICKABLE_GROUPS.map((id) => [id, mineRows.filter((r) => groupOf(r, now) === id).length]));
-  }, [rows, filters.mine, me, now, focused]);
-  // What is really on its way: not live, not closed, and not parked.
-  const coming = rows.filter((r) => isComing(r) && !isParked(r, now)).length;
+export function OnItsWay({ model, filters, onFilters }: { model: OnItsWayModel; filters: Filters; onFilters: (f: Filters) => void }) {
+  const { ready, focused, shown, counts, coming } = model;
   if (ready && !coming) return null;
   const pickGroup = (group: Filters["group"]) => onFilters({ ...filters, group });
   return (

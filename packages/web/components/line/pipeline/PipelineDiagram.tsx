@@ -15,6 +15,7 @@ import { useEditWhere } from "../../../hooks/usePipelines";
 import { pipelineCheckout, pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
 import { statTiles, targetWords, trackOf, waitingSessions, type StatTile } from "../../../lib/line/pipelineView";
 import { entityRoute } from "../../../lib/entityLinks";
+import { deploysFocusHref } from "../../../lib/deploys/focus";
 import type { EditOp } from "../../../lib/line/pipelineEdit";
 import type { Pipeline } from "../../../lib/line/pipelineTypes";
 import { PipelineTrack } from "./PipelineTrack";
@@ -91,9 +92,15 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
           <div className="pv-gutter-does">{model.main.waiting ? `${model.main.waiting} waiting` : "nothing waiting"}</div>
         </div>
         <div className="pv-targets">
-          {model.main.targets.map((t) => (
-            <span key={t.name} className="pv-target" data-tone={t.tone}><i className="pv-led" data-tone={t.tone} aria-hidden /><b>{t.name}</b><span>{targetWords(t, now)}</span></span>
-          ))}
+          {model.main.targets.map((t) => {
+            // The deploy its words are about (going out, else failed, else live while nothing waits), highlighted on the Deploys page.
+            const dp = t.going?.deploy ?? t.failed?.deploy ?? (t.waiting ? null : t.live?.deploy) ?? null;
+            const body = <><i className="pv-led" data-tone={t.tone} aria-hidden /><b>{t.name}</b><span>{targetWords(t, now)}</span></>;
+            // Deploys belong to a team: a personal pipeline's targets have no page to open.
+            if (!teamId) return <span key={t.name} className="pv-target" data-tone={t.tone} data-pv-target={t.name}>{body}</span>;
+            const href = deploysFocusHref({ team: teamId, repository: model.repository, target: t.name, focus: dp ? { kind: "deploy", id: dp } : null });
+            return <Link key={t.name} href={href} className="pv-target" data-tone={t.tone} title={`Open ${t.name} on the Deploys page`} data-pv-target={t.name}>{body}</Link>;
+          })}
           {sessions.length ? (
             <button type="button" className="pv-waiting" onClick={() => setOpen({ kind: "main" })} data-pipeline-waiting>
               <span className="pv-avatars" aria-hidden>{sessions.slice(0, 4).map((s) => <i key={s.key} data-c={avatarOf(s.key)} title={s.title} />)}</span>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { landedShas, reachShip, reachTargets, runShip, sessionShips } from "../sessionShip";
+import { landedShas, reachShip, reachTargets, runShip, sessionShips, shipHref } from "../sessionShip";
 
 const SHA = "a0de449540f0a6545c78d050748211d78013c039";
 const target = (name: string, state: string, over: Record<string, unknown> = {}) => ({ target: name, state, deploy: null, now: null, ...over }) as any;
@@ -70,7 +70,7 @@ describe("a landed change reads where the deploy records put it", () => {
   const waiting = { state: "waiting", targets: [target("aivery-operator", "waiting", { dormant: true }), target("production", "waiting", { now: { short_id: "dp-2232" } })] } as any;
 
   test("not live yet names the target still shipping, never a dormant one", () => {
-    expect(reachShip(waiting, "r")).toEqual({ words: "Not live yet · production", tone: "wait", deploy: null, run: "r" });
+    expect(reachShip(waiting, "r")).toEqual({ words: "Not live yet · production", tone: "wait", deploy: null, run: "r", sha: null, team: null });
     expect(reachTargets(waiting)).toEqual([{ name: "production", state: "waiting", deploy: null, at: null }]);
   });
 
@@ -115,4 +115,21 @@ test("a session's run of a flow that carries no change (an eval, a deploy) is no
   const evalRun = run("r2", "s", { status: "running", created_at: 2, takes_change: false, current_node_id: "judge" });
   expect(sessionShips([change, evalRun], []).get("s")).toMatchObject({ words: "Merged", run: "r1" });
   expect(landedShas([change, evalRun])).toEqual(["a".repeat(40)]);
+});
+
+describe("a card's ship word opens the Deploys page", () => {
+  test("at its deploy, else at the commit it landed, else nowhere", () => {
+    expect(shipHref({ deploy: "dp-9", sha: SHA })).toBe("/deploys?deploy=dp-9");
+    // Deploys belong to a team: a personal run's commit has no page to open.
+    expect(shipHref({ deploy: null, sha: SHA })).toBeNull();
+    // On the run's own team, so a viewer in another workspace still lands on the page that holds it.
+    expect(shipHref({ sha: SHA.toUpperCase(), team: "T1" })).toBe(`/deploys?team=T1&sha=${SHA}`);
+    expect(shipHref({})).toBeNull();
+    // A landed run's words carry its commit, whether they come from the run or from the reach that answered for it.
+    const landed = run("r", "c", { status: "completed", current_node_id: "exit", merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] });
+    expect(runShip(landed)?.sha).toBe(SHA);
+    expect(runShip({ ...landed, workspace: "team:T1" })).toMatchObject({ sha: SHA, team: "T1" });
+    const waiting = { state: "waiting", targets: [target("production", "waiting")] } as any;
+    expect(sessionShips([landed], [], { [SHA]: waiting }).get("c")).toMatchObject({ words: "Not live yet · production", sha: SHA });
+  });
 });

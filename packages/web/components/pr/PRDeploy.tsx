@@ -16,19 +16,25 @@ import { deploysFocusHref } from "../../lib/deploys/focus";
 import type { ExternalEventAccent } from "../../lib/externalEvents";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
 
-/** The chip beside a merged pull request's state: live, or what holds it. */
+/** The chip beside a merged pull request's state: live, or what holds it; it opens the Deploys page at the PR. */
 export function PRReachChip({ model, Chip }: { model: PrDeployModel; Chip: (p: { accent: ExternalEventAccent; title?: string; children: React.ReactNode }) => React.ReactNode }) {
   const h = model.headline;
   if (!h) return null;
   const look = REACH_LOOK[h.state];
   const Icon = REACH_ICON[h.state];
+  const chip = (
+    <Chip accent={TONE_ACCENT[look.tone]} title={model.teamId ? "Open on the Deploys page" : "Where this change runs in production"}>
+      <Icon className={`w-3.5 h-3.5 ${h.state === "failed" ? FAILED_ICON : ""}`} />
+      {h.words}
+    </Chip>
+  );
+  // A reader outside the team (a public PR) has no Deploys page to open.
+  if (!model.teamId) return <span data-pr-reach-chip={h.state} className="contents">{chip}</span>;
+  // The target that needs the reader first (the band's first row), so the page opens where the headline is about.
   return (
-    <span data-pr-reach-chip={h.state} className="contents">
-      <Chip accent={TONE_ACCENT[look.tone]} title="Where this change runs in production">
-        <Icon className={`w-3.5 h-3.5 ${h.state === "failed" ? FAILED_ICON : ""}`} />
-        {h.words}
-      </Chip>
-    </span>
+    <Link href={deploysHrefOf(model, model.rows[0]?.target ?? null)} data-pr-reach-chip={h.state} className="no-underline rounded-full transition-[filter] hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-blue">
+      {chip}
+    </Link>
   );
 }
 
@@ -61,9 +67,9 @@ export function PRShipsTo({ model }: { model: PrDeployModel }) {
   );
 }
 
-/** A target on the Deploys page, a merged pull request highlighted there (an open one is on no target yet). */
-const deploysHrefOf = (model: Pick<PrDeployModel, "teamId" | "repository" | "number" | "merged">, target: string) =>
-  deploysFocusHref({ team: model.teamId, repository: model.repository, target, focus: model.merged ? { kind: "pr", pr: model.number } : null });
+/** A target on the Deploys page with the pull request highlighted: merged, in the queue or the deploy that took it; open, on its way. */
+const deploysHrefOf = (model: Pick<PrDeployModel, "teamId" | "repository" | "number">, target: string | null) =>
+  deploysFocusHref({ team: model.teamId, repository: model.repository, target, focus: { kind: "pr", pr: model.number } });
 
 function CiWord({ ci, url }: { ci: keyof typeof CI_WORDS; url: string | null }) {
   const word = CI_WORDS[ci];

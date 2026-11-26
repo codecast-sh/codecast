@@ -1,7 +1,9 @@
 // The Deploys page's focus chip: the thing a link names reads as the pill a conversation draws for it (a session or
-// task by its title), never a raw conversation id, and its × still clears the highlight. The pill runs
-// for real; only the Convex transport is faked.
-import { afterAll, expect, mock, test } from "bun:test";
+// task by its title), never a raw conversation id, and its × still clears the highlight; a change on its
+// way reads as on its way. The pill runs for real; only the Convex transport is faked. Below it, the landing a link
+// runs (landFocus): each column brings its highlighted row to the middle, the row flashes once, and the viewer's own
+// move ends it.
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
@@ -15,6 +17,13 @@ const restoreGlobals = replaceGlobals({
   HTMLElement: dom.window.HTMLElement,
   Element: dom.window.Element,
   Node: dom.window.Node,
+  Event: dom.window.Event,
+  KeyboardEvent: dom.window.KeyboardEvent,
+  MutationObserver: dom.window.MutationObserver,
+  getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 
@@ -34,6 +43,7 @@ mock.module("next/link", () => ({
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { FocusChip, Paused } = await import("../DeploysPage");
+const { landFocus } = await import("../../../lib/deploys/landFocus");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -81,6 +91,44 @@ test("a branch keeps its plain name", () => {
   unmount();
 });
 
+// A link to something on neither the queue nor a deploy: when it is on its way (an open change, found in the left
+// column) the chip says so and reads as waiting; otherwise it is not on this target.
+function mountWhere(coming: "coming" | "parked" | "reading" | null) {
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  act(() => root.render(<MemoryRouter><FocusChip focus={{ kind: "pr", pr: 101 } as any} repository="acme/app" waiting={false} coming={coming} deploys={[]} live={null} onClear={() => {}} /></MemoryRouter>));
+  return { host, unmount: () => act(() => root.unmount()) };
+}
+
+test("a change on its way, on no deploy yet, reads as on its way and waiting", () => {
+  const { host, unmount } = mountWhere("coming");
+  const chip = host.querySelector(".dpp-focus")!;
+  expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("on its way");
+  expect(chip.getAttribute("data-state")).toBe("waiting");
+  unmount();
+});
+
+test("a parked change says so, never that it is moving", () => {
+  const { host, unmount } = mountWhere("parked");
+  expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("parked on its way");
+  unmount();
+});
+
+test("while what is on its way is still being read, the chip says it is looking, never that the thing is not here", () => {
+  const { host, unmount } = mountWhere("reading");
+  expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("looking…");
+  unmount();
+});
+
+test("a change neither coming nor deployed is not on this target", () => {
+  const { host, unmount } = mountWhere(null);
+  const chip = host.querySelector(".dpp-focus")!;
+  expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("not on this target");
+  expect(chip.getAttribute("data-state")).toBe("missing");
+  unmount();
+});
+
 // The repository's production pause (DP17): who, why, the rollback and the task that lift it, the migrations that rule
 // a revert out, and Lift only for whoever may lift it.
 function mountPaused(p: any, canLift: boolean, onLift = () => {}) {
@@ -122,4 +170,87 @@ test("a rollback's pause names its deploy and task, and a fix forward shows the 
   expect(warn.textContent).toContain("No revert: fix forward");
   expect(warn.textContent).toContain("drizzle/0007_x.sql");
   unmount();
+});
+
+// The landing, against a pane like the page's: two columns that each scroll, rows placed off their column's middle.
+// jsdom lays nothing out, so each element reports the box the test gives it, and a scroll is a recorded call.
+describe("landing a link on the Deploys page", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  let scrolled: string[] = [];
+  function pane() {
+    document.body.innerHTML = `<div data-deploy-pane><div class="dpp-body">
+      <div data-deploy-col="before" style="overflow-y: auto"><section><div class="chb-rows"></div></section></div>
+      <div data-deploy-col="after" style="overflow-y: auto"><section><ul class="dpp-commits"></ul></section></div>
+    </div></div>`;
+    for (const col of document.querySelectorAll("[data-deploy-col]")) (col as any).getBoundingClientRect = () => ({ top: 0, height: 400 });
+    scrolled = [];
+  }
+  function row(where: "before" | "after", id: string, focus = true) {
+    const el = document.createElement(where === "before" ? "a" : "li");
+    el.className = where === "before" ? "chb-row" : "dpp-commit";
+    el.id = id;
+    if (focus) el.setAttribute("data-focus", "");
+    (el as any).getBoundingClientRect = () => ({ top: 900, height: 20 });
+    (el as any).scrollIntoView = () => scrolled.push(id);
+    document.querySelector(where === "before" ? ".chb-rows" : ".dpp-commits")!.appendChild(el);
+    return el;
+  }
+
+  test("a row that arrives after the page opens is brought to the middle of its own column, and flashes", async () => {
+    pane();
+    const stop = landFocus();
+    await tick();
+    expect(scrolled).toEqual([]);
+    const r = row("after", "c1");
+    await tick();
+    expect(scrolled).toEqual(["c1"]);
+    expect(r.hasAttribute("data-flash")).toBe(true);
+    stop();
+  });
+
+  test("each column centres its own row; one column takes only its most telling one", async () => {
+    pane();
+    row("before", "change");
+    row("after", "commit");
+    row("after", "commit2");
+    const stop = landFocus();
+    await tick();
+    expect(scrolled.sort()).toEqual(["change", "commit"]);
+    stop();
+  });
+
+  test("a row already in the middle is left where it is", async () => {
+    pane();
+    const r = row("after", "c1");
+    (r as any).getBoundingClientRect = () => ({ top: 190, height: 20 });
+    const stop = landFocus();
+    await tick();
+    expect(scrolled).toEqual([]);
+    expect(r.hasAttribute("data-flash")).toBe(true);
+    stop();
+  });
+
+  test("the viewer's own key ends it: a row arriving afterwards is not scrolled to", async () => {
+    pane();
+    const stop = landFocus();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+    row("after", "late");
+    await tick();
+    expect(scrolled).toEqual([]);
+    stop();
+  });
+
+  test("the flash ends when the row's own animation does, not a child's", async () => {
+    pane();
+    const r = row("after", "c1");
+    const child = document.createElement("span");
+    r.appendChild(child);
+    const stop = landFocus();
+    await tick();
+    child.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(r.hasAttribute("data-flash")).toBe(true);
+    r.dispatchEvent(new Event("animationend", { bubbles: true }));
+    expect(r.hasAttribute("data-flash")).toBe(false);
+    stop();
+  });
 });
