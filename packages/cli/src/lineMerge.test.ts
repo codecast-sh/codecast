@@ -180,6 +180,68 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
+  test("a branch that reverts one of main's recent commits on purpose lands: setting its files back is the branch's point", () => {
+    const r = gitRepo();
+    try {
+      r.commit("x.txt", "before\n", "add x");
+      const feat = r.commit("x.txt", "after\n", "feat: x");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "revert", "--no-edit", feat);
+      r.git(r.work, "push", "-q", "origin", "b");
+      r.advanceMain("m.txt", "main moved\n");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("merged");
+      expect(r.git(r.origin, "show", "main:x.txt")).toBe("before");
+    } finally { r.done(); }
+  });
+
+  test("a revert excuses only the commit it names: a squash over a stale tree that also reverts is held for the rest", () => {
+    const r = gitRepo();
+    try {
+      r.commit("x.txt", "before\n", "add x");
+      const feat = r.commit("x.txt", "after\n", "feat: x");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "revert", "--no-edit", feat);
+      r.advanceMain("a.txt", "one\ntwo\n");
+      r.git(r.work, "fetch", "-q", "origin");
+      r.git(r.work, "reset", "-q", "--soft", "origin/main");
+      r.git(r.work, "commit", "-q", "-m", `Revert x, squashed\n\nThis reverts commit ${feat}.`);
+      r.git(r.work, "push", "-q", "-f", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("left");
+      const reason = out.kind === "left" ? out.reason : "";
+      expect(reason).toContain("a.txt from ");
+      expect(reason).not.toContain("x.txt");
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+    } finally { r.done(); }
+  });
+
+  test("a revert does not excuse erasing main's newer change to the same file: a stale squash that reverts A over B is held, naming B", () => {
+    const r = gitRepo();
+    try {
+      r.commit("x.txt", "before\n", "add x");
+      const a = r.commit("x.txt", "after\n", "feat: x");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "revert", "--no-edit", a);
+      r.advanceMain("x.txt", "after\nand more\n");
+      r.git(r.work, "fetch", "-q", "origin");
+      const b = r.git(r.work, "rev-parse", "origin/main");
+      r.git(r.work, "reset", "-q", "--soft", "origin/main");
+      r.git(r.work, "commit", "-q", "-m", `Revert x, squashed\n\nThis reverts commit ${a}.`);
+      r.git(r.work, "push", "-q", "-f", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("left");
+      const reason = out.kind === "left" ? out.reason : "";
+      expect(reason).toContain(`x.txt from ${b.slice(0, 10)}`);
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+    } finally { r.done(); }
+  });
+
   test("a deletion of the branch's own is held with the rest when the landing also sets main back, as a squash over a stale tree does", () => {
     const r = gitRepo();
     try {
