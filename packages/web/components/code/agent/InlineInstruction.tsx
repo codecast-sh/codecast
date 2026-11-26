@@ -12,16 +12,23 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { KeyCap } from "../../KeyCap";
 import { isMac } from "../../../shortcuts";
-import { useAgentStore, type InlineRequest } from "../../../lib/code/agent/agentStore";
-import { rangeLabel, sendInstruction } from "../../../lib/code/agent/compose";
+import { inlineDraft, useAgentStore, type InlineRequest } from "../../../lib/code/agent/agentStore";
+import { newSessionText, rangeLabel, sendInstruction } from "../../../lib/code/agent/compose";
+import { vaultRootOf } from "../../../lib/code/agent/live";
 import { SessionMark } from "./SessionMark";
 
 export const InlineInstruction = memo(function InlineInstruction({ request }: { request: InlineRequest }) {
-  const target = useAgentStore((s) => s.links[request.vaultId]?.sessionId ?? null);
+  // The target was fixed when the box opened; only this box's picker moves it.
+  const target = request.sessionId;
+  const draft = inlineDraft(request.id);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useWatchEffect(() => {
+    // Focus once per box: a box drawn again after a scroll must not pull focus
+    // from wherever the person moved it.
+    if (draft.focused) return;
+    draft.focused = true;
     requestAnimationFrame(() => boxRef.current?.focus());
   }, []);
 
@@ -30,24 +37,36 @@ export const InlineInstruction = memo(function InlineInstruction({ request }: { 
     request.onClose();
   };
 
-  const pickTarget = (then?: (id: string) => void) => {
+  const send = (sessionId: string) => {
+    const text = boxRef.current?.value ?? "";
+    if (!text.trim()) return;
+    const clientId = sendInstruction(useInboxStore.getState(), sessionId, request.range, text);
+    if (!clientId) return;
+    useAgentStore.getState().closeInline(request.id);
+    request.onSent(sessionId, clientId);
+  };
+
+  /** Choose where this goes; `andSend` sends once picked (Enter with no target). */
+  const pickTarget = (andSend: boolean) => {
     const rect = rootRef.current?.getBoundingClientRect();
     useAgentStore.getState().openPicker({
       vaultId: request.vaultId,
       anchor: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null,
+      action: "instruct",
       then: (id) => {
-        then?.(id);
-        requestAnimationFrame(() => boxRef.current?.focus());
+        useAgentStore.getState().setInlineTarget(request.id, id);
+        if (andSend) send(id);
+        else requestAnimationFrame(() => boxRef.current?.focus());
+      },
+      newSession: () => {
+        const root = vaultRootOf(request.vaultId);
+        if (!root) return false;
+        const text = boxRef.current?.value.trim() ?? "";
+        useInboxStore.getState().openCompose(`${newSessionText(request.range)}${text}`, { projectPath: root });
+        close();
+        return true;
       },
     });
-  };
-
-  const send = (sessionId: string) => {
-    const text = boxRef.current?.value ?? "";
-    if (!text.trim()) return;
-    if (!sendInstruction(useInboxStore.getState(), sessionId, request.range, text)) return;
-    useAgentStore.getState().closeInline(request.id);
-    request.onSent(sessionId);
   };
 
   const r = request.range;
@@ -65,7 +84,7 @@ export const InlineInstruction = memo(function InlineInstruction({ request }: { 
         <span className="text-sol-text-dim">To</span>
         <button
           type="button"
-          onClick={() => pickTarget()}
+          onClick={() => pickTarget(false)}
           className="flex min-w-0 max-w-[60%] items-center gap-1 rounded px-1 py-0.5 text-sol-text hover:bg-sol-bg-alt"
           title="Change the session this goes to"
         >
@@ -78,16 +97,21 @@ export const InlineInstruction = memo(function InlineInstruction({ request }: { 
       </div>
       <textarea
         ref={boxRef}
-        rows={1}
+        rows={Math.min(8, draft.text.split("\n").length)}
+        defaultValue={draft.text}
         placeholder="Tell the agent what to do with these lines"
         aria-label="Instruction for the agent"
         spellCheck={false}
+        style={{ fieldSizing: "content" } as React.CSSProperties}
         className="block max-h-40 w-full resize-none bg-transparent px-2.5 py-1.5 text-[13px] leading-5 text-sol-text outline-none placeholder:text-sol-text-dim"
         onInput={(e) => {
-          // Grow with the text, written straight to the element.
+          // Kept for a redraw of the widget. The box grows by CSS
+          // (field-sizing); where that is missing, `rows` follows the line
+          // count, set only when it changes and with no layout read.
           const el = e.currentTarget;
-          el.style.height = "auto";
-          el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+          draft.text = el.value;
+          const rows = String(Math.min(8, el.value.split("\n").length));
+          if (el.getAttribute("rows") !== rows) el.setAttribute("rows", rows);
         }}
         onKeyDown={(e) => {
           e.stopPropagation();
@@ -97,7 +121,7 @@ export const InlineInstruction = memo(function InlineInstruction({ request }: { 
           } else if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             if (target) send(target);
-            else pickTarget(send);
+            else pickTarget(true);
           } else if (e.key === "k" && (isMac ? e.metaKey : e.ctrlKey)) {
             // Cmd-K twice: the command palette, as everywhere else in the app.
             e.preventDefault();

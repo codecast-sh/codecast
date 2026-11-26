@@ -7,7 +7,7 @@
 // The linked session is resolved by AgentLayer (components/code/agent), which
 // the Files workspace mounts; these commands read its answer from agentStore.
 
-import { Prec } from "@codemirror/state";
+import { Prec, type EditorState, type TransactionSpec } from "@codemirror/state";
 import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { useInboxStore, sessionWorkState, type InboxSession } from "../../../store/inboxStore";
 import { useCodeStore } from "../../../store/codeStore";
@@ -87,19 +87,31 @@ function viewFor(ctx: CodeCommandContext): EditorView | null {
 
 const vaultOf = (view: EditorView) => view.state.facet(featureContext)?.vaultId ?? null;
 
-/** Run `act` with the linked session; with none, the picker asks first. */
-function withSession(view: EditorView, act: (sessionId: string) => void): boolean {
+/** The folder's linked session, read once: the inline box pins it. */
+function linkedOf(view: EditorView): string | null {
+  const vaultId = vaultOf(view);
+  return vaultId ? (useAgentStore.getState().links[vaultId]?.sessionId ?? null) : null;
+}
+
+/** Where the picker hangs for this editor: its status chip. */
+function chipAnchor(view: EditorView, vaultId: string) {
+  const chip = useAgentStore.getState().chips.find((c) => c.vaultId === vaultId && c.el.isConnected && view.dom.closest("[data-code-group]")?.contains(c.el));
+  const rect = chip?.el.getBoundingClientRect();
+  return rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null;
+}
+
+/** Quote to the linked session; with none, the picker asks first. */
+function quoteToLinked(view: EditorView): boolean {
   const vaultId = vaultOf(view);
   if (!vaultId) return false;
   const st = useAgentStore.getState();
   const linked = st.links[vaultId]?.sessionId;
+  const act = (id: string) => quoteSelection(view, id);
   if (linked) {
     act(linked);
     return true;
   }
-  const chip = st.chips.find((c) => c.vaultId === vaultId && c.el.isConnected && view.dom.closest("[data-code-group]")?.contains(c.el));
-  const rect = chip?.el.getBoundingClientRect();
-  st.openPicker({ vaultId, anchor: rect ? { left: rect.left, top: rect.top, bottom: rect.bottom } : null, then: act });
+  st.openPicker({ vaultId, anchor: chipAnchor(view, vaultId), then: act, action: "quote", newSession: () => newSession(view) });
   return true;
 }
 
@@ -117,7 +129,21 @@ export function quoteSelection(view: EditorView, sessionId: string): boolean {
   return true;
 }
 
-export function openInlineInstruction(view: EditorView): boolean {
+/** The editor state holding an inline spot, and how to update it: the view
+ *  the box opened in while it still shows that buffer, else the buffer that
+ *  holds the spot now (switched away, or shown in another split). */
+function spotHolder(view: EditorView, id: number): { state: EditorState; apply(spec: TransactionSpec): void } | null {
+  if (agentMarks(view.state).inline?.id === id) return { state: view.state, apply: (spec) => view.dispatch(spec) };
+  for (const b of codeBuffers.all()) {
+    const state = currentState(b);
+    if (agentMarks(state).inline?.id === id) return { state, apply: (spec) => updateBuffer(b, spec) };
+  }
+  return null;
+}
+
+/** Open the inline instruction box under the range, aimed at `sessionId`
+ *  (null: the box asks on Enter). */
+export function openInlineInstruction(view: EditorView, sessionId: string | null = null): boolean {
   const vaultId = vaultOf(view);
   const root = vaultId ? vaultRootOf(vaultId) : null;
   const range = root ? selectedRange(view, root) : null;
@@ -125,17 +151,24 @@ export function openInlineInstruction(view: EditorView): boolean {
   const { from, to } = lineBounds(view, range);
   const id = useAgentStore.getState().openInline({
     vaultId,
+    sessionId,
     range,
-    onSent: (sessionId) => {
-      const row = sessionRow(sessionId);
-      const b = lineBounds(view, range);
-      view.dispatch({ effects: [setInlineSpot.of(null), addSentMark.of({ ...b, sessionId, color: sessionColor(row ?? sessionId), label: sessionShortTitle(row) })] });
-      watchTurn(sessionId);
-      view.focus();
+    onSent: (target, clientId) => {
+      const holder = spotHolder(view, id);
+      if (!holder) return;
+      // The spot's range has mapped through every edit since the box opened
+      // (an agent edit above it, the person's typing).
+      const spot = agentMarks(holder.state).inline!;
+      const row = sessionRow(target);
+      const mark = { from: spot.from, to: spot.to, key: clientId, sessionId: target, color: sessionColor(row ?? target), label: sessionShortTitle(row) };
+      holder.apply({ effects: [setInlineSpot.of(null), addSentMark.of(mark)] });
+      watchTurn(target, clientId);
+      if (holder.state === view.state) view.focus();
     },
     onClose: () => {
-      if (agentMarks(view.state).inline?.id === id) view.dispatch({ effects: setInlineSpot.of(null) });
-      view.focus();
+      const holder = spotHolder(view, id);
+      holder?.apply({ effects: setInlineSpot.of(null) });
+      if (holder?.state === view.state) view.focus();
     },
   });
   view.dispatch({ effects: setInlineSpot.of({ id, pos: to, from, to }) });
@@ -143,7 +176,7 @@ export function openInlineInstruction(view: EditorView): boolean {
   return true;
 }
 
-function newSession(view: EditorView): boolean {
+export function newSession(view: EditorView): boolean {
   const vaultId = vaultOf(view);
   const root = vaultId ? vaultRootOf(vaultId) : null;
   const range = root ? selectedRange(view, root) : null;
@@ -153,29 +186,66 @@ function newSession(view: EditorView): boolean {
   return true;
 }
 
-// ── the sent marker ends with the session's turn ───────────────────────────
+// ── the sent marker ends with the turn that read it ────────────────────────
+//
+// Keyed by the sent message's client id, not the session: a session already
+// mid-turn reads a queued instruction only later, and two instructions to one
+// session each keep their own marker. The message has reached the agent once
+// its echo is in the transcript (or the store retired its pending bubble,
+// which it does on the echo); the marker ends when the session next stops
+// working after that.
 
-/** Sessions with a sent marker out, and whether each was seen working since. */
-const watched = new Map<string, { seenWorking: boolean; since: number }>();
+interface SentWatch {
+  sessionId: string;
+  since: number;
+  deliveredAt: number | null;
+  seenWorking: boolean;
+}
+
+/** A send never delivered (offline, refused) stops being watched after this. */
+const UNDELIVERED_MS = 30 * 60_000;
+/** A turn so short no working state was seen still ends the marker. */
+const QUICK_TURN_MS = 60_000;
+
+const watched = new Map<string, SentWatch>();
 let unwatch: (() => void) | null = null;
 
-function clearSentEverywhere(sessionId: string): void {
+function clearSentEverywhere(clientId: string): void {
   for (const b of codeBuffers.all()) {
-    if (agentMarks(currentState(b)).sent.some((s) => s.sessionId === sessionId)) updateBuffer(b, { effects: clearSentMarks.of(sessionId) });
+    if (agentMarks(currentState(b)).sent.some((s) => s.key === clientId)) updateBuffer(b, { effects: clearSentMarks.of(clientId) });
   }
 }
 
-function checkTurns(): void {
-  const s = useInboxStore.getState();
-  for (const [id, w] of watched) {
-    const row = s.sessions[id] as InboxSession | undefined;
-    const working = !!row && sessionWorkState(row) === "working";
+type InboxState = ReturnType<typeof useInboxStore.getState>;
+
+/** The agent has the message: its echo is in the transcript, or its pending
+ *  bubble is gone (retired on the echo). */
+export function sentDelivered(s: Pick<InboxState, "messages" | "pendingMessages">, sessionId: string, clientId: string): boolean {
+  if ((s.messages[sessionId] ?? []).some((m) => m.client_id === clientId && !m._isOptimistic && !m._isQueued)) return true;
+  return !(s.pendingMessages[sessionId] ?? []).some((m) => m._clientId === clientId || m._id === clientId);
+}
+
+/** One pass over the watched sends. Exported for tests. */
+export function checkSentTurns(s: InboxState = useInboxStore.getState(), now = Date.now()): void {
+  for (const [clientId, w] of watched) {
+    // A session created a moment ago may have been re-keyed to its real id.
+    const sid = s.resolveLiveSessionId?.(w.sessionId) ?? w.sessionId;
+    if (w.deliveredAt === null) {
+      if (sentDelivered(s, sid, clientId)) w.deliveredAt = now;
+      else {
+        if (now - w.since > UNDELIVERED_MS) {
+          watched.delete(clientId);
+          clearSentEverywhere(clientId);
+        }
+        continue;
+      }
+    }
+    const row = s.sessions[sid] as InboxSession | undefined;
+    const working = !!row && sessionWorkState(row, now) === "working";
     if (working) w.seenWorking = true;
-    // The turn this instruction started has ended (or never started within a
-    // few minutes: an offline session, a refused send).
-    else if (w.seenWorking || Date.now() - w.since > 10 * 60_000) {
-      watched.delete(id);
-      clearSentEverywhere(id);
+    else if (w.seenWorking || now - w.deliveredAt > QUICK_TURN_MS) {
+      watched.delete(clientId);
+      clearSentEverywhere(clientId);
     }
   }
   if (!watched.size) {
@@ -184,14 +254,12 @@ function checkTurns(): void {
   }
 }
 
-function watchTurn(sessionId: string): void {
-  watched.set(sessionId, { seenWorking: false, since: Date.now() });
+export function watchTurn(sessionId: string, clientId: string, now = Date.now()): void {
+  watched.set(clientId, { sessionId, since: now, deliveredAt: null, seenWorking: false });
   if (unwatch) return;
-  let last: unknown = null;
-  unwatch = useInboxStore.subscribe((s) => {
-    if (s.sessions === last) return;
-    last = s.sessions;
-    checkTurns();
+  unwatch = useInboxStore.subscribe((s, prev) => {
+    if (s.sessions === prev.sessions && s.messages === prev.messages && s.pendingMessages === prev.pendingMessages) return;
+    checkSentTurns(s);
   });
 }
 
@@ -202,7 +270,8 @@ function chipItem(view: EditorView): StatusItemView | null {
   dom.className = "cm-agent-chip";
   dom.style.display = "inline-flex";
   let vaultId = vaultOf(view);
-  if (vaultId) useAgentStore.getState().addChip(dom, vaultId);
+  const start = () => newSession(view);
+  if (vaultId) useAgentStore.getState().addChip(dom, vaultId, start);
   return {
     dom,
     update(u: ViewUpdate) {
@@ -210,7 +279,7 @@ function chipItem(view: EditorView): StatusItemView | null {
       if (next === vaultId) return;
       useAgentStore.getState().removeChip(dom);
       vaultId = next;
-      if (vaultId) useAgentStore.getState().addChip(dom, vaultId);
+      if (vaultId) useAgentStore.getState().addChip(dom, vaultId, start);
     },
     destroy: () => useAgentStore.getState().removeChip(dom),
   };
@@ -237,12 +306,11 @@ function watchConflicts(): void {
 
 // ── registration ───────────────────────────────────────────────────────────
 
-const run = (fn: (view: EditorView) => boolean) => (view: EditorView) => fn(view);
-
-const keys = Prec.high(
+/** Cmd-L and Cmd-K. Exported for mount tests. */
+export const agentKeys = Prec.high(
   keymap.of([
-    { key: "Mod-l", preventDefault: true, run: run((v) => withSession(v, (id) => quoteSelection(v, id))) },
-    { key: "Mod-k", preventDefault: true, run: run((v) => withSession(v, () => openInlineInstruction(v))) },
+    { key: "Mod-l", preventDefault: true, run: quoteToLinked },
+    { key: "Mod-k", preventDefault: true, run: (v) => openInlineInstruction(v, linkedOf(v)) },
   ]),
 );
 
@@ -264,7 +332,7 @@ export function registerAgentFeature(): void {
     labelOf: (id) => (id ? sessionShortTitle(sessionRow(id)) : "an agent (session unknown)"),
     mountInline: (id, host) => useAgentStore.getState().setInlineHost(id, host),
   });
-  registerEditorFeature(FEATURE, () => [agentMarksExtension(), keys, tracker], { needsVault: true });
+  registerEditorFeature(FEATURE, () => [agentMarksExtension(), agentKeys, tracker], { needsVault: true });
   registerStatusItem({ id: "agent.link", side: "right", order: 5, priority: 60, needsVault: true, create: chipItem });
   watchConflicts();
 
@@ -274,8 +342,8 @@ export function registerAgentFeature(): void {
     return view ? fn(view, args) : false;
   };
   registerCodeCommands({
-    "agent.quoteSelection": withView((v) => withSession(v, (id) => quoteSelection(v, id))),
-    "agent.inlineInstruction": withView((v) => withSession(v, () => openInlineInstruction(v))),
+    "agent.quoteSelection": withView(quoteToLinked),
+    "agent.inlineInstruction": withView((v) => openInlineInstruction(v, linkedOf(v))),
     "agent.newSession": withView((v) => newSession(v)),
     "agent.nextEdit": withView((v) => stepAgentEdit(v, 1)),
     "agent.prevEdit": withView((v) => stepAgentEdit(v, -1)),
@@ -287,7 +355,7 @@ export function registerAgentFeature(): void {
     "agent.pickSession": withView((v) => {
       const vaultId = vaultOf(v);
       if (!vaultId) return false;
-      useAgentStore.getState().openPicker({ vaultId, anchor: null });
+      useAgentStore.getState().openPicker({ vaultId, anchor: chipAnchor(v, vaultId), newSession: () => newSession(v) });
       return true;
     }),
   });

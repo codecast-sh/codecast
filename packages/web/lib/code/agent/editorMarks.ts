@@ -15,7 +15,7 @@
 // Everything maps through later edits, so a mark stays on its text while the
 // person types above it.
 
-import { Annotation, EditorSelection, EditorState, StateEffect, StateField, type ChangeDesc, type Extension, type Text, type Transaction } from "@codemirror/state";
+import { Annotation, Compartment, EditorSelection, EditorState, StateEffect, StateField, type ChangeDesc, type Extension, type Text, type Transaction } from "@codemirror/state";
 import { Decoration, EditorView, GutterMarker, ViewPlugin, WidgetType, gutter, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { externalChange } from "../fileSync";
 import { featureContext } from "../features";
@@ -69,6 +69,8 @@ export interface Flash {
 export interface SentMark {
   from: number;
   to: number;
+  /** The sent message's client id: the marker ends with that message's turn. */
+  key: string;
   sessionId: string;
   color: string;
   label: string;
@@ -97,6 +99,7 @@ export const dismissAgentEdits = StateEffect.define<"all" | number[]>();
 export const dropFlashes = StateEffect.define<number>(); // drop those due by this time
 export const addFlash = StateEffect.define<Flash>();
 export const addSentMark = StateEffect.define<SentMark>();
+/** Clears the marker of one sent message (its client id), or all. */
 export const clearSentMarks = StateEffect.define<string | "all">();
 export const setInlineSpot = StateEffect.define<InlineSpot | null>();
 
@@ -166,7 +169,7 @@ export const agentMarksField = StateField.define<AgentMarksState>({
       } else if (e.is(addSentMark)) {
         sent = [...sent.filter((s) => s.to < e.value.from || s.from > e.value.to), e.value];
       } else if (e.is(clearSentMarks)) {
-        sent = e.value === "all" ? [] : sent.filter((s) => s.sessionId !== e.value);
+        sent = e.value === "all" ? [] : sent.filter((s) => s.key !== e.value);
       } else if (e.is(setInlineSpot)) {
         inline = e.value;
       }
@@ -185,16 +188,28 @@ export const agentMarksField = StateField.define<AgentMarksState>({
   },
 });
 
+/** Holds the agent gutter only while the buffer has agent edits, so a file no
+ *  agent touched carries no empty strip beside the git gutter. */
+const gutterSlot = new Compartment();
+
 /** An external change (fileSync's adopt) gets its ranges marked as one agent
- *  edit per changed run, colored for the session most likely behind it. */
+ *  edit per changed run, colored for the session most likely behind it. The
+ *  first edit in a buffer brings the gutter in with it. */
 const markExternalChanges = EditorState.transactionExtender.of((tr) => {
-  if (!tr.docChanged || !tr.annotation(externalChange)) return null;
-  const ctx = tr.startState.facet(featureContext);
-  const sessionId = ctx ? hooks.writerOf(ctx.vaultId, ctx.path) : null;
-  const color = hooks.colorOf(sessionId);
-  const edits = changedRanges(tr).map((r) => ({ ...r, sessionId, color }));
-  if (!edits.length) return null;
-  return { effects: addAgentEdits.of({ edits, flashUntil: Date.now() + EDIT_FLASH_MS }) };
+  const effects: StateEffect<unknown>[] = [];
+  let adding = tr.effects.some((e) => e.is(addAgentEdits));
+  if (tr.docChanged && tr.annotation(externalChange)) {
+    const ctx = tr.startState.facet(featureContext);
+    const sessionId = ctx ? hooks.writerOf(ctx.vaultId, ctx.path) : null;
+    const color = hooks.colorOf(sessionId);
+    const edits = changedRanges(tr).map((r) => ({ ...r, sessionId, color }));
+    if (edits.length) {
+      effects.push(addAgentEdits.of({ edits, flashUntil: Date.now() + EDIT_FLASH_MS }));
+      adding = true;
+    }
+  }
+  if (adding && gutterSlot.get(tr.startState) !== editGutter) effects.push(gutterSlot.reconfigure(editGutter));
+  return effects.length ? { effects } : null;
 });
 
 // ── drawing ────────────────────────────────────────────────────────────────
@@ -355,6 +370,26 @@ const flashTimer = ViewPlugin.fromClass(
   },
 );
 
+/** Takes the gutter out once the last edit is dismissed. A microtask later,
+ *  because a view update cannot dispatch. */
+const gutterHider = ViewPlugin.fromClass(
+  class {
+    constructor(readonly view: EditorView) {
+      this.check();
+    }
+    update(u: ViewUpdate) {
+      if (u.startState.field(agentMarksField).edits !== u.state.field(agentMarksField).edits) this.check();
+    }
+    check() {
+      const idle = (st: EditorState) => !st.field(agentMarksField).edits.length && gutterSlot.get(st) === editGutter;
+      if (!idle(this.view.state)) return;
+      queueMicrotask(() => {
+        if (this.view.dom.isConnected && idle(this.view.state)) this.view.dispatch({ effects: gutterSlot.reconfigure([]) });
+      });
+    }
+  },
+);
+
 const escapeDismisses = EditorView.domEventHandlers({
   keydown(e, view) {
     if (e.key !== "Escape" || e.defaultPrevented) return false;
@@ -388,7 +423,7 @@ const theme = EditorView.baseTheme({
 });
 
 export function agentMarksExtension(): Extension {
-  return [agentMarksField, markExternalChanges, decorations, editGutter, flashTimer, escapeDismisses, theme];
+  return [agentMarksField, markExternalChanges, decorations, gutterSlot.of([]), gutterHider, flashTimer, escapeDismisses, theme];
 }
 
 // ── verbs ──────────────────────────────────────────────────────────────────

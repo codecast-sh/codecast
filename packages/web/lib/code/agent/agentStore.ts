@@ -19,17 +19,46 @@ export interface PickerRequest {
   /** Where to hang the menu (the status chip); null centers it. */
   anchor: { left: number; top: number; bottom: number } | null;
   then?: PickedThen;
+  /** What the pick is for, which the menu names: a Cmd-L quote, the target of
+   *  an inline instruction, or (absent) the folder's link itself. */
+  action?: "quote" | "instruct";
+  /** Start a new session here instead (the menu's "New session" row). Returns
+   *  false when there is nothing to start it from. */
+  newSession?: () => boolean;
 }
 
 export interface InlineRequest {
   id: number;
   vaultId: string;
+  /** The session this instruction goes to, fixed when the box opened and
+   *  changed only through the box's own picker: a re-ranked folder link never
+   *  moves it while the person types. Null asks on Enter. */
+  sessionId: string | null;
   /** The widget's host element in the editor, which the layer portals into. */
   host: HTMLElement | null;
   range: CodeRange;
   /** Called once the message is handed to the store. */
-  onSent(sessionId: string): void;
+  onSent(sessionId: string, clientId: string): void;
   onClose(): void;
+}
+
+/** The text typed into an open inline box, kept outside React and the store
+ *  (a keystroke writes neither) so the box gets it back when CodeMirror drops
+ *  its widget and draws it again: a scroll far away, a buffer switch. */
+const inlineDrafts = new Map<number, { text: string; focused: boolean }>();
+
+export function inlineDraft(id: number): { text: string; focused: boolean } {
+  let d = inlineDrafts.get(id);
+  if (!d) inlineDrafts.set(id, (d = { text: "", focused: false }));
+  return d;
+}
+
+/** A status bar chip's host, and its editor's way to start a session with the
+ *  selection quoted (the picker's "New session here"). */
+export interface ChipHost {
+  el: HTMLElement;
+  vaultId: string;
+  newSession?: () => boolean;
 }
 
 interface AgentStoreState {
@@ -45,8 +74,8 @@ interface AgentStoreState {
   picker: PickerRequest | null;
   inline: InlineRequest | null;
   /** The status bar chips' host elements (one per editor), portalled into. */
-  chips: ReadonlyArray<{ el: HTMLElement; vaultId: string }>;
-  addChip(el: HTMLElement, vaultId: string): void;
+  chips: ReadonlyArray<ChipHost>;
+  addChip(el: HTMLElement, vaultId: string, newSession?: () => boolean): void;
   removeChip(el: HTMLElement): void;
   setOverride(vaultId: string, value: LinkOverride): void;
   setLink(vaultId: string, link: AgentLink): void;
@@ -57,6 +86,7 @@ interface AgentStoreState {
   closePicker(): void;
   openInline(req: Omit<InlineRequest, "id" | "host">): number;
   setInlineHost(id: number, host: HTMLElement | null): void;
+  setInlineTarget(id: number, sessionId: string): void;
   closeInline(id?: number): void;
 }
 
@@ -72,9 +102,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   picker: null,
   inline: null,
   chips: [],
-  addChip: (el, vaultId) => {
+  addChip: (el, vaultId, newSession) => {
     if (get().chips.some((c) => c.el === el && c.vaultId === vaultId)) return;
-    set((s) => ({ chips: [...s.chips.filter((c) => c.el !== el), { el, vaultId }] }));
+    set((s) => ({ chips: [...s.chips.filter((c) => c.el !== el), { el, vaultId, newSession }] }));
   },
   removeChip: (el) => {
     if (!get().chips.some((c) => c.el === el)) return;
@@ -107,7 +137,11 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   closePicker: () => set({ picker: null }),
   openInline: (req) => {
     const id = ++inlineIds;
-    get().inline?.onClose();
+    const prev = get().inline;
+    if (prev) {
+      inlineDrafts.delete(prev.id);
+      prev.onClose();
+    }
     set({ inline: { ...req, id, host: null } });
     return id;
   },
@@ -116,9 +150,15 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     if (!cur || cur.id !== id || cur.host === host) return;
     set({ inline: { ...cur, host } });
   },
+  setInlineTarget: (id, sessionId) => {
+    const cur = get().inline;
+    if (!cur || cur.id !== id || cur.sessionId === sessionId) return;
+    set({ inline: { ...cur, sessionId } });
+  },
   closeInline: (id) => {
     const cur = get().inline;
     if (!cur || (id !== undefined && cur.id !== id)) return;
+    inlineDrafts.delete(cur.id);
     set({ inline: null });
   },
 }));

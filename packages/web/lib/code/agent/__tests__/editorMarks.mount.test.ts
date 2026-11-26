@@ -12,7 +12,7 @@ const { EditorView } = await import("@codemirror/view");
 const { featureBase } = await import("../../features");
 const { externalChange } = await import("../../fileSync");
 const marks = await import("../editorMarks");
-const { addSentMark, agentMarks, agentMarksExtension, dismissAgentEdits, dropFlashes, setAgentMarkHooks, stepAgentEdit } = marks;
+const { addSentMark, agentMarks, agentMarksExtension, clearSentMarks, dismissAgentEdits, dropFlashes, setAgentMarkHooks, stepAgentEdit } = marks;
 
 const writers: Record<string, string | null> = { "src/a.ts": "s1" };
 const restore = setAgentMarkHooks({
@@ -164,9 +164,9 @@ describe("]a / [a", () => {
 });
 
 describe("sent marker", () => {
-  const sent = (view: InstanceType<typeof EditorView>, line: number) => {
+  const sent = (view: InstanceType<typeof EditorView>, line: number, key = "c1") => {
     const l = view.state.doc.line(line);
-    view.dispatch({ effects: addSentMark.of({ from: l.from, to: l.to, sessionId: "s1", color: "c-s1", label: "Fix math" }) });
+    view.dispatch({ effects: addSentMark.of({ from: l.from, to: l.to, key, sessionId: "s1", color: "c-s1", label: "Fix math" }) });
   };
 
   it("shows 'sent to <session>' and maps through typing elsewhere", () => {
@@ -187,6 +187,28 @@ describe("sent marker", () => {
     sent(view, 3);
     view.dispatch({ changes: { from: view.state.doc.line(3).from, insert: "x" } });
     expect(agentMarks(view.state).sent).toEqual([]);
+    view.destroy();
+  });
+
+  it("clears one sent message's marker, leaving another to the same session", () => {
+    const view = mount();
+    sent(view, 2, "c1");
+    sent(view, 5, "c2");
+    view.dispatch({ effects: clearSentMarks.of("c1") });
+    expect(agentMarks(view.state).sent.map((x) => x.key)).toEqual(["c2"]);
+    view.destroy();
+  });
+});
+
+describe("the agent gutter", () => {
+  it("is there only while the buffer has agent edits", async () => {
+    const view = mount();
+    expect(view.dom.querySelector(".cm-agentGutter")).toBeNull();
+    adopt(view, 0, 3, "ONE");
+    expect(view.dom.querySelector(".cm-agentGutter")).not.toBeNull();
+    view.dispatch({ effects: dismissAgentEdits.of("all") });
+    await Promise.resolve();
+    expect(view.dom.querySelector(".cm-agentGutter")).toBeNull();
     view.destroy();
   });
 });
