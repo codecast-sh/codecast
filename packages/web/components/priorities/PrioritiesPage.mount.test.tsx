@@ -36,12 +36,12 @@ const days = lastDays(10, NOW);
 
 const step = (key: string, title: string, tier: "critical" | "polish", done = false, extra: Record<string, unknown> = {}) => ({ key, title, tier, tier_set_by: "pass", refs: [], done, ...extra });
 const sess = (tag: string, title: string, state: string, ageHours: number, extra: Record<string, unknown> = {}) => ({
-  short_id: `jx7${tag}`.slice(0, 7), conversation_id: fixtureId(tag), title, state, workflow: false, why: ["mapped"], last_active_at: NOW - ageHours * HOUR, ...extra,
+  short_id: `jx7${tag}`.slice(0, 7), conversation_id: fixtureId(tag), title, state, mine: true, workflow: false, why: ["mapped"], last_active_at: NOW - ageHours * HOUR, ...extra,
 });
-const links = (key: string, sessions: unknown[], extra: Record<string, unknown> = {}) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], ...extra });
+const links = (key: string, sessions: unknown[], extra: Record<string, unknown> = {}) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false, ...extra });
 const PL_1075 = { short_id: "pl-1075", title: "Every change merges green through one flow", done: 24, total: 37, size: 37 };
 const PL_619 = { short_id: "pl-619", title: "The whole platform program", done: 80, total: 140, size: 140 };
-const base = { summary: "", rank_set_by: "pass", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 0, session_count_more: false, sessions: [] as any[], status: "active" };
+const base = { summary: "", rank_set_by: "pass", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 0, session_count_more: false, sessions: [] as any[], status: "active", status_set_by: "pass", correction_pending: false };
 const counts = (steps: any[]) => ({ critical_done: steps.filter((s) => s.tier === "critical" && s.done).length, critical_total: steps.filter((s) => s.tier === "critical").length });
 const row = (id: number, title: string, rank: number | null, steps: any[], extra: Record<string, unknown> = {}) => ({ ...base, _id: `p${id}`, short_id: `pri-${id}`, title, rank, steps, counts: counts(steps), ...extra });
 
@@ -172,6 +172,69 @@ test("the bracket rail spans the lines one session covers; the plan sits on the 
     expect(pri2.querySelector("[data-milestone-detail]")!.textContent).toContain("Deploy redesign");
   } finally {
     await page.unmount();
+  }
+}, 60_000);
+
+test("a teammate's priority offers no action, and a teammate's ask on the viewer's milestone is not the viewer's to answer", async () => {
+  const theirs = ROWS.map((r) => ({ ...r, mine: false, user_id: "teammate", owner: "Bea" }));
+  const team = await mount(view({ rows: theirs, filters: readFilters(new URLSearchParams("mine=0")) }));
+  try {
+    expect(order(team.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5"]);
+    expect(team.container.querySelectorAll("[data-action]")).toHaveLength(0);
+  } finally {
+    await team.unmount();
+  }
+  // pri-1's ask belongs to a teammate's session: Resume the viewer's own, and nothing waits on them there.
+  const rows = ROWS.map((r) => (r.short_id !== "pri-1" ? r : { ...r, links: r.links!.map((l: any) => ({ ...l, sessions: l.sessions.map((x: any) => ({ ...x, mine: x.title !== "Change requests flow design" })) })) }));
+  const page = await mount(view({ rows }));
+  try {
+    expect(primaries(block(page.container, "pri-1")).map((a) => a.getAttribute("data-action"))).toEqual(["resume"]);
+    expect([...page.container.querySelectorAll("[data-waiting-item]")].map((a) => a.getAttribute("data-waiting-item"))).not.toContain(fixtureId("crflow"));
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("an ask on a polish milestone shows its Answer with polish collapsed; the phone has its own 44px Polish toggle", async () => {
+  const polishAsk = row(7, "Polish asks", 1, [step("s1", "Ship it", "critical"), step("p1", "Tidy the copy", "polish"), step("p2", "Other polish", "polish")], {
+    links: [links("s1", [sess("polshp", "Ship session", "dormant", 2)]), links("p1", [sess("polask", "Copy review", "needs_you", 1)]), links("p2", [])],
+  });
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(view({ rows: [polishAsk], layout }));
+    const { act } = React as any;
+    try {
+      const b = block(page.container, "pri-7");
+      expect(primaries(b).map((a) => a.getAttribute("data-action"))).toEqual(["answer"]);
+      expect(b.querySelector('[data-milestone="p1"] [data-action="answer"]')).not.toBeNull();
+      // Only the asking polish line shows until Polish opens.
+      expect(b.querySelector('[data-milestone="p2"]')).toBeNull();
+      const toggle = b.querySelector("[data-polish]") as HTMLElement;
+      if (layout === "phone") expect(toggle.className).toContain("h-11");
+      await act(async () => { toggle.click(); });
+      expect(b.querySelector('[data-milestone="p2"]')).not.toBeNull();
+    } finally {
+      await page.unmount();
+    }
+  }
+}, 60_000);
+
+test("Looks done?, correction pending and Stalled read on every width", async () => {
+  const marked = row(8, "Marked", 1, [step("s1", "All tasks closed", "critical"), step("s2", "Corrected", "critical")], {
+    first_seen_at: NOW - 30 * DAY, correction_pending: true,
+    links: [links("s1", [], { looks_done: true }), links("s2", [], { correction_pending: true })],
+  });
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(view({ rows: [marked], layout }));
+    try {
+      const b = block(page.container, "pri-8");
+      expect(b.querySelector('[data-milestone="s1"] [data-looks-done]')).not.toBeNull();
+      expect(b.querySelector('[data-milestone="s2"] [data-correction-pending]')).not.toBeNull();
+      // The pending correction is on a milestone: the header does not repeat it.
+      expect(b.querySelector("[data-priority-head] [data-correction-pending]")).toBeNull();
+      expect(b.querySelector("[data-priority-head] [data-stalled]")!.textContent).toBe("Stalled 30d");
+    } finally {
+      await page.unmount();
+    }
   }
 }, 60_000);
 

@@ -158,9 +158,12 @@ export type PriorityLinkedSession = {
   conversation_id: string;
   title: string;
   state: PrioritySessionState;
+  /** The viewer's own (or co-owned): only these ask the viewer anything; another's needs-you reads idle. */
+  mine: boolean;
   /** A step a workflow run spawned, not a session a person drives. */
   workflow: boolean;
   why: PriorityLinkWhy[];
+  /** Its last activity, to the 10 minutes (a heartbeat leaves the list's answer as it was). */
   last_active_at: number;
 };
 
@@ -176,6 +179,10 @@ export type PriorityMilestoneLinks = {
   /** Its own plan (never the priority's), and the big plans it is part of. */
   plan: PriorityPlanRef | null;
   part_of: PriorityPlanRef[];
+  /** Still open, but every task it names is done: "Looks done?". */
+  looks_done: boolean;
+  /** A correction on this milestone waits for the next pass. */
+  correction_pending: boolean;
 };
 
 /** A list answer: the rows, what it left out, and when the viewer's pass in the listed workspace runs. */

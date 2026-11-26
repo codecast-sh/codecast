@@ -55,6 +55,8 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
   const polish = model.milestones.filter((m) => m.tier === "polish");
   const wide = layout === "wide";
   const rail = filters.show.sessions && wide ? model.rail : null;
+  // Collapsed polish still shows the line holding the priority's action and any line asking the person: nothing waiting is out of sight.
+  const polishShown = polish.filter((m) => polishOpen ? !m.done || doneOpen : model.action?.milestone.key === m.key || m.sessions.some(asksPerson));
 
   const line = (m: MilestoneModel) => (
     <MilestoneLine
@@ -86,12 +88,12 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
         <ul>
           {critical.filter((m) => !m.done).map(line)}
           {doneOpen && critical.filter((m) => m.done).map(line)}
-          {polishOpen && polish.length > 0 && (
+          {polishShown.length > 0 && (
             <>
               <li aria-hidden className="ml-[26px] mt-0.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-sol-text-dim">
                 Polish <span className="h-px flex-1 bg-sol-border/50" />
               </li>
-              {polish.filter((m) => !m.done || doneOpen).map(line)}
+              {polishShown.map(line)}
             </>
           )}
         </ul>
@@ -124,6 +126,16 @@ function Progress({ model, layout, onToggle }: { model: PriorityModel; layout: L
     : <span className="flex items-center gap-1.5 px-1" title={`${d} of ${t} critical milestones done`}>{body}</span>;
 }
 
+/** Stalled, in words and a diamond so it reads without colour. */
+function StalledMark({ days, className }: { days: number; className?: string }) {
+  return <span data-stalled className={cn("shrink-0 items-center gap-1 whitespace-nowrap text-[11px] font-semibold text-sol-text", className)}><i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" />Stalled {days}d</span>;
+}
+
+/** "correction pending": the person's correction waits for the next pass. */
+function PendingMark() {
+  return <span data-correction-pending title="Your correction waits for the next pass" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-sol-text-dim"><i aria-hidden className="block size-[5px] rounded-full border border-sol-text-dim" />correction pending</span>;
+}
+
 /** Momentum: the ten days on the page's one scale, then how many landed and how long since, or how long stalled. */
 function Momentum({ model, todayIndex, peak, layout }: { model: PriorityModel; todayIndex: number; peak: number; layout: ListLayout }) {
   if (layout === "phone") return <DayStrip counts={model.counts} todayIndex={todayIndex} peak={peak} size="mini" />;
@@ -134,7 +146,7 @@ function Momentum({ model, todayIndex, peak, layout }: { model: PriorityModel; t
       <span className="hidden min-w-0 flex-col text-[11px] leading-[13px] [@container(min-width:44rem)]:flex">
         <span className="tabular-nums text-sol-text">{model.landed10} landed</span>
         {model.stalledDays != null
-          ? <span data-stalled className="inline-flex items-center gap-1 font-semibold text-sol-text"><i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" />Stalled {model.stalledDays}d</span>
+          ? <StalledMark days={model.stalledDays} className="inline-flex" />
           : <span className="tabular-nums text-sol-text-dim">{last == null ? "none yet" : last === 0 ? "last today" : `last ${last}d`}</span>}
       </span>
     </span>
@@ -180,6 +192,9 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           {row.title}
         </span>
         {!wide && model.today > 0 && <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
+        {/* Where the momentum column has no room for words (a narrow list, a phone), Stalled sits by the title. */}
+        {model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
+        {row.correction_pending && !model.milestones.some((m) => m.correctionPending) && <PendingMark />}
         {compact && model.action && <span data-compact-action className="ml-auto flex shrink-0"><ActionButton row={row} action={model.action} showSession={false} /></span>}
       </span>
       {/* One width on every wide row, so the compact view's actions line up. */}
@@ -203,6 +218,14 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           <span className="col-start-4 row-start-1"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
           <span className={C_MENU_PHONE}><RowMenu label={`More for ${row.title}`} shortId={row.short_id} layout={layout} /></span>
         </>
+      )}
+      {!wide && polish && !compact && (
+        <div data-meta className={cn(C_META, "flex items-center")}>
+          <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className="-ml-2 inline-flex h-11 items-center gap-0.5 whitespace-nowrap rounded px-2 text-meta text-sol-text-dim hover:bg-sol-bg-alt">
+            Polish <span className="tabular-nums">{polish.done}/{polish.total}</span>
+            <ChevronRight className={cn("size-3 transition-transform", polish.open && "rotate-90")} />
+          </button>
+        </div>
       )}
       {plan && wide && (
         <div data-meta className={cn(C_META, "flex min-h-6 items-center gap-1.5 overflow-hidden")}>
@@ -284,6 +307,8 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
         {step.title}
       </span>
       {wide && <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />}
+      {m.looksDone && <span data-looks-done title="Every task it names is done" className="inline-flex shrink-0 items-center rounded-full border border-sol-border px-1.5 text-[11px] leading-[18px] text-sol-text-muted">Looks done?</span>}
+      {m.correctionPending && <PendingMark />}
     </span>
   );
   return (
