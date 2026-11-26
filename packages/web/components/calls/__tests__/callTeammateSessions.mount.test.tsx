@@ -30,7 +30,12 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { CallSessionChips } = await import("../CallSessionChips");
 
+const roots: { unmount(): void }[] = [];
+
 afterAll(() => {
+  // Unmount first: a mounted chip row stays subscribed to the store and would
+  // re-render under the next file's mocks.
+  act(() => roots.forEach((r) => r.unmount()));
   closeDomWindow(dom);
   restoreGlobals();
   mock.module("next/navigation", () => realNav);
@@ -60,6 +65,7 @@ async function render() {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  roots.push(root);
   await act(() =>
     root.render(
       <ChipsWithPeople
