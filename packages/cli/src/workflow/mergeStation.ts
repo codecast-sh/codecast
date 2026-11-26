@@ -292,7 +292,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       if (!onto) return await fail(2, `git fetch origin ${into} failed`);
       const generated = readGenerators(exec, at, onto);
       if (generated.error) log(`${generated.error}: a conflict in generated files goes to the change's session`);
-      const rebased = rebaseOnto(exec, at, onto, generated.generators);
+      const rebased = rebaseOnto(exec, at, repo, onto, generated.generators);
       if ("conflicted" in rebased) {
         const was = git(at, "merge-base", "HEAD", onto).stdout.trim();
         const theirs = lines(git(at, "log", "--format=%h %s", "-n", "5", `${was}..${onto}`, "--", ...rebased.conflicted.map((f) => `:(literal)${f}`)).stdout);
@@ -428,10 +428,12 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
 /** Rebase the tree's HEAD onto `onto`. A stop whose conflicts are all files `generators` write takes `onto`'s side of
  *  them and goes on (`taken` names them, for their generators to write anew); any other conflict is aborted, leaving
  *  the tree as it was. */
-function rebaseOnto(exec: Exec, at: string, onto: string, generators: Generator[]): { sha: string; taken: string[] } | { conflicted: string[] } | { reason: string } {
+function rebaseOnto(exec: Exec, at: string, repo: string, onto: string, generators: Generator[]): { sha: string; taken: string[] } | { conflicted: string[] } | { reason: string } {
   const git = (...a: string[]) => exec("git", a, at);
   const taken = new Set<string>();
   if (git("merge-base", "--is-ancestor", onto, "HEAD").status !== 0) {
+    const blocked = clearUntrackedBlockers(exec, at, repo, onto);
+    if (blocked) return { reason: blocked };
     for (let step = git("rebase", "-q", onto), stops = 0; step.status !== 0; stops++) {
       const conflicted = lines(git("diff", "--name-only", "--diff-filter=U").stdout);
       // A stop that comes back however often it is resolved is no rebase going forward.
@@ -454,6 +456,29 @@ function rebaseOnto(exec: Exec, at: string, onto: string, generators: Generator[
     }
   }
   return { sha: git("rev-parse", "HEAD").stdout.trim(), taken: [...taken] };
+}
+
+/** An untracked file where `onto` tracks the same path stops a rebase ("untracked working tree files would be
+ *  overwritten"). One holding exactly `onto`'s bytes is a copy of what lands anyway, so it is removed; any other is
+ *  named, with the fix, rather than left to an unexplained failed rebase (ct-102042). The tree is the station's own
+ *  and goes when the merge stops; an untracked file in it was copied from the main checkout (`repo`) as the tree was
+ *  made, and every later merge copies it again, so the fix is made there. */
+function clearUntrackedBlockers(exec: Exec, at: string, repo: string, onto: string): string | null {
+  const git = (...a: string[]) => exec("git", a, at);
+  const untracked = git("ls-files", "-z", "--others", "--exclude-standard").stdout.split("\0").filter(Boolean);
+  if (!untracked.length) return null;
+  const incoming = new Set(git("ls-tree", "-r", "-z", "--name-only", onto).stdout.split("\0"));
+  const differing: string[] = [];
+  for (const f of untracked.filter((f) => incoming.has(f))) {
+    const theirs = git("rev-parse", `${onto}:${f}`).stdout.trim();
+    const ours = git("hash-object", "--", f).stdout.trim();
+    if (ours && ours === theirs) fs.rmSync(path.join(at, f));
+    else differing.push(f);
+  }
+  if (!differing.length) return null;
+  const one = differing.length === 1;
+  const listed = differing.slice(0, 5).join(", ") + (differing.length > 5 ? ` and ${differing.length - 5} more` : "");
+  return `untracked ${one ? "file" : "files"} ${listed} in ${repo} ${one ? "differs" : "differ"} from the default branch's tracked ${one ? "copy" : "copies"}, and every merge worktree copies ${one ? "it" : "them"} from there: commit, remove or move ${one ? "it" : "them"} in ${repo}, then merge again`;
 }
 
 /** Why a regenerated rebase's generated files are not what main's generators write at its head, or null when they

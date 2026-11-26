@@ -300,6 +300,17 @@ describe("withAgentConfigCopies", () => {
     expect(copyOf(m)).toContain(".mcp.json");
   });
 
+  test("only agent context travels: another session's untracked docs, markdown and scripts stay in the checkout", () => {
+    // The shape of ct-102042: a tracked AGENTS.md names an untracked script that another session is still writing.
+    commit("packages/web/AGENTS.md", "Record runs with `scripts/record-personal-reports.ts`.\n");
+    write("packages/web/scripts/record-personal-reports.ts", "export {}\n");
+    write("packages/cli/src/workflow/templates/personal/ship.md", "wip\n");
+    write("docs/draft.txt", "wip\n");
+    write("packages/web/CLAUDE.local.md", "personal\n");
+    const m = withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false, warn });
+    expect(copyOf(m)).toEqual(["packages/web/CLAUDE.local.md"]);
+  });
+
   test("a file under a symlinked component is skipped with a warning; the rest still ships", () => {
     commit("README.md");
     const shared = fs.mkdtempSync(path.join(os.tmpdir(), "ws-shared-"));
@@ -368,14 +379,14 @@ describe("withAgentConfigCopies", () => {
 
   test("a path in the user's cloud_mirror_exclude stays out of the worktree copy list", () => {
     commit(".gitignore", ".sim/\n");
-    write(".sim/run/notes.md");
+    write(".sim/run/AGENTS.md");
     write(".sim/assets/frame.png");
     write("CLAUDE.local.md");
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "ws-config-"));
     const previous = process.env.CODECAST_DIR;
     process.env.CODECAST_DIR = configDir;
     try {
-      expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toContain(".sim/run/notes.md");
+      expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toContain(".sim/run/AGENTS.md");
       fs.writeFileSync(path.join(configDir, "config.json"), JSON.stringify({ cloud_mirror_exclude: ".sim" }));
       expect(copyOf(withAgentConfigCopies(emptyManifest(), repo, { isInputRoot: false }))).toEqual(["CLAUDE.local.md"]);
     } finally {

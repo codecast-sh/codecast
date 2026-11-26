@@ -220,7 +220,8 @@ describe("line.cast offline run through the session path", () => {
   test("a malformed profile stops the run before any hand starts", async () => {
     spawnSync("git", ["init", "-q", tmpDir]);
     fs.mkdirSync(path.join(tmpDir, ".codecast"));
-    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), "[line]\nsize_budjet = 400\n");
+    // An unknown key is only warned about (lineProfile.ts warnUnknown), so the malformed value is one of the wrong type.
+    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), "[line]\nsize_budget = \"four hundred\"\n");
     const origErr = console.error;
     console.error = () => {};
     try {
