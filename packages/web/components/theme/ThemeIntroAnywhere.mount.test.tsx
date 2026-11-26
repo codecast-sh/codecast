@@ -82,6 +82,34 @@ test("a card already up goes down once the person starts composing, without bein
   expect(fake.dismissed).toContain("theme-intro");
   expect(fake.writes.filter((w) => "theme_intro_seen" in w)).toEqual([]);
 
-  await act(async () => root.unmount());
+  // With the composer empty again, the gate raises it once more.
+  ta.value = "";
+  await act(async () => { await sleep(ORG_MEET_SETTLE_MS + 1200 + 150); });
+  expect(fake.toasts.map((t) => t.id)).toEqual(["theme-intro"]);
+
+  // The person's own answers still mark it seen: Done, All themes, a swipe.
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const cardRoot = createRoot(host);
+  const press = async (label: string) => {
+    await act(async () => cardRoot.render(fake.toasts[0].render("theme-intro")));
+    const button = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === label)!;
+    await act(async () => button.click());
+  };
+  await press("Done");
+  expect(fake.writes).toEqual([{ theme_intro_seen: true }]);
+
+  for (const answer of ["All themes", "swipe"]) {
+    fake.writes = [];
+    delete fake.state.clientState.ui.theme_intro_seen;
+    fake.toasts = [];
+    (window as any).__showThemeIntro();
+    if (answer === "swipe") fake.toasts[0].onDismiss?.();
+    else await press(answer);
+    expect(fake.writes).toEqual([{ theme_intro_seen: true }]);
+  }
+
+  await act(async () => { cardRoot.unmount(); root.unmount(); });
+  host.remove();
   ta.remove();
 }, 120_000);

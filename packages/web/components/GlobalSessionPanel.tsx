@@ -24,7 +24,7 @@ import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewCo
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
-import { makeCollectionSig } from "../store/wakeSig";
+import { makeCollectionSig, rowSigExcluding } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
@@ -1646,6 +1646,13 @@ function SessionBeacon({
 // Memoized (see the export at the bottom of the file): the layout re-renders
 // often with identical props, and every un-memoized pass here rebuilt ~100
 // cards' worth of elements.
+// UI prefs the list never draws from. A swatch press writes color_theme, and
+// waking on the whole prefs object re-rendered the whole list on each one
+// (ct-101513).
+const LIST_IGNORED_UI_KEYS: ReadonlySet<string> = new Set(
+  ["color_theme", "theme_intro_seen"].flatMap((k) => [k, `${k}:ts`]),
+);
+
 // The declared status a status section's header already says, so a card under
 // it does not repeat it as a chip.
 const SECTION_DECLARED_STATUS: Record<string, ThreadStateStatus | undefined> = {
@@ -1660,7 +1667,7 @@ function SessionListPanelImpl({
   activeSessionId?: string | null;
 }) {
   const s = useTrackedStore([
-    s => s.clientState.ui,
+    s => rowSigExcluding(s.clientState.ui, LIST_IGNORED_UI_KEYS),
     // Team-mode active set + viewer identity — gate the scope pre-filter below.
     s => teamInboxIdsOf(s),
     s => s.currentUser?._id,
