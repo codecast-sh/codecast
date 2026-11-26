@@ -193,6 +193,39 @@ describe("a milestone holding a session the person placed survives the pass", ()
   });
 });
 
+describe("past 500 sessions on one priority", () => {
+  test("a drop, the pass's merge and the person's merge each reach every session", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const make = (priority: Id<"priorities">, n: number, step?: string) => w.t.run(async (ctx) => {
+      for (let i = 0; i < n; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: w.ana, agent_type: "claude_code", session_id: `jx7m${priority}${i}`, team_id: w.acme, is_private: false, team_visibility: "full",
+          started_at: 1, updated_at: 1, message_count: 1, status: "active", priority_id: priority, ...(step ? { priority_step_key: step } : {}),
+        } as any);
+      }
+    });
+    const on = (priority: Id<"priorities">, step?: string) => w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_priority", (q) => q.eq("priority_id", priority)).collect()).filter((c) => step === undefined || c.priority_step_key === step).length);
+    await make(p1._id, 510, "s3");
+    await as(w, w.ana).mutation(pri.dropStep, { short_id: "pri-1", step_key: "s3" });
+    expect(await on(p1._id, "s3")).toBe(0);
+    const priority = (short_id: string) => w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", ai_rank: 5, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1,
+    } as any));
+    const p8 = await priority("pri-8");
+    await make(p8, 505);
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [{ short_id: "pri-8", merged_into: "pri-1", step_keys: {} }], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    expect(await on(p8)).toBe(0);
+    const p9 = await priority("pri-9");
+    await make(p9, 505);
+    await as(w, w.ana).mutation(pri.merge, { short_id: "pri-9", into: "pri-1" });
+    expect(await on(p9)).toBe(0);
+  }, 120_000);
+});
+
 describe("milestone keys from before the mark", () => {
   test("a priority with no mark takes it from its milestones and its sessions' keys the first time it is written; a new key past a session's old one", async () => {
     const w = await seeded();

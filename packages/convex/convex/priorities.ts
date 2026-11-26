@@ -20,7 +20,7 @@ import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWo
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { hasOkRun, moveCorrections, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
+import { hasOkRun, moveCorrections, runBlocker, sessionMover } from "./priorityPassRun";
 import { backfillGroup, legacy } from "./priorityRankBackfill";
 import { activeGroup } from "./lib/priorityGroup";
 import { inWorkspace } from "./priorityPassInputs";
@@ -718,7 +718,7 @@ async function doMilestone(ctx: Ctx, viewer: Id<"users">, shortId: string, stepK
   await ctx.db.patch(p._id, { steps: p.steps.map((s) => (s.key === step.key ? next : s)), updated_at: now });
   // A drop takes the milestone off the sessions on it; they keep the priority.
   if ("drop" in change) {
-    for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).take(SESSION_COUNT_CAP)) {
+    for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).collect()) {
       if (conv.priority_step_key === step.key) await ctx.db.patch(conv._id, { priority_step_key: undefined });
     }
   }
@@ -778,8 +778,9 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
   if (String(p._id) === String(into._id)) return { error: "a priority cannot be merged into itself" };
   if (p.workspace !== into.workspace) return { error: `${p.short_id} and ${into.short_id} are in different workspaces` };
   const now = Date.now();
-  const sessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).take(SESSION_COUNT_CAP);
-  const intoSessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", into._id)).take(SESSION_COUNT_CAP);
+  // Every session of both, however many: none is left on the merged one, and no key one holds is handed out again.
+  const sessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).collect();
+  const intoSessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", into._id)).collect();
   let next = Math.max(into.step_key_max ?? 0, ...into.steps.map((s) => keyNumber(s.key)), ...intoSessions.map((c) => keyNumber(c.priority_step_key)));
   const remap = new Map<string, string>();
   const carried = p.steps.map((s) => {

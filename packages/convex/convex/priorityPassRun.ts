@@ -408,7 +408,8 @@ export const applyPlan = internalMutation({
         const removing = new Set(row.steps.filter((st) => !st.dropped && !proposedKeys.has(st.key)).map((st) => st.key));
         const anchored = new Set<string>();
         if (removing.size) {
-          for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).take(SESSION_COUNT_CAP)) {
+          // The newest first: past SESSION_COUNT_CAP, the ones a person placed most recently are the ones seen.
+          for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).order("desc").take(SESSION_COUNT_CAP)) {
             if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key && removing.has(conv.priority_step_key)) anchored.add(conv.priority_step_key);
           }
         }
@@ -447,7 +448,7 @@ export const applyPlan = internalMutation({
       const step_keys: Record<string, string> = { ...(m.step_keys ?? {}) };
       const survivorLive = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
       const held = new Set<string>();
-      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).take(SESSION_COUNT_CAP)) {
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).collect()) {
         if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key) held.add(conv.priority_step_key);
       }
       const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
@@ -510,7 +511,8 @@ export const applyPlan = internalMutation({
     for (const [from, { into, intoRow, step_keys }] of mergedInto) {
       // The survivor's milestones after this write; a session's milestone follows the merge's map when it is live there.
       const live = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
-      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
+      // Every one of them, however many: a merge leaves none behind on a merged priority.
+      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).collect();
       for (const conv of left) {
         if (!(await inWorkspace(vis, conv, args.user_id, args.workspace))) continue;
         const not = (conv.priority_not ?? []).some((id) => String(id) === String(into));
@@ -521,7 +523,7 @@ export const applyPlan = internalMutation({
 
     // A session on a milestone this plan removed, or on a key no milestone holds (left from before), keeps the priority, step unknown, whoever put it there.
     for (const [id, live] of gone) {
-      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP)) {
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).collect()) {
         if (conv.priority_step_key && !live.has(conv.priority_step_key)) await ctx.db.patch(conv._id, { priority_step_key: undefined });
       }
     }
