@@ -69,8 +69,12 @@ export function HandToAgentReview({ channelId, rootKey, message, preview, onClos
 
   const ledger = handLedger({ ...facts, ...(preview ? { preview } : {}), agentType, folder, machine: machine ? deviceDisplayName(machine) : null, machineOffline: !!machine && !(machine as any).online });
   const start = () => {
-    const stub = useInboxStore.getState().handThreadToAgent({ message, rootKey, agentType, projectPath: folder, targetDeviceId: machine?.device_id ?? null });
+    const st = useInboxStore.getState();
+    const stub = st.handThreadToAgent({ message, rootKey, agentType, projectPath: folder, targetDeviceId: machine?.device_id ?? null });
     onClose(stub);
+    // The person just started this agent: open it, the way every other
+    // composer that starts a session does (ct-102011).
+    if (stub) st.requestNavigate(stub, { source: "gesture" });
   };
 
   return (
