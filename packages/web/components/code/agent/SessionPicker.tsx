@@ -3,7 +3,7 @@
 // and runs whatever action was waiting on a session (Cmd-L with no link).
 
 import { memo, useMemo, useRef, useState } from "react";
-import { Ban } from "lucide-react";
+import { Ban, Plus } from "lucide-react";
 import { useInboxStore, sessionWorkState, type InboxSession } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { KeyCap } from "../../KeyCap";
@@ -11,8 +11,8 @@ import { hoverFocus } from "../../../shortcuts/focusSource";
 import { modernDialog } from "../../ui/modernLook";
 import { formatRelativeTime } from "../../../lib/conversationFormat";
 import { useAgentStore, type PickerRequest } from "../../../lib/code/agent/agentStore";
-import { agentSessionsSig, steerableRow } from "../../../lib/code/agent/live";
-import { candidateSessions, type AgentSessionRow } from "../../../lib/code/agent/sessions";
+import { placeCandidates, steerableRow, vaultAgentSig, vaultMachineOf } from "../../../lib/code/agent/live";
+import type { AgentSessionRow } from "../../../lib/code/agent/sessions";
 import { SessionMark } from "./SessionMark";
 
 const STATE_COLOR: Record<string, string> = {
@@ -25,15 +25,18 @@ const STATE_COLOR: Record<string, string> = {
 const STATE_LABEL: Record<string, string> = { working: "Working", needs_input: "Needs input", done: "Done", dormant: "Dormant", idle: "Idle" };
 
 const WIDTH = 380;
+/** The option keys of the "New session here" and "None" rows; a session row's
+ *  key is its id. */
+const NEW = "\u0000new";
+const NONE = "\u0000none";
 
 export const SessionPicker = memo(function SessionPicker({ request, root }: { request: PickerRequest; root: string | null }) {
   const { vaultId } = request;
-  const sig = useInboxStore((s) => agentSessionsSig(s.sessions as Record<string, InboxSession>));
+  const sig = useInboxStore((s) => (root ? vaultAgentSig(s, { root, machine: vaultMachineOf(vaultId, s) }) : ""));
   const linked = useAgentStore((s) => s.links[vaultId]?.sessionId ?? null);
   const rows = useMemo(() => {
     const s = useInboxStore.getState();
-    const viewer = (s.currentUser as { _id?: unknown } | null)?._id;
-    const list: AgentSessionRow[] = candidateSessions(Object.values(s.sessions) as AgentSessionRow[], root, viewer ? String(viewer) : null);
+    const list: AgentSessionRow[] = root ? placeCandidates(s, { root, machine: vaultMachineOf(vaultId, s) }) : [];
     // The linked session stays listed even when it works elsewhere (beside).
     if (linked && !list.some((r) => r._id === linked)) {
       const row = steerableRow(s, linked);
@@ -41,10 +44,17 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
     }
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sig, root, linked]);
+  }, [sig, root, linked, vaultId]);
   const now = Date.now();
-  const options: Array<string | null> = [...rows.map((r) => r._id), null];
-  const [selected, setSelected] = useState(() => Math.max(0, options.indexOf(linked)));
+  // Sessions, then "New session here", then None. Rows re-sort by activity while
+  // the picker is open, so the selection is held by key, never by position:
+  // Enter acts on the row that was highlighted when the person pressed it.
+  const options: string[] = [...rows.map((r) => r._id), NEW, NONE];
+  const [selectedKey, setSelectedKey] = useState<string>(() => (linked && options.includes(linked) ? linked : request.action ? options[0] : NONE));
+  // A selected session that left the list highlights nothing and Enter does
+  // nothing until an arrow picks a row again.
+  const selected = options.indexOf(selectedKey);
+  const move = (by: number) => setSelectedKey(options[selected < 0 ? 0 : Math.max(0, Math.min(options.length - 1, selected + by))]);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useWatchEffect(() => {
@@ -52,12 +62,20 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
   }, []);
 
   const close = () => useAgentStore.getState().closePicker();
-  const pick = (id: string | null) => {
+  const pick = (key: string) => {
     const st = useAgentStore.getState();
+    const id = key === NONE ? null : key;
+    if (key === NEW) {
+      st.closePicker();
+      if (!request.newSession?.() && root) useInboxStore.getState().openCompose("", { projectPath: root });
+      return;
+    }
     st.setOverride(vaultId, id ?? "none");
     st.closePicker();
     if (id) request.then?.(id);
   };
+  const verb = request.action === "quote" ? "quote" : request.action === "instruct" ? (request.then ? "send" : "pick") : "link";
+  const title = request.action === "quote" ? "Quote to" : request.action === "instruct" ? "Instruction to" : "Linked session";
 
   const a = request.anchor;
   const style: React.CSSProperties = a
@@ -67,7 +85,7 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
   return (
     <div role="dialog" aria-modal="true" aria-label="Link a session" className="fixed inset-0 z-[70]" onMouseDown={close}>
       <div style={style} className={`overflow-hidden rounded-lg border border-sol-border/50 bg-sol-card shadow-2xl ${modernDialog({ scroll: false })}`} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="border-b border-sol-border/30 px-3 py-1.5 text-meta text-sol-text-dim">{request.then ? "Send to" : "Linked session"}</div>
+        <div className="border-b border-sol-border/30 px-3 py-1.5 text-meta text-sol-text-dim">{title}</div>
         <div
           ref={listRef}
           tabIndex={-1}
@@ -80,27 +98,27 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
               close();
             } else if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n") || e.key === "j") {
               e.preventDefault();
-              setSelected((i) => Math.min(options.length - 1, i + 1));
+              move(1);
             } else if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "p") || e.key === "k") {
               e.preventDefault();
-              setSelected((i) => Math.max(0, i - 1));
+              move(-1);
             } else if (e.key === "Enter") {
               e.preventDefault();
-              pick(options[selected] ?? null);
+              if (selected >= 0) pick(selectedKey);
             }
           }}
         >
-          {rows.map((r, i) => {
+          {rows.map((r) => {
             const state = sessionWorkState(r as InboxSession, now);
             return (
               <button
                 key={r._id}
                 type="button"
                 role="option"
-                aria-selected={i === selected}
+                aria-selected={r._id === selectedKey}
                 onClick={() => pick(r._id)}
-                {...hoverFocus(() => setSelected(i))}
-                className={`flex w-full items-center gap-2.5 px-3 py-1 text-left text-[13px] ${i === selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"}`}
+                {...hoverFocus(() => setSelectedKey(r._id))}
+                className={`flex w-full items-center gap-2.5 px-3 py-1 text-left text-[13px] ${r._id === selectedKey ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"}`}
               >
                 <span className="size-1.5 shrink-0 rounded-full" style={{ background: STATE_COLOR[state] }} title={STATE_LABEL[state]} />
                 <SessionMark id={r._id} className="flex-1" />
@@ -109,14 +127,25 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
               </button>
             );
           })}
-          {rows.length === 0 && <div className="px-3 py-2 text-meta text-sol-text-dim">No sessions in this folder</div>}
+          {rows.length === 0 && <div className="px-3 py-1.5 text-meta text-sol-text-dim">No sessions in this folder</div>}
           <button
             type="button"
             role="option"
-            aria-selected={selected === options.length - 1}
-            onClick={() => pick(null)}
-            {...hoverFocus(() => setSelected(options.length - 1))}
-            className={`flex w-full items-center gap-2.5 border-t border-sol-border/30 px-3 py-1 text-left text-[13px] ${selected === options.length - 1 ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"}`}
+            aria-selected={selectedKey === NEW}
+            onClick={() => pick(NEW)}
+            {...hoverFocus(() => setSelectedKey(NEW))}
+            className={`flex w-full items-center gap-2.5 border-t border-sol-border/30 px-3 py-1 text-left text-[13px] ${selectedKey === NEW ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"}`}
+          >
+            <Plus className="h-3 w-3 shrink-0 opacity-60" />
+            <span className="flex-1">New session here</span>
+          </button>
+          <button
+            type="button"
+            role="option"
+            aria-selected={selectedKey === NONE}
+            onClick={() => pick(NONE)}
+            {...hoverFocus(() => setSelectedKey(NONE))}
+            className={`flex w-full items-center gap-2.5 px-3 py-1 text-left text-[13px] ${selectedKey === NONE ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"}`}
           >
             <Ban className="h-3 w-3 shrink-0 opacity-60" />
             <span className="flex-1">None</span>
@@ -125,7 +154,7 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
         </div>
         <div className="flex items-center gap-4 border-t border-sol-border/30 px-3 py-1.5 text-meta text-sol-text-dim">
           <span className="flex items-center gap-1">
-            <KeyCap size="xs">↵</KeyCap> link
+            <KeyCap size="xs">↵</KeyCap> {verb}
           </span>
           <span className="flex items-center gap-1">
             <KeyCap size="xs">Esc</KeyCap> cancel

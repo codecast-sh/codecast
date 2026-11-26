@@ -15,7 +15,7 @@ import { Link2Off } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useAgentStore } from "../../../lib/code/agent/agentStore";
-import { computeVaultAgentState, vaultAgentSig } from "../../../lib/code/agent/live";
+import { computeVaultAgentState, vaultAgentSig, vaultMachineOf } from "../../../lib/code/agent/live";
 import { InlineInstruction } from "./InlineInstruction";
 import { SessionMark } from "./SessionMark";
 import { SessionPicker } from "./SessionPicker";
@@ -35,18 +35,19 @@ function useAgentLinking(vaultId: string, root: string | null): void {
     const recompute = (force: boolean) => {
       const s = useInboxStore.getState();
       const override = useAgentStore.getState().overrides[vaultId];
-      const sig = vaultAgentSig(s, root);
+      const place = { root, machine: vaultMachineOf(vaultId, s) };
+      const sig = vaultAgentSig(s, place);
       if (!force && sig === lastSig && override === lastOverride) return;
       lastSig = sig;
       lastOverride = override;
-      const next = computeVaultAgentState(s, root, override);
       const agent = useAgentStore.getState();
+      const next = computeVaultAgentState(s, place, override, agent.links[vaultId]);
       agent.setLink(vaultId, next.link);
       agent.setPresence(vaultId, root, next.index, next.digest);
     };
     recompute(true);
     const offInbox = useInboxStore.subscribe((s, prev) => {
-      if (s.sessions === prev.sessions && s.messages === prev.messages && s.tabs === prev.tabs && s.activeTabId === prev.activeTabId && s.currentSessionId === prev.currentSessionId) return;
+      if (s.sessions === prev.sessions && s.messages === prev.messages && s.tabs === prev.tabs && s.activeTabId === prev.activeTabId && s.currentSessionId === prev.currentSessionId && s.localDevice === prev.localDevice) return;
       recompute(false);
     });
     const offAgent = useAgentStore.subscribe((s, prev) => {
@@ -63,7 +64,7 @@ function useAgentLinking(vaultId: string, root: string | null): void {
 
 /** The status bar chip: the linked session, and how many quotes wait in its
  *  composer. A press opens the picker. */
-const AgentChip = memo(function AgentChip({ vaultId, host }: { vaultId: string; host: HTMLElement }) {
+const AgentChip = memo(function AgentChip({ vaultId, host, newSession }: { vaultId: string; host: HTMLElement; newSession?: () => boolean }) {
   const link = useAgentStore((s) => s.links[vaultId]);
   const id = link?.sessionId ?? null;
   const queued = useInboxStore((s) => (id ? (s.reviewComments[id]?.length ?? 0) : 0));
@@ -75,7 +76,7 @@ const AgentChip = memo(function AgentChip({ vaultId, host }: { vaultId: string; 
       title={id ? `Linked session (${how}). Click to change` : "No linked session. Click to pick one"}
       onClick={() => {
         const rect = host.getBoundingClientRect();
-        useAgentStore.getState().openPicker({ vaultId, anchor: { left: rect.left, top: rect.top, bottom: rect.bottom } });
+        useAgentStore.getState().openPicker({ vaultId, anchor: { left: rect.left, top: rect.top, bottom: rect.bottom }, newSession });
       }}
       className="inline-flex max-w-[220px] items-center gap-1.5 rounded px-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
     >
@@ -103,7 +104,7 @@ export const AgentLayer = memo(function AgentLayer({ vaultId, root }: { vaultId:
   const inline = useAgentStore((s) => (s.inline?.vaultId === vaultId ? s.inline : null));
   return (
     <>
-      {chips.filter((c) => c.vaultId === vaultId).map((c, i) => createPortal(<AgentChip vaultId={vaultId} host={c.el} />, c.el, `chip${i}`))}
+      {chips.filter((c) => c.vaultId === vaultId).map((c, i) => createPortal(<AgentChip vaultId={vaultId} host={c.el} newSession={c.newSession} />, c.el, `chip${i}`))}
       {inline?.host && createPortal(<InlineInstruction key={inline.id} request={inline} />, inline.host)}
       {picker && <SessionPicker request={picker} root={root} />}
     </>
