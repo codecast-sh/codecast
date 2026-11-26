@@ -66,6 +66,7 @@ describe("reservation-specific lock", () => {
     ["missing token", JSON.stringify({ pid: process.pid })],
     ["empty token", JSON.stringify({ pid: process.pid, token: "" })],
     ["invalid group", JSON.stringify({ pid: process.pid, pgid: "x", token: "holder" })],
+    ["invalid start time", JSON.stringify({ pid: process.pid, pgid: 1, started: 5, token: "holder" })],
   ])("does not reclaim a lock with %s metadata", async (_label, contents) => {
     fs.writeFileSync(lock, contents!);
     const inode = fs.statSync(lock).ino;
@@ -183,13 +184,29 @@ describe("reservation-specific lock", () => {
     expect(fs.existsSync(lock)).toBe(false);
   });
 
-  test("a dead owner that left nothing running is reclaimed, and the caller enters", async () => {
-    const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" });
+  /** A process that led its own group (as a station does) and has exited. */
+  async function deadLeader(): Promise<number> {
+    const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "ignore", stderr: "ignore", detached: true });
     expect(await child.exited).toBe(0);
-    fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, token: "dead-holder" }));
+    return child.pid;
+  }
+
+  test("a dead owner that led its group and left nothing running is reclaimed, and the caller enters", async () => {
+    const pid = await deadLeader();
+    fs.writeFileSync(lock, JSON.stringify({ pid, pgid: pid, token: "dead-holder" }));
     expect(await withPortReservations(root, async () => JSON.parse(fs.readFileSync(lock, "utf8")).pid)).toBe(process.pid);
     expect(fs.existsSync(lock)).toBe(false);
     expect(fs.readdirSync(directory)).toEqual(["repositories.json"]);
+  });
+
+  test("a dead owner whose lock names no group (an older cast's) fails closed with its path for manual recovery", async () => {
+    const pid = await deadLeader();
+    const contents = JSON.stringify({ pid, token: "dead-holder" });
+    fs.writeFileSync(lock, contents);
+    const callback = mock(async () => "entered");
+    await expect(withPortReservations(root, callback)).rejects.toThrow(`Workspace port reservations have an interrupted owner (pid ${pid}); inspect remaining child processes before manually removing ${lock}`);
+    expect(callback).not.toHaveBeenCalled();
+    expect(fs.readFileSync(lock, "utf8")).toBe(contents);
   });
 
   test("a dead owner whose child still runs in its group fails closed with its path for manual recovery", async () => {
@@ -198,7 +215,7 @@ describe("reservation-specific lock", () => {
     const survivor = Number((await new Response(owner.stdout).text()).trim());
     await owner.exited;
     try {
-      const contents = JSON.stringify({ pid: owner.pid, token: "dead-holder" });
+      const contents = JSON.stringify({ pid: owner.pid, pgid: owner.pid, token: "dead-holder" });
       fs.writeFileSync(lock, contents);
       const callback = mock(async () => "entered");
       await expect(withPortReservations(root, callback)).rejects.toThrow(`inspect remaining child processes before manually removing ${lock}`);
@@ -209,7 +226,9 @@ describe("reservation-specific lock", () => {
     }
   });
 
-  test.each([
+  // An orphan is told from a sibling by its adoption by launchd (pid 1), which only macOS promises: elsewhere a
+  // subreaper may adopt it, and a non-leader owner's lock is never reclaimed there.
+  test.skipIf(process.platform !== "darwin").each([
     ["holds an orphan, fails closed", "sleep 60 >/dev/null 2>&1 & echo $$", true],
     ["holds no orphan, is reclaimed", "echo $$", false],
   ])("a dead owner that ran inside another's living group that %s", async (_label, inner, refused) => {
@@ -239,11 +258,37 @@ describe("reservation-specific lock", () => {
     }
   });
 
-  test("records the owner's process group", async () => {
+  test("an owner whose pid now names a process started at another time is gone, and its lock is reclaimed", async () => {
+    // This process stands in for whatever was handed the dead owner's pid; the owner's own group is gone.
+    const group = await deadLeader();
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, pgid: group, started: "Mon Jan 1 00:00:00 2001", token: "dead-holder" }));
+    if (process.platform === "darwin") {
+      expect(await withPortReservations(root, async () => "entered")).toBe("entered");
+      expect(fs.existsSync(lock)).toBe(false);
+    } else {
+      await expect(withPortReservations(root, async () => "entered")).rejects.toThrow("interrupted owner");
+    }
+  });
+
+  test("an owner alive since the start time its lock records keeps it", async () => {
+    await withPortReservations(root, async () => {
+      const contents = fs.readFileSync(lock, "utf8");
+      const clock = expireWait();
+      try {
+        await expect(withPortReservations(root, async () => "entered")).rejects.toThrow("Timed out waiting for workspace port reservations");
+      } finally {
+        clock.mockRestore();
+      }
+      expect(fs.readFileSync(lock, "utf8")).toBe(contents);
+    });
+  });
+
+  test("records the owner's process group and start time", async () => {
     await withPortReservations(root, async () => {
       const owner = JSON.parse(fs.readFileSync(lock, "utf8"));
-      const ps = Bun.spawnSync(["ps", "-o", "pgid=", "-p", String(process.pid)]);
-      expect(owner.pgid).toBe(Number(ps.stdout.toString().trim()));
+      const [pgid, ...started] = Bun.spawnSync(["ps", "-o", "pgid=,lstart=", "-p", String(process.pid)]).stdout.toString().trim().split(/\s+/);
+      expect(owner.pgid).toBe(Number(pgid));
+      expect(owner.started).toBe(started.join(" "));
     });
   });
 
