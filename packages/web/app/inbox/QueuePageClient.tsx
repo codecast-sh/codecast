@@ -207,17 +207,18 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const convSessionId = (conversation as any)?.session_id;
   const agentTaskId = (conversation as any)?.agent_task_id;
   const subHeaderContent = useMemo(() => <>
-    {isOwnSession && (
-      <TriggerContextPanel
-        key={convId}
-        conversationId={convId}
-        sessionId={convSessionId}
-        agentTaskId={agentTaskId}
-      />
-    )}
+    {/* Every viewer of the conversation sees its triggers, a teammate's
+        session included: webListForConversation returns foreign rows and
+        the verbs authorize by conversation access. */}
+    <TriggerContextPanel
+      key={convId}
+      conversationId={convId}
+      sessionId={convSessionId}
+      agentTaskId={agentTaskId}
+    />
     {activePlanId && <PlanContextPanel planId={activePlanId} />}
     {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
-  </>, [isOwnSession, convId, convSessionId, agentTaskId, activePlanId, workflowRunId]);
+  </>, [convId, convSessionId, agentTaskId, activePlanId, workflowRunId]);
 
   if (!conversation) {
     return <ConversationPlaceholder id={sessionId} />;
