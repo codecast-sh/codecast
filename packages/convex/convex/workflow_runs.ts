@@ -2042,6 +2042,8 @@ export async function enrichRun(ctx: Ctx, run: any, reads: RunReads = newRunRead
     ...run,
     task_short_id: task?.short_id,
     task_title: task?.title,
+    // Where the task started (the session it was filed from), so every view of the run can step back to it.
+    task_origin_conversation_id: (task as any)?.created_from_conversation ?? undefined,
     plan_short_id: plan?.short_id,
     workflow_name: run.workflow_name ?? workflow?.name,
     workflow_slug: workflow?.slug,

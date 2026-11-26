@@ -23,17 +23,27 @@ export type FlowStation = {
   sessionId?: string;
   started_at?: number;
   completed_at?: number;
+  /** What the station said it did: its result as written (a command's output, an agent's reply), else what it was doing. */
+  output?: string;
+  /** The verdict it routed on, when one differs from plain success. */
+  outcome?: string;
 };
+
+/** Where the run's work came from, read before its first station: the session the task was filed from, then the task. */
+export type FlowOrigin = { key: "session" | "task"; label: string; ref?: string; href: string };
 
 export type FlowFocus = { conversationId?: string | null; decisionId?: string | null; nodeId?: string | null };
 
 export type FlowContext = {
+  /** The stations the run reached, and the one it stands at, in order. */
   stations: FlowStation[];
+  /** Stations of the flow still ahead of where the run stands, in graph order; branches it passed by are left out. */
+  ahead: FlowStation[];
   /** The station the run stands at (index), while it is alive. */
   at: number;
   /** The station the viewer is looking at (index): their session, their decision, else where the run stands. */
   focus: number;
-  /** The run stands at a station the line's current graph no longer has: its order is the run's own history. */
+  /** The run ran a version of the flow the published graph no longer matches: its order is the run's own history. */
   lineChanged: boolean;
 };
 
@@ -67,8 +77,10 @@ const ALIVE = new Set(["pending", "running", "paused"]);
  */
 function isStation(r: RunNodeRow, graphType: string | undefined, gateNodeId: string | undefined): boolean {
   const type = graphType ?? r.type;
+  // Where the run stands is always a station, even a fan-out waiting on its branches.
+  if (r.current) return true;
   if (STRUCTURAL.has(r.id) || (graphType && STRUCTURAL.has(graphType))) return false;
-  if (r.current || r.status === "failed" || r.id === gateNodeId || r.session || r.session_id) return true;
+  if (r.status === "failed" || r.id === gateNodeId || r.session || r.session_id) return true;
   if (graphType) return WORK.has(type) && (graphType !== "command" || r.status !== "completed" || took(r) >= 1000 || !!r.outcome && r.outcome !== "success");
   // No graph to say what a node is: it ran as something only if it took time.
   return r.status === "pending" ? false : took(r) >= 1000;
@@ -81,16 +93,21 @@ const took = (r: RunNodeRow) => (r.started_at != null && r.completed_at != null 
  * once the line was republished without it, the run's own history is the only true order.
  */
 export function flowContext(
-  run: { _id?: string; status?: string; current_node_id?: string; gate_node_id?: string; gate_decision_id?: string; gate_decision_short_id?: string; node_statuses?: any[] } | null | undefined,
+  run: { _id?: string; status?: string; current_node_id?: string; gate_node_id?: string; gate_decision_id?: string; gate_decision_short_id?: string; fail_reason?: string; node_statuses?: any[] } | null | undefined,
   graph?: { nodes?: Array<{ id: string; label?: string; type?: string }> } | null,
   focus: FlowFocus = {},
 ): FlowContext {
-  const empty = { stations: [], at: -1, focus: -1, lineChanged: false };
+  const empty = { stations: [], ahead: [], at: -1, focus: -1, lineChanged: false };
   if (!run) return empty;
   const alive = ALIVE.has(run.status ?? "");
-  const standing = run.gate_node_id ?? run.current_node_id;
+  // An empty gate id means no gate: the run stands at its current node.
+  const standing = run.gate_node_id || run.current_node_id;
   const graphNodes = graph?.nodes ?? [];
-  const lineChanged = !!standing && alive && graphNodes.length > 0 && !graphNodes.some((n) => n.id === standing);
+  // The run ran another version of the flow when a station it reached, or the one it stands at, is not in the graph
+  // as published now; live or ended, its own history is then the only true order.
+  const inGraph = new Set(graphNodes.map((n) => n.id));
+  const reachedIds = (run.node_statuses ?? []).filter((n: any) => n.status !== "pending").map((n: any) => n.node_id as string);
+  const lineChanged = graphNodes.length > 0 && [...reachedIds, ...(alive && standing ? [standing] : [])].some((id) => !STRUCTURAL.has(id) && !inGraph.has(id));
   const types = new Map(graphNodes.map((n) => [n.id, n.type]));
   const labels = new Map(graphNodes.map((n) => [n.id, n.label]));
   const rows = runNodeRows(run, lineChanged ? null : graph);
@@ -115,20 +132,42 @@ export function flowContext(
       ...(handle ? { href: `/conversation/${handle}`, sessionId } : decision ? { href: `/decisions/${decision}` } : {}),
       started_at: r.started_at,
       completed_at: r.completed_at,
+      output: r.result_preview || r.activity || (r.status === "failed" && r.id === run.current_node_id ? run.fail_reason : undefined) || undefined,
+      ...(r.outcome && r.outcome !== "success" && r.outcome !== "failure" ? { outcome: r.outcome } : {}),
     });
   }
+  // What happened leads; what has not happened folds: a station not reached before the last one reached is a branch
+  // the run passed by, and the rest are still ahead.
+  const lastReached = stations.reduce((last, s, i) => (s.state !== "next" ? i : last), -1);
+  const ahead = stations.slice(lastReached + 1);
+  const shown = stations.slice(0, lastReached + 1).filter((s) => s.state !== "next");
+  stations.length = 0;
+  stations.push(...shown);
   const at = stations.findIndex((s) => s.current);
   const mine = stations.findIndex((s) =>
     (!!focus.conversationId && s.sessionId === focus.conversationId) ||
     (!!focus.nodeId && s.id === focus.nodeId) ||
     (!!focus.decisionId && s.id === run.gate_node_id && (focus.decisionId === run.gate_decision_id || focus.decisionId === run.gate_decision_short_id)));
-  return { stations, at, focus: mine >= 0 ? mine : at >= 0 ? at : stations.length - 1, lineChanged };
+  return { stations, ahead, at, focus: mine >= 0 ? mine : at >= 0 ? at : stations.length - 1, lineChanged };
 }
 
-/** The nearest station before or after `from` that opens somewhere: what the step arrows go to. */
+/** The station before or after `from`: what the step arrows go to. One with a session or decision opens it; one
+ *  without opens in place, so every station of the run can be read, back to the first. */
 export function stepTarget(ctx: FlowContext, from: number, dir: -1 | 1): number {
-  for (let i = from + dir; i >= 0 && i < ctx.stations.length; i += dir) if (ctx.stations[i].href) return i;
-  return -1;
+  const i = from + dir;
+  return i >= 0 && i < ctx.stations.length ? i : -1;
+}
+
+/** Where the run's work came from: the session its task was filed from (with its title when known), then the task. */
+export function flowOrigin(
+  run: { task_short_id?: string; task_title?: string; task_origin_conversation_id?: string } | null | undefined,
+  originTitle?: string | null,
+): FlowOrigin[] {
+  const out: FlowOrigin[] = [];
+  if (!run) return out;
+  if (run.task_origin_conversation_id) out.push({ key: "session", label: originTitle?.trim() || "Where it started", href: `/conversation/${run.task_origin_conversation_id}` });
+  if (run.task_short_id) out.push({ key: "task", label: run.task_title?.trim() || run.task_short_id, ref: run.task_short_id, href: `/tasks/${run.task_short_id}` });
+  return out;
 }
 
 const RUN_WORDS: Record<string, string> = { pending: "starting", running: "running", paused: "waiting", completed: "finished", failed: "stopped" };
