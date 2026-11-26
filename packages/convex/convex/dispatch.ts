@@ -1179,7 +1179,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; description?: string; team_id?: string }; priority?: string; priority_step?: string; plan?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; team?: boolean; team_visibility?: string; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key?: string; description?: string; team_id?: string }; priority?: string; priority_step?: string; plan?: string }]) => {
     // A hosted conversation (the simple lane's assistant) runs in this
     // backend: no device, no daemon command. Its start queues the first
     // message in the same transaction, idempotent on session_id like below.
@@ -1351,6 +1351,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         teamSession = true;
       }
     }
+    // What the team sees, picked in the composer (Hidden is `private` above):
+    // Summary or Full shares it from the first write, on the team a Team pick
+    // would land on, as a manual share the folder rule never revisits.
+    const pickedVisibility = !opts.private && !teamSession && (opts.team_visibility === "summary" || opts.team_visibility === "full")
+      ? opts.team_visibility : undefined;
+    let sharedVisibility: "summary" | "full" | undefined;
+    if (pickedVisibility) {
+      const share = await buildShareUpdate(ctx, { team_id: resolvedTeamId, git_root: resolvedGitRoot, project_path: resolvedProjectPath, git_remote_url: resolvedGitRemoteUrl }, userId);
+      if (share.team_id) {
+        resolvedTeamId = share.team_id;
+        isPrivate = false;
+        autoShared = false;
+        sharedVisibility = pickedVisibility;
+      }
+    }
     const conversationId = await ctx.db.insert("conversations", {
       user_id: runnerUserId,
       ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
@@ -1369,7 +1384,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // no folder rule can share it.
       ...(opts.private
         ? { is_private: true, team_visibility: "private" as const }
-        : { is_private: isPrivate, auto_shared: autoShared || undefined, ...(teamSession ? { team_visibility: "full" as const } : {}) }),
+        : { is_private: isPrivate, auto_shared: autoShared || undefined, ...(teamSession ? { team_visibility: "full" as const } : sharedVisibility ? { team_visibility: sharedVisibility } : {}) }),
       status: "active" as const,
       ...(linkedTask ? { active_task_id: linkedTask._id } : {}),
       // Stamp the plan so the inbox can group plan workers even without a viable

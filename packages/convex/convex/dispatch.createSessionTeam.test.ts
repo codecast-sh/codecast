@@ -29,7 +29,7 @@ const ctxAs = (db: any) => ({
   runQuery: async () => undefined,
 }) as any;
 
-async function start(db: any, sessionId: string, pick: Record<string, boolean> = {}) {
+async function start(db: any, sessionId: string, pick: Record<string, boolean | string> = {}) {
   await (dispatch as any)._handler(ctxAs(db), { action: "createSession", args: [{ agent_type: "claude_code", project_path: "/repo", session_id: sessionId, ...pick }] });
   return db._tables.conversations.find((c: any) => c.session_id === sessionId);
 }
@@ -49,5 +49,19 @@ describe("starting a session as Team, Personal or private", () => {
   test("no pick follows the folder rule", async () => {
     const db = seed([{ path_prefix: "/repo", team_id: TEAM, auto_share: true }]);
     expect(await start(db, "s-rule")).toMatchObject({ team_id: TEAM, is_private: false });
+  });
+
+  test("Summary or Full shares it at that level even where the folder rule keeps it private", async () => {
+    const db = seed();
+    expect(await start(db, "s-summary", { team_visibility: "summary" })).toMatchObject({ team_id: TEAM, is_private: false, team_visibility: "summary" });
+    const full = await start(db, "s-full", { team_visibility: "full" });
+    expect(full).toMatchObject({ team_id: TEAM, is_private: false, team_visibility: "full" });
+    expect(full.auto_shared).toBeUndefined();
+  });
+
+  test("a level never outranks Hidden or Team", async () => {
+    const db = seed();
+    expect(await start(db, "s-both", { private: true, team_visibility: "full" })).toMatchObject({ is_private: true, team_visibility: "private" });
+    expect(await start(db, "s-team-level", { team: true, team_visibility: "summary" })).toMatchObject({ team_visibility: "full" });
   });
 });
