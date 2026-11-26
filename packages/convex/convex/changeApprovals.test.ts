@@ -767,6 +767,42 @@ describe("a landing commit, with no pull request", () => {
     expect(await approvalStampFor(w.ctx as any, "run1" as any)).toEqual({});
   });
 
+  test("an approval carries to another run of the same task while its diff is unchanged; a changed diff asks again", async () => {
+    // run1 stopped (main stayed red); the session ran the change again as run2, which landed a new commit of the same diff.
+    const stopped = landingRun({ status: "failed" });
+    const again = landingRun({ _id: "run2", created_at: 10, ...reviewed(true, CARRIED), review_verdict: { ...reviewed(true, CARRIED).review_verdict, attempt: 10 }, node_statuses: [{ node_id: "review", status: "completed", session_id: "rev", started_at: 11 }], landing: { repository: REPO, first_sha: CARRIED, sha: CARRIED, at: 10 } });
+    const cardYes = { _id: "a1", repository: REPO, workflow_run_id: "run1", task_id: "t1", judged_key: "whole:w1", source: "card", files: [JUDGED], user_id: "u_ashot", decision_id: "sd_1", created_at: 5 };
+    const w = world({ workflow_runs: [again, stopped], change_approvals: [cardYes], session_decisions: [{ _id: "sd_1", short_id: "sd-1" }] });
+    const run2 = { ...args, run_id: "run2", head_sha: CARRIED };
+    expect(await (settle as any)._handler(w.ctx, run2)).toMatchObject({ state: "success", description: "approved by Ashot (sd-1)" });
+    expect(cards(w.db)).toEqual([]);
+    // Another task's approval of the same diff is not this task's.
+    const other = world({ workflow_runs: [again, stopped], change_approvals: [{ ...cardYes, task_id: "t9", workflow_run_id: "run9" }] });
+    expect(await (settle as any)._handler(other.ctx, run2)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    // The new run's diff changed: asked again.
+    expect(await (settle as any)._handler(w.ctx, { ...run2, whole_key: "w2" })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    // A Revise on the new run's own card takes back the earlier run's yes too: an earlier yes never outlives a later no.
+    const revise = { _id: "sd_own2", workflow_run_id: "run2", options: [{ label: "Ship" }, { label: "Revise" }], conversation_id: "c_log" };
+    await settleCardApproval(w.ctx as any, revise as any, { status: "answered", answer_index: 1 }, { kind: "user", user_id: "host" as any }, 70);
+    expect(w.db._tables.change_approvals[0].revoked_at).toBe(70);
+    expect(await (settle as any)._handler(w.ctx, run2)).toMatchObject({ state: "pending" });
+  });
+
+  test("a Ship press an earlier run of the task claimed but never tied (it stopped before pushing) is the next run's press", async () => {
+    const stopped = landingRun({ status: "failed", pressed_approval_id: "p1", landing: undefined });
+    const again = landingRun({ _id: "run2", landing: { repository: REPO, first_sha: CARRIED, sha: CARRIED, at: 10 }, ...reviewed(false, CARRIED) });
+    const press = { _id: "p1", repository: REPO, workflow_run_id: "run1", task_id: "t1", source: "ship_press", files: [JUDGED], user_id: "u_jason", created_at: 1 };
+    const w = world({ workflow_runs: [again, stopped], change_approvals: [press] });
+    expect(await (settle as any)._handler(w.ctx, { ...args, run_id: "run2", head_sha: CARRIED })).toMatchObject({ state: "success", description: "approved by Jason Benn (Ship press)" });
+    expect(w.db._tables.change_approvals[0]).toMatchObject({ judged_key: "k1", head_sha: CARRIED, task_id: "t1" });
+  });
+
+  test("a press is stamped with the task of the run that claims it", async () => {
+    const w = world({ change_approvals: [{ _id: "p1", repository: REPO, source: "ship_press", files: [JUDGED], user_id: "u_jason", conversation_id: "c_log", created_at: 100 }] });
+    expect(await claimPress(w.ctx as any, "run1" as any, "c_log" as any, 200)).toBe("p1");
+    expect(w.db._tables.change_approvals[0]).toMatchObject({ workflow_run_id: "run1", task_id: "t1" });
+  });
+
   test("a settle for a commit the run has since replaced changes nothing and says so", async () => {
     const w = world({ workflow_runs: [landingRun({ landing: { repository: REPO, first_sha: SQUASH, sha: CARRIED, at: 2 } })] });
     expect(await (settle as any)._handler(w.ctx, args)).toEqual({ state: "pending", description: `replaced by ${CARRIED.slice(0, 10)}`, context: "approval (shadow)" });

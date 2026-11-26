@@ -32,7 +32,8 @@
 //              fast-forwarded to it) reports each push (orgLineMerge.recordRunLanding). The same rule reads the change from
 //              GitHub's comparison of the default branch with that commit and posts the same status on it; the run, never a
 //              pull request number, keys its press, approvals and cards. A commit carried onto a newer main is the first one
-//              through a recorded rebase. A commit no run reported is not evaluated at all: nothing posts on it.
+//              through a recorded rebase. Another run of the same task (one that stopped and was run again) carries the
+//              approvals of an unchanged diff, and a Revise or Drop on any of them takes back the task's. A commit no run reported is not evaluated at all: nothing posts on it.
 //
 // Nothing posts for a repository until an admin opts it in (setGate), "shadow" first, under its own context.
 import { v } from "convex/values";
@@ -47,7 +48,7 @@ import { requireInstallationRevoker } from "./githubApp";
 import { fetchPRFiles, PR_FILES_CAP, type PRPath } from "./githubApi";
 import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
-import { approvalContext, askerOf, changeJudgedFiles, gateOf, isCam, isReleaseCaptain, mayReadGate, preBuildYes } from "./lib/changeApprovalRows";
+import { approvalContext, askerOf, changeJudgedFiles, gateOf, isCam, isReleaseCaptain, landingApprovals, mayReadGate, preBuildYes } from "./lib/changeApprovalRows";
 import { askReviewForMechanism, cardPeople, cardStale, postApprovalCard, withdrawApprovalCard, type CardReason } from "./lib/changeApprovalCards";
 import { MECHANISM_FILE } from "./lib/automaticReview";
 import { automaticOutcome, automaticReviewFor, claimHead, countedWithoutRun, type Claim } from "./lib/automaticReviewHold";
@@ -623,9 +624,13 @@ export const settle = internalMutation({
     const firstHead = (head: string) => (landing ? coveredHeads(run, runAttempt(run), run.landing.first_sha).has(head) : run?.pr?.first_head_sha === head);
 
     if (run && key !== undefined) {
-      const press: any = run.pressed_approval_id ? await ctx.db.get(run.pressed_approval_id) : null;
+      // A landing run no press started stands on one an earlier run of its task claimed and never tied (it stopped
+      // before it pushed a landing).
+      const press: any = run.pressed_approval_id ? await ctx.db.get(run.pressed_approval_id)
+        : landing ? (await landingApprovals(ctx, run)).filter((a) => a.source === "ship_press" && a.judged_key === undefined && !a.revoked_at).sort((a, b) => b.created_at - a.created_at)[0] ?? null
+        : null;
       if (press && !press.revoked_at && press.judged_key === undefined && firstHead(args.head_sha) && judged.every((p) => press.files.includes(p))) {
-        await ctx.db.patch(press._id, { ...byPr, judged_key: key, head_sha: args.head_sha });
+        await ctx.db.patch(press._id, { ...byPr, judged_key: key, head_sha: args.head_sha, ...(run.task_id ? { task_id: run.task_id } : {}) });
       }
     }
 
@@ -651,11 +656,12 @@ export const settle = internalMutation({
     // Whole keys are namespaced (`whole:`, `head:`) apart from judged-diff keys: when every changed file is judged the two
     // patch ids are equal, and a yes to the judged files must never read as a yes to the change whole.
     const wholeKey = args.whole_key ? `whole:${args.whole_key}` : `head:${args.head_sha}`;
-    // A landing's approvals are its run's; a pull request's, its number's.
-    const keyed = async (k: string | undefined): Promise<Doc<"change_approvals">[]> => (k === undefined ? [] : (await (landing
-      ? ctx.db.query("change_approvals").withIndex("by_run_key", (q) => q.eq("workflow_run_id", run._id).eq("judged_key", k))
-      : ctx.db.query("change_approvals").withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
-    ).collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at));
+    // A landing's approvals are its run's and its task's other runs' (lib/changeApprovalRows landingApprovals); a pull
+    // request's, its number's.
+    const keyed = async (k: string | undefined): Promise<Doc<"change_approvals">[]> => (k === undefined ? [] : (landing
+      ? await landingApprovals(ctx, run, k)
+      : await ctx.db.query("change_approvals").withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k)).collect()
+    ).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at));
     // With no run behind the pull request, only codecast's own approval card counts (lib/automaticReviewHold.ts).
     const countable = async (rows: Doc<"change_approvals">[]) => (run ? rows : countedWithoutRun(ctx, repository, args.pr_number!, rows));
     const approvals = await countable(await keyed(key));

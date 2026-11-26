@@ -146,6 +146,23 @@ export async function scheduleRunApprovalPost(ctx: { db: any; scheduler: any }, 
  */
 export type ApprovalStamp = { repository: string; pr_number?: number; sha?: string; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[]; held?: boolean };
 
+/**
+ * A landing's approvals of one diff key, or every one with no key: its run's, and those of any other run of the same
+ * task, so an approval outlives a run that stopped and was run again while the diff it approved is unchanged.
+ */
+export async function landingApprovals(ctx: { db: any }, run: { _id: Id<"workflow_runs">; task_id?: Id<"tasks"> }, key?: string): Promise<Doc<"change_approvals">[]> {
+  const byRun: Doc<"change_approvals">[] = await ctx.db.query("change_approvals").withIndex(key === undefined ? "by_run" : "by_run_key", (q: any) => (key === undefined ? q.eq("workflow_run_id", run._id) : q.eq("workflow_run_id", run._id).eq("judged_key", key))).collect();
+  const byTask: Doc<"change_approvals">[] = run.task_id ? await ctx.db.query("change_approvals").withIndex("by_task_key", (q: any) => (key === undefined ? q.eq("task_id", run.task_id) : q.eq("task_id", run.task_id).eq("judged_key", key))).collect() : [];
+  const seen = new Set(byRun.map((a) => String(a._id)));
+  return [...byRun, ...byTask.filter((a) => !seen.has(String(a._id)))];
+}
+
+/** A Revise, Drop or dismissal of a run's change: every approval it stands on goes, its task's too for a landing. */
+async function revokeRunApprovals(ctx: { db: any }, run: any, now: number): Promise<void> {
+  const rows: Doc<"change_approvals">[] = run.landing ? await landingApprovals(ctx, run) : await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", run._id)).collect();
+  for (const a of rows) if (!a.revoked_at) await ctx.db.patch(a._id, { revoked_at: now });
+}
+
 /** Work the status out again for what a card was about: the landing of its run, else its pull request. */
 async function repostFor(ctx: { db: any; scheduler: any }, a: ApprovalStamp): Promise<void> {
   if (a.pr_number !== undefined) { await scheduleApprovalPost(ctx, a.repository, a.pr_number); return; }
@@ -166,7 +183,9 @@ export async function claimPress(ctx: { db: any }, runId: Id<"workflow_runs">, c
     .take(10);
   const press = presses.find((p) => p.source === "ship_press" && !p.workflow_run_id && !p.revoked_at);
   if (!press) return null;
-  await ctx.db.patch(press._id, { workflow_run_id: runId });
+  // The task rides along: a later run of the same task finds the press by it (taskApprovals).
+  const run: any = await ctx.db.get(runId);
+  await ctx.db.patch(press._id, { workflow_run_id: runId, ...(run?.task_id ? { task_id: run.task_id } : {}) });
   await ctx.db.patch(runId, { pressed_approval_id: press._id });
   return press._id;
 }
@@ -237,8 +256,7 @@ export async function settleCardApproval(
       });
     }
   } else {
-    const held: Doc<"change_approvals">[] = await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", run._id)).collect();
-    for (const a of held) if (!a.revoked_at) await ctx.db.patch(a._id, { revoked_at: now });
+    await revokeRunApprovals(ctx, run, now);
   }
   await scheduleRunApprovalPost(ctx, run);
 }
@@ -398,10 +416,14 @@ async function settleApprovalCard(
       decision_id: row._id, created_at: now,
     });
   } else {
-    const held: Doc<"change_approvals">[] = a.run_id
-      ? await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", a.run_id)).collect()
-      : await ctx.db.query("change_approvals").withIndex("by_pr_key", (q: any) => q.eq("repository", a.repository).eq("pr_number", a.pr_number).eq("judged_key", a.judged_key)).collect();
-    for (const h of held) if (!h.revoked_at) await ctx.db.patch(h._id, { revoked_at: now });
+    const run: any = a.run_id ? await ctx.db.get(a.run_id) : null;
+    if (run) await revokeRunApprovals(ctx, run, now);
+    else {
+      const held: Doc<"change_approvals">[] = a.run_id
+        ? await ctx.db.query("change_approvals").withIndex("by_run", (q: any) => q.eq("workflow_run_id", a.run_id)).collect()
+        : await ctx.db.query("change_approvals").withIndex("by_pr_key", (q: any) => q.eq("repository", a.repository).eq("pr_number", a.pr_number).eq("judged_key", a.judged_key)).collect();
+      for (const h of held) if (!h.revoked_at) await ctx.db.patch(h._id, { revoked_at: now });
+    }
   }
   await repostFor(ctx, a);
 }

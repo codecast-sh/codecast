@@ -4156,6 +4156,8 @@ export default defineSchema({
     .index("by_run", ["workflow_run_id"])
     // A landing's approvals: keyed by its run and the diff key, never a pull request number.
     .index("by_run_key", ["workflow_run_id", "judged_key"])
+    // And the task's: another run of the same task (one that stopped, then ran again) carries its approval of the same diff.
+    .index("by_task_key", ["task_id", "judged_key"])
     .index("by_conversation", ["conversation_id", "created_at"]),
 
   // A change guide a model wrote for a pull request whose author wrote none
