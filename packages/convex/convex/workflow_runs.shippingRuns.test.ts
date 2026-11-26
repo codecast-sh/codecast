@@ -124,8 +124,32 @@ describe("workflow_runs.shippingRuns", () => {
   });
 });
 
+describe("workflow_runs.shippingRuns read caps", () => {
+  test("a burst of other flows' failed runs, newer than a change run and past the per-status cap, never hides it", async () => {
+    const { t, ids, run, read } = await setup();
+    const change = await run({ status: "failed", at: NOW - 100_000 });
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 200; i++) {
+        await ctx.db.insert("workflow_runs", { user_id: ids.ana, workspace: ids.ws, team_id: ids.team, workflow_id: ids.build, status: "failed", node_statuses: [], created_at: NOW - 50_000 + i, updated_at: NOW - 50_000 + i } as any);
+      }
+    });
+    expect((await read(ids.ana)).map((r: any) => r._id)).toEqual([change]);
+  });
+
+  test("a run merged within the window is a shipper however many runs were updated after it", async () => {
+    const { t, ids, run, readAll } = await setup();
+    const merged = await run({ status: "completed", spawner: ids.open, at: NOW - 200_000, extra: { merge: { sha: "e".repeat(40), branch: "x", into: "main", at: NOW - 200_000 } } });
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 450; i++) {
+        await ctx.db.insert("workflow_runs", { user_id: ids.ana, workspace: ids.ws, team_id: ids.team, workflow_id: ids.build, status: "completed", node_statuses: [], created_at: NOW - 100_000 + i, updated_at: NOW - 100_000 + i } as any);
+      }
+    });
+    expect((await readAll(ids.ana)).shippers.map((s: any) => s.run_id)).toEqual([merged]);
+  });
+});
+
 describe("workflow_runs.shippingRuns shippers", () => {
-  test("every change run of the window, completed and merged ones included, with who pressed Ship", async () => {
+  test("the change runs of the window, unmerged and merged (completed included), with who pressed Ship", async () => {
     const { run, task, readAll, ids } = await setup();
     const a = await task(1);
     const merged = await run({ task: a, status: "completed", spawner: ids.open, extra: { merge: { sha: "e".repeat(40), branch: "x", into: "main", at: NOW } } });
@@ -146,8 +170,9 @@ describe("workflow_runs.shippingRuns shippers", () => {
 
   test("another team's runs never show, and a stranger gets none", async () => {
     const { run, readAll, ids } = await setup();
-    await run({ status: "completed" });
-    await run({ status: "completed", workspace: `team:${ids.other}` });
+    await run({ status: "completed", extra: { merge: { sha: "a".repeat(40), branch: "x", into: "main", at: NOW } } });
+    await run({ status: "running", workspace: `team:${ids.other}` });
+    await run({ status: "completed", workspace: `team:${ids.other}`, extra: { merge: { sha: "b".repeat(40), branch: "y", into: "main", at: NOW } } });
     expect((await readAll(ids.ana)).shippers).toHaveLength(1);
     expect(await readAll(ids.eve)).toEqual({ runs: [], shippers: [] });
   });

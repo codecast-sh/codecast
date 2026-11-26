@@ -415,7 +415,7 @@ export type ShippingRun = {
 };
 
 /**
- * Who pressed Ship on a change run of the last 30 days, any status (merged ones included): the page credits a commit
+ * Who pressed Ship on a change run of the last 30 days, unmerged or merged in that window: the page credits a commit
  * on main to that session, by `merged_sha` exactly, else by its task. `spawner_title` and `user_id` (the session's
  * owner) only for a viewer who may read the session; `stand_in`: no session started the run, the spawner is the
  * project lead's standing session.
@@ -431,7 +431,7 @@ export type ShippingShipper = {
   created_at: number;
 };
 
-export type ShippingRuns = { runs: ShippingRun[]; shippers?: ShippingShipper[] };
+export type ShippingRuns = { runs: ShippingRun[]; shippers: ShippingShipper[] };
 
 export type QueueGroup = {
   /** "s:<conversation id>" for one session's commits, "none" for commits no session claims. */

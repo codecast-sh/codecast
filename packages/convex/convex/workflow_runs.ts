@@ -2079,12 +2079,14 @@ export const listRuns = query({
 
 /** The statuses of a run still on its way to main. */
 const SHIPPING_STATUSES = ["running", "paused", "failed", "pending"] as const;
-/** Runs read per status, the most recently updated first. */
+/** Change runs kept per status, the most recently updated first. */
 const SHIPPING_READ = 150;
-/** How far back a run's last update may be. */
+/** Runs scanned per status for them: other flows' runs are skipped, so a burst of them cannot crowd a change run out. */
+const SHIPPING_SCAN = 300;
+/** How far back a run's last update, or its merge, may be. */
 const SHIPPING_WINDOW_MS = 30 * 86_400_000;
-/** Change runs of any status read for who pressed Ship, the most recently updated first. */
-const SHIPPERS_READ = 400;
+/** Merged change runs read for who pressed Ship, the most recently merged first. */
+const SHIPPERS_MERGED_READ = 200;
 
 /** Whether a run's change reached main: its merge step recorded the landing, or its Merged station completed. */
 const runMerged = (run: Doc<"workflow_runs">): boolean => !!run.merge || run.node_statuses.some((n) => n.node_id === "land__landed" && n.status === "completed");
@@ -2093,20 +2095,29 @@ const runMerged = (run: Doc<"workflow_runs">): boolean => !!run.merge || run.nod
  * A team's Ship runs still on their way to main (deploys.md, the Shipping column): runs of a flow that takes a change,
  * not merged, not superseded, on a task still open, and only the newest run of each task (a task's later round
  * replaces its earlier ones, merged ones included). A run with no task stands alone. Slim rows: no station sessions.
- * With them, `shippers`: every change run of the window, any status, with the session that pressed Ship on it.
+ * With them, `shippers`: the change runs of the window, unmerged and merged, with the session that pressed Ship on each.
  */
 export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now = Date.now()): Promise<ShippingRuns> {
   const workspace = `team:${teamId}`;
   if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { runs: [], shippers: [] };
   const since = now - SHIPPING_WINDOW_MS;
+  const reads = newRunReads();
+  // Whether a run's flow takes a change: its graph, read once per version (feedWorkflowOf).
+  const takesChange = async (r: Doc<"workflow_runs">) => sourceTakesSessionChange((await feedWorkflowOf(ctx, r, reads))?.source);
+  // Change runs not yet merged, each status's newest; the caps count change runs only.
   const candidates: Doc<"workflow_runs">[] = [];
   for (const status of SHIPPING_STATUSES) {
-    const rows: Doc<"workflow_runs">[] = await ctx.db
+    let scanned = 0;
+    let kept = 0;
+    for await (const r of ctx.db
       .query("workflow_runs")
       .withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status).gt("updated_at", since))
-      .order("desc")
-      .take(SHIPPING_READ);
-    for (const r of rows) if (!runMerged(r)) candidates.push(r);
+      .order("desc")) {
+      if (++scanned > SHIPPING_SCAN) break;
+      if (runMerged(r) || !(await takesChange(r))) continue;
+      candidates.push(r);
+      if (++kept >= SHIPPING_READ) break;
+    }
   }
   const newestPerTask = new Map<string, Doc<"workflow_runs">>();
   const kept: Doc<"workflow_runs">[] = [];
@@ -2122,7 +2133,6 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
     if (!latest || String(latest._id) === String(r._id)) kept.push(r);
   }
 
-  const reads = newRunReads();
   // The session that pressed Ship, as the viewer may read it: its title and owner, else nothing.
   const convs = new Map<string, Promise<{ title: string | null; user_id: Id<"users"> } | null>>();
   const spawnerOf = (id: Id<"conversations"> | undefined) => {
@@ -2137,7 +2147,7 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
   const runs: ShippingRun[] = [];
   for (const run of kept) {
     const e = await enrichRun(ctx, run, reads);
-    if (!e.takes_change || e.superseded) continue;
+    if (e.superseded) continue;
     if (run.task_id) {
       const task = await ctx.db.get(run.task_id);
       if (task && isTerminalTaskStatus(task.status)) continue;
@@ -2175,13 +2185,16 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
   runs.sort((a, b) => b.updated_at - a.updated_at);
 
   // Every change run of the window, merged ones included: who pressed Ship on each, so the page credits a commit on
-  // main to that session (by the merged sha, else by its task) rather than to the flow's own station sessions.
+  // main to that session (by the merged sha, else by its task) rather than to the flow's own station sessions. The
+  // unmerged ones are the candidates above; the merged ones come off the sparse merge index, merged within the window.
   const shippers: ShippingShipper[] = [];
-  const recent: Doc<"workflow_runs">[] = await ctx.db
+  const merged: Doc<"workflow_runs">[] = await ctx.db
     .query("workflow_runs")
-    .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace).gt("updated_at", since))
+    .withIndex("by_workspace_merged", (q: any) => q.eq("workspace", workspace).gt("merge.at", since))
     .order("desc")
-    .take(SHIPPERS_READ);
+    .take(SHIPPERS_MERGED_READ);
+  const recent: Doc<"workflow_runs">[] = [...candidates];
+  for (const r of merged) if (await takesChange(r)) recent.push(r);
   const taskShort = new Map<string, Promise<string | null>>();
   for (const run of recent) {
     if (!sourceTakesSessionChange((await feedWorkflowOf(ctx, run, reads))?.source)) continue;
@@ -2203,6 +2216,7 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
       created_at: run.created_at,
     });
   }
+  shippers.sort((a, b) => b.created_at - a.created_at);
   return { runs, shippers };
 }
 
