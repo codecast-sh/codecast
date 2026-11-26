@@ -2,7 +2,9 @@
 // the existing feed hooks) joined with what the store already holds about
 // each session, read once per page and never per row:
 //   - the viewer's own sessions (store.sessions): the full status, its reason
-//     and the pinned state line, decided by the rail's own rules;
+//     and the pinned state line, decided by the inbox's own placement
+//     (placeInboxRows, mine scope), so a worker riding its working lead reads
+//     as its lead does and Needs someone is exactly the inbox's Needs you;
 //   - git and GitHub events (store.externalEvents): the PRs a session touched
 //     and the commits it made;
 //   - tasks (store.tasks, the active workspace): the ones a session worked on;
@@ -12,9 +14,10 @@
 // hooks already tick on.
 import { useMemo, useRef } from "react";
 import { isHostedAgentType } from "@codecast/shared/contracts";
-import { railRowPlacement, useTrackedStore, type InboxSession, type SessionDecisionItem } from "../../store/inboxStore";
+import { placedRailPlacement, railRowPlacement, useTrackedStore, type InboxSession, type PlacedInbox, type RailPlacement, type SessionDecisionItem } from "../../store/inboxStore";
 import { makeCollectionSig } from "../../store/wakeSig";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useMinePlacement } from "../../hooks/useNeedsInputCount";
 import { useViewerIdentity } from "../../hooks/useTeamRoster";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { externalEventsNewestFirst, useExternalEvents } from "../../hooks/useSyncExternalEvents";
@@ -51,10 +54,32 @@ const taskSig = (t: TaskRowLike) =>
 
 const NO_DECISIONS: Record<string, SessionDecisionItem> = {};
 
+// A row as the inbox files it: its own placement when it is a top-level row;
+// a worker nested under a card rides that card's placement unless the inbox
+// counts it among the card's workers that wait on the person, which keep
+// their own facts. null for a row the inbox never placed.
+function inboxPlacementOf(placed: PlacedInbox | null): (id: string) => RailPlacement | null {
+  if (!placed) return () => null;
+  const parentOf = new Map<string, string>();
+  for (const [parent, subs] of placed.subsByParent) for (const sub of subs) parentOf.set(String(sub._id), parent);
+  const waiting = new Set<string>();
+  for (const subs of placed.workersNeedingYouByParent.values()) for (const sub of subs) waiting.add(String(sub._id));
+  return (id) => {
+    const own = placedRailPlacement(placed, id);
+    if (own) return own;
+    const parent = parentOf.get(id);
+    return parent && !waiting.has(id) ? placedRailPlacement(placed, parent) : null;
+  };
+}
+
 export type ActivityItems = { items: ActivityItem[]; loose: PrThread[] };
 
 export function useActivityItems(rows: readonly Conversation[], opts: { teamId: string | null; teamMode: boolean }): ActivityItems {
   const now = useCoarseNow(15_000);
+  // The inbox's own verdict per row (riders, membership, asks), the one the
+  // rail draws. A row the inbox never placed falls back to being placed alone.
+  const placed = useMinePlacement();
+  const placementOf = useMemo(() => inboxPlacementOf(placed), [placed]);
   const viewer = useViewerIdentity();
   const st = useTrackedStore([
     (s) => ownSessionsSig(s.sessions),
@@ -97,7 +122,7 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
       if (own) {
         const hosted = isHostedAgentType(own.agent_type);
         const live = { asking: !!sessionOutcomes?.decisions.some((d) => d.pending && d.askedOfViewer), blocked: !!own.pending_api_error };
-        status = sessionStatusOf({ row: own, placement: railRowPlacement(own, now), now, live, hosted });
+        status = sessionStatusOf({ row: own, placement: placementOf(own._id) ?? railRowPlacement(own, now), now, live, hosted });
         const card = sessionCardLine({
           row: own,
           status,
@@ -143,7 +168,7 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
     return next.items;
     // sessionsSig stands in for st.sessions: only the drawn fields wake it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows, sessionsSig, outcomes, now, viewer, teamMode]);
+  }, [rows, sessionsSig, placementOf, outcomes, now, viewer, teamMode]);
 
   // Only inside the span the loaded sessions cover, as the Classic feed keeps
   // its git rows: older pages bring their own, and a busy repo never fills
