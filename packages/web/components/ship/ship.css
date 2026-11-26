@@ -14,19 +14,27 @@
   font-family: var(--font-ui);
   color: var(--sol-text);
 }
+/* A card is as wide as where it sits, so the track can ask how much room each of its stages gets. An inline-size container
+   takes no width from its content: its parent must give it one (a block, or a sized popover), never shrink to fit it. */
+.sj { container: sj / inline-size; }
 
 /* The track: one equal column per stage, joined by a line that fills in as the change moves. */
 .sj-track { display: grid; padding: 14px 10px 10px; row-gap: 6px; }
 .sj-track[data-compact] { padding: 10px 6px 8px; }
 .sj-stages { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; list-style: none; margin: 0; padding: 0; }
-.sj-return { grid-row: 2; display: flex; flex-direction: column; align-items: center; gap: 3px; }
-.sj-return-line { position: relative; align-self: stretch; height: 8px; border: 1.5px solid color-mix(in srgb, var(--sj-session) 45%, transparent); border-top: 0; border-radius: 0 0 8px 8px; margin: -4px calc(50% / var(--n, 1)) 0; }
-.sj-return-words { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); color: color-mix(in srgb, var(--sj-session) 85%, var(--sol-text-dim)); }
+.sj-return { grid-row: 2; grid-column: var(--sj-from) / var(--sj-to); display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.sj-return-line { position: relative; align-self: stretch; height: 8px; border: 1.5px solid color-mix(in srgb, var(--sj-session) 45%, transparent); border-top: 0; border-radius: 0 0 8px 8px; margin: 0 calc(50% / var(--n, 1)); }
+.sj-return-words { font-size: var(--fs-meta); line-height: 1.3; text-align: center; text-wrap: balance; color: color-mix(in srgb, var(--sj-session) 85%, var(--sol-text-dim)); }
+/* The arrow keeps to the first word, so words wrapped under a narrow loop never leave it alone on a line. */
+.sj-return-words > svg { display: inline; vertical-align: -1px; margin-right: 4px; }
 /* One stage that sends work back: a hook under it, out and back into the same stage. */
-.sj-return[data-single] .sj-return-line { align-self: center; width: 64px; height: 12px; margin: -2px 0 0; border-radius: 0 0 12px 12px; }
+.sj-return[data-single] .sj-return-line { align-self: center; width: 64px; height: 12px; margin: 0; border-radius: 0 0 12px 12px; }
 .sj-return[data-active] .sj-return-line { border-color: var(--sj-session); }
 .sj-return[data-active] .sj-return-words { color: var(--sj-session); font-weight: 600; }
 .sj-stage { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; text-align: center; }
+/* A card inside a reply sits in Tailwind typography, whose `.prose-sm :where(ol > li)` pads and spaces every list item:
+   the stage is the card's own row, so neither applies (the stacked rail lines up with its marks only at zero). */
+.sj .sj-stage { padding-inline: 0; margin-block: 0; }
 .sj-stage::after { content: ""; position: absolute; top: 10px; left: calc(50% + 14px); right: calc(-50% + 14px); height: 2px; border-radius: 2px; background: var(--sj-rule); }
 .sj-stage:last-child::after { display: none; }
 .sj-stage[data-past]::after { background: color-mix(in srgb, var(--sj-ok) 70%, transparent); }
@@ -59,9 +67,11 @@
 .sj-stage[data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-stage[data-who="you"] { --sj-who-c: var(--sj-you); }
 .sj-stage[data-who="session"], .sj-stage[data-state="back"] { --sj-who-c: var(--sj-session); }
-.sj-label { font-size: 12.5px; font-weight: 600; line-height: 1.2; margin-top: 3px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A label wraps rather than hides its end: "Land without asking?" reads whole on two lines. A word wider than its column
+   (only where the track cannot turn down the card, below) is hyphenated where English allows, split only past that. */
+.sj-label { font-size: 12.5px; font-weight: 600; line-height: 1.2; margin-top: 3px; max-width: 100%; overflow-wrap: break-word; hyphens: auto; text-wrap: balance; }
 .sj-stage[data-state="idle"] .sj-label { color: var(--sol-text-muted); }
-.sj-who { font-size: var(--fs-meta); line-height: 1.2; color: var(--sj-who-c); white-space: nowrap; }
+.sj-who { font-size: var(--fs-meta); line-height: 1.2; color: var(--sj-who-c); max-width: 100%; overflow-wrap: break-word; hyphens: auto; }
 .sj-stage[data-state="idle"] .sj-who { opacity: .8; }
 .sj-round { color: var(--sol-text-dim); margin-left: 3px; }
 /* Under who acts, not beside it: six stages leave no room for both on one line. */
@@ -113,7 +123,7 @@
 .shp { display: flex; flex-direction: column; }
 .shp-head { display: flex; align-items: baseline; gap: 8px; padding: 11px 14px 9px; border-bottom: 1px solid var(--sj-rule-2); min-width: 0; }
 .shp-head > b { font-size: 13.5px; font-weight: 600; flex: none; }
-.shp-sub { font-size: 12px; color: var(--sol-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shp-sub { font-size: 12px; color: var(--sol-text-muted); min-width: 0; overflow-wrap: break-word; }
 .shp-task { font-size: var(--fs-meta); font-family: var(--font-mono); color: var(--sol-blue); text-decoration: none; flex: none; }
 .shp-link { margin-left: auto; flex: none; font-size: var(--fs-meta); color: var(--sol-text-muted); text-decoration: none; }
 .shp-link:hover, .shp-task:hover { text-decoration: underline; }
@@ -141,6 +151,9 @@
 .shp-close { margin-left: auto; align-self: center; flex: none; width: 44px; height: 44px; margin-block: -10px; margin-right: -10px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--sol-text-muted); }
 .shp-link + .shp-close { margin-left: 0; }
 .shp-close:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: -2px; }
+/* The session's or task's title reads whole on a line of its own under the panel's name. */
+.shp-sheet .shp-head { flex-wrap: wrap; row-gap: 2px; }
+.shp-sheet :is(.shp-sub, .shp-session) { order: 1; flex-basis: 100%; }
 .shp-sheet .shp-flow { min-height: 44px; grid-template-columns: 14px minmax(0, 1fr); row-gap: 2px; }
 .shp-sheet .shp-path { grid-column: 2; justify-self: start; white-space: normal; line-height: 1.5; }
 .shp-sheet .sj-btn, .shp-sheet .shp-link { min-height: 44px; display: inline-flex; align-items: center; }
@@ -178,9 +191,48 @@ a.sj-left { text-decoration: none; }
 /* A segment's inside, hinted under its stage and opened in place: its passing steps down a spine, each route off a step a
    branch under it, the segment's end last. A route a person answers on is dashed in the asker's blue. */
 .sj-hint { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; font-size: var(--fs-meta); line-height: 1.2; color: var(--sol-text-dim); }
-.sj-hint > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sj-hint > span { min-width: 0; overflow-wrap: break-word; }
 .sj-hint-caret { width: 11px; height: 11px; flex: none; transition: transform .2s; }
 .sj-stage-btn[aria-expanded="true"] .sj-hint-caret { transform: rotate(180deg); }
+
+/* Too many stages for the card's width (each needs about 84px for its name and who acts there): the track turns down the
+   card, one stage a row, as the phone draws it. A rule per stage count, each matching a track with at least that many
+   stages, sets one switch; the rows read it. Thirteen stages or more always turn. A browser without container style
+   queries keeps the row: its labels wrap and hyphenate, and a column narrower than "Automatic" still splits the word. */
+@container sj (width < 272px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(3)) { --sj-stack: 1; } }
+@container sj (width < 356px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(4)) { --sj-stack: 1; } }
+@container sj (width < 440px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(5)) { --sj-stack: 1; } }
+@container sj (width < 524px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(6)) { --sj-stack: 1; } }
+@container sj (width < 608px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(7)) { --sj-stack: 1; } }
+@container sj (width < 692px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(8)) { --sj-stack: 1; } }
+@container sj (width < 776px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(9)) { --sj-stack: 1; } }
+@container sj (width < 860px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(10)) { --sj-stack: 1; } }
+@container sj (width < 944px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(11)) { --sj-stack: 1; } }
+@container sj (width < 1028px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(12)) { --sj-stack: 1; } }
+.sj-track:has(> .sj-stages > .sj-stage:nth-child(13)) { --sj-stack: 1; }
+@container style(--sj-stack: 1) {
+  .sj-stages { display: flex; flex-direction: column; }
+  .sj-stage, .sj-stage-btn { display: grid; grid-template-columns: 22px minmax(0, max-content) minmax(0, 1fr); column-gap: 10px; row-gap: 2px; align-items: center; text-align: left; }
+  .sj-stage { padding-bottom: 12px; }
+  .sj-stage:last-child { padding-bottom: 0; }
+  .sj-stage:has(> .sj-stage-btn) { display: block; }
+  .sj-stage-btn { box-sizing: border-box; width: 100%; padding: 0; }
+  .sj-stage::after { top: 24px; bottom: 2px; left: 10px; right: auto; width: 2px; height: auto; }
+  .sj-node { grid-area: 1 / 1; }
+  .sj-label { grid-area: 1 / 2; margin-top: 0; }
+  .sj-who { grid-area: 1 / 3; }
+  /* A stacked row has room for who acts and the round on one line. */
+  .sj-who .sj-round { display: inline; margin-left: 3px; }
+  .sj-hint { grid-area: 2 / 2 / 3 / 4; }
+  .sj-left { grid-column: 2 / 4; white-space: normal; }
+  /* A stage that opens is a block holding its button's grid: the step left for you lines up with the label column. */
+  .sj-stage:has(> .sj-stage-btn) > .sj-left { display: block; margin: 2px 0 0 32px; }
+  .sj-return { grid-column: 1 / -1; align-items: flex-start; padding-left: 32px; text-align: left; }
+  .sj-return-words { text-align: left; }
+  .sj-return-line { display: none; }
+  /* The stages that send findings back carry the return mark the words under the list explain. */
+  .sj-stage[data-loops] .sj-who::after { content: "↵" / ""; margin-left: 6px; font-weight: 600; color: var(--sj-session); }
+}
 .sj-in { list-style: none; margin: 0; padding: 12px 14px 12px 16px; border-top: 1px solid var(--sj-rule-2); background: var(--sj-card); font-size: 12px; }
 .sj-in-step { position: relative; padding: 0 0 12px 26px; --sj-who-c: var(--sj-auto); }
 .sj-in-step[data-who="agent"] { --sj-who-c: var(--sj-agent); }
@@ -236,7 +288,7 @@ a.sj-left { text-decoration: none; }
 .shp-declined header span { font-size: 12px; color: var(--sol-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shp-declined blockquote { margin: 6px 0 0; padding-left: 9px; border-left: 2px solid var(--sj-rule); font-size: 12.5px; line-height: 1.45; color: var(--sol-text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 button.shp-link { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; font-size: var(--fs-meta); }
-.shp-session { font-size: 13px; color: var(--sol-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shp-session { font-size: 13px; color: var(--sol-text); min-width: 0; overflow-wrap: break-word; }
 .sj-target-item { display: inline-flex; align-items: center; gap: 4px; }
 .shp-asks { display: inline-block; margin-right: 10px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent); }
 .shp-flowname .shp-asks { margin: 0 0 0 8px; }

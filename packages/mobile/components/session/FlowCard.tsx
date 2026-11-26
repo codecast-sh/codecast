@@ -89,7 +89,7 @@ export function FlowRunCard({ runId, onOpen }: { runId: string; onOpen?: (route:
 /** The card's name: a press opens the run when the card draws one. */
 function CardName({ label, links }: { label: string; links?: RunLinks | null }) {
   const Theme = useTheme();
-  const text = <RNText style={[styles.name, { color: links ? Theme.violet : Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>;
+  const text = <RNText style={[styles.name, { color: links ? Theme.violet : Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>;
   if (!links) return text;
   return (
     <Pressable onPress={() => links.open(links.runHref)} hitSlop={8} style={({ pressed }) => [styles.namePress, pressed && { opacity: 0.6 }]} accessibilityRole="link" accessibilityLabel={`Open the ${label} run`} testID="flow-card-run">
@@ -145,8 +145,8 @@ function ShipBody({ flow, run, links }: { flow: AppFlow; run: RunRow; links: Run
           <RNView key={s.id} style={{ opacity: s.state === 'idle' || s.state === 'skipped' ? 0.55 : 1 }}>
             <StepRow href={links.stepHref(s.id)} links={links} style={styles.step} testID={`flow-card-step-${s.id}`}>
               <Feather name={icon[s.state]} size={13} color={tone[s.state]} />
-              <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
-              <RNText style={[styles.who, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(s)}</RNText>
+              <RNText style={[styles.stepName, styles.shrink, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
+              <RNText style={[styles.who, styles.shrink, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(s)}</RNText>
             </StepRow>
             {/* A segment's inside, in a few words: the steps a passing run takes through it. */}
             {s.inside ? <RNText style={[styles.who, { marginLeft: 20, color: Theme.textDim }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{insideWords(s.inside)}</RNText> : null}
@@ -156,8 +156,8 @@ function ShipBody({ flow, run, links }: { flow: AppFlow; run: RunRow; links: Run
               <RNView key={b.id}>
                 <RNView style={[styles.step, { marginLeft: 20, opacity: b.state === 'idle' ? 0.55 : 1 }]}>
                   <Feather name={icon[b.state]} size={12} color={tone[b.state]} />
-                  <RNText style={[styles.who, { color: Theme.text, fontWeight: '600' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{b.label}</RNText>
-                  <RNText style={[styles.who, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(b)}</RNText>
+                  <RNText style={[styles.who, styles.shrink, { color: Theme.text, fontWeight: '600' }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{b.label}</RNText>
+                  <RNText style={[styles.who, styles.shrink, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(b)}</RNText>
                 </RNView>
                 {result(b, 38)}
               </RNView>
@@ -446,6 +446,8 @@ const styles = StyleSheet.create({
   stepName: { fontSize: 13, fontWeight: '600' },
   route: { fontSize: 12, marginTop: 2 },
   who: { fontSize: 11 },
+  // A stage's name and who acts there share a row: at a large text size they wrap inside the card, never past its edge.
+  shrink: { flexShrink: 1 },
   group: { fontSize: 13, fontWeight: '700', marginTop: 2, marginBottom: 4 },
   end: { fontSize: 12, fontWeight: '600', marginTop: 2 },
   why: { fontSize: 11, paddingHorizontal: 12, paddingBottom: 10 },

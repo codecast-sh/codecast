@@ -48,7 +48,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
         {stages.map((s, i) => {
           const next = stages[i + 1];
           return (
-            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done" || s.state === "nothing") ? "" : undefined} data-stage={s.id} title={s.note ?? undefined}>
+            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done" || s.state === "nothing") ? "" : undefined} data-loops={looping.includes(i) ? "" : undefined} data-stage={s.id} title={s.note ?? undefined}>
               {onOpen && (s.steps?.length || s.inside) ? (
                 <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} aria-controls={s.inside ? insideId : undefined} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
                   <StageFace s={s} finished={finished} />
@@ -60,7 +60,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
         })}
       </ol>
       {looping.length && !compact ? (
-        <div className="sj-return" data-active={back ? "" : undefined} data-single={looping.length === 1 ? "" : undefined} style={{ gridColumn: `${looping[0] + 1} / ${looping[looping.length - 1] + 2}`, ["--n" as string]: looping[looping.length - 1] - looping[0] + 1 }}
+        <div className="sj-return" data-active={back ? "" : undefined} data-single={looping.length === 1 ? "" : undefined} style={{ ["--sj-from" as string]: looping[0] + 1, ["--sj-to" as string]: looping[looping.length - 1] + 2, ["--n" as string]: looping[looping.length - 1] - looping[0] + 1 }}
           title={`Back to ${subject} from ${looping.map((i) => stages[i].label).join(", ")}`} data-journey-return>
           <span className="sj-return-line" aria-hidden />
           <span className="sj-return-words"><CornerDownLeft className="w-2.5 h-2.5" aria-hidden />findings come back to {subject}</span>
