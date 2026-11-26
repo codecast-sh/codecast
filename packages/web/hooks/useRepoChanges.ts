@@ -7,7 +7,7 @@
 // that draws a change feeds and pins its own with useChangeReach, so a chip
 // nobody draws costs no subscription.
 import type { RepoChangeRows } from "../lib/changes/assemble";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { activeTeamIdOf } from "../lib/activeTeam";
@@ -29,6 +29,22 @@ const PR_LIMIT = 50;
 const prSig = (p: ChangePullRequest) => `${p.state}|${p.files_synced_at ?? 0}|${p.draft ? 1 : 0}|${p.auto_merge ? 1 : 0}|${p.closed_at ?? 0}|${p.head_ref ?? ""}|${p.head_sha ?? ""}|${p.checks_state ?? ""}|${p.review_decision ?? ""}|${p.mergeable_state ?? ""}|${p.merge_commit_sha ?? ""}|${p.linked_session_ids?.length ?? 0}`;
 const detailSig = (d: PullRequestDetailRow) => `${d.checks_state ?? ""}|${d.checks?.length ?? 0}`;
 const reachSig = (r: DeployReachRow) => `${r.state}|${r.targets?.map((t) => `${t.target}:${t.state}:${t.deploy?.short_id ?? ""}:${t.now?.short_id ?? ""}`).join(",") ?? ""}`;
+
+/** Plain data compared by value: an assembled change is JSON-shaped (strings, numbers, arrays, plain objects). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i])) return false;
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  for (const k of ka) if (!Object.prototype.hasOwnProperty.call(b, k) || !sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])) return false;
+  return true;
+}
 
 type TitleRow = { title?: string | null; user_id?: string | null; owner_user_id?: string | null };
 type TitleStore = { sessions: unknown; conversations: unknown };
@@ -120,14 +136,25 @@ export function useRepoChanges(repository: string | null | undefined, teamId?: s
   }, [refsKey]);
   const reach = useCollectionRows<DeployReachRow>("deployReach", { where: reachWhere, sig: reachSig });
 
+  // Any feeder push re-assembles the whole repository into new objects. A change whose facts did not move keeps the
+  // object it had, so the memoized rows that draw it (ChangeBoard's Row, 350+ on a busy repository) stay still.
+  const held = useRef<Map<string, RepoChange>>(new Map());
   const changes = useMemo(() => {
     const byRef = new Map(reach.filter((r) => r.targets?.length).map((r) => [r._id, r]));
     // A row with no targets is an answer (it touches none); no row is a question not answered yet.
     const read = new Set(reach.map((r) => r._id));
-    return assembled.map((c) => {
+    const prev = held.current;
+    const next = new Map<string, RepoChange>();
+    const out = assembled.map((c) => {
       const laid = withReach(c, c.reach_ref ? byRef.get(c.reach_ref) : undefined, !c.reach_ref || read.has(c.reach_ref));
-      return { ...laid, lifecycle: changeLifecycle(laid.facts) };
+      const fresh: RepoChange = { ...laid, lifecycle: changeLifecycle(laid.facts) };
+      const old = prev.get(fresh.key);
+      const kept = old && sameValue(old, fresh) ? old : fresh;
+      next.set(fresh.key, kept);
+      return kept;
     });
+    held.current = next;
+    return out;
   }, [assembled, reach, now]);
 
   const ready = !!repo && checkoutsFeed.ready && targetsReady && prsFeed.ready;
