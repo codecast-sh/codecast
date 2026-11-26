@@ -22,6 +22,7 @@ import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { passOn } from "./lib/priorityPassSchedule";
 import { askRerun } from "./lib/priorityClassifierHook";
+import { recomputeStepDone } from "./lib/priorityLinks";
 import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
@@ -42,8 +43,8 @@ export const PRIORITY_PASS_FIRST_USD = 5;
 const CATCH_UP_RUNS_READ = 200;
 /** `cast priorities run` runs at most once in this long per (person, workspace). */
 export const RUN_NOW_EVERY_MS = 10 * MINUTE;
-/** The most of one absorbed priority's corrections a merge moves to the survivor. */
-const CORRECTIONS_MOVED = 200;
+/** A merge moves an absorbed priority's corrections to the survivor this many at a time, until none is left. */
+export const CORRECTIONS_PAGE = 100;
 const stepNumber = (key: string) => Number(/^s(\d+)$/.exec(key)?.[1] ?? 0);
 /** A priority's sessions are counted from the index up to this many; past it the stored count goes on by the moves and is flagged. */
 export const SESSION_COUNT_CAP = 500;
@@ -228,6 +229,15 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
   return out;
 }
 
+/** Moves every correction on `from` to `into`, a page at a time, each onto the step `stepFor` maps its step to. */
+export async function moveCorrections(ctx: { db: any }, from: Id<"priorities">, into: Id<"priorities">, stepFor: (key: string | undefined) => string | undefined): Promise<void> {
+  for (;;) {
+    const page: Doc<"priority_corrections">[] = await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", from)).take(CORRECTIONS_PAGE);
+    for (const c of page) await ctx.db.patch(c._id, { priority_id: into, step_key: stepFor(c.step_key) });
+    if (page.length < CORRECTIONS_PAGE) return;
+  }
+}
+
 /**
  * Moves sessions between priorities and then counts again, from the index,
  * every priority a session moved to or from, so a count that drifted heals:
@@ -383,6 +393,12 @@ export const applyPlan = internalMutation({
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
       await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, updated_at: now });
       counts.updated++;
+      // A milestone whose done state this write changed follows its tasks and pull requests as they are now
+      // (lib/priorityLinks): a plan made before a task closed, or one that flips a merged milestone, never undoes them.
+      for (const st of patch.steps ?? []) {
+        const before = row.steps.find((x) => x.key === st.key);
+        if (before && (before.done !== st.done || before.done_at !== st.done_at) && st.refs.some((r) => r.kind === "task" || r.kind === "pr")) await recomputeStepDone(ctx, row._id, st.key);
+      }
     }
 
     const mergedInto = new Map<Id<"priorities">, Id<"priorities">>();
@@ -394,11 +410,11 @@ export const applyPlan = internalMutation({
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, ai_rank: undefined, updated_at: now });
       mergedInto.set(row._id, into);
       counts.merged++;
-      // Its corrections follow it, onto the step their step became (step-less when that is unknown).
-      for (const c of await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", row._id)).take(CORRECTIONS_MOVED)) {
-        const to = c.step_key ? m.step_keys?.[c.step_key] : undefined;
-        await ctx.db.patch(c._id, { priority_id: into, step_key: to && liveSteps.get(intoRow.short_id)?.has(to) !== false ? to : undefined });
-      }
+      // Every one of its corrections follows it, onto the step their step became (step-less when that is unknown).
+      await moveCorrections(ctx, row._id, into, (key) => {
+        const to = key ? m.step_keys?.[key] : undefined;
+        return to && liveSteps.get(intoRow.short_id)?.has(to) !== false ? to : undefined;
+      });
     }
 
     const { move, recount } = sessionMover(ctx);

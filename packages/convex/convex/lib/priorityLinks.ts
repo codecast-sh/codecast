@@ -2,10 +2,14 @@
 // waiting for the pass (Priorities v2 design doc, Backend shape 2 and 3).
 //
 // Evidence: a task a milestone names closing or reopening, a pull request it
-// names merging or closing, and a decision answered or a pin declared done on a session
-// mapped to it each recompute that milestone at once, with `done_at` the
-// evidence's own time (the close or drop, the merge, the answer, the pin
-// that made it true), never the time a later pass noticed. The records
+// names merging or closing, and a pin declared done on the milestone's only
+// live person-driven session each recompute that milestone at once, with
+// `done_at` the evidence's own time (the close or drop, the merge, the pin
+// that made it true), never the time a later pass noticed. A decision card
+// answered is not evidence: cards are questions asked mid-work.
+// The pass recomputes the same way after it writes a milestone whose done
+// state it changed (priorityPassRun applyPlan), so a stale or wrong plan
+// never undoes what tasks and pull requests say. The records
 // decide in order: a milestone with tasks follows its tasks alone (as the
 // pass does, lib/priorityPass stepDone); one with pull requests of its own
 // workspace is done once none is open and one merged; only one with neither
@@ -32,7 +36,7 @@ import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/prior
 import { stepDone } from "./priorityPass";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
-import { passActivity } from "./priorityPassSchedule";
+import { passActivity, pinsAskForPass } from "./priorityPassSchedule";
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -168,9 +172,11 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
  * setTaskStatus): every milestone naming it, among the priorities of its
  * owner and of the people whose sessions link it, in the task's workspace
  * (the only workspace whose pass can name it, wherever those sessions are).
- * Each of those people's pass there is asked for (lib/priorityPassSchedule).
+ * Each of those people's pass there is asked for (lib/priorityPassSchedule),
+ * unless the session that made the change is a machine's (a role's seat, a
+ * trigger's run, a workflow's): those come round the clock (pinsAskForPass).
  */
-export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">): Promise<void> {
+export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">, actor?: Conv | null): Promise<void> {
   const workspace = task.workspace;
   if (!workspace) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
@@ -180,6 +186,7 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
   const sessions = await sessionsOf(ctx, [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)]);
   const places = [task.user_id, ...sessions.map((c) => c.user_id)].map((user) => ({ user, workspace }));
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
+  if (actor && !pinsAskForPass(actor)) return;
   for (const { user } of places) await passActivity(ctx, user, workspace);
 }
 
@@ -195,9 +202,22 @@ export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Pro
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 
-/** A decision answered or a pin declared done on `conv` at `at`: its milestone, when it is mapped to one. */
-export async function sessionEvidence(ctx: Ctx, conv: Pick<Conv, "priority_id" | "priority_step_key"> | null, at: number): Promise<void> {
-  if (conv?.priority_id && conv.priority_step_key) await recomputeStepDone(ctx, conv.priority_id, conv.priority_step_key, at);
+/** A person drives it: a top-level session of their own, not a role's seat, a trigger's run, a workflow's, a worker or a subagent. */
+const personDriven = (c: Conv) => pinsAskForPass(c) && !c.parent_conversation_id && !c.is_subagent;
+/** Still going: not killed or dismissed, and not declared or settled done. */
+const live = (c: Conv) => !c.inbox_killed_at && !c.inbox_dismissed_at && c.thread_state_status !== "done" && c.settle_verdict !== "done";
+
+/**
+ * A pin declared done on `conv` at `at`: its milestone, when it is mapped to
+ * one, the session is person-driven, and no other live person-driven
+ * session works that milestone (one session finishing is not the milestone
+ * finishing while another still works it).
+ */
+export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number): Promise<void> {
+  if (!conv?.priority_id || !conv.priority_step_key || !personDriven(conv)) return;
+  const held: Conv[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", conv.priority_id)).take(OWN_READ);
+  if (held.some((c) => String(c._id) !== String(conv._id) && c.priority_step_key === conv.priority_step_key && personDriven(c) && live(c))) return;
+  await recomputeStepDone(ctx, conv.priority_id, conv.priority_step_key, at);
 }
 
 // ── Links ───────────────────────────────────────────────────────────────────

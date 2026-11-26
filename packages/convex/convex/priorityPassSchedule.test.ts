@@ -232,6 +232,33 @@ describe("each trigger asks for its owner's pass", () => {
     expect(await scheduleOf(w, w.ana, w.team)).not.toBeNull();
   });
 
+  test("a task a machine's session closes, or a card a machine's session asked, asks for nothing; the person's session asks", async () => {
+    const w = await world();
+    const { seat, task } = await w.t.run(async (ctx) => {
+      const role = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: Date.now() } as any);
+      const seat = await ctx.db.insert("conversations", {
+        user_id: w.ana, agent_type: "claude_code", session_id: "jx7seat", short_id: "jx7seat", title: "Seat", started_at: Date.now(), updated_at: Date.now(),
+        message_count: 3, status: "active", team_id: w.acme, is_private: false, team_visibility: "full", standing_role_id: role,
+      } as any);
+      const task = await ctx.db.insert("tasks", {
+        user_id: w.ana, workspace: w.team, short_id: "ct-1", title: "Grader", status: "open", task_type: "task", priority: "medium", source: "human", created_at: Date.now(), updated_at: Date.now(),
+      } as any);
+      return { seat, task };
+    });
+    await w.t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(task), { status: "done", closed_at: Date.now() }, await ctx.db.get(seat)));
+    const decision = await w.t.run((ctx: any) => ctx.db.insert("session_decisions", {
+      conversation_id: seat, session_id: "jx7seat", user_id: w.ana, question: "Flip the flag?", options: [{ label: "Yes" }, { label: "No" }],
+      blocking: true, status: "pending", created_at: Date.now(),
+    }));
+    await w.t.withIdentity({ subject: `${w.ana}|session` }).mutation(api.sessionDecisions.resolve, { decision_id: decision, status: "answered", answer_index: 0 });
+    await settle(w);
+    expect(await scheduleOf(w, w.ana, w.team)).toBeNull();
+    // The same close from the person's own session asks.
+    await w.t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(task), { status: "open", closed_at: undefined }, await ctx.db.get(w.teamConv)));
+    await settle(w);
+    expect(await scheduleOf(w, w.ana, w.team)).not.toBeNull();
+  });
+
   test("a correction, and its pass reads it with nothing else new", async () => {
     const w = await world();
     const t0 = Date.now();

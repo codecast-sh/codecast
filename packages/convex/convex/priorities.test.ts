@@ -260,6 +260,10 @@ describe("reads", () => {
     expect(shown.links).toEqual(row.links);
     expect(shown.plan).toEqual(row.plan);
     expect(Array.isArray((await as(ada).query(pri.show, { short_id: "pri-4" })).links)).toBe(true);
+    // A teammate reading the page learns of no correction waiting: corrections are the owner's alone.
+    const beaShown = await as(bea).query(pri.show, { short_id: "pri-1" });
+    expect(beaShown.links.map((l: any) => l.correction_pending)).toEqual([false, false, false]);
+    expect(beaShown.correction_pending).toBe(false);
   });
 
   test("history names today's sessions no priority holds, for the No priority share", async () => {
@@ -620,6 +624,43 @@ describe("writes", () => {
     expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
     expect(await t.mutation(pri.cliMove, { api_token: TOKEN, short_id: "pri-4", to: 1 })).toEqual({ error: expect.stringContaining("only active priorities are ranked") });
     expect(await t.mutation(pri.cliMove, { api_token: TOKEN, short_id: "pri-2", to: 1.5 })).toEqual({ error: "a rank is a whole number from 1" });
+  });
+
+  test("a move clears the old absolute rank on each row it rewrites, and only there", async () => {
+    const { t, as, ada, p1, p3 } = await world();
+    await t.run(async (ctx) => {
+      for (const id of [p1, p3]) await ctx.db.patch(id, { rank: 7, rank_set_by: "pass" } as any);
+    });
+    await as(ada).mutation(pri.moveTo, { short_id: "pri-3", to: 1 });
+    const legacy = () => t.run(async (ctx: any) => Promise.all([p1, p3].map(async (id) => {
+      const p = await ctx.db.get(id);
+      return [p.short_id, p.rank ?? null, p.rank_set_by ?? null];
+    })));
+    expect(await legacy()).toEqual([["pri-1", 7, "pass"], ["pri-3", null, null]]);
+    await as(ada).mutation(pri.moveTo, { short_id: "pri-1", to: 99 });
+    expect(await legacy()).toEqual([["pri-1", null, null], ["pri-3", null, null]]);
+  });
+
+  test("a merge, the person's or the pass's, moves every correction of the absorbed priority, however many", async () => {
+    const { t, as, ada, ws, p1, p2, p3 } = await world();
+    const correct = (priority_id: Id<"priorities">, n: number) => t.run(async (ctx) => {
+      for (let i = 0; i < n; i++) {
+        await ctx.db.insert("priority_corrections", {
+          user_id: ada, workspace: ws, priority_id, text: `fix ${i}`, status: "pending", created_at: NOW + i,
+          snapshot: { short_id: "x", title: "x", summary: "", status: "active", steps: [] },
+        } as any);
+      }
+    });
+    const on = (id: Id<"priorities">) => t.run(async (ctx) => (await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q) => q.eq("priority_id", id)).collect()).length);
+    await correct(p2, 120);
+    await as(ada).mutation(pri.merge, { short_id: "pri-2", into: "pri-1" });
+    expect([await on(p2), await on(p1)]).toEqual([0, 120]);
+    await correct(p3, 250);
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: ws, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [{ short_id: "pri-3", merged_into: "pri-1" }], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    expect([await on(p3), await on(p1)]).toEqual([0, 370]);
   });
 
   test("move up and move down step one place, renumbering only when a neighbour has no place; at the top it stays first", async () => {

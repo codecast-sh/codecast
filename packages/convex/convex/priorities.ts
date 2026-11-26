@@ -20,7 +20,7 @@ import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWo
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { hasOkRun, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
+import { hasOkRun, moveCorrections, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
 import { inWorkspace } from "./priorityPassInputs";
 import { passTiming } from "./priorityPassSweep";
 import { passActivity } from "./lib/priorityPassSchedule";
@@ -266,7 +266,9 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     }),
     listed: (c) => listed(String(c._id)),
     mine: (c) => mine(String(c._id)),
+    // Corrections are their owner's alone: no one else learns one is waiting.
     pending: async (p) => {
+      if (!isOwner(r.viewer, p)) return new Set();
       const rows = await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).take(50);
       return new Set(rows.map((c: any) => c.step_key ?? ""));
     },
@@ -659,7 +661,8 @@ async function doMove(ctx: Ctx, viewer: Id<"users">, shortId: string, to: MoveTo
   const at = positionsOf(rows).get(String(p._id))!;
   const now = Date.now();
   for (const w of placePriority(rows, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
-    await ctx.db.patch(w.row._id, { ...(w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank }), updated_at: now });
+    // The absolute rank relative rank replaced goes with the rewrite (priorityRankBackfill).
+    await ctx.db.patch(w.row._id, { ...(w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank }), rank: undefined, rank_set_by: undefined, updated_at: now });
   }
   return echo(ctx, viewer, p._id);
 }
@@ -767,9 +770,7 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
     await move(conv, not ? undefined : into._id, conv.priority_step_key ? remap.get(conv.priority_step_key) : undefined, conv.priority_set_by);
   }
   await recount(viewer);
-  for (const c of await correctionsOf(ctx, viewer, p)) {
-    await ctx.db.patch(c._id, { priority_id: into._id, step_key: c.step_key ? remap.get(c.step_key) : undefined });
-  }
+  await moveCorrections(ctx, p._id, into._id, (key) => (key ? remap.get(key) : undefined));
   return echo(ctx, viewer, into._id);
 }
 

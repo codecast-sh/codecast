@@ -6,7 +6,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { patchPullRequest } from "./prShepherd";
@@ -88,6 +88,45 @@ async function world() {
 
 const stepOf = async (t: any, p: Id<"priorities">, key: string) => (await t.run((ctx: any) => ctx.db.get(p))).steps.find((s: any) => s.key === key);
 const convOf = (t: any, id: Id<"conversations">) => t.run((ctx: any) => ctx.db.get(id));
+
+describe("a pass never undoes what tasks and pull requests say", () => {
+  const applyPlan = (t: any, ada: Id<"users">, started_at: number, updates: unknown[]) => t.mutation((internal as any).priorityPassRun.applyPlan, {
+    user_id: ada, workspace: `user:${ada}`, started_at, from_cursor: 1, cursor_at: 2, model: "m",
+    plan: { creates: [], updates, merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
+  });
+
+  test("a task closing while the model reads: the stale plan renames another milestone, and s1 stays done at the close", async () => {
+    const { t, ada, p1, ct1 } = await world();
+    // The pass read pri-1 with s1 open; its task closes during the call.
+    const read = (await t.run((ctx: any) => ctx.db.get(p1))).steps;
+    const closedAt = NOW - H;
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct1), { status: "done", closed_at: closedAt }));
+    expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: closedAt });
+    await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps: read.map((s: any) => (s.key === "s3" ? { ...s, title: "Renamed" } : s)) } }]);
+    expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: closedAt });
+    expect((await stepOf(t, p1, "s3")).title).toBe("Renamed");
+  });
+
+  test("the pass cannot flip a milestone its merged pull request closed back to not done; only evidence reopens it", async () => {
+    const { t, ada, p1, pr } = await world();
+    const mergedAt = NOW - 2 * H;
+    await t.run((ctx: any) => patchPullRequest(ctx, pr, { state: "merged", merged_at: mergedAt }));
+    expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
+    const steps = (await t.run((ctx: any) => ctx.db.get(p1))).steps;
+    await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps: steps.map((s: any) => (s.key === "s2" ? { key: s.key, title: s.title, tier: s.tier, tier_set_by: "pass", refs: s.refs, done: false } : s)) } }]);
+    expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
+  });
+
+  test("nor its closed task's; a task reopening does reopen it", async () => {
+    const { t, ada, p1, ct1 } = await world();
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct1), { status: "done", closed_at: NOW - H }));
+    const steps = (await t.run((ctx: any) => ctx.db.get(p1))).steps;
+    await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps: steps.map((s: any) => (s.key === "s1" ? { key: s.key, title: s.title, tier: s.tier, tier_set_by: "pass", refs: s.refs, done: false } : s)) } }]);
+    expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: NOW - H });
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct1), { status: "in_progress", closed_at: undefined }));
+    expect((await stepOf(t, p1, "s1")).done).toBe(false);
+  });
+});
 
 describe("evidence marks a milestone done at the evidence's own time", () => {
   test("a linked task closing: done_at is the task's close, not when it was written", async () => {
@@ -188,16 +227,40 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s7")).done).toBe(false);
   });
 
-  test("a decision answered on a mapped session: done_at is the answer", async () => {
+  test("a decision answered on a mapped session closes nothing: a card is a question asked mid-work", async () => {
     const { t, ada, p1, cDec } = await world();
     const decision = await t.run((ctx: any) => ctx.db.insert("session_decisions", {
       conversation_id: cDec, session_id: "sess-jx7dec1", user_id: ada, question: "Flip the flag?", options: [{ label: "Yes" }, { label: "No" }],
       blocking: true, status: "pending", created_at: NOW,
     }));
     await t.withIdentity({ subject: `${ada}|session` }).mutation(api.sessionDecisions.resolve, { decision_id: decision, status: "answered", answer_index: 0 });
-    const row = await t.run((ctx: any) => ctx.db.get(decision));
-    expect(row.resolved_at).toBeNumber();
-    expect(await stepOf(t, p1, "s4")).toMatchObject({ done: true, done_at: row.resolved_at });
+    expect((await t.run((ctx: any) => ctx.db.get(decision))).resolved_at).toBeNumber();
+    expect((await stepOf(t, p1, "s4")).done).toBe(false);
+  });
+
+  test("a done pin counts only from a person-driven top-level session that is the milestone's only live one", async () => {
+    const { t, ada, p1, cPin } = await world();
+    const { worker, other } = await t.run(async (ctx: any) => {
+      const make = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, agent_type: "claude_code", session_id: `sess-${short_id}`, short_id, title: short_id, started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
+        priority_id: p1, ...fields,
+      });
+      return {
+        worker: await make("jx7wrk1", { priority_step_key: "s4", parent_conversation_id: cPin }),
+        other: await make("jx7oth1", { priority_step_key: "s3" }),
+      };
+    });
+    const done = (session: string) => t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session, text: "Shipped", status: "done" });
+    // A worker's done pin is not the milestone's.
+    await done("jx7wrk1");
+    expect((await stepOf(t, p1, "s4")).done).toBe(false);
+    // Another live person-driven session still works s3: one finishing is not the milestone finishing.
+    await done("jx7pin1");
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+    // Once the other is done too, its pin closes the milestone.
+    await done("jx7oth1");
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: (await convOf(t, other)).thread_state_at });
+    void worker;
   });
 
   test("a pin declared done on a mapped session: done_at is the pin, and a later pin keeps it", async () => {
