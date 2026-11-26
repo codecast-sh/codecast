@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { CALL_MODEL, PROD_DEFAULT_MODEL, PROSE_MODEL, STRONG_MODEL } from '../models';
 import { surfaces } from '../registry';
+import { AUTOMATIC_REVIEW_MODEL } from '../../../convex/convex/lib/automaticReview';
 import { CHECKS, modelPinsCheck, prodCallModel } from './doctor';
 
 // The "model pins" check: it passes on the tree as committed and names a call
@@ -19,6 +20,7 @@ describe('doctor: model pins', () => {
     expect(prodCallModel('title')).toBe(CALL_MODEL);
     expect(prodCallModel('changes-story')).toBe(PROSE_MODEL);
     expect(prodCallModel('ground')).toBe(STRONG_MODEL);
+    expect(prodCallModel('automatic-review')).toBe(AUTOMATIC_REVIEW_MODEL);
     expect(prodCallModel('decide')).toBe(PROD_DEFAULT_MODEL);
     expect(prodCallModel('review-note')).toBe(PROD_DEFAULT_MODEL);
   });

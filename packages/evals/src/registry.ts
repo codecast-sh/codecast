@@ -3,6 +3,7 @@ import { surfaceDir } from './surface';
 import { echoMeta } from './testSurface';
 import { meta as anchorBrief } from './surfaces/anchorBrief/meta';
 import { meta as ask } from './surfaces/ask/meta';
+import { meta as automaticReview } from './surfaces/automaticReview/meta';
 import { meta as callSummary } from './surfaces/callSummary/meta';
 import { meta as cardWrite } from './surfaces/cardWrite/meta';
 import { meta as changesEdition } from './surfaces/changesEdition/meta';
@@ -25,7 +26,7 @@ import { meta as title } from './surfaces/title/meta';
 // Every surface's meta, statically: light, so `stale` and `status` answer
 // without loading a single implementation. Implementations load on demand.
 
-const PHASE1: SurfaceMeta[] = [settle, title, insight, callSummary, ask, handoff, suggest, changesStory, changesEdition, route, ground, cardWrite, orgReview, roleWake, anchorBrief, expectations, guidance, decide, reviewNote, intentRead];
+const PHASE1: SurfaceMeta[] = [settle, title, insight, callSummary, ask, handoff, suggest, changesStory, changesEdition, route, ground, automaticReview, cardWrite, orgReview, roleWake, anchorBrief, expectations, guidance, decide, reviewNote, intentRead];
 
 /** The test surface joins only when a test asks for it. */
 export const testMode = (): boolean => process.env.CODECAST_EVALS_TEST === '1';

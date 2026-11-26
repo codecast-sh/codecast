@@ -16,7 +16,7 @@
 //
 // Measured on frozen real pull requests by the evals' automatic-review surface (packages/evals).
 import type { Infer } from "convex/values";
-import { STRONG_MODEL } from "./anthropic";
+import { STRONG_MODEL, type SurfaceRequest } from "./anthropic";
 import { runModelCall, type CallScope } from "../modelCalls";
 import type { automaticReviewValidator } from "./automaticReviewValidator";
 
@@ -63,6 +63,11 @@ export function automaticReviewPrompt(a: { repository: string; head_sha: string;
     `Changed files (${a.files.length}):\n${a.files.map((f) => `- ${f}`).join("\n")}`,
     `The diff against the default branch:\n<diff>\n${a.diff}\n</diff>`,
   ].join("\n\n");
+}
+
+/** The one request it posts for a head, which the evals' automatic-review surface replays byte for byte. */
+export function automaticReviewRequest(a: { repository: string; head_sha: string; files: string[]; diff: string; mechanism_definition: string }): SurfaceRequest {
+  return { model: AUTOMATIC_REVIEW_MODEL, max_tokens: MAX_TOKENS, system: automaticReviewSystem(a.mechanism_definition), prompt: automaticReviewPrompt(a), output_schema: AUTOMATIC_REVIEW_SCHEMA };
 }
 
 /** A path as a `diff --git` header writes it: bare, or quoted with C escapes. Null when it cannot be read back exactly. */
@@ -137,12 +142,11 @@ export async function reviewHead(ctx: { runQuery: any; runMutation: any; schedul
     const files = diffPaths(a.diff);
     if (!files) return failed("the diff names a path codecast cannot read back exactly");
     if (files.join("\n") !== [...new Set(a.listed)].sort().join("\n")) return failed("GitHub's file list and the head's diff name different files");
-    const system = automaticReviewSystem(a.mechanism_definition);
-    const prompt = automaticReviewPrompt({ repository: a.repository, head_sha: a.head_sha, files, diff: a.diff });
-    const size = system.length + prompt.length;
+    const req = automaticReviewRequest({ repository: a.repository, head_sha: a.head_sha, files, diff: a.diff, mechanism_definition: a.mechanism_definition });
+    const size = (req.system ?? "").length + req.prompt.length;
     if (size > AUTOMATIC_REVIEW_PROMPT_MAX) return failed(`the prompt is ${size.toLocaleString("en-US")} characters, over the ${AUTOMATIC_REVIEW_PROMPT_MAX.toLocaleString("en-US")} it sends`);
     if (!scope) return failed("the repository's workspace has no model budget to pay for it");
-    const spec = { model: AUTOMATIC_REVIEW_MODEL, max_tokens: MAX_TOKENS, system, prompt, output: "json" as const, output_schema: AUTOMATIC_REVIEW_SCHEMA };
+    const spec = { ...req, output: "json" as const };
     // Only a call that never got an answer is tried again; an answer, fitting or not, is the one draw.
     for (let attempt = 1; ; attempt++) {
       const r = await runModelCall(ctx, scope, "judge", spec, "Automatic pull request review", CALL_TIMEOUT_MS);

@@ -1,0 +1,26 @@
+{
+  "name": "automatic-review drop-unsubscribe-column",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:drop-unsubscribe-column"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "automatic-review:drop-unsubscribe-column",
+    "title": "automatic-review drop-unsubscribe-column"
+  },
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "trigger": {
+    "type": "automatic-review"
+  },
+  "meta": {
+    "surface": "automatic-review",
+    "visibility": "public",
+    "snapshot": "fixtures/automatic-review/drop-unsubscribe-column.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "9cde5c0b-fb48-4b2b-8751-4ebc44939ef6",
+  "createdAt": "2026-11-26T06:04:33.616Z"
+}

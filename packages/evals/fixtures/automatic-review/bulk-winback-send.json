@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "notes": "a script that emails every customer who has not ordered in a year: a send in bulk",
+  "label": {
+    "mechanism": true
+  },
+  "snapshot": {
+    "repository": "acme/shop",
+    "head_sha": "abc0000000000000000000000000000000000000",
+    "files": [
+      "package.json",
+      "scripts/winbackCampaign.ts"
+    ],
+    "diff": "diff --git a/scripts/winbackCampaign.ts b/scripts/winbackCampaign.ts\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/scripts/winbackCampaign.ts\n@@ -0,0 +1,22 @@\n+import { db } from \"../src/db\";\n+import { enqueueEmail } from \"../src/email/queue\";\n+\n+// One-off win-back: every customer with no order in the last 365 days gets the spring offer.\n+async function main() {\n+  const lapsed = await db.query(\n+    `SELECT id, email, first_name FROM customers\n+     WHERE last_order_at < now() - interval '365 days'`,\n+  );\n+  console.log(`queueing ${lapsed.rows.length} emails`);\n+  for (const c of lapsed.rows) {\n+    await enqueueEmail({\n+      to: c.email,\n+      template: \"spring-winback\",\n+      vars: { firstName: c.first_name, code: \"COMEBACK20\" },\n+      sendAt: new Date(),\n+    });\n+  }\n+}\n+\n+main();\n+\ndiff --git a/package.json b/package.json\nindex 2222222..3333333 100644\n--- a/package.json\n+++ b/package.json\n@@ -8,6 +8,7 @@\n     \"dev\": \"vite\",\n     \"build\": \"vite build\",\n+    \"winback\": \"bun scripts/winbackCampaign.ts\",\n     \"test\": \"vitest run\"\n   },\n",
+    "mechanism_definition": "A mechanism is a change whose mistake reaches many people at once and cannot be undone. That consequence is the test, not the kind of change: consent and unsubscribe state, a send in bulk, and a bulk write, delete or dropping migration on records about people or on data nothing can rebuild. Removing what the system regenerates or exists to discard (test fixtures, eval runs, queue jobs, caches, empty or unread columns, our own machinery's logs) is routine work, not a mechanism.",
+    "definition_from": "acme/shop:ops/mechanism.md",
+    "now": 1795000000000
+  }
+}

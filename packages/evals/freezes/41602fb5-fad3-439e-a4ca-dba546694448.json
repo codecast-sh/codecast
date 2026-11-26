@@ -1,0 +1,26 @@
+{
+  "name": "automatic-review dev-dependency-bump",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:dev-dependency-bump"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "automatic-review:dev-dependency-bump",
+    "title": "automatic-review dev-dependency-bump"
+  },
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "trigger": {
+    "type": "automatic-review"
+  },
+  "meta": {
+    "surface": "automatic-review",
+    "visibility": "public",
+    "snapshot": "fixtures/automatic-review/dev-dependency-bump.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "41602fb5-fad3-439e-a4ca-dba546694448",
+  "createdAt": "2026-11-26T06:04:33.907Z"
+}

@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-11-20T12:00:00.000Z",
+  "notes": "a cleanup that deletes eval runs older than 30 days: data the system exists to discard, which the definition calls routine",
+  "label": {
+    "mechanism": false
+  },
+  "snapshot": {
+    "repository": "acme/shop",
+    "head_sha": "abc0003333333333333333333333333333333333",
+    "files": [
+      "src/jobs/index.ts",
+      "src/jobs/pruneEvalRuns.ts"
+    ],
+    "diff": "diff --git a/src/jobs/pruneEvalRuns.ts b/src/jobs/pruneEvalRuns.ts\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/src/jobs/pruneEvalRuns.ts\n@@ -0,0 +1,12 @@\n+import { db } from \"../db\";\n+\n+// Eval runs are scratch: each nightly run writes a fresh set, and nothing reads one past a week.\n+export async function pruneEvalRuns() {\n+  const r = await db.query(`DELETE FROM eval_runs WHERE created_at < now() - interval '30 days'`);\n+  console.log(`pruned ${r.rowCount} eval runs`);\n+}\n+\ndiff --git a/src/jobs/index.ts b/src/jobs/index.ts\nindex 2222222..3333333 100644\n--- a/src/jobs/index.ts\n+++ b/src/jobs/index.ts\n@@ -4,6 +4,7 @@ import { nightlyReport } from \"./nightlyReport\";\n+import { pruneEvalRuns } from \"./pruneEvalRuns\";\n\n export const crons = [\n   { name: \"nightly-report\", schedule: \"0 6 * * *\", run: nightlyReport },\n+  { name: \"prune-eval-runs\", schedule: \"30 6 * * *\", run: pruneEvalRuns },\n ];\n",
+    "mechanism_definition": "A mechanism is a change whose mistake reaches many people at once and cannot be undone. That consequence is the test, not the kind of change: consent and unsubscribe state, a send in bulk, and a bulk write, delete or dropping migration on records about people or on data nothing can rebuild. Removing what the system regenerates or exists to discard (test fixtures, eval runs, queue jobs, caches, empty or unread columns, our own machinery's logs) is routine work, not a mechanism.",
+    "definition_from": "acme/shop:ops/mechanism.md",
+    "now": 1795000000000
+  }
+}
