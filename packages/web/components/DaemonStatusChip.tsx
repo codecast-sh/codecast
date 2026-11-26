@@ -30,17 +30,45 @@ import { SessionHostWakeChip, SessionRunLimitChip } from "./HostWakeStatus";
 // The pill carries only the short state ("stalled · 365"), never the machine
 // name or the word "daemon": the header has no room for a sentence, and the
 // panel says both. Its width holds steady through a copy too: the check
-// replaces the dot, not the text.
+// replaces the dot, and the word that says what happened floats beside the
+// pill for a moment instead of changing its text. A glyph swap alone went
+// unseen (ct-102050: three presses for one copy), so the float names the
+// command it copied, or, when the clipboard refuses, the command to type.
+type CopyResult = "copied" | "failed" | null;
+
+function CopyNotice({ result, command }: { result: CopyResult; command: string }) {
+  if (!result) return null;
+  return (
+    <span
+      role="status"
+      data-daemon-pill-notice={result}
+      className="pointer-events-none absolute right-full top-1/2 z-50 mr-1.5 -translate-y-1/2 whitespace-nowrap rounded-md border border-sol-border bg-sol-bg px-2 py-0.5 text-meta font-medium text-sol-text shadow-md"
+    >
+      {result === "copied" ? "Copied " : "Couldn't copy · run "}
+      <code className="font-mono">{command}</code>
+    </span>
+  );
+}
+
 function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealthCopy; machine?: string; quiet?: boolean }) {
-  const [copied, setCopied] = useState(false);
+  const [result, setResult] = useState<CopyResult>(null);
+  const copied = result === "copied";
   const color = `var(${view.colorVar})`;
   const label = machine ? `${machine}: ${view.label}` : view.label;
+  // The pill reads as a status badge; its tooltip (and accessible
+  // description) says what a click does.
+  const hint = `Click to copy ${view.command}`;
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await copyToClipboard(view.command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    let next: CopyResult = "copied";
+    try {
+      await copyToClipboard(view.command);
+    } catch {
+      next = "failed";
+    }
+    setResult(next);
+    setTimeout(() => setResult(null), next === "copied" ? 2000 : 6000);
   };
 
   const panel = (
@@ -52,7 +80,7 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
       <StatusPanelSection className="p-0">
         <button type="button" onClick={handleClick} className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sol-bg-alt/60">
           <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-meta text-sol-text">{view.command}</code>
-          <span className="ml-auto shrink-0 text-meta text-sol-text-dim group-hover:text-sol-text">{copied ? "Copied" : "Copy"}</span>
+          <span className="ml-auto shrink-0 text-meta text-sol-text-dim group-hover:text-sol-text">{copied ? "Copied" : result === "failed" ? "Copy by hand" : "Copy"}</span>
         </button>
       </StatusPanelSection>
     </div>
@@ -61,8 +89,9 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
   if (quiet) {
     return (
       <HoverCard card={panel} side="bottom" align="end" className="w-[280px]" focusable>
-        <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} onClick={handleClick} style={{ color }} className="h-6 w-6 rounded-full hover:text-current [&>svg]:h-3.5 [&>svg]:w-3.5">
+        <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} title={hint} onClick={handleClick} style={{ color }} className="relative h-6 w-6 rounded-full hover:text-current [&>svg]:h-3.5 [&>svg]:w-3.5">
           {copied ? <Check /> : <TriangleAlert />}
+          <CopyNotice result={result} command={view.command} />
         </TopbarButton>
       </HoverCard>
     );
@@ -73,13 +102,15 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
       <TopbarChip
         data-daemon-pill="pill"
         aria-label={label}
+        title={hint}
         onClick={handleClick}
         tone={color}
         alert
-        className="hidden md:flex cursor-pointer"
+        className="relative hidden md:flex cursor-pointer"
       >
         {copied ? <Check className="h-2.5 w-2.5 shrink-0" /> : <StatusDot color={color} ping />}
         <span className="max-w-[112px] truncate">{view.short}</span>
+        <CopyNotice result={result} command={view.command} />
       </TopbarChip>
     </HoverCard>
   );
