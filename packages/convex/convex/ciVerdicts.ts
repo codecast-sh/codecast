@@ -40,10 +40,10 @@ export const record = mutation({
     const { team, repository } = await teamFor(ctx, args);
     if (!/^[0-9a-f]{40}$/i.test(args.sha)) throw new Error(`"${args.sha}" is not a full 40-character commit sha.`);
     const { api_token: _t, team_id: _team, ...row } = args;
-    await recordCommitCi(ctx, { ...row, repository, kind: "runner" }, team);
+    const outcome = await recordCommitCi(ctx, { ...row, repository, kind: "runner" }, team);
     const [stored] = await rowsAt(ctx, team, repository, args.sha, args.name);
     // A late or older delivery leaves the stored run in place; say which one stands.
-    return { sha: args.sha.toLowerCase(), run_id: stored?.run_id ?? null, status: stored?.status ?? null, conclusion: stored?.conclusion ?? null, kept: stored?.run_id === args.run_id };
+    return { sha: args.sha.toLowerCase(), run_id: stored?.run_id ?? null, status: stored?.status ?? null, conclusion: stored?.conclusion ?? null, written: outcome === "written" };
   },
 });
 

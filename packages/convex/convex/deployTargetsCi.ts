@@ -36,9 +36,9 @@ export type CommitCiInput = {
  * One workflow run or check suite on the default branch, as the commit's CI
  * row for that workflow or app: written once per run, updated as it moves,
  * and a rerun (a newer start) takes the row over. Returns false for a repository
- * no team's installation routes.
+ * no team's installation routes, "kept" when the stored run stands over this one.
  */
-export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"teams"> | null): Promise<boolean> {
+export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"teams"> | null): Promise<false | "written" | "kept"> {
   const repository = normalizeRepository(row.repository);
   const team = teamId ?? (await resolveTeamForRepository(ctx, repository));
   if (!team) return false;
@@ -60,8 +60,8 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
   };
   if (same) {
     // An older run's late delivery does not speak over a newer run of the same workflow.
-    if (row.started_at < same.started_at) return true;
-    if (same.status === "completed" && row.status !== "completed" && same.run_id === row.run_id) return true;
+    if (row.started_at < same.started_at) return "kept";
+    if (same.status === "completed" && row.status !== "completed" && same.run_id === row.run_id) return "kept";
     // A runner's job logs the new verdict no longer names are dropped from storage with the row's old jobs.
     const kept = new Set((row.jobs ?? []).map((j) => j.log_storage_id).filter(Boolean));
     for (const j of same.jobs ?? []) if (j.log_storage_id && !kept.has(j.log_storage_id)) await ctx.storage.delete(j.log_storage_id);
@@ -69,7 +69,7 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
   } else {
     await ctx.db.insert("commit_ci", { workspace: teamKey(team), team_id: team, repository, sha, name: row.name, kind: row.kind, ...fields });
   }
-  return true;
+  return "written";
 }
 
 /** A workflow_run payload on its repository's default branch as a commit CI row, whatever its status. */

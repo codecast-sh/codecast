@@ -83,7 +83,7 @@ export function registerCiCommand(program: Command, deps: PublishDeps): void {
       try {
         const r = await recordVerdict(deps, opts.file, opts.json ? () => {} : console.log);
         if (opts.json) return console.log(JSON.stringify(r));
-        console.log(r.kept ? `Recorded ${r.sha.slice(0, 12)}: ${r.status === "completed" ? r.conclusion : r.status}` : `Kept the stored run ${r.run_id} on ${r.sha.slice(0, 12)} (${r.status}); this one is older or already finished`);
+        console.log(r.written ? `Recorded ${r.sha.slice(0, 12)}: ${r.status === "completed" ? r.conclusion : r.status}` : `Not recorded: the stored run ${r.run_id} on ${r.sha.slice(0, 12)} (${r.status === "completed" ? r.conclusion : r.status}) stands, since this one is older or the same run still in progress`);
       } catch (err) { fail(err); }
     });
 

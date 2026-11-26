@@ -48,7 +48,7 @@ describe("recording a runner verdict", () => {
   test("one row per commit and name, scoped to the repository's team", async () => {
     const { t, ctx } = await world();
     const r = await put(ctx);
-    expect(r).toMatchObject({ sha: SHA, kept: true, conclusion: "success" });
+    expect(r).toMatchObject({ sha: SHA, written: true, conclusion: "success" });
     expect(t.commit_ci).toHaveLength(1);
     expect(t.commit_ci[0]).toMatchObject({ kind: "runner", workspace: `team:${TEAM}`, host: "union-line-3", run_kind: "main", name: "union-ci" });
     expect(t.commit_ci[0].jobs[0]).toMatchObject({ name: "test", log_storage_id: "log_a" });
@@ -58,11 +58,11 @@ describe("recording a runner verdict", () => {
     const { t, ctx, deleted } = await world();
     await put(ctx);
     const late = await put(ctx, { status: "in_progress", conclusion: undefined, jobs: [] });
-    expect(late).toMatchObject({ kept: true, status: "completed" });
+    expect(late).toMatchObject({ written: false, status: "completed" });
     expect(t.commit_ci[0].jobs).toHaveLength(1);
 
     const older = await put(ctx, { run_id: "run-0", started_at: NOW - 1000, conclusion: "failure" });
-    expect(older).toMatchObject({ kept: false, run_id: "run-1", conclusion: "success" });
+    expect(older).toMatchObject({ written: false, run_id: "run-1", conclusion: "success" });
 
     await put(ctx, { run_id: "run-2", started_at: NOW + 1000, status: "in_progress", conclusion: undefined, jobs: [job("test", "failure", { log_storage_id: "log_b" })] });
     expect(t.commit_ci).toHaveLength(1);
