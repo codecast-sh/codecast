@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, refreezeSessionChange, writeFrozenChange } from "./flowChange";
+import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
 import { behindWords, readFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
@@ -209,12 +209,14 @@ describe("a named branch's fix comes back to the run", () => {
     const home = await refreezeSessionChange(here, runDir, worktree);
     expect(home.change.tip).toBe(local);
 
-    // Origin still holds the earlier fix, behind what the run froze: nothing moved.
+    // The session pushes it: origin now holds what the run froze, and nothing moved.
+    git(worktree, "push", "--quiet", "origin", "feat");
     const still = await refreezeSessionChange(here, runDir, worktree);
     expect(still.moved).toBe(false);
     expect(still.change.tip).toBe(local);
 
-    // The conflict fix: rebuilt there on an older base and force-pushed, so it descends from nothing the run holds.
+    // The conflict fix: rebuilt there on an older base and force-pushed. Origin held all the run froze, so nothing
+    // of it is replayed: the force-push replaces it.
     git(there, "fetch", "--quiet", "origin");
     git(there, "reset", "--quiet", "--hard", base);
     write(there, "a.txt", "rebased there\n");
@@ -225,7 +227,7 @@ describe("a named branch's fix comes back to the run", () => {
     expect(forced.moved).toBe(true);
     expect(forced.change.tip).toBe(rebased);
     expect(git(worktree, "rev-parse", "HEAD")).toBe(rebased);
-  });
+  }, 180_000);
 
   // Rebased here before the run, while origin still holds the push from before it: that older copy is not a fix.
   test("a branch rebased here keeps its tip when origin holds the copy from before the rebase and nothing was fixed", async () => {
@@ -253,7 +255,7 @@ describe("a named branch's fix comes back to the run", () => {
     expect(again.moved).toBe(false);
     expect(again.change.tip).toBe(amended);
     expect(fs.readFileSync(path.join(worktree, "a.txt"), "utf-8")).toBe("v2\n");
-  });
+  }, 180_000);
 });
 
 // A shared checkout whose HEAD lags its upstream: the change is cut on HEAD,
@@ -426,6 +428,37 @@ describe("a session's change is cut on fresh upstream", () => {
     expect(levelled.landed).toBe(fresh);
     expect(levelled.tip).toBe(change.tip);
     expect(moved).toBe(false);
+  }, 180_000);
+
+  test("a landed refreeze with nothing new in the run's worktree keeps the change as it was; landed only once upstream holds what the worktree carried (ct-99118)", async () => {
+    const { root, upstream, session } = lagging("upff");
+    const runDir = path.join(root, ".git", "run-landed-carry");
+    writeFrozenChange(runDir, await freezeSessionChange(root, session, { branch: "codecast/landed-carry", worktree: "landed-carry" }));
+    const tree = path.join(sandbox, "upff-wt");
+    git(root, "worktree", "add", "--quiet", tree, "codecast/landed-carry");
+    await snapshotRunTree(tree, runDir);
+    write(tree, "b.ts", "export const b = 'from the worktree';\n");
+    const carried = (await refreezeSessionChange(root, runDir, tree)).change;
+    expect(carried.carried).toEqual(["b.ts"]);
+    const level = () => { git(root, "fetch", "-q", "origin"); git(root, "reset", "-q", "--hard", "origin/main"); };
+
+    // Upstream lands the session's a.ts and the checkout levels with it, but upstream lacks the worktree's b.ts.
+    upstream("a.ts", "export const a = 2;\n");
+    level();
+    await snapshotRunTree(tree, runDir);
+    const kept = await refreezeSessionChange(root, runDir, tree);
+    expect(kept.change.landed).toBeUndefined();
+    expect(kept.change.tip).toBe(carried.tip);
+    expect(kept.moved).toBe(false);
+
+    // Once upstream holds b.ts too, the change has landed, as it was.
+    const all = upstream("b.ts", "export const b = 'from the worktree';\n");
+    level();
+    await snapshotRunTree(tree, runDir);
+    const landed = await refreezeSessionChange(root, runDir, tree);
+    expect(landed.change.landed).toBe(all);
+    expect(landed.change.tip).toBe(carried.tip);
+    expect(landed.change.carried).toEqual(["b.ts"]);
   }, 180_000);
 });
 

@@ -12,7 +12,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeCheckoutChange, NoCheckoutChange, previewCheckoutChange, refreezeSessionChange, writeFrozenChange } from "./flowChange";
+import { freezeCheckoutChange, NoCheckoutChange, previewCheckoutChange, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
 import { readFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
@@ -158,6 +158,28 @@ describe("a shared checkout's pass is one flow change", () => {
     expect(change.behind).toBeUndefined();
     expect(git(root, "log", "--format=%s", `${change.base}..${change.tip}`)).toContain("add f, unpushed");
     expect(git(root, "diff", "--name-only", `${change.base}...${change.tip}`).split("\n")).toContain("src/f.ts");
+  }, 180_000);
+
+  test("a file carried from the run's worktree stays out of the checkout's paths, so a stranger's edit to it there never joins the change (ct-99118)", async () => {
+    const { root } = checkoutWorld();
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    const runDir = path.join(root, ".git", "run-carry");
+    writeFrozenChange(runDir, { ...change, session: "jx7cccc", conversation: "jx7ccccccccccccccccccccccccccccc" });
+    const tree = path.join(sandbox, `pass-wt-${worlds}`);
+    git(root, "worktree", "add", "--quiet", tree, "codecast/pass");
+    await snapshotRunTree(tree, runDir);
+    write(tree, "src/d.ts", "export const d = 'from the worktree';\n");
+    const first = (await refreezeSessionChange(root, runDir, tree, { roster })).change;
+    expect(first.carried).toEqual(["src/d.ts"]);
+    expect(first.paths).not.toContain("src/d.ts");
+
+    // Then a session nobody's edit names writes src/d.ts in the shared checkout.
+    write(root, "src/d.ts", "export const d = 'a stranger';\n");
+    await snapshotRunTree(tree, runDir);
+    const second = (await refreezeSessionChange(root, runDir, tree, { roster })).change;
+    expect(git(root, "show", `${second.tip}:src/d.ts`)).toBe("export const d = 'from the worktree';");
+    expect(second.paths).not.toContain("src/d.ts");
+    expect(second.carried).toEqual(["src/d.ts"]);
   }, 180_000);
 
   test("a refreeze takes a writer's fix and a file it adds, and leaves a stranger's new file out", async () => {

@@ -22,6 +22,13 @@ export type FrozenChange = {
   /** Origin's tip of the branch when the change was last frozen, if origin has it: origin holds a fix only once it
    *  moves off this, so a copy pushed before a local rebase never replaces the change. */
   remote_tip?: string;
+  /** A change frozen again from a checkout carries what its subject left in the run's worktree on top of the freeze
+   *  (refreezeSessionChange): the freeze's own tip, under it, so the next refreeze carries it too. */
+  frozen_tip?: string;
+  /** The files that carry changes over `frozen_tip`. Kept apart from `paths`, which a checkout's refreeze reads from the shared checkout. */
+  carried?: string[];
+  /** When the change was last frozen (ms; writeFrozenChange stamps it): what this checkout fetched of the branch after it is news. */
+  frozen_at?: number;
   /**
    * Set when the change could not be replayed onto upstream, so it stays on HEAD, behind that upstream commit: it
    * `conflict`s there in `conflicts`, or the checkout's history is `unreplayable` (a merge commit). `reason` says it whole.
@@ -46,6 +53,16 @@ export type FrozenChange = {
 };
 
 const CHANGE_FILE = "change.json";
+/** The run's worktree as a git tree when a brief last went out (flowChange.ts snapshotRunTree). */
+export const BRIEF_TREE = "brief-tree";
+/** Where files the session left in the run's worktree that the change holds out are kept, so the next stage checks the change alone. */
+export const heldDir = (runDir: string) => path.join(runDir, "held");
+
+/** What a refreeze held out of the change and set aside, said to the session in its next brief; empty when nothing. */
+export function heldWords(runDir: string, held: Array<{ path: string; why: string }>): string {
+  if (!held.length) return "";
+  return `Held out of the change and moved from the run's worktree to ${heldDir(runDir)}: ${held.map((h) => `${h.path} (${h.why})`).join("; ")}`;
+}
 
 /**
  * The files a branch changes against the repository's main line: `git diff --name-only <merge-base>..<branch>`,
@@ -64,11 +81,17 @@ export function branchChangePaths(top: string, branch: string): string[] {
   return out ? out.split("\n").filter(Boolean) : [];
 }
 
-/** Leave the change where the run's stations read it: `$run_dir/change.json`. */
+/**
+ * Leave the change where the run's stations read it: `$run_dir/change.json`, stamped with when (`frozen_at`). A
+ * change written afresh (a run's start, or a refreeze that took the session's edits) ends any brief's record of the
+ * worktree: a run directory is reused by the next run of the same flow and task, and a record from a stopped attempt
+ * would carry its stations' output.
+ */
 export function writeFrozenChange(runDir: string, change: FrozenChange): string {
   fs.mkdirSync(runDir, { recursive: true });
   const file = path.join(runDir, CHANGE_FILE);
-  fs.writeFileSync(file, JSON.stringify(change, null, 2) + "\n");
+  fs.rmSync(path.join(runDir, BRIEF_TREE), { force: true });
+  fs.writeFileSync(file, JSON.stringify({ ...change, frozen_at: Date.now() }, null, 2) + "\n");
   return file;
 }
 
@@ -116,7 +139,7 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       ...(change.session ? { change_session: change.session } : {}),
       ...(change.conversation ? { change_conversation: change.conversation } : {}),
       // No paths is a change whose files were not read: left unset, so `touches` reads it as unknown.
-      ...(change.paths?.length ? { change_files: change.paths.join(" ") } : {}),
+      ...(change.paths?.length ? { change_files: [...new Set([...change.paths, ...(change.carried ?? [])])].join(" ") } : {}),
       // Where a reviewer's diff starts: a session's change sits on the upstream it was cut onto, which the local default branch may lag.
       ...((change.source === "session" || change.source === "checkout") && change.base ? { diff_base: change.base } : {}),
       change_return: changeReturnWords(change),
