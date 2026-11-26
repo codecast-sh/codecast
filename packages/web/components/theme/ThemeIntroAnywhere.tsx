@@ -10,7 +10,7 @@
 
 import { useLocation } from "react-router";
 import { isSetupFlowPath } from "../../lib/setupFlow";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Palette } from "lucide-react";
@@ -54,9 +54,29 @@ function ThemeIntroCard({ onDone, onAll }: { onDone: () => void; onAll: () => vo
   );
 }
 
-function showThemeIntro(onAll: () => void) {
+/** Text typed into a composer: the field an input event came from, read the
+ *  way composerHasText reads every composer on the page. */
+function typedIntoComposer(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement || (target instanceof HTMLInputElement && target.type === "text")) return !!target.value.trim();
+  return target instanceof HTMLElement && target.isContentEditable && !!(target.textContent ?? "").trim();
+}
+
+/** Raises the card. While it is up, the person starting to compose takes it
+ *  down without answering it (theme_intro_seen stays unset), and onYield runs
+ *  so the gate can raise it again later. */
+function showThemeIntro(onAll: () => void, onYield?: () => void) {
   let answered = false;
-  const answer = () => { if (!answered) { answered = true; markSeen(); } };
+  const stopListening = () => document.removeEventListener("input", onInput, true);
+  const answer = () => { stopListening(); if (!answered) { answered = true; markSeen(); } };
+  function onInput(e: Event) {
+    if (answered || !typedIntoComposer(e.target)) return;
+    // Yielding is not an answer: sonner's onDismiss must not mark it seen.
+    answered = true;
+    stopListening();
+    toast.dismiss(TOAST_ID);
+    onYield?.();
+  }
+  document.addEventListener("input", onInput, true);
   toast.custom(
     (id) => (
       <ThemeIntroCard
@@ -81,6 +101,8 @@ export function ThemeIntroAnywhere() {
     (st) => cliNeverConnected(st.currentUser),
   ]);
   const risen = useRef(false);
+  // Bumped when the card yields to composing, so the gate arms once more.
+  const [yields, setYields] = useState(0);
   const ready = s.clientStateInitialized && !!s.currentUser?._id && !phone && !cliNeverConnected(s.currentUser);
   const seen = s.clientState.ui?.theme_intro_seen === true;
 
@@ -99,10 +121,13 @@ export function ThemeIntroAnywhere() {
       const busy = (st.call?.phase ?? "idle") !== "idle" || !!st.tour || composerHasText() || toast.getToasts().length > 0;
       if (risen.current || busy || st.clientState.ui?.theme_intro_seen) return;
       risen.current = true;
-      showThemeIntro(() => router.push(settingsPathFor("general")));
+      showThemeIntro(
+        () => router.push(settingsPathFor("general")),
+        () => { risen.current = false; setYields((n) => n + 1); },
+      );
     }, SETTLE_MS);
     return () => window.clearTimeout(t);
-  }, [ready, seen, router, inSetupFlow]);
+  }, [ready, seen, router, inSetupFlow, yields]);
 
   return null;
 }
