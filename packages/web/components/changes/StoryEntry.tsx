@@ -103,7 +103,7 @@ function useStoryMedia(story: Story) {
 /** The closed card's picture: its first screenshot, small; else the page it published, as a tile with the page's title. */
 function Thumb({ all }: { all: readonly StoryMedia[] }) {
   const media = all.find((m) => m.kind === "image") ?? all.find((m) => m.kind === "page");
-  if (!media || media.kind === "canvas") return null;
+  if (!media) return null;
   if (media.kind === "image") {
     return <img src={media.src} alt="" loading="lazy" className="h-[84px] w-[136px] shrink-0 rounded-md border border-sol-border/30 bg-sol-bg-alt/60 object-cover object-top" />;
   }

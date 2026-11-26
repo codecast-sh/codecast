@@ -22,6 +22,8 @@ import {
   Hexagon,
   UserRound,
   KeyRound,
+  Bug,
+  BellRing,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
@@ -101,6 +103,8 @@ const TYPE_ICON: Record<EntityType, any> = {
   commit: GitCommitHorizontal,
   call: Phone,
   replay: Film,
+  issue: Bug,
+  metric: BellRing,
   deploy: Rocket,
   source: Radio,
   role: Hexagon,
