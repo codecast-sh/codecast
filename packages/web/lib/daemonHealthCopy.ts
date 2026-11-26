@@ -146,3 +146,17 @@ export function describeDeviceFreeze(row: {
     colorVar: hourMs >= OVERLOADED_HOUR_MS ? "--sol-orange" : "--sol-text-dim",
   };
 }
+
+// Where the panel's command must be run. Copy puts it on the clipboard of the
+// machine running this browser, so the row says which machine it is for:
+// "here" when the chip is this browser's own daemon, "elsewhere" when the app
+// knows this browser runs on a different machine, and "unknown" when it cannot
+// tell (the local daemon did not answer), in which case it names the machine
+// and claims neither.
+export type CommandTarget = "here" | "elsewhere" | "unknown";
+
+export function describeCommandTarget(machine: string | undefined, where: CommandTarget): string {
+  if (where === "here") return machine ? `Run on this machine (${machine})` : "Run on this machine";
+  if (!machine) return "";
+  return where === "elsewhere" ? `Run on ${machine}, not this machine` : `Run on ${machine}`;
+}
