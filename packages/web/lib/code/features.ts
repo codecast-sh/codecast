@@ -119,11 +119,29 @@ export function editorFeatureCompartment(id: string): Compartment | undefined {
   return features.get(id)?.compartment;
 }
 
+let focused: EditorView | null = null;
+
+/** The editor the person was last in, for commands that name none (the
+ *  command palette, a status bar chip). A plain `focusin` on the editor's
+ *  root, so it holds whatever inside the editor took focus. */
+export function focusedEditorView(): EditorView | null {
+  return focused?.dom.isConnected ? focused : null;
+}
+
 /** A mounted editor; registry changes reach it until the returned release. */
 export function attachFeatureHost(view: EditorView): () => void {
   hosts.add(view);
+  const onFocus = () => {
+    focused = view;
+  };
+  view.dom.addEventListener("focusin", onFocus);
+  if (view.hasFocus || !focusedEditorView()) focused = view;
   syncEditorFeatures(view);
-  return () => hosts.delete(view);
+  return () => {
+    hosts.delete(view);
+    view.dom.removeEventListener("focusin", onFocus);
+    if (focused === view) focused = null;
+  };
 }
 
 function effectsFor(view: EditorView, id: string, feature: Feature, ext: Extension) {
