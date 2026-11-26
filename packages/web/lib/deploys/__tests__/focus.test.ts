@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { NO_FILTERS, commitMatches, deployMatches, deploysFocusHref, filterParams, filtersOf, focusOf, focusOfRef, focusRef, focusRepository, reachAnyDeploy, focusTarget, labelsOf, reachDeployOn } from "../focus";
+import { carriedMatches, commitMatches, deployMatches, deploysFocusHref, focusOf, focusOfRef, focusRef, focusRepository, mineOf, reachAnyDeploy, focusTarget, reachDeployOn, rowMatches, runMatches, viewOf } from "../focus";
+import { carriedOfQueue, rowsFor, shipperOf } from "../board";
 
 const params = (q: string) => new URLSearchParams(q);
 const commit = (sha: string, subject: string, extra: Partial<{ tasks: any[]; session: any }> = {}) => ({
@@ -30,15 +31,25 @@ describe("what a link into Deploys points at", () => {
   });
 });
 
-describe("which IDs the queue shows", () => {
-  test("PR and SHA by default, plus the kind the link points at", () => {
-    expect(labelsOf(params(""), null)).toEqual(["pr", "sha"]);
-    expect(labelsOf(params("task=ct-1"), focusOf(params("task=ct-1")))).toEqual(["pr", "sha", "task"]);
-    expect(labelsOf(params("deploy=dp-1"), focusOf(params("deploy=dp-1")))).toEqual(["pr", "sha"]);
+describe("the view the switch opens at", () => {
+  test("sessions by default; a link opens at the view that lists what it points at", () => {
+    expect(viewOf(params(""), null)).toBe("sessions");
+    expect(viewOf(params("task=ct-1"), focusOf(params("task=ct-1")))).toBe("tasks");
+    expect(viewOf(params("pr=7"), focusOf(params("pr=7")))).toBe("prs");
+    expect(viewOf(params("deploy=dp-1"), focusOf(params("deploy=dp-1")))).toBe("sessions");
   });
-  test("the address's own choice wins, in the switch's order, and may be empty", () => {
-    expect(labelsOf(params("show=session,pr&task=ct-1"), focusOf(params("task=ct-1")))).toEqual(["pr", "session"]);
-    expect(labelsOf(params("show="), null)).toEqual([]);
+  test("the address's own choice wins; an older link's list opens at the first view it names", () => {
+    expect(viewOf(params("show=branches&task=ct-1"), focusOf(params("task=ct-1")))).toBe("branches");
+    expect(viewOf(params("show=pr,sha"), null)).toBe("prs");
+    expect(viewOf(params("show=session,pr"), null)).toBe("sessions");
+    expect(viewOf(params("show=nonsense,task"), null)).toBe("tasks");
+    expect(viewOf(params("show="), null)).toBe("sessions");
+  });
+  test("Mine is on for mine=1 and for an older link's per-column mine", () => {
+    expect(mineOf(params("mine=1"))).toBe(true);
+    expect(mineOf(params("mine=coming,waiting"))).toBe(true);
+    expect(mineOf(params("mine=0"))).toBe(false);
+    expect(mineOf(params(""))).toBe(false);
   });
 });
 
@@ -128,9 +139,9 @@ test("a pill's reach ref reads back as a Deploys link, and its reach names a dep
   expect(reachAnyDeploy(null)).toBeNull();
 });
 
-test("a branch link finds the waiting commit that came from it, and opens with the Branch column on", () => {
+test("a branch link finds the waiting commit that came from it, and opens at Branches", () => {
   expect(focusOf(params("branch=jb/x"))).toEqual({ kind: "branch", name: "jb/x" });
-  expect(labelsOf(params("branch=jb/x"), focusOf(params("branch=jb/x")))).toEqual(["pr", "sha", "branch"]);
+  expect(viewOf(params("branch=jb/x"), focusOf(params("branch=jb/x")))).toBe("branches");
   const c = { ...commit("abc", "y"), branch: "jb/x" };
   expect(commitMatches(c, { kind: "branch", name: "jb/x" })).toBe(true);
   expect(commitMatches(c, { kind: "branch", name: "jb/y" })).toBe(false);
@@ -174,29 +185,50 @@ describe("the target a link opens, when two repositories both have one of that n
   });
 });
 
-describe("each column's filters, in the address", () => {
+describe("the view and Mine, in the address", () => {
   const read = (href: string) => new URLSearchParams(href.split("?")[1] ?? "");
-  const f = (comingMine: boolean, group: "you" | "moving" | null, waitingMine: boolean) => ({ coming: { mine: comingMine, group }, waiting: { mine: waitingMine } });
-  test("a link carries each column's Mine and the picked group, and reads back as the same view", () => {
-    for (const filters of [f(true, "you", false), f(false, "moving", true), f(true, null, true), f(false, null, false)]) {
-      const href = deploysFocusHref({ team: "t1", target: "web", focus: { kind: "pr", pr: 4552 }, show: ["pr", "sha"], filters });
-      const p = read(href);
-      expect(filtersOf(p)).toEqual(filters);
-      // The filters ride beside the link's own params; none of them is lost.
-      expect(focusOf(p)).toEqual({ kind: "pr", pr: 4552 });
-      expect(labelsOf(p, null)).toEqual(["pr", "sha"]);
-    }
-    expect(deploysFocusHref({ team: "t1", filters: f(true, "you", true) })).toBe("/deploys?team=t1&mine=coming%2Cwaiting&group=you");
-    expect(deploysFocusHref({ team: "t1", filters: f(false, null, true) })).toBe("/deploys?team=t1&mine=waiting");
+  test("a link carries the view and Mine and reads back as the same page, beside the link's own params", () => {
+    const p = read(deploysFocusHref({ team: "t1", target: "web", focus: { kind: "pr", pr: 4552 }, show: "tasks", mine: true }));
+    expect(viewOf(p, focusOf(p))).toBe("tasks");
+    expect(mineOf(p)).toBe(true);
+    expect(focusOf(p)).toEqual({ kind: "pr", pr: 4552 });
   });
-  test("a filter that is off leaves no param", () => {
-    expect(deploysFocusHref({ team: "t1", filters: NO_FILTERS })).toBe("/deploys?team=t1");
-    expect(filterParams(NO_FILTERS)).toEqual({ mine: null, group: null });
+  test("the default view and Mine off leave no param", () => {
+    expect(deploysFocusHref({ team: "t1", show: "sessions", mine: false })).toBe("/deploys?team=t1");
   });
-  test("an address with no filters, or nonsense ones, filters nothing", () => {
-    expect(filtersOf(params(""))).toEqual(NO_FILTERS);
-    expect(filtersOf(params("mine=yes&group=live"))).toEqual(NO_FILTERS);
-    expect(filtersOf(params("mine=1"))).toEqual(NO_FILTERS);
-    expect(filtersOf(params("group=parked"))).toEqual(NO_FILTERS);
+});
+
+describe("finding the linked thing on the board", () => {
+  const sess = (id: string) => ({ conversation_id: id, short_id: id.slice(0, 7), title: id });
+  const q = (sha: string, extra: any) => ({ sha, subject: `S ${sha}`, at: 1, main_at: 1, author: "a", ci: "passed" as const, ci_url: null, tasks: [], session: null, ...extra });
+  const c = carriedOfQueue([
+    q("aaaaaaa1", { session: sess("jx7sessionone"), pr_number: 7, branch: "jb/x", tasks: [{ task_id: "t1", short_id: "ct-1", title: null }] }),
+    q("bbbbbbb2", { session: sess("jx7sessiontwo") }),
+  ], shipperOf([]));
+  test("a carried commit matches by PR, SHA prefix, task, session (or its short id) and branch", () => {
+    const x = c.commits[0]!;
+    for (const f of [{ kind: "pr", pr: 7 }, { kind: "sha", sha: "aaaaa" }, { kind: "task", id: "ct-1" }, { kind: "session", id: "jx7sess" }, { kind: "branch", name: "jb/x" }] as const) expect(carriedMatches(x, f)).toBe(true);
+    expect(carriedMatches(c.commits[1]!, { kind: "pr", pr: 7 })).toBe(false);
+  });
+  test("a row holds the link when it is that thing or one of its commits is, in every view", () => {
+    const hit = (view: Parameters<typeof rowsFor>[1], f: any) => rowsFor(c, view, () => false).filter((r) => rowMatches(r, c, f)).map((r) => r.key);
+    expect(hit("sessions", { kind: "pr", pr: 7 })).toEqual(["jx7sessionone"]);
+    expect(hit("shas", { kind: "pr", pr: 7 })).toEqual(["aaaaaaa1"]);
+    expect(hit("prs", { kind: "sha", sha: "bbbbbbb" })).toEqual(["bbbbbbb2"]);
+    expect(hit("tasks", { kind: "session", id: "jx7sessionone" })).toEqual(["ct-1"]);
+    expect(hit("branches", { kind: "sha", sha: "bbbbbbb2" })).toEqual(["no-branch"]);
+    expect(hit("branches", { kind: "branch", name: "jb/x" })).toEqual(["jb/x"]);
+    expect(hit("sessions", { kind: "deploy", id: "dp-1" })).toEqual([]);
+  });
+  test("a Ship run matches by its task, PR, the session that pressed Ship, or the branch it merged", () => {
+    const r = { task_short_id: "ct-1", task_id: "t1", pr: { repository: "o/r", number: 7, first_head_sha: "", head_sha: "", at: 1 }, spawner_conversation_id: "jx7sessionone", merge: null };
+    expect(runMatches(r, { kind: "task", id: "ct-1" })).toBe(true);
+    expect(runMatches(r, { kind: "pr", pr: 7 })).toBe(true);
+    expect(runMatches(r, { kind: "session", id: "jx7sess" })).toBe(true);
+    // A session id reads in any case; too short to be a short id, it names nothing.
+    expect(runMatches(r, { kind: "session", id: "JX7SESS" })).toBe(true);
+    expect(carriedMatches(c.commits[0]!, { kind: "session", id: "JX7SESSIONONE" })).toBe(true);
+    expect(runMatches(r, { kind: "session", id: "jx7" })).toBe(false);
+    expect(runMatches(r, { kind: "sha", sha: "aaaaaaa" })).toBe(false);
   });
 });

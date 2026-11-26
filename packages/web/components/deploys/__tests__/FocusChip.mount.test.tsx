@@ -1,6 +1,6 @@
 // The Deploys page's focus chip: the thing a link names reads as the pill a conversation draws for it (a session or
 // task by its title), never a raw conversation id, and its × still clears the highlight; a change on its
-// way reads as on its way. The pill runs for real; only the Convex transport is faked. Below it, the landing a link
+// way (a Ship run in Shipping) reads as on its way. The pill runs for real; only the Convex transport is faked. Below it, the landing a link
 // runs (landFocus): each column brings its highlighted row to the middle, the row flashes once, and the viewer's own
 // move ends it.
 import { afterAll, describe, expect, mock, test } from "bun:test";
@@ -42,7 +42,7 @@ mock.module("next/link", () => ({
 
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { FocusChip, Paused } = await import("../DeploysPage");
+const { FocusChip, Paused } = await import("../DeploysBoard");
 const { landFocus } = await import("../../../lib/deploys/landFocus");
 
 afterAll(() => {
@@ -91,8 +91,8 @@ test("a branch keeps its plain name", () => {
   unmount();
 });
 
-// A link to something on neither the queue nor a deploy: when it is on its way (an open change, found in the left
-// column) the chip says so and reads as waiting; otherwise it is not on this target.
+// A link to something on neither the queue nor a deploy: when it is on its way (a Ship run in the left column) the
+// chip says so and reads as waiting; otherwise it is not on this target.
 function mountWhere(coming: "coming" | "parked" | "reading" | null) {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -179,20 +179,20 @@ describe("landing a link on the Deploys page", () => {
   let scrolled: string[] = [];
   function pane() {
     document.body.innerHTML = `<div data-deploy-pane><div class="dpp-body">
-      <div data-deploy-col="before" style="overflow-y: auto"><section><div class="chb-rows"></div></section></div>
-      <div data-deploy-col="after" style="overflow-y: auto"><section><ul class="dpp-commits"></ul></section></div>
+      <div data-deploy-col="before" style="overflow-y: auto"><section><ul class="dpp-ship"></ul></section></div>
+      <div data-deploy-col="after" style="overflow-y: auto"><section><ul class="dpp-list"></ul></section></div>
     </div></div>`;
     for (const col of document.querySelectorAll("[data-deploy-col]")) (col as any).getBoundingClientRect = () => ({ top: 0, height: 400 });
     scrolled = [];
   }
   function row(where: "before" | "after", id: string, focus = true) {
-    const el = document.createElement(where === "before" ? "a" : "li");
-    el.className = where === "before" ? "chb-row" : "dpp-commit";
+    const el = document.createElement("li");
+    el.className = where === "before" ? "dpp-run" : "dpp-row";
     el.id = id;
     if (focus) el.setAttribute("data-focus", "");
     (el as any).getBoundingClientRect = () => ({ top: 900, height: 20 });
     (el as any).scrollIntoView = () => scrolled.push(id);
-    document.querySelector(where === "before" ? ".chb-rows" : ".dpp-commits")!.appendChild(el);
+    document.querySelector(where === "before" ? ".dpp-ship" : ".dpp-list")!.appendChild(el);
     return el;
   }
 

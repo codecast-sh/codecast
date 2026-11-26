@@ -33,7 +33,7 @@ const pr = (over: Partial<ChangePullRequest> & Pick<ChangePullRequest, "number" 
 });
 
 const queued = (sha: string, subject: string, ci: QueueCommit["ci"] = "passed"): QueueCommit => ({
-  sha, subject, at: now - 20 * MIN, author: "ashot", session: { conversation_id: "c-queue", short_id: "jx7abcd", title: null }, tasks: [], ci, ci_url: null,
+  sha, subject, at: now - 20 * MIN, main_at: now - 20 * MIN, author: "ashot", session: { conversation_id: "c-queue", short_id: "jx7abcd", title: null }, tasks: [], ci, ci_url: null,
 });
 
 const titles: Record<string, string> = { "c-chip": "Change chips", "c-a": "Deploy pill words", "c-b": "PR deploy band", "c-c": "Live needs evidence", "c-two": "Budget checks" };

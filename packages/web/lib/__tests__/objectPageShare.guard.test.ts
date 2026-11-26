@@ -32,7 +32,7 @@ const ENTITY_PAGES: Record<EntityType, Page> = {
   // A role's page is its standing conversation.
   role: ["app/inbox/QueuePageClient.tsx"],
   person: ["app/team/[username]/page.tsx"],
-  deploy: ["components/deploys/DeploysPage.tsx"],
+  deploy: ["components/deploys/DeploysBoard.tsx"],
   secret: ["components/secrets/SecretDetail.tsx"],
   flow: ["components/line/workspace/LineWorkspace.tsx"],
 };

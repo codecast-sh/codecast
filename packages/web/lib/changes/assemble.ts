@@ -39,19 +39,7 @@ export type RepoChangeRows = {
   branches?: { default_branch: string; branches: ReadonlyArray<ChangeBranchRow>; truncated?: boolean } | null;
   /** A session's title in the viewer's own store: a team row never carries one. */
   titleOf?: (conversationId: string) => string | null | undefined;
-  /** The people a session belongs to (its author and its routed owner), when the viewer's store holds it. */
-  ownersOf?: (conversationId: string) => ReadonlyArray<string> | null | undefined;
 };
-
-/**
- * Who a change belongs to, by the strongest fact it carries: its pull request's author, else the people whose sessions
- * wrote it (those the viewer's store knows), else the devices its checkouts sit on, else its commit's author.
- */
-export type ChangeOwner =
-  | { by: "pr"; login: string }
-  | { by: "session"; users: string[] }
-  | { by: "device"; devices: string[] }
-  | { by: "commit"; author: string };
 
 export type ChangeWriterLink = { conversation_id: string | null; title: string | null; state: ChangeWriter["state"]; href: string | null };
 
@@ -81,7 +69,6 @@ export type AssembledChange = {
   updated_at: number;
   /** What a reference can name it by (findChange). */
   refs: { branch: string | null; pr: number | null; shas: string[] };
-  owner: ChangeOwner | null;
 };
 
 const COMMIT_CI: Record<CommitCiState, NonNullable<ChangeFacts["check"]>["ci"]> = { passed: "success", failed: "failure", running: "pending", none: "none" };
@@ -132,15 +119,6 @@ function linkedWriters(ids: ReadonlyArray<string> | undefined, have: ReadonlyArr
 
 const factWriters = (ws: ReadonlyArray<ChangeWriterLink>): ChangeWriter[] => ws.map((w) => ({ conversation_id: w.conversation_id, title: w.title, state: w.state }));
 
-/** A change's owner from what it joins, strongest first (ChangeOwner). */
-function ownerOf(o: { pr?: ChangePullRequest | null; writers?: ReadonlyArray<ChangeWriterLink>; devices?: ReadonlyArray<string>; author?: string | null }, ownersOf: RepoChangeRows["ownersOf"]): ChangeOwner | null {
-  if (o.pr?.author_github_username) return { by: "pr", login: o.pr.author_github_username };
-  const users = [...new Set((o.writers ?? []).flatMap((w) => (w.conversation_id && ownersOf?.(w.conversation_id)) || []))];
-  if (users.length) return { by: "session", users };
-  if (o.devices?.length) return { by: "device", devices: [...new Set(o.devices)] };
-  return o.author ? { by: "commit", author: o.author } : null;
-}
-
 /** The pull request a branch carries now: an open one, else the newest. */
 function pickPr(prs: ReadonlyArray<ChangePullRequest>): ChangePullRequest | null {
   return [...prs].sort((a, b) => Number(b.state === "open") - Number(a.state === "open") || prActive(b) - prActive(a))[0] ?? null;
@@ -149,7 +127,7 @@ function pickPr(prs: ReadonlyArray<ChangePullRequest>): ChangePullRequest | null
 /** Every change on the repository, freshest first. */
 export function assemble(rows: RepoChangeRows): AssembledChange[] {
   const repository = lower(rows.repository);
-  const { now, titleOf, ownersOf } = rows;
+  const { now, titleOf } = rows;
   const checkouts = (rows.checkouts ?? []).filter((c) => lower(c.repository) === repository);
   const prs = (rows.pullRequests ?? []).filter((p) => !p.repository || lower(p.repository) === repository);
   const targets = rows.targets?.filter((t) => lower(t.repository) === repository);
@@ -165,7 +143,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
   const usedPrs = new Set<number>();
 
   const base = (key: string, facts: ChangeFacts, extra: Partial<AssembledChange> & Pick<AssembledChange, "links" | "writers" | "updated_at" | "refs">): AssembledChange => ({
-    key, repository, facts: { ...facts, ...(deploys !== undefined ? { deploys } : {}) }, reach_ref: null, where: null, owner: null, ...extra,
+    key, repository, facts: { ...facts, ...(deploys !== undefined ? { deploys } : {}) }, reach_ref: null, where: null, ...extra,
   });
 
   /** Lay a pull request onto a change's facts and links. */
@@ -202,7 +180,6 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
       updated_at: lastWrite([row]),
       // Its head is main's: a sha names the commit on main, never this checkout's uncommitted work.
       refs: { branch: null, pr: null, shas: [] },
-      owner: ownerOf({ writers, devices: [row.device_id] }, ownersOf),
     });
   }
 
@@ -241,7 +218,6 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
       where: `${basename(fresh.path)} · ${deviceName(fresh)}${others > 0 ? ` +${others}` : ""}`,
       updated_at: Math.max(lastWrite(group), pr ? prActive(pr) : 0, remote.get(name)?.committed_at ?? 0),
       refs: { branch: name, pr: pr?.number ?? null, shas: [fresh.head_sha, pr?.head_sha, pr?.merge_commit_sha].filter((s): s is string => !!s) },
-      owner: ownerOf({ pr, writers, devices: group.map((r) => r.device_id) }, ownersOf),
     }));
   }
 
@@ -267,7 +243,6 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
       writers,
       updated_at: prActive(pr),
       refs: { branch: pr.head_ref ?? null, pr: pr.number, shas: [pr.head_sha, pr.merge_commit_sha].filter((s): s is string => !!s) },
-      owner: ownerOf({ pr, writers }, ownersOf),
     }));
   }
 
@@ -318,7 +293,6 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
           where: null,
           updated_at: c.at,
           refs: { branch: null, pr: prN, shas: [sha] },
-          owner: ownerOf({ writers, author: c.author }, ownersOf),
         }));
       }
     }

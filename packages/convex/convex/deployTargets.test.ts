@@ -152,9 +152,37 @@ describe("the waiting queue (DP12)", () => {
       ["s:conv_api_work", [["04", "failed"], ["02", "passed"]], "failed"],
       ["none", [["05", "running"]], "running"],
     ]);
-    expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals" });
+    expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals", user_id: "user_me", priority: null });
+    // Main's order rides each commit, and a branch looked up and not found reads null, never absent.
+    for (const c of backend.queue.groups.flatMap((g: any) => g.commits)) {
+      expect(typeof c.main_at).toBe("number");
+      expect("branch" in c).toBe(true);
+    }
     expect(backend.queue.groups[0].commits[1].tasks).toEqual([{ task_id: "task_a", short_id: "ct-7", title: "Totals round wrong" }]);
     expect(backend.queue.groups[0].commits[0].ci_url).toBe("https://ci/2");
+  });
+
+  test("a session the viewer may not read is named by id alone: no title, owner or branch", async () => {
+    const { t, ctx } = await published();
+    t.conversations.push({ _id: "conv_bo_secret", title: "Bo's private fix", user_id: BO, team_id: TEAM, is_private: true, git_branch: "bo/secret" });
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(1), repository: REPO, source: "cast ship mark", at: NOW - 9_000 });
+    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], conv: "conv_bo_secret" }], NOW - 5_000);
+    const sessionOf = async (token: string) => {
+      const [backend] = (await (view as any)._handler(ctx, { api_token: token, team_id: TEAM, target: "backend" })).targets;
+      const [c] = backend.queue.groups[0].commits;
+      return { session: c.session, branch: c.branch };
+    };
+    expect(await sessionOf(TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: null, priority: null }, branch: null });
+    expect(await sessionOf(BO_TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: "Bo's private fix", user_id: BO, priority: null }, branch: "bo/secret" });
+    // Once it goes out, the deploy's own session list hides the title from Ana the same way.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(2), repository: REPO, source: "m", at: NOW - 1_000 });
+    const historyTitle = async (token: string) => {
+      const [backend] = (await (view as any)._handler(ctx, { api_token: token, team_id: TEAM, target: "backend" })).targets;
+      return backend.history[0].sessions[0].title;
+    };
+    expect(await historyTitle(TOKEN)).toBeNull();
+    expect(await historyTitle(BO_TOKEN)).toBe("Bo's private fix");
   });
 
   test("a deploy going live records the commits it carried, the sessions and tasks behind them, and what came after", async () => {

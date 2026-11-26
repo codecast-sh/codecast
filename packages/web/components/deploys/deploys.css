@@ -1,4 +1,4 @@
-/* The Deploys page: targets across the top, then one target's live, what is on its way, waiting and history. Tokens are the app's --sol-*. */
+/* The Deploys page: targets across the top, then one target: its head, Shipping and its deploy cards. Tokens are the app's --sol-*. */
 .dpp {
   --dp-rule: color-mix(in srgb, var(--sol-border) 45%, transparent);
   --dp-rule-2: color-mix(in srgb, var(--sol-border) 24%, transparent);
@@ -55,17 +55,8 @@
 .dpp-back { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--dp-rule); background: var(--dp-card); color: var(--sol-text-muted); cursor: pointer; white-space: nowrap; }
 .dpp-back:hover { color: var(--sol-text); }
 
-.dpp-ci { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 999px; flex: none; }
-.dpp-ci[data-ci="passed"] { background: color-mix(in srgb, var(--sol-green) 18%, transparent); color: var(--sol-green); }
-.dpp-ci[data-ci="failed"] { background: color-mix(in srgb, var(--sol-red) 16%, transparent); color: var(--sol-red); }
-.dpp-ci[data-ci="running"] { background: color-mix(in srgb, var(--sol-yellow) 18%, transparent); }
-/* Static: a list row never runs an infinite animation (one per running commit re-layers the page every frame); the colour says running. */
-.dpp-ci-run { width: 6px; height: 6px; border-radius: 999px; background: var(--sol-yellow); }
-.dpp-ci-none { width: 6px; height: 6px; border-radius: 999px; border: 1.5px solid var(--sol-text-dim); }
-.dpp-ci-link { display: inline-flex; }
 
 .dpp-going { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 14px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--sol-blue) 40%, transparent); background: color-mix(in srgb, var(--sol-blue) 7%, var(--dp-card)); color: var(--sol-blue); }
-.dpp-going[data-kind="failed"] { border-color: color-mix(in srgb, var(--sol-red) 40%, transparent); background: color-mix(in srgb, var(--sol-red) 6%, var(--dp-card)); color: var(--sol-red); }
 .dpp-going b { font-weight: 600; }
 .dpp-going code { color: var(--sol-text); }
 /* Production paused (DP17): the repository's pause, its facts under it, Lift at the end of its line. */
@@ -78,7 +69,6 @@
 .dpp-pause-warn { color: var(--sol-red); }
 .dpp-pause-warn ul { list-style: none; margin: 2px 0 0; padding: 0; }
 .dpp-target[data-paused] { --dp-tone: var(--sol-orange); }
-.dpp-note { flex-basis: 100%; color: var(--sol-text); font-size: 12px; }
 .dpp-steps { flex-basis: 100%; list-style: none; margin: 4px 0 0; padding: 0; display: flex; gap: 6px; flex-wrap: wrap; }
 .dpp-steps li { font-size: var(--fs-meta); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--dp-rule); color: var(--sol-text-muted); background: var(--dp-card); }
 .dpp-steps li[data-status="completed"] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 40%, transparent); }
@@ -91,44 +81,11 @@
 .dpp-h-sub { font-size: 12px; font-weight: 400; color: var(--sol-text-dim); }
 .dpp-none { margin: 0; color: var(--sol-text-muted); font-size: 12.5px; }
 
-.dpp-groups { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.dpp-group { border: 1px solid var(--dp-rule); border-radius: 10px; background: var(--dp-card); overflow: hidden; }
-.dpp-group-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--dp-rule-2); min-width: 0; }
-.dpp-session { font-weight: 600; font-size: 13px; color: var(--sol-text); text-decoration: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-a.dpp-session:hover { text-decoration: underline; }
-.dpp-task { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-blue); text-decoration: none; flex: none; }
-.dpp-group-n { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-dim); flex: none; }
-.dpp-commits { list-style: none; margin: 0; padding: 4px 0; }
-.dpp-commit { display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; row-gap: 2px; padding: 4px 12px; }
-.dpp-commit > .dpp-subject { flex: 1 1 16ch; min-width: 16ch; }
-.dpp-commit > .dpp-age { margin-left: auto; }
-.dpp-commit > .dpp-ci, .dpp-commit > .dpp-ci-link { flex: none; }
-/* The IDs stay on the CI mark's line: past the row's width the last column is cut, never the mark left alone. */
-.dpp-commit > .dpp-ids { flex: 0 1 auto; max-width: calc(100% - 24px); overflow: hidden; }
-.dpp-ids { display: inline-flex; align-items: center; gap: 8px; }
-.dpp-ids:empty { display: none; }
-.dpp-id { display: inline-flex; min-width: 0; font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; }
-.dpp-id > * { min-width: 0; max-width: 100%; }
-.dpp-id[data-kind="pr"] { width: 56px; }
-.dpp-id[data-kind="sha"] { width: 72px; }
-/* A task or session reads by its title, cut at the cell's edge; the hover card and tooltip hold the rest. */
-.dpp-id[data-kind="task"] { width: 144px; }
-.dpp-id[data-kind="session"] { width: 136px; }
-.dpp-id[data-kind="branch"] { width: 160px; }
-.dpp-id[data-kind="branch"] code { overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); color: var(--sol-text-muted); }
-.dpp-commits .dpp-commit[data-focus], .dpp-dp-item[data-focus] > .dpp-dp-row { background: color-mix(in srgb, var(--sol-yellow) 30%, transparent); box-shadow: inset 0 0 0 1.5px var(--sol-yellow), inset 4px 0 0 var(--sol-yellow); }
-/* A link's row flashes as it lands, then keeps the steady highlight (DeploysPage landFocus); the changes grid's row too. */
-@keyframes dpp-flash { 0%, 50%, 100% { background-color: color-mix(in srgb, var(--sol-yellow) 30%, transparent); } 25%, 75% { background-color: color-mix(in srgb, var(--sol-yellow) 75%, transparent); } }
-.dpp-commit[data-flash], .dpp-dp-row[data-flash], .chb-row[data-flash] { animation: dpp-flash 1.1s ease-in-out 1; }
-@media (prefers-reduced-motion: reduce) { .dpp-commit[data-flash], .dpp-dp-row[data-flash], .chb-row[data-flash] { animation: none; } }
 .dpp-labels { margin-left: auto; display: inline-flex; border: 1px solid var(--dp-rule); border-radius: 999px; overflow: hidden; }
 .dpp-labels button { font: inherit; font-size: 12px; font-weight: 500; color: var(--sol-text-dim); background: none; border: 0; padding: 2px 9px; cursor: pointer; }
 .dpp-labels button + button { border-left: 1px solid var(--dp-rule); }
 .dpp-labels button[aria-pressed="true"] { color: var(--sol-text); font-weight: 600; background: color-mix(in srgb, var(--sol-text) 12%, transparent); }
-/* Each column's own filter row, under its heading: On its way's Mine and groups, Waiting on main's Mine and IDs. */
-.dpp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
 .dpp-pick-n { margin-left: 5px; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); font-weight: 500; }
-.dpp-filters > .dpp-mine, .dpp-filters > .dpp-labels { margin-left: 0; }
 .dpp-focus { display: flex; align-items: center; gap: 8px; margin: 8px 16px 0; padding: 4px 6px 4px 10px; border-radius: 6px; font-size: var(--fs-meta); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); border: 1px solid color-mix(in srgb, var(--sol-yellow) 45%, transparent); }
 .dpp-focus b { font-family: var(--font-mono); font-weight: 600; }
 .dpp-focus-ref { display: inline-flex; min-width: 0; max-width: 70%; }
@@ -136,46 +93,17 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-focus[data-state="missing"] { background: none; border-style: dashed; }
 .dpp-focus > button { margin-left: auto; display: inline-flex; padding: 3px; color: var(--sol-text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer; }
 .dpp-focus > button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 9%, transparent); }
-.dpp-commit[data-mine] { background: color-mix(in srgb, var(--sol-blue) 9%, transparent); box-shadow: inset 2px 0 0 var(--sol-blue); }
 .dpp-mine { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 500; color: var(--sol-text-muted); background: none; border: 1px solid var(--dp-rule); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
 .dpp-mine[aria-pressed="true"] { color: var(--sol-blue); border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
-.dpp-commit code { color: var(--sol-text-muted); }
-.dpp-subject { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dpp-more { font-size: 12px; color: var(--sol-text-dim); padding: 2px 4px; }
 
-.dpp-history { list-style: none; margin: 0; padding: 0; border: 1px solid var(--dp-rule); border-radius: 10px; background: var(--dp-card); overflow: hidden; }
-.dpp-dp-row { display: grid; grid-template-columns: 16px 64px 64px minmax(0, 1fr) 40px auto; align-items: center; gap: 10px; padding: 7px 12px; border-top: 1px solid var(--dp-rule-2); }
-.dpp-dp-item:first-child .dpp-dp-row { border-top: 0; }
-.dpp-dp-id { all: unset; font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-blue); cursor: pointer; }
-.dpp-dp-id:hover, .dpp-dp-id[aria-expanded="true"] { text-decoration: underline; }
-.dpp-dp-id:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
-.dpp-dp-sha { color: var(--sol-text-muted); }
-.dpp-dp-what { font-size: 12px; color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
-.dpp-dp-by { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
-.dpp-status { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 999px; color: var(--sol-text-dim); }
-.dpp-status[data-status="live"] { color: var(--sol-green); }
-.dpp-status[data-status="failed"] { color: var(--sol-red); }
-.dpp-status[data-status="requested"], .dpp-status[data-status="running"] { color: var(--sol-blue); }
-.dpp-dp-row[data-status="failed"] .dpp-dp-id { color: var(--sol-red); }
 .dpp-row-act { justify-self: end; white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); padding: 2px 8px; border-radius: 6px; border: 1px solid var(--dp-rule); background: none; color: var(--sol-text-muted); cursor: pointer; }
 .dpp-row-act:hover { color: var(--sol-text); }
-.dpp-ci[data-ci="none"] { visibility: hidden; }
-.dpp-authors { font-weight: 400; }
-.dpp-expand { margin: 2px 12px 4px 40px; font: inherit; font-size: 12px; color: var(--sol-blue); background: none; border: 0; padding: 2px 0; cursor: pointer; }
-.dpp-expand:hover { text-decoration: underline; }
 .dpp-log { margin-left: auto; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 7px; border: 1px solid currentColor; color: inherit; text-decoration: none; opacity: .85; }
 .dpp-log:hover { opacity: 1; }
 .dpp-headci { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sol-text-muted); text-decoration: none; white-space: nowrap; }
 .dpp-headci[data-ci="failed"] { color: var(--sol-red); font-weight: 600; }
 .dpp-headci[data-ci="passed"] { color: var(--sol-green); }
 a.dpp-headci:hover span { text-decoration: underline; }
-.dpp-livenow { justify-self: end; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-green); padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sol-green) 14%, transparent); }
-.dpp-dp-row[data-live-now] { background: color-mix(in srgb, var(--sol-green) 5%, transparent); }
-.dpp-dp-sessions { display: inline-flex; gap: 6px; min-width: 0; overflow: hidden; }
-.dpp-dp-session { color: var(--sol-text); text-decoration: none; padding: 0 7px; border-radius: 999px; background: color-mix(in srgb, var(--sol-violet) 10%, transparent); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dpp-dp-session:hover { text-decoration: underline; }
-.dpp-dp-item { list-style: none; }
-.dpp-dp-item[data-open] .dpp-dp-row { background: color-mix(in srgb, var(--sol-blue) 5%, transparent); }
 .dpp-detail { display: flex; align-items: flex-start; gap: 16px; padding: 10px 14px 12px 40px; border-top: 1px solid var(--dp-rule-2); background: var(--dp-sunk); }
 .dpp-detail dl { flex: 1; display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 12px; }
 .dpp-detail dt { color: var(--sol-text-dim); }
@@ -187,18 +115,11 @@ a.dpp-headci:hover span { text-decoration: underline; }
 .dpp-names code { color: var(--sol-text); overflow-wrap: anywhere; }
 .dpp-names-more { margin-top: 2px; font: inherit; font-size: 12px; color: var(--sol-blue); background: none; border: 0; padding: 2px 0; cursor: pointer; }
 .dpp-names-more:hover { text-decoration: underline; }
-.dpp-detail-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
-.dpp-detail-sessions a { display: inline-block; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sol-violet) 10%, transparent); color: var(--sol-text); text-decoration: none; }
-.dpp-detail-sessions a:hover { text-decoration: underline; }
 .dpp-current { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--sol-green); padding: 7px 4px; }
 
 .dpp-main { container-type: inline-size; }
 .dpp-col:empty { display: none; }
 
-/* A deploy row's second line: what it carried and what came of it. */
-.dpp-carried { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; min-width: 0; margin-top: 2px; }
-.dpp-dp-row { row-gap: 0; }
-.dpp-why { color: var(--sol-red); }
 .dpp-after { font-size: var(--fs-meta); font-weight: 600; padding: 0 7px; border-radius: 999px; }
 .dpp-after[data-tone="ok"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
 .dpp-after[data-tone="bad"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 10%, transparent); }
@@ -208,43 +129,172 @@ a.dpp-headci:hover span { text-decoration: underline; }
 .dpp-devpush { flex-basis: 100%; font-size: var(--fs-meta); color: var(--sol-orange); white-space: normal; }
 .dpp-head-sub { margin-right: 6px; }
 @container (max-width: 760px) { .dpp-head { grid-template-areas: "name" "live" "actions"; grid-template-columns: minmax(0, 1fr); } .dpp-actions { justify-self: start; flex-wrap: wrap; } }
-.dpp-detail-sessions a.dpp-detail-task { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
-.dpp-detail-task span { margin-left: 6px; color: var(--sol-text-muted); }
-/* Modern's sans interface: the repository, a version and a task id stay mono. */
-.dpp-repo:is(.modern-style *), .dpp-head-sub:is(.modern-style *), .dpp-ver:is(.modern-style *), .dpp-detail-task:is(.modern-style *) { font-family: var(--font-mono); }
-.modern-style .dpp-detail-task span { font-family: var(--font-ui); }
-.dpp-via { flex: none; font-size: var(--fs-meta); color: var(--sol-text-dim); font-style: italic; }
-.dpp-changes { display: flex; flex-direction: column; gap: 8px; }
-.dpp-change-group ul { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.dpp-change-group li { display: grid; grid-template-columns: 60px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
-.dpp-change-group li code { color: var(--sol-text-muted); }
+/* Modern's sans interface: the repository and a version stay mono. */
+.dpp-repo:is(.modern-style *), .dpp-head-sub:is(.modern-style *), .dpp-ver:is(.modern-style *) { font-family: var(--font-mono); }
 
 /* The page's own width decides the layout: `dpp-frame` is the query box, since the window says nothing of the sidebars. */
 .dpp-frame { container: dpp / inline-size; height: 100%; min-height: 0; }
 /* Modern: the page header (components/ui/page-header) over the targets and the target. */
 .dpp-frame--headed { display: flex; flex-direction: column; }
 .dpp-frame--headed > .dpp { height: auto; flex: 1 1 auto; }
-/* Wide: what is on its way beside what waits on main and what went out, each column its own scroll under the target's head. */
+
+/* Each column's head: heading with its count, then one subline; both columns' heads are the same height, so their first cards line up. */
+.dpp-sec h3.dpp-colhead { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-height: 30px; margin: 0 0 8px; }
+.dpp-switch { margin-left: auto; }
+.dpp-sub { display: flex; align-items: flex-start; gap: 6px; min-height: 18px; margin: 0 0 12px; font-size: 12.5px; color: var(--sol-text-muted); }
+.dpp-sub[data-yours] { color: var(--sol-blue); }
+.dpp-sub a { color: inherit; text-decoration: none; border-bottom: 1px dotted currentColor; }
+.dpp-part { white-space: nowrap; }
+.dpp-you { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 999px; background: var(--sol-blue); }
+.dpp-sub .dpp-you { margin-top: 6px; }
+.dpp-jump { display: none; order: 9; flex-basis: 100%; font-size: 12px; font-weight: 500; color: var(--sol-blue); text-decoration: none; }
+
+/* Shipping: one card per change on its way, its stepper and where it stands in words. */
+.dpp-ship, .dpp-cards { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.dpp-run, .dpp-card { min-width: 0; border: 1px solid var(--dp-rule); border-radius: 10px; background: var(--dp-card); }
+.dpp-run { display: flex; flex-direction: column; gap: 5px; padding: 10px 14px; }
+.dpp-run[data-tone="yellow"] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--sol-yellow) 70%, transparent); }
+.dpp-run[data-tone="blue"] { box-shadow: inset 3px 0 0 var(--sol-blue); }
+.dpp-run[data-tone="red"] { box-shadow: inset 3px 0 0 var(--sol-red); }
+.dpp-run[data-dropped] { opacity: .62; }
+.dpp-run--none, .dpp-card--none { padding: 10px 14px; font-size: 12.5px; color: var(--sol-text-muted); }
+.dpp-run-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.dpp-run-title { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 600; color: var(--sol-text); text-decoration: none; overflow-wrap: anywhere; }
+a.dpp-run-title:hover { text-decoration: underline; }
+.dpp-run-top > .dpp-age { flex: none; padding-top: 2px; }
+.dpp-track { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.dpp-stepper { list-style: none; margin: 0; padding: 0; display: inline-flex; align-items: center; }
+.dpp-step { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--sol-text-dim); }
+.dpp-step + .dpp-step::before { content: ""; width: 14px; height: 1.5px; margin: 0 6px; background: color-mix(in srgb, var(--sol-text) 18%, transparent); }
+.dpp-step i { display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 999px; border: 1.5px solid color-mix(in srgb, var(--sol-text) 25%, transparent); }
+.dpp-step i svg { width: 9px; height: 9px; }
+/* One palette: green done, yellow moving, blue a person's turn, red stopped, grey not reached. */
+.dpp-step[data-state="done"] { color: var(--sol-text-secondary); }
+.dpp-step[data-state="done"] i { border-color: var(--sol-green); background: var(--sol-green); color: var(--sol-bg); }
+.dpp-step[data-state="active"] { color: var(--sol-text); }
+.dpp-step[data-state="active"] i { border-color: var(--sol-yellow); color: var(--sol-yellow); }
+.dpp-step[data-state="active"] i svg { width: 10px; height: 10px; }
+.dpp-step[data-state="waiting"] { color: var(--sol-blue); }
+.dpp-step[data-state="waiting"] i { border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 22%, transparent); }
+.dpp-step[data-state="failed"] { color: var(--sol-red); }
+.dpp-step[data-state="failed"] i { border-color: var(--sol-red); background: var(--sol-red); color: var(--sol-bg); }
+.dpp-step[data-state="idle"] { opacity: .7; }
+.dpp-run-now { margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--dp-rule); font-size: 12.5px; font-weight: 500; color: var(--sol-text-secondary); }
+.dpp-run-now[data-tone="yellow"] { color: color-mix(in srgb, var(--sol-yellow) 75%, var(--sol-text)); }
+.dpp-run-now[data-tone="blue"] { color: var(--sol-blue); }
+.dpp-run-now[data-tone="red"] { color: var(--sol-red); }
+.dpp-run-detail { flex-basis: 100%; font-size: 12px; color: var(--sol-text-dim); overflow-wrap: anywhere; }
+.dpp-refs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; font-size: 12px; }
+.dpp-refs > * { max-width: 100%; }
+.dpp-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--sol-text-muted); overflow-wrap: anywhere; }
+.dpp-branch svg { flex: none; width: 12px; height: 12px; }
+.dpp-flowname { font-size: 11.5px; color: var(--sol-text-dim); }
+.dpp-earlier { font-size: 11.5px; font-style: italic; color: var(--sol-text-dim); text-decoration: none; border-bottom: 1px dotted currentColor; }
+.dpp-fold { display: flex; align-items: center; gap: 6px; width: 100%; padding: 9px 12px; font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; color: var(--sol-text-secondary); background: color-mix(in srgb, var(--sol-text) 3%, transparent); border: 0; border-radius: 10px; cursor: pointer; }
+.dpp-older { border: 1px solid var(--dp-rule); background: var(--dp-card); }
+.dpp-chev { width: 14px; height: 14px; transition: transform .15s; }
+.dpp-fold[aria-expanded="true"] .dpp-chev { transform: rotate(90deg); }
+.dpp-fold-sub { font-weight: 400; color: var(--sol-text-dim); }
+
+/* Deploys: one card kind, its state first, its edge saying whose turn it is. */
+.dpp-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 12px; }
+.dpp-card[data-kind="next"] { box-shadow: inset 3px 0 0 var(--sol-blue); }
+.dpp-card[data-kind="running"], .dpp-card[data-kind="requested"] { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--sol-yellow) 70%, transparent); }
+.dpp-card[data-kind="failed"] { box-shadow: inset 3px 0 0 var(--sol-red); }
+.dpp-card[data-live] { box-shadow: inset 3px 0 0 var(--sol-green); }
+.dpp-card[data-quiet] { padding-bottom: 10px; }
+.dpp-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; min-width: 0; font-size: 13px; }
+.dpp-card-title { all: unset; font-family: var(--font-mono); font-weight: 600; cursor: pointer; }
+button.dpp-card-title:hover { text-decoration: underline; }
+.dpp-card-title:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
+.dpp-card[data-kind="next"] .dpp-card-title { font-family: inherit; cursor: default; }
+.dpp-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; min-width: 0; }
+.dpp-sha { font-size: 12px; color: var(--sol-text-muted); }
+.dpp-by { font-size: 12.5px; color: var(--sol-text-secondary); }
+.dpp-fact { font-size: 12px; color: var(--sol-text-dim); }
+.dpp-attempt { all: unset; font-family: var(--font-mono); color: var(--sol-blue); cursor: pointer; }
+.dpp-attempt:hover, .dpp-attempt[aria-expanded="true"] { text-decoration: underline; }
+.dpp-attempt:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
+.dpp-card-end { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; }
+.dpp-card-end > .dpp-age { min-width: 34px; text-align: right; }
+.dpp-card-end .dpp-go { padding: 4px 12px; font-size: 12.5px; }
+.dpp-card-note { margin: 0; font-size: 12.5px; color: var(--sol-red); overflow-wrap: anywhere; }
+.dpp-card .dpp-detail { margin: 0 -14px; padding-left: 14px; }
+.dpp-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.dpp-pill svg { width: 11px; height: 11px; }
+.dpp-pill[data-tone="green"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 14%, transparent); }
+.dpp-pill[data-tone="yellow"] { color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 16%, transparent); }
+.dpp-pill[data-tone="red"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+.dpp-pill[data-tone="done"], .dpp-pill[data-tone="idle"] { color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+
+/* What a card carried: a blue-dot gutter, the item (whole, wrapping as prose with a hanging indent), + and − in their own columns. */
+.dpp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.dpp-row { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12.5px; border-top: 1px solid color-mix(in srgb, var(--dp-rule-2) 60%, transparent); }
+.dpp-row:first-child { border-top: 0; }
+.dpp-row[data-counted] { grid-template-columns: 10px minmax(0, 1fr) auto; }
+.dpp-row[data-id-col] { grid-template-columns: 10px 72px minmax(0, 1fr) auto; }
+.dpp-row:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+.dpp-gutter { display: inline-flex; align-items: center; align-self: center; }
+.dpp-row-main { min-width: 0; padding-left: 1.3em; text-indent: -1.3em; overflow-wrap: anywhere; }
+.dpp-row[data-id-col] .dpp-row-main { padding-left: 0; text-indent: 0; }
+/* The hanging indent belongs to the row's own lines: anything inside that lays out its own box (a branch, a pill's icon, a note) starts flush. */
+.dpp-row-main * { text-indent: 0; }
+.dpp-row-id { white-space: nowrap; }
+.dpp-newer { margin-left: 8px; font-size: 11.5px; font-style: italic; color: var(--sol-text-dim); }
+.dpp-row-main > .entity-ref { display: inline !important; line-height: 1.55; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.dpp-row-main > .entity-ref > span { display: inline !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+.dpp-row-main > .entity-ref .entity-ref__icon { display: inline-flex !important; vertical-align: -2px; margin-right: 3px; }
+.dpp-refs .entity-ref { max-width: 100%; }
+.dpp-refs .entity-ref .truncate { white-space: normal; overflow: visible; text-overflow: clip; }
+.dpp-lines { display: inline-grid; grid-template-columns: 58px 58px; gap: 4px; font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dpp-lines b { font-weight: 600; text-align: right; }
+.dpp-add { color: var(--sol-green); }
+.dpp-del { color: var(--sol-red); }
+.dpp-lines .dpp-unk { font-weight: 400; color: var(--sol-text-dim); }
+.dpp-more-rows { align-self: stretch; margin: 0; padding: 5px 0 0; font: inherit; font-size: 12px; text-align: left; color: var(--sol-blue); background: none; border: 0; border-top: 1px solid color-mix(in srgb, var(--dp-rule-2) 60%, transparent); cursor: pointer; }
+
+/* What a link points at: highlighted, and flashed once as it lands (lib/deploys/landFocus). */
+.dpp-row[data-focus] { --dp-focus: color-mix(in srgb, var(--sol-yellow) 24%, var(--dp-card)); background: var(--dp-focus); }
+/* A whole card or run keeps its words readable: a faint wash inside a yellow ring. */
+.dpp-run[data-focus], .dpp-card[data-focus] { --dp-focus: color-mix(in srgb, var(--sol-yellow) 7%, var(--dp-card)); background: var(--dp-focus); border-color: var(--sol-yellow); box-shadow: inset 0 0 0 1px var(--sol-yellow), inset 4px 0 0 var(--sol-yellow); }
+@keyframes dpp-flash { 0%, 50%, 100% { background-color: var(--dp-focus); } 25%, 75% { background-color: color-mix(in srgb, var(--sol-yellow) 40%, var(--dp-card)); } }
+.dpp-row[data-flash], .dpp-run[data-flash], .dpp-card[data-flash] { animation: dpp-flash 1.1s ease-in-out 1; }
+@media (prefers-reduced-motion: reduce) { .dpp-row[data-flash], .dpp-run[data-flash], .dpp-card[data-flash] { animation: none; } }
+
+/* Wide: Shipping beside Deploys, each column its own scroll under the target's head. */
 @container dpp (min-width: 1200px) {
   .dpp-main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
   .dpp-main > * { flex: none; }
   .dpp-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; }
   .dpp-col { flex: 1 1 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 40px; }
-  /* A column keeps each waiting commit on one line: past its width the last ID column is cut, never the subject wrapped. */
-  .dpp-commit { flex-wrap: nowrap; }
-  .dpp-commit > .dpp-ids { min-width: 0; }
 }
-/* On its way in a column: one chip carries the five stages (ChangeBoard's own narrow form), so the title gets the row. */
-@container (max-width: 760px) {
-  .dpp .chb-head > span:not(:first-child), .dpp .chb-cell, .dpp .chb-age { display: none; }
-  .dpp .chb-head, .dpp .chb-row { grid-template-columns: minmax(0, 1fr) auto; }
-  .dpp .chb-compact { display: inline-flex; justify-self: end; }
+/* Narrower: one column, Deploys first (did my session go out?), with a jump to Shipping. */
+@container dpp (max-width: 1199px) {
+  .dpp-body { display: flex; flex-direction: column; }
+  .dpp-col[data-deploy-col="after"] { order: -1; }
+  .dpp-jump { display: inline; }
 }
 /* A phone: the targets scroll sideways in one row, and the page keeps a 16px gutter. */
 @container dpp (max-width: 720px) {
   .dpp-targets { padding: 8px 16px; overflow-x: auto; scrollbar-width: none; }
   .dpp-targets ul { flex-wrap: nowrap; }
-  .dpp-target { min-height: 44px; }
-  .dpp-filters .dpp-mine, .dpp-filters .dpp-labels button, .dpp .chb-pick { min-height: 44px; }
+  .dpp-target, .dpp-mine { min-height: 44px; }
+  /* The switch keeps its compact look; each button's touch target reaches 44px past its edges. */
+  .dpp-switch { overflow: visible; }
+  .dpp-switch button { position: relative; }
+  .dpp-switch button::after { content: ""; position: absolute; inset: -12px 0; }
+  .dpp-switch button:first-child { border-radius: 999px 0 0 999px; }
+  .dpp-switch button:last-child { border-radius: 0 999px 999px 0; }
   .dpp-main { padding: 14px 16px 32px; }
 }
+/* Under 560px a card's facts take their own line and every row is a 44px target. */
+@container dpp (max-width: 560px) {
+  .dpp-card-head { row-gap: 3px; }
+  .dpp-meta { order: 3; flex-basis: 100%; }
+  .dpp-lines { grid-template-columns: 46px 50px; gap: 6px; font-size: 11px; }
+  .dpp-row[data-id-col] { grid-template-columns: 10px 60px minmax(0, 1fr) auto; }
+  .dpp-row { min-height: 44px; align-items: center; }
+  .dpp-more-rows, .dpp-fold { min-height: 44px; }
+}
+/* On a phone the state words wrap under the stepper: no divider or indent there. */
+@container dpp (max-width: 560px) { .dpp-run-now { margin-left: 0; padding-left: 0; border-left: 0; } }

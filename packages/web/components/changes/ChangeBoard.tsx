@@ -1,8 +1,7 @@
 "use client";
 // Every change in a repository as one lifecycle grid (docs/architecture/changes.md CH4):
 // a row per change, the five stages as its columns with one track across
-// them, grouped by who acts next. The branches page and the Deploys page draw
-// their changes through it.
+// them, grouped by who acts next. The branches page draws its changes through it.
 import { memo, useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
@@ -13,12 +12,12 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useChangeReach } from "../../hooks/useRepoChanges";
 import { ChangeChip, ChangeJourney } from "./ChangeChip";
 import { VEHICLE_GLYPH } from "../../lib/changes/vehicleGlyph";
-import { PICKABLE_GROUPS, attentionTone, groupChanges, groupLabel, type ChangeGroupId, type ChangeRow } from "../../lib/changes/rows";
+import { attentionTone, groupChanges, type ChangeRow } from "../../lib/changes/rows";
 import "./changes.css";
 
 const MONO = new Set(["branch", "pr", "commit"]);
 
-const Row = memo(function Row({ row, at, focused }: { row: ChangeRow; at: number; focused: boolean }) {
+const Row = memo(function Row({ row, at }: { row: ChangeRow; at: number }) {
   const l = row.lifecycle;
   const v = l.vehicle;
   const Glyph = VEHICLE_GLYPH[v.kind];
@@ -59,10 +58,9 @@ const Row = memo(function Row({ row, at, focused }: { row: ChangeRow; at: number
   );
   const aria = `${vehicleName(v)}: ${l.now.word}`;
   const attn = attentionTone(row);
-  const focus = focused ? "" : undefined;
   return row.links?.href
-    ? <Link href={row.links.href} className="chb-row" data-tone={l.now.tone} data-attn={attn} data-focus={focus} aria-label={aria} data-change-row={row.key}>{body}</Link>
-    : <div className="chb-row" data-tone={l.now.tone} data-attn={attn} data-focus={focus} aria-label={aria} data-change-row={row.key}>{body}</div>;
+    ? <Link href={row.links.href} className="chb-row" data-tone={l.now.tone} data-attn={attn} aria-label={aria} data-change-row={row.key}>{body}</Link>
+    : <div className="chb-row" data-tone={l.now.tone} data-attn={attn} aria-label={aria} data-change-row={row.key}>{body}</div>;
 });
 
 /** Feeds one landed change's reach, whether or not its row is drawn: a hidden group still needs to know where it stands. */
@@ -72,28 +70,13 @@ function ReachFeed({ refId }: { refId: string }) {
 }
 
 /** The grid. `at` freezes its clock (a preview); otherwise it ticks each half minute. */
-export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups = [], mine = false, pick, focused }: {
-  rows: ReadonlyArray<ChangeRow>;
-  at?: number;
-  empty?: string;
-  /** Groups left out by id (`closed`, `live`), for a surface that shows only what is on its way. */
-  hideGroups?: ReadonlyArray<string>;
-  /** The rows are only the viewer's own: the failures and turns read "Needs you". */
-  mine?: boolean;
-  /** A surface that narrows the grid to one group: each pickable group's name presses it, and again clears it. A picked
-   *  group with nothing in it says `empty` under its name. */
-  pick?: { group: ChangeGroupId | null; onPick: (g: ChangeGroupId | null) => void };
-  /** The row a link points at, highlighted. */
-  focused?: (r: ChangeRow) => boolean;
-}) {
+export function ChangeBoard({ rows, at, empty = "Nothing on its way" }: { rows: ReadonlyArray<ChangeRow>; at?: number; empty?: string }) {
   const tick = useCoarseNow(30_000);
   const now = at ?? tick;
   // Grouping turns on days, not seconds: regroup on a ten-minute clock so a ticking grid keeps its rows still.
   const groupClock = Math.floor(now / 600_000) * 600_000;
-  const picked = pick?.group ?? null;
-  // The picked group keeps its name on screen with nothing in it, so the press that clears it is still there.
-  const groups = useMemo(() => groupChanges(rows, groupClock, picked).filter((g) => !hideGroups.includes(g.id)), [rows, hideGroups, groupClock, picked]);
-  // A group folds by default, but not while it holds the row a link points at; the viewer's own press then decides.
+  const groups = useMemo(() => groupChanges(rows, groupClock), [rows, groupClock]);
+  // A group folds by default; the viewer's own press then decides.
   const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
   return (
     <div className="chb-scope">
@@ -105,17 +88,14 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
           <span className="chb-age">Updated</span>
         </div>
         {groups.length ? groups.map((g) => {
-          const folded = toggled.get(g.id) ?? (g.folded && !(focused && g.rows.some(focused)));
-          const head = <><i aria-hidden />{groupLabel(g, mine)}<b>{g.rows.length}</b></>;
+          const folded = toggled.get(g.id) ?? !!g.folded;
+          const head = <><i aria-hidden />{g.label}<b>{g.rows.length}</b></>;
           return (
             <section key={g.id} className="chb-group" data-tone={g.tone} data-change-group={g.id} data-folded={folded ? "" : undefined}>
-              {pick && PICKABLE_GROUPS.includes(g.id) ? (
-                <button type="button" className="chb-group-head chb-pick" aria-pressed={picked === g.id} onClick={() => pick.onPick(picked === g.id ? null : g.id)} data-change-pick={g.id}>{head}</button>
-              ) : g.folded ? (
+              {g.folded ? (
                 <button type="button" className="chb-group-head chb-fold" aria-expanded={!folded} onClick={() => setToggled((t) => new Map(t).set(g.id, !folded))} data-change-fold={g.id}>{head}<ChevronRight className="chb-chevron" aria-hidden /></button>
               ) : <div className="chb-group-head">{head}</div>}
-              {folded ? null : g.rows.length ? <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} focused={!!focused?.(r)} />)}</div>
-                : g.id === picked ? <div className="chb-rows"><div className="chb-empty">{empty}</div></div> : null}
+              {folded ? null : <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} />)}</div>}
             </section>
           );
         }) : <div className="chb-rows"><div className="chb-empty">{empty}</div></div>}

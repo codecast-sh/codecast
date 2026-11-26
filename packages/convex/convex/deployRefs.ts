@@ -8,7 +8,8 @@ import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./lib/access";
-import { pushSummary } from "./deployTargetsState";
+import { commitBySha, commitFacts, pushSummary } from "./deployTargetsState";
+import { sessionPriorityReader } from "./lib/sessionPriority";
 
 export const whereIs = query({
   args: { ref: v.string() },
@@ -24,6 +25,8 @@ export const whereIs = query({
 const RECENT = 80;
 /** The commits a deploy row lists by name; the rest are counted. */
 const COMMIT_ROWS = 40;
+/** The sessions a deploy row names: every one its commits carry, up to this. */
+const SESSION_ROWS = 80;
 
 /** A team's newest deploys, every target, each with the sessions whose commits it carried and the tasks it took out. */
 export const recentForTeam = query({
@@ -34,11 +37,18 @@ export const recentForTeam = query({
     const workspace = `team:${args.team_id}`;
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
     const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
-    const convs = new Map<string, { title: string | null } | null>();
+    // A session the viewer may read, with its owner and the priority it serves.
+    const priorityOf = await sessionPriorityReader(ctx, userId, args.team_id);
+    const convs = new Map<string, { title: string | null; user_id: string; priority: { id: string; title: string | null } | null } | null>();
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {
       const k = String(id);
-      if (!convs.has(k)) { const c = await ctx.db.get(id); convs.set(k, c && (await canAccessConversation(ctx, userId, c)) ? { title: (c.title || c.subtitle || null) as string | null } : null); }
+      if (!convs.has(k)) {
+        const c = await ctx.db.get(id);
+        convs.set(k, c && (await canAccessConversation(ctx, userId, c))
+          ? { title: (c.title || c.subtitle || null) as string | null, user_id: String(c.user_id), priority: await priorityOf(c) }
+          : null);
+      }
       return convs.get(k);
     };
     const taskOf = async (id: Id<"tasks">) => {
@@ -50,9 +60,18 @@ export const recentForTeam = query({
     for (const d of rows) {
       const sessionIds = [...new Set((d.commits ?? []).flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))];
       const sessions = [];
-      for (const id of sessionIds.slice(0, 12)) {
+      for (const id of sessionIds.slice(0, SESSION_ROWS)) {
         const c = await convOf(id as Id<"conversations">);
-        if (c) sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title });
+        if (!c) continue;
+        // The tasks this session's commits in the deploy name, every commit counted (not only the listed rows): how the
+        // page credits a flow's station session ("Review · ct-N") to the session that pressed Ship.
+        const taskIdsHere = [...new Set((d.commits ?? []).flatMap((x) => (String(x.conversation_id) === id ? (x.task_ids ?? []).map(String) : [])))];
+        const task_short_ids: string[] = [];
+        for (const t of taskIdsHere) {
+          const short = (await taskOf(t as Id<"tasks">))?.short_id;
+          if (short) task_short_ids.push(short);
+        }
+        sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, priority: c.priority, task_short_ids });
       }
       const taskIds = [...new Set([...d.carries.map((c) => String(c.task_id)), ...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String))])];
       const taskRows = [];
@@ -97,5 +116,33 @@ export const recentForTeam = query({
       });
     }
     return out;
+  },
+});
+
+/**
+ * One deploy's listed commits (the first COMMIT_ROWS, as recentForTeam lists them) with their lines, pull request and
+ * branch, read from their rows on main and their pull requests (commitFacts). Its own query, asked per card the page
+ * shows: those rows are large, and recentForTeam is held by every viewer of the page.
+ */
+export const deployLines = query({
+  args: { deploy_id: v.id("deploys") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { rows: [] };
+    const d = await ctx.db.get(args.deploy_id);
+    if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) return { rows: [] };
+    const convs = new Map<string, Promise<Doc<"conversations"> | null>>();
+    // A session's branch is read only for a viewer who may read the session.
+    const readable = (id: Id<"conversations">) => {
+      const k = String(id);
+      if (!convs.has(k)) convs.set(k, ctx.db.get(id).then(async (c) => (c && (await canAccessConversation(ctx, userId, c)) ? c : null)));
+      return convs.get(k)!;
+    };
+    const rows: Array<{ sha: string; insertions?: number; deletions?: number; pr_number: number | null; branch: string | null }> = [];
+    for (const c of (d.commits ?? []).slice(0, COMMIT_ROWS)) {
+      const row = d.repository ? await commitBySha(ctx, d.repository, c.sha) : null;
+      rows.push({ sha: c.sha, ...(row ? await commitFacts(ctx, row, c.conversation_id ? await readable(c.conversation_id) : null) : { pr_number: null, branch: null }) });
+    }
+    return { rows };
   },
 });

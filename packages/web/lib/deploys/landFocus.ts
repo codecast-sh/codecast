@@ -1,8 +1,8 @@
 // Landing a link on the Deploys page: each column brings the row the link highlights to its middle and flashes it
 // once, following the page as its sections load, until the viewer acts. The page runs it when a link's focus changes.
 
-/** The rows a link highlights, most telling first: a commit waiting in the queue, the deploy that took it, its change on its way. */
-const FOCUS_ROWS = [".dpp-commit[data-focus]", "[data-focus] > .dpp-dp-row", ".chb-row[data-focus]"];
+/** What a link highlights, most telling first: a row of a deploy card, the card itself, its change on its way in Shipping. */
+const FOCUS_ROWS = [".dpp-row[data-focus]", ".dpp-card[data-focus]", ".dpp-run[data-focus]"];
 
 /** What scrolls an element: its nearest ancestor that scrolls vertically (a column in two columns, else the pane). */
 function scrollerOf(el: Element): Element | null {
@@ -19,8 +19,8 @@ function offCentre(row: Element, scroller: Element | null): boolean {
 
 /**
  * Land a link: bring each highlighted row to the middle of whatever scrolls it (each column scrolls on its own, so
- * each brings its own; one scroller takes the most telling), and flash each row once as it first appears. Queues,
- * history and what is on its way arrive on their own clocks and can grow above a row after it is found, so it keeps
+ * each brings its own; one scroller takes the most telling), and flash each row once as it first appears. Deploys,
+ * the queue and Ship runs arrive on their own clocks and can grow above a row after it is found, so it keeps
  * the rows centred as anything moves, for 6s after the first one appeared. The viewer's own scroll, press, key or a
  * focus moving (a screen reader reading on) ends it, and so does 10s with nothing found.
  */
