@@ -110,7 +110,7 @@ function row(_id: string, extra: Record<string, unknown>) {
 // turn ended (Done under the state rule, so Working or waiting hides it).
 const parent = () => row(PARENT, { title: "Parent session", agent_status: "working", is_idle: false, updated_at: NOW - 5_000 });
 const busy = () => row(BUSY, { title: "Busy subagent", is_subagent: true, parent_conversation_id: PARENT, agent_status: "working", is_idle: false, updated_at: NOW - 4_000 });
-const finished = () => row(FINISHED, { title: "Finished subagent", is_subagent: true, parent_conversation_id: PARENT, agent_status: null, updated_at: NOW - 120_000 });
+const finished = () => row(FINISHED, { title: "Finished subagent", is_subagent: true, parent_conversation_id: PARENT, agent_status: null, status: "completed", updated_at: NOW - 120_000 });
 
 function seed(rows: Record<string, unknown>[], ui: Record<string, unknown>) {
   __resetInboxPlacementCacheForTests();

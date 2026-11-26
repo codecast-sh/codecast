@@ -27,10 +27,10 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
 import { rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import type { PlanState } from "@codecast/shared/tasks";
-import { agentStatusAt, liveFactsOf, sessionLiveAt } from "./liveness";
+import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
 import { sessionStartupState } from "./sessionLifecycle";
 import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
@@ -280,19 +280,24 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   const where = section ?? (placement ? sectionOfBucket(overlaidBucket(placement.bucket, row, now, live)) : null);
   // A Claude Code subagent drawn under its parent (the shared
   // isSubagentConversation: the flag, or a parent pointer on a row that lacks
-  // it) runs inside its parent's turn and hands its result back there. Once
-  // its turn ended (no live status of its own, not producing, no ask or send
-  // of the person's) it waits on nobody: Done, whatever its placement says (a
-  // settled wait files Needs you, or Working "With <owner>" when an agent
-  // owner answers it). A failure still reads Error, a set-aside row keeps its
-  // shelf, and a section above the row still decides. A spawned worker, and a
-  // subagent standing as its own card, read their placement like any session.
-  const handedBack = nested && !section && (row.message_count ?? 0) > 0
+  // it) runs inside its parent's turn and hands its result back there; it has
+  // no live status of its own. It is producing while its last output is
+  // within the grace the server's parent park uses (SUBAGENT_PRODUCING_GRACE_MS,
+  // so a long tool call stays Working), and Done once it completed or fell
+  // quiet past it, whatever its placement says (a settled wait files Needs
+  // you, or Working "With <owner>" when an agent owner answers it). An ask or
+  // send of the person's, a failure, a set-aside row and a section above the
+  // row still decide. A spawned worker, and a subagent standing as its own
+  // card, read their placement like any session.
+  const inParentsTurn = nested && !section && (row.message_count ?? 0) > 0
     && isSubagentConversation({ is_subagent: row.is_subagent === true, parent_conversation_id: row.parent_conversation_id })
-    && !row.spawned_by_conversation_id && !row.agent_status && !live.asking && !live.pendingSend && !sessionLiveAt(row as Parameters<typeof sessionLiveAt>[0], now);
-  if (handedBack && where !== "dismissed" && where !== "stashed" && where !== "snoozed" && where !== "questions"
-    && !row.inbox_killed_at && !row.inbox_dismissed_at && !row.inbox_stashed_at) {
-    return live.stopped || statusFailure(row, now, live) ? "error" : "done";
+    && !row.spawned_by_conversation_id && !row.agent_status && !live.asking && !live.pendingSend
+    && where !== "dismissed" && where !== "stashed" && where !== "snoozed" && where !== "questions"
+    && !row.inbox_killed_at && !row.inbox_dismissed_at && !row.inbox_stashed_at;
+  if (inParentsTurn) {
+    if (live.stopped || statusFailure(row, now, live)) return "error";
+    const finished = row.status === "completed" || now - (row.updated_at ?? 0) >= SUBAGENT_PRODUCING_GRACE_MS;
+    return finished ? "done" : "working";
   }
   switch (where) {
     case "dismissed": return "killed";

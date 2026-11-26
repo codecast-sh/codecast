@@ -66,7 +66,7 @@ const row = (title: string, ageMin: number, extra: Record<string, unknown> = {})
 const oldWork = row("Search auth", 9, { is_idle: false, agent_status: "working" });
 const newWork = row("Read docs", 2, { is_idle: false, agent_status: "working" });
 const ask = row("Deploy worker", 5, { spawned_by_conversation_id: "jx7parent", agent_status: "idle" });
-const doneSub = row("Map routes", 4);
+const doneSub = row("Map routes", 4, { status: "completed" });
 const kids = [oldWork, doneSub, newWork, ask];
 
 const render = (el: React.ReactElement) => {

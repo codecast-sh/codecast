@@ -178,6 +178,12 @@ export function isStatusTrustStale(
 // session on the same clock.
 export const AGENT_IDLE_GRACE_MS = 45 * 1000;
 
+// How recently a subagent must have produced output to count as producing on
+// the strength of recent activity alone. Wider than the AGENT_IDLE_GRACE so a
+// child mid-tool-call (quiet but live) doesn't release its parent's park
+// prematurely, and doesn't read Done on its parent's card.
+export const SUBAGENT_PRODUCING_GRACE_MS = 5 * 60 * 1000;
+
 // Companion to isStatusTrustStale for rows with NO claim of active work. The
 // long TTL above gives a present ACTIVE agent_status an hour of benefit of the
 // doubt; a row carrying no active status deserves none — nothing anywhere says

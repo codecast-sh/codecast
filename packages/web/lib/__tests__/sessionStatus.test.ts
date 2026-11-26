@@ -280,6 +280,16 @@ describe("a nested subagent whose turn ended", () => {
     expect(status(sub)).toBe("done");
   });
 
+  // A long tool call (a build, a sleep) is quiet but not over: it stays
+  // Working through the grace the server's parent park uses, then reads Done.
+  test("a subagent quiet inside a long tool call reads Working until the producing grace runs out", () => {
+    const quiet = (ms: number, over: Partial<InboxSession> = {}) => row({ is_subagent: true, parent_conversation_id: "jx7parent", status: "active", agent_status: undefined, is_idle: undefined, updated_at: NOW - ms, agent_status_updated_at: NOW - ms, ...over });
+    expect(status(quiet(75_000))).toBe("working");
+    expect(status(quiet(4 * 60_000))).toBe("working");
+    expect(status(quiet(6 * 60_000))).toBe("done");
+    expect(status(quiet(75_000, { status: "completed" }))).toBe("done");
+  });
+
   test("a subagent standing as its own card reads its placement", () => {
     const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
     expect(status(sub, undefined, false)).toBe("needs_you");
