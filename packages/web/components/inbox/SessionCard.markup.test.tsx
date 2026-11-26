@@ -134,9 +134,10 @@ const CASES: Array<[string, Partial<InboxSession>, Props?]> = [
   ["draft", { _id: "c-draft", _hasDraft: true, message_count: 0, last_user_message: undefined }],
   ["pending send", { _id: "c-pending", has_pending: true }],
   ["assigned ping", { _id: "c-ping", assigned_ping: { by_name: "Ann Lee", note: "Can you take the webhook half?", at: NOW - 7.5 * MIN } }],
-  ["spawned by, fork, plan, task, comments", {
+  ["handed off from, fork, plan, task, comments", {
     _id: "c-spawned",
     spawned_by_conversation_id: "c-lead",
+    handed_off_from_conversation_id: "c-lead",
     forked_from: "c-lead",
     active_plan: { _id: "p1", title: "Webhook retry", short_id: "pl-88" },
     active_task: { _id: "t1", title: "Dashboard retry UI", short_id: "ct-4102" },

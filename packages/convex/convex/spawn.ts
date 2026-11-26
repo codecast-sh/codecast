@@ -13,7 +13,7 @@ import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
-import { listSessionOwnerIds, ownersModelOn } from "./sessionOwners";
+import { listSessionOwnerIds, ownersModelOn, ownPeerByItsSpawnersHuman } from "./sessionOwners";
 import { actsForRole } from "@codecast/shared/contracts/sessionOwners";
 import { roleOfConversation } from "./lib/actor";
 import { actingPersonOf } from "./lib/userSend";
@@ -265,10 +265,12 @@ export async function spawnSessionCore(
   });
 
   const shortId = conversationId.toString().slice(0, 7);
+  const spawnerRow = opts.spawnerConversationId ? await ctx.db.get(opts.spawnerConversationId) : null;
   await ctx.db.patch(conversationId, { short_id: shortId });
   if (!(opts.roleStarted && await ownersModelOn(ctx, await ctx.db.get(conversationId)))) await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
   // A worker or a handoff continues its source's work (lib/priorityLinks).
   await inheritLink(ctx, conversationId, opts.subagentFields?.parent_conversation_id ?? opts.handoffFrom?._id, runnerUserId);
+  if (!opts.subagentFields) await ownPeerByItsSpawnersHuman(ctx, await ctx.db.get(conversationId), spawnerRow);
   if (opts.handoffFrom) {
     await applyHandoffLink(ctx, userId, opts.handoffFrom, { _id: conversationId, short_id: shortId, agent_type: agentType, model: opts.model });
   }
@@ -280,7 +282,6 @@ export async function spawnSessionCore(
   // brief is from the person whose send started the turn it is working on.
   // Only a session the caller runs speaks for its turn, and a hosted child
   // takes input from its runner alone.
-  const spawnerRow = opts.spawnerConversationId ? await ctx.db.get(opts.spawnerConversationId) : null;
   const briefFrom = spawnerRow && spawnerRow.user_id === userId && !isHostedAgentType(agentType)
     ? actingPersonOf(spawnerRow, userId)
     : userId;

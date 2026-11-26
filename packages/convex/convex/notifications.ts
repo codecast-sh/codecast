@@ -744,7 +744,7 @@ export async function performNeedsInputCheck(
   // to the person's own notify below, so the wait is never swallowed.
   //
   // Under the owners model (team feature session_owners) the reader is the
-  // session's agent owner, its role or the session that started it
+  // session's agent owner, its role or the session it works for
   // (lib/agentOwnerWaits), and one it cannot reach, or that already passed
   // this wait up, sends the wait to the person owners: wait_up_at files it
   // under Needs You and the push below rings them.
@@ -1095,8 +1095,8 @@ export const checkNeedsInput = internalMutation({
 // window's real releases. A wait the parent was told stood "With <parent>"
 // and rang nobody, and the needs-input check runs only when the child's own
 // status moves, so its check runs again here and reaches the child's people.
-// Paged, 50 children a call, over the Task subagents and then the spawned
-// sessions, so the kill or delete mutation never carries it.
+// Paged, 50 children a call, over the sessions nested under it (a spawned
+// peer was never its child), so the kill or delete mutation never carries it.
 const DEAD_PARENT_PAGE = 50;
 
 // A wait stands on the child: one it told its parent (hand_wake_notified_key,
@@ -1115,12 +1115,11 @@ async function processAlive(ctx: { db: any }, child: any, now: number): Promise<
 
 export async function performReleaseDeadParentChildren(
   ctx: { db: any; scheduler: any },
-  args: { parent_id: string; released_at: number; spawned?: boolean; cursor?: string | null },
+  args: { parent_id: string; released_at: number; cursor?: string | null },
 ): Promise<{ released: number; rechecked: number }> {
-  const field = args.spawned ? "spawned_by_conversation_id" : "parent_conversation_id";
   const page = await ctx.db
     .query("conversations")
-    .withIndex(args.spawned ? "by_spawned_by" : "by_parent_conversation_id", (q: any) => q.eq(field, args.parent_id))
+    .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", args.parent_id))
     .paginate({ numItems: DEAD_PARENT_PAGE, cursor: args.cursor ?? null });
   let released = 0;
   let rechecked = 0;
@@ -1140,8 +1139,6 @@ export async function performReleaseDeadParentChildren(
   }
   if (!page.isDone) {
     await ctx.scheduler.runAfter(0, internal.notifications.releaseDeadParentChildren, { ...args, cursor: page.continueCursor });
-  } else if (!args.spawned) {
-    await ctx.scheduler.runAfter(0, internal.notifications.releaseDeadParentChildren, { parent_id: args.parent_id, released_at: args.released_at, spawned: true });
   }
   return { released, rechecked };
 }
@@ -1172,11 +1169,11 @@ export const rerouteMemberEscalations = internalMutation({
 });
 
 export const releaseDeadParentChildren = internalMutation({
-  args: { parent_id: v.string(), released_at: v.number(), spawned: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())) },
+  args: { parent_id: v.string(), released_at: v.number(), cursor: v.optional(v.union(v.string(), v.null())) },
   handler: (ctx, args) => performReleaseDeadParentChildren(ctx, args),
 });
 
-// A session's agent owner (its role, or the session that started it) passes
+// A session's agent owner (its role, or the session it works for) passes
 // what the session waits on up to its person owners (`cast own <s> --pass-up`):
 // the wait files under Needs You and the needs-input check rings them. Only
 // under the owners model (team feature session_owners), and only while an

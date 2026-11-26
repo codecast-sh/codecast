@@ -144,9 +144,9 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   }
   if (draft.parent && !parentIsRole) {
     rows.push({
-      key: `s:${draft.parent}`, kind: "session", name: view.parent?.title ?? "Session that started it",
-      sub: "Session that started it", mine: false,
-      onRemove: solo ? null : () => setDraft(releaseParent), removeLabel: solo ? "The only owner" : "Remove the session that started it",
+      key: `s:${draft.parent}`, kind: "session", name: view.parent?.title ?? "Session it works for",
+      sub: "Session it works for", mine: false,
+      onRemove: solo ? null : () => setDraft(releaseParent), removeLabel: solo ? "The only owner" : "Remove the session it works for",
     });
   }
 

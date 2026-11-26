@@ -390,8 +390,8 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionOwnership.listOwners", "sessionOwnership.listOwnersFor"],
   },
   // The agents working for a session under the owners model (convex
-  // sessionAgents.listSessionAgents): one row per open conversation, its
-  // sub-agents and the sessions it spawned, each with its state and people.
+  // sessionAgents.listSessionAgents): one row per open conversation, the
+  // workers nested under it, each with its state and people.
   // The agents band draws it; an agent's owners, once read, come from
   // sessionOwners (lib/sessionAgents). Only the server writes it.
   sessionAgents: {

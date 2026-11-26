@@ -4202,8 +4202,9 @@ const OWNERS_MODEL_HELP =
   "who started it while nobody does.\n\n" +
   "With the Session owners team feature:\n" +
   "  A session is in the inbox of each of its owners, and only theirs. Its\n" +
-  "  owners are people, at most one role, and the session that started it\n" +
-  "  (a sub-agent's or a spawned session's parent). The person who started\n" +
+  "  owners are people, at most one role, and the session it is nested under\n" +
+  "  as a worker (a sub-agent's or a --subagent spawn's parent; a plain spawn\n" +
+  "  is its spawner's peer, never its child). The person who started\n" +
   "  it owns it while nothing else does, unless a role started it. An agent\n" +
   "  owner (the role, else the parent session) answers what the session\n" +
   "  asks. Owners, and the account that runs it, change its owners; anyone\n" +
@@ -4270,7 +4271,7 @@ program
     "  cast disown jx7c6zk                  # leave it yourself\n" +
     "  cast disown jx7c6zk ashot@x.ai       # remove a teammate\n" +
     "  cast disown jx7c6zk @eval            # its role no longer owns it\n" +
-    "  cast disown jx7c6zk parent           # the session that started it no longer owns it"
+    "  cast disown jx7c6zk parent           # the session it is nested under no longer owns it"
   )
   .argument("<session_or_owner>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or an owner, to use the CURRENT session")
   .argument("[owner]", "Team member email (exact) or name, @role, or parent; defaults to you")
@@ -4303,7 +4304,7 @@ program
 
 program
   .command("owners")
-  .description("List a session's owners: people, its role, the session that started it (see: cast own)")
+  .description("List a session's owners: people, its role, the session it is nested under (see: cast own)")
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
     const result = await cliPost("/cli/sessions/owners", { session_id: sessionId });

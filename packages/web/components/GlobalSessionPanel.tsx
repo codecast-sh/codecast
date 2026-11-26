@@ -14,6 +14,10 @@ import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu } from "./
 import { labelSessions } from "../lib/labelSessions";
 import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
+import { adoptChange, adoptDropRefusal, mayEdit, rowDropZone, viewerOwns } from "../lib/adoptDrop";
+import { applyOwnersWithToast } from "../lib/ownersGestures";
+import { ownerFactsOf, ownersReadOf } from "../store/sessionOwnersSlice";
+
 import { copyToClipboard, formatShortDate } from "../lib/utils";
 import { LoginCodePaste } from "./LoginCodePaste";
 import type { ThreadStateStatus } from "@codecast/shared/contracts";
@@ -105,6 +109,14 @@ import { windowOrgTree } from "../store/orgSlice";
 import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+
+// What the store knows of a session's owners for a drop (lib/adoptDrop), and
+// the parent field on its row (a release leaves it).
+const ownersKnownOf = (st: any, id: string) => ({ facts: ownerFactsOf(st, id), canEdit: !!ownersReadOf(st, id)?.can_edit });
+const parentLinkIn = (st: any, id: string): string | null => {
+  const p = (st.sessions?.[id] ?? st.conversations?.[id])?.parent_conversation_id;
+  return p ? String(p) : null;
+};
 
 // The login flow's device-row state, as listAccountProfiles reports it.
 type LoginFlowState = {
@@ -2600,9 +2612,53 @@ function SessionListPanelImpl({
   // While a card is in flight, an empty drop section still renders its header,
   // so "drag onto Done" works when nothing is filed there yet.
   const [sessionDragActive, setSessionDragActive] = useState(false);
-  useEventListener("dragstart", (e) => { if (e.dataTransfer?.types.includes("codecast/session-id")) setSessionDragActive(true); });
-  useEventListener("dragend", () => setSessionDragActive(false));
-  useEventListener("drop", () => setSessionDragActive(false));
+  // The card in flight: dataTransfer is unreadable during dragover, and a row
+  // must know what is dragged to say whether it would take it as a worker.
+  const draggedSessionRef = useRef<string | null>(null);
+  // The row a card hovers to adopt: the dragged title, whether it leaves the
+  // viewer's inbox, and where the row's own card sits inside the row.
+  const [adoptOver, setAdoptOver] = useState<{ id: string; title: string; leaves: boolean; top: number; height: number } | null>(null);
+  const endSessionDrag = () => {
+    setSessionDragActive(false);
+    draggedSessionRef.current = null;
+    setAdoptOver(null);
+  };
+  useEventListener("dragstart", (e) => {
+    if (!e.dataTransfer?.types.includes("codecast/session-id")) return;
+    setSessionDragActive(true);
+    draggedSessionRef.current = e.dataTransfer.getData("codecast/session-id") || null;
+  });
+  useEventListener("dragend", endSessionDrag);
+  useEventListener("drop", endSessionDrag);
+
+  // Drop a card on the middle of another row: the dragged session becomes that
+  // session's worker (owners change adopt_parent). A row lights only for a drop
+  // the server would take (lib/adoptDrop); one card at a time.
+  const adoptRefusal = useCallback((draggedId: string, targetId: string): string | null => {
+    if (selectionIdsFor(draggedId).length > 1) return "One session at a time";
+    const st = useInboxStore.getState() as any;
+    return adoptDropRefusal({
+      dragged: st.sessions?.[draggedId],
+      target: st.sessions?.[targetId],
+      draggedOwners: ownersKnownOf(st, draggedId),
+      targetOwners: ownersKnownOf(st, targetId),
+      viewerId: String(st.currentUser?._id ?? ""),
+      // The painted parent first, so a reverse drag right after an adopt stays dark.
+      parentOf: (id) => {
+        const p = ownerFactsOf(st, id)?.parent_conversation_id ?? parentLinkIn(st, id);
+        return p ? String(p) : null;
+      },
+    });
+  }, []);
+  const adoptSession = useCallback((draggedId: string, targetId: string) => {
+    endSessionDrag();
+    const st = useInboxStore.getState() as any;
+    const meId = String(st.currentUser?._id ?? "");
+    const mayHandTo = (id: string) => !!st.sessions?.[id] && mayEdit(st.sessions[id], ownersKnownOf(st, id), meId);
+    const { change, inverse } = adoptChange(ownerFactsOf(st, draggedId), ownersReadOf(st, draggedId), meId, targetId, mayHandTo);
+    const title = (id: string) => st.sessions?.[id]?.title || "Untitled session";
+    applyOwnersWithToast(draggedId, change, inverse, `“${title(draggedId)}” now works for “${title(targetId)}”`);
+  }, []);
 
   // Drag-to-reorder in the "time" view. There's no separate grip handle — the
   // whole card is already draggable (the card→label "file it" drag, tagged
@@ -3126,35 +3182,77 @@ function SessionListPanelImpl({
             const reorderHere = reorderable && reorderOver?.id === session._id;
             const holdLeft = (s.newSessionHolds[session._id] ?? 0) - Date.now();
             const justStarted = key === "new" && Date.now() - (session.started_at ?? 0) < 4000;
+            // Where a dragged card lands on this row. The adopt zone is the
+            // row's own card, measured alone: never its bars or the worker
+            // rows under it, which are other sessions.
+            const dropAt = (e: React.DragEvent<HTMLDivElement>, draggedId: string | null) => {
+              const wrap = e.currentTarget;
+              const card = wrap.querySelector<HTMLElement>(`[data-session-id="${session._id}"]`);
+              const adoptable = !!card && card.contains(e.target as Node) && !!draggedId && !adoptRefusal(draggedId, session._id);
+              const rect = (adoptable ? card! : wrap).getBoundingClientRect();
+              const top = adoptable ? rect.top - wrap.getBoundingClientRect().top : 0;
+              return { zone: rowDropZone(e.clientY, rect.top, rect.height, { reorderable, adoptable, sectionDrop: isDropTarget }), top, height: rect.height };
+            };
             return (
               <div
                 key={session._id}
                 style={holdStyleOf(session._id)}
                 className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
-                onDragOver={reorderable ? (e) => {
+                onDragOver={(e) => {
                   if (!e.dataTransfer.types.includes("codecast/session-id")) return;
+                  const draggedId = draggedSessionRef.current;
+                  const { zone, top, height } = dropAt(e, draggedId);
+                  if (zone !== "adopt") setAdoptOver((cur) => (cur?.id === session._id ? null : cur));
+                  // No zone here: the drag falls through to the section (filing it).
+                  if (!zone) return;
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pos = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-                  setReorderOver((cur) => (cur?.id === session._id && cur.pos === pos ? cur : { id: session._id, pos }));
-                } : undefined}
-                onDragLeave={reorderable ? (e) => {
+                  if (zone === "adopt") {
+                    e.stopPropagation();
+                    setDragOverSectionKey(null);
+                    setReorderOver((cur) => (cur?.id === session._id ? null : cur));
+                    setAdoptOver((cur) => {
+                      if (cur?.id === session._id && cur.top === top && cur.height === height) return cur;
+                      const st = useInboxStore.getState() as any;
+                      const dragged = st.sessions?.[draggedId!];
+                      const leaves = !!dragged && viewerOwns(dragged, ownersKnownOf(st, draggedId!), String(st.currentUser?._id ?? ""));
+                      return { id: session._id, title: dragged?.title || "this session", leaves, top, height };
+                    });
+                    return;
+                  }
+                  setReorderOver((cur) => (cur?.id === session._id && cur.pos === zone ? cur : { id: session._id, pos: zone }));
+                }}
+                onDragLeave={(e) => {
                   if (e.currentTarget.contains(e.relatedTarget as Node)) return;
                   setReorderOver((cur) => (cur?.id === session._id ? null : cur));
-                } : undefined}
+                  setAdoptOver((cur) => (cur?.id === session._id ? null : cur));
+                }}
                 onDragEnd={reorderable ? () => setReorderOver(null) : undefined}
-                onDrop={reorderable ? (e) => {
+                onDrop={(e) => {
                   const draggedId = e.dataTransfer.getData("codecast/session-id");
                   if (!draggedId) return;
-                  e.preventDefault();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pos = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-                  handleReorderDrop(draggedId, session._id, pos);
-                } : undefined}
+                  const { zone } = dropAt(e, draggedId);
+                  if (zone === "adopt") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setDragOverSectionKey(null);
+                    adoptSession(draggedId, session._id);
+                  } else if (zone && reorderable) {
+                    e.preventDefault();
+                    handleReorderDrop(draggedId, session._id, zone);
+                  }
+                }}
               >
                 {reorderHere && (
                   <div className={`absolute left-0 right-0 h-0.5 bg-sol-cyan z-10 pointer-events-none ${reorderOver!.pos === "before" ? "top-0" : "bottom-0"}`} />
+                )}
+                {adoptOver?.id === session._id && (
+                  <div style={{ top: adoptOver.top, height: adoptOver.height }} className="absolute left-0 right-0 z-10 pointer-events-none ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10 flex items-end justify-end p-1.5">
+                    <div className="max-w-[90%] rounded-md border border-sol-cyan/60 bg-sol-bg px-2 py-1 shadow-lg">
+                      <div className="text-meta text-sol-text truncate">Make “{adoptOver.title}” its worker</div>
+                      <div className="text-meta text-sol-text-dim [text-wrap:balance]">{adoptOver.leaves ? "It leaves your inbox · this session answers it" : "This session answers it"}</div>
+                    </div>
+                  </div>
                 )}
                 <SessionCard
                   session={session}

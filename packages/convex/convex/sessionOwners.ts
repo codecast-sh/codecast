@@ -206,6 +206,43 @@ export async function humanStarterUser(
   return null;
 }
 
+// A peer (a session another one only spawned) has no parent to own it, so it
+// needs an owner of its own. Under the owners model, one a bot-run session
+// spawned has no human by its own fields, so it takes its spawner's: the
+// spawner's people (its implicit starter included) get owner rows, or, when a
+// role alone owns the spawner (a role's standing session or hand), the peer
+// is that role's start. Otherwise it would be in nobody's inbox. Returns
+// whether it wrote anything.
+export async function ownPeerByItsSpawnersHuman(
+  ctx: { db: any },
+  child: { _id: Id<"conversations">; user_id: Id<"users">; author_user_id?: Id<"users">; team_id?: Id<"teams">; org_role_id?: unknown; parent_conversation_id?: unknown },
+  spawner: any | null,
+): Promise<boolean> {
+  if (!spawner || child.parent_conversation_id || child.org_role_id || (await humanStarterUser(ctx, child)) || !(await ownersModelOn(ctx, child))) return false;
+  // A spawner that is itself a worker has only its parent session: climb to
+  // the first session in the chain with people or a role.
+  let at = spawner;
+  for (let hops = 0; at && hops < PEER_OWNER_HOPS; hops++) {
+    const owners = ownersOf(await sessionOwnerFactsOf(ctx, at));
+    const people = owners.people.length ? owners.people : owners.implicitStarter ? [owners.implicitStarter] : [];
+    if (people.length) {
+      for (const id of people) await addSessionOwnerRow(ctx, child._id, id as Id<"users">, id as Id<"users">);
+      await syncPrimaryOwnerCache(ctx, child._id);
+      return true;
+    }
+    if (owners.role) {
+      // A role is filed only in its own team: a peer elsewhere stays unowned
+      // and its waits reach the fallback person.
+      if (String(at.team_id ?? "") !== String(child.team_id ?? "")) return false;
+      await ctx.db.patch(child._id, { org_role_id: owners.role, org_role_hold: "filed", role_started: true, owners_changed_at: Date.now() });
+      return true;
+    }
+    at = owners.parentSession ? await ctx.db.get(owners.parentSession) : null;
+  }
+  return false;
+}
+const PEER_OWNER_HOPS = 8;
+
 export async function conversationHasHumanStarter(
   ctx: { db: any },
   conversation: { user_id: Id<"users">; author_user_id?: Id<"users"> },
@@ -335,12 +372,12 @@ export async function sessionOwnerFactsOf(ctx: { db: any }, conversation: any): 
   const rows = (await ownerRows(ctx, conversation._id)).map((r: any) => ({ user_id: String(r.user_id), added_at: r.added_at }));
   const starter = await humanStarterUser(ctx, conversation);
   return {
+    conversation_id: conversation._id,
     rows,
     starter: starter ? String(starter._id) : null,
     user_id: conversation.user_id,
     org_role_id: conversation.org_role_id,
     parent_conversation_id: conversation.parent_conversation_id,
-    spawned_by_conversation_id: conversation.spawned_by_conversation_id,
     parent_released_at: conversation.parent_released_at ?? await deadParentAt(ctx, conversation),
     role_started: conversation.role_started ?? null,
   };

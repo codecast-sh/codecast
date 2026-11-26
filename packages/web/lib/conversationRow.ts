@@ -27,8 +27,8 @@ export type Conversation = {
   author_name: string;
   is_own: boolean;
   parent_conversation_id?: string | null;
-  // Visible-child pointer (agent-team teammate → its lead). The server folds it
-  // into parent_conversation_id for the link; this field only picks the label.
+  // The session that spawned it (an agent-team lead, a plain spawn): a peer,
+  // never a parent, so it makes no parent link; a handoff's card reads it.
   spawned_by_conversation_id?: string | null;
   // The handoff pair (`cast handoff --to`): a child started from a human
   // shell has no spawned_by, so the card reads this for its parent link too.

@@ -120,7 +120,7 @@ describe("applyOwnersChange", () => {
   });
 
   test("taking over a role's start takes every agent owner off, adds the taker and ends the role's start", async () => {
-    const db = fixtures(true, { user_id: BOT, role_started: true, spawned_by_conversation_id: PARENT });
+    const db = fixtures(true, { user_id: BOT, role_started: true, parent_conversation_id: PARENT });
     const role = await performCreateRole(ctxOf(db), ME as any, { name: "A", handle: "aa", team_id: TEAM });
     conv(db).org_role_id = role._id;
     // The runner is a bot: MATE can see it and add themselves, then take it over.
@@ -135,7 +135,7 @@ describe("applyOwnersChange", () => {
   });
 
   test("cast disown @role takes off only the role and adds nobody", async () => {
-    const db = fixtures(true, { spawned_by_conversation_id: PARENT });
+    const db = fixtures(true, { parent_conversation_id: PARENT });
     await performCreateRole(ctxOf(db), ME as any, { name: "A", handle: "aa", team_id: TEAM });
     await performAddSessionOwner(ctxOf(db), ME as any, { session_id: S, owner: "@aa" });
     expect(conv(db).org_role_id).toBeDefined();
@@ -147,7 +147,7 @@ describe("applyOwnersChange", () => {
   });
 
   test("cast disown parent releases only the parent, and the starter owns it again", async () => {
-    const db = fixtures(true, { spawned_by_conversation_id: PARENT });
+    const db = fixtures(true, { parent_conversation_id: PARENT });
     await performRemoveSessionOwner(ctxOf(db), ME as any, { session_id: S, owner: "parent" });
     expect(conv(db).parent_released_at).toBeGreaterThan(0);
     expect(people(db)).toEqual([]);
@@ -158,7 +158,7 @@ describe("applyOwnersChange", () => {
 
   test("a deleted or killed parent counts as released: the child falls back to its starter", async () => {
     for (const parent of ["deleted", "killed"]) {
-      const db = fixtures(true, { spawned_by_conversation_id: PARENT });
+      const db = fixtures(true, { parent_conversation_id: PARENT });
       if (parent === "deleted") db._tables.conversations = db._tables.conversations.filter((c: any) => c._id !== PARENT);
       else db._tables.conversations.find((c: any) => c._id === PARENT).inbox_killed_at = 7;
       const read: any = await performListOwners(ctxOf(db), ME as any, S);
@@ -248,7 +248,7 @@ describe("applyOwnersChange", () => {
 
 describe("listOwners", () => {
   test("names the people in the order added, the role, the parent and whether the viewer may edit", async () => {
-    const db = fixtures(true, { spawned_by_conversation_id: PARENT });
+    const db = fixtures(true, { parent_conversation_id: PARENT });
     const role = await performCreateRole(ctxOf(db), ME as any, { name: "Eval lead", handle: "aa", team_id: TEAM });
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, add: [MATE, ME], role: "@aa" });
     const read: any = await performListOwners(ctxOf(db), ME as any, S);
@@ -274,5 +274,10 @@ describe("listOwners", () => {
     const child: any = await performListOwners(ctxOf(fixtures(true, { parent_conversation_id: PARENT })), ME as any, S);
     expect(child.implicit_starter).toBeNull();
     expect(child.owners).toEqual([]);
+    // A plain spawn is its spawner's peer: no parent owns it, so its starter does.
+    const peer: any = await performListOwners(ctxOf(fixtures(true, { spawned_by_conversation_id: PARENT })), ME as any, S);
+    expect(peer.parent_session).toBeNull();
+    expect(peer.implicit_starter).toMatchObject({ user_id: ME, implicit: true });
+    await expect(performRemoveSessionOwner(ctxOf(fixtures(true, { spawned_by_conversation_id: PARENT })), ME as any, { session_id: S, owner: "parent" })).rejects.toThrow(/No parent session/);
   });
 });

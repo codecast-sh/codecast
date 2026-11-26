@@ -146,7 +146,7 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // its owners' inboxes, a nested one included, and rides nothing: no role
 // riding, no child_live lift, no teammate ride, no child ask lifting its
 // parent. A wait its agent owner answers (agentAnswersRow: its role, or the
-// session that started it, until the wait reaches its people) files as
+// session it works for, until the wait reaches its people) files as
 // working, "With <owner>". A row without owners_model places exactly as v29.
 // v31: a pinned block holds through hibernation (declaredBlockHolds).
 export const INBOX_PROJECTION_VERSION = 31 as const;
