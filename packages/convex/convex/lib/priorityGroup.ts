@@ -19,17 +19,20 @@ export function activeGroup(ctx: { db: any }, userId: Id<"users">, workspace: st
     .take(ACTIVE_GROUP_READ);
 }
 
+/** The most sessions any one transaction reads off one priority; the rest is paged by scheduled runs (priorityPassRun SESSION_PAGE). */
+export const MARK_SESSIONS_READ = 200;
+
 /**
  * The highest milestone key a priority has spent (prioritiesSchema
- * step_key_max). A priority written before the mark existed has none: it is
- * worked out once from its milestones and every session still on one, so a
- * key a removed milestone's sessions hold is never handed out again.
+ * step_key_max). A priority written before the mark existed has none until
+ * the one-time backfill sets it (priorityStepKeyBackfill, from every session):
+ * until then a write takes it from its milestones and its newest
+ * MARK_SESSIONS_READ sessions' keys.
  */
 export async function stepKeyMark(ctx: { db: any }, p: Doc<"priorities">): Promise<number> {
   if (p.step_key_max != null) return p.step_key_max;
   let mark = stepKeyMax(p.steps);
-  for await (const c of ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)) as AsyncIterable<Doc<"conversations">>) {
-    if (c.priority_step_key) mark = stepKeyMax([{ key: c.priority_step_key }], mark);
-  }
+  const newest: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(MARK_SESSIONS_READ);
+  for (const c of newest) if (c.priority_step_key) mark = stepKeyMax([{ key: c.priority_step_key }], mark);
   return mark;
 }

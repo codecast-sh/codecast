@@ -4,11 +4,14 @@
 // written straight to applyPlan shows the hold is in code, not in the prompt.
 // A correction reaches the next pass's prompt and turns applied when it
 // succeeds.
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { PRIORITY_PASS_CAPS } from "./lib/priorityPass";
+import * as passRun from "./priorityPassRun";
+import * as prioritiesModule from "./priorities";
+import * as stepKeyBackfill from "./priorityStepKeyBackfill";
 
 setDefaultTimeout(60_000);
 
@@ -193,37 +196,181 @@ describe("a milestone holding a session the person placed survives the pass", ()
   });
 });
 
-describe("past 500 sessions on one priority", () => {
-  test("a drop, the pass's merge and the person's merge each reach every session", async () => {
+describe("past 1,500 sessions on one priority", () => {
+  const MANY = 1500;
+  /** Each watched transaction's session reads (the limit each asked for; Infinity for a read of all) and the sessions it wrote. */
+  type Tx = { fn: string; limits: number[]; read: number; patched: number; wrote: number };
+  const watched: Array<[any, string]> = [
+    [passRun.applyPlan, "applyPlan"], [passRun.moveMergedSessions, "moveMergedSessions"], [passRun.clearDeadStepKeys, "clearDeadStepKeys"],
+    [prioritiesModule.dropStep, "dropStep"], [prioritiesModule.merge, "merge"], [stepKeyBackfill.run, "backfill"],
+  ];
+  let txs: Tx[] = [];
+  const originals = new Map<any, any>();
+  const countedQuery = (q: any, tx: Tx): any => new Proxy(q, {
+    get(target, prop) {
+      if (prop === Symbol.asyncIterator) {
+        tx.limits.push(Infinity);
+        return () => {
+          const it = target[Symbol.asyncIterator]();
+          return { next: async () => { const r = await it.next(); if (!r.done) tx.read++; return r; } };
+        };
+      }
+      const val = target[prop];
+      if (typeof val !== "function") return val;
+      return (...a: any[]) => {
+        const out = val.apply(target, a);
+        if (prop === "take") { tx.limits.push(a[0]); return out.then((rows: any[]) => { tx.read += rows.length; return rows; }); }
+        if (prop === "collect" || prop === "paginate") { tx.limits.push(prop === "paginate" ? a[0].numItems : Infinity); return out.then((r: any) => { tx.read += (r.page ?? r).length; return r; }); }
+        if (prop === "first" || prop === "unique") { tx.limits.push(1); return out.then((r: any) => { if (r) tx.read++; return r; }); }
+        return countedQuery(out, tx);
+      };
+    },
+  });
+  const countingCtx = (ctx: any, tx: Tx) => {
+    const db = new Proxy(ctx.db, {
+      get(target, prop) {
+        if (prop === "query") return (table: string) => (table === "conversations" ? countedQuery(target.query(table), tx) : target.query(table));
+        if (prop === "patch") return (id: any, ...rest: any[]) => { tx.wrote++; if (target.normalizeId("conversations", id)) tx.patched++; return target.patch(id, ...rest); };
+        const val = target[prop];
+        return typeof val === "function" ? val.bind(target) : val;
+      },
+    });
+    return new Proxy(ctx, { get: (target, prop) => (prop === "db" ? db : target[prop]) });
+  };
+  beforeAll(() => {
+    for (const [fn, name] of watched) {
+      const orig = fn._handler;
+      originals.set(fn, orig);
+      fn._handler = (ctx: any, args: any) => {
+        const tx: Tx = { fn: name, limits: [], read: 0, patched: 0, wrote: 0 };
+        txs.push(tx);
+        return orig(countingCtx(ctx, tx), args);
+      };
+    }
+  });
+  afterAll(() => { for (const [fn] of watched) fn._handler = originals.get(fn); });
+
+  /** Every scheduled run, until none is left. */
+  const drain = async (w: World) => {
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      await w.t.finishInProgressScheduledFunctions();
+      const pending = (await w.t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect())).filter((j: any) => j.state.kind === "pending" || j.state.kind === "inProgress");
+      if (!pending.length) return;
+    }
+    throw new Error("scheduled runs never settled");
+  };
+  const make = (w: World, priority: Id<"priorities">, n: number, step?: string) => w.t.run(async (ctx) => {
+    for (let i = 0; i < n; i++) {
+      await ctx.db.insert("conversations", {
+        user_id: w.ana, agent_type: "claude_code", session_id: `jx7m${priority}${i}`, team_id: w.acme, is_private: false, team_visibility: "full",
+        started_at: 1, updated_at: 1, message_count: 1, status: "active", priority_id: priority, ...(step ? { priority_step_key: step } : {}),
+      } as any);
+    }
+  });
+  const on = (w: World, priority: Id<"priorities">, step?: string) => w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_priority", (q) => q.eq("priority_id", priority)).collect()).filter((c) => step === undefined || c.priority_step_key === step).length);
+  const priority = (w: World, short_id: string, fields: Record<string, unknown> = {}) => w.t.run((ctx) => ctx.db.insert("priorities", {
+    user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", ai_rank: 5, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1, ...fields,
+  } as any));
+  const applyPlan = (w: World, plan: Record<string, unknown>) => w.t.mutation(pass.applyPlan, {
+    user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+    plan: { creates: [], updates: [], merges: [], sessions: [], unmap: [], notes: [], rewritten: [], ...plan },
+  });
+  /** No transaction read every session of a priority: each read asked for a page, at most the count's own cap; none wrote more than a page of sessions. */
+  const bounded = () => {
+    expect(txs.length).toBeGreaterThan(1);
+    for (const tx of txs) {
+      expect({ fn: tx.fn, over: tx.limits.filter((n) => n > passRun.SESSION_COUNT_CAP + 1) }).toEqual({ fn: tx.fn, over: [] });
+      expect(tx.patched).toBeLessThanOrEqual(passRun.SESSION_PAGE);
+    }
+  };
+  beforeEach(() => { txs = []; });
+
+  test("a person's drop clears a page now and the rest in scheduled runs", async () => {
     const w = await seeded();
     const p1 = await byShort(w, "pri-1");
-    const make = (priority: Id<"priorities">, n: number, step?: string) => w.t.run(async (ctx) => {
-      for (let i = 0; i < n; i++) {
-        await ctx.db.insert("conversations", {
-          user_id: w.ana, agent_type: "claude_code", session_id: `jx7m${priority}${i}`, team_id: w.acme, is_private: false, team_visibility: "full",
-          started_at: 1, updated_at: 1, message_count: 1, status: "active", priority_id: priority, ...(step ? { priority_step_key: step } : {}),
-        } as any);
-      }
-    });
-    const on = (priority: Id<"priorities">, step?: string) => w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_priority", (q) => q.eq("priority_id", priority)).collect()).filter((c) => step === undefined || c.priority_step_key === step).length);
-    await make(p1._id, 510, "s3");
+    await make(w, p1._id, MANY, "s3");
+    const total = await on(w, p1._id);
+    txs = [];
     await as(w, w.ana).mutation(pri.dropStep, { short_id: "pri-1", step_key: "s3" });
-    expect(await on(p1._id, "s3")).toBe(0);
-    const priority = (short_id: string) => w.t.run((ctx) => ctx.db.insert("priorities", {
-      user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", ai_rank: 5, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1,
-    } as any));
-    const p8 = await priority("pri-8");
-    await make(p8, 505);
-    await w.t.mutation(pass.applyPlan, {
-      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
-      plan: { creates: [], updates: [], merges: [{ short_id: "pri-8", merged_into: "pri-1", step_keys: {} }], sessions: [], unmap: [], notes: [], rewritten: [] },
-    });
-    expect(await on(p8)).toBe(0);
-    const p9 = await priority("pri-9");
-    await make(p9, 505);
+    // The first page, oldest first, holds the seeded session too.
+    expect(await on(w, p1._id, "s3")).toBe(total - passRun.SESSION_PAGE);
+    await drain(w);
+    expect([await on(w, p1._id, "s3"), await on(w, p1._id)]).toEqual([0, total]);
+    expect(txs.filter((t) => t.fn === "clearDeadStepKeys").length).toBe(Math.ceil(MANY / passRun.SESSION_PAGE) - 1);
+    bounded();
+  }, 180_000);
+
+  test("a plan that removes a milestone clears its sessions a page at a time", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    await make(w, p1._id, MANY, "s2");
+    const total = await on(w, p1._id);
+    txs = [];
+    await applyPlan(w, { updates: [{ short_id: "pri-1", patch: { steps: p1.steps.filter((s: any) => s.key !== "s2") } }] });
+    expect(await on(w, p1._id, "s2")).toBe(total - passRun.SESSION_PAGE);
+    await drain(w);
+    expect([await on(w, p1._id, "s2"), await on(w, p1._id)]).toEqual([0, total]);
+    bounded();
+  }, 180_000);
+
+  test("the pass's merge moves a page now and the rest in scheduled runs, onto the carried milestone", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const p8 = await priority(w, "pri-8", { steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }] });
+    await make(w, p8, MANY, "s1");
+    const before = await on(w, p1._id, "s1");
+    txs = [];
+    await applyPlan(w, { merges: [{ short_id: "pri-8", merged_into: "pri-1", step_keys: { s1: "s1" } }] });
+    expect(await on(w, p8)).toBe(MANY - passRun.SESSION_PAGE);
+    await drain(w);
+    expect([await on(w, p8), await on(w, p1._id, "s1")]).toEqual([0, before + MANY]);
+    const survivor = await byShort(w, "pri-1");
+    expect([survivor.session_count, survivor.session_count_capped]).toEqual([MANY + (p1.session_count ?? 0), true]);
+    bounded();
+  }, 180_000);
+
+  test("the person's merge moves a page now and the rest in scheduled runs, each onto its milestone's new key", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const p9 = await priority(w, "pri-9", { steps: [{ key: "s1", title: "Auth", tier: "critical", refs: [] }] });
+    await make(w, p9, MANY, "s1");
+    txs = [];
     await as(w, w.ana).mutation(pri.merge, { short_id: "pri-9", into: "pri-1" });
-    expect(await on(p9)).toBe(0);
-  }, 120_000);
+    expect(await on(w, p9)).toBe(MANY - passRun.SESSION_PAGE);
+    await drain(w);
+    const carried = (await byShort(w, "pri-1")).steps.find((s: any) => s.title === "Auth").key;
+    expect([await on(w, p9), await on(w, p1._id, carried)]).toEqual([0, MANY]);
+    bounded();
+  }, 180_000);
+
+  test("the backfill lifts a mark from every session, a budget of sessions a run; a second run lifts nothing", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const p8 = await priority(w, "pri-8");
+    // The oldest session holds s40, past the newest page a write reads: the mark a write takes misses it.
+    await make(w, p8, 1, "s40");
+    await make(w, p8, MANY - 1);
+    await w.t.run((ctx) => ctx.db.patch(p1._id, { step_key_max: undefined } as any));
+    const backfill = (internal as any).priorityStepKeyBackfill.run;
+    txs = [];
+    const dry = await w.t.mutation(backfill, {});
+    expect(dry).toMatchObject({ dryRun: true, done: false });
+    expect((await byShort(w, "pri-8")).step_key_max).toBeUndefined();
+    await w.t.mutation(backfill, { dryRun: false, auto: true });
+    await drain(w);
+    expect([(await byShort(w, "pri-1")).step_key_max, (await byShort(w, "pri-8")).step_key_max]).toEqual([3, 40]);
+    const runs = txs.filter((t) => t.fn === "backfill");
+    for (const r of runs) expect(r.read).toBeLessThanOrEqual(stepKeyBackfill.SESSION_BUDGET);
+    expect(runs.length).toBeGreaterThan(2);
+    bounded();
+    txs = [];
+    await w.t.mutation(backfill, { dryRun: false, auto: true });
+    await drain(w);
+    const reruns = txs.filter((t) => t.fn === "backfill");
+    expect(reruns.length).toBeGreaterThan(1);
+    expect(reruns.every((t) => t.wrote === 0)).toBe(true);
+  }, 180_000);
 });
 
 describe("milestone keys from before the mark", () => {

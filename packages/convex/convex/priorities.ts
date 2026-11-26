@@ -20,9 +20,9 @@ import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWo
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { hasOkRun, moveCorrections, runBlocker, sessionMover } from "./priorityPassRun";
+import { clearDeadStepKeysNow, hasOkRun, moveCorrections, moveMergedSessionsNow, runBlocker, sessionMover } from "./priorityPassRun";
 import { backfillGroup, legacy } from "./priorityRankBackfill";
-import { activeGroup } from "./lib/priorityGroup";
+import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
 import { inWorkspace } from "./priorityPassInputs";
 import { passTiming } from "./priorityPassSweep";
 import { passActivity } from "./lib/priorityPassSchedule";
@@ -698,7 +698,7 @@ function milestoneOf(p: Priority, stepKey: string): Result<PriorityStep> {
   return live.find((s) => s.key === key) ?? { error: `${p.short_id} has no milestone ${stepKey}; its milestones: ${live.map((s) => s.key).join(", ") || "none"}` };
 }
 
-async function doMilestone(ctx: Ctx, viewer: Id<"users">, shortId: string, stepKey: string, change: MilestoneChange): Promise<Result<PriorityRow>> {
+async function doMilestone(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, stepKey: string, change: MilestoneChange): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const step = milestoneOf(p, stepKey);
@@ -717,12 +717,8 @@ async function doMilestone(ctx: Ctx, viewer: Id<"users">, shortId: string, stepK
     next = { ...rest, done: false, done_set_by: "person" };
   }
   await ctx.db.patch(p._id, { steps: p.steps.map((s) => (s.key === step.key ? next : s)), updated_at: now });
-  // A drop takes the milestone off the sessions on it; they keep the priority.
-  if ("drop" in change) {
-    for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).collect()) {
-      if (conv.priority_step_key === step.key) await ctx.db.patch(conv._id, { priority_step_key: undefined });
-    }
-  }
+  // A drop takes the milestone off the sessions on it (a page now, the rest by scheduled runs); they keep the priority.
+  if ("drop" in change) await clearDeadStepKeysNow(ctx, p._id);
   return echo(ctx, viewer, p._id);
 }
 
@@ -771,7 +767,7 @@ const keyNumber = (key: string | null | undefined) => {
  * join the survivor under new keys, its sessions and corrections follow with
  * their milestone, and it is marked merged by the person.
  */
-async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: string): Promise<Result<PriorityRow>> {
+async function doMerge(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, intoId: string): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const into = await owned(ctx, viewer, intoId);
@@ -779,10 +775,8 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
   if (String(p._id) === String(into._id)) return { error: "a priority cannot be merged into itself" };
   if (p.workspace !== into.workspace) return { error: `${p.short_id} and ${into.short_id} are in different workspaces` };
   const now = Date.now();
-  // Every session of both, however many: none is left on the merged one, and no key one holds is handed out again.
-  const sessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).collect();
-  const intoSessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", into._id)).collect();
-  let next = Math.max(into.step_key_max ?? 0, ...into.steps.map((s) => keyNumber(s.key)), ...intoSessions.map((c) => keyNumber(c.priority_step_key)));
+  // New keys after every one the survivor has spent (its mark).
+  let next = Math.max(await stepKeyMark(ctx, into), ...into.steps.map((s) => keyNumber(s.key)));
   const remap = new Map<string, string>();
   const carried = p.steps.map((s) => {
     const key = `s${++next}`;
@@ -791,12 +785,8 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
   });
   await ctx.db.patch(into._id, { steps: [...into.steps, ...carried], step_key_max: next, updated_at: now });
   await ctx.db.patch(p._id, { status: "merged", merged_into: into._id, status_set_by: "person", ...UNRANKED, updated_at: now });
-  const { move, recount } = sessionMover(ctx);
-  for (const conv of sessions) {
-    const not = (conv.priority_not ?? []).some((id) => String(id) === String(into._id));
-    await move(conv, not ? undefined : into._id, conv.priority_step_key ? remap.get(conv.priority_step_key) : undefined, conv.priority_set_by);
-  }
-  await recount(viewer);
+  // Every session of it, however many: a page now, the rest by scheduled runs.
+  await moveMergedSessionsNow(ctx, p._id, into._id, Object.fromEntries(remap));
   await moveCorrections(ctx, p._id, into._id, (key) => (key ? remap.get(key) : undefined));
   return echo(ctx, viewer, into._id);
 }

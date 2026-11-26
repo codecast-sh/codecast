@@ -248,6 +248,76 @@ export async function moveCorrections(ctx: { db: any }, from: Id<"priorities">, 
   }
 }
 
+/** The most sessions of one priority one transaction moves or clears; a scheduled run takes the next page, and the next, until none is left. */
+export const SESSION_PAGE = 200;
+
+/** One page of a priority's sessions created after `after`, oldest first: the cursor is the last one's _creationTime. */
+const sessionPage = (ctx: { db: any }, priorityId: Id<"priorities">, after: number): Promise<Doc<"conversations">[]> =>
+  ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", priorityId).gt("_creationTime", after)).take(SESSION_PAGE);
+
+/**
+ * One page of a merge: each session still on `from` goes to `into`, onto the
+ * milestone `step_keys` maps its own to when that is live there (step
+ * unknown otherwise), keeping who placed it; one the person said is not
+ * part of `into` lets go. `scope` keeps only sessions of that person in that
+ * workspace (the pass's). Returns where the next page starts, or null.
+ */
+export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, into: Id<"priorities">, step_keys: Record<string, string>, after: number, scope?: { user_id: Id<"users">; workspace: string }): Promise<number | null> {
+  const intoRow: Doc<"priorities"> | null = await ctx.db.get(into);
+  const live = new Set((intoRow?.steps ?? []).filter((st) => !st.dropped).map((st) => st.key));
+  const page = await sessionPage(ctx, from, after);
+  const { move, recount } = sessionMover(ctx);
+  const vis = sessionVisibility(ctx);
+  for (const conv of page) {
+    if (scope && !(await inWorkspace(vis, conv, scope.user_id, scope.workspace))) continue;
+    const not = (conv.priority_not ?? []).some((id) => String(id) === String(into));
+    const to = conv.priority_step_key ? step_keys[conv.priority_step_key] : undefined;
+    await move(conv, not ? undefined : into, to && live.has(to) ? to : undefined, conv.priority_set_by);
+  }
+  if (intoRow) await recount(intoRow.user_id);
+  return page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null;
+}
+
+/** One page of a priority's sessions on a key that is no live milestone of it now (removed or dropped): each keeps the priority, step unknown. Returns where the next page starts, or null. */
+export async function clearDeadKeysPage(ctx: { db: any }, priorityId: Id<"priorities">, after: number): Promise<number | null> {
+  const row: Doc<"priorities"> | null = await ctx.db.get(priorityId);
+  if (!row) return null;
+  const live = new Set(row.steps.filter((st) => !st.dropped).map((st) => st.key));
+  const page = await sessionPage(ctx, priorityId, after);
+  for (const conv of page) if (conv.priority_step_key && !live.has(conv.priority_step_key)) await ctx.db.patch(conv._id, { priority_step_key: undefined });
+  return page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null;
+}
+
+/** The rest of a merge past its first page, a page a run (moveMergedPage): idempotent, it touches only sessions still on `from`. */
+export const moveMergedSessions = internalMutation({
+  args: { from: v.id("priorities"), into: v.id("priorities"), step_keys: v.record(v.string(), v.string()), after: v.number(), scope: v.optional(v.object({ user_id: v.id("users"), workspace: v.string() })) },
+  handler: async (ctx, args): Promise<void> => {
+    const next = await moveMergedPage(ctx, args.from, args.into, args.step_keys, args.after, args.scope);
+    if (next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { ...args, after: next });
+  },
+});
+
+/** The rest of a removed or dropped milestone's sessions past the first page, a page a run (clearDeadKeysPage): idempotent, it reads the milestones as they are then. */
+export const clearDeadStepKeys = internalMutation({
+  args: { priority_id: v.id("priorities"), after: v.number() },
+  handler: async (ctx, args): Promise<void> => {
+    const next = await clearDeadKeysPage(ctx, args.priority_id, args.after);
+    if (next !== null) await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { ...args, after: next });
+  },
+});
+
+/** A merge's sessions: the first page now, the rest by scheduled runs. */
+export async function moveMergedSessionsNow(ctx: { db: any; scheduler: any }, from: Id<"priorities">, into: Id<"priorities">, step_keys: Record<string, string>, scope?: { user_id: Id<"users">; workspace: string }): Promise<void> {
+  const next = await moveMergedPage(ctx, from, into, step_keys, 0, scope);
+  if (next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { from, into, step_keys, after: next, ...(scope ? { scope } : {}) });
+}
+
+/** A priority's sessions on dead keys: the first page now, the rest by scheduled runs. */
+export async function clearDeadStepKeysNow(ctx: { db: any; scheduler: any }, priorityId: Id<"priorities">): Promise<void> {
+  const next = await clearDeadKeysPage(ctx, priorityId, 0);
+  if (next !== null) await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { priority_id: priorityId, after: next });
+}
+
 /**
  * Moves sessions between priorities and then counts again, from the index,
  * every priority a session moved to or from, so a count that drifted heals:
@@ -408,7 +478,7 @@ export const applyPlan = internalMutation({
         const anchored = new Set<string>();
         if (removing.size) {
           // The newest first: past SESSION_COUNT_CAP, the ones a person placed most recently are the ones seen.
-          for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).order("desc").take(SESSION_COUNT_CAP)) {
+          for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).order("desc").take(SESSION_PAGE)) {
             if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key && removing.has(conv.priority_step_key)) anchored.add(conv.priority_step_key);
           }
         }
@@ -447,7 +517,8 @@ export const applyPlan = internalMutation({
       const step_keys: Record<string, string> = { ...(m.step_keys ?? {}) };
       const survivorLive = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
       const held = new Set<string>();
-      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).collect()) {
+      // Its newest page of sessions, as the anchors of a plain rewrite are read.
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).order("desc").take(SESSION_PAGE)) {
         if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key) held.add(conv.priority_step_key);
       }
       const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
@@ -511,25 +582,11 @@ export const applyPlan = internalMutation({
     await letGoStrays(ctx, vis, move, args, strays ?? [], new Set(plan.rewritten));
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown;
     // one the person placed (or a link or the classifier mapped) keeps that there, and one they said is not part of the survivor lets go.
-    for (const [from, { into, intoRow, step_keys }] of mergedInto) {
-      // The survivor's milestones after this write; a session's milestone follows the merge's map when it is live there.
-      const live = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
-      // Every one of them, however many: a merge leaves none behind on a merged priority.
-      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).collect();
-      for (const conv of left) {
-        if (!(await inWorkspace(vis, conv, args.user_id, args.workspace))) continue;
-        const not = (conv.priority_not ?? []).some((id) => String(id) === String(into));
-        const to = conv.priority_step_key ? step_keys[conv.priority_step_key] : undefined;
-        await move(conv, not ? undefined : into, to && live.has(to) ? to : undefined, conv.priority_set_by);
-      }
-    }
+    // Every one of them, however many, a page now and the rest by scheduled runs: a merge leaves none behind on a merged priority.
+    for (const [from, { into, step_keys }] of mergedInto) await moveMergedSessionsNow(ctx, from, into, step_keys, { user_id: args.user_id, workspace: args.workspace });
 
     // A session on a milestone this plan removed, or on a key no milestone holds (left from before), keeps the priority, step unknown, whoever put it there.
-    for (const [id, live] of gone) {
-      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).collect()) {
-        if (conv.priority_step_key && !live.has(conv.priority_step_key)) await ctx.db.patch(conv._id, { priority_step_key: undefined });
-      }
-    }
+    for (const id of gone.keys()) await clearDeadStepKeysNow(ctx, id);
 
     await recount(args.user_id);
     // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
