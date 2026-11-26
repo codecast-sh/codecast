@@ -19,7 +19,7 @@ if (fs.existsSync("effect.txt")) for (const l of fs.readFileSync("effect.txt", "
 const version = createHash("sha256").update(fs.readFileSync("evals/grader.txt")).digest("hex").slice(0, 12);
 const cases = [];
 // FAKE_VOID: the candidate leaves a case the base scored unscored. FAKE_BASE_ABSENT: the base has cases it never
-// scores (Union's empty pitch lists), and the candidate scores them.
+// scores (a team's empty pitch lists), and the candidate scores them.
 const cand = process.env.CODECAST_ENV_CANDIDATE !== "base";
 const absent = process.env.FAKE_BASE_ABSENT && !cand ? 1 : 0;
 if (env === "fake/floor") {

@@ -23,7 +23,7 @@ const PRIVATE = [
 const SKIP_DIRS = new Set(["node_modules", "dist"]);
 
 function isTestFile(rel: string): boolean {
-  return /\.test\.tsx?$/.test(rel) || /(^|\/)(__fixtures__|test-helpers)\//.test(rel) || /\.testkit\.ts$/.test(rel);
+  return /\.test\.tsx?$/.test(rel) || /(^|\/)(__fixtures__|test-helpers)\//.test(rel) || /(\.testkit|[Ff]ixtures?)\.ts$/.test(rel);
 }
 
 function* walk(dir: string): Generator<string> {
@@ -38,7 +38,7 @@ function* walk(dir: string): Generator<string> {
 describe("CLI tests name no private repository", () => {
   test("no test, fixture or test helper names a private path or target", () => {
     const hits: string[] = [];
-    for (const file of walk(path.join(CLI, "src"))) {
+    for (const file of [...walk(path.join(CLI, "src")), ...walk(path.join(CLI, "scripts"))]) {
       const rel = path.relative(CLI, file);
       if (file === THIS_FILE || !isTestFile(rel)) continue;
       const text = fs.readFileSync(file, "utf8").toLowerCase();
