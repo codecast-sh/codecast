@@ -1,5 +1,5 @@
-// The Deploys page's focus chip: a link that names a session by its 32-character conversation id reads as the
-// session's short id inside a session pill, never the whole id, and its × still clears the highlight. The pill runs
+// The Deploys page's focus chip: the thing a link names reads as the pill a conversation draws for it (a session or
+// task by its title), never a raw conversation id, and its × still clears the highlight. The pill runs
 // for real; only the Convex transport is faked.
 import { afterAll, expect, mock, test } from "bun:test";
 import { act } from "react";
@@ -46,31 +46,38 @@ function mount(focus: any, onClear = () => {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  act(() => root.render(<MemoryRouter><FocusChip focus={focus} waiting deploys={[]} live={null} onClear={onClear} /></MemoryRouter>));
+  act(() => root.render(<MemoryRouter><FocusChip focus={focus} repository="acme/app" waiting deploys={[]} live={null} onClear={onClear} /></MemoryRouter>));
   return { host, unmount: () => act(() => root.unmount()) };
 }
 
-test("a session named by its conversation id reads as its short id, in a session pill", () => {
+test("a session named by its conversation id is the app's session pill, never the raw id, and its × clears", () => {
   let cleared = 0;
   const { host, unmount } = mount({ kind: "session", id: CONVERSATION_ID }, () => cleared++);
   const chip = host.querySelector(".dpp-focus")!;
-  expect(chip.textContent).toContain("jx7b0m0");
   expect(chip.textContent).not.toContain(CONVERSATION_ID);
-  expect(chip.querySelector(`a[href*="${CONVERSATION_ID}"]`)).not.toBeNull();
+  expect(chip.querySelector(`.dpp-focus-ref a[href="/conversation/${CONVERSATION_ID}"]`)).not.toBeNull();
   act(() => (chip.querySelector("[data-deploy-focus-clear]") as HTMLButtonElement).click());
   expect(cleared).toBe(1);
   unmount();
 });
 
-test("a session already named by its short id reads the same", () => {
-  const { host, unmount } = mount({ kind: "session", id: "jx7b0m0" });
-  expect(host.querySelector(".dpp-focus")!.textContent).toContain("jx7b0m0");
-  unmount();
+test("a task, PR, commit and deploy are each the pill a conversation draws, at their own page", () => {
+  for (const [focus, href] of [
+    [{ kind: "task", id: "ct-98653" }, "/tasks/ct-98653"],
+    [{ kind: "pr", pr: 12 }, "/pr/acme/app/12"],
+    [{ kind: "sha", sha: "abcdef1234" }, "/commit/acme/app/abcdef1234"],
+    [{ kind: "deploy", id: "dp-3080" }, "/deploys?deploy=dp-3080"],
+  ] as const) {
+    const { host, unmount } = mount(focus);
+    expect(host.querySelector(".dpp-focus-ref a")!.getAttribute("href")).toBe(href);
+    unmount();
+  }
 });
 
-test("a task keeps its plain word", () => {
-  const { host, unmount } = mount({ kind: "task", id: "ct-98653" });
-  expect(host.querySelector(".dpp-focus b")!.textContent).toBe("ct-98653");
+test("a branch keeps its plain name", () => {
+  const { host, unmount } = mount({ kind: "branch", name: "jb/x" });
+  expect(host.querySelector(".dpp-focus b")!.textContent).toBe("jb/x");
+  expect(host.querySelector(".dpp-focus a")).toBeNull();
   unmount();
 });
 

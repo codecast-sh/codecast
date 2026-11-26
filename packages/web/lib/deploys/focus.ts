@@ -2,9 +2,8 @@
 // A chip clicked anywhere (a PR, a commit, a task, a session, a deploy) opens
 // the page with that thing highlighted: on the target that has it, in the
 // queue while it waits, or on the deploy in History that took it out. The
-// IDs the queue shows and the filters both columns share ride the same
-// address (show=, mine=, group=), so a link opens the page as its sender saw
-// it.
+// IDs the queue shows and each column's filters ride the same address
+// (show=, mine=, group=), so a link opens the page as its sender saw it.
 import type { QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployReach";
 import { prNumberOf } from "@codecast/shared/changes";
@@ -63,17 +62,26 @@ export function labelsOf(p: Params, focus: DeployFocus | null): DeployLabel[] {
   return DEPLOY_LABELS.map((l) => l.id).filter((id) => DEFAULT_LABELS.includes(id) || extra.includes(id));
 }
 
-/** What both columns are narrowed to: the viewer's own, and one group of what is on its way. */
-export type DeployFilters = { mine: boolean; group: ChangeGroupId | null };
+/** The page's two columns: On its way (changes not yet on main) and Waiting on main (commits not yet live). */
+export type DeployColumn = "coming" | "waiting";
+const COLUMNS: ReadonlyArray<DeployColumn> = ["coming", "waiting"];
 
-/** The filters an address names (`mine=1`, `group=you`); anything else reads as none. */
+/** Each column narrowed on its own: On its way to the viewer's changes and one group, Waiting on main to their commits. */
+export type DeployFilters = { coming: { mine: boolean; group: ChangeGroupId | null }; waiting: { mine: boolean } };
+export const NO_FILTERS: DeployFilters = { coming: { mine: false, group: null }, waiting: { mine: false } };
+
+/** The filters an address names (`mine=coming,waiting`, `group=you`); anything else reads as none. */
 export function filtersOf(p: Params): DeployFilters {
+  const mine = new Set((p.get("mine") ?? "").split(",").map((s) => s.trim()));
   const group = p.get("group") as ChangeGroupId | null;
-  return { mine: p.get("mine") === "1", group: group && PICKABLE_GROUPS.includes(group) ? group : null };
+  return { coming: { mine: mine.has("coming"), group: group && PICKABLE_GROUPS.includes(group) ? group : null }, waiting: { mine: mine.has("waiting") } };
 }
 
 /** The filters as address params; a filter that is off drops its param. */
-export const filterParams = (f: DeployFilters): Record<"mine" | "group", string | null> => ({ mine: f.mine ? "1" : null, group: f.group });
+export function filterParams(f: DeployFilters): Record<"mine" | "group", string | null> {
+  const mine = COLUMNS.filter((c) => f[c].mine);
+  return { mine: mine.length ? mine.join(",") : null, group: f.coming.group };
+}
 
 const sameSession = (s: { conversation_id: string; short_id?: string | null } | null | undefined, id: string) =>
   !!s && (s.conversation_id === id || (!!s.short_id && s.short_id === id));

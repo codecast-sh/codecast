@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitMatches, deployMatches, deploysFocusHref, filterParams, filtersOf, focusOf, focusOfRef, focusRef, focusRepository, reachAnyDeploy, focusTarget, labelsOf, reachDeployOn } from "../focus";
+import { NO_FILTERS, commitMatches, deployMatches, deploysFocusHref, filterParams, filtersOf, focusOf, focusOfRef, focusRef, focusRepository, reachAnyDeploy, focusTarget, labelsOf, reachDeployOn } from "../focus";
 
 const params = (q: string) => new URLSearchParams(q);
 const commit = (sha: string, subject: string, extra: Partial<{ tasks: any[]; session: any }> = {}) => ({
@@ -174,10 +174,11 @@ describe("the target a link opens, when two repositories both have one of that n
   });
 });
 
-describe("the filters both columns share, in the address", () => {
+describe("each column's filters, in the address", () => {
   const read = (href: string) => new URLSearchParams(href.split("?")[1] ?? "");
-  test("a link carries Mine and the picked group, and reads back as the same view", () => {
-    for (const filters of [{ mine: true, group: "you" as const }, { mine: false, group: "moving" as const }, { mine: true, group: null }, { mine: false, group: null }]) {
+  const f = (comingMine: boolean, group: "you" | "moving" | null, waitingMine: boolean) => ({ coming: { mine: comingMine, group }, waiting: { mine: waitingMine } });
+  test("a link carries each column's Mine and the picked group, and reads back as the same view", () => {
+    for (const filters of [f(true, "you", false), f(false, "moving", true), f(true, null, true), f(false, null, false)]) {
       const href = deploysFocusHref({ team: "t1", target: "web", focus: { kind: "pr", pr: 4552 }, show: ["pr", "sha"], filters });
       const p = read(href);
       expect(filtersOf(p)).toEqual(filters);
@@ -185,15 +186,17 @@ describe("the filters both columns share, in the address", () => {
       expect(focusOf(p)).toEqual({ kind: "pr", pr: 4552 });
       expect(labelsOf(p, null)).toEqual(["pr", "sha"]);
     }
-    expect(deploysFocusHref({ team: "t1", filters: { mine: true, group: "you" } })).toBe("/deploys?team=t1&mine=1&group=you");
+    expect(deploysFocusHref({ team: "t1", filters: f(true, "you", true) })).toBe("/deploys?team=t1&mine=coming%2Cwaiting&group=you");
+    expect(deploysFocusHref({ team: "t1", filters: f(false, null, true) })).toBe("/deploys?team=t1&mine=waiting");
   });
   test("a filter that is off leaves no param", () => {
-    expect(deploysFocusHref({ team: "t1", filters: { mine: false, group: null } })).toBe("/deploys?team=t1");
-    expect(filterParams({ mine: false, group: null })).toEqual({ mine: null, group: null });
+    expect(deploysFocusHref({ team: "t1", filters: NO_FILTERS })).toBe("/deploys?team=t1");
+    expect(filterParams(NO_FILTERS)).toEqual({ mine: null, group: null });
   });
   test("an address with no filters, or nonsense ones, filters nothing", () => {
-    expect(filtersOf(params(""))).toEqual({ mine: false, group: null });
-    expect(filtersOf(params("mine=yes&group=live"))).toEqual({ mine: false, group: null });
-    expect(filtersOf(params("group=parked"))).toEqual({ mine: false, group: null });
+    expect(filtersOf(params(""))).toEqual(NO_FILTERS);
+    expect(filtersOf(params("mine=yes&group=live"))).toEqual(NO_FILTERS);
+    expect(filtersOf(params("mine=1"))).toEqual(NO_FILTERS);
+    expect(filtersOf(params("group=parked"))).toEqual(NO_FILTERS);
   });
 });
