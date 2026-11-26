@@ -318,6 +318,14 @@ export type CommitCiState = "passed" | "failed" | "running" | "none";
 
 export type CommitCiRun = { name: string; status: string; conclusion?: string | null; url?: string | null; at: number };
 
+/**
+ * Whether a commit_ci row speaks in a deploy, rollback or red-main decision. Our own runner's rows (`kind: "runner"`,
+ * ct-102083) run in shadow beside GitHub's and decide nothing until ct-102084 flips this one place.
+ */
+export function ciRowDecides(row: { kind: string }): boolean {
+  return row.kind !== "runner";
+}
+
 const CI_PASS = new Set(["success", "neutral", "skipped"]);
 const CI_SILENT = new Set(["cancelled", "stale", "action_required"]);
 

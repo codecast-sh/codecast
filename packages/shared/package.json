@@ -95,6 +95,7 @@
     "./contracts/lineTimeline": "./contracts/lineTimeline.ts",
     "./contracts/deploys": "./contracts/deploys.ts",
     "./contracts/deployTargets": "./contracts/deployTargets.ts",
+    "./contracts/ciVerdict": "./contracts/ciVerdict.ts",
     "./contracts/deployReach": "./contracts/deployReach.ts",
     "./contracts/ciFailures": "./contracts/ciFailures.ts",
     "./contracts/mainRed": "./contracts/mainRed.ts",

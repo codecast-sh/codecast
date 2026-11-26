@@ -105,6 +105,7 @@ import type * as checkoutAsk from "../checkoutAsk.js";
 import type * as checkouts from "../checkouts.js";
 import type * as ciBackfill from "../ciBackfill.js";
 import type * as ciRuns from "../ciRuns.js";
+import type * as ciVerdicts from "../ciVerdicts.js";
 import type * as cleanup from "../cleanup.js";
 import type * as cliAuth from "../cliAuth.js";
 import type * as cliAuthHttp from "../cliAuthHttp.js";
@@ -1003,6 +1004,7 @@ declare const fullApi: ApiFromModules<{
   checkouts: typeof checkouts;
   ciBackfill: typeof ciBackfill;
   ciRuns: typeof ciRuns;
+  ciVerdicts: typeof ciVerdicts;
   cleanup: typeof cleanup;
   cliAuth: typeof cliAuth;
   cliAuthHttp: typeof cliAuthHttp;

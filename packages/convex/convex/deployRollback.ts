@@ -9,7 +9,7 @@ import { internalMutation, mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
-import { teamKey, ciOf } from "./deployTargetsCi";
+import { teamKey, ciOf, deployCiRows } from "./deployTargetsCi";
 import { mainCommitsAfter, repositoryArg, targetRows } from "./deployTargetsState";
 import { deployTeamFor } from "./changesDeploy";
 import { requestTargetDeployCore } from "./deployTargetRequest";
@@ -118,7 +118,7 @@ export async function rollbackFor(ctx: any, userId: Id<"users">, args: { team_id
 /** Whether a commit's CI passed on main: the target's CI workflow when it names one (ci.yml), else all of it. */
 async function greenOnMain(ctx: any, repository: string, sha: string, ciWorkflow?: string): Promise<boolean> {
   if (!ciWorkflow) return (await ciOf(ctx, repository, sha)).state === "passed";
-  const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).take(50);
+  const rows = await deployCiRows(ctx, repository, sha);
   const newest = rows.filter((r) => r.kind === "workflow" && r.path?.split("/").pop() === ciWorkflow).sort((a, b) => b.started_at - a.started_at)[0];
   return newest?.status === "completed" && newest.conclusion === "success";
 }

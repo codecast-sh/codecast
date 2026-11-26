@@ -28,6 +28,17 @@ const ciFailureValidator = v.object({
   excerpt: v.string(),
 });
 
+/** One job of our own CI runner's verdict on a commit (`cast ci record`): failing tests in CiFailure's shape. */
+export const runnerJob = v.object({
+  name: v.string(),
+  counts: v.boolean(),
+  conclusion: v.string(),
+  seconds: v.number(),
+  failing: v.array(ciFailureValidator),
+  log_storage_id: v.optional(v.id("_storage")),
+  note: v.optional(v.string()),
+});
+
 // The main_red / main_green payload (shared/contracts/mainRed.ts MainRedPayload).
 export const mainRedPayloadValidator = v.object({
   repo: v.string(),
@@ -97,8 +108,15 @@ export const deployTables = {
     sha: v.string(),
     // The workflow's name, or the app's.
     name: v.string(),
-    kind: v.union(v.literal("workflow"), v.literal("suite")),
+    // runner: our own CI runner's verdict (`cast ci record`, ct-102083). Deploy, rollback and red-main decisions
+    // read it only once `ciRowDecides` says so (shared/contracts/deployTargets.ts); in shadow it decides nothing.
+    kind: v.union(v.literal("workflow"), v.literal("suite"), v.literal("runner")),
     run_id: v.optional(v.string()),
+    // A runner row's host, run kind (main's shadow run or a landing candidate's) and per-job verdicts, each job's
+    // log a gzipped tail in file storage.
+    host: v.optional(v.string()),
+    run_kind: v.optional(v.union(v.literal("main"), v.literal("landing"))),
+    jobs: v.optional(v.array(runnerJob)),
     // A workflow run's file (`.github/workflows/ci.yml`), so a reader can ask for one workflow's verdict.
     path: v.optional(v.string()),
     status: v.string(),

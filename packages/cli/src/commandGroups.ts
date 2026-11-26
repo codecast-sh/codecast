@@ -782,6 +782,7 @@ Examples:
   cast guide tasks --json    Machine-readable {topic, version, build_id, body}`,
     load: () => import("./guide.js").then((m) => m.registerGuideCommand),
   },
+  { token: "ci", description: "Our own CI runner's verdict per commit: cast ci record --file <dir>/verdict.json | show <sha> [--json] | log <sha> <job>", load: () => import("./ciCommand.js").then((m) => m.registerCiCommand) },
   { token: "register", hasOptions: true, description: "Register this agent session for messaging only (run from a Claude Code SessionStart hook)", load: () => import("./relay/commands.js").then((m) => m.registerRegisterCommand) },
   { token: "unregister", hasOptions: true, description: "End this agent session's messaging-only registration (run from a Claude Code SessionEnd hook)", load: () => import("./relay/commands.js").then((m) => m.registerUnregisterCommand) },
   { token: "relay", hasOptions: true, description: "Deliver messages to registered herdr and paseo agent sessions on this machine", load: () => import("./relay/commands.js").then((m) => m.registerRelayCommand) },

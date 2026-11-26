@@ -8,7 +8,7 @@ import { resolveTeamForRepository } from "./githubWebhooks";
 import { commitBySha } from "./deployTargetsState";
 import { recordDeployMarker } from "./deploys";
 import { cancelIfPaused, kickDispatch } from "./deployDispatch";
-import { commitCiState, type CommitCiRun, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
+import { ciRowDecides, commitCiState, type CommitCiRun, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
 
 export const teamKey = (teamId: Id<"teams">) => `team:${teamId}`;
 
@@ -18,8 +18,12 @@ export type CommitCiInput = {
   repository: string;
   sha: string;
   name: string;
-  kind: "workflow" | "suite";
+  kind: Doc<"commit_ci">["kind"];
   run_id?: string;
+  /** Our own runner's rows only (`cast ci record`). */
+  host?: string;
+  run_kind?: "main" | "landing";
+  jobs?: NonNullable<Doc<"commit_ci">["jobs"]>;
   /** A workflow run's file (`.github/workflows/ci.yml`). */
   path?: string;
   status: string;
@@ -48,6 +52,9 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
     status: row.status,
     ...(row.conclusion ? { conclusion: row.conclusion } : {}),
     ...(row.url ? { url: row.url } : {}),
+    ...(row.host ? { host: row.host } : {}),
+    ...(row.run_kind ? { run_kind: row.run_kind } : {}),
+    ...(row.jobs ? { jobs: row.jobs } : {}),
     started_at: row.started_at,
     updated_at: now,
   };
@@ -55,7 +62,10 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
     // An older run's late delivery does not speak over a newer run of the same workflow.
     if (row.started_at < same.started_at) return true;
     if (same.status === "completed" && row.status !== "completed" && same.run_id === row.run_id) return true;
-    await ctx.db.patch(same._id, { ...fields, ...(row.conclusion ? {} : { conclusion: undefined }) });
+    // A runner's job logs the new verdict no longer names are dropped from storage with the row's old jobs.
+    const kept = new Set((row.jobs ?? []).map((j) => j.log_storage_id).filter(Boolean));
+    for (const j of same.jobs ?? []) if (j.log_storage_id && !kept.has(j.log_storage_id)) await ctx.storage.delete(j.log_storage_id);
+    await ctx.db.patch(same._id, { ...fields, ...(row.conclusion ? {} : { conclusion: undefined }), ...(row.jobs ? {} : { jobs: undefined }) });
   } else {
     await ctx.db.insert("commit_ci", { workspace: teamKey(team), team_id: team, repository, sha, name: row.name, kind: row.kind, ...fields });
   }
@@ -111,9 +121,15 @@ export function checkSuiteCi(payload: any): CommitCiInput | null {
   };
 }
 
+/** A commit's CI rows that speak in deploy, rollback and red-main decisions (`ciRowDecides`). */
+export async function deployCiRows(ctx: any, repository: string, sha: string): Promise<Doc<"commit_ci">[]> {
+  const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).take(50);
+  return rows.filter(ciRowDecides);
+}
+
 /** Each commit's CI, read from its rows. */
 export async function ciOf(ctx: any, repository: string, sha: string): Promise<{ state: CommitCiState; url: string | null; runs: CommitCiRun[] }> {
-  const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).take(50);
+  const rows = await deployCiRows(ctx, repository, sha);
   const runs = rows.map((r) => ({ name: r.name, status: r.status, conclusion: r.conclusion ?? null, url: r.url ?? null, at: r.started_at }));
   const state = commitCiState(runs);
   const red = runs.find((r) => r.status === "completed" && r.conclusion && !["success", "neutral", "skipped", "cancelled", "stale"].includes(r.conclusion));
