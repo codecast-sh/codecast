@@ -41,6 +41,18 @@ So run `packages/convex/deploy.sh` **before** pushing such a commit, then push. 
 
 Web carries a second layer of defence. A query that merely ENRICHES a surface goes through `useQueryNoThrow` (`packages/web/hooks/useQueryNoThrow.ts`), never plain `useQuery` — pills, badges, chips and name lookups all qualify. The test is what the component should show if the answer never arrives: if it can still render something honest, use the hook; if the surface is meaningless without the data, plain `useQuery` is right and the ErrorBoundary is the intended outcome.
 
+### Removing what a running client calls
+
+Open tabs, the phone app and older CLI binaries keep calling the old names after a deploy: a removed public function, HTTP route or dispatch action fails for them ("Unknown dispatch action", a 404) until they update, and a CLI only updates with the next release. So a change that removes or renames one keeps a thin alias that forwards to the new code, and files a task to delete it after the next CLI release. Delete the alias then; it is a deploy aid, not an interface.
+
+### Migrations and backfills
+
+A backfill runs after the deploy, by hand, and passes keep running in the gap, so:
+
+- **Code reads correctly before its backfill runs.** A new field is optional, and every reader falls back to what the old rows hold (Priorities v2's rank order read the legacy `rank` until `priorityRankBackfill` ran). Then the backfill's timing is never a correctness question.
+- **A backfill is idempotent:** a second run, or a run after people have edited rows, changes nothing that is already right. It defaults to a dry run, pages through the table (`auto: true` schedules the next page), and returns counts.
+- **Run it right after `deploy.sh`** with `packages/convex/run.sh <module>:run`: the dry run first, then the real one. Confirm by reading the rows (`env -u CONVEX_DEPLOYMENT npx convex data <table>`), not the return value. Name the command in the change's handoff, and when nothing reads the old field any more, delete the backfill and the field in a follow-up.
+
 ## Prompt dry runs
 
 Run any headless `claude -p` that grades a prompt through `packages/cli/scripts/prompt-dry-run.ts`, never a bare `claude -p`: the daemon syncs every transcript under `~/.claude/projects`, so a bare run lands in the founder's inbox, and only the harness isolates it and refuses its writes. `--model` is required. The script's header documents its flags, isolation and output files. Don't edit the harness or its guard while a run is alive (bash reads a script as it runs). To grade a prod prompt against real moments, use `./evals`, which drives this harness.
