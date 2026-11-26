@@ -38,7 +38,9 @@ Ship never merges unless one of these holds, and the popover says which:
 - the project's profile sets `[line.merge] auto = true`, or
 - the task is on a role's line and that role holds a merge grant
   (`org_roles.line_merge`, the-line.md L12); the ship session then merges
-  through `cast line merge`, which counts it against the role's daily limit.
+  through `cast line merge`, which counts it against the role's daily limit,
+  and refuses a change a before-merge step covers (those go through the
+  change flow, whose Merge runs the steps).
 
 A task or session press opens the PR and shepherds it, and so does a change
 card's Ship on a project with no ship command. `[line.merge] method` picks

@@ -527,10 +527,10 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     ? republishLanded(cwd, merged.sha, {
       held: () => notYetHeld(cwd, merged.sha),
       publish: async () => {
-        if ((await publishHere(["line", "profile", "--publish", "--json"])).code === 0) return null;
+        if ((await publishHere(["line", "profile", "--publish", "--json"])).code === 0) return { republished: "all" };
         // A repository with no line profile still has its targets: publish those, and say the profile was not.
-        if ((await publishHere(["line", "deploy", "targets", "--publish", "--json"])).code === 0) return `cast line profile --publish failed in ${cwd} (the deploy targets were republished)`;
-        return `cast line profile --publish and cast line deploy targets --publish both failed in ${cwd}`;
+        if ((await publishHere(["line", "deploy", "targets", "--publish", "--json"])).code === 0) return { republished: "targets", why: `cast line profile --publish failed in ${cwd}` };
+        return { republished: "none", why: `cast line profile --publish and cast line deploy targets --publish both failed in ${cwd}` };
       },
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
       now: () => Date.now(),

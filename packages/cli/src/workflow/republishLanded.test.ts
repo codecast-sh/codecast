@@ -51,7 +51,7 @@ describe("republishLanded", () => {
     const published: number[] = [];
     const words = await republishLanded("/repo", landed, {
       held: async () => (++looks < 3 ? "the checkout's HEAD does not hold it yet" : null),
-      publish: async () => { published.push(now); return null; },
+      publish: async () => { published.push(now); return { republished: "all" as const }; },
       sleep: async (ms) => { now += ms; },
       now: () => now,
     }, { intervalMs: 30_000, deadline: 10 * 60_000 });
@@ -65,7 +65,9 @@ describe("republishLanded", () => {
     const words = await republishLanded("/repo", landed, io, { intervalMs: 30_000, deadline: 10 * 60_000 });
     expect(words).toBe(`The line profile and deploy targets it changed were not republished: the checkout's HEAD does not hold it yet. Run \`cast line profile --publish\` in /repo once it holds ${landed.slice(0, 7)}.`);
     expect(now).toBe(10 * 60_000);
-    const failed = await republishLanded("/repo", landed, { ...io, held: async () => null, publish: async () => "both publishes failed" }, { intervalMs: 1, deadline: 0 });
+    const failed = await republishLanded("/repo", landed, { ...io, held: async () => null, publish: async () => ({ republished: "none" as const, why: "both publishes failed" }) }, { intervalMs: 1, deadline: 0 });
     expect(failed).toBe("The line profile and deploy targets it changed were not republished: both publishes failed.");
+    const half = await republishLanded("/repo", landed, { ...io, held: async () => null, publish: async () => ({ republished: "targets" as const, why: "cast line profile --publish failed in /repo" }) }, { intervalMs: 1, deadline: 0 });
+    expect(half).toBe("Republished the deploy targets it changed; the line profile was not: cast line profile --publish failed in /repo.");
   });
 });

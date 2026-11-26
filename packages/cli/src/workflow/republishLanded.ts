@@ -19,11 +19,13 @@ export async function notYetHeld(cwd: string, sha: string): Promise<string | nul
   return null;
 }
 
+export type Published = { republished: "all" } | { republished: "targets" | "none"; why: string };
+
 export type RepublishIO = {
   /** Why the checkout cannot publish yet, or null (notYetHeld). */
   held: () => Promise<string | null>;
-  /** Publish the checkout's profile and targets; resolves with an error's words, or null on success. */
-  publish: () => Promise<string | null>;
+  /** Publish the checkout's profile and targets: what was republished, and why the rest was not. */
+  publish: () => Promise<Published>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
 };
@@ -38,8 +40,10 @@ export async function republishLanded(cwd: string, sha: string, io: RepublishIO,
   for (;;) {
     const blocked = await io.held();
     if (!blocked) {
-      const failed = await io.publish();
-      return failed ? `The line profile and deploy targets it changed were not republished: ${failed}.` : "Republished the line profile and deploy targets it changed.";
+      const done = await io.publish();
+      if (done.republished === "all") return "Republished the line profile and deploy targets it changed.";
+      if (done.republished === "targets") return `Republished the deploy targets it changed; the line profile was not: ${done.why}.`;
+      return `The line profile and deploy targets it changed were not republished: ${done.why}.`;
     }
     why = blocked;
     if (io.now() >= opts.deadline) break;
