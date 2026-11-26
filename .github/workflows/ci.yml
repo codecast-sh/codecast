@@ -10,9 +10,12 @@ on:
 # one group that never cancels a running run: one runs to its verdict, and
 # only the newest push waits behind it, so a burst of pushes does not queue a
 # full run per commit ahead of main's head. A commit whose waiting run was
-# replaced is judged by the newer run, which holds it.
+# replaced is judged by the newer run, which holds it. A rerun of a main run
+# (run_attempt above 1: red main's rerun of a red run's failed jobs, or a
+# person's) keeps a group of its own: in the shared one it would wait behind
+# the next push, be replaced by a later one, or replace main head's own run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || 'main' }}
+  group: ci-${{ github.event.pull_request.number || (github.run_attempt == 1 && 'main') || format('main-{0}-{1}', github.sha, github.run_attempt) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
