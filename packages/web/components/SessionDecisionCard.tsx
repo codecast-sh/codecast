@@ -359,9 +359,10 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     onDone();
   }, [item.decisionId, answerDecision, onDone]);
 
-  // Where this ask sits: in the queue being stepped, else among its own
-  // session's open asks when there are several.
-  const place = stepper ?? (asks && asks.length > 1 && threadIndex >= 0 ? { position: threadIndex + 1, total: asks.length } : null);
+  // Where this ask sits among its own session's open asks, when there are
+  // several. The queue's position belongs to the queue's own stepper header,
+  // never to the card in the thread.
+  const place = asks && asks.length > 1 && threadIndex >= 0 ? { position: threadIndex + 1, total: asks.length } : null;
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
