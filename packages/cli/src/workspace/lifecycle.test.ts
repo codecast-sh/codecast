@@ -492,6 +492,9 @@ describe("cast ws acquire --no-ports (CLI)", () => {
     expect(await cast("status", "worker")).toContain("ports:   none (--no-ports)");
     expect(await cast("acquire", "server", "--skip-setup", "--skip-hooks", "--skip-pool"))
       .toContain("ports:   web=41500");
+    // A plain acquire of a portless workspace asks for ports again, and gets them.
+    expect(await cast("acquire", "worker", "--skip-setup", "--skip-hooks", "--skip-pool"))
+      .toContain("ports:   web=41600");
   }, 20000);
 });
 

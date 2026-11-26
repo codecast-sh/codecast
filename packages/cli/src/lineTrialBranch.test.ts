@@ -148,6 +148,16 @@ describe("freshRunBranch", () => {
     }
   }, 60_000);
 
+  test("with no lsof to read, nobody is said to be out of a tree: processesIn throws", () => {
+    const pathEnv = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      expect(() => processesIn("/tmp/some-tree")).toThrow("Could not read which processes sit in /tmp/some-tree");
+    } finally {
+      process.env.PATH = pathEnv;
+    }
+  });
+
   test("ownersOf puts each process to the agent session it works for: its own, or the nearest ancestor's", () => {
     // ct-60857 on the box: the tips session (claude --resume, its cwd outside
     // the worktree) ran a tool call that cd'd into it, and the shell and its

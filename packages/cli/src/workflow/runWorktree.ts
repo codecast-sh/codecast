@@ -44,7 +44,9 @@ export async function restoreRunTree(cwd: string, context: Record<string, string
   if (!worktree) return;
   const branch = context["branch"] || `codecast/${worktree}`;
   try {
-    if (await restoreRunWorktree(cwd, worktree, branch) === "restored") console.log(`${c.dim}Made worktree ${worktree} on ${branch}${c.reset}`);
+    // A change run's stations run no dev server of their own, so its tree takes no port (ct-101923).
+    const { readFrozenChange } = await import("./flowChangeFile.js");
+    if (await restoreRunWorktree(cwd, worktree, branch, { noPorts: !!readFrozenChange(context["run_dir"]) }) === "restored") console.log(`${c.dim}Made worktree ${worktree} on ${branch}${c.reset}`);
   } catch (err) {
     // The station that needs it still fails with its own error; the run is not stopped here.
     console.error(`${c.yellow}Could not put worktree ${worktree} back on ${branch}: ${(err as Error).message}${c.reset}`);
@@ -52,7 +54,7 @@ export async function restoreRunTree(cwd: string, context: Record<string, string
 }
 
 /** Put the run's worktree `name` back on `branch` when its directory is gone; `cwd` is the run's checkout. */
-export async function restoreRunWorktree(cwd: string, name: string, branch: string): Promise<RunWorktreeRestore> {
+export async function restoreRunWorktree(cwd: string, name: string, branch: string, opts: { noPorts?: boolean } = {}): Promise<RunWorktreeRestore> {
   const git = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   // The root `cast ws path` resolves from a station's directory, so the checkout lands where it looks.
   const repoRoot = git("rev-parse", "--show-toplevel");
@@ -68,7 +70,7 @@ export async function restoreRunWorktree(cwd: string, name: string, branch: stri
   git("worktree", "prune");
   // An explicit branch with no start point attaches to the branch as it stands and never takes a warm pool slot cut from main.
   const { acquireWorkspace } = await import("../workspace/lifecycle.js");
-  await acquireWorkspace(repoRoot, name, { branch, skipPool: true });
+  await acquireWorkspace(repoRoot, name, { branch, skipPool: true, ...(opts.noPorts ? { noPorts: true } : {}) });
   return "restored";
 }
 
@@ -105,7 +107,10 @@ export async function releaseEndedRunTree(cwd: string, context: Record<string, s
     const off = await commitRunLeftovers(tree, name, message, context["run_dir"]);
     const reason = off ? await contentKeepReason(tree, repoRoot) : null;
     if (reason) {
-      console.log(`${c.dim}Kept worktree ${name}: ${reason} (${off})${c.reset}`);
+      // Kept for its work, not for a server: an ended run's tree holds no port (ct-101923).
+      const { releaseWorkspacePorts } = await import("../workspace/portRelease.js");
+      const freed = await releaseWorkspacePorts(repoRoot, name).catch(() => false);
+      console.log(`${c.dim}Kept worktree ${name}: ${reason} (${off})${freed ? "; its ports are free" : ""}${c.reset}`);
       return;
     }
     await releaseTree(repoRoot, tree);
@@ -113,6 +118,36 @@ export async function releaseEndedRunTree(cwd: string, context: Record<string, s
   } catch (err) {
     console.error(`${c.yellow}Could not release worktree ${name}: ${(err as Error).message.split("\n")[0]}${c.reset}`);
   }
+}
+
+/**
+ * When an acquire finds every port slot taken (workspace/lifecycle.ts), the trees runs left behind give theirs up
+ * first, as releaseEndedRunTree has them do at a run's end: the backfill for trees kept before it did (about 25 kept
+ * change-ct-* trees held a laptop's slots on Nov 26, ct-101923). A run's tree is spared while its run is live, while it
+ * is a few minutes old (its run may not be listed yet), or while a process sits in it; when either read fails, none is
+ * touched. The names whose ports it freed.
+ */
+export async function releaseEndedRunTreePorts(repoRoot: string, liveRunIds?: () => Promise<ReadonlySet<string> | null>, now = Date.now()): Promise<string[]> {
+  const { listStates } = await import("../workspace/contract.js");
+  const { runTreeNames, runTreesOf } = await import("./runDirs.js");
+  const runs = runTreeNames(repoRoot);
+  const held = listStates(repoRoot).filter((s) => runs.has(s.name) && !s.noPorts && Object.keys(s.ports).length > 0 && fs.existsSync(s.path));
+  if (!held.length) return [];
+  const { liveRunIdsOf, readLiveRunsOnDevice } = await import("./liveRuns.js");
+  const ids = await (liveRunIds ? liveRunIds() : readLiveRunsOnDevice().then(liveRunIdsOf)).catch(() => null);
+  const { readProcessCwds } = await import("../land/scan.js");
+  const cwds = ids ? await readProcessCwds() : null;
+  if (!ids || !cwds) return [];
+  const live = runTreesOf(repoRoot, ids);
+  const { young } = await import("./runBranch.js");
+  const { releaseWorkspacePorts } = await import("../workspace/portRelease.js");
+  const freed: string[] = [];
+  for (const s of held) {
+    const tree = fs.realpathSync(s.path);
+    if (live.has(s.name) || young(tree, now) || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) continue;
+    if (await releaseWorkspacePorts(repoRoot, s.name).catch(() => false)) freed.push(s.name);
+  }
+  return freed;
 }
 
 /**

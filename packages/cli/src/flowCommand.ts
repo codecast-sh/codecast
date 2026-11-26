@@ -452,6 +452,15 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         };
         await claimCheckoutRun(checkoutGitDir, runLive).catch((err) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });
       }
+      // The branch is this run's alone before anything moves or checks it out, and before a task is made for a run
+      // that would be refused (workflow/runBranch.ts, ct-98893). A task not made yet has no branch or tree of its own.
+      if (branch || task) {
+        const { claimRunBranchVia } = await import("./workflow/runBranch.js");
+        const own = task ? runSlug(graph, { task_id: task }, "run") : null;
+        const freed = await claimRunBranchVia(top, own, branch ?? `codecast/${own}`, { task, rewrites: !branch }, deps.cliPost)
+          .catch((err: Error) => { console.error(err.message); process.exit(1); });
+        if (freed && !opts.json) console.error(dim(`  ${freed}`));
+      }
       if (!task) {
         const made = await cast(["task", "create", changeTitle, "-d", `A change run through the ${found.label} flow (${found.slug}).`, "--found-during", "none"], top);
         task = (made.out + made.err).match(/\bct-\d+\b/)?.[0];
@@ -468,15 +477,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const runDir = lineRunDir(top, worktree);
       const { writeFrozenChange, originTip, freezeSessionChange } = await import("./workflow/flowChange.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
-      // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never
-      // reset; one on another branch (an earlier run's) keeps it there and is released (putChangeInWorktree).
-      const earlierPath = (await cast(["ws", "path", worktree], top)).out.trim();
-      const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-      const earlierOn = earlier ? spawnSync("git", ["-C", earlier, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf-8" }).stdout.trim() : "";
-      if (earlier && !placed && (branch || sessionRef || opts.checkout) && earlierOn === (branch ?? `codecast/${worktree}`)) {
-        const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
-        if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
-      }
+      // A worktree an earlier run of this change made, read before its branch moves (workflow/runBranch.ts earlierRunTree).
+      const { earlierRunTree } = await import("./workflow/runBranch.js");
+      const resets = !placed && (branch || sessionRef || opts.checkout) ? branch ?? `codecast/${worktree}` : null;
+      let earlier: string | null = null;
+      try { earlier = earlierRunTree((await cast(["ws", "path", worktree], top)).out.trim(), resets); } catch (err) { console.error((err as Error).message); process.exit(1); }
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
@@ -513,7 +518,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const { runHandsVia } = await import("./lineTrialBranch.js");
         const { putChangeInWorktree } = await import("./workflow/flowChange.js");
         await putChangeInWorktree(top, worktree, earlier, change, task!, async () => {
-          const ws = await cast(["ws", "acquire", worktree, "--branch", change!.branch, "--skip-pool", "--json"], top);
+          // No port: no station of a change runs a dev server of its own, and `cast dev` takes a free one if asked (ct-101923).
+          const ws = await cast(["ws", "acquire", worktree, "--branch", change!.branch, "--skip-pool", "--no-ports", "--json"], top);
           if (ws.code !== 0) { console.error(acquireFailureLine(worktree, ws.out, ws.err)); process.exit(1); }
         }, runHandsVia((route, body) => deps.cliPost(route, body))).catch((err: Error) => { console.error(err.message); process.exit(1); });
         writeFrozenChange(runDir, change);

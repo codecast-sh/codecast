@@ -44,6 +44,7 @@ import {
 import { buildHookEnv, runHook } from "./hooks.js";
 import { PortAllocationError, allocatePorts, computePorts, isPortFree, portsToEnv } from "./ports.js";
 import { partitionReservations, withPortReservations, withWorkspaceOperation, type PortReservation } from "./portReservations.js";
+import { portExhaustion, withoutPorts } from "./portRelease.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { linkSharedDirectories, unlinkSharedDirectories } from "./share.js";
 import { runSetup } from "./setup.js";
@@ -106,7 +107,7 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
   const manifest = savedInputRoot ? previous!.manifest : resolveManifest(repoRoot, inputRoot);
   const cloudWorkspace = process.env.CODECAST_CLOUD_WORKSPACE === "1" || previous?.env.CODECAST_CLOUD_WORKSPACE === "1";
   if (cloudWorkspace) manifest.backend = "local";
-  const noPorts = opts.noPorts === true || previous?.noPorts === true;
+  const noPorts = opts.noPorts ?? previous?.noPorts === true;
   if (noPorts) manifest.ports = {};
 
   // Dispatch to non-local backend if the manifest selected one.
@@ -139,13 +140,17 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     ...(purpose ? { purpose } : {}),
   };
 
-  const prepared = await withPortReservations(repoRoot, async (reservations) => {
+  const prepare = () => withPortReservations(repoRoot, async (reservations) => {
     const existing = readState(repoRoot, name);
-    if (existing && existing.state === "ready" && (!noPorts || existing.noPorts)) {
-      const ws = stateToWorkspace(existing);
+    // One without ports asked for them is rebuilt below, taking them.
+    if (existing && existing.state === "ready" && (noPorts || !existing.noPorts)) {
+      // Asked for no ports, a ready workspace that holds some gives them up as it stands: nothing in it is rebuilt.
+      const kept = noPorts && !existing.noPorts ? withoutPorts(existing) : existing;
+      const ws = stateToWorkspace(kept);
       const contract = await validateContract(ws);
       if (contract.ok) {
         ws.contract = contract;
+        if (kept !== existing) writeState(repoRoot, { ...kept, contract });
         return { result: { workspace: ws, created: false } };
       }
     }
@@ -198,6 +203,16 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       ...(noPorts ? { noPorts: true } : {}),
     });
     return { existing, portAlloc, initialEnv, notices };
+  });
+  // Every slot taken: the trees ended runs kept give theirs up, read outside the reservation lock (it reads the
+  // server and every process's directory), and the allocation runs once more.
+  const prepared = await prepare().catch(async (err) => {
+    if (!(err instanceof PortAllocationError)) throw err;
+    const freed = await portExhaustion.sweep(repoRoot).catch(() => []);
+    if (!freed.length) throw err;
+    const again = await prepare();
+    if (!again.result) again.notices.push(`every port slot was taken: freed those of ${freed.length} tree(s) ended runs kept (${freed.join(", ")})`);
+    return again;
   });
   if (prepared.result) return prepared.result;
   const { existing, portAlloc, initialEnv, notices } = prepared;
@@ -578,6 +593,8 @@ async function allocateWorkspacePorts(
   startIndex: number,
 ) {
   const notices: string[] = [];
+  // A workspace that takes no port reclaims none, so it says nothing of the slots others left behind.
+  if (Object.keys(manifest.ports).length === 0) return { portAlloc: await allocatePorts(manifest, { startIndex }), notices };
   const { live: holders, stale } = partitionReservations(reservations.filter(
     (reservation) => reservation.repoRoot !== root || reservation.workspace.name !== name,
   ));

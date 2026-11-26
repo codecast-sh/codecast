@@ -15,6 +15,23 @@ export type LiveRunsOnDevice = { runs?: Array<{ run_id: string; status: string; 
 // The server answers at most this many runs of a status (workflow_runs.liveRunsForDevice).
 export const LIVE_RUNS_PAGE = 100;
 
+/** The server's live runs on this machine, or null when it cannot be asked or did not answer. */
+export async function readLiveRunsOnDevice(): Promise<LiveRunsOnDevice | null> {
+  const log = console.log;
+  console.log = console.error;
+  try {
+    const { convexClient } = await import("../remote/convexClient.js");
+    const { deviceId } = await import("../remote/device.js");
+    const convex = await convexClient({ timeoutMs: 30_000 });
+    const data = await convex.client.mutation(convex.api.workflow_runs.liveRunsForDevice, { api_token: convex.token, device: deviceId() });
+    return data && !("error" in data) ? data : null;
+  } catch {
+    return null;
+  } finally {
+    console.log = log;
+  }
+}
+
 /** The ids of the live runs, or null when the server could not say or its answer may be cut short. */
 export function liveRunIdsOf(data: LiveRunsOnDevice | null | undefined): Set<string> | null {
   if (!data?.runs) return null;
