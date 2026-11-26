@@ -116,15 +116,9 @@ export function appPool(pushed: ReadonlyArray<PushedFlowRow> = [], repo: Readonl
   return pool;
 }
 
-/** A checkout's report of a shipped flow with its start decided there (cli workflow/startFacts.ts): only the library's own
- *  stations and routes, some left out. */
-function cutOf(f: RepoFlow): ShippedFlow | null {
-  const lib = SHIPPED_FLOWS.find((s) => s.slug === f.slug);
-  if (!lib) return null;
-  const nodes = new Map(lib.nodes.map((n) => [n.id, n.label]));
-  const edges = new Set(lib.edges.map((e) => `${e.from}\0${e.to}\0${e.condition ?? ""}`));
-  return f.nodes.every((n) => nodes.has(n.id) && nodes.get(n.id) === n.label) && f.edges.every((e) => edges.has(`${e.from}\0${e.to}\0${e.condition ?? ""}`)) ? lib : null;
-}
+/** The shipped flow a checkout reported with its start decided there (cli workflow/startFacts.ts), by the report's own
+ *  mark: a repository's flow that only looks like the library's stays the repository's. */
+const cutOf = (f: RepoFlow): ShippedFlow | null => (f.decided_from === f.slug ? SHIPPED_FLOWS.find((s) => s.slug === f.slug) ?? null : null);
 
 function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<RepoFlow>): AppFlow[] {
   // A cut of a shipped flow is that flow as this checkout runs it: the library's, with the path its start takes.

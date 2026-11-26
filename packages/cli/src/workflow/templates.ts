@@ -45,6 +45,10 @@ import climbRecord from "./templates/climb/record.sh" with { type: "text" };
 import changeReview from "./templates/change/review.md" with { type: "text" };
 import changeBrief from "./templates/change/brief.md" with { type: "text" };
 import changeDirectFix from "./templates/change/direct_fix.md" with { type: "text" };
+import changeDirectReview from "./templates/change/direct_review.md" with { type: "text" };
+import changeDirectRevise from "./templates/change/direct_revise.md" with { type: "text" };
+import changeDirectConflict from "./templates/change/direct_conflict.md" with { type: "text" };
+import changeDirectCiRed from "./templates/change/direct_ci_red.md" with { type: "text" };
 import changeConflict from "./templates/change/conflict.md" with { type: "text" };
 import changeCiConflict from "./templates/change/ci_conflict.md" with { type: "text" };
 import personalCast from "./templates/personal.cast" with { type: "text" };
@@ -96,6 +100,10 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "change/review.md": changeReview,
   "change/brief.md": changeBrief,
   "change/direct_fix.md": changeDirectFix,
+  "change/direct_review.md": changeDirectReview,
+  "change/direct_revise.md": changeDirectRevise,
+  "change/direct_conflict.md": changeDirectConflict,
+  "change/direct_ci_red.md": changeDirectCiRed,
   "change/conflict.md": changeConflict,
   "change/ci_conflict.md": changeCiConflict,
   // The personal workspace's Ship (personal.cast): its stations and what it sends back to the session.

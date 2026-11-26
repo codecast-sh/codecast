@@ -25,7 +25,7 @@ const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segmen
  *  decide the start as a run there decides it (startFacts.ts). */
 export function flowSnapshot(slug: string, src: string, where: PoolWhere, file: string | null, facts: Record<string, string> = {}) {
   // The main path's order is the journey's to fold again from the graph; the listing keeps its stations.
-  const { where: _where, file: _file, errors: _errors, draft: _draft, path: _path, ...flow } = describeFlow(slug, src, where, file);
+  const { where: _where, file: _file, errors: _errors, draft: _draft, path: _path, ...flow } = describeFlow(slug, src, where, file, undefined, facts);
   const graph = decideStart(parseWorkflowSource(src, file ? path.dirname(file) : undefined, {}, file ?? undefined), facts);
   const nodes = [...graph.nodes.values()].map((n) => Object.fromEntries(NODE_FIELDS.filter((k) => n[k] !== undefined).map((k) => [k, n[k]])));
   const edges = graph.edges.map((e) => ({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}), ...(e.condition ? { condition: e.condition } : {}) }));

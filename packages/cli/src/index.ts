@@ -22502,14 +22502,24 @@ workflow
       post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()], where: groupDeps().flow.directoryWorkspace });
     if (personalRefused) { console.error(`✗ ${personalRefused}`); process.exit(1); }
     const source = resolved.source;
-    // The checkout decides its start before the push, so the run's card draws the path it takes (startFacts.ts).
-    const { decideStart, startFacts } = await import("./workflow/startFacts.js");
-    const graph = decideStart(parseWorkflowSource(source, resolved.dir), startFacts(process.cwd()));
+    // The repository's default branch decides the start before the push, so the run's card draws the path it takes
+    // (startFacts.ts).
+    const { reviewNodeOf, runGraph, startFacts, StartFactsError } = await import("./workflow/startFacts.js");
+    let graph: ReturnType<typeof parseWorkflowSource>;
+    try {
+      graph = runGraph(parseWorkflowSource(source, resolved.dir), startFacts(process.cwd()));
+    } catch (err) {
+      if (!(err instanceof StartFactsError)) throw err;
+      console.error(`✗ ${err.message}`);
+      process.exit(1);
+    }
+    // The review station of the path the run takes: a direct repository's is the direct path's.
+    const reviewId = reviewNodeOf(graph);
     // A role running the line (org-roles-standing.md T4, the-line.md L3):
     // the review station takes the role's own review backend, and the run is
     // A role whose switch is off starts nothing.
     let reviewBackend: string | undefined = options.reviewBackend;
-    if (graph.nodes.has("review")) {
+    if (reviewId) {
       const self = await ownRole().catch(() => null);
       if (self) {
         if (!(self.starts_on_its_own ?? autonomyOn(self.trust))) {
@@ -22520,14 +22530,14 @@ workflow
       }
     }
     if (reviewBackend) {
-      const review = graph.nodes.get("review");
+      const review = reviewId ? graph.nodes.get(reviewId) : undefined;
       if (!review) { console.error("--review-backend needs a node named 'review' in the workflow"); process.exit(1); }
       review.agent = String(reviewBackend).toLowerCase();
       if (review.backend !== "session") review.backend = reviewBackend as any;
     }
     // A review on a second backend is a second opinion; one line says so.
     {
-      const review = graph.nodes.get("review");
+      const review = reviewId ? graph.nodes.get(reviewId) : undefined;
       const implement = graph.nodes.get("implement");
       const agentOf = (n: any) => (n.agent || (n.backend !== "session" ? n.backend : undefined) || "claude");
       if (review && implement && agentOf(review) === agentOf(implement)) {

@@ -236,12 +236,65 @@
       "stop": "$merge.output"
     },
     {
+      "id": "direct_review",
+      "label": "Review",
+      "shape": "box",
+      "type": "agent",
+      "backend": "session"
+    },
+    {
       "id": "direct_fix",
       "label": "Fix findings",
       "shape": "box",
       "type": "agent",
       "backend": "subject",
       "max_visits": 3
+    },
+    {
+      "id": "direct_revise",
+      "label": "Fix findings",
+      "shape": "box",
+      "type": "agent",
+      "backend": "subject",
+      "max_visits": 3
+    },
+    {
+      "id": "direct_conflict",
+      "label": "Resolve conflict",
+      "shape": "box",
+      "type": "agent",
+      "backend": "subject",
+      "max_visits": 3
+    },
+    {
+      "id": "direct_ci_red",
+      "label": "Fix CI",
+      "shape": "box",
+      "type": "agent",
+      "backend": "subject",
+      "max_visits": 3
+    },
+    {
+      "id": "direct_rejected",
+      "label": "Rejected",
+      "shape": "Msquare",
+      "type": "exit",
+      "stop": "The reviewer rejected the change. $review_note"
+    },
+    {
+      "id": "direct_changes",
+      "label": "Found work",
+      "shape": "Msquare",
+      "type": "exit",
+      "stop": "The reviewer asked for changes, and no session made this change to fix them. $review_note"
+    },
+    {
+      "id": "direct_unreviewed",
+      "label": "No verdict",
+      "shape": "Msquare",
+      "type": "exit",
+      "stop": "The reviewer ended its turn without a verdict on the change.",
+      "machine": true
     },
     {
       "id": "decide__decide",
@@ -383,59 +436,22 @@
       "stop": "This machine could not run the project's check, so the change is not judged yet: $direct_check__verify.summary. Fix the machine, or run the flow again on one that can."
     },
     {
+      "id": "direct_check__nocheck",
+      "label": "No check command",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_check",
+      "segment_flow": "check",
+      "segment_exit": "stop",
+      "stop": "This repository names no check command, so nothing can check the change: set [line.commands] check in .codecast/line.toml on its default branch."
+    },
+    {
       "id": "direct_check",
       "label": "Check",
       "shape": "diamond",
       "type": "conditional",
       "segment": "direct_check",
       "segment_flow": "check",
-      "segment_entry": true
-    },
-    {
-      "id": "direct_review__review",
-      "label": "Review",
-      "shape": "box",
-      "type": "agent",
-      "backend": "session",
-      "segment": "direct_review",
-      "segment_flow": "review"
-    },
-    {
-      "id": "direct_review__approved",
-      "label": "Approved",
-      "shape": "parallelogram",
-      "type": "command",
-      "segment": "direct_review",
-      "segment_flow": "review",
-      "segment_exit": "done"
-    },
-    {
-      "id": "direct_review__changes",
-      "label": "Changes asked",
-      "shape": "parallelogram",
-      "type": "command",
-      "segment": "direct_review",
-      "segment_flow": "review",
-      "segment_exit": "stop",
-      "stop": "The reviewer asked for changes. $review_note"
-    },
-    {
-      "id": "direct_review__rejected",
-      "label": "Rejected",
-      "shape": "parallelogram",
-      "type": "command",
-      "segment": "direct_review",
-      "segment_flow": "review",
-      "segment_exit": "stop",
-      "stop": "The reviewer rejected the change. $review_note"
-    },
-    {
-      "id": "direct_review",
-      "label": "Review",
-      "shape": "diamond",
-      "type": "conditional",
-      "segment": "direct_review",
-      "segment_flow": "review",
       "segment_entry": true
     },
     {
@@ -478,19 +494,21 @@
     {
       "id": "land__conflict",
       "label": "Conflict",
-      "shape": "Msquare",
-      "type": "exit",
+      "shape": "parallelogram",
+      "type": "command",
       "segment": "land",
       "segment_flow": "ship",
+      "segment_exit": "stop",
       "stop": "The change does not rebase cleanly or fails the check on the default branch. $land__rebase.output"
     },
     {
       "id": "land__unshipped",
       "label": "Not merged",
-      "shape": "Msquare",
-      "type": "exit",
+      "shape": "parallelogram",
+      "type": "command",
       "segment": "land",
       "segment_flow": "ship",
+      "segment_exit": "stop",
       "stop": "The change was not merged. $land__ship.output"
     },
     {
@@ -793,7 +811,47 @@
       "condition": "ship_mode = direct"
     },
     {
+      "from": "direct_review",
+      "to": "land",
+      "condition": "review_verdict = approve"
+    },
+    {
+      "from": "direct_review",
+      "to": "direct_revise",
+      "label": "changes asked",
+      "condition": "review_verdict = changes and change_conversation"
+    },
+    {
+      "from": "direct_review",
+      "to": "direct_changes",
+      "label": "changes asked, no session",
+      "condition": "review_verdict = changes"
+    },
+    {
+      "from": "direct_review",
+      "to": "direct_rejected",
+      "label": "rejected",
+      "condition": "review_verdict = reject"
+    },
+    {
+      "from": "direct_review",
+      "to": "direct_unreviewed",
+      "label": "no verdict"
+    },
+    {
       "from": "direct_fix",
+      "to": "direct_check"
+    },
+    {
+      "from": "direct_revise",
+      "to": "direct_check"
+    },
+    {
+      "from": "direct_conflict",
+      "to": "direct_check"
+    },
+    {
+      "from": "direct_ci_red",
       "to": "direct_check"
     },
     {
@@ -905,6 +963,12 @@
       "condition": "outcome = failure and direct_check__unjudged.json.exit = failed and change_conversation"
     },
     {
+      "from": "direct_check__nocheck",
+      "to": "direct_fix",
+      "label": "check failed",
+      "condition": "outcome = failure and direct_check__nocheck.json.exit = failed and change_conversation"
+    },
+    {
       "from": "direct_check",
       "to": "direct_check__verify"
     },
@@ -912,6 +976,11 @@
       "from": "direct_check__verify",
       "to": "direct_check__passed",
       "condition": "outcome = success"
+    },
+    {
+      "from": "direct_check__verify",
+      "to": "direct_check__nocheck",
+      "condition": "outcome = failure and not line.commands.check"
     },
     {
       "from": "direct_check__verify",
@@ -924,42 +993,6 @@
       "condition": "outcome = failure and direct_check__verify.exit_code = 2"
     },
     {
-      "from": "direct_review__approved",
-      "to": "land",
-      "condition": "outcome = success"
-    },
-    {
-      "from": "direct_review__changes",
-      "to": "direct_fix",
-      "label": "changes asked",
-      "condition": "outcome = failure and direct_review__changes.json.exit = changes and change_conversation"
-    },
-    {
-      "from": "direct_review__rejected",
-      "to": "direct_fix",
-      "label": "changes asked",
-      "condition": "outcome = failure and direct_review__rejected.json.exit = changes and change_conversation"
-    },
-    {
-      "from": "direct_review",
-      "to": "direct_review__review"
-    },
-    {
-      "from": "direct_review__review",
-      "to": "direct_review__approved",
-      "condition": "review_verdict = approve"
-    },
-    {
-      "from": "direct_review__review",
-      "to": "direct_review__changes",
-      "condition": "review_verdict = changes"
-    },
-    {
-      "from": "direct_review__review",
-      "to": "direct_review__rejected",
-      "condition": "review_verdict = reject"
-    },
-    {
       "from": "land__shipped",
       "to": "direct_deploy",
       "condition": "outcome = success"
@@ -968,6 +1001,30 @@
       "from": "land__landed",
       "to": "direct_deploy",
       "condition": "outcome = success"
+    },
+    {
+      "from": "land__conflict",
+      "to": "direct_conflict",
+      "label": "conflicts with main",
+      "condition": "outcome = failure and land__conflict.json.exit = conflict and change_conversation"
+    },
+    {
+      "from": "land__conflict",
+      "to": "direct_ci_red",
+      "label": "CI red after landing",
+      "condition": "outcome = failure and land__conflict.json.exit = unshipped and land__ship.exit_code = 7 and change_conversation"
+    },
+    {
+      "from": "land__unshipped",
+      "to": "direct_conflict",
+      "label": "conflicts with main",
+      "condition": "outcome = failure and land__unshipped.json.exit = conflict and change_conversation"
+    },
+    {
+      "from": "land__unshipped",
+      "to": "direct_ci_red",
+      "label": "CI red after landing",
+      "condition": "outcome = failure and land__unshipped.json.exit = unshipped and land__ship.exit_code = 7 and change_conversation"
     },
     {
       "from": "land",

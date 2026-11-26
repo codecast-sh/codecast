@@ -8834,6 +8834,8 @@ export default defineSchema({
       takes: v.array(v.string()),
       nodes: v.array(v.any()),
       edges: v.array(v.object({ from: v.string(), to: v.string(), label: v.optional(v.string()), condition: v.optional(v.string()) })),
+      decided_from: v.optional(v.string()),
+      facts: v.optional(v.record(v.string(), v.string())),
     })),
     updated_at: v.number(),
   })

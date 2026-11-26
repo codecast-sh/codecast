@@ -18,6 +18,9 @@ const repoFlowValidator = v.object({
   takes: v.array(v.string()),
   nodes: v.array(v.any()),
   edges: v.array(v.object({ from: v.string(), to: v.string(), label: v.optional(v.string()), condition: v.optional(v.string()) })),
+  // A shipped flow with its start decided in that checkout (shared/contracts/repoFlows.ts).
+  decided_from: v.optional(v.string()),
+  facts: v.optional(v.record(v.string(), v.string())),
 });
 
 /** How many flows one checkout may report: a `.codecast/flows` holds a few. */

@@ -11,7 +11,7 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
-import { decideStart, startFacts } from "./startFacts";
+import { pinDirectCommands, runGraph, startFacts, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
@@ -2195,9 +2195,19 @@ export type WorkflowRunOutcome = "completed" | "failed" | "invalid";
 
 export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<WorkflowRunOutcome> {
   const cwd = options.cwd || process.cwd();
-  // What the checkout says before anything runs (its ship mode): a start it decides runs, and shows, only its own path.
-  const facts = startFacts(cwd);
-  graph = decideStart(graph, facts);
+  // What the repository's default branch says before anything runs (its ship mode): a start it decides runs, and
+  // shows, only its own path; a resumed run keeps the start it took.
+  let facts: Record<string, string>;
+  try {
+    facts = startFacts(cwd);
+    graph = runGraph(graph, facts, options.resume ? { resumeAt: options.resume.current_node_id } : {});
+  } catch (err) {
+    if (!(err instanceof StartFactsError)) throw err;
+    console.error(`${c.red}✗ ${err.message}${c.reset}`);
+    const start = [...graph.nodes.values()].find((n) => n.type === "start");
+    if (options.runId && !options.dryRun && start) await reportProgress(options, profileFailure(start.id, err.message));
+    return "invalid";
+  }
 
   if (options.goalOverride) {
     graph.goal = options.goalOverride;
@@ -2249,6 +2259,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     return "invalid";
   }
   Object.assign(initialContext, profile);
+  pinDirectCommands(initialContext);
   // A run with no cause keeps its files under its own id, so a resume finds them.
   initialContext["run_dir"] = lineRunDir(cwd, !initialContext["task_id"] && options.runId ? `${slugPart(graph.name)}-${slugPart(options.runId)}` : runSlug(graph, initialContext, "run"));
   // A change frozen for this run (flows.md FL4) waits on its own branch and worktree: every station starts on it.
@@ -2562,6 +2573,7 @@ async function runNodeLoop(
       break;
     }
     Object.assign(state.context, profile);
+    pinDirectCommands(state.context);
 
     // ── Stage 2: Print node header ────────────────────────────────────────────
     const icon = nodeIcon(current);

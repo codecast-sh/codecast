@@ -2,16 +2,19 @@
 // the change, in the change's worktree. The same command the line's Verify runs.
 // Exit 2 says this machine could not judge the change (line-profile.md LP4): no
 // test database, a missing tool. That stop is the machine's, not the change's.
+// A repository that names no check command has nothing to check with, and says so.
 digraph check {
   graph [kind="segment", label="Check", description="The project's check command on the change", takes="branch"]
   start [shape=Mdiamond]
   verify [label="Verify", shape=parallelogram, timeout=3600,
-    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && bash -c $line.commands.check"]
+    script="cmd=$line.commands.check; [ -n \"$cmd\" ] || { echo \"this repository names no check command\"; exit 1; }; wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && bash -c \"$cmd\""]
   passed [shape=Msquare, label="Passed"]
   failed [shape=Msquare, label="Checks failed", stop="The project's check failed on the change: $verify.summary"]
   unjudged [shape=Msquare, label="Not checked here", machine=true, stop="This machine could not run the project's check, so the change is not judged yet: $verify.summary. Fix the machine, or run the flow again on one that can."]
+  nocheck [shape=Msquare, label="No check command", stop="This repository names no check command, so nothing can check the change: set [line.commands] check in .codecast/line.toml on its default branch."]
   start -> verify
   verify -> passed [condition="outcome = success"]
+  verify -> nocheck [condition="outcome = failure and not line.commands.check"]
   verify -> failed [condition="outcome = failure and verify.exit_code != 2"]
   verify -> unjudged [condition="outcome = failure and verify.exit_code = 2"]
 }

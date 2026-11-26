@@ -90,14 +90,16 @@ describe("the session's pool", () => {
       f = edges.filter((e) => f.includes(e.from) && !kept.has(e.to)).map((e) => e.to);
       f.forEach((id) => kept.add(id));
     }
-    const cut: RepoFlow = { slug: "change", name: "change", kind: "line", label: lib.label, description: lib.description ?? null, takes: lib.takes, nodes: lib.nodes.filter((n) => kept.has(n.id)), edges: edges.filter((e) => kept.has(e.from) && kept.has(e.to)) };
+    const graphOnly: RepoFlow = { slug: "change", name: "change", kind: "line", label: lib.label, description: lib.description ?? null, takes: lib.takes, nodes: lib.nodes.filter((n) => kept.has(n.id)), edges: edges.filter((e) => kept.has(e.from) && kept.has(e.to)) };
+    const cut: RepoFlow = { ...graphOnly, decided_from: "change", facts: { ship_mode: "direct" } };
     const change = namedForRepo(appPool([], [cut]), "acme/sit").find((f) => f.slug === "change")!;
     expect(change.label).toBe("Ship");
     expect(change.where).toBe("shipped");
     expect(change.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["Check", "Review", "Land", "Deploy"]);
-    // A repository's own change that only looks like the library's is still the repository's.
-    const own = namedForRepo(appPool([], [{ ...cut, nodes: cut.nodes.map((n) => (n.id === "land" ? { ...n, label: "Push" } : n)) }]), "acme/sit").find((f) => f.slug === "change")!;
+    // A repository's own change.cast, even a copy of the library's graph, is the repository's: only the mark says otherwise.
+    const own = namedForRepo(appPool([], [graphOnly]), "acme/sit").find((f) => f.slug === "change")!;
     expect(own.label).toBe("Ship · sit");
+    expect(own.where).toBe("repo");
   });
 
   test("a personal flow is in a personal session's pool and out of a team session's", () => {

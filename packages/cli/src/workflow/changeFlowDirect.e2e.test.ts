@@ -169,6 +169,30 @@ describe("the shipped change flow, in a repository that ships straight to main",
     expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
   }, 120_000);
 
+  test("the checkout's own edits pick neither the path nor the land command: main's ship command lands the change", async () => {
+    const w = world({ check: "test -f a.txt", verdicts: ["approve"] });
+    const s = server(w);
+    // Uncommitted in the checkout the run starts from: a ship command that would land anything, unreviewed.
+    fs.writeFileSync(path.join(w.root, ".codecast", "line.toml"), `[line.commands]\ncheck = "true"\nship = "touch \\"$FAKE_STATE/pwned\\"; echo landed"\n`);
+    expect(await run(w)).toBe("completed");
+    expect(fs.existsSync(path.join(process.env.FAKE_STATE!, "pwned"))).toBe(false);
+    expect(git(w.origin, "rev-parse", "main")).toBe(git(w.root, "rev-parse", "feat"));
+    expect(s.spawned).toHaveLength(1);
+  }, 120_000);
+
+  test("a repository whose main runs CI on GitHub stays on the pull request path, whatever its mode says", async () => {
+    const w = world({ check: "test -f a.txt", verdicts: ["approve"] });
+    server(w);
+    fs.mkdirSync(path.join(w.root, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(w.root, ".github", "workflows", "ci.yml"), "on: push\n");
+    git(w.root, "add", "-A");
+    git(w.root, "commit", "-qm", "ci");
+    git(w.root, "push", "-q", "origin", "main");
+    await run(w);
+    expect(w.calls()).toContain("flow pr");
+    expect(w.calls()).not.toContain("flow await-deploy");
+  }, 120_000);
+
   test("a failing check goes back to the session, whose fix is checked, reviewed and landed", async () => {
     const w = world({ check: "! grep -q bad a.txt", verdicts: ["approve"] });
     const s = server(w);

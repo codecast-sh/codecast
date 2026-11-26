@@ -43,7 +43,7 @@ landed() {
 cmd=$line.commands.ship
 if [ -z "$cmd" ] && [ "$ship_mode" = direct ]; then
   # A repository that ships straight to its default branch opens no pull request, so only its own command lands it.
-  said="this repository ships straight to $default_branch ([ship] mode = \"direct\" in .codecast/workspace.toml), so no pull request lands it, and its line profile names no ship command: set [line.commands] ship in .codecast/line.toml"
+  said="this repository ships straight to $default_branch, so no pull request lands it, and the line profile on $default_branch names no ship command: set [line.commands] ship in .codecast/line.toml there"
   echo "$said"
   cast task comment $task_id "Not merged: $said" -t blocker > /dev/null
   exit 1

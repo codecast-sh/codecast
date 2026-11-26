@@ -46,8 +46,10 @@ describe("journeyStages", () => {
     const s = journeyStages(directCut(change) as any);
     expect(s.map((x) => x.label)).toEqual(["Check", "Review", "Land", "Deploy", "Live"]);
     expect(s.map((x) => x.role)).toEqual(["step", "step", "land", "deploy", "live"]);
+    expect(s.map((x) => x.who)).toEqual(["auto", "agent", "auto", "auto", "auto"]);
     expect(s[0].loops.map((l) => l.id)).toEqual(["direct_fix"]);
-    expect(s[1].loops.map((l) => l.id)).toEqual(["direct_fix"]);
+    expect(s[1].loops.map((l) => l.id)).toEqual(["direct_revise"]);
+    expect(s[2].loops.map((l) => l.id)).toEqual(["direct_conflict", "direct_ci_red"]);
     expect(approvalOf(directCut(change) as any).kind).toBe("never");
   });
 
