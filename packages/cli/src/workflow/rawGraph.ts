@@ -311,6 +311,8 @@ export class Parser {
     if (attrs.asker) node.asker = String(attrs.asker);
     if (attrs.answerer) node.answerer = String(attrs.answerer);
     if (attrs.stop) node.stop = String(attrs.stop);
+    if (attrs.keep_subject === true || attrs.keep_subject === "true") node.keep_subject = true;
+    if (attrs.whole_stop === true || attrs.whole_stop === "true") node.whole_stop = true;
     if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
     if (attrs.system) node.system = String(attrs.system);
     if (attrs.output) node.output = String(attrs.output) === "text" ? "text" : "json";
@@ -353,6 +355,8 @@ export interface RawGraph {
   edges: WorkflowEdge[];
   /** The base files a variant was read on top of. */
   files: string[];
+  /** The shipped flows (by slug) this graph is built from: itself, a base it extends, a segment it runs. */
+  shipped?: string[];
   /** `subgraph <node> { ... }` blocks: the steps that fill that node, by node id. */
   fills?: Map<string, RawGraph>;
   /** A variant's attributes for stations inside a segment (`review__review [...]`, or `review [guide=...]` on the segment), applied once the segment is expanded. */

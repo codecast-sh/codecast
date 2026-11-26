@@ -22,7 +22,7 @@ function cast(env: NodeJS.ProcessEnv, cliPost?: FlowDeps["cliPost"]) {
     subjectSession: refuse("subjectSession"),
     realCwd: () => process.cwd(),
     readWorkspace: refuse("readWorkspace"),
-    directoryTeam: refuse("directoryTeam"),
+    directoryWorkspace: refuse("directoryWorkspace"),
     writeWorkspace: refuse("writeWorkspace"),
     requireFlows: refuse("requireFlows"),
   };

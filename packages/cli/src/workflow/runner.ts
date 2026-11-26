@@ -485,6 +485,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
     if (change.landed) context["change_landed"] = change.landed;
+    else delete context["change_landed"];
     const said = (change.landed ? `the session's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
       : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "") + (heldNote ? `; ${heldNote}` : "");
@@ -594,6 +595,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
     if (change.landed) context["change_landed"] = change.landed;
+    else delete context["change_landed"];
     const said = `briefed ${names}; ${change.landed ? `the checkout's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
       : "the checkout's change is as it was: the stage runs again on the same change"}${heldNote ? `; ${heldNote}` : ""}${unheard ? `. ${unheard}` : ""}`;
@@ -1289,6 +1291,20 @@ async function spawnHand(
   return { conversationId: spawned.conversation_id, shortId: spawned.short_id || spawned.conversation_id.slice(0, 7) };
 }
 
+/**
+ * What a finished station's node shows: a station script's own words (the dissolve station's JSON, a check's failure)
+ * with what the runner noticed about it; an agent's conclusion, so the run reads it without loading the transcript,
+ * or, for one that says `output="json"`, the JSON it pinned (a station result the run view reads: an outcome, a note,
+ * a step left for the person).
+ */
+function stationPreview(node: WorkflowNode, context: Record<string, string>): string | undefined {
+  const said = context[`${node.id}.output`] ?? "";
+  if (node.type === "command" || node.type === "call") return [resultPreview(said), context[`${node.id}.notes`]].filter(Boolean).join("\n") || undefined;
+  if (node.type !== "agent" && node.type !== "prompt") return undefined;
+  const pinned = node.output === "json" ? context[`${node.id}.json`] : undefined;
+  return pinned ? resultPreview(pinned) : agentResultPreview(said);
+}
+
 /** The fanin node a fanout's branches converge on, or null. */
 function findFanin(node: WorkflowNode, graph: WorkflowGraph): WorkflowNode | null {
   const branches = graph.edges.filter(e => e.from === node.id).map(e => graph.nodes.get(e.to)).filter((n): n is WorkflowNode => !!n);
@@ -1361,8 +1377,10 @@ async function executeFanout(
       if (k.startsWith(`${branch.id}.`)) state.context[k] = v;
     }
     // The branch's own report ends its node, which stops its hand (workflow_runs.stopStationHands).
+    // Its words are what its node shows, as a station's outside a fan-out (a Check that was Skipped says why).
     if (options.runId) {
-      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`] });
+      const result_preview = stationPreview(branch, ctx);
+      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`], ...(result_preview ? { result_preview } : {}) });
     }
     state.visitCounts[branch.id] = (state.visitCounts[branch.id] || 0) + 1;
     state.completed.push(branch.id);
@@ -2404,7 +2422,9 @@ async function driveRun(
       await runComment(options, "blocker", `Review rejected; task left open as blocked.${queued ? " Decision queued to the run's owner." : " No decision queued: the run has no owning session."}`);
     }
     await parker?.stop();
-    const retired = await retireSubject(options, state.context, cwd);
+    const kept = subjectKept(graph, state.completed, current);
+    if (kept) console.log(`${c.dim}  the session the change came from stays: the run ended at ${current.label}${kept === current ? "" : `, past ${kept.label}`}, which leaves something for a person${c.reset}`);
+    const retired = kept ? null : await retireSubject(options, state.context, cwd);
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
@@ -2458,7 +2478,7 @@ async function driveRun(
     // A run that got past a ship step's success landed its change, whatever stopped it after.
     const landed = state.completed.some((id) => /(^|__)(shipped|landed)$/.test(id));
     await parker?.stop();
-    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed }), { key: "end" });
+    await tellSubject(options, state.context, runEndMessage(graph, { taskId: options.taskId, endLabel: current.label, failed: true, failReason: state.failReason, landed, whole: !!current.whole_stop }), { key: "end" });
     return "failed";
   }
   return "completed";
@@ -2623,13 +2643,7 @@ async function runNodeLoop(
         node_status: outcome === "failure" ? "failed" : "completed",
         outcome,
         session_id: state.context[`${current.id}.session_id`],
-        // A station script's own words (the dissolve station's JSON, a
-        // check's failure) are what its node shows; an agent's is what it
-        // concluded, so the run reads it without loading the transcript.
-        result_preview: current.type === "command" || current.type === "call"
-          ? [resultPreview(state.context[`${current.id}.output`] ?? ""), state.context[`${current.id}.notes`]].filter(Boolean).join("\n") || undefined
-          : current.type === "agent" || current.type === "prompt" ? agentResultPreview(state.context[`${current.id}.output`] ?? "")
-          : undefined,
+        result_preview: stationPreview(current, state.context),
         // A call node's cost, as the server charged it (learning-loop.md LL10).
         cost_usd: current.type === "call" ? Number(state.context[`${current.id}.cost_usd`] ?? 0) : undefined,
       });
@@ -2729,10 +2743,7 @@ async function runNodeLoop(
     // shipped with CI red). With no such edge it takes its retry_target, or its fanout's, or the run stops (below).
     const faninFailed = current.type === "parallel_fanin" && outcome === "failure";
     delete state.context["station_dead"];
-    // A subject's change found already on upstream when frozen again has nothing left to check or land: the run goes
-    // to its exit and ends done, rather than back through stages that would read an empty change.
-    const landedExit = current.backend === "subject" && outcome === "success" && state.context["change_landed"]
-      ? [...graph.nodes.values()].find((n) => n.type === "exit" && !n.stop && !n.segment_exit) ?? null : null;
+    const landedExit = outcome === "success" ? landedExitOf(graph, current, state.context) : null;
     if (landedExit) console.log(`  ${c.green}✓${c.reset} the change is already on upstream at ${state.context["change_landed"].slice(0, 10)}: the run ends done`);
     const next = landedExit ? landedExit : stationBlocked
       ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
@@ -2810,6 +2821,24 @@ async function runNodeLoop(
   }
 
   return current;
+}
+
+/** The station or end of a finished run that keeps its subject (`keep_subject`): the end itself first, else one it passed. */
+export function subjectKept(graph: WorkflowGraph, completed: ReadonlyArray<string>, end: WorkflowNode): WorkflowNode | null {
+  if (end.keep_subject) return end;
+  return completed.map((id) => graph.nodes.get(id)).find((n) => n?.keep_subject) ?? null;
+}
+
+/**
+ * A subject's change found already on upstream when frozen again has nothing left to check or land: the run goes to
+ * its exit and ends done, rather than back through stages that would read an empty change. A station whose own edges
+ * read `change_landed` routes that case itself (the personal flow deploys what landed), so it has none. Null when the
+ * run goes on by the station's edges.
+ */
+export function landedExitOf(graph: WorkflowGraph, current: WorkflowNode, context: Record<string, string>): WorkflowNode | null {
+  if (current.backend !== "subject" || !context["change_landed"]) return null;
+  if (graph.edges.some((e) => e.from === current.id && /\bchange_landed\b/.test(e.condition ?? ""))) return null;
+  return [...graph.nodes.values()].find((n) => n.type === "exit" && !n.stop && !n.segment_exit) ?? null;
 }
 
 // Human gate edges use the selected key to find the right target

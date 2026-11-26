@@ -9,10 +9,11 @@ import { memo, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
-import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
 import { WHO_WORDS, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
 import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
+import { leftWords } from "../../lib/ship/stationResult";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
@@ -23,9 +24,10 @@ import type { SessionAsk } from "../../lib/ship/sessionAsk";
 import "./ship.css";
 
 /** `insideId`: the element an open segment's inside is drawn in, which its stage's toggle controls. */
-export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen, insideId }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void; insideId?: string }) {
+/** `task`: the run's task, where a step left for the person was posted: the step opens it. */
+export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen, insideId, task }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void; insideId?: string; task?: string | null }) {
   // A finished journey says only what happened: no one acts any more, and nothing goes back.
-  const finished = stages.length > 0 && stages.every((s) => s.state === "done" || s.state === "skipped") && stages.some((s) => s.state === "done");
+  const finished = stages.length > 0 && stages.every((s) => s.state === "done" || s.state === "skipped" || s.state === "nothing") && stages.some((s) => s.state === "done");
   // The stages whose findings come back to the session, as one return line under them.
   const looping = finished ? [] : stages.map((s, i) => (s.loops.length ? i : -1)).filter((i) => i >= 0);
   const back = stages.some((s) => s.state === "back");
@@ -35,12 +37,13 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
         {stages.map((s, i) => {
           const next = stages[i + 1];
           return (
-            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done") ? "" : undefined} data-stage={s.id}>
+            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done" || s.state === "nothing") ? "" : undefined} data-stage={s.id} title={s.note ?? undefined}>
               {onOpen && (s.steps?.length || s.inside) ? (
                 <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} aria-controls={s.inside ? insideId : undefined} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
                   <StageFace s={s} finished={finished} />
                 </button>
               ) : <StageFace s={s} finished={finished} />}
+              {s.left ? <LeftStep step={s.left} task={task} className="sj-left" /> : null}
             </li>
           );
         })}
@@ -57,6 +60,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
 });
 
 function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolean }) {
+  const who = s.state === "nothing" ? "Skipped" : finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who];
   return (
     <>
       <span className="sj-node" aria-hidden><Mark state={s.state} /></span>
@@ -64,19 +68,24 @@ function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolea
         // A fan-out is one stage under one name ("CI + Review"); a branch that sent work back, stopped or waits says so
         // in a glyph and in words for a screen reader, never in its color alone (a grayscale screen shows no color).
         <span className="sj-label" data-journey-branches>
-          {s.branches.map((b, i) => <span key={b.id}>{i ? " + " : null}<span className="sj-branch" data-state={b.state} data-stage={b.id}>{b.label}{BRANCH_FLAG[b.state] ? <><i className="sj-branch-flag" aria-hidden>{BRANCH_FLAG[b.state]!.glyph}</i><span className="sr-only"> ({BRANCH_FLAG[b.state]!.words})</span></> : null}</span></span>)}
+          {s.branches.map((b, i) => <span key={b.id}>{i ? " + " : null}<span className="sj-branch" data-state={b.state} data-stage={b.id} title={b.note ?? undefined}>{b.label}{BRANCH_FLAG[b.state] ? <><i className="sj-branch-flag" aria-hidden>{BRANCH_FLAG[b.state]!.glyph}</i><span className="sr-only"> ({BRANCH_FLAG[b.state]!.words})</span></> : null}</span></span>)}
           <StateWords state={s.state} />
         </span>
       ) : <span className="sj-label">{s.label}<StateWords state={s.state} /></span>}
       {/* A segment hints at its inside, which a press on it opens in place. */}
       {s.inside ? <span className="sj-hint" data-journey-hint><span>{insideWords(s.inside)}</span><ChevronDown className="sj-hint-caret" aria-hidden /></span> : null}
       <span className="sj-who">
-        {finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who]}
+        {who}
+        {/* A branch that found nothing to do, beside who acts: never in place of it. */}
+        {skippedBranches(s) ? <span className="sj-skip">{who ? " · " : ""}{skippedBranches(s)} skipped</span> : null}
         {!finished && s.round ? <span className="sj-round">· round {s.round}</span> : null}
       </span>
     </>
   );
 }
+
+/** A fan-out's branches that ran and found nothing to do, by their last step's name ("Check"). */
+const skippedBranches = (s: JourneyStage) => s.branches?.filter((b) => b.state === "nothing").map((b) => b.label.split(" → ").pop()).join(", ") || null;
 
 /** A fan-out branch's state where it needs a reader's notice, as a glyph and as words. */
 const BRANCH_FLAG: Partial<Record<JourneyStage["state"], { glyph: string; words: string }>> = {
@@ -86,7 +95,7 @@ const BRANCH_FLAG: Partial<Record<JourneyStage["state"], { glyph: string; words:
 };
 
 /** A stage's state in words for a screen reader: its node, which shows it, is hidden from one. */
-const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped" };
+const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped", nothing: "ran, skipped", unknown: "not known" };
 function StateWords({ state }: { state: JourneyStage["state"] }) {
   return STATE_WORDS[state] ? <span className="sr-only">, {STATE_WORDS[state]}</span> : null;
 }
@@ -137,19 +146,29 @@ function Route({ r }: { r: InsideRoute }) {
 }
 
 /** What one stage did on the run: each of its steps with its words, rounds and the session that did it. */
-function StageDetail({ stage, now_ms }: { stage: JourneyStage; now_ms: number }) {
+/** A step a station left to the person: it opens the task it was posted to, where the person does it and says so. */
+function LeftStep({ step, task, className }: { step: string; task?: string | null; className: string }) {
+  return task
+    ? <Link className={className} href={`/tasks/${task}`} title={step} data-journey-left>{leftWords(step)}</Link>
+    : <span className={className} title={step} data-journey-left>{leftWords(step)}</span>;
+}
+
+function StageDetail({ stage, now_ms, task }: { stage: JourneyStage; now_ms: number; task?: string | null }) {
   return (
     <ul className="sj-detail" data-journey-detail={stage.id}>
       {(stage.steps ?? []).map((st) => (
         <li key={st.id} data-status={st.status}>
-          <span className="sj-detail-mark" data-status={st.status} aria-hidden />
+          <span className="sj-detail-mark" data-status={st.skipped || st.earlier ? "skipped" : st.status} aria-hidden />
           <b>{st.label}</b>
+          {st.skipped ? <span className="sj-skip">Skipped</span> : st.earlier ? <span className="sj-skip">earlier round</span> : null}
           {st.visits && st.visits > 1 ? <span className="sj-round">round {st.visits}</span> : null}
           {st.session ? <Link className="sj-detail-session" href={`/conversation/${st.session.id}`}>{st.session.title ?? "Open session"}</Link> : null}
           {st.at ? <span className="sj-since">{ageShort(now_ms - st.at)}</span> : null}
-          {st.said ? <p>{st.said}</p> : null}
+          {/* The step that posted the step left for the person says it below, where it opens the task. */}
+          {st.said && !(stage.left && st.said.startsWith(leftWords(""))) ? <p>{st.said}</p> : null}
         </li>
       ))}
+      {stage.left ? <li><LeftStep step={stage.left} task={task} className="sj-detail-left" /></li> : null}
     </ul>
   );
 }
@@ -159,6 +178,8 @@ function Mark({ state }: { state: JourneyStage["state"] }) {
   if (state === "stopped") return <X className="w-3 h-3" strokeWidth={3} />;
   if (state === "back") return <CornerDownLeft className="w-3 h-3" strokeWidth={2.6} />;
   if (state === "routed") return <ArrowRight className="w-3 h-3" strokeWidth={2.6} />;
+  if (state === "nothing") return <Minus className="w-3 h-3" strokeWidth={3} />;
+  if (state === "unknown") return <b className="sj-unknown" aria-hidden>?</b>;
   if (state === "active") return <i className="sj-pulse" />;
   if (state === "waiting") return <i className="sj-wait" />;
   return null;
@@ -195,7 +216,8 @@ function useBriefMessageId(conversationId: string | null, at: number | null): st
 }
 
 /** What is happening now, and the person's part in it. `again` draws Ship again, primary when re-running is the fix. */
-export function JourneyNowBar({ now, run, now_ms, children, again }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode }) {
+/** `personal`: a personal Ship's run: its reasons show whole, and its Deploy, which deploys itself, opens Deploys only with targets. */
+export function JourneyNowBar({ now, run, now_ms, children, again, personal = false }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean }) {
   const since = (at: number | null | undefined) => (at ? <span className="sj-since">{ageShort(now_ms - at)}</span> : null);
   // The conversation on screen: opening the run's session from inside it goes nowhere, so the brief it sent is the press.
   const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
@@ -256,7 +278,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
         </div>
       );
     case "merged":
-      return <div className="sj-now" data-kind="landed"><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden /><b>Merged</b><code className="sj-sha">{now.sha.slice(0, 7)}</code>{since(now.at)}{children}</div>;
+      return <div className="sj-now" data-kind="landed"><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden /><b>{now.end ?? "Merged"}</b><code className="sj-sha">{now.sha.slice(0, 7)}</code>{since(now.at)}{now.why ? <span className="sj-what">{now.why}</span> : null}{children}</div>;
     case "passed":
       return <div className="sj-now" data-kind="live"><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden /><b>Done</b>{children}</div>;
     case "unlanded":
@@ -276,7 +298,8 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
           <i className="sj-pulse" aria-hidden />
           <b>Deploying</b>
           <Waits waits={now.waits} named="Deploy" now_ms={now_ms} fallback={now.line ?? now.targets.join(", ")} />
-          <Link className="sj-act" href={deploysHref(run, now.line)} data-journey-deploys>Deploys</Link>
+          {/* Only a run going out to deploy targets has a place on the Deploys page; one whose Deploy deploys itself has none. */}
+          {!personal || now.targets.length || targetsFromLine(now.line).length ? <Link className="sj-act" href={deploysHref(run, now.line)} data-journey-deploys>Deploys</Link> : null}
           {children}
         </div>
       );
@@ -295,9 +318,12 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
             : now.fix === "run" ? openRun
             : null}
           {/* Ship again, never for a deploy (it would land the change again); it leads when re-running is the fix, or when nothing else here can. */}
-          {now.fix !== "deploy" && again ? again(now.fix === "again" || (inSession && !briefId)) : null}
+          {/* A change already on main lands nothing if shipped again: the run is the way on. */}
+          {/* A change that may be on main (Landing unknown) could land twice: its reason says to resume the run instead. */}
+          {now.fix !== "deploy" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
           {children}
-          {now.why ? <p className="sj-note">{now.why}</p> : null}
+          {/* A stop's reason is whole: its last words are what the person does next. */}
+          {now.why ? <p className="sj-note" data-whole={personal || undefined} data-journey-why>{now.why}</p> : null}
         </div>
       );
   }
@@ -344,10 +370,10 @@ export function JourneyView({ journey, run, now_ms, compact, actions, again, tar
   const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
   return (
     <div className="sj" data-journey={journey.now.kind}>
-      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} />
+      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} task={run?.task_short_id ?? null} />
       {opened?.inside ? <SegmentInside stage={opened} id={insideId} /> : null}
-      {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} /> : null}
-      {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again}>{actions}</JourneyNowBar> : null}
+      {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} task={run?.task_short_id ?? null} /> : null}
+      {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal}>{actions}</JourneyNowBar> : null}
       {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
     </div>
   );

@@ -183,7 +183,7 @@ function RunPanel({ runId, taskId }: { runId: string; taskId: string | null }) {
   if (run === null) return <div className="ot-quiet">This run is not on this device</div>;
   return (
     <div className="ot-run" data-origin-run>
-      <RunOutcomeText run={run} task={task} className="ot-run-outcome" />
+      <RunOutcomeText run={run} task={task} graph={workflow as any} className="ot-run-outcome" />
       <RunPathView phases={phases} ended={run.status === "completed" || run.status === "failed"} />
     </div>
   );

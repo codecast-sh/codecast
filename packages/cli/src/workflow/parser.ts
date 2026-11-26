@@ -74,6 +74,7 @@ export function parseWorkflowSource(src: string, dir?: string, opts: ParseOption
     }
   }
   if (sources.size) graph.sources = [...sources];
+  if (raw.shipped?.length) graph.shipped = raw.shipped;
   return graph;
 }
 
@@ -85,6 +86,8 @@ export function graphExtends(src: string): string | undefined {
 
 function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: string[], resolve: ResolveFlow = resolveFlowSource): RawGraph {
   const raw = new Parser(tokenize(src)).parseRaw();
+  const shipped = shippedSlugOf(src, raw);
+  if (shipped) raw.shipped = [shipped];
   if (dir) {
     // `@file` against the file that wrote it, so a base's stations keep reading the base's files.
     for (const attrs of raw.nodes.values()) {
@@ -165,6 +168,7 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
     nodes,
     edges: [...base.edges.filter((e) => !routed.has(e.from) && !removed.has(e.from) && !removed.has(e.to)), ...child.edges],
     files: [...(path.isAbsolute(baseFile) ? [baseFile] : []), ...base.files],
+    shipped: [...new Set([...(base.shipped ?? []), ...(child.shipped ?? [])])],
     fills: new Map([...(base.fills ?? [])].filter(([id]) => !removed.has(id)).concat([...(child.fills ?? [])])),
     overrides,
     // What the base gated or took off stays so down a chain; edits are this file's own (cast flow show reads them against its base).
@@ -235,6 +239,31 @@ export function resolveFlowSource(slug: string, dir: string | undefined, read: R
   return team && text !== null ? { src: text, dir: path.dirname(team), file: team } : null;
 }
 
+/**
+ * Whether a graph is built from the shipped flow `slug`, as the parser expands it: the graph itself, a base it
+ * extends, or a segment any of them runs (WorkflowGraph.shipped). A graph that does not parse does not run, so it
+ * reaches nothing.
+ */
+export function reachesShippedFlow(src: string, dir: string | undefined, slug: string, read: ReadFile = readDisk): boolean {
+  try {
+    return !!parseWorkflowSource(src, dir, { read }).shipped?.includes(slug);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The shipped flow a source is, by slug: how a parse knows where a graph came from. Its exact text, or, for the
+ * personal Ship, what any copy of it keeps however it was copied (line endings, a stale sync of the repo's own
+ * template): its `own_results=true` graph attribute, or a station reading the template's own `@personal/` files.
+ */
+function shippedSlugOf(src: string, raw: RawGraph): string | null {
+  for (const [slug, text] of Object.entries(BUILTIN_WORKFLOW_TEMPLATES)) if (text === src) return slug;
+  const ownResults = raw.attrs.own_results === true || raw.attrs.own_results === "true";
+  const readsPersonalFiles = [...raw.nodes.values()].some((a) => ["prompt", "script", "guide"].some((f) => typeof a[f] === "string" && (a[f] as string).startsWith("@personal/")));
+  return ownResults || readsPersonalFiles ? "personal" : null;
+}
+
 const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal", "guide"];
 const ID_FIELDS = ["asker", "answerer", "retry_target"];
 
@@ -277,6 +306,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
   const nodes = new Map(raw.nodes);
   let edges = [...raw.edges];
   const files = [...raw.files];
+  const shipped = new Set(raw.shipped ?? []);
   for (const [id, attrs] of flowNodes) {
     const fill = fills.get(id);
     // A fill is this graph's own steps: no slug to name it by, read where this graph is read.
@@ -293,6 +323,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
       if (found.file) files.push(found.file);
     }
     files.push(...seg.files);
+    for (const s of seg.shipped ?? []) shipped.add(s);
     const slot = typeof attrs.slot === "string" ? attrs.slot : attrs.slot === true ? String(attrs.label ?? id) : null;
     const marks: Record<string, Attr> = { ...(slug ? { segment_flow: slug } : {}), ...(fill ? { segment_generated: true } : {}) };
     const starts = [...seg.nodes].filter(([, a]) => shapeOf(a) === "Mdiamond").map(([sid]) => sid);
@@ -346,7 +377,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
     nodes.set(id, { shape: "diamond", label: segLabel, segment: id, segment_label: segLabel, ...marks, segment_entry: true, ...(slot ? { slot } : {}) });
     for (const e of seg.edges) edges.push({ ...e, from: rename(e.from), to: rename(e.to), ...(e.condition ? { condition: rewriteCondition(e.condition) } : {}) });
   }
-  return applyOverrides({ ...raw, nodes, edges, files, fills: undefined });
+  return applyOverrides({ ...raw, nodes, edges, files, shipped: [...shipped], fills: undefined });
 }
 
 /**
@@ -485,7 +516,7 @@ const sortedAttrs = (o: object) => Object.fromEntries(Object.entries(o).filter((
 export function graphHash(graph: WorkflowGraph): string {
   const sorted = sortedAttrs;
   // Where the graph was read from is not what it is.
-  const { nodes, edges, sources: _sources, edits: _edits, pruned: _pruned, gated: _gated, ...attrs } = graph;
+  const { nodes, edges, sources: _sources, shipped: _shipped, edits: _edits, pruned: _pruned, gated: _gated, ...attrs } = graph;
   const canonical = JSON.stringify({
     graph: sorted(attrs),
     nodes: [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id)).map(sorted),

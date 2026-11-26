@@ -17,6 +17,7 @@
  * moment wins and the level reports that HEAD moved.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -186,7 +187,7 @@ function removeFile(root: string, rel: string): void {
  * typing descends from the frozen blob, so the merge must start there or
  * every later keystroke reads as a conflict with the shipped version.
  */
-export async function levelCheckout(cwd: string, target: string, opts: { rewritten?: boolean; dryRun?: boolean; worktreeBase?: Map<string, string | null> } = {}): Promise<LevelResult> {
+export async function levelCheckout(cwd: string, target: string, opts: { rewritten?: boolean; dryRun?: boolean; worktreeBase?: Map<string, string | null>; refLast?: boolean; onWrite?: (rel: string) => void } = {}): Promise<LevelResult> {
   const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
   const from = await git(root, ["rev-parse", "HEAD"]);
   const to = await git(root, ["rev-parse", `${target}^{commit}`]);
@@ -221,11 +222,16 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   if (conflicts.length) return { ...result, ok: false, reason: `${conflicts.length} file(s) changed here and in ${to.slice(0, 9)} without a clean merge` };
   if (opts.dryRun) return result;
 
-  // The branch first, by compare-and-swap: a commit made in the checkout since
-  // we read HEAD wins, and nothing has been written yet.
-  if ((await gitTry(root, ["update-ref", "-m", `cast land level ${from.slice(0, 9)} -> ${to.slice(0, 9)}`, branch, to, from])) === null) {
+  // The branch by compare-and-swap: a commit made in the checkout since we read HEAD wins. By default it moves first,
+  // before anything is written. With `refLast` (one person's checkout, `cast land level --ref-last`) it moves last, so
+  // a level cut off midway never leaves the branch at `to` over an index and files still at `from` (a staged revert):
+  // at worst some files and the index are at `to` with HEAD still at `from`, which a rerun finishes. A commit made
+  // during that write loses the swap at the end, and everything the level wrote is put back as it was.
+  const moveRef = async () => (await gitTry(root, ["update-ref", "-m", `cast land level ${from.slice(0, 9)} -> ${to.slice(0, 9)}`, branch, to, from])) !== null;
+  if (!opts.refLast && !(await moveRef())) {
     return { ...empty, ok: false, reason: "HEAD moved while levelling; run again" };
   }
+  const before = opts.refLast ? await priorState(root, actions, entries) : null;
 
   // Files next. Each is re-hashed right before its write; one edited since
   // the plan is decided again from what is on disk now, so a keystroke that
@@ -248,6 +254,8 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
       if (a.entry.dst) writeAtomic(file, await blobContent(root, a.entry.dst), a.entry.dstMode);
       else removeFile(root, a.entry.path);
     } else if (!gaveUp) levelMode(file, a.entry);
+    if (before && (a.kind === "merge" || a.kind === "write")) before.wrote.set(a.entry.path, a.kind === "merge" ? blobSha(a.content) : a.entry.dst);
+    opts.onWrite?.(a.entry.path);
   }
 
   // The index last: target's entry for every path that moved, the rest of the
@@ -256,8 +264,57 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   await withIndexLockRetry(() => git(root, ["update-index", "--index-info"], undefined, info));
   await gitTry(root, ["update-index", "-q", "--refresh"]);
 
+  if (before && !(await moveRef())) {
+    const now = (await gitTry(root, ["rev-parse", "HEAD"]))?.trim() ?? "";
+    await putBack(root, before);
+    return { ...empty, ok: false, reason: `HEAD moved to ${now.slice(0, 9)} while levelling (a commit was made here), so nothing of ${to.slice(0, 9)} was kept: the index and files are as they were, on that commit; run again once it sits on ${to.slice(0, 9)}'s line` };
+  }
+
   if (raced.length) return { ...result, ok: false, conflicts: raced, reason: `${raced.length} file(s) kept changing during the level; their edits stand but lack ${to.slice(0, 9)}'s change` };
   return result;
+}
+
+/** A blob's object id, as git names the bytes (what `worktreeBlobs` reads back from disk). */
+const blobSha = (bytes: Buffer) => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+
+/** What a `refLast` level is about to change, so a lost swap puts it back: each written file's bytes and the index entries. */
+type Prior = { files: Map<string, { link: string } | { bytes: Buffer; mode: number } | null>; index: string; paths: string[]; wrote: Map<string, string | null> };
+
+async function priorState(root: string, actions: Action[], entries: DiffEntry[]): Promise<Prior> {
+  const files: Prior["files"] = new Map();
+  for (const a of actions) {
+    if (a.kind !== "write" && a.kind !== "merge") continue;
+    const file = path.join(root, a.entry.path);
+    let st: fs.Stats | null = null;
+    try { st = fs.lstatSync(file); } catch {}
+    files.set(a.entry.path, !st ? null : st.isSymbolicLink() ? { link: fs.readlinkSync(file) } : { bytes: fs.readFileSync(file), mode: st.mode & 0o777 });
+  }
+  const paths = entries.map((e) => e.path);
+  const index = paths.length ? (await execFileAsync("git", ["-C", root, "ls-files", "-s", "-z", "--", ...paths.map((p) => `:(literal)${p}`)], { encoding: "utf-8", maxBuffer: BLOB_MAX_BUFFER })).stdout : "";
+  return { files, index, paths, wrote: new Map() };
+}
+
+/** Put back what a `refLast` level wrote: a file still as the level left it gets its old bytes, then the index entries. */
+async function putBack(root: string, prior: Prior): Promise<void> {
+  for (const [rel, wrote] of prior.wrote) {
+    if (((await worktreeBlobs(root, [rel])).get(rel) ?? null) !== wrote) continue;
+    const file = path.join(root, rel);
+    const was = prior.files.get(rel) ?? null;
+    if (!was) { removeFile(root, rel); continue; }
+    if ("link" in was) { try { fs.unlinkSync(file); } catch {} fs.symlinkSync(was.link, file); continue; }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, was.bytes);
+    fs.chmodSync(file, was.mode);
+  }
+  const listed = new Set<string>();
+  const lines = prior.index.split("\0").filter(Boolean).map((l) => {
+    const [meta, p] = [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)];
+    const [mode, sha] = meta.split(" ");
+    listed.add(p);
+    return `${mode} ${sha}\t${p}`;
+  });
+  const gone = prior.paths.filter((p) => !listed.has(p)).map((p) => `0 ${NULL_SHA}\t${p}`);
+  await withIndexLockRetry(() => git(root, ["update-index", "--index-info"], undefined, [...gone, ...lines].join("\n") + "\n"));
 }
 
 /** Retry `fn` while another git process holds an index lock (the daemon snapshots the same checkouts). */

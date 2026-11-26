@@ -54,6 +54,20 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
       process.exit(await runLanded(deps.realCwd(), opts, (p, b) => deps.cliPost(p, b, { throwOnError: true })));
     });
 
+  // The personal flow's Check station (workflow/personalCheck.ts): runs what Find check read from the docs.
+  flow
+    .command("check")
+    .description("Run the check commands a personal flow's Find check read from the project's docs, each in the change's tree; prints and writes check.json {outcome: pass|fail|skipped, note, results: [{run, cwd, source, exit, tail}]}; exits 0 once it ran them, 2 when the answer cannot be read")
+    .requiredOption("--spec <json>", "Find check's answer: {outcome: found|skipped, note, commands: [{run, cwd, source}]}")
+    .requiredOption("--tree <path>", "The change's tree, where each command's directory resolves")
+    .requiredOption("--dir <path>", "The run's directory: check.json and each command's check-<n>.log go there")
+    .action(async (opts: { spec: string; tree: string; dir: string }) => {
+      const { runCheck } = await import("./workflow/personalCheck.js");
+      const r = runCheck(opts);
+      if (typeof r === "string") { console.log(r); process.exit(2); }
+      console.log(JSON.stringify(r));
+    });
+
   // The change flow's CI station (workflow/ciStation.ts): parks on the pull request's checks.
   flow
     .command("ci")

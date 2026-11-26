@@ -4,7 +4,8 @@
 // Pure and free of the `@/` alias: the phone's bundle and tests import it through the gallery.
 import { readEdit } from "./line/flowEditFence";
 import { EDIT_SKIP } from "./renderGalleryPipeline.generated";
-import { BRANCHING_FLOW, FANOUT_FLOW, LAND_FLOW } from "./ship/journeyFixtures";
+import { BRANCHING_FLOW, FANOUT_FLOW, LAND_FLOW, PERSONAL_FLOW } from "./ship/journeyFixtures";
+import { PERSONAL_GALLERY_RUNS } from "./renderGalleryPersonal.generated";
 
 // The flow object (ct-69934): their runs, graph and session-flow row are store records the gallery's loader seeds
 // (renderGalleryRecords).
@@ -37,9 +38,24 @@ export const GALLERY_FLOW = {
   // A flow that is one segment, Land: its findings sent back to the session, and a change at the person's card inside it.
   shipLandBack: "galleryshiprunlandback01",
   shipLandCard: "galleryshiprunlandcard01",
+  // The personal Ship, each run a moment of the real runner's recorded reports (renderGalleryPersonal.generated.ts):
+  // Live with a step left, Landed with no deploy documented, round 2 while its Check runs again after a red one, at Land,
+  // at Deploy, a red Check back with the session, a failed deploy the session fixes, Deployed, unverified, Not landed,
+  // and Main keeps moving after its rounds.
+  shipPersonal: "galleryshiprunpersonal01",
+  shipPersonalNoDeploy: "galleryshiprunpersonal02",
+  shipPersonalRound2: "galleryshiprunpersonal03",
+  shipPersonalLanding: "galleryshiprunpersonal04",
+  shipPersonalDeploying: "galleryshiprunpersonal05",
+  shipPersonalRed: "galleryshiprunpersonal06",
+  shipPersonalDeployFix: "galleryshiprunpersonal07",
+  shipPersonalUnverified: "galleryshiprunpersonal08",
+  shipPersonalUnlanded: "galleryshiprunpersonal09",
+  shipPersonalMovingStop: "galleryshiprunpersonal10",
   branchingGraph: "galleryflowbranching0001",
   fanoutGraph: "galleryflowfanout0000001",
   landGraph: "galleryflowland000000001",
+  personalGraph: "galleryflowpersonal00001",
   // The pipeline's inline objects (pipeline.md PL5, PL6): the change run that carried the skip edit out, and the repo's pipeline.
   editLive: "galleryeditrunlive000001",
   pipeline: "gallerypipeline000000001",
@@ -82,11 +98,11 @@ export const FLOW_EDGES = [
   { from: "implement__prove", to: "implement__exit" },
 ];
 
-/** Runs of a change flow from this session, one at each place a person meets it, on the two hand-written graphs
- *  (lib/ship/journeyFixtures) so they keep their meaning whatever the library's flow becomes. Node statuses are shaped
- *  the way the runner reports them (runner.ts): one entry per node (its latest visit); a fan-out branch's report carries
- *  no output, so CI keeps its last progress line; Verdicts reports the round's verdicts as its output; a failed run's
- *  current node is the exit it stopped at. */
+/** Runs of a change flow from this session, one at each place a person meets it, on the hand-written graphs
+ *  (lib/ship/journeyFixtures) so they keep their meaning whatever the library's flow becomes, and the personal Ship's
+ *  from its recorded reports. Node statuses are shaped the way the runner reports them (runner.ts): one entry per node
+ *  (its latest visit); a fan-out branch reports its final output when it ends, and a running one shows its last progress
+ *  line; Verdicts reports the round's verdicts as its output; a failed run's current node is the exit it stopped at. */
 export function shipRuns(now: number, viewerId: string, workspace: string, conversationId: string, status: (id: string, s: "completed" | "running") => object, refs: { decision: string; decisionShort: string; liveDeploy: string }) {
   const base = { user_id: viewerId, workspace, spawner_conversation_id: conversationId, task_short_id: "ct-4110", task_title: "Rename the inbox divider", created_at: now - 900_000, updated_at: now };
   const through = (...ids: string[]) => ids.map((id) => status(id, "completed"));
@@ -95,6 +111,13 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
   const fan = { ...base, workflow_id: GALLERY_FLOW.fanoutGraph, workflow_slug: FANOUT_FLOW.slug, workflow_name: FANOUT_FLOW.name };
   const branching = { ...base, workflow_id: GALLERY_FLOW.branchingGraph, workflow_slug: BRANCHING_FLOW.slug, workflow_name: BRANCHING_FLOW.name };
   const land = { ...base, workflow_id: GALLERY_FLOW.landGraph, workflow_slug: LAND_FLOW.slug, workflow_name: LAND_FLOW.name };
+  const personal = { ...base, workflow_id: GALLERY_FLOW.personalGraph, workflow_slug: PERSONAL_FLOW.slug, workflow_name: PERSONAL_FLOW.name };
+  // The personal Ship's runs are moments of the real runner's recorded reports (renderGalleryPersonal.generated.ts).
+  const recorded = (key: keyof typeof PERSONAL_GALLERY_RUNS, _id: string) => {
+    const r = PERSONAL_GALLERY_RUNS[key] as any;
+    return { ...personal, ...r, _id, ...(r.waiting_on_session ? { waiting_on_session: { ...r.waiting_on_session, conversation_id: conversationId, since: now - 120_000 } } : {}),
+      node_statuses: r.node_statuses.map((n: any) => ({ ...n, started_at: now + n.started_at * 20, ...(n.completed_at !== undefined ? { completed_at: now + n.completed_at * 20 } : {}) })) };
+  };
   const landRound = [...through("land__pr", "land__checks"), said("land__ci", "Waiting on CI for #12 at abc1234: 14 of 14 jobs done, 11m"), ...through("land__review", "land__read")];
   const merge = (at: number) => ({ sha: "4a6e413b2c", branch: "codecast/change-ct-4110", into: "main", at });
   // The round: PR, then CI and Review side by side; CI's last progress line stays on its node, Review reports nothing.
@@ -150,6 +173,16 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
     // Merge stopped on exit 6, the change edits what judges it: the card inside Land waits on the viewer.
     { ...land, _id: GALLERY_FLOW.shipLandCard, status: "paused", current_node_id: "land__card__decide", gate_node_id: "land__card__decide", gate_prompt: "Ship ct-4110? It edits CI, so CI can't vouch for it.", gate_decision_id: refs.decision, gate_decision_short_id: refs.decisionShort,
       node_statuses: [...landRound, failed("land__merge"), ...through("land__why_card", "land__card"), { ...status("land__card__decide", "running"), started_at: now - 40_000 }] },
+    recorded("live", GALLERY_FLOW.shipPersonal),
+    recorded("landed", GALLERY_FLOW.shipPersonalNoDeploy),
+    recorded("round2", GALLERY_FLOW.shipPersonalRound2),
+    recorded("landing", GALLERY_FLOW.shipPersonalLanding),
+    recorded("deploying", GALLERY_FLOW.shipPersonalDeploying),
+    recorded("red", GALLERY_FLOW.shipPersonalRed),
+    recorded("deployFix", GALLERY_FLOW.shipPersonalDeployFix),
+    recorded("unverified", GALLERY_FLOW.shipPersonalUnverified),
+    recorded("unlanded", GALLERY_FLOW.shipPersonalUnlanded),
+    recorded("movingStop", GALLERY_FLOW.shipPersonalMovingStop),
     // Merge refused: the runner reports the exit it stopped at.
     { ...fan, _id: GALLERY_FLOW.shipRefused, status: "failed", current_node_id: "unshipped",
       fail_reason: "Stopped: The merge guard refused: the branch would undo changes main made to packages/web/lib/inboxDivider.ts since 4a6e413.",
@@ -158,6 +191,6 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
 }
 
 /** The pushed graphs the branching and fan-out run cards draw from. */
-export const shipGraphs = (now: number, viewerId: string, workspace: string) => ([[BRANCHING_FLOW, GALLERY_FLOW.branchingGraph], [FANOUT_FLOW, GALLERY_FLOW.fanoutGraph], [LAND_FLOW, GALLERY_FLOW.landGraph]] as const).map(([f, _id]) => ({
+export const shipGraphs = (now: number, viewerId: string, workspace: string) => ([[BRANCHING_FLOW, GALLERY_FLOW.branchingGraph], [FANOUT_FLOW, GALLERY_FLOW.fanoutGraph], [LAND_FLOW, GALLERY_FLOW.landGraph], [PERSONAL_FLOW, GALLERY_FLOW.personalGraph]] as const).map(([f, _id]) => ({
   ...f, _id, user_id: viewerId, workspace, created_at: now, updated_at: now,
 }));

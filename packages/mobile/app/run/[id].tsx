@@ -24,7 +24,7 @@ import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 import { answererNameOf } from '@codecast/web/lib/decisionLinks';
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from '@codecast/web/lib/workflowRun';
 import {
-  LANDING_STATIONS, behindBase, cardName, choiceWords, runOutcome, runPath, shortDay,
+  LANDING_STATIONS, behindBase, cardName, choiceWords, landingOf, runOutcome, runPath, shortDay,
   type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState,
 } from '@codecast/web/lib/line/runReport';
 import { compactAge } from '@codecast/web/lib/threadState';
@@ -85,6 +85,8 @@ const STEP_MARK: Record<StepState, { icon: IconName; tone: keyof Palette }> = {
   live: { icon: 'circle-o-notch', tone: 'cyan' },
   waiting: { icon: 'pause', tone: 'yellow' },
   noted: { icon: 'hand-paper-o', tone: 'textDim' },
+  nothing: { icon: 'minus', tone: 'textMuted' },
+  unknown: { icon: 'question', tone: 'textMuted' },
 };
 
 const answerColor = (answer: string | null, t: Palette) =>
@@ -131,7 +133,9 @@ export default function RunScreen() {
   const line = isLineRun(run as any);
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'pending';
   const ended = run.status === 'completed' || run.status === 'failed';
-  const outcome = runOutcome(run, task, now, false, ask);
+  const outcome = runOutcome(run, task, now, false, { graph: workflow as any, ask });
+  // A personal Ship lands, maybe twice: its latest landing, as its journey shows it.
+  const landing = landingOf(run, workflow as any);
   // The session the run waits on asks a person: whom it waits on and what, as the run's card says it.
   const asking = live && run.waiting_on_session?.blocked && ask?.open !== false
     ? { head: ask?.mine ? 'Waiting on you' : 'Waiting for a person', body: [ask?.question, run.waiting_on_session.note].filter(Boolean).join('\n') }
@@ -253,19 +257,19 @@ export default function RunScreen() {
           {run.goal_override && !run.task_title ? <FactRow label="Goal">{run.goal_override}</FactRow> : null}
         </Facts>
 
-        {run.merge || card ? (
+        {landing || card ? (
           <RNView style={objectStyles.section}>
-            <SectionLabel>Merged</SectionLabel>
+            <SectionLabel>{landing?.word ?? 'Merged'}</SectionLabel>
             <Facts testID="run-landed">
-              {run.merge ? (
-                <FactRow label="Merged" icon="code-fork" tone={Theme.green}>
+              {landing ? (
+                <FactRow label={landing.word} icon="code-fork" tone={Theme.green}>
                   <RNView style={styles.shas}>
                     {pr ? (
-                      <TouchableOpacity onPress={() => go(`/commit/${pr[1]}/${pr[2]}/${run.merge!.sha}`)} activeOpacity={0.6} testID="run-merge-sha">
-                        <RNText style={styles.shaLink}>{short(run.merge.sha)}</RNText>
+                      <TouchableOpacity onPress={() => go(`/commit/${pr[1]}/${pr[2]}/${landing.sha}`)} activeOpacity={0.6} testID="run-merge-sha">
+                        <RNText style={styles.shaLink}>{short(landing.sha)}</RNText>
                       </TouchableOpacity>
-                    ) : <RNText style={styles.sha}>{short(run.merge.sha)}</RNText>}
-                    <RNText style={styles.factDim}>{`${run.merge.branch} → ${run.merge.into}`}</RNText>
+                    ) : <RNText style={styles.sha}>{short(landing.sha)}</RNText>}
+                    {run.merge ? <RNText style={styles.factDim}>{`${run.merge.branch} → ${run.merge.into}`}</RNText> : null}
                   </RNView>
                 </FactRow>
               ) : null}
@@ -286,7 +290,8 @@ export default function RunScreen() {
             <SectionLabel>{`${others.some((r) => r.created_at > run.created_at) ? 'Other' : 'Earlier'} runs on ${taskRef ?? 'this task'} · ${others.length}`}</SectionLabel>
             <RNView style={objectStyles.list}>
               {othersShown.map((r) => {
-                const o = runOutcome(r, task, now, true);
+                // A run of the same flow reads by the same graph (a personal Ship's says so).
+                const o = runOutcome(r, task, now, true, { graph: r.workflow_id && r.workflow_id === run.workflow_id ? (workflow as any) : null });
                 return (
                   <TouchableOpacity key={r._id} style={styles.other} onPress={() => go(`/run/${r._id}`)} activeOpacity={0.6} testID={`run-other-${r._id}`}>
                     <RNView style={[styles.dot, { backgroundColor: outcomeColor(o.tone, Theme) }]} />

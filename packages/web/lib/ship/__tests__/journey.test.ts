@@ -139,11 +139,12 @@ describe("journeyStages", () => {
       expect(journeyWords(ended).words).not.toMatch(/Waiting/);
     }
   });
-  test("among the shipped flows only change goes back to the session, from the stages it always did", () => {
+  test("among the shipped flows only change and personal go back to the session, from the stages they always did", () => {
     const read = (f: (typeof SHIPPED_FLOWS)[number]) => journeyStages(f as any).map((x) => (x.loops.length ? `${x.label} ↺ ${x.loops.map((l) => l.id).join(",")}` : x.label));
     const looping = SHIPPED_FLOWS.filter((f) => journeyStages(f as any).some((x) => x.loops.length));
     expect(Object.fromEntries(looping.map((f) => [f.slug, read(f)]))).toEqual({
       change: ["PR", "CI + Review ↺ ci_conflict,brief", "Merge ↺ fix_conflict", "Deploy", "Live"],
+      personal: ["Check + Review ↺ fix_conflict,brief", "Land", "Deploy ↺ deploy_fix", "Live"],
     });
   });
 });
@@ -446,7 +447,7 @@ test("readableWhy cuts long reasons at a word", () => {
 describe("approvalOf", () => {
   test("each shipped line says from its graph whether a person approves", () => {
     const lines = SHIPPED_FLOWS.filter((f) => f.kind === "line").map((f) => [f.slug, approvalWords(approvalOf(f as any))]);
-    expect(lines).toEqual([["line", "Asks you every time"], ["change", "Asks you if it edits CI"], ["climb", "Sometimes asks you"]]);
+    expect(lines).toEqual([["line", "Asks you every time"], ["change", "Asks you if it edits CI"], ["personal", "No approval"], ["climb", "Sometimes asks you"]]);
   });
   test("a gate on a side route asks only on that route; one reached only past landing asks nobody", () => {
     const g = (turn: { label?: string }, gateAfterLand = false, asks_if?: string) => ({
@@ -643,5 +644,14 @@ describe("Ship in one click (pl-1075)", () => {
     const at = journeyOf(change, r, [], { id: ME, decision: card({ holder: { kind: "user", id: "u2" }, asked_user_ids: ["u2"] }) as any, holder_name: "Ashot" });
     expect(at.now).toMatchObject({ kind: "gate", mine: false, who: "Ashot" });
     expect(journeyWords(at)).toEqual({ words: "Waiting for approval from Ashot", tone: "wait" });
+  });
+});
+
+// A station's result JSON (stationResult.ts) changes nothing for a flow whose stations report none. The personal Ship,
+// whose stations do, is tested on the real runner's replayed reports (personalReplay.test.ts).
+describe("station results", () => {
+  test("a flow whose stations report no result reads as it did", () => {
+    const j = journeyOf(change, run({ status: "completed", current_node_id: "exit", merge: { sha: "4a6e413b2c" }, node_statuses: [...MERGED, st("deploy__wait", "completed", 16, { result_preview: "Live: 4a6e413b2c on web dp-12." }), st("deploy__live", "completed", 17, { result_preview: '{"exit": "live"}' })] }));
+    expect(j.stages.every((s) => s.state === "done" && !s.note && !s.left)).toBe(true);
   });
 });

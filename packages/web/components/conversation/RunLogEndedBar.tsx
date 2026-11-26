@@ -9,6 +9,7 @@ import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { RunOutcomeText } from "../line/RunReport";
+import { useRunWorkflow } from "../../hooks/useSyncWorkflows";
 import { decisionHref, runHref } from "../../lib/decisionLinks";
 import { lineRefHref } from "../../lib/line/lineWorkspaceUrl";
 import type { ReportRun } from "../../lib/line/runReport";
@@ -45,11 +46,13 @@ const chip = "inline-flex items-center gap-0.5 rounded-md border border-sol-bord
 
 export function RunLogEndedBar({ run }: { run: ReportRun & { gate_decision_id?: string } }) {
   const decisions = useRunDecisions(run._id, run.gate_decision_id, run.gate_decision_short_id);
+  // The run's graph says how its outcome reads (a personal Ship's by its own ends).
+  const workflow = useRunWorkflow(run as any);
   return (
     <div className="border-t border-sol-border/40 bg-sol-bg px-4 py-3" data-run-log-ended>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[13px]">
         <span className="text-sol-text-dim">This run has ended.</span>
-        <RunOutcomeText run={run} />
+        <RunOutcomeText run={run} graph={workflow} />
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Link href={runHref(run._id)} className={chip}>Open the run<ArrowUpRight className="h-3 w-3" /></Link>

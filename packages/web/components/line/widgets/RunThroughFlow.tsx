@@ -14,8 +14,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
 import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
-import { appPool, linesFirst, namedForRepo, type AppFlow } from "../../../lib/line/flowPool";
-import { defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
+import { appPool, shipPicks, type AppFlow } from "../../../lib/line/flowPool";
 import { journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
 import { approvalOf, approvalWords, shipConfirms } from "../../../lib/ship/approval";
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
@@ -261,12 +260,9 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
   const root = useInboxStore((s) => sessionRootOf(s as any, conversationId));
   const repository = repositoryOfRemote(remote);
   const repoFlows = useRepoFlows(root, repository);
-  const { pool, fallback } = useMemo(() => {
-    // Flows only: a segment runs one part of a change, never the change to live.
-    const all = namedForRepo(linesFirst(appPool(workflows, repoFlows).filter((f) => f.kind === "line" && takesSessionChange(f))), repository);
-    const d = defaultFlowOf(all, teamSlug);
-    return { pool: d ? [d, ...all.filter((f) => f !== d)] : all, fallback: d };
-  }, [workflows, repoFlows, repository, teamSlug]);
+  // A session no team shares ships through the personal Ship, as `cast flow run change` does in its directory.
+  const personal = !!workspace?.startsWith("user:");
+  const { pool, fallback } = useMemo(() => shipPicks(appPool(workflows, repoFlows), repository, teamSlug, personal), [workflows, repoFlows, repository, teamSlug, personal]);
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
   const journey = useMemo(() => (flow ? journeyOf(flow, null) : null), [flow]);

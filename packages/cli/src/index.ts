@@ -2965,13 +2965,17 @@ function groupDeps(): GroupDeps {
   return {
     getCliEndpoint, detectCurrentSessionId, resolveProjectId,
     flow: {
-      cliPost, callingSession, subjectSession, realCwd: getRealCwd,
+      cliPost, callingSession, subjectSession, realCwd: getRealCwd, pulseSession: detectCurrentSessionId,
       // Where a flow command reads (the team named, else the one this shell reads) and where a switch writes.
       readWorkspace, writeWorkspace: (team?: string) => writeWorkspace(team, { teamRequired: true }),
-      directoryTeam: async () => {
-        const { teamForDirectory } = await import("./directoryTeam.js");
-        const mapped = await cliPost("/cli/teams/projects", { limit: 30 }, { throwOnError: true });
-        return teamForDirectory(mapped?.projects ?? [], getRealCwd());
+      directoryWorkspace: async (subjects) => {
+        const { directoryWorkspace, checkoutLocation } = await import("./directoryTeam.js");
+        const cwd = getRealCwd();
+        const session = callingSession();
+        return directoryWorkspace({
+          post: (route, body) => cliPost(route, body, { throwOnError: true }),
+          session, sessionUnknown: !session && !!findAgentAncestor(), cwd, active: () => readWorkspace(), location: () => checkoutLocation(cwd), subjects,
+        });
       },
       requireFlows: (ws) => requireWorkspaceFeature(ws, "line"),
       flowDeviceConfig: () => readConfig()?.flow,
@@ -22433,6 +22437,7 @@ workflow
   .addOption(new Option("--change <file>", "With --device: the frozen change (JSON) that machine fetches and freezes before the run starts (cast flow run writes it)").hideHelp())
   .option("--no-subject", "No session is behind the run: its hands spawn under none, and its gates ask the project lead's session, else the run's own log")
   .addOption(new Option("--spawner <session>", "The session behind the run, named by the cast flow run that started it").hideHelp())
+  .addOption(new Option("--personal-established", "cast flow run established this checkout as personal before starting the personal Ship").hideHelp())
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -22473,6 +22478,15 @@ workflow
       console.error(`Workflow not found: ${file} (not a file, not a shipped template, and not one of your pushed workflows; see cast workflow list)`);
       process.exit(1);
     }
+    // Asked only of a run typed by hand: one `cast flow run` started has decided this already, where it was decided.
+    const personalRefused = options.personalEstablished ? null : await (async () => {
+      const { shippedPersonalRefusal, runSubjects } = await import("./directoryTeam.js");
+      const { reachesShippedFlow } = await import("./workflow/parser.js");
+      const ships = resolved.label === "builtin:personal" || reachesShippedFlow(resolved.source, resolved.dir, "personal");
+      const subjects = runSubjects({ post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()] });
+      return shippedPersonalRefusal(ships, () => groupDeps().flow.directoryWorkspace(subjects));
+    })();
+    if (personalRefused) { console.error(`✗ ${personalRefused}`); process.exit(1); }
     const source = resolved.source;
     const graph = parseWorkflowSource(source, resolved.dir);
     // A role running the line (org-roles-standing.md T4, the-line.md L3):

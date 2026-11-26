@@ -72,8 +72,38 @@ order holds for a segment named inside another flow:
 each published flow the CLI reads from the pool is written under
 `~/.codecast/flows/<row id>/` and indexed by slug (`teamFlowIndex.ts`), so the
 parser finds a team segment on this machine for a local run and a daemon run
-alike. A read that names no team reads the pool of the team this directory is
-mapped to (`cast teams map`), else the active team (`directoryTeam.ts`).
+alike. A read that names no team reads the pool of the team the directory's
+listing maps it to (`cast teams map`), else the active team
+(`directoryTeam.ts`), unless the directory is established as personal. That
+takes all of these:
+
+- The calling session, if there is one, is stamped personal (the stamp the
+  web's Ship reads). A session not synced yet, and an agent with no session
+  id, are not established. So are the other sessions the change comes from:
+  `--session <id>`, a `--task`'s change session, and the task a session's own
+  run binds to must each be stamped personal, and a `--task` or bound task
+  that is a team's, or cannot be read, rules personal out.
+- The server's rule on the git_root the daemon syncs stamps personal, and no
+  team rule touches the checkout: none covers the directory or its git_root or
+  sits inside it, and none names its repository. A person with no folder rules
+  is personal only when they belong to no team; in one, the daemon stamps
+  their sessions with the active team.
+- No team the person is in already knows the repository
+  (`workflows.workspaceFactsForCli`): from a teammate's published checkout, a
+  pull request or a commit the team holds, or a member's share rule that names
+  it, auto-shared or not. A server that cannot say is not personal.
+
+A personal workspace ships through `personal` in place of the shipped `change`
+(`workspacePool`): a nameless `cast flow run` and `cast flow run change` run
+it, unless the repository has its own `change`, which every workspace ships
+through and beside which the personal Ship is not offered. A checkout cut
+before the repository's own `change` landed is refused, as for any flow it
+overrides. A team's pool never offers the shipped `personal`, and a team's own
+published `personal` keeps its place. The web's Ship previews the personal Ship
+for a session the web reads as personal and asks for `change`, so the CLI
+decides what runs and only the preview can differ (a person with no rules,
+say). Session start's flows line names the Ship as `change` and leaves that
+decision to the run.
 
 The pool is the team's. `cast flow publish` files the flow's `workflows` row
 under the publisher's team workspace (`workspace` is `team:<id>`, `team_id`
@@ -103,9 +133,7 @@ not name, then the published ones, so it draws the flow a press runs. A
 checkout with no origin reports nothing, and a teammate's picker on someone
 else's session lacks the repo's flows until their own checkout of it has
 reported. A team
-flow never overrides a shipped one of the same slug: a directory that is not
-mapped reads the active team's pool, so an override would follow the person
-into every other repository they open.
+flow never overrides a shipped one of the same slug.
 
 The graph says what kind of flow it is and what it is for, so the pool needs no
 second record of it:
@@ -127,7 +155,9 @@ digraph review {
 - `draft`: the session an import belongs to until it is made general (FL5).
 
 The CLI ships a starter pool: the `line`, the `change` line (labelled Ship: PR, CI beside
-review, merge, deploy, FL4), the `climb` line (FL10: hill-climbing one goal metric through its environments), and the segments `check`, `eval`, `review`, `judge` (FL9), `decide`, `ship`
+review, merge, deploy, FL4), the `personal` line (labelled Ship too: the documented check beside review, land on
+main, the documented deploy, FL4; offered only in a personal workspace, where it takes `change`'s place, and never in a
+team's), the `climb` line (FL10: hill-climbing one goal metric through its environments), and the segments `check`, `eval`, `review`, `judge` (FL9), `decide`, `ship`
 (labelled Land: rebase, then land through the project's own ship command, the way a repository that pushes straight
 to its default branch ships), `deploy` and `prove-implement`, cut from the shipped line's own station files so their
 prompts stay one copy. The web reads the shipped pool from a generated
@@ -410,8 +440,8 @@ it, or an earlier run did) is not told either. Otherwise the session hears the
 end as below; a failed run's end message is an ordinary send that revives a
 killed subject on purpose, so the failure reaches someone.
 
-The `change` flow is the ship model for every workspace, with no person asked
-on the way:
+The `change` flow is the ship model for every team workspace, with no person
+asked on the way (a personal workspace ships through `personal`, below):
 
 ```
 PR → (CI ‖ Review) → Verdicts → Merge → Merged → Deploy → Live
@@ -690,7 +720,7 @@ out, that production may run a backend the default branch lacks.
 ### Deploy: the run takes the merged commit live
 
 `change` ends at Deploy after Merge, and a flow built on the `ship` segment after
-Land. The `deploy` segment is one station
+Land; `personal`'s Deploy is a station of its own that reads no targets (below). The `deploy` segment is one station
 with `parks=true`: while the run stands there it holds no machine slot and no
 session. The station runs `cast flow await-deploy --merge $run_dir/merge.json`
 in the run's worktree. It starts only from the sha Merge wrote there, else the
@@ -755,6 +785,94 @@ While the session works, the run carries `waiting_on_session` (`node_id`,
 session settles or the run ends; each node status carries `visits`, against
 the graph's `max_visits`.
 
+### Personal: Ship from the project's own docs
+
+A personal workspace (FL2) ships through the shipped `personal` flow
+(`templates/personal.cast`, labelled Ship): what a person shipping their own
+project does by hand. It opens no pull request, waits on no CI, needs no merge
+authority and raises no card, a change to `.github/**` or `.codecast/**`
+included: the independent reviewer alone vouches for those. The check and the
+deploy are what the project's docs say, read again every run.
+
+```
+Round → Find check → (Check ‖ Review) → Verdicts → Land → Landed → Deploy → Live
+ ↑ │                                       │         │                 │  ├→ Deployed, unverified
+ │ └─ Resolve conflict ─┐                  │         │                 │  └→ Landed
+ ├──────────────────────┘                  │         │                 │
+ ├──── Fix findings ←──────────────────────┘         │                 │
+ ├──── main moved (at most 3 times) ←────────────────┘                 │
+ └──── Landed outside ← Fix deploy ←───────────────────────────────────┘
+```
+
+Round (`personal/round.sh`) opens each round in the run's worktree: it fetches
+origin's default branch, rebases the change onto it, and prints `round.json` =
+{round, head_sha, main_sha, verdicts_at}, `round` a fresh nonce, so Check and
+Review judge exactly the commit Land pushes. A conflict (exit 1) is briefed to
+the session (Resolve conflict); a change with nothing left above the default
+branch (exit 4) was put there by the session and goes to Landed outside.
+
+Find check, once a run, is an agent session that reads the docs in the change's
+tree, in order: CLAUDE.md and AGENTS.md at the root and below, the lines of
+`~/.claude/CLAUDE.md` that name the repository or a class it belongs to,
+`.codecast/line.toml` and `workspace.toml`, README.md, then scripts plainly
+named for the job. It runs nothing and invents nothing. It pins
+`{outcome: found|skipped, note, commands: [{run, cwd, source}]}`, each command
+with the doc line that names it; nothing documented is `skipped`, its note
+saying what it read. An answer the run cannot read stops at No check found.
+Check (`cast flow check`, `workflow/personalCheck.ts`) runs each command in the
+change's tree and writes `check.json` = {outcome, note, results}, each result
+with its exit code and its output's end (the whole in `check-<n>.log`). The
+exit codes decide: `pass` only when every command exited 0. A command whose
+directory is outside the tree, that `cd`s out of it, or that names the person's
+checkout by path is never run: the station exits 2 and the run stops at Check
+did not run.
+
+Review runs beside Check: the line's review prompt plus `personal/review.md`,
+reading `git diff <main_sha>...<head_sha>` and pinning {verdict, findings,
+round, head_sha}. Verdicts counts the pin only with this round's nonce; with
+none, the reviewer is asked once more in the round, then the run stops at
+Review never finished. A `ship` beside a passing or skipped check lands, so a
+project with no documented check lands on the reviewer's verdict alone. A red
+check or `changes` is one brief to the session (Fix findings, carrying
+`check.json` and the review); a rejection ends at Rejected.
+
+Land (`personal/land.sh`) pushes the round's head straight to origin's default
+branch, only while the worktree still holds it and origin has not moved since
+the round. A moved main, or a push refused because it just moved, opens a new
+round (exit 3), at most three times before Main keeps moving. `cast flow
+landed` then records the commit on origin as the run's merge, an observed
+landing that spends no merge allowance (Deploy, above). Land brings the
+person's checkout up to it with `cast land level`, which keeps every local
+edit, when that checkout is on the default branch, and says why when not.
+Landed prints {outcome, sha, note}; its id is `landed`, so a stop past it tells
+the session its change is on main.
+
+Deploy is an agent session in the run's worktree at the landed commit. It reads
+the same docs in the same order for the documented deploy (a push counts only
+when a doc says the push is the deploy), runs that and no other route, and
+confirms the landed commit is what runs (a version or health endpoint, the
+server's `git rev-parse HEAD`, the reloaded app). It pins `{outcome:
+live|unverified|skipped|failed, note, sha, seen_live, commands,
+left_for_you}`. The run ends Live only on `live` with the landed sha and what
+showed it running (`seen_live`); a deploy that ran but was not seen running
+ends Deployed, unverified; nothing documented ends Landed. A step only a
+person's hands can do (reload an extension, press a button in an app) is done
+with `cast computer` when its grants are in place; otherwise Deploy names it in
+`left_for_you` and finishes the rest, and Left for you posts "One step left for
+you: …" on the task and the node. The run never waits for it. A documented
+deploy that fails goes to the session (Fix deploy), which fixes the script and
+the doc that describes it. Landed outside (`land.sh` as the `outside` station)
+then reads what the fix left on origin: nothing new, the fix having lived
+outside the repository, sends the same landing back to Deploy; a fix still to
+land opens a new round.
+
+A session that puts its change on the default branch itself, when briefed,
+goes through Landed outside to Deploy from origin's head, unchecked by this
+run, and Deploy's note says so; one that dropped its change ends at Not landed.
+Each way back to the session (Fix findings, Resolve conflict, Fix deploy) has
+`max_visits=3`. A run with no session behind it stops where it would brief one:
+Conflict, Found work, Deploy failed.
+
 ## FL5. A Claude Code workflow becomes a flow
 
 A session that ran a dynamic workflow (the Workflow tool's `agent`,
@@ -804,7 +922,12 @@ side by side; each step marked with who does it (an agent, a command, a
 person). A definition shows the routes off the path as neutral words under the
 step they leave, one form each: an end by its own name, a route to a station as
 "outcome → station". A run shows each step done, current or stopped, and only
-the route it took, red only where it stopped.
+the route it took, red only where it stopped. A step whose result (its pinned
+JSON or its script's, `lib/ship/stationResult.ts`) says `outcome: skipped` ran
+and found nothing to do: it is drawn Skipped, apart from done and stopped, its
+note on hover. A step a station left to the person reads "One step left for
+you: …" on its stage. A run that landed and ended short of Live says the end it
+reached (Deployed, unverified; Landed) where Live would be.
 
 - **In a conversation**, a flow is one object (FL8): a `cast flow run` card
   follows the run live (state in words, the task, Stop while it runs, the
@@ -817,17 +940,22 @@ the route it took, red only where it stopped.
   change is offered first. A team admin sets it with Make default on a flow's
   page in /flows, where the library marks it Default; any flow that takes a
   branch qualifies. A team that set none, or set one that left the pool, gets
-  `change`, labeled Ship (`defaultFlowOf` in `shared/contracts/flowPool.ts`). The CLI reads it
+  `change`, labeled Ship (`defaultFlowOf` in `shared/contracts/flowPool.ts`). A
+  personal workspace (FL2) gets `personal`, also labelled Ship, and `change`
+  names it there unless the repository has its own `.codecast/flows/change.cast`
+  (`workspacePool`, `shipFlowSlug`). The CLI reads it
   from `default_flow` on `/cli/workflows/pool` and resolves it by the same
   function against its own pool (FL2's, the repo's flows included): a nameless
   `cast flow run` runs it, `cast flow ls` marks it, and session start names it.
   The default is the team's only when that team was named or the directory is
   mapped to it; an unmapped directory takes none and gets `change`, as session
-  start, which reads no team there, names it.
+  start, which reads no team there, names it, unless it is established as
+  personal, which gets `personal`.
 - **On a session's header**, Ship lists the lines that take a branch from the
   session's own pool: the library's, the session repository's, and those filed
   under the session's workspace (its team, else the viewer's personal one), the
-  workspace's default first and picked. Each row is the flow's label (a
+  workspace's default first and picked; a personal session's lists `personal`
+  in `change`'s place (`shipPicks`). Each row is the flow's label (a
   repository's flow that replaces a library one adds the repository's name,
   "Change · union-mobile"), whether a person approves before it lands, read
   from the graph ("Asks you every time"; "Asks you if it edits CI" when a person is

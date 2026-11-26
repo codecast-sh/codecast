@@ -3,6 +3,7 @@ import { usePoolFlowRows } from "./useSyncWorkflows";
 import { useWorkspaceRuns } from "./useSyncRuns";
 import { useLiveFlow } from "./useLiveFlow";
 import { appPool, flowOfRun } from "../lib/line/flowPool";
+import { workspacePool } from "@codecast/shared/contracts/flowPool";
 import { flowLibrary, libraryFlows, type LibraryRow } from "../lib/line/flowLibrary";
 
 /** A run as the Flows views read it. */
@@ -12,7 +13,8 @@ export type FlowRun = { _id: string; status: string; run_kind?: string; current_
 export function useFlowLibrary(space: string | null | undefined) {
   const rows = usePoolFlowRows(space) as LibraryRow[];
   const live = useLiveFlow(space);
-  const pool = useMemo(() => appPool(rows), [rows]);
+  // In the workspace's terms, as `cast flow` reads it: a team's library never offers the personal Ship (workspacePool).
+  const pool = useMemo(() => workspacePool(appPool(rows), !!space?.startsWith("user:")), [rows, space]);
   const spine = live ? live.flow : null;
   const lib = useMemo(() => flowLibrary(pool, rows, spine), [pool, rows, spine]);
   const flows = useMemo(() => libraryFlows(lib), [lib]);

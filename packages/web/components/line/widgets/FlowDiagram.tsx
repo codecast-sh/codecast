@@ -10,7 +10,8 @@
 import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepStates, type DiagramStep, type FlowDiagramModel, type SideRoute, type StepMark, type StepState } from "../../../lib/line/flowDiagram";
+import { leftWords } from "../../../lib/ship/stationResult";
+import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepResult, stepStates, type DiagramStep, type FlowDiagramModel, type SideRoute, type StepMark, type StepState } from "../../../lib/line/flowDiagram";
 import type { ShippedFlow } from "../../../lib/line/flowPool";
 import { WHO } from "../../../lib/line/flowWho";
 
@@ -65,7 +66,7 @@ function useFitPath(content: unknown) {
   }, []);
 }
 
-const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: "", stopped: "✕" };
+const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: "", stopped: "✕", nothing: "–", back: "↩", unknown: "?" };
 
 /** `marks`: what a pipeline says on each step beside its name (who changed it, when it runs, what stands on it now), by step id.
  *  `diagram`: the flow's model as the host already shaped it (a pipeline lane says a shared route once), else the flow's own. */
@@ -76,6 +77,8 @@ const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: 
 export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram, quietRoutes = false, onAdd }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel; quietRoutes?: boolean; onAdd?: (afterId: string | null) => void } & Partial<Pick>) {
   const model = useMemo(() => diagram ?? flowDiagram(flow), [diagram, flow]);
   const states = useMemo(() => stepStates(model, run), [model, run]);
+  // While the session the change came from fixes what a stage found (its fix station runs), the Session it opens on is where the run is.
+  const sessionNow = !!model.own && !!run && (run.status === "running" || run.status === "paused") && flow.nodes.find((n) => n.id === run.current_node_id)?.backend === "subject";
   const pick: Pick = { picked, onPick };
   // A segment of several steps, or several running side by side, draws folded: one box with the routes that leave it;
   // pressing it opens its frame.
@@ -95,7 +98,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
         {lead ? (onAdd && !compact
           ? <button type="button" className="fd-arrow fd-add" aria-label={`Add a station before ${s.label}`} title={`Add a station before ${s.label}`} onClick={() => onAdd(model.steps[i - 1]?.id ?? null)} data-fd-add={s.id}><span aria-hidden>+</span></button>
           : <span className="fd-arrow" aria-hidden />) : null}
-        {folded(s) ? <Step step={{ ...s, side: foldedRoutes(s) }} state={states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} fold={{ count: s.inner.length, words: s.kind === "parallel" ? "at once" : "steps", toggle: () => toggle(s.id) }} />
+        {folded(s) ? <Step step={{ ...s, side: foldedRoutes(s) }} state={model.own && s.inner.some((x) => states.get(x.id) === "current") ? "current" : states.get(s.id) ?? "idle"} compact={compact} run={run} pick={pick} fold={{ count: s.inner.length, words: s.kind === "parallel" ? "at once" : "steps", toggle: () => toggle(s.id) }} />
           : s.kind === "parallel" ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} parallel onFold={quietRoutes ? undefined : () => toggle(s.id)} />
           : s.kind === "segment" && s.inner.length > 1 ? <Segment step={s} states={states} compact={compact} run={run} pick={pick} onFold={() => toggle(s.id)} />
           : s.kind === "segment" && s.inner.length === 1 ? <Step step={{ ...s.inner[0], label: s.label, side: [...s.inner[0].side, ...s.side], slot: s.slot }} markId={s.id} state={states.get(s.inner[0].id) ?? "idle"} compact={compact} run={run} pick={pick} />
@@ -117,6 +120,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
   // A flow run around one step reads in two rows: the way in, then that step and its stages to the end.
   const split = hubAt > 0 && !compact;
   return (
+    <OwnRun.Provider value={!!model.own}>
     <Marks.Provider value={marks ?? null}>
     <QuietRoutes.Provider value={quietRoutes}>
     <RailTo.Provider value={railTo}>
@@ -126,7 +130,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
         <ol className="fd-path">
           {lastReturn >= 0 && !model.hub ? (
             <li className="fd-cell" data-rail="start">
-              <div className="fd-cell-main"><span className="fd-session" title="The session the change came from: what a stage finds goes back to it">Session</span></div>
+              <div className="fd-cell-main"><span className="fd-session" data-state={sessionNow ? "current" : undefined} title="The session the change came from: what a stage finds goes back to it">Session</span></div>
               <span className="fd-rail" aria-hidden />
             </li>
           ) : null}
@@ -138,6 +142,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
     </RailTo.Provider>
     </QuietRoutes.Provider>
     </Marks.Provider>
+    </OwnRun.Provider>
   );
 });
 
@@ -172,6 +177,7 @@ function Segment({ step, states, compact, run, pick, parallel = false, onFold }:
 /** `fold`: this box is a folded segment: it says how many steps it holds, and pressing it opens them. */
 function Step({ step, state, compact, run, pick, fold, markId }: { step: DiagramStep; state: StepState; compact: boolean; run: RunLike; pick: Pick; fold?: { count: number; words: string; toggle: () => void }; markId?: string }) {
   const mark = useContext(Marks)?.[markId ?? step.id];
+  const ownRun = useContext(OwnRun);
   const body = (
     <>
       <Who kind={step.kind} />
@@ -181,7 +187,7 @@ function Step({ step, state, compact, run, pick, fold, markId }: { step: Diagram
       {state !== "idle" ? <span className="fd-dot" aria-label={state}>{STATE_MARK[state]}</span> : null}
     </>
   );
-  const attrs = { className: "fd-step", "data-kind": step.kind, "data-own": mark?.own ?? undefined, "data-passes": mark?.passes ? "" : undefined, "data-proposed": mark?.proposed ? "" : undefined, "data-skipped": mark?.skipped ? "" : undefined, "data-state": state, "data-folded": fold ? "" : undefined, "data-slot": step.slot?.filled === "empty" ? "" : undefined, "data-written": written(step) ? "" : undefined, title: slotTitle(step) ?? `${step.label}: ${WHO[step.kind].word}` };
+  const attrs = { className: "fd-step", "data-kind": step.kind, "data-own": mark?.own ?? undefined, "data-passes": mark?.passes ? "" : undefined, "data-proposed": mark?.proposed ? "" : undefined, "data-skipped": mark?.skipped ? "" : undefined, "data-state": state, "data-folded": fold ? "" : undefined, "data-slot": step.slot?.filled === "empty" ? "" : undefined, "data-written": written(step) ? "" : undefined, title: slotTitle(step) ?? (ownRun ? runTitle(step, state, run) : undefined) ?? `${step.label}: ${WHO[step.kind].word}` };
   return (
     <div className="fd-step-wrap">
       {fold
@@ -197,6 +203,13 @@ function Step({ step, state, compact, run, pick, fold, markId }: { step: Diagram
 
 /** Steps the flow wrote in place for one of its segments (a backbone's slot it filled). */
 const written = (step: DiagramStep) => step.slot?.filled === "generated";
+/** On a run, what a step's result said, on hover: Skipped and why, its note, a step it left to the person. */
+function runTitle(step: DiagramStep, state: StepState, run: RunLike): string | undefined {
+  const r = state === "idle" || state === "current" ? null : stepResult(run, step.id);
+  if (!r) return undefined;
+  const words = [state === "nothing" ? "Skipped" : null, r.note, r.leftForYou ? leftWords(r.leftForYou) : null].filter(Boolean);
+  return words.length ? `${step.label}: ${words.join(" · ")}` : undefined;
+}
 /** A slot says what it must do, on hover. */
 const slotTitle = (step: DiagramStep) => (step.slot?.does ? `${step.label}: ${step.slot.does}` : undefined);
 
@@ -223,6 +236,8 @@ const dropsToRail = (step: DiagramStep, railTo: string) =>
 
 /** Whether each step's other ways fold into one quiet line (FlowDiagram `quietRoutes`). */
 const QuietRoutes = createContext(false);
+/** Whether the run drawn is an own-results round's (ownRound.ts): only its steps say on hover what their result said. */
+const OwnRun = createContext(false);
 
 /** A pipeline's marks by step id; null for a plain flow. */
 const Marks = createContext<Readonly<Record<string, StepMark>> | null>(null);

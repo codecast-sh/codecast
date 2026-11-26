@@ -59,7 +59,10 @@ check), or done.
 
 Ship is a team feature (`teams.features.ship`, off by default, toggled in
 team settings). In an off workspace none of the controls below render; the
-personal workspace follows the viewer's teams.
+personal workspace follows the viewer's teams. A session's own Ship, on its
+header, is not this control: it runs a flow (flows.md FL6), and in a personal
+workspace that flow is `personal`, which lands on the default branch with no
+pull request (flows.md FL4).
 
 - Task page: `TaskShipStation`, at the review station (status in review, or
   any task with a ship run).

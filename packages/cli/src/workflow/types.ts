@@ -106,6 +106,12 @@ export interface WorkflowNode {
   // its verdicts, records the sha it merged), so a person sees it as part of
   // that stage, never as a stage of its own. It runs like any other station.
   fold?: boolean;
+  // A station or end that leaves something for a person (a deploy nobody saw live, a step left to them): a run that
+  // passes it or ends there keeps the session its change came from, which is never retired (runner.ts subjectKept).
+  keep_subject?: boolean;
+  // A stop whose own words say all of how the change stands (it left the run, a fix the run cannot take): the run's
+  // end message adds no "was not merged, run it again" to them (subjectStation.ts runEndMessage).
+  whole_stop?: boolean;
   // A person's step a run reaches only on a side route (flows.md FL6): what
   // makes a run ask, as words that finish "Asks you if …" ("it edits CI").
   asks_if?: string;
@@ -163,6 +169,8 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[];
   /** The files the graph was read from: its own file and every @file it inlined (parser.ts). */
   sources?: string[];
+  /** The shipped flows (by slug) the graph is built from: itself, a base it extends, a segment it runs (parser.ts). */
+  shipped?: string[];
   /** The edits a variant made over the flow it extends (after=, skip, guide=, when=), as written: not part of the graph's hash. */
   edits?: FlowEditChange[];
   /** The base stations a skip took off the path, with the ones nothing reached after it: not part of the graph's hash. */

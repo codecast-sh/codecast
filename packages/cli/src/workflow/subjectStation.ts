@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkflowGraph } from "./types";
 import { readFrozenChange, type FrozenChange } from "./flowChangeFile.js";
+import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
 
 export type Subject = { conversationId: string; shortId: string };
 
@@ -171,7 +172,7 @@ export async function findingRoots(cwd: string, worktree: string | undefined): P
 }
 
 /** How a run ended, said to the session it came from. */
-export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; endLabel: string; failed: boolean; failReason?: string; lastOutput?: string; landed?: boolean }): string {
+export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; endLabel: string; failed: boolean; failReason?: string; lastOutput?: string; landed?: boolean; whole?: boolean }): string {
   const flow = graph.label || graph.name;
   const on = opts.taskId ? ` on ${opts.taskId}` : "";
   if (!opts.failed) {
@@ -179,8 +180,13 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
     return `The ${flow} run${on} is over: ${opts.endLabel}.${said && !said.startsWith("{") ? ` ${said}` : ""} Nothing more is waiting on this session for it.`;
   }
   const why = (opts.failReason ?? "it failed").replace(/^Stopped:\s*/, "").replace(/\.$/, "");
+  // A stop that says all of it (whole_stop) stands as it is.
+  if (opts.whole) return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}.`;
   // A stop after Land leaves the change on the default branch: only what comes after it did not happen.
-  const after = opts.landed ? "The change is on the default branch; nothing after this stage ran." : `The change was not merged. Run it again with \`cast flow run ${graph.name}\` once it is ready.`;
+  // The personal Ship lands with no merge, and runs as `change` in the workspace it ships (flowPool.ts workspacePool).
+  const personal = graph.name === PERSONAL_FLOW_SLUG;
+  const after = opts.landed ? "The change is on the default branch; nothing after this stage ran."
+    : `The change was not ${personal ? "landed" : "merged"}. Run it again with \`cast flow run ${personal ? "change" : graph.name}\` once it is ready.`;
   return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}. ${after}`;
 }
 

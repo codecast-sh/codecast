@@ -19,7 +19,6 @@ import {
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
 import type { PushedPoolRow } from "./workflow/flowPool.js";
-import { fetchMappedProjects, teamForDirectory } from "./directoryTeam.js";
 import { orgContextBlock, type OrgWhere } from "@codecast/shared/contracts/orgWhere";
 import { fitProjectContextBlock } from "@codecast/shared/contracts/projectContext";
 import { restoresTaskContext } from "@codecast/shared/tasks/resumeSources";
@@ -72,7 +71,7 @@ export interface BuiltStableContext {
 interface StableReads {
   feed: any | null;
   mods: string | null;
-  pool: { rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null } | null;
+  pool: { rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null; undecided?: boolean } | null;
   /** Where a session in this scope sits in the org; its session fields are filled per start. */
   where: OrgWhere | null;
 }
@@ -418,7 +417,7 @@ export async function buildStableContext(
     // Its instructions give way to fit the budget beside the org, mods and
     // flows; the whole text stays one command away (cast project show).
     const project = reads.where?.project_context;
-    const rest = `${reads.mods ?? ""}${!reads.pool || reads.pool.flowsOn === false ? "" : await flowsLine(opts.cwd, reads.pool.rows, reads.pool.defaultFlow)}`;
+    const rest = `${reads.mods ?? ""}${!reads.pool || reads.pool.flowsOn === false ? "" : await flowsLine(opts.cwd, reads.pool.rows, reads.pool.defaultFlow, !!reads.pool.undecided)}`;
     let projectBlock = "";
     if (project && !restoresTaskContext(opts.start?.source)) {
       projectBlock = `\n\n${fitProjectContextBlock(project, STABLE_CONTEXT_BUDGET - PROJECT_FEED_RESERVE - Buffer.byteLength(orgBlock + rest))}`;
@@ -489,18 +488,22 @@ async function fetchOrgWhere(siteUrl: string, apiToken: string, session?: string
  * One line naming the flows a change made here can run through (docs/architecture/flows.md FL7), read from this
  * checkout's pool with no network. Kept to one line: it rides the same 9000-byte budget the feed gives way to.
  */
-export async function flowsLine(cwd?: string, pushed: ReadonlyArray<PushedPoolRow> = [], defaultFlow?: string | null): Promise<string> {
+export async function flowsLine(cwd?: string, pushed: ReadonlyArray<PushedPoolRow> = [], defaultFlow?: string | null, undecided = false): Promise<string> {
   try {
     // The pool's parser and templates load only here, so the CLI and the daemon don't carry them on every start.
-    const [{ poolFlows, workspaceDefaultFlow }, { flowPathWords }] = await Promise.all([import("./workflow/flowPool.js"), import("@codecast/shared/contracts/flowPool")]);
-    const pool = poolFlows(cwd ?? process.cwd(), null, pushed).filter((f) => f.takes.includes("branch") && !f.errors.length);
+    const [{ poolFlows, workspaceDefaultFlow }, { CHANGE_FLOW_SLUG, flowPathWords, workspacePool }] = await Promise.all([import("./workflow/flowPool.js"), import("@codecast/shared/contracts/flowPool")]);
+    // The team's pool: the personal Ship is never named here (the run decides it, directoryTeam.ts).
+    const pool = workspacePool(poolFlows(cwd ?? process.cwd(), null, pushed), false).filter((f) => f.takes.includes("branch") && !f.errors.length);
     // The flow a nameless `cast flow run` runs, by the same rule.
     const lead = workspaceDefaultFlow(pool, defaultFlow);
     if (!lead) return "";
     const segments = pool.filter((f) => f !== lead && f.kind === "segment").map((f) => f.slug);
     const lines = pool.filter((f) => f !== lead && f.kind === "line").map((f) => f.slug);
     const parts = [
-      `the default is ${lead.slug} (${flowPathWords(lead).path})`,
+      // A checkout no team rule reads as the team's: the run decides how its change ships, so the line does not say.
+      undecided && lead.slug === CHANGE_FLOW_SLUG && lead.where === "shipped"
+        ? "the default is change (Ship: `cast flow run change` decides when it runs how this checkout's change ships)"
+        : `the default is ${lead.slug} (${flowPathWords(lead).path})`,
       ...(segments.length ? [`the segments ${segments.join(", ")} each run one part of a change`] : []),
       ...(lines.length ? [`${lines.join(", ")} ${lines.length === 1 ? "is another whole line" : "are other whole lines"}`] : []),
     ];
@@ -529,9 +532,19 @@ async function sendRepoFlows(siteUrl: string, apiToken: string, cwd?: string): P
 
 /** The team pool's published flows for a directory: its mapped team's, else none (session start reads no other
  *  team's). `flowsOn` says whether that workspace has the Flows feature on; undefined when the read failed or the
- *  server predates the flag, which leaves the line as it was. `defaultFlow` is the default flow that team set. */
-async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<{ rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null } | null> {
-  const team = teamForDirectory(await fetchMappedProjects(siteUrl, apiToken), cwd ?? process.cwd());
+ *  server predates the flag, which leaves the line as it was. `defaultFlow` is the default flow that team set.
+ *  `undecided` says the directory may ship through the personal Ship, which only the run itself decides (directoryTeam.ts). */
+async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<{ rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null; undecided: boolean } | null> {
+  const dir = cwd ?? process.cwd();
+  // Loaded here, off the boot graph. Session start never reads the active team, so in doubt no team is named.
+  const { directoryWorkspace, checkoutLocation } = await import("./directoryTeam.js");
+  const post = async (route: string, body: Record<string, unknown>) => {
+    const r = await fetch(`${siteUrl}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: apiToken, ...body }), signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`${route}: ${r.status}`);
+    return r.json();
+  };
+  const where = await directoryWorkspace({ post, session: undefined, cwd: dir, active: async () => ({ kind: "personal" }), location: () => checkoutLocation(dir) }).catch(() => null);
+  const team = where?.ownsDefault && where.ws.kind === "team" ? where.ws.teamId : null;
   const response = await fetch(`${siteUrl}/cli/workflows/pool`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -540,7 +553,7 @@ async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: strin
   });
   const data = (await response.json()) as { flows?: PushedPoolRow[]; flows_on?: boolean; default_flow?: string | null };
   if (!response.ok) return null;
-  return { rows: team ? data.flows ?? [] : [], flowsOn: typeof data.flows_on === "boolean" ? data.flows_on : undefined, defaultFlow: team ? data.default_flow ?? null : null };
+  return { rows: team ? data.flows ?? [] : [], flowsOn: typeof data.flows_on === "boolean" ? data.flows_on : undefined, defaultFlow: team ? data.default_flow ?? null : null, undecided: !!where?.personal };
 }
 
 /**

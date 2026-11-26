@@ -597,6 +597,10 @@ naming the target, the commit and its last state, and ends it at Deploy stuck.
 Deploy targets have no owner of their own, so the task's blocker is the one
 card.
 
+The personal flow's Deploy (flows.md FL4) is not this stage: an agent runs the
+deploy the project's docs name, reads no targets, records no deploy of its
+own, and ends Live only on seeing the landed commit run.
+
 The `cast-deploy` skill ships everything uncommitted in a shared checkout and
 ends with `cast deploy`, so what a project deploys, in what order and with what
 follow-ups lives in its `.codecast/deploy.toml`, not in the skill.

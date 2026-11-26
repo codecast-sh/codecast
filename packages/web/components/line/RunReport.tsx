@@ -5,10 +5,10 @@
 // come from lib/line/runReport, so a run reads the same everywhere.
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Check, ChevronRight, Hand, Loader2, Pause, X } from "lucide-react";
+import { ArrowUpRight, Check, ChevronRight, Hand, HelpCircle, Loader2, Minus, Pause, X } from "lucide-react";
 import { useSyncRuns } from "../../hooks/useSyncRuns";
 import { useWorkflowRuns } from "../../hooks/useSyncWorkflows";
-import { causeRunEntries, runOutcome, shortDay, type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState } from "../../lib/line/runReport";
+import { causeRunEntries, runOutcome, shortDay, type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState, type OutcomeOpts } from "../../lib/line/runReport";
 import { cn } from "../../lib/utils";
 import { runHref } from "../../lib/decisionLinks";
 import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
@@ -29,8 +29,8 @@ export const outcomeToneClass = (tone: OutcomeTone) => TONE[tone];
 /** The run's outcome in one sentence, in its tone. `muted` draws a run that
  *  no longer speaks for the cause (a later run followed it): red is kept for
  *  the cause's state now. `brief` is a row's version (runOutcome). */
-export function RunOutcomeText({ run, task, className, muted, brief, ask }: { run: ReportRun; task?: ReportTask | null; className?: string; muted?: boolean; brief?: boolean; ask?: { mine: boolean; open: boolean } | null }) {
-  const o = runOutcome(run, task, undefined, brief, ask ?? null);
+export function RunOutcomeText({ run, task, className, muted, brief, graph, ask }: { run: ReportRun; task?: ReportTask | null; className?: string; muted?: boolean; brief?: boolean } & OutcomeOpts) {
+  const o = runOutcome(run, task, undefined, brief, { graph, ask });
   return <span className={cn(muted ? "text-sol-text-dim" : TONE[o.tone], className)} data-run-outcome={o.end ?? run.status}>{o.text}</span>;
 }
 
@@ -54,6 +54,8 @@ const STEP_MARK: Record<StepState, { icon: typeof Check; cls: string }> = {
   live: { icon: Loader2, cls: "text-sol-cyan animate-spin" },
   waiting: { icon: Pause, cls: "text-sol-yellow" },
   noted: { icon: Hand, cls: "text-sol-text-dim" },
+  nothing: { icon: Minus, cls: "text-sol-text-muted" },
+  unknown: { icon: HelpCircle, cls: "text-sol-text-muted" },
 };
 
 /** A station's state as its mark: the same check, cross, spinner and pause every run path draws. */
@@ -108,7 +110,7 @@ function PhaseRow({ phase, ended, bare }: { phase: ReportPhase; ended: boolean; 
   );
 }
 
-const RESULT_TONE: Record<StepState, string> = { failed: "text-sol-red", waiting: "text-sol-yellow", noted: "text-sol-text-muted", done: "text-sol-text", live: "text-sol-text" };
+const RESULT_TONE: Record<StepState, string> = { failed: "text-sol-red", waiting: "text-sol-yellow", noted: "text-sol-text-muted", nothing: "text-sol-text-muted", unknown: "text-sol-text", done: "text-sol-text", live: "text-sol-text" };
 
 /** One station's result. The station's name sits in a dim fixed column so
  *  results align; the result links to the session that did it, and a note
@@ -149,23 +151,24 @@ export function useCauseRuns(taskId: string | null | undefined): ReportRun[] {
  *  report. `current` marks the run the reader is on; `newest` is the cause's
  *  newest run time when `runs` leaves it out. A run a later run followed reads
  *  muted and says where it stopped and why. */
-export function CauseRunList({ runs, task, current, empty, newest }: { runs: ReportRun[]; task?: ReportTask | null; current?: string; empty?: ReactNode; newest?: number }) {
+/** `graphOf`: a run's graph where the caller holds one (a personal Ship's says so, ownRound.ts), else none. */
+export function CauseRunList({ runs, task, current, empty, newest, graphOf }: { runs: ReportRun[]; task?: ReportTask | null; current?: string; empty?: ReactNode; newest?: number; graphOf?: (run: ReportRun) => OutcomeOpts["graph"] }) {
   const entries = useMemo(() => causeRunEntries(runs, newest), [runs, newest]);
   if (runs.length === 0) return empty ? <>{empty}</> : null;
   return (
     <ul className="divide-y divide-sol-border/20" data-cause-runs>
       {/* Only the newest run speaks for the cause's state now; an older one says what it came to. */}
-      {entries.map((e) => <CauseRunRow key={e.run._id} run={e.run} task={e.run === runs[0] && !newest ? task : null} current={current} muted={e.superseded} />)}
+      {entries.map((e) => <CauseRunRow key={e.run._id} run={e.run} task={e.run === runs[0] && !newest ? task : null} current={current} muted={e.superseded} graph={graphOf?.(e.run)} />)}
     </ul>
   );
 }
 
-function CauseRunRow({ run: r, task, current, muted }: { run: ReportRun; task?: ReportTask | null; current?: string; muted?: boolean }) {
+function CauseRunRow({ run: r, task, current, muted, graph }: { run: ReportRun; task?: ReportTask | null; current?: string; muted?: boolean; graph?: OutcomeOpts["graph"] }) {
   return (
     <li>
       <Link href={runHref(r._id)} className={cn("group flex items-baseline gap-3 px-1 py-1.5 text-[12.5px] min-w-0 hover:bg-sol-bg-alt/60 rounded", r._id === current && "bg-sol-bg-alt/50")} data-cause-run={r._id} aria-current={r._id === current ? "page" : undefined}>
         <span className="w-12 shrink-0 text-meta text-sol-text-dim tabular-nums">{shortDay(r.created_at)}</span>
-        <RunOutcomeText run={r} task={task} muted={muted} brief className="min-w-0 sm:truncate" />
+        <RunOutcomeText run={r} task={task} muted={muted} brief graph={graph} className="min-w-0 sm:truncate" />
         {r._id === current
           ? <span className="ml-auto shrink-0 text-meta text-sol-text-dim">this run</span>
           : <ArrowUpRight className="ml-auto w-3 h-3 shrink-0 self-center text-sol-text-dim/0 group-hover:text-sol-blue" />}

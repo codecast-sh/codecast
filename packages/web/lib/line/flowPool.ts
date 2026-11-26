@@ -4,13 +4,14 @@
 // teammates published to the workspace's pool, workflows.webPool). Each reads through the one fold
 // (shared/contracts/flowPool.ts) the CLI's `cast flow ls` uses, so both say
 // the same stations in the same order. Pure: no store, no React.
-import { flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, retiredFlowLine, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { defaultFlowOf, flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, retiredFlowLine, segmentTopOf, takesSessionChange, workspacePool, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
+import { sourceSaysOwnResults } from "@codecast/shared/contracts/ownResults";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 import { stationsOfNodes, type FlowStations, type StationDetail } from "./flowStations";
 
-export type ShippedFlow = PoolFlowSummary & { name: string; nodes: FlowNodeIn[]; edges: FlowEdgeIn[]; /** The flow it extends, as the generator reads it (cli workflow/flowPool.ts PoolFlow). */ extends?: string | null };
+export type ShippedFlow = PoolFlowSummary & { name: string; nodes: FlowNodeIn[]; edges: FlowEdgeIn[]; /** The flow it extends, as the generator reads it (cli workflow/flowPool.ts PoolFlow). */ extends?: string | null; /** A personal Ship (ownRound.ts): its source says `own_results=true`. */ own_results?: boolean };
 
 export type AppFlow = ShippedFlow & {
   /** `team`: published to a team's pool; `pushed`: the viewer's own; `repo`: the session's repository's own (`.codecast/flows`). */
@@ -93,6 +94,7 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
     workflowId: row._id,
     base: flowBase(row),
     stationDetails: stationsOfNodes(row.nodes),
+    ...(sourceSaysOwnResults(row.source) ? { own_results: true } : {}),
   };
 }
 
@@ -156,3 +158,13 @@ export function flowRowPath(f: Pick<AppFlow, "label" | "stations">): string {
 
 /** Lines first, then segments, each in the pool's own order. */
 export const linesFirst = (pool: ReadonlyArray<AppFlow>): AppFlow[] => [...pool.filter((f) => f.kind === "line"), ...pool.filter((f) => f.kind !== "line")];
+
+/** The Ship picker's flows for a session (RunThroughFlow), its default first: the session's pool in its workspace's
+ *  terms (a personal session ships through `personal` where the repository has no `change` of its own, as `cast flow
+ *  run` there does), only the whole flows that take a session's change, the default by defaultFlowOf. */
+export function shipPicks(pool: ReadonlyArray<AppFlow>, repository: string | null, workspaceSlug: string | null, personal: boolean): { pool: AppFlow[]; fallback: AppFlow | null } {
+  // Flows only: a segment runs one part of a change, never the change to live.
+  const all = namedForRepo(linesFirst(workspacePool(pool, personal).filter((f) => f.kind === "line" && takesSessionChange(f))), repository);
+  const d = defaultFlowOf(all, workspaceSlug);
+  return { pool: d ? [d, ...all.filter((f) => f !== d)] : all, fallback: d };
+}

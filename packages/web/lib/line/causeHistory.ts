@@ -19,7 +19,7 @@ import {
 } from "@codecast/shared/contracts/causeHistory";
 import type { LineCauseTask } from "../lineFlow";
 import type { MapDecision, MapRun, MapSignal } from "./lineMap";
-import { runOutcome, type ReportRun, type ReportTask, type RunOutcome } from "./runReport";
+import { runOutcome, type OutcomeOpts, type ReportRun, type ReportTask, type RunOutcome } from "./runReport";
 
 export {
   backTimes, carryingDeploys, coverageOf, historyBrief, earlierFixes, closesSummary, closesArgument, closedAtStep, unshippedGuard,
@@ -35,6 +35,8 @@ export type HistoryInput = {
   task: LineCauseTask | undefined;
   /** The cause's runs, any graph, newest first. */
   runs: ReadonlyArray<MapRun>;
+  /** A run's graph where the caller holds it (the drawn graph, for the runs of it): a personal Ship's says so. */
+  graphOf?: (run: MapRun) => OutcomeOpts["graph"];
   decisions: ReadonlyArray<MapDecision>;
   signals: ReadonlyArray<MapSignal>;
   occurrences: OccurrenceRow | undefined;
@@ -68,6 +70,6 @@ export function causeHistory(input: HistoryInput): CauseHistory {
     ...input,
     runs: input.runs as ReadonlyArray<MapRun & ReportRun>,
     decisions: input.decisions as ReadonlyArray<MapDecision & HistoryDecisionRow>,
-    outcome: (run) => runOutcome(run, input.task as ReportTask | undefined, input.now, true),
+    outcome: (run) => runOutcome(run, input.task as ReportTask | undefined, input.now, true, { graph: input.graphOf?.(run) }),
   });
 }

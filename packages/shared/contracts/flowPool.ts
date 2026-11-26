@@ -275,11 +275,32 @@ export const retiredFlowLine = (slug: string): string | null =>
 /** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
 export const takesSessionChange = (flow: { takes: ReadonlyArray<string> }) => flow.takes.includes("branch");
 
+/** The Ship of a personal workspace: reviewed, landed on main and deployed the way the project's docs say, with no pull request. */
+export const PERSONAL_FLOW_SLUG = "personal";
+
+/**
+ * A pool in its workspace's terms. A personal workspace (a directory no team shares, no --team) ships through
+ * `personal` in place of the shipped `change`, unless the repository has its own `change`, which still wins; a team's
+ * pool never offers the shipped `personal`.
+ */
+export function workspacePool<F extends { slug: string; where?: string }>(pool: ReadonlyArray<F>, personal: boolean): F[] {
+  const shipped = (slug: string) => (f: F) => f.slug === slug && f.where === "shipped";
+  // A repository's own `change` is its Ship in every workspace, so the shipped personal one is not offered beside it.
+  if (!personal || pool.some((f) => f.slug === CHANGE_FLOW_SLUG && f.where === "repo")) return pool.filter((f) => !shipped(PERSONAL_FLOW_SLUG)(f));
+  return pool.some(shipped(PERSONAL_FLOW_SLUG)) ? pool.filter((f) => !shipped(CHANGE_FLOW_SLUG)(f)) : pool.slice();
+}
+
+/** The flow a name runs in a pool: `change` is the personal Ship where the pool has no `change` (a personal workspace's, workspacePool). */
+export function shipFlowSlug(pool: ReadonlyArray<{ slug: string }>, slug: string): string {
+  return slug === CHANGE_FLOW_SLUG && !pool.some((f) => f.slug === CHANGE_FLOW_SLUG) && pool.some((f) => f.slug === PERSONAL_FLOW_SLUG) ? PERSONAL_FLOW_SLUG : slug;
+}
+
 /** The workspace's default flow out of a pool (flows.md FL4): the slug it set when that flow is in the pool and takes a
- *  session's change, else Change, else the first that does. The web's pickers and a nameless `cast flow run` both read it. */
+ *  session's change, else Change (the personal Ship in a personal workspace's pool), else the first that does. The
+ *  web's pickers and a nameless `cast flow run` both read it. */
 export function defaultFlowOf<F extends { slug: string; takes: ReadonlyArray<string> }>(pool: ReadonlyArray<F>, workspaceSlug: string | null | undefined): F | null {
   const ok = (slug: string | null | undefined) => {
-    const f = slug ? pool.find((p) => p.slug === slug) : undefined;
+    const f = slug ? pool.find((p) => p.slug === shipFlowSlug(pool, slug)) : undefined;
     return f && takesSessionChange(f) ? f : null;
   };
   return ok(workspaceSlug) ?? ok(CHANGE_FLOW_SLUG) ?? pool.find(takesSessionChange) ?? null;

@@ -14,6 +14,44 @@ import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
 import { runNodeLine, runNodeRows, scriptLine, type RunNodeRow } from "../workflowRun";
 import { SHIPPED_LINE } from "./shippedLine.generated";
 import { lineRefHref } from "./lineWorkspaceUrl";
+import { leftWords, stationResult } from "../ship/stationResult";
+import { shortWhy, stopWhy } from "../ship/journey";
+import { jsonOf, personalRound, type RoundState, type RoundStation } from "../ship/personalRound";
+import { roundsOnOwnResults } from "../ship/ownRound";
+import { flowNodeAttrOf } from "@codecast/shared/contracts/flowPool";
+
+/** A graph a report reads a run by. */
+type RunGraph = { own_results?: boolean; source?: string | null; nodes?: ReadonlyArray<{ id: string; label?: string; type?: string; fold?: boolean; stop?: string; backend?: string }>; edges?: ReadonlyArray<{ from: string; to: string; label?: string; condition?: string }> };
+/** The graph of a personal Ship's run (ownRound.ts: it says so in its graph), from the graph the caller has: the run's
+ *  stored row, whose source says it, or its flow. Null for every other run, and for a caller with no graph: a run's
+ *  name alone never makes it personal (a team's own flow may be slugged `personal`). */
+function ownGraphOf(graph?: RunGraph | null): { nodes: NonNullable<RunGraph["nodes"]>; edges: NonNullable<RunGraph["edges"]> } | null {
+  return graph?.nodes && graph.edges && roundsOnOwnResults(graph) ? (withSourceAttrs(graph) as any) : null;
+}
+
+/** Whether a run's page draws its steps as its path (runPath): a line run, and a personal Ship's, whose steps read
+ *  through its round's view as the phone and every other surface read them. Every other run reads as its sessions. */
+export const readsAsPath = (run: Parameters<typeof isLineRun>[0], graph?: RunGraph | null): boolean => isLineRun(run) || !!ownGraphOf(graph);
+
+/** The commit a run put on main, as its page names it: a personal Ship's latest landing ("Landed", the sha its journey
+ *  shows, though the run row keeps its first merge), else the run's merge. */
+export function landingOf(run: ReportRun & { merge?: { sha: string } | null }, graph?: RunGraph | null): { word: "Landed" | "Merged"; sha: string } | null {
+  const own = ownGraphOf(graph);
+  const sha = own ? personalRound(own as any, run as any)?.landed ?? run.merge?.sha : run.merge?.sha;
+  return sha ? { word: own ? "Landed" : "Merged", sha } : null;
+}
+
+/** A stored workflows row (useRunWorkflow) keeps no fold, stop, backend or machine on its nodes (workflowNodeValidator):
+ *  they read from its source, as pushedFlow reads them, so a report drawn from the row reads the graph the journey does. */
+function withSourceAttrs(g: RunGraph): RunGraph {
+  if (!g.source || g.nodes!.some((n) => n.fold || n.stop)) return g;
+  const attrs = (["fold", "stop", "backend", "machine"] as const).map((k) => [k, flowNodeAttrOf(g.source, k)] as const);
+  return { ...g, nodes: g.nodes!.map((n) => {
+    const add: Record<string, unknown> = {};
+    for (const [k, of] of attrs) if (of[n.id] && (k === "stop" || k === "backend" || of[n.id] === "true")) add[k] = k === "stop" || k === "backend" ? of[n.id] : true;
+    return { ...n, ...add };
+  }) };
+}
 
 // ── the shape a report reads ─────────────────────────────────────────────────
 
@@ -22,12 +60,15 @@ export type ReportNode = { node_id: string; status: string; outcome?: string; la
 /** A run row as the store holds it (workflow_runs.enrichRun). */
 export type ReportRun = {
   _id: string;
+  /** The workflows row it ran: a run of the same flow reads by the same graph. */
+  workflow_id?: string | null;
   status: string;
   task_id?: string;
   task_short_id?: string;
   current_node_id?: string;
   current_node_label?: string;
   workflow_name?: string;
+  workflow_slug?: string;
   /** "workflow" for a Workflow tool run, reported from its session's snapshot: no line stations, no named ends. */
   run_kind?: string;
   /** The phases a Workflow tool run declared. */
@@ -494,8 +535,9 @@ export function gateAnswer(run: Pick<ReportRun, "gate_answer" | "gate_choices" |
 }
 
 /** "noted": a step that did not do its part but did not stop the run either
- *  (the merge left to a person), drawn neutral rather than as a failure. */
-export type StepState = "done" | "failed" | "live" | "waiting" | "noted";
+ *  (the merge left to a person), drawn neutral rather than as a failure.
+ *  "nothing": it ran and its result said it found nothing to do there (stationResult.ts). */
+export type StepState = "done" | "failed" | "live" | "waiting" | "noted" | "nothing" | "unknown";
 /** Every step is named by its station; `note` says why when the result
  *  needs it (a merge left to a person); `href` is where the result leads:
  *  the session that did the step, or the task when a person finished it. */
@@ -603,6 +645,27 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
 
 export { scriptLine };
 
+/** A personal run's step as its round's view says (personalRound.ts): running, done, found work, nothing to do, or a
+ *  step of an earlier round. A step left for the person opens the task it was posted to. */
+const PERSONAL_STEP: Record<RoundState, StepState> = { running: "live", done: "done", nothing: "nothing", back: "failed", stopped: "failed", failed: "failed", idle: "noted", unknown: "unknown" };
+function personalStepOf(step: ReportStep, { state, endSays }: RoundStation, ofRound: boolean, row: RunNodeRow, run: ReportRun): ReportStep {
+  // A step of another round says its state only, never that round's words or links.
+  if (!ofRound) {
+    const { note: _n, href: _h, hrefTitle: _t, ...bare } = step;
+    return state === "running" ? { ...bare, state: "live", result: "Running" }
+      : state === "done" ? { ...bare, state: "done", result: "Landed earlier" }
+      : { ...bare, state: "noted", result: "An earlier round" };
+  }
+  const left = row.result_preview?.startsWith(leftWords("")) && run.task_short_id ? { href: `/tasks/${run.task_short_id}`, hrefTitle: "Open the task the step was posted to" } : {};
+  // Its result JSON (stationResult.ts): Skipped when it found nothing to do, its note as its words, and a step it left to
+  // the person beside them. A station that reported live on a run that ended short of Live says what the end says.
+  const ran = row.status === "completed" ? stationResult(row.result_preview) : null;
+  const skipped = state === "nothing";
+  const words = endSays?.why ?? (skipped ? "Skipped" : ran?.note ?? step.result);
+  const note = skipped && ran?.note ? { note: ran.note } : ran?.leftForYou ? { note: leftWords(ran.leftForYou) } : {};
+  return { ...step, ...left, ...note, result: words, state: PERSONAL_STEP[state] };
+}
+
 /** `steps` are what a reader reads; `routine` are steps that passed and only
  *  assembled something (the card), folded with `folded`, the stations not reached. */
 export type ReportPhase = { key: LinePhaseKey | "steps"; label: string; steps: ReportStep[]; routine: ReportStep[]; folded: Array<{ id: string; label: string }>; state: StepState | "skipped" };
@@ -621,7 +684,11 @@ export function runPath(run: ReportRun, workflow?: { nodes?: Array<{ id: string;
   const line = isLineRun(run);
   const rows = runNodeRows(run, workflow ?? (line ? SHIPPED_LINE : null)).filter((r) => !isHidden(r));
   if (!line) {
-    const steps = foldLanding(rows.filter(reached).map((r) => stepOf(r, run, task, opts)), labelOf(run, "ship"));
+    const own = ownGraphOf(workflow as RunGraph | null);
+    const round = own ? personalRound(own, run) : null;
+    // An own-results round's branch that runs unreported (a script reports only when it ends) is a step of the run now.
+    const shown = round ? rows.filter((r) => reached(r) || round.station(r.id).state === "running") : rows.filter(reached);
+    const steps = foldLanding(shown.map((r) => (round ? personalStepOf(stepOf(r, run, task, opts), round.station(r.id), round.ofRound(r.id), r, run) : stepOf(r, run, task, opts))), labelOf(run, "ship"));
     return [{ key: "steps", label: "Steps", steps, routine: [], folded: rows.filter((r) => !reached(r)).map((r) => ({ id: r.id, label: r.label })), state: phaseState(steps) }];
   }
   const byPhase = new Map<string, RunNodeRow[]>();
@@ -762,11 +829,20 @@ export { runEnd };
  *  An end with its reason, never a failure to retry. */
 export const stoppedOnPurpose = (run: Pick<ReportRun, "status" | "fail_reason">) => run.status === "failed" && /^Stopped:/.test(run.fail_reason?.trim() ?? "");
 
-/** `ask`: what the session the run waits on asks a person, when the caller knows it (lib/ship/sessionAsk.ts). */
-export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.now(), brief = false, ask: { mine: boolean; open: boolean } | null = null): RunOutcome {
+/** What the caller knows beyond the run row. `graph`: the run's graph, which says how a personal Ship's run reads
+ *  (ownRound.ts). `ask`: what the session the run waits on asks a person (lib/ship/sessionAsk.ts). */
+export type OutcomeOpts = { graph?: RunGraph | null; ask?: { mine: boolean; open: boolean } | null };
+
+export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.now(), brief = false, { graph, ask = null }: OutcomeOpts = {}): RunOutcome {
+  const own = ownGraphOf(graph);
   const ended = runEnd(run);
   const end = ended?.kind ?? null;
   const at = labelOf(run, run.current_node_id);
+  // The personal Ship's stops say their reason whole: a result's note, a rejection's findings, never its raw JSON.
+  if (stoppedOnPurpose(run) && own) {
+    const stop = own.nodes.find((n) => n.id === run.current_node_id && n.type === "exit");
+    return { tone: "closed", end, text: `${stop?.label ?? "Stopped"}: ${(stopWhy(run.fail_reason) ?? "").replace(/\.$/, "")}.` };
+  }
   if (stoppedOnPurpose(run)) return { tone: "closed", end, text: `${run.fail_reason!.trim().replace(/\.$/, "")}.` };
   if (run.status === "pending") return { tone: "calm", end, text: "Queued to start." };
   if (run.status === "paused") {
@@ -815,6 +891,19 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
   if (task?.review_verdict?.verdict === "reject" && ran(run, "review")) return { tone: "closed", end, text: "Review rejected the change." };
   // Another graph's own end step (AgentWatch's failed_at_build,
   // dissolved_at_prove, refine_rejected) says where and how the run ended.
+  // An own-results round ends at one of its own ends, by its name, saying how far the change got (with why when short of
+  // Live) and a step left for the person.
+  const ownEnd = run.status === "completed" && own ? own.nodes.find((n) => n.id === run.current_node_id && n.type === "exit" && !n.stop) : undefined;
+  if (ownEnd) {
+    const left = [...(run.node_statuses ?? [])].reverse().map((n) => stationResult(n.result_preview)?.leftForYou).find(Boolean);
+    const round = personalRound(own!, run);
+    // The station that decided the end: the newest one with a way into it whose output is a result.
+    const decided = (run.node_statuses ?? []).filter((n) => own!.edges.some((e) => e.to === ownEnd.id && (e.from === n.node_id || own!.edges.some((x) => x.to === e.from && x.from === n.node_id))) && !!jsonOf(n.result_preview)?.outcome)
+      .sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))[0];
+    // Short of Live (as the journey reads it: an end not named Live), it says why.
+    const why = ownEnd.label !== "Live" && round?.landed && decided ? shortWhy(decided.result_preview, round.landed) : null;
+    return { tone: "shipped", end, text: `${ownEnd.label ?? ownEnd.id}${why ? `: ${why.replace(/\.$/, "")}` : ""}.${left ? ` ${leftWords(left).replace(/\.?$/, ".")}` : ""}` };
+  }
   const reached = (run.node_statuses ?? []).filter((n) => n.node_id !== "exit" && n.node_id !== "start" && n.status === "completed");
   const id = run.current_node_id && run.current_node_id !== "exit" ? run.current_node_id : reached[reached.length - 1]?.node_id ?? "";
   const escalatedAt = /^escalated_at_(\w+)$/.exec(id)?.[1];

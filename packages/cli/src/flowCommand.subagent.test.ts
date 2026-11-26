@@ -55,7 +55,7 @@ async function run(args: string[], subagent: boolean) {
     subjectSession: async () => (subagent ? false : PARENT),
     realCwd: () => cwd,
     readWorkspace: async () => ({ kind: "personal" }),
-    directoryTeam: async () => null,
+    directoryWorkspace: async () => ({ ws: { kind: "personal" }, ownsDefault: false, personal: false }),
     writeWorkspace: async () => ({ kind: "personal" }),
     requireFlows: async () => {},
   };

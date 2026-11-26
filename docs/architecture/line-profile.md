@@ -172,6 +172,12 @@ a declaration.
   its merge authority, the-line.md L12). A grant merges through `cast line
   merge`, so it counts against the role's daily limit.
 
+In a personal workspace these contracts bind no Ship: the `personal` flow
+(flows.md FL4) reads `.codecast/line.toml` as one more doc beside CLAUDE.md
+and README.md. Its Check runs the commands the docs name and judges them by
+their exit codes alone, so any exit but 0, 2 included, is red; its Deploy runs the documented deploy and reports Live
+only on seeing the landed commit run. Neither runs the profile's `ship`.
+
 ## LP5. Principles and prompting per project
 
 Principles are split three ways. The shared set ships with codecast
@@ -212,7 +218,8 @@ is a signal.
 The default line that ships with codecast is an org template: one role that
 owns a project's line, routines that are its finders, the shipped `line`
 workflow, and the shared principles. A project's profile overrides any
-default.
+default; in a personal workspace its commands are one more doc the Ship's
+stations read (LP4).
 
 The release lives in this repository at `packages/cli/org-templates/line/`
 and installs like any other (org-templates.md):
