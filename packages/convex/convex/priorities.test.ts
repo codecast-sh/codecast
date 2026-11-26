@@ -626,6 +626,25 @@ describe("writes", () => {
     expect(await t.mutation(pri.cliMove, { api_token: TOKEN, short_id: "pri-2", to: 1.5 })).toEqual({ error: "a rank is a whole number from 1" });
   });
 
+  test("before the rank backfill, person ranks are fixed slots and pass ranks fill the free ones, in the list, a move and the pass's input alike", async () => {
+    const { t, as, ada, ws, p1, p2, p3, p4 } = await world();
+    // A person 1, F person 2, B pass 1, C pass 2.
+    await t.run(async (ctx) => {
+      for (const [id, rank, by] of [[p1, 1, "person"], [p2, 2, "person"], [p3, 1, "pass"], [p4, 2, "pass"]] as const) {
+        await ctx.db.patch(id, { status: "active", done_at: undefined, ai_rank: undefined, person_pos: undefined, rank, rank_set_by: by } as any);
+      }
+    });
+    const order = async () => (await rowsOf(as(ada), { workspace: ws, status: "active" })).map((r: any) => r.short_id);
+    expect(await order()).toEqual(["pri-1", "pri-2", "pri-3", "pri-4"]);
+    const { input } = await t.query((internal as any).priorityPassInputs.passInputs, { user_id: ada, workspace: ws });
+    expect(input.priorities.filter((p: any) => p.status === "active").map((p: any) => [p.short_id, p.person_pos, p.ai_rank]).sort()).toEqual([
+      ["pri-1", 1, null], ["pri-2", 2, null], ["pri-3", null, 3], ["pri-4", null, 4],
+    ]);
+    // C up one: what the person sees moves.
+    await as(ada).mutation(pri.moveUp, { short_id: "pri-4" });
+    expect(await order()).toEqual(["pri-1", "pri-2", "pri-4", "pri-3"]);
+  });
+
   test("before the rank backfill: the order the person set shows, and a move starts from it (legacy person ranks 5,3,2,1,4, then pri-4 to #2)", async () => {
     const { t, as, ada, ws, p1, p2, p3, p4 } = await world();
     await t.run(async (ctx) => {

@@ -16,7 +16,7 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
-import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
+import { effectivePriorityOrder, legacyOrder } from "@codecast/shared/contracts/priorities";
 
 type Priority = Doc<"priorities">;
 
@@ -25,28 +25,7 @@ const GROUP_READ = 200;
 
 export const legacy = (p: Priority) => p.rank !== undefined || p.rank_set_by !== undefined;
 
-/**
- * The order the absolute rank showed (the order it replaced): a rank the
- * person set is a fixed slot, the most recently set winning a shared one; the
- * pass's ranks fill the free slots in their order, unranked last, the most
- * recently active first.
- */
-export function legacyOrder(rows: Priority[]): Priority[] {
-  const pinned = rows.filter((r) => r.rank_set_by === "person" && r.rank != null).sort((a, b) => a.rank! - b.rank! || b.updated_at - a.updated_at);
-  const flowing = rows.filter((r) => !pinned.includes(r)).sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || b.last_active_at - a.last_active_at);
-  const slots = new Map<number, Priority>();
-  for (const r of pinned) {
-    let at = Math.max(1, r.rank!);
-    while (slots.has(at)) at++;
-    slots.set(at, r);
-  }
-  let next = 1;
-  for (const r of flowing) {
-    while (slots.has(next)) next++;
-    slots.set(next, r);
-  }
-  return [...slots.entries()].sort(([a], [b]) => a - b).map(([, r]) => r);
-}
+// The order it writes is shared/contracts/priorities legacyOrder, the one lists show until it runs.
 
 /**
  * Rewrites one owner's active priorities in one workspace (`group`, every one

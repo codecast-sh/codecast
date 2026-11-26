@@ -256,7 +256,33 @@ export type PriorityLooseSession = { short_id: string; conversation_id: string; 
  * (convex priorityRankBackfill) rewrites a row: a rank the person set counts
  * as placed, so nothing they ordered before it ran loses its place.
  */
-export type PriorityOrderRow = { status: PriorityStatus; person_pos?: number | null; ai_rank?: number | null; rank?: number | null; rank_set_by?: PrioritySetBy | null; last_active_at: number };
+export type PriorityOrderRow = { status: PriorityStatus; person_pos?: number | null; ai_rank?: number | null; rank?: number | null; rank_set_by?: PrioritySetBy | null; last_active_at: number; updated_at?: number };
+
+/** A row the rank backfill has not rewritten: it still says who set its absolute rank. */
+const isLegacy = (r: PriorityOrderRow): boolean => r.rank_set_by != null;
+
+/**
+ * The order the absolute rank showed (the order relative rank replaced, and
+ * the one the backfill writes): a rank the person set is a fixed slot, the
+ * most recently set winning a shared one; the pass's ranks fill the free
+ * slots in their order, unranked last, the most recently active first.
+ */
+export function legacyOrder<T extends PriorityOrderRow>(rows: readonly T[]): T[] {
+  const pinned = rows.filter((r) => r.rank_set_by === "person" && r.rank != null).sort((a, b) => a.rank! - b.rank! || (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const flowing = rows.filter((r) => !pinned.includes(r)).sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || b.last_active_at - a.last_active_at);
+  const slots = new Map<number, T>();
+  for (const r of pinned) {
+    let at = Math.max(1, r.rank!);
+    while (slots.has(at)) at++;
+    slots.set(at, r);
+  }
+  let next = 1;
+  for (const r of flowing) {
+    while (slots.has(next)) next++;
+    slots.set(next, r);
+  }
+  return [...slots.entries()].sort(([a], [b]) => a - b).map(([, r]) => r);
+}
 
 /** A priority's place on the one scale: the person's (person_pos, else a rank they set that the backfill has not rewritten yet), else the pass's (ai_rank, else its old rank), else none. */
 const orderKey = (r: PriorityOrderRow): number | null => r.person_pos ?? (r.rank_set_by === "person" ? r.rank : null) ?? r.ai_rank ?? r.rank ?? null;
@@ -279,7 +305,10 @@ const byPlace = (a: PriorityOrderRow, b: PriorityOrderRow) =>
  * one order list, pin line, CLI and web all read.
  */
 export function effectivePriorityOrder<T extends PriorityOrderRow>(rows: readonly T[]): T[] {
-  return rows.filter((r) => r.status === "active").sort(byPlace);
+  const active = rows.filter((r) => r.status === "active");
+  // A group the rank backfill has not reached yet shows the order it will write: its old rows in legacyOrder, the rest after them.
+  if (!active.some(isLegacy)) return active.sort(byPlace);
+  return [...legacyOrder(active.filter(isLegacy)), ...active.filter((r) => !isLegacy(r)).sort(byPlace)];
 }
 
 /** Each active priority's position (1 = first) among its owner's active ones in its workspace, by `id`. `rows` holds every active priority of each owner and workspace it covers. */

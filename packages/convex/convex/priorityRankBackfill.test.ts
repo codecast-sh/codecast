@@ -7,7 +7,7 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { api, internal } from "./_generated/api";
-import { legacyOrder } from "./priorityRankBackfill";
+import { legacyOrder } from "@codecast/shared/contracts/priorities";
 
 setDefaultTimeout(60_000);
 
