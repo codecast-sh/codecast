@@ -21,7 +21,9 @@
 // here so its result can be read), and the open-at-login Run value.
 //
 // CODECAST_APPS_SHOW=1 shows the app window (it is off screen by default);
-// CODECAST_APPS_SHOTS=<dir> saves screenshots of the app window there.
+// CODECAST_APPS_SHOTS=<dir> saves screenshots of the app window there, and
+// shows it: a window that was never shown paints no frame on Windows, so
+// Page.captureScreenshot would wait forever for one.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -153,7 +155,7 @@ test("install, call, republish and uninstall an app in the Electron-window host"
   });
 
   const port = await freePort();
-  const show = process.env.CODECAST_APPS_SHOW === "1";
+  const show = process.env.CODECAST_APPS_SHOW === "1" || !!process.env.CODECAST_APPS_SHOTS;
   const child = spawn(require("electron"), [ELECTRON_DIR, "--background"], {
     env: {
       ...process.env,
