@@ -233,11 +233,13 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   if (!conversation) {
     // Nowhere to ask from (its person has no session at all): they are told, once per question, so it still lands.
     // No card_key is kept for a notification: the next evaluation posts the card once they have a session. They are
-    // told again only once they have read the last notice.
-    const unread: any[] = await ctx.db.query("notifications").withIndex("by_recipient_read", (q: any) => q.eq("recipient_user_id", a.to.user_id).eq("read", false)).take(200);
+    // told again only once they have read the last notice about this pull request, whatever else they have unread, and
+    // it reaches them whatever their notification switches say: only they can act on it.
     const entity = `${a.repository}#${a.pr_number}`;
-    if (unread.some((n) => n.type === "card_waiting" && n.entity_id === entity)) return null;
+    const notices: any[] = await ctx.db.query("notifications").withIndex("by_recipient_entity", (q: any) => q.eq("recipient_user_id", a.to.user_id).eq("entity_id", entity)).collect();
+    if (notices.some((n) => n.type === "card_waiting" && !n.read)) return null;
     await emitNotification(ctx as any, {
+      always: true,
       event_type: "card_waiting", actor_name: "Codecast", entity_type: "code", entity_id: `${a.repository}#${a.pr_number}`,
       message: `${a.repository}#${a.pr_number} waits for your approval: ${WHY[a.reason]}`,
       link: `https://github.com/${a.repository}/pull/${a.pr_number}`, recipient_ids: asked,
@@ -268,7 +270,8 @@ export async function postApprovalCard(ctx: { db: any }, a: {
       { label: "Revise", description: "It stays unmerged; say what to change" },
       { label: "Drop", description: "It stays unmerged" },
     ],
-    blocking: false,
+    // Blocking: an answered approval card is never answered again (the web's resolution patch re-opens only advisory asks).
+    blocking: true,
     silent: true,
     status: "pending",
     holder: { kind: "user", id: String(a.to.user_id) },
@@ -278,7 +281,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     hops: [],
     ...(a.run?.task_id ? { task_id: a.run.task_id } : {}),
     ...(a.pr?.team_id ? { team_id: a.pr.team_id } : {}),
-    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason },
+    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason, asked },
     approval_card: true,
     created_at: a.now,
     session_title: conversation.title,

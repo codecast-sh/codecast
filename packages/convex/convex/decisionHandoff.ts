@@ -31,6 +31,7 @@ import { userCanAccessRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { recordHandoffEntry } from "./decisionThread";
+import { approvalHandoffRefusal } from "./lib/changeApprovalRows";
 import { HOSTED_ANSWER_REFUSED, refreshHolder, rerouteRow, syncDecisionInbox, tellHearingRole } from "./sessionDecisions";
 
 type Ctx = { db: any; scheduler?: any };
@@ -89,6 +90,8 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
   if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
     return { error: "It is already theirs" };
   }
+  const approvalRefusal = await approvalHandoffRefusal(ctx, row as any, userId, to.kind === "user" ? [to.id as Id<"users">] : "role");
+  if (approvalRefusal) return { error: approvalRefusal };
   const now = Date.now();
   const note = cleanNote(rawNote);
   const from = handoffFrom(row);
@@ -142,6 +145,8 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
   if (!teamId) return { error: "A personal session's decision has no one above it to escalate to" };
   const ownerId = (row.holder?.kind === "user" ? row.holder.id : userId) as Id<"users">;
   const to = await escalationTargets(ctx, teamId, ownerId, userId);
+  const approvalRefusal = await approvalHandoffRefusal(ctx, row as any, userId, to);
+  if (approvalRefusal) return { error: approvalRefusal };
   if (to.length === 0) return { error: String(ownerId) === String(userId) ? "Nobody is above you: no manager and no other admin in this workspace" : "Nobody else is above the owner: take it yourself instead" };
   const now = Date.now();
   const from = handoffFrom(row);

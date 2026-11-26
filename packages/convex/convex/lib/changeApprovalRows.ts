@@ -194,7 +194,7 @@ export async function settleCardApproval(
     // the whole diff it showed, which covers a mechanism until any code changes.
     const a = row.approval;
     // The run's own card clears a hold only by the same rule as the hold's card: an asked person, in person, not the author.
-    if (a && (await mayClearHold(ctx, { asked_user_ids: (row as any).asked_user_ids, repository: a.repository, pr_number: a.pr_number }, by))) await clearHold(ctx, a.repository, a.pr_number);
+    if (a && (await mayClearHold(ctx, { asked: (a as any).asked, repository: a.repository, pr_number: a.pr_number }, by))) await clearHold(ctx, a.repository, a.pr_number);
     if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
       await ctx.db.insert("change_approvals", {
         repository: a.repository,
@@ -229,9 +229,10 @@ async function prAuthor(ctx: { db: any }, repository: string, prNumber: number):
  * Whether an answer may approve where the author must not: a person's own (no session answering for them, `via`), one
  * the card asked, and not the pull request's author.
  */
-async function mayClearHold(ctx: { db: any }, card: { asked_user_ids?: Id<"users">[]; repository: string; pr_number: number }, by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> }): Promise<boolean> {
+async function mayClearHold(ctx: { db: any }, card: { asked?: Id<"users">[]; repository: string; pr_number: number }, by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> }): Promise<boolean> {
   if (by.kind !== "user" || !by.user_id || by.via) return false;
-  if (!(card.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id))) return false;
+  // The people the card asked when codecast posted it: a pass or an escalation adds no one. A run's own card has none.
+  if (!(card.asked ?? []).some((id) => String(id) === String(by.user_id))) return false;
   return String(await prAuthor(ctx, card.repository, card.pr_number)) !== String(by.user_id);
 }
 
@@ -244,12 +245,15 @@ async function mayClearHold(ctx: { db: any }, card: { asked_user_ids?: Id<"users
  */
 export async function approvalCardRefusal(
   ctx: { db: any },
-  row: { approval_card?: boolean; options: Array<{ label: string }>; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; run_id?: Id<"workflow_runs">; reason?: string } },
+  row: { approval_card?: boolean; status?: string; options: Array<{ label: string }>; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[] } },
   by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   verdict?: { status: string; answer_index?: number },
 ): Promise<string | null> {
   if (!row.approval_card || !row.approval || verdict?.status === "withdrawn") return null;
-  const asked = (row.asked_user_ids ?? []).map(String);
+  if (row.status && row.status !== "pending") return `This approval card is already ${row.status}: it is answered once.`;
+  // Who the card asked when codecast posted it, never whom a pass or an escalation handed it to (a card from before the
+  // set was kept reads its asked people).
+  const asked = (row.approval.asked ?? row.asked_user_ids ?? []).map(String);
   const names = (await Promise.all(asked.map(async (id) => {
     const u: any = ctx.db.normalizeId?.("users", id) ? await ctx.db.get(id) : await ctx.db.get(id).catch(() => null);
     return u?.name || u?.github_username || null;
@@ -264,6 +268,25 @@ export async function approvalCardRefusal(
     const others = names.length > 1 ? `; ${who} can, besides you` : "";
     return `You opened this pull request, so your approval of it does not count${others}.`;
   }
+  return null;
+}
+
+/**
+ * Why an approval card codecast posted may not be passed or escalated, or null when it may: only someone it asked hands
+ * it on, only to a person, and never to the pull request's author (`to`: the people it would go to; "role" for a role).
+ */
+export async function approvalHandoffRefusal(
+  ctx: { db: any },
+  row: { approval_card?: boolean; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; asked?: Id<"users">[] } },
+  userId: Id<"users">,
+  to: Id<"users">[] | "role",
+): Promise<string | null> {
+  if (!row.approval_card || !row.approval) return null;
+  const asked = (row.approval.asked ?? row.asked_user_ids ?? []).map(String);
+  if (!asked.includes(String(userId))) return "Only the people an approval card asks hand it on.";
+  if (to === "role") return "An approval card is a person's to answer, never a role's.";
+  const author = await prAuthor(ctx, row.approval.repository, row.approval.pr_number);
+  if (author && to.some((id) => String(id) === String(author))) return "An approval card never goes to the pull request's author.";
   return null;
 }
 
@@ -340,7 +363,7 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
  */
 async function settleApprovalCard(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; asked_user_ids?: Id<"users">[]; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string } },
+  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; asked_user_ids?: Id<"users">[]; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[] } },
   verdict: { status: string; answer_index?: number },
   by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
@@ -348,10 +371,10 @@ async function settleApprovalCard(
   if (by.kind !== "user" || !by.user_id) return;
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
-    const asked = (row.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id));
+    const asked = (a.asked ?? row.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id));
     const authorBarred = !a.run_id || a.reason === "objection";
     if (by.via || !asked || (authorBarred && String(await prAuthor(ctx, a.repository, a.pr_number)) === String(by.user_id))) return;
-    if (await mayClearHold(ctx, { asked_user_ids: row.asked_user_ids, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number);
+    if (await mayClearHold(ctx, { asked: a.asked, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number);
     await ctx.db.insert("change_approvals", {
       repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
       conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),

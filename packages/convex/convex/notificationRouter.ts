@@ -222,6 +222,9 @@ const EMIT_ARGS = {
   // true = bell row only: no desktop banner and no phone push. For news worth
   // finding later that nobody should be interrupted for.
   quiet: v.optional(v.boolean()),
+  // true = delivered whatever the recipient's notification switches say: the only way something they alone must act on
+  // reaches them (an approval card with no session to ask it in, changeApprovalCards).
+  always: v.optional(v.boolean()),
 };
 
 // The one fan-out. Callable inside a mutation's own transaction, so a
@@ -299,6 +302,7 @@ export async function emitNotification(ctx: MutationCtx, args: ObjectType<typeof
 
   for (const recipient of allowed) {
     if (
+      !args.always &&
       !isNotificationEnabled(
         recipient.notification_preferences as any,
         args.event_type

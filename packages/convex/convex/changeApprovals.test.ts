@@ -930,8 +930,10 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
       expect(await answerAs(db, card, "u_ashot", { session_id: "ashot-other", for_human: true, answer_index })).toEqual({ error: expect.stringContaining("an answer a session gives for its person does not count") });
     }
     stillOpen();
-    // The author asked beside Ashot: their Approve is refused, saying Ashot can; Revise from them is theirs to give.
-    db._tables.session_decisions.find((d: any) => d._id === card._id).asked_user_ids = ["u_ashot", "u_jason"];
+    // Had the card asked the author beside Ashot when it was posted: their Approve is refused, saying Ashot can.
+    const row = db._tables.session_decisions.find((d: any) => d._id === card._id);
+    row.asked_user_ids = ["u_ashot", "u_jason"];
+    row.approval = { ...row.approval, asked: ["u_ashot", "u_jason"] };
     expect(await answerAs(db, { ...card }, "u_jason")).toEqual({ error: "You opened this pull request, so your approval of it does not count; Ashot or Jason can, besides you." });
     stillOpen();
     // A dismissal by someone the card did not ask, through the one resolve path every surface takes: refused.
@@ -942,6 +944,85 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
     expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
     expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "success" });
+  });
+
+  test("a pass or an escalation adds no one who may answer, never reaches the author, and only an asked person hands a card on (round 5, finding 1)", async () => {
+    const { passCore, escalateCore } = await import("./decisionHandoff");
+    const db = heldWorld({
+      users: [...people, { _id: "u_cam", name: "Cam" }],
+      team_memberships: [...people, { _id: "u_cam" }].map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id, role: i === 0 ? "admin" : "member", joined_at: i })),
+      conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1, team_id: "team1" }, { _id: "c_cam", session_id: "cam", user_id: "u_cam", title: "Cam's own", updated_at: 1, team_id: "team1" }],
+    });
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    const [card] = cards(db);
+    expect(card.approval.asked).toEqual(["u_ashot"]);
+    // Ashot may not hand it to the author, nor to a role.
+    expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, { kind: "user", id: "u_jason" } as any)).toEqual({ error: "An approval card never goes to the pull request's author." });
+    expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, { kind: "role", id: "role1" } as any)).toEqual({ error: "An approval card is a person's to answer, never a role's." });
+    // He may hand it to Cam, but Cam's Approve does not count and clears nothing; the card stays open.
+    expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, { kind: "user", id: "u_cam" } as any)).toEqual({ passed: true });
+    expect(db._tables.session_decisions.find((d: any) => d._id === card._id).asked_user_ids).toEqual(["u_cam"]);
+    expect(await answerAs(db, card, "u_cam")).toEqual({ error: expect.stringContaining("Only Ashot answers this approval card") });
+    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+    expect(approvals(db)).toEqual([]);
+    // Cam, holding it now, may not pass it on or escalate it: he was never asked.
+    expect(await passCore(ctxOf(db) as any, "u_cam" as any, card.short_id, { kind: "user", id: "u_ashot" } as any)).toEqual({ error: "Only the people an approval card asks hand it on." });
+    expect(await escalateCore(ctxOf(db) as any, "u_cam" as any, card.short_id, "too big for me")).toEqual({ error: "Only the people an approval card asks hand it on." });
+    // Ashot's own answer still counts.
+    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
+  });
+
+  test("an answered approval card is answered once: no second answer, by any path (round 5, finding 2)", async () => {
+    const { answerRefusal, guardClientResolution } = await import("./sessionDecisions");
+    const db = heldWorld();
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    const [card] = cards(db);
+    expect(card.blocking).toBe(true);
+    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    const answered = db._tables.session_decisions.find((d: any) => d._id === card._id);
+    // The web's resolution patch is dropped for a blocking row that is no longer pending, and refused outright.
+    expect(guardClientResolution(answered, { status: "dismissed" })).toEqual({});
+    expect(await answerRefusal(ctxOf(db) as any, answered, { kind: "user", id: "u_ashot", user_id: "u_ashot" as any }, { status: "dismissed" })).toBe("This approval card is already answered: it is answered once.");
+    expect((await answerAs(db, card, "u_ashot", { answer_index: 2 })).error).toBe("Decision is already answered");
+    expect(approvals(db)).toHaveLength(1);
+  });
+
+  test("a card codecast took back, or that is gone, is asked again (round 5, finding 3)", async () => {
+    for (const how of ["withdrawn", "deleted"]) {
+      const db = heldWorld();
+      await (settle as any)._handler(ctxOf(db), heldArgs);
+      const [first] = cards(db);
+      if (how === "withdrawn") await withdrawCore(ctxOf(db) as any, db._tables.session_decisions.find((d: any) => d._id === first._id), 5, undefined, "taken back");
+      else db._tables.session_decisions = db._tables.session_decisions.filter((d: any) => d._id !== first._id);
+      await (settle as any)._handler(ctxOf(db), heldArgs);
+      const open = cards(db).filter((c: any) => c.status === "pending");
+      expect(open).toHaveLength(1);
+      expect(open[0]._id).not.toBe(first._id);
+      expect(db._tables.pull_requests[0].approval.card_id).toBe(open[0]._id);
+    }
+  });
+
+  test("the no-session notice is found by its pull request among any number unread, and reaches a person whose task notices are off (round 5, finding 4)", async () => {
+    const busy = Array.from({ length: 250 }, (_, i) => ({ _id: `n${i}`, recipient_user_id: "u_ashot", type: "task_commented", entity_type: "task", entity_id: `t${i}`, message: "x", read: false, created_at: i }));
+    const db = heldWorld({
+      users: people.map((u) => (u._id === "u_ashot" ? { ...u, notification_preferences: { task_activity: false } } : u)),
+      conversations: [], notifications: busy,
+    });
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    const notice = () => db._tables.notifications.filter((n: any) => n.type === "card_waiting");
+    expect(notice()).toEqual([expect.objectContaining({ recipient_user_id: "u_ashot", entity_id: `${REPO}#7` })]);
+    // The sweep's next evaluations tell him nothing new while it is unread.
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    expect(notice()).toHaveLength(1);
+  });
+
+  test("a hold outranks a whole-diff approval while no answer exists yet (round 5, finding 5)", async () => {
+    const db = heldWorld({ change_approvals: [{ _id: "ca1", repository: REPO, pr_number: 7, judged_key: "whole:w1", files: [], user_id: "u_ashot", source: "card", created_at: 1 }] });
+    // No answer for this head yet (another evaluation is reading it): the hold, not the old approval, decides.
+    db._tables.pull_requests[0].approval.automatic = { head_sha: HEAD, pending: true, reason: "reading", at: Date.now() };
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
   });
 
   test("a run-backed card answered by someone it did not ask is refused and stays open, rather than closing with nothing approved (round 4, finding 1)", async () => {

@@ -113,12 +113,16 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (f.captain_revert) return { state: "success", description: "the Release Captain's revert: CI's required checks decide" };
   // No codecast run, and no automatic review has answered for this head yet (another evaluation is reading it): it waits,
   // and nobody is asked. A review that never answers fails closed (claimAutomaticReview), never waits for ever.
+  // A hold outranks any approval of the change, a whole-diff one included: only clearing it releases the pull request.
+  const heldWaits = (): ApprovalVerdict => ({ state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: ${f.held}`) });
   if (!f.run) {
+    if (f.held) return heldWaits();
     if (f.card) return approved(f.card);
     return { state: "pending", description: "waiting for codecast's automatic review" };
   }
   if (f.mechanism === null) {
     if (f.run === "live") return { state: "pending", description: "waiting for the review's mechanism answer" };
+    if (f.held) return heldWaits();
     // The run ended with no answer, so its reviewer can no longer give one: a person reads it whole (the card). The
     // automatic review that could not answer fails closed the same way, saying why.
     if (f.card) return approved(f.card);
@@ -127,7 +131,7 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (f.objection) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: the automatic review ${f.objection === "rejected" ? "rejected it" : "asked for changes"}`) };
   // A hold waits for a person to clear it on its card (changeApprovalRows mayClearHold): no other approval answers it,
   // a run's own Ship card included. An automatic answer that is itself a mechanism or objection asks its own card.
-  if (f.held && !(f.automatic && (f.mechanism || f.objection))) return { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: ${f.held}`) };
+  if (f.held && !(f.automatic && (f.mechanism || f.objection))) return heldWaits();
   if (!f.judged.length && !f.mechanism) return { state: "success", description: f.automatic ? "no judged paths; the automatic review: not a mechanism" : "no judged paths; the review: not a mechanism" };
   if (f.card) return approved(f.card);
   if (f.mechanism) return { state: "pending", description: fit(`needs ${f.needs.mechanism}: the review called it a mechanism`) };
@@ -147,7 +151,7 @@ export function cardReason(f: ApprovalFacts): CardReason | null {
   if ("unreadable" in f) return f.card ? null : "unreadable";
   if (f.captain_revert) return null;
   if (!f.run) return null;
-  if (f.mechanism === null) return !f.card && f.run === "ended" ? "review" : null;
+  if (f.mechanism === null) return f.run !== "ended" ? null : f.held ? "objection" : !f.card ? "review" : null;
   // A hold is asked on its own card whatever else approved the change (decide).
   if (f.held && !(f.automatic && (f.mechanism || f.objection))) return "objection";
   if (f.card) return null;
@@ -656,6 +660,11 @@ export const settle = internalMutation({
     const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
     const pr = rows[0] ?? null;
     const before = pr?.approval;
+    // A card codecast asked and then took back (or that is gone) asks nothing now: its key no longer stands, so the
+    // question is asked again. A card someone answered keeps it.
+    const heldCard: any = before?.card_id ? await ctx.db.get(before.card_id) : null;
+    const cardKeyStands = !!before?.card_key && !!heldCard && heldCard.status !== "withdrawn";
+    const beforeKey = cardKeyStands ? before!.card_key : undefined;
     // Who each question goes to: a person, never a role (lib/changeApprovalCards.ts).
     const to = await cardPeople(ctx, {
       teamId: pr?.team_id ?? run?.team_id, run, camAsked, area_owner: args.people?.area_owner,
@@ -701,11 +710,11 @@ export const settle = internalMutation({
     const reason: CardReason | null = cardReason(facts);
     // A card about the judged files binds to their diff; any other reads the change whole.
     const cardKey = reason === "judged" && key !== undefined ? key : wholeKey;
-    const stale = cardStale(before?.card_key, { diffs: reason ? [cardKey] : [key, wholeKey].filter((k): k is string => !!k), reason, success: verdict.state === "success" });
+    const stale = cardStale(beforeKey, { diffs: reason ? [cardKey] : [key, wholeKey].filter((k): k is string => !!k), reason, success: verdict.state === "success" });
     if (stale && before?.card_id) await withdrawApprovalCard(ctx, before.card_id, now, "The pull request's judged diff or what it waits on changed; a new card asks if anything is needed.");
     const posted = reason ? await postApprovalCard(ctx, {
       repository, pr_number: args.pr_number, head_sha: args.head_sha, key: cardKey, judged, reason, to: to[reason], run, pr,
-      title: args.people?.title ?? pr?.title ?? "", before_key: before?.card_key, now,
+      title: args.people?.title ?? pr?.title ?? "", before_key: beforeKey, now,
       // The automatic review's own words are what the card shows, its reason or why it gave none.
       ...(auto ? { words: `${auto.failed ? "The automatic review could not answer" : `The automatic review of this head (${auto.verdict}, ${auto.mechanism ? "a mechanism" : "not a mechanism"})`}: ${auto.reason}` } : {}),
       ...(held ? { held } : {}),
@@ -720,7 +729,7 @@ export const settle = internalMutation({
           ...(run ? { run_id: run._id } : {}),
           ...(typeof mechanism === "boolean" ? { mechanism } : {}),
           ...(captainRevert ? { captain_revert: true } : {}),
-          ...(posted ? { card_key: posted.card_key, ...(posted.card_id ? { card_id: posted.card_id } : {}) } : before?.card_key && !stale ? { card_key: before.card_key, ...(before.card_id ? { card_id: before.card_id } : {}) } : {}),
+          ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : beforeKey && !stale ? { card_key: beforeKey, ...(before?.card_id ? { card_id: before.card_id } : {}) } : {}),
           ...(askedReview ? { review_asked: args.head_sha } : before?.review_asked ? { review_asked: before.review_asked } : {}),
           ...(before?.engineer_told ? { engineer_told: true } : {}),
           // An answer is stored only over its own head's claim (or nothing): an older head's late answer never
