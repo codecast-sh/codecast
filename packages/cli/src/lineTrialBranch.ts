@@ -22,7 +22,7 @@ function git(cwd: string, args: string[]): { ok: boolean; out: string } {
 }
 
 /** The worktree that has `branch` checked out, if any. */
-function worktreeOf(repo: string, branch: string): string | null {
+export function worktreeOf(repo: string, branch: string): string | null {
   let at: string | null = null;
   for (const line of git(repo, ["worktree", "list", "--porcelain"]).out.split("\n")) {
     if (line.startsWith("worktree ")) at = line.slice(9);

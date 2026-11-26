@@ -494,6 +494,19 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
       }
+      // The branch is this run's alone before anything moves or checks it out (workflow/runBranch.ts, ct-98893).
+      if (branch || sessionRef || opts.checkout) {
+        const { claimRunBranch } = await import("./workflow/runBranch.js");
+        const { runHandsVia } = await import("./lineTrialBranch.js");
+        const liveTrees = async () => {
+          const [{ deviceId }, { liveRunIdsOf }, { runTreesOf }] = await Promise.all([import("./remote/device.js"), import("./workflow/liveRuns.js"), import("./workflow/runDirs.js")]);
+          const ids = liveRunIdsOf(await deps.cliPost("/cli/workflow-runs/live-on-device", { device: deviceId() }).catch(() => null));
+          return ids && runTreesOf(top, ids);
+        };
+        const freed = await claimRunBranch(top, worktree, branch ?? `codecast/${worktree}`, { task: task!, rewrites: !branch, liveTrees, hands: runHandsVia((route, body) => deps.cliPost(route, body)) })
+          .catch((err: Error) => { console.error(err.message); process.exit(1); });
+        if (freed && !opts.json) console.error(dim(`  ${freed}`));
+      }
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
