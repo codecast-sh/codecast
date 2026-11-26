@@ -707,13 +707,14 @@ export function ForkMapBox({
 
 // The branch map's handle: the composer drawn as the top card of a stack,
 // one layer peeking out behind its top edge.
-// It sits in the gap above the box, so it takes no height. Hover or focus
+// It sits in a 9px band ComposerShell reserves above the box, so it never
+// touches the thread state or pull request strip above. Hover or focus
 // lifts the front layer a little and a tooltip names the family (the gap is
 // too narrow to hold words); a press opens the map upward into the composer,
 // and the layer folds down into the box while it is open (the map's own close
 // and Esc take it back). Positioned against ComposerShell's zero-height anchor
-// at the field's top edge; z-[25] clears the thread state panel (relative
-// z-20), whose padding covers that gap.
+// at the field's top edge; z-[25] keeps it over the thread state panel
+// (relative z-20).
 export function BranchMapLayers({ heading, open, onToggle }: { heading: string; open: boolean; onToggle: () => void }) {
   const radius = { borderRadius: "10px 10px 0 0" };
   const ease = "duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none";
