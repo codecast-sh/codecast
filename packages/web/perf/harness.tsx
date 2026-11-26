@@ -278,10 +278,6 @@ function ownersRead(i: number) {
 }
 
 async function seedStore(sessions: number, owners = false) {
-  // The store hydrates from IndexedDB as its module loads, and its last write
-  // (draftsHydrated) lands when it lands: before anything is seeded, never
-  // inside a measured run.
-  await until(() => useInboxStore.getState().draftsHydrated, "the store's boot hydration");
   const st = useInboxStore.getState() as any;
   st._setDispatch?.(async () => undefined);
   useInboxStore.setState({
