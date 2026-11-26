@@ -22818,13 +22818,16 @@ workflow
 workflow
   .command("reask <task>")
   .description("Ask a line run's decision again on the stations as they are now: the run picks up at the station that presents the decision (the one its gate names as asker), which posts its own question, and the old decision is withdrawn. For a run waiting on a decision, or one that failed while standing at it. Run it on the machine that holds the run")
-  .option("--at <node>", "Pick the run up at this station instead (needed when the gate it waits at is gone from the graph)")
+  .option("--at <node>", "Pick the run up at this station instead (needed when the gate it waits at is gone from the graph and no one gate took its place under a renamed step)")
+  .option("--run <id>", "Ask this run of the problem's again rather than its newest (the app's Re-ask names the run it checked)")
   .option("--json", "Machine-readable output")
-  .action(async (task: string, options: { at?: string; json?: boolean }) => {
+  .action(async (task: string, options: { at?: string; run?: string; json?: boolean }) => {
     const fail = (message: string): never => { console.error(message); process.exit(2); };
-    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1 });
-    const row = Array.isArray(listed?.runs) ? listed.runs[0] : null;
-    if (!row) fail(`${task} has no run`);
+    // Named, the run is that one of the problem's (the server checked it is the problem's current run); else its newest.
+    const listed = await cliPost("/cli/workflow-runs/list", { task_id: task, limit: options.run ? 20 : 1 });
+    const runs: any[] = Array.isArray(listed?.runs) ? listed.runs : [];
+    const row = options.run ? runs.find((r) => r._id === options.run) : runs[0];
+    if (!row) fail(options.run ? `${task} has no run ${options.run}` : `${task} has no run`);
     if (row.runner_device && row.runner_device !== deviceId()) fail(`${task}'s run lives on another machine (${row.runner_device}): ask it again there, so its runner is stopped and its station reads that machine's work`);
     // The server's refusals first (a closed or trial problem, a run not at a decision), so a runner is stopped only for a run that will move.
     await cliPost("/cli/workflow-runs/reask", { run_id: row._id, check: true });

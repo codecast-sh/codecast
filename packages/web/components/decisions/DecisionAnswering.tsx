@@ -27,6 +27,7 @@ import { AskAgain } from "../line/AskAgain";
 import { DecisionAnswerControls, DecisionRecordedAnswer } from "./DecisionAnswerControls";
 import { PersonChip } from "./DecisionParties";
 import { SupersededNote } from "../SupersededNote";
+import { ReaskButton } from "../line/widgets/ReaskRun";
 import { answererNameOf, cardAnswerIndexes, cardOutcome, settledAgo } from "./ChangeCardView";
 
 const api = _api as any;
@@ -159,7 +160,20 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
   // A card whose run went on without it can be asked again while it is still the cause's newest run.
   const cause = causeRow;
   const askAgain = !!closedWords?.askAgain && !!cause?._id && (cause.status === "open" || cause.status === "backlog") && (!cause.workflow_run_id || cause.workflow_run_id === decision.workflow_run_id);
-  const banner: ReactNode = decision.status === "pending" && detail.superseded ? <SupersededNote superseded={detail.superseded} /> : closedWords && !act ? (
+  // A decision whose run waits at a step its flow renamed or dropped can be asked again on the flow as it is now, by
+  // the run's owner (whose machine runs it), through the problem the run works (`cast workflow reask <task>`). A run
+  // pinned to library versions (`flow_versions`) re-reads its pinned graph, where the old step still stands, so asking
+  // again would only ask the same outdated question: no button. A trial's own surfaces carry their Re-ask.
+  const reaskDecision = useInboxStore((st) => st.reaskDecision);
+  const reaskable = decision.status === "pending" && !trial && act && (detail.superseded?.why === "station_gone" || detail.superseded?.why === "line_changed")
+    && run?.status === "paused" && !!run.task_id && !(run as { flow_versions?: unknown[] }).flow_versions?.length
+    && !!meId && String((run as { user_id?: string }).user_id ?? "") === meId;
+  const banner: ReactNode = decision.status === "pending" && detail.superseded ? (
+    <span className="inline-flex flex-wrap items-center gap-3">
+      <SupersededNote superseded={detail.superseded} />
+      {reaskable && <ReaskButton at={decision.reask_at ?? detail.reask_at ?? 0} subject={decision.short_id ?? decision.question} onReask={() => reaskDecision(decision._id)} onRefused={() => useInboxStore.getState().reaskRefused(decision._id)} className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12px] text-sol-text hover:border-sol-text-dim disabled:opacity-60" />}
+    </span>
+  ) : closedWords && !act ? (
     <b className="font-semibold text-sol-text" data-banner-state>{closedWords.headline.split(":")[0]}{decision.resolved_at ? ` · ${settledAgo(decision.resolved_at, now)}` : ""}</b>
   ) : closedWords ? (
     <>

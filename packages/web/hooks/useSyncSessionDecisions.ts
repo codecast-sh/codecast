@@ -17,8 +17,8 @@ const api = _api as any;
 // way (convex decisionRowsForViewer), each prunes only the rows it answers
 // for, and `in_queue` says which rows are the viewer's own (inViewerQueue).
 
-/** The queue feed answers for every row in the viewer's queue. */
-const QUEUE_SYNC = { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue !== false };
+/** The queue feed answers for every row in the viewer's queue, and for one it holds there but for its ended session. */
+const QUEUE_SYNC = { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue !== false || r.asker_ended === true };
 
 // useQueryNoThrow because the queue only enriches the inbox — the app must
 // keep rendering if the function is missing (deploy gap) or errors.
@@ -46,7 +46,7 @@ export function useSyncTeamLineDecisions(workspaces: ReadonlyArray<string>) {
   const args = useMemo(() => (key ? { workspaces: key.split(",") } : "skip"), [key]);
   const opts = useMemo(() => {
     const read = new Set(key.split(","));
-    return { syncOpts: { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue === false && !!r.line_workspace && read.has(r.line_workspace) } };
+    return { syncOpts: { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue === false && !r.asker_ended && !!r.line_workspace && read.has(r.line_workspace) } };
   }, [key]);
   return useSyncCollection("sessionDecisions", api.sessionDecisions.listOpenForLines, args as any, opts);
 }
@@ -57,7 +57,7 @@ export function useSyncTeamLineDecisions(workspaces: ReadonlyArray<string>) {
 export function useSyncTeamDecisions(workspace: string | null) {
   const args = useMemo(() => (workspace ? { workspace } : "skip"), [workspace]);
   const opts = useMemo(
-    () => ({ syncOpts: { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue === false && r.team_workspace === workspace } }),
+    () => ({ syncOpts: { isDelta: true, pruneAbsentScope: (r: SessionDecisionItem) => r.in_queue === false && !r.asker_ended && r.team_workspace === workspace } }),
     [workspace],
   );
   return useSyncCollection("sessionDecisions", api.decisionTeamList.listForTeam, args as any, opts);

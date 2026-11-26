@@ -233,6 +233,13 @@ export const DAEMON_COMMANDS = [
   // present a new decision. Result: that command's JSON. Old daemons:
   // "Unknown command".
   "line_trial_reask",
+  // "Re-ask" on any other problem's run paused where no answer can land (its
+  // step was renamed or left the flow), from the decision's own page,
+  // targeted at the run's machine. args: { task (ct-N), run, project_path? }.
+  // Runs `cast workflow reask <task> --run <run>` there, which asks that run
+  // of the problem's. Result: that command's JSON. Old
+  // daemons: "Unknown command".
+  "run_reask",
   // Deploy on the line (deploys.md DP2): the Line page's Deploy, targeted at
   // the device that publishes the project's line profile. args: { deploy
   // (dp-N), root }. Runs `cast line deploy run <dp-N>` in the root, detached,

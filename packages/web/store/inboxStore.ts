@@ -1577,6 +1577,10 @@ export type SessionDecisionItem = {
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
   /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
+  /** When this window last had the decision's run asked again (reaskDecision) from the viewer's queue row, never sent to the server: the Re-ask button reads it until a new decision replaces this one. */
+  reask_at?: number;
+  /** In the viewer's queue but for the viewer having Closed the session that asked it (convex askerEnded): out of every queue, and the queue feed's row alone to prune. */
+  asker_ended?: boolean;
   /** An Ask first read of a Touch ID secret: its Approve confirms with a passkey. */
   touch_id?: boolean;
   blocking: boolean;
@@ -1692,6 +1696,8 @@ export type { DecisionThreadItem, DecisionCommentRow, DecisionThreadOwnerVia } f
 export type DecisionDetailItem = {
   _id: string;
   decision: SessionDecisionItem;
+  /** When this window last had the decision's run asked again (reaskDecision) while the viewer holds no queue row of it; never sent to the server. */
+  reask_at?: number;
   doc: { _id: string; title?: string; content?: string; updated_at?: number } | null;
   task: { _id: string; short_id?: string; title: string; status?: string; status_id?: string; project_id?: string } | null;
   stack: { _id: string; short_id?: string; title: string; decision_ids: string[]; policy?: DecisionStackItem["policy"]; status: string } | null;
@@ -7309,6 +7315,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // viewer, leaves "Handled without you", and the reopenDecision side effect
   // does the server write.
   reopenDecision: (decisionId: string) => void;
+  reaskDecision: (decisionId: string) => Promise<unknown>;
+  reaskRefused: (decisionId: string) => void;
   // Hands an open question to a teammate (it leaves this viewer's queue) or a
   // role (it stays here, held by the role); the passDecision side effect.
   passDecision: (decisionId: string, to: { kind: "user" | "role"; id: string }, note?: string) => void;
@@ -11235,6 +11243,25 @@ const inboxStoreConfig = (set: any, get: any) => ({
     };
   }),
 
+  // "Re-ask" on a decision whose run waits at a step its flow renamed or
+  // dropped: the button reads asking at once (`reask_at`), and the
+  // reaskDecision side effect has the run's machine ask again
+  // (convex lineActions reaskDecisionCore); the new decision withdraws this one.
+  // An outdated decision is in no list feed, so its page usually holds it only as a detail: the stamp goes on the
+  // viewer's queue row when there is one, else on the detail, and is never adopted into the queue.
+  reaskDecision: asyncAction(function (this: Draft, decisionId: string) {
+    const row = this.sessionDecisions[decisionId];
+    if (row) { if (row.status === "pending") row.reask_at = Date.now(); return; }
+    const detail = this.decisionDetails[decisionId];
+    if (detail?.decision.status === "pending") detail.reask_at = Date.now();
+  }),
+  // A refused re-ask takes its stamp back: the button then offers it again rather than read as asking.
+  reaskRefused: sync(function (this: Draft, decisionId: string) {
+    const row = this.sessionDecisions[decisionId];
+    if (row) row.reask_at = undefined;
+    const detail = this.decisionDetails[decisionId];
+    if (detail) detail.reask_at = undefined;
+  }),
   reopenDecision: action(function (this: Draft, decisionId: string) {
     const row = this.sessionDecisions[decisionId];
     const me = String(this.currentUser?._id ?? "");

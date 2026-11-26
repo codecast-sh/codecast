@@ -6,7 +6,7 @@
 // take no answer is asked again through trialReask. An answer from a tab a
 // cast browser session drives is an agent's, so it rides as a stand-in
 // (the action's result carries `agent`) and never reads as the person's verdict.
-import { action } from "./mutativeMiddleware";
+import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { isAgentDrivenTab } from "../lib/desktopHandoff";
 
 export type TrialSliceActions = {
@@ -17,8 +17,11 @@ export type TrialSliceActions = {
   trialRerun: (taskId: string, newApproach?: boolean) => void;
   /** Close a stopped trial run's problem (keyed by its problem): it drops, and its findings retire with it. */
   trialClose: (taskId: string) => void;
-  /** Ask a paused trial run again (keyed by its problem): its machine has the asking station present a new decision. */
-  trialReask: (taskId: string) => void;
+  /** Ask a paused trial run again (keyed by its problem): its machine has the asking station present a new decision.
+   *  Resolves with the command sent to that machine (`command_id`), whose verdict the Re-ask button watches. */
+  trialReask: (taskId: string) => Promise<unknown>;
+  /** A refused trial re-ask takes its cards' stamp back. */
+  trialReaskRefused: (taskId: string) => void;
   /** Raise a trial's run limit and spend cap (only up): its dispatcher may start runs again on its next pass. */
   trialRaiseLimits: (projectId: string, maxRuns: number, capUsd: number) => void;
 };
@@ -65,10 +68,13 @@ export function createTrialSlice(): TrialSliceActions {
     }) as TrialSliceActions["trialClose"],
     // The problem's waiting cards say they were asked again (`reask_at`, read by the Re-ask button); the server closes
     // them once the run's machine has picked the run up, and the new decision arrives as a card of its own.
-    trialReask: action(function (this: Cards, taskId: string) {
+    trialReask: asyncAction(function (this: Cards, taskId: string) {
       const now = Date.now();
       for (const card of Object.values(this.trialCards)) if (card.task_id === taskId && card.status === "waiting") card.reask_at = now;
     }) as TrialSliceActions["trialReask"],
+    trialReaskRefused: sync(function (this: Cards, taskId: string) {
+      for (const card of Object.values(this.trialCards)) if (card.task_id === taskId) card.reask_at = undefined;
+    }) as TrialSliceActions["trialReaskRefused"],
     // The header reads the new limits at once, and no hold: the one recorded named the old limits (lineTrial.raiseLimits).
     trialRaiseLimits: action(function (this: Cards, projectId: string, maxRuns: number, capUsd: number) {
       const d = this.trialProjects?.[projectId]?.dispatch;

@@ -62,14 +62,16 @@ export function runHref(runId: string): string {
 
 /** Whether an open decision waits on the viewer: the queue's own stamp when the row came through a queue feed, else
  *  (a decision page opened directly, read from its document alone) whether the viewer is among the people it asks. */
-export function waitsOnViewer(d: Pick<SessionDecisionItem, "in_queue" | "asked_user_ids">, viewerId: string | undefined): boolean {
+export function waitsOnViewer(d: Pick<SessionDecisionItem, "in_queue" | "asked_user_ids"> & { asker_ended?: boolean }, viewerId: string | undefined): boolean {
+  // Out of the queue because the viewer Closed the session that asked it: still theirs, never a teammate's.
+  if (d.asker_ended) return true;
   if (d.in_queue !== undefined || !d.asked_user_ids || !viewerId) return inViewerQueue(d);
   return d.asked_user_ids.includes(viewerId);
 }
 
 /** What a pending decision's wait means for the person, in plain words: the consequence, never the mechanism. One held
  *  by someone else (passed, escalated, shared out) waits on them; a silent card was asked by codecast, not an agent. */
-export function decisionWaitLabel(d: Pick<SessionDecisionItem, "status" | "blocking" | "silent" | "in_queue" | "asked_user_ids">, viewerId?: string): string {
+export function decisionWaitLabel(d: Pick<SessionDecisionItem, "status" | "blocking" | "silent" | "in_queue" | "asked_user_ids" | "asker_ended">, viewerId?: string): string {
   if (d.status !== "pending") return d.status;
   if (!waitsOnViewer(d, viewerId)) return "Waiting on a teammate";
   if (d.blocking) return "Waiting on you";

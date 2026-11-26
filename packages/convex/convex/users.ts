@@ -4073,7 +4073,7 @@ export const sendConfigCommand = mutation({
 export async function enqueueConfigCommand(
   ctx: Pick<MutationCtx, "db">,
   userId: Id<"users">,
-  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit" | "line_graph_edit" | "line_try" | "line_trial_reask" | "line_deploy" | "line_fixloop",
+  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit" | "line_graph_edit" | "line_try" | "line_trial_reask" | "run_reask" | "line_deploy" | "line_fixloop",
   argsJson: string | undefined,
   targetDeviceId?: string,
   requestId?: string,

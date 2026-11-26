@@ -22,7 +22,7 @@ import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { withDecisionFacts } from "./lib/decisionRowFacts";
 import { decisionTeamOf } from "./lib/decisionTeam";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType, isClosedSession } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
 import { nextShortId } from "./counters";
@@ -41,7 +41,8 @@ import { noticeAreaOwner, routeByArea } from "./decisionRouting";
 import { settleAreasCard } from "./decisionAreas";
 export { syncDecisionInbox };
 import { artifactUrl } from "./lib/artifactRules";
-import { humanStarterUser, listSessionOwnerIds, listSessionPartyIds } from "./sessionOwners";
+import { humanStarterUser, listSessionOwnerIds, listSessionPartyIds, sessionOwnerRow } from "./sessionOwners";
+import { overlayViewerTriage } from "./lib/viewerTriage";
 import { buildLadder, workspaceAdmins, type Hop } from "./lib/roleLadder";
 export { buildLadder, workspaceAdmins };
 import { resolveAskedPeople } from "./lib/decisionAudience";
@@ -1718,7 +1719,9 @@ export async function listForSessionCore(
     // `cast decide ls --mine` (the-line.md L10): every pending decision the
     // caller holds, from the same read the web queue uses, oldest first so
     // the list reads as the queue does.
-    rows = (await listForUserCore(ctx, auth.userId, Date.now())).filter((r) => r.status === "pending");
+    const ended = new Map<string, Promise<boolean>>();
+    rows = [];
+    for (const r of await listForUserCore(ctx, auth.userId, Date.now())) if (r.status === "pending" && !(await askerEnded(ctx, auth.userId, r, ended))) rows.push(r);
     rows.sort((a, b) => a.created_at - b.created_at);
     return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
   }
@@ -2591,7 +2594,7 @@ export const listForUser = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    return decisionRowsForViewer(ctx, await listForUserCore(ctx, userId, Date.now()), () => true);
+    return decisionRowsForViewer(ctx, userId, await listForUserCore(ctx, userId, Date.now()), () => true);
   },
 });
 
@@ -2618,9 +2621,10 @@ const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as
  * currentDecisions): each check reads the run, its problem and its workflow
  * per row, so a feed runs it once.
  */
-export async function decisionRowsForViewer(ctx: Ctx, given: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
+export async function decisionRowsForViewer(ctx: Ctx, viewerId: Id<"users">, given: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
   const rows = await withDecisionFacts(ctx, given);
   const severity = new Map<string, number | null>();
+  const ended = new Map<string, Promise<boolean>>();
   const out = [];
   for (const r of rows) {
     let worst: number | null = null;
@@ -2633,9 +2637,47 @@ export async function decisionRowsForViewer(ctx: Ctx, given: DecisionRow[], inQu
       }
       worst = severity.get(key) ?? null;
     }
-    out.push({ ...r, ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: await inQueue(r), problem_severity: worst });
+    // A row the viewer's queue holds but for its session having ended says so (`asker_ended`), so the queue feed,
+    // which sent it, still answers for it in the web's prune and lets it go once it leaves the viewer's list.
+    const queued = await inQueue(r);
+    const askerGone = queued && (await askerEnded(ctx, viewerId, r, ended));
+    out.push({ ...r, ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: queued && !askerGone, ...(askerGone ? { asker_ended: true } : {}), problem_severity: worst });
   }
   return out;
+}
+
+/**
+ * Whether an open decision is the session's own question and that session reads as Closed in `viewerId`'s inbox,
+ * exactly as the inbox reads it (conversations stampInboxViewerFields): the row its people share, with a team
+ * session's stamps replaced by the viewer's own triage; a viewer who is neither its author nor an owner never has it
+ * closed. A Close counts, never a kill (shared isClosedSession), which a run's stations get when they finish. Such a
+ * decision leaves that person's queues but stays answerable from its page and its session; an answer enters the
+ * session as a person's message, which reopens it (pendingMessages enqueue), and a reopened session's decisions come
+ * back to the queue.
+ *
+ * Only the session's own ask counts (sessionOwnAsk). A run's gate belongs to the run, a problem's or card's question to
+ * the work it names, and a card the server posts (a merge approval, the team's areas) is set down in whichever session
+ * was handy: each waits on its answer whatever became of the session it sits in.
+ */
+export function askerEnded(ctx: Ctx, viewerId: Id<"users">, row: Pick<DecisionRow, "status" | "conversation_id" | "workflow_run_id" | "task_id" | "card" | "approval_card" | "asked_message_count">, memo: Map<string, Promise<boolean>> = new Map()): Promise<boolean> {
+  if (row.status !== "pending" || !sessionOwnAsk(row)) return Promise.resolve(false);
+  const key = String(row.conversation_id);
+  if (!memo.has(key)) memo.set(key, (async () => {
+    const conv: Doc<"conversations"> | null = await ctx.db.get(row.conversation_id);
+    if (!conv) return false;
+    const mine = await sessionOwnerRow(ctx, conv._id, viewerId, conv);
+    if (String(conv.user_id) !== String(viewerId) && !mine) return false;
+    const seen: any = { ...conv };
+    if (mine?.team_id) overlayViewerTriage(seen, mine.triage);
+    return isClosedSession(seen);
+  })());
+  return memo.get(key)!;
+}
+
+/** A question the session asked of its own accord (`ask`, which alone stamps `asked_message_count`), about no run,
+ *  problem or card. */
+function sessionOwnAsk(row: Pick<DecisionRow, "workflow_run_id" | "task_id" | "card" | "approval_card" | "asked_message_count">): boolean {
+  return row.asked_message_count !== undefined && !row.workflow_run_id && !row.task_id && !row.card && !row.approval_card;
 }
 
 /** Whether a decision sits in the viewer's own queue: an inbox row of theirs, or (an older row) they asked it. */
@@ -2702,7 +2744,7 @@ export const listOpenForLines = query({
         take(d);
       }
       const standing = await withLiveSession(ctx, await currentDecisions(ctx, rows));
-      out.push(...(await decisionRowsForViewer(ctx, standing, (r) => inViewerQueue(ctx, r, userId), { line_workspace: workspace })));
+      out.push(...(await decisionRowsForViewer(ctx, userId, standing, (r) => inViewerQueue(ctx, r, userId), { line_workspace: workspace })));
     }
     return out;
   },

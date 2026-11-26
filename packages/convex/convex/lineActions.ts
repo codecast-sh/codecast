@@ -14,9 +14,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { canReadRun } from "./workflow_runs";
+import { canReadRun, ownsRun } from "./workflow_runs";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueueConfigCommand } from "./users";
+import { ownDevice } from "./devices";
 import { canAccessProject, resolveWorkspaceKey } from "./lib/access";
 import { BRIEF_MAX_CHARS, causeHistoryForTask, stationBrief } from "./lineWorkspace";
 import { NO_CAUSE_HISTORY, historyBrief } from "@codecast/shared/contracts/causeHistory";
@@ -385,28 +386,53 @@ export async function askLineAgentCore(ctx: any, userId: Id<"users">, clientKey:
   }
 }
 
-// ── ask a trial run again ───────────────────────────────────────────────────
+// ── ask a run's decision again ──────────────────────────────────────────────
 
 /**
- * "Re-ask" on a trial run paused where no answer can land: its step left the
- * line, or no session asked its card. Asking again stops the run's runner and
- * reads its graph on the machine that runs it, so the act is a command to that
- * machine (`line_trial_reask`), which runs the same re-ask the CLI does
- * (`cast line trial rerun <task> --reask`). One request waits at a time: a
- * second press while the first is still queued answers with it.
+ * "Re-ask" on a run paused where no answer can land: its step left the flow,
+ * or no session asked its card. Asking again stops the run's runner and reads
+ * its graph on the machine that runs it, so the act is a command to that
+ * machine, which runs the same re-ask the CLI does: a trial problem's
+ * (`line_trial_reask`, `cast line trial rerun <task> --reask`) under the
+ * trial's budget, any other problem's (`run_reask`, `cast workflow reask
+ * <task>`) by the run's owner. One request waits at a time: a second press
+ * while the first is still queued answers with it.
  */
-export async function reaskTrialRunCore(ctx: any, userId: Id<"users">, taskRef: string) {
+export async function reaskOnRunMachineCore(ctx: any, userId: Id<"users">, taskRef: string) {
   const id = ctx.db.normalizeId("tasks", taskRef);
   const task: Doc<"tasks"> | null = id ? await ctx.db.get(id) : await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", taskRef)).first();
-  const project = await trialProjectOf(ctx, task);
-  if (!task || !project || !(await canAccessProject(ctx, userId, project))) throw new ConvexError("This is not a problem in a trial project");
-  const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
-  if (!run || run.status !== "paused" || !run.gate_node_id) throw new ConvexError(`${task.short_id}'s run is not waiting at a card`);
+  const trial = task ? await trialProjectOf(ctx, task) : null;
+  const run: Doc<"workflow_runs"> | null = task?.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
+  // One refusal for every caller who may not, before any reason that would say what the problem is.
+  if (!task || (trial ? !(await canAccessProject(ctx, userId, trial)) : !run || !(await canReadRun(ctx, userId, run)) || !(await ownsRun(ctx, userId, run)))) {
+    throw new ConvexError("Only the run's owner asks its decision again");
+  }
+  // The machine's owner alone sends it commands (enqueueConfigCommand): a co-owner of the run's session who is not
+  // hears that first, before anything about the run's state.
+  if (run?.runner_device && !(await ownDevice(ctx, userId, run.runner_device))) throw new ConvexError("That machine is not yours: only its owner can ask the run again");
+  if (!run || run.status !== "paused" || !run.gate_node_id) throw new ConvexError(`${task.short_id}'s run is not waiting at a decision`);
   if (!run.runner_device) throw new ConvexError(`${task.short_id}'s run names no machine`);
-  const args = JSON.stringify({ task: task.short_id, ...(run.project_path ? { project_path: run.project_path } : {}) });
+  const command = trial ? "line_trial_reask" as const : "run_reask" as const;
+  // The run it checked rides along, so the machine asks that run and no newer one the problem has since.
+  const args = JSON.stringify({ task: task.short_id, ...(trial ? {} : { run: String(run._id) }), ...(run.project_path ? { project_path: run.project_path } : {}) });
   const queued: Doc<"daemon_commands">[] = await ctx.db.query("daemon_commands").withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined)).collect();
-  const waiting = queued.find((c) => c.command === "line_trial_reask" && c.args === args);
+  const waiting = queued.find((c) => c.command === command && c.args === args);
   if (waiting) return { task: task.short_id, command_id: String(waiting._id), queued: true as const };
-  const commandId = await enqueueConfigCommand(ctx, userId, "line_trial_reask", args, run.runner_device);
+  const commandId = await enqueueConfigCommand(ctx, userId, command, args, run.runner_device);
   return { task: task.short_id, command_id: String(commandId), queued: false as const };
+}
+
+/** Re-ask from a decision's own page: the decision's run, through the problem it works. */
+export async function reaskDecisionCore(ctx: any, userId: Id<"users">, decisionId: Id<"session_decisions">) {
+  const decision: Doc<"session_decisions"> | null = await ctx.db.get(decisionId);
+  const run: Doc<"workflow_runs"> | null = decision?.workflow_run_id ? await ctx.db.get(decision.workflow_run_id) : null;
+  // Ownership before any reason that says what the decision or its run is.
+  if (!decision || !run || !(await canReadRun(ctx, userId, run)) || !(await ownsRun(ctx, userId, run))) throw new ConvexError("Only the run's owner asks its decision again");
+  if (decision.status !== "pending") throw new ConvexError("This decision is not one a run waits on");
+  if (String(run.gate_decision_id ?? "") !== String(decision._id)) throw new ConvexError("Its run no longer waits on this decision");
+  // The machine asks the problem's newest run (`cast workflow reask <task>`): only while that is this decision's.
+  const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (!task) throw new ConvexError("Its run works no problem to ask again");
+  if (String(task.workflow_run_id ?? "") !== String(run._id)) throw new ConvexError(`${task.short_id} has a newer run than the one that asked this`);
+  return reaskOnRunMachineCore(ctx, userId, String(run.task_id));
 }

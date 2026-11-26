@@ -32,6 +32,9 @@ describe("decisionWaitLabel", () => {
   test("one passed, escalated or shared out to someone else waits on them, not the viewer", () => {
     expect(decisionWaitLabel({ status: "pending", blocking: true, in_queue: false })).toBe("Waiting on a teammate");
   });
+  test("one out of the queue because the viewer Closed its session is still theirs, never a teammate's", () => {
+    expect(decisionWaitLabel({ status: "pending", blocking: true, in_queue: false, asker_ended: true })).toBe("Waiting on you");
+  });
   test("a silent card was asked by codecast, so no agent went ahead", () => {
     expect(decisionWaitLabel({ status: "pending", blocking: false, silent: true })).toBe("Asked of you");
     expect(decisionWaitLabel({ status: "pending", blocking: false })).toBe("The agent went ahead; you can change course");

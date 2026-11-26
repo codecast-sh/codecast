@@ -89,7 +89,7 @@ export function registerLineTrialCommands(line: Command, deps: PublishDeps): voi
         if (superseded) console.log(`  ${superseded} superseded card${superseded === 1 ? "" : "s"} hidden (--all shows them)`);
         if (!cards.length) { console.log("  No cards yet."); continue; }
         for (const c of cards) {
-          const state = c.superseded ? `replaced: ${SUPERSEDED_WORDS[c.superseded.why as SupersededWhy]}` : c.status === "answered" ? `${c.answer.label}${c.answer.stand_in ? " (stand-in)" : ""}` : c.status;
+          const state = c.superseded ? `${c.superseded.by ? "replaced" : "outdated"}: ${SUPERSEDED_WORDS[c.superseded.why as SupersededWhy]}` : c.status === "answered" ? `${c.answer.label}${c.answer.stand_in ? " (stand-in)" : ""}` : c.status;
           console.log(`  ${c.short_id}  ${c.kind === "card" ? "card    " : "proposal"}  ${state.padEnd(10)}  ${age(c.created_at).padEnd(8)}  ${c.task_short_id}  ${c.task_title.slice(0, 80)}`);
         }
       }
