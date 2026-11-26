@@ -9,7 +9,7 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { runModelCallOrOwn } from "./modelCalls";
+import { runModelCall } from "./modelCalls";
 import { callScope } from "./priorityPassRun";
 import { sessionTasks } from "./priorityPassInputs";
 import { linkSession } from "./lib/priorityLinks";
@@ -181,7 +181,7 @@ export const classify = internalAction({
 
 /** One model call for one session's input: what it chose (null when the reply named nothing the input showed), and its cost. */
 export async function classifyOnce(ctx: any, input: ClassifierInput, workspace: string, budgeted: boolean, model?: string): Promise<{ choice: ClassifierChoice | null; cost_usd: number; error?: string }> {
-  const reply = await runModelCallOrOwn(ctx, callScope(workspace), budgeted, "grouping", classifierRequest(input, model), "Priority classifier", { ctx, scope: { workspace } }, CALL_TIMEOUT_MS);
+  const reply = await runModelCall(ctx, callScope(workspace), "grouping", classifierRequest(input, model), "Priority classifier", CALL_TIMEOUT_MS, { budgeted });
   if (!reply.ok) return { choice: null, cost_usd: reply.cost_usd, error: reply.error };
   return { choice: parseClassifierReply(reply.json, input), cost_usd: reply.cost_usd };
 }
