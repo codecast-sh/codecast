@@ -210,17 +210,19 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
     .requiredOption("--verdict <verdict>", "ship, changes or rejected")
     .requiredOption("--head <sha>", "The pull request head the review read (40 hex characters)")
     .option("--round <id>", "The review round, as pr.json names it")
-    .option("--run <id>", "The run, when this session reviews for more than one")
+    .option("--run <id>", "The run, when this session reviews for more than one (default: $run_id)")
     .option("--node <id>", "The reviewer station's id, when the session runs more than one")
     .option("--mechanism <answer>", "true or false: whether the change is a mechanism (a mistake that reaches many people and cannot be undone). Left out, the review has not said, and an approval status waits on it")
     .action(async (opts: { verdict: string; head: string; round?: string; run?: string; node?: string; mechanism?: string }) => {
       if (opts.mechanism !== undefined && opts.mechanism !== "true" && opts.mechanism !== "false") { console.error("--mechanism is true or false"); process.exit(1); }
       const session = deps.callingSession();
       if (!session) { console.error("no session: the review verdict is recorded from inside the reviewer station's own session"); process.exit(1); }
+      // The run read by its id, when the station knows it: the server's fallback reads the session's own run pointers.
+      const runId = opts.run ?? process.env.run_id;
       try {
         const r = await deps.cliPost("/cli/workflow-runs/review-verdict", {
           session_id: session, verdict: opts.verdict, head_sha: opts.head,
-          ...(opts.round ? { round: opts.round } : {}), ...(opts.run ? { run_id: opts.run } : {}), ...(opts.node ? { node_id: opts.node } : {}),
+          ...(opts.round ? { round: opts.round } : {}), ...(runId ? { run_id: runId } : {}), ...(opts.node ? { node_id: opts.node } : {}),
           ...(opts.mechanism !== undefined ? { mechanism: opts.mechanism === "true" } : {}),
         }, { throwOnError: true });
         console.log(`recorded ${opts.verdict} on ${opts.head.slice(0, 10)} for ${r?.node_id ?? "the reviewer station"}`);

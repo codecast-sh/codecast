@@ -1646,7 +1646,7 @@ export const admitToStation = mutation({
     // Only the runs holding a place there: the workspace's running runs are thousands, parked at a queue for weeks.
     const inside = (await ctx.db.query("workflow_runs")
       .withIndex("by_workspace_status_place", (q) => q.eq("workspace", run.workspace!).eq("status", "running").eq("station_place.node_id", args.node_id))
-      .take(Math.max(0, args.cap))).length;
+      .take(Math.max(0, Math.ceil(args.cap)))).length;
     if (inside >= args.cap) return { admitted: false, inside, cap: args.cap };
     await ctx.db.patch(run._id, { station_place: { node_id: args.node_id, at: Date.now() } });
     return { admitted: true, inside: inside + 1, cap: args.cap };

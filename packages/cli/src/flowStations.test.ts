@@ -38,12 +38,29 @@ function argv(line: string, vars: Record<string, string>): string[] {
   return out.split("\0").filter(Boolean);
 }
 
+/** Runs `fn` with $run_id set to `value` (unset when undefined), then puts it back. */
+async function withRunId(value: string | undefined, fn: () => Promise<void>) {
+  const was = process.env.run_id;
+  if (value === undefined) delete process.env.run_id; else process.env.run_id = value;
+  try { await fn(); } finally { if (was === undefined) delete process.env.run_id; else process.env.run_id = was; }
+}
+
 describe("cast flow review-verdict", () => {
   test("review.md's literal line, from a spawned reviewer session, records the verdict naming only the session", async () => {
     const head = "c".repeat(40);
     const { program, posts } = cast({ CLAUDE_CODE_SESSION_ID: "rev-agent-uuid" });
-    await program.parseAsync(["node", "cast", ...argv(REVIEW_MD_LINE, { "pr.json.head_sha": head, "pr.json.round": "r2" })]);
+    await withRunId(undefined, () => program.parseAsync(["node", "cast", ...argv(REVIEW_MD_LINE, { "pr.json.head_sha": head, "pr.json.round": "r2" })]).then(() => {}));
     expect(posts).toEqual([{ path: "/cli/workflow-runs/review-verdict", body: { session_id: "rev-agent-uuid", verdict: "changes", head_sha: head, round: "r2" } }]);
+  });
+
+  test("a session with $run_id names its run, and --run wins over it", async () => {
+    const head = "c".repeat(40);
+    const { program, posts } = cast({ CLAUDE_CODE_SESSION_ID: "rev-agent-uuid" });
+    await withRunId("run_7", async () => {
+      await program.parseAsync(["node", "cast", "flow", "review-verdict", "--verdict", "ship", "--head", head]);
+      await program.parseAsync(["node", "cast", "flow", "review-verdict", "--verdict", "ship", "--head", head, "--run", "run_9"]);
+    });
+    expect(posts.map((p) => p.body.run_id)).toEqual(["run_7", "run_9"]);
   });
 
   test("--run and --node pass through when a session must name them", async () => {
