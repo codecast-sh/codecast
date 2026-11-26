@@ -24,14 +24,16 @@
 #   deadline  how long a change flow's Deploy stage waits for it to go live, from when it
 #             can first go out, before it calls the deploy stuck (30m, 1h30m; at most 24h).
 #             Default a day for a press target or the line's own, which the run only waits
-#             on, 60m for a release target it sends, 30m for a push or auto target
+#             on, 60m for a release target it sends, 30m for a push or auto target, 10m
+#             for one Merge sends (a before_push ship step), which it only waits on
 #
 # These live apart from workspace.toml because every released CLI validates that
 # file strictly and refuses keys it does not know.
 
 # Convex goes out before the merge (workspace.toml's convex step, run by Merge from the
-# change rebased onto main), because web rebuilds the moment main moves; Deploy then finds
-# it live with the merged commit, or sends it from main when it is not.
+# change rebased onto main), because web rebuilds the moment main moves. Deploy only waits
+# for that recorded deploy and never sends it itself: a send from here would deploy this
+# checkout's working tree. With no deploy carrying the merged commit it stops stuck.
 [[target]]
 name = "backend"
 ship = "convex"

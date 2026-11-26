@@ -93,7 +93,7 @@ describe("targets in .codecast/deploy.toml", () => {
     expect(deploysFor(shipSpec(REPO).deploy, ["packages/cli/src/index.ts", "packages/mobile/app.tsx", "packages/convex/convex/x.ts"]).map((s) => [s.name, s.target ?? null])).toEqual([["convex", "backend"]]);
   });
 
-  test("codecast's change runs send every target a change touches: backend before the merge, cli and mobile, web on push; desktop waits for a press", () => {
+  test("codecast's change runs send every target a change touches: backend at Merge (Deploy only waits on it), cli and mobile, web on push; desktop waits for a press", () => {
     const spec = shipSpec(REPO);
     expect(spec.flow).toBe("change");
     const files = ["packages/convex/convex/x.ts", "packages/web/app/page.tsx", "packages/cli/src/index.ts", "packages/mobile/app.tsx", "packages/electron/main.js"];
@@ -103,7 +103,7 @@ describe("targets in .codecast/deploy.toml", () => {
     expect(held).toEqual({});
     const { duties } = deployDuties(readDeployTargets(REPO, spec.deploy), files, { held });
     expect(duties.map((d) => [d.target, d.action, d.how])).toEqual([
-      ["backend", "send", "release"],
+      ["backend", "wait", "merge"],
       ["web", "wait", "push"],
       ["cli", "send", "release"],
       ["mobile", "send", "release"],
