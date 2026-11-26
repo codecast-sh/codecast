@@ -727,7 +727,7 @@ async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boole
       : null;
     if (!reason) { kept++; continue; }
     by_reason[reason]++;
-    if (!dryRun) await ctx.db.patch(row._id, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined });
+    if (!dryRun) await ctx.db.patch(row._id, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined, inbox_stash_cause: undefined });
   }
   const cleared = Object.values(by_reason).reduce((a, b) => a + b, 0);
   return {

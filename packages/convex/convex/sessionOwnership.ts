@@ -247,6 +247,7 @@ async function unhide(ctx: { db: any }, conversation: any): Promise<void> {
   if (conversation.inbox_stashed_at) {
     hidden.inbox_stashed_at = undefined;
     hidden.inbox_stash_hidden = undefined;
+    hidden.inbox_stash_cause = undefined;
   }
   if (conversation.inbox_snoozed_until) hidden.inbox_snoozed_until = undefined;
   if (Object.keys(hidden).length > 0) await ctx.db.patch(conversation._id, hidden);

@@ -483,7 +483,7 @@ async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> 
 // back (isStashHidden). A run without a task is someone's own workflow and
 // stays in their inbox.
 function runLogInboxFields(taskBoundAt: number | undefined) {
-  return taskBoundAt ? { inbox_stashed_at: taskBoundAt, inbox_stash_hidden: true } : {};
+  return taskBoundAt ? { inbox_stashed_at: taskBoundAt, inbox_stash_hidden: true, inbox_stash_cause: "run_log" } : {};
 }
 
 // Once, for runs created before runLogInboxFields: stash and hide the log

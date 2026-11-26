@@ -125,6 +125,7 @@ export * from "./appSurfaces";
 // How a pull request is named: one parser for the reference forms people type
 // and one builder for the codecast page link, shared by the CLI, Convex and web.
 export * from "./conversationFields";
+export * from "./stashCause";
 export * from "./prRefs";
 // The `--on <event>` vocabulary: which events a trigger can wait for, the
 // filter each name arms, and the labels the web renders. Shared because the

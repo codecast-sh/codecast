@@ -1360,19 +1360,21 @@ export const resolveTeamFromDirectory = query({
  * stands for the task and its fork chips lead to it. It files where its origin
  * is filed (a task already dismissed or snoozed does not come back), else it
  * is born stashed; a message sent to it brings it back like any stash.
+ * A stash it inherits carries the origin's cause; one it is born with says
+ * the fork set it, never the person.
  */
 export function daemonForkFields(
-  origin: Pick<Doc<"conversations">, "_id" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_stash_hidden" | "inbox_snoozed_until">,
+  origin: Pick<Doc<"conversations">, "_id" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_stash_hidden" | "inbox_stash_cause" | "inbox_snoozed_until">,
   fork: { at_uuid: string; copied: number; cutoff?: number },
   now: number,
 ) {
-  const triage = (["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_snoozed_until"] as const)
+  const triage = (["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_stash_cause", "inbox_snoozed_until"] as const)
     .filter((k) => origin[k] !== undefined && origin[k] !== null);
   return {
     forked_from: origin._id,
     fork_copied: fork.copied,
     ...(fork.cutoff !== undefined ? { fork_cutoff_timestamp: fork.cutoff } : {}),
-    ...(origin.inbox_stashed_at ? {} : { inbox_stashed_at: now }),
+    ...(origin.inbox_stashed_at ? {} : { inbox_stashed_at: now, inbox_stash_cause: "fork" }),
     ...Object.fromEntries(triage.map((k) => [k, origin[k]])),
   };
 }
@@ -8832,6 +8834,7 @@ async function enrichInboxSessionRow(
     inbox_stashed_at: conv.inbox_stashed_at ?? null,
     inbox_snoozed_until: conv.inbox_snoozed_until ?? null,
     inbox_stash_hidden: conv.inbox_stash_hidden ?? null,
+    inbox_stash_cause: conv.inbox_stash_cause ?? null,
     // The retired marker: classifyWorkState uses it to keep a killed row out of
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
@@ -9098,6 +9101,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_stashed_at: child.inbox_stashed_at ?? null,
     inbox_snoozed_until: child.inbox_snoozed_until ?? null,
     inbox_stash_hidden: child.inbox_stash_hidden ?? null,
+    inbox_stash_cause: child.inbox_stash_cause ?? null,
     inbox_killed_at: child.inbox_killed_at ?? null,
     inbox_closed_at: child.inbox_closed_at ?? null,
     inbox_adopted_at: child.inbox_adopted_at ?? null,
@@ -12028,6 +12032,7 @@ async function resurfaceHiddenSession(
   await ctx.db.patch(conv._id, {
     inbox_dismissed_at: undefined,
     inbox_stashed_at: undefined,
+    inbox_stash_cause: undefined,
     inbox_killed_at: undefined,
   });
   // The un-kill mirror (same as the web restore path in dispatch): bring back
@@ -12125,7 +12130,7 @@ export const cliSetSessionVisibility = mutation({
     const patch =
       args.action === "kill"
         ? { inbox_dismissed_at: Date.now(), ...(teamKill && !conv.inbox_killed_at ? { inbox_killed_at: Date.now() } : {}) }
-        : { inbox_stashed_at: Date.now(), inbox_stash_hidden: args.hidden ? true : undefined };
+        : { inbox_stashed_at: Date.now(), inbox_stash_hidden: args.hidden ? true : undefined, inbox_stash_cause: "person" };
     await ctx.db.patch(conv._id, patch);
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
     // The nested group (Task subagents + agent-team teammates) comes down with
@@ -12476,6 +12481,7 @@ export async function performSetThreadState(
   if (status === "blocked" && (conv.inbox_stashed_at || conv.inbox_dismissed_at) && !conv.inbox_killed_at) {
     await ctx.db.patch(conv._id, {
       inbox_stashed_at: undefined,
+      inbox_stash_cause: undefined,
       inbox_dismissed_at: undefined,
     });
     resurfaced = true;
@@ -13937,7 +13943,7 @@ export async function resolveRestartTarget(
     if (conv.status === "completed") revive.status = "active" as const;
     if (conv.inbox_killed_at) revive.inbox_killed_at = undefined;
     if (conv.inbox_dismissed_at) revive.inbox_dismissed_at = undefined;
-    if (conv.inbox_stashed_at) revive.inbox_stashed_at = undefined;
+    if (conv.inbox_stashed_at) { revive.inbox_stashed_at = undefined; revive.inbox_stash_cause = undefined; }
     if (Object.keys(revive).length > 0) {
       await ctx.db.patch(conv._id, revive);
       // A revival is a revival: undismiss re-arms the schedules the kill

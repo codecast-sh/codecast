@@ -151,6 +151,7 @@ export async function stampRunConversation(
       conv.thread_state_status !== "blocked"
     ) {
       patch.inbox_stashed_at = Date.now();
+      patch.inbox_stash_cause = "run_repeating";
     }
   }
   if (Object.keys(patch).length > 0) {

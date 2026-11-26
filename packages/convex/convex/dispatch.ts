@@ -515,6 +515,12 @@ export async function applyPatches(
           // inbox_closed_at stays: with no dismissed stamp it is inert (not a close),
           // and it is the cell the close's undo finds to clear this stash with.
           if ((finalSafe as any).inbox_closed_at == null) (finalSafe as any).inbox_closed_at = (finalSafe as any).inbox_stashed_at;
+          (finalSafe as any).inbox_stash_cause = "close_aside";
+        } else if (table === "conversations" && "inbox_stashed_at" in finalSafe) {
+          // Every stamp write on this rail is the person's gesture (a stash, a
+          // restore, a dismiss that clears the stash), so the cause follows the
+          // stamp: theirs when set, gone when cleared (contracts/stashCause).
+          (finalSafe as any).inbox_stash_cause = (finalSafe as any).inbox_stashed_at ? "person" : undefined;
         }
         // A close's adoption of a child (the client paints the children its
         // close leaves standing) is the client's guess. The server decides it:
@@ -555,6 +561,8 @@ export async function applyPatches(
           } else if (!f.inbox_killed_at) {
             const triage: Record<string, any> = {};
             for (const k of VIEWER_TRIAGE_FIELDS) if (k in f) { triage[k] = f[k]; delete f[k]; }
+            // The person's own stash lives in their triage, which says it is theirs.
+            delete f.inbox_stash_cause;
             if (Object.keys(triage).length) await recordViewerTriage(ctx as any, userId, doc._id as Id<"conversations">, triage);
           }
         }

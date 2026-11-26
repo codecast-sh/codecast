@@ -832,6 +832,9 @@ export type InboxSession = {
   // back on one). Honored only while inbox_stashed_at is set — see the shared
   // isStashHidden. Every stash write sets it, true or null.
   inbox_stash_hidden?: boolean | null;
+  // Who or what set the stash (shared stashCause): server-written beside the
+  // stamp, read only while the stamp is set.
+  inbox_stash_cause?: string | null;
   // The RETIRED marker — the user tore this session down. Set by every kill
   // surface (`cast kill`, the web killSession command, applyHideTransition's
   // kill branch) and outranks every other state signal: a killed row is never

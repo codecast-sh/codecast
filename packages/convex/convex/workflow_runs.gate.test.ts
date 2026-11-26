@@ -465,6 +465,7 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     const log = tables.conversations.find((c) => c._id === bound.primary_conversation_id);
     expect(log.inbox_stash_hidden).toBe(true);
     expect(log.inbox_stashed_at).toBeGreaterThan(0);
+    expect(log.inbox_stash_cause).toBe("run_log");
     const free = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line" });
     const own = tables.conversations.find((c) => c._id === free.primary_conversation_id);
     expect(own.inbox_stashed_at).toBeUndefined();

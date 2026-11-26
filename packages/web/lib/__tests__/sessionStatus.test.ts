@@ -14,7 +14,7 @@ import {
   type SessionStatus,
   type StatusLive,
 } from "../sessionStatus";
-import { sessionCardLine } from "../sessionCardLine";
+import { sessionCardLine, stashCauseTarget } from "../sessionCardLine";
 import { splitStatusBands } from "../statusBands";
 
 // The status vocabulary (lib/sessionStatus) against the two rules it replaces
@@ -284,5 +284,30 @@ describe("the card's second line", () => {
     expect(sessionCardLine({ row: snoozed, status: "dormant", now: NOW }).reason).toMatch(/^Until /);
     const draft = row({ message_count: 0, _hasDraft: true });
     expect(sessionCardLine({ row: draft, status: "idle", now: NOW, draft: "try the retry budget" })).toMatchObject({ reason: "Draft", text: "try the retry budget" });
+  });
+
+  // ct-101902: a stashed row says who or what set it aside, and opens it.
+  test("a stash names its cause, beside Hidden, with the whole of it in the title", () => {
+    const fork = row({ inbox_stashed_at: NOW - 1000, inbox_stash_cause: "fork", forked_from: "conv_origin" } as any);
+    expect(sessionCardLine({ row: fork, status: "stashed", now: NOW })).toMatchObject({ reason: "Forked", reasonTitle: expect.stringContaining("branch of another session") });
+    const hidden = sessionCardLine({ row: row({ inbox_stashed_at: NOW - 1000, inbox_stash_cause: "run_log" } as any), status: "stashed", now: NOW, stashHidden: true });
+    expect(hidden.reason).toBe("Run log · Hidden");
+    expect(hidden.reasonTitle).toContain("only an ask does");
+    expect(sessionCardLine({ row: row({ inbox_stashed_at: NOW - 1000, inbox_stash_cause: "person" } as any), status: "stashed", now: NOW }).reason).toBe("By you");
+  });
+
+  test("a stash from before causes were recorded reads as it did", () => {
+    const old = row({ inbox_stashed_at: NOW - 1000 });
+    expect(sessionCardLine({ row: old, status: "stashed", now: NOW }).reason).toBeNull();
+    expect(sessionCardLine({ row: old, status: "stashed", now: NOW, stashHidden: true })).toMatchObject({ reason: "Hidden" });
+  });
+
+  test("a system stash opens what set it; the person's own opens nothing", () => {
+    const at = NOW - 1000;
+    expect(stashCauseTarget(row({ inbox_stashed_at: at, inbox_stash_cause: "fork", forked_from: "conv_origin" } as any))).toEqual({ session: "conv_origin" });
+    expect(stashCauseTarget(row({ inbox_stashed_at: at, inbox_stash_cause: "run_log", workflow_run_id: "wr_1" } as any))).toMatchObject({ href: "/workflows/runs/wr_1" });
+    expect(stashCauseTarget(row({ inbox_stashed_at: at, inbox_stash_cause: "run_folded", agent_task_id: "at_1" } as any))).toMatchObject({ href: "/triggers/at_1" });
+    expect(stashCauseTarget(row({ inbox_stashed_at: at, inbox_stash_cause: "person", forked_from: "conv_origin" } as any))).toBeNull();
+    expect(stashCauseTarget(row({ inbox_stashed_at: null, inbox_stash_cause: "fork", forked_from: "conv_origin" } as any))).toBeNull();
   });
 });

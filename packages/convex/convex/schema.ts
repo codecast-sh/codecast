@@ -1103,6 +1103,10 @@ export default defineSchema({
     // only while inbox_stashed_at is set — every stash write sets it (true or
     // cleared), so a clear of the stamp needs no companion clear here.
     inbox_stash_hidden: v.optional(v.boolean()),
+    // Who or what set the stash (contracts/stashCause.ts): written beside every
+    // stamp write and cleared with every clear, so it is never stale. A stamp
+    // with no cause predates it and is drawn with no attribution.
+    inbox_stash_cause: v.optional(v.string()),
     inbox_killed_at: v.optional(v.number()),
     // A Close (web/phone): equal to the inbox_dismissed_at it stamped while the
     // row stays closed (shared isClosedSession). Never cleared: an un-hide clears
