@@ -82,8 +82,7 @@ import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow }
 import { SessionBrowserTabs } from "./inbox/SessionBrowserTabs";
 import { SessionCard } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
-import { ModernSectionHeader } from "./inbox/ModernSectionHeader";
-import { SessionStatusMark } from "./inbox/SessionStatusMark";
+import { HiddenBucketHead } from "./inbox/HiddenBucketHead";
 import { hostedStopOf, hostedStopsSig, lastAskOf, lastNoticeKind, splitHostedStops } from "../lib/hostedNotice";
 import { actionFor } from "./conversation/HostedNotice";
 import { useThinkingAvailable } from "./simple/assistantPromise";
@@ -2869,26 +2868,8 @@ function SessionListPanelImpl({
     if (variant !== "snoozed") topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className={modern ? undefined : "border-t border-sol-border/30"}>
-        {/* Modern draws these heads like every other section's (mark, label,
-            count, hairline), so the rail's marks and labels share one column. */}
         {modern ? (
-          <ModernSectionHeader
-            label={label}
-            count={items.length}
-            color="text-sol-text-dim"
-            sectionKey={`hidden_${variant}`}
-            collapsed={!expanded}
-            onToggle={onToggle}
-            icon={<SessionStatusMark status={variant === "dismissed" ? "killed" : variant === "stashed" ? "stashed" : "dormant"} />}
-            facts={liveCount > 0 && (
-              <span className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-green">
-                <SessionStatusMark status="working" size={8} />
-                {liveCount} running
-              </span>
-            )}
-            action={headerAction}
-            hideCount={items.length === 0}
-          />
+          <HiddenBucketHead label={label} count={items.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={liveCount} action={headerAction} />
         ) : (
         <div data-sv-hidden-head className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
           <button
