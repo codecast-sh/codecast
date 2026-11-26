@@ -214,24 +214,58 @@ test("Decisions rows carry their rank or None too, sorted by it", async () => {
   await g.unmount();
 });
 
-test("only the sync host feeds the priorities the view sorts by; a follower window reads the replicated rows", async () => {
-  const subscribes = async (role: "host" | "follower") => {
-    seed("priorities");
+test("the host's feeders feed the priorities the view sorts by, with no inbox panel of their own; a follower's panel reads the replicated rows", async () => {
+  const { useSyncInboxPriorities } = await import("../../hooks/usePriorities");
+  // The host's feeder, mounted as HostFeeders mounts it (asserted from the source below).
+  const HostFeeders = () => { useSyncInboxPriorities(); return null; };
+  const fs = await import("node:fs");
+  const source = (f: string) => fs.readFileSync(new URL(f, import.meta.url), "utf8");
+  const feeders = source("../DashboardLayout.tsx").split("function HostFeeders()")[1].split("\n}\n")[0];
+  expect(feeders).toContain("useSyncInboxPriorities();");
+  // The panel feeds nothing itself: a host with no panel would leave the view unfed.
+  expect(source("../GlobalSessionPanel.tsx")).not.toMatch(/useSyncPriorities\(|useSyncInboxPriorities\(/);
+  const as = (role: "host" | "follower") => {
     useInboxStore.setState((s: any) => ({
       syncRole: role,
       teams: [{ _id: "t1", name: "Team", role: "admin", features: { priorities: true } }],
       clientState: { ...s.clientState, ui: { ...s.clientState.ui, active_team_id: "t1" } },
     }));
-    asked.length = 0;
-    const m = await mountInbox();
-    const fed = asked.includes("priorities:list");
-    // Either way the cards rank from the store's rows.
-    expect(m.host.querySelector(`[data-session-id="${FIRST}"] [data-priority-rank]`)?.textContent).toBe("#1");
-    await m.unmount();
-    return fed;
   };
-  expect(await subscribes("host")).toBe(true);
-  expect(await subscribes("follower")).toBe(false);
+  seed("priorities");
+  // The host window shows no inbox panel (another page, the panel closed): its feeders still subscribe.
+  as("host");
+  asked.length = 0;
+  const hostEl = document.createElement("div");
+  const hostRoot = createRoot(hostEl);
+  await act(async () => hostRoot.render(<MemoryRouter initialEntries={["/priorities"]}><HostFeeders /></MemoryRouter>));
+  expect(asked).toContain("priorities:list");
+  await act(async () => hostRoot.unmount());
+  // Not while another view is up.
+  seed("grouped");
+  asked.length = 0;
+  const idleRoot = createRoot(document.createElement("div"));
+  await act(async () => idleRoot.render(<MemoryRouter initialEntries={["/inbox"]}><HostFeeders /></MemoryRouter>));
+  expect(asked).not.toContain("priorities:list");
+  await act(async () => idleRoot.unmount());
+  // The follower's panel subscribes to nothing of its own, and its ranks follow the rows the host replicates.
+  seed("priorities");
+  as("follower");
+  asked.length = 0;
+  const m = await mountInbox();
+  expect(asked).not.toContain("priorities:list");
+  expect(rankOf(m.host, FIRST)).toBe("#1");
+  expect(rankOf(m.host, SECOND)).toBe("#7");
+  // The host's pass swaps p1 and p2; the replicated rows reach the follower's store through syncTable.
+  await act(async () => {
+    const st = useInboxStore.getState() as any;
+    st.syncTable("priorities", Object.values(st.priorities).map((p: any) => (p._id === "p2" ? { ...p, ai_rank: 1 } : p._id === "p1" ? { ...p, ai_rank: 7 } : p)));
+  });
+  // The store's sync wakes subscribers on its own beat, not inside this act.
+  for (let i = 0; i < 40 && rankOf(m.host, SECOND) !== "#1"; i++) await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+  expect(rankOf(m.host, SECOND)).toBe("#1");
+  expect(rankOf(m.host, FIRST)).toBe("#7");
+  expect(cardOrder(m.host).indexOf(SECOND)).toBeLessThan(cardOrder(m.host).indexOf(FIRST));
+  await m.unmount();
   useInboxStore.setState({ syncRole: "host" } as any);
 });
 

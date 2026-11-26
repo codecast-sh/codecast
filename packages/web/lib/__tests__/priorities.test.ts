@@ -105,8 +105,15 @@ describe("the store actions' paints", () => {
     paintMove(rows, "pri-3", 1);
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-3", "pri-1", "pri-2"]);
     expect(withLiveRanks(rows).map((r) => [r.short_id, r.rank, r.person_pos, r.rank_source])).toEqual([
-      ["pri-1", 2, null, "ai"], ["pri-2", 3, null, "ai"], ["pri-3", 1, 0, "person"], ["pri-4", 1, null, "ai"],
+      ["pri-1", 2, null, "ai"], ["pri-2", 3, null, "ai"], ["pri-3", 1, 0, "person"], ["pri-4", null, null, "ai"],
     ]);
+  });
+
+  test("a teammate's priorities carry no rank, and keep their order among themselves", () => {
+    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { ai_rank: 2, user_id: "ash" as any, mine: false }), row("pri-5", { ai_rank: 1, user_id: "ash" as any, mine: false })];
+    const live = withLiveRanks(rows);
+    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", null], ["pri-5", null]]);
+    expect(ids(ownerGroups(live)[1].active)).toEqual(["pri-5", "pri-6"]);
   });
 
   test("past the end lands last; up and down step one place", () => {

@@ -12,14 +12,14 @@
 // milestone's ⋯ and its box as a Done toggle across the line's left gutter,
 // each session's ⋯ in an open milestone, and on a desktop list the rank as a
 // drag handle (arrow keys step it).
-import { useCallback, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { asksPerson, bestSession, isClosedSession } from "@codecast/shared/contracts/priorityDerive";
 import { milestoneHref, pastBadge, rankProvenance, type PriorityRow } from "../../lib/priorities";
-import { LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, fitLine, lineSession, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { COARSE_TALL, LINE_LABEL_MAX, LINE_PLAN_TITLE_MIN, LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, fitLine, lineSession, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { usePriorityWrites } from "../../hooks/usePriorities";
@@ -162,6 +162,15 @@ function StalledMark({ days, className }: { days: number; className?: string }) 
   return <span data-stalled className={cn("shrink-0 items-center gap-1 whitespace-nowrap text-mark font-semibold text-sol-text", className)}><i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" />Stalled {days}d</span>;
 }
 
+/** Stalled as its mark alone, beside the strip of a compact row that has no room for the words. */
+function StalledIcon({ days, className }: { days: number; className?: string }) {
+  return (
+    <span data-stalled role="img" aria-label={`Stalled ${days}d`} title={`Stalled ${days}d`} className={cn("size-3 shrink-0 items-center justify-center", className)}>
+      <i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" />
+    </span>
+  );
+}
+
 /** "correction pending": the person's correction waits for the next pass. */
 export function PendingMark() {
   return <span data-correction-pending title="Your correction waits for the next pass" className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-mark text-sol-text-dim"><i aria-hidden className="block size-[5px] rounded-full border border-sol-text-dim" />correction pending</span>;
@@ -252,20 +261,22 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
   const { row } = model;
   const wide = layout === "wide";
   // A top-three priority nothing was typed into today says so in its today cell ("0"), its title unmuted.
-  const untouched = row.status === "active" && (row.rank ?? 99) <= 3 && model.today === 0;
+  const untouched = row.mine && row.status === "active" && (row.rank ?? 99) <= 3 && model.today === 0;
   // The row's own correction, when no milestone line carries it.
   const pending = row.correction_pending && !model.milestones.some((m) => m.correctionPending);
   const plan = filters.show.plans && !compact ? model.plan : null;
   return (
     <div data-priority-head className={cn(LIST_GRID[layout], "gap-y-0.5")}>
       <Rank row={row} drag={drag} />
-      <span className={cn(C_TITLE, "flex min-w-0 items-center gap-2")}>
-        <span title={row.summary || row.title} className={cn("min-w-0 font-semibold", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", "text-sol-text")}>
+      {/* The title keeps 8rem and breaks between words only; a compact row's action wraps under it before the title gives way. */}
+      <span className={cn(C_TITLE, "flex min-w-0 items-center gap-2", compact && "flex-wrap gap-y-1")}>
+        <span title={row.summary || row.title} className={cn("min-w-[8rem] break-normal font-semibold", compact && "flex-1 basis-[8rem]", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", "text-sol-text")}>
           {row.title}
         </span>
-        {!wide && (model.today > 0 || untouched) && <span data-today className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
+        {/* A compact row's strip already shows today, and Stalled sits by the strip as its mark. */}
+        {!wide && !compact && (model.today > 0 || untouched) && <span data-today className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
         {/* Where the momentum column has no room for words (a narrow list, a phone), Stalled sits by the title. */}
-        {model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
+        {!compact && model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
         {/* On a phone and in the compact view the title keeps the row's width; the mark goes on the meta line below. */}
         {wide && !compact && pending && <PendingMark />}
         {compact && model.action && <span data-compact-action className="ml-auto flex shrink-0"><ActionButton row={row} action={model.action} showSession={false} /></span>}
@@ -274,7 +285,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
       <span className={cn(C_PROGRESS, "flex items-center justify-end gap-2", wide && "w-full")}>
         <Progress model={model} layout={layout} onToggle={onProgress} />
         {wide && (
-          <span data-polish-slot className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:invisible")}>
+          <span data-polish-slot className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:hidden")}>
             {polish && (
               <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className={cn("inline-flex items-center gap-0.5 whitespace-nowrap rounded px-1 text-meta text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text-muted", TOUCH_AREA)}>
                 Polish <span className="tabular-nums">{polish.done}/{polish.total}</span>
@@ -286,13 +297,19 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
       </span>
       {wide ? (
         <>
-          <span data-today className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text">{model.today > 0 || untouched ? model.today : ""}</span>
+          <span className="col-start-4 row-start-1 flex items-center justify-self-center gap-1">
+            {compact && model.stalledDays != null && <StalledIcon days={model.stalledDays} className="inline-flex [@container(min-width:44rem)]:hidden" />}
+            <span data-today className="text-meta tabular-nums text-sol-text">{model.today > 0 || untouched ? model.today : ""}</span>
+          </span>
           <span className="col-start-5 row-start-1 justify-self-start"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
           <span className={cn(C_MENU, "[@media(pointer:coarse)]:flex [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:items-center")}><PriorityMenu row={row} /></span>
         </>
       ) : (
         <>
-          <span className="col-start-4 row-start-1"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
+          <span className="col-start-4 row-start-1 flex items-center gap-1">
+            {compact && model.stalledDays != null && <StalledIcon days={model.stalledDays} className="inline-flex" />}
+            <Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} />
+          </span>
           <span className={C_MENU_PHONE}><PriorityMenu row={row} touch /></span>
         </>
       )}
@@ -331,11 +348,13 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
  * A milestone's chips on a wide line: one row that never wraps, first to
  * last: the priority's action (its button, then "in ‹session›", which
  * ellipsizes down to 5rem), else the bracket's head session or the line's
- * own session (a chip of at least 5rem); then "+N" more sessions; then one
+ * own session (a chip of at least 5rem); then "+N" more sessions ("+N
+ * sessions" on a line with no session named, when it fits); then one
  * glyph-and-count chip per other kind the Show filter asks for; then the
  * plan. The row measures itself (fitLine): with no room the plan leaves
- * first (it shows only with 8rem to itself), then the counts from the end.
- * The action, its session and "+N" never leave. The open line lists all.
+ * first (it shows only once the session's words have up to 12rem and its
+ * own title 8rem), then the counts from the end. The action, its session
+ * and "+N" never leave. The open line lists all.
  */
 function LineChips({ model, m, railed, filters, lookups }: {
   model: PriorityModel;
@@ -353,20 +372,23 @@ function LineChips({ model, m, railed, filters, lookups }: {
   let shown: SessionLine | undefined;
   if (mine) {
     lead.push(<span key="act" data-fit="fixed" className="flex shrink-0"><ActionButton row={model.row} action={mine} showSession={false} /></span>);
-    if (mine.session) lead.push(<span key="in" data-fit="label" className="flex min-w-[5rem] shrink items-center overflow-hidden"><InSession s={mine.session} /></span>);
+    if (mine.session) lead.push(<span key="in" data-fit="label" className={cn(LABEL_SLOT, "items-center overflow-hidden")}><InSession s={mine.session} /></span>);
     shown = mine.session;
   } else if (driver && railed === "head") {
-    lead.push(<span key="drv" data-fit="label" className="flex min-w-[5rem] shrink"><SessionSlot s={driver} className="min-w-0 max-w-full" /></span>);
+    lead.push(<span key="drv" data-fit="label" className={LABEL_SLOT}><SessionSlot s={driver} className="min-w-0 max-w-full" /></span>);
   } else if (filters.show.sessions && !m.done) {
     shown = own.find(asksPerson) ?? bestSession(own);
-    if (shown) lead.push(<span key="s" data-fit="label" className="flex min-w-[5rem] shrink"><SessionSlot s={shown} className="min-w-0 max-w-full" /></span>);
+    if (shown) lead.push(<span key="s" data-fit="label" className={LABEL_SLOT}><SessionSlot s={shown} className="min-w-0 max-w-full" /></span>);
   }
   const others = filters.show.sessions && !m.done ? own.filter((s) => s !== shown).length + m.more : 0;
   const kinds = m.done ? [] : kindCounts(m, filters, lookups);
   const plan = filters.show.plans ? m.plan : null;
+  // "+N" with no session named before it.
+  const lone = others > 0 && lead.length === (mine ? 1 : 0);
   // What fits, measured: re-measured whenever the row's width or what it holds changes.
   const parts = `${lead.length}|${others}|${kinds.map((k) => `${k.kind}${k.n}`).join(",")}|${plan?.short_id ?? ""}`;
-  const [fit, setFit] = useState<{ parts: string; kinds: number; plan: boolean } | null>(null);
+  // Shown with the plan: the session words' and the plan's own widths, held so neither gives way to the other.
+  const [fit, setFit] = useState<{ parts: string; kinds: number; plan: boolean; words: boolean; label?: number; planMin?: number } | null>(null);
   const width = useRef(0);
   const row = useRef<HTMLSpanElement | null>(null);
   const observer = useRef<ResizeObserver | null>(null);
@@ -389,42 +411,53 @@ function LineChips({ model, m, railed, filters, lookups }: {
     if (!measuring || !row.current) return;
     const el = row.current;
     // Not laid out (hidden, or no layout engine): nothing to measure, so nothing leaves.
-    if (!(el.clientWidth > 0)) return setFit({ parts, kinds: kinds.length, plan: !!plan });
+    if (!(el.clientWidth > 0)) return setFit({ parts, kinds: kinds.length, plan: !!plan, words: lone });
     const style = getComputedStyle(el);
     const room = el.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-    const widths = (kind: string) => [...el.children].filter((c) => (c as HTMLElement).dataset.fit === kind).map((c) => (c as HTMLElement).offsetWidth);
-    setFit({
-      parts,
-      ...fitLine({
-        room,
-        gap: parseFloat(style.columnGap) || 0,
-        // The session's words hold 5rem however long they are.
-        fixed: [...widths("fixed"), ...widths("label").map(() => LABEL_MIN), ...widths("more")],
-        kinds: widths("kind"),
-        hasPlan: !!plan,
-      }),
+    const all = (kind: string) => [...el.children].filter((c) => (c as HTMLElement).dataset.fit === kind) as HTMLElement[];
+    const widths = (kind: string) => all(kind).map((c) => c.offsetWidth);
+    const words = el.querySelector<HTMLElement>("[data-more-words]")?.offsetWidth ?? 0;
+    const labels = all("label").map(naturalWidth);
+    // The plan's chrome as drawn, and its title's words up to 8rem.
+    const planEl = all("plan")[0];
+    const planTitle = planEl?.querySelector<HTMLElement>("[data-plan-title]");
+    const planMin = planEl && planTitle ? planEl.offsetWidth - planTitle.clientWidth + Math.min(planTitle.scrollWidth, LINE_PLAN_TITLE_MIN) : undefined;
+    const fitted = fitLine({
+      room,
+      gap: parseFloat(style.columnGap) || 0,
+      fixed: [...widths("fixed"), ...widths("more").map((w) => w - words)],
+      labels,
+      kinds: widths("kind"),
+      plan: planMin ?? null,
+      words: lone ? words : 0,
     });
+    setFit({ parts, ...fitted, ...(fitted.plan && { label: Math.min(labels[0] ?? 0, LINE_LABEL_MAX), planMin }) });
   });
   const shownKinds = measuring ? kinds : kinds.slice(0, fit!.kinds);
+  // With the plan shown, the session's words and the plan's title keep the widths the fit gave them.
+  const held = !measuring && fit!.plan ? ({ "--line-label": `${fit!.label}px`, "--line-plan": `${fit!.planMin}px` } as CSSProperties) : undefined;
   return (
-    <span ref={measureRow} data-line-chips className="relative flex h-8 min-w-0 flex-1 flex-nowrap items-center gap-x-1.5 overflow-hidden pl-3 [@media(pointer:coarse)]:h-12">
-      {railed && <span aria-hidden data-rail={railed} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[railed])} />}
+    <span ref={measureRow} data-line-chips style={held} className="flex h-8 min-w-0 flex-1 flex-nowrap items-center gap-x-1.5 overflow-hidden pl-3 [@media(pointer:coarse)]:h-12">
       {lead}
       {others > 0 && (
         <span data-fit="more" data-more-sessions title={`${others} more ${others === 1 ? "session" : "sessions"}`} aria-label={`${others} more ${others === 1 ? "session" : "sessions"}`} className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1 text-meta tabular-nums text-sol-text-dim">
           +{others}
+          {lone && (measuring || fit!.words) && <span data-more-words>&nbsp;{others === 1 ? "session" : "sessions"}</span>}
         </span>
       )}
       {shownKinds.map((k) => <span key={k.kind} data-fit="kind" className="flex shrink-0"><KindCount kind={k.kind} n={k.n} /></span>)}
       {plan && (measuring || fit!.plan) && (
-        <span data-fit="plan" className="flex min-w-[8rem] shrink"><PlanChip plan={plan} className="min-w-0 max-w-[14rem]" /></span>
+        <span data-fit="plan" className="flex min-w-[var(--line-plan,0px)] shrink"><PlanChip plan={plan} bar={false} className="min-w-0 max-w-[16rem]" /></span>
       )}
     </span>
   );
 }
 
-/** The width "in ‹session›" (or a line's session chip) keeps, whatever else the row holds. */
-const LABEL_MIN = 80;
+/** A line's session words: at least 5rem, and with the plan shown the width the fit held for them (up to 12rem). */
+const LABEL_SLOT = "flex min-w-[max(5rem,var(--line-label,0px))] shrink";
+
+/** A part's width with its words whole: as drawn, plus whatever its ellipsis hides. */
+const naturalWidth = (el: HTMLElement) => el.offsetWidth + Math.max(0, ...[...el.querySelectorAll<HTMLElement>("*")].map((d) => d.scrollWidth - d.clientWidth));
 
 /** The other kinds of link the Show filter asks for that a milestone has, each as its count. */
 function kindCounts(m: MilestoneModel, filters: ListFilters, lookups: LinkLookups): Array<{ kind: LinkKind; n: number }> {
@@ -472,9 +505,13 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
     </span>
   );
   const title = (
-    <span className="flex min-w-0 items-center gap-2">
-      {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. A teammate's is a status mark, nothing to press. */}
-      {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:h-11" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneMark done={step.done} />}
+    // Where the title can wrap or carry its marks under it (a coarse pointer, a phone), the box sits by its first line, not the block's middle.
+    <span data-line-title className={cn("flex min-w-0 gap-2", wide ? "items-center [@media(pointer:coarse)]:items-start" : "items-start")}>
+      {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. A teammate's is a status mark, nothing to press.
+          A 44px press area 8px above the line's top centres the box on a first line that sits under 4px of padding. */}
+      {row.mine
+        ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:-my-2 [@media(pointer:coarse)]:h-11" : "-my-2 -ml-[30px] h-11 pl-[30px]"} />
+        : <span className="flex h-7 shrink-0 items-center"><MilestoneMark done={step.done} /></span>}
       {wide ? (
         // Under a coarse pointer (Daylight) the marks go on a line of their own under the title, as on a phone.
         <span className="flex min-w-0 items-center gap-2 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:gap-0.5 [@media(pointer:coarse)]:py-1">
@@ -506,11 +543,14 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
       >
         {wide ? (
           <>
-            {/* Title and chips take the line up to its menu: a milestone line has no strip, so its chips use the today and momentum columns too. */}
-            <div className="col-start-2 col-end-6 row-start-1 grid min-w-0 grid-cols-[minmax(max(40%,8rem),1fr)_minmax(0,1fr)] items-center gap-x-3">
+            {/* Title and chips take the line up to its menu: a milestone line has no strip, so its chips use the today and momentum columns too.
+                The title takes up to 35% (at least 8rem) and the chips the rest, so a session's words and a plan's title fit side by side. */}
+            <div className="col-start-2 col-end-6 row-start-1 grid min-w-0 grid-cols-[minmax(8rem,35%)_minmax(0,1fr)] items-center gap-x-3 self-stretch">
               {title}
-              {/* One row that never wraps (LineChips). Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside its clip. */}
-              <span className="flex min-w-0 items-start gap-1.5">
+              {/* One row that never wraps (LineChips). Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside its clip.
+                  The cell takes the line's whole height, and the bracket rail with it, however tall the title makes the line. */}
+              <span data-line-chips-cell className="relative flex min-w-0 items-center gap-1.5 self-stretch">
+                {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
                 <LineChips model={model} m={m} railed={rail} filters={filters} lookups={lookups} />
                 {m.today > 0 && <span data-line-today className="flex h-8 shrink-0 items-center whitespace-nowrap text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today} today</span>}
               </span>
@@ -574,10 +614,11 @@ export function WorkflowRuns({ runs, now, menu }: { runs: SessionLine[]; now: nu
   );
 }
 
-export function TypeRow({ label, children }: { label: string; children: ReactNode }) {
+/** `tall`: its chips are 44px under a coarse pointer, and the label keeps to their first line. */
+export function TypeRow({ label, tall, children }: { label: string; tall?: boolean; children: ReactNode }) {
   return (
     <div data-type-row={label} className="flex min-w-0 items-start gap-2 py-0.5">
-      <span className="flex h-6 w-20 shrink-0 items-center text-mark font-semibold uppercase tracking-wide text-sol-text-dim">{label}</span>
+      <span className={cn("flex h-6 w-20 shrink-0 items-center text-mark font-semibold uppercase tracking-wide text-sol-text-dim", tall && "[@media(pointer:coarse)]:h-11")}>{label}</span>
       {/* A container: a chip in it gives up its extras by the row's width (PlanChip). */}
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 [container-type:inline-size]">{children}</div>
     </div>
@@ -609,11 +650,11 @@ export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
   const deploys = lookups.deploysOf(m);
   const rows = [
     plans.length > 0 && (
-      <TypeRow key="plan" label="Plan">
-        {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className="max-w-[24rem]" />)}
+      <TypeRow key="plan" label="Plan" tall>
+        {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className={cn("max-w-[24rem]", COARSE_TALL)} />)}
       </TypeRow>
     ),
-    m.tasks.length > 0 && <TypeRow key="tasks" label="Tasks">{m.tasks.map((t) => <TaskChip key={t} id={t} className="max-w-[24rem]" />)}</TypeRow>,
+    m.tasks.length > 0 && <TypeRow key="tasks" label="Tasks" tall>{m.tasks.map((t) => <TaskChip key={t} id={t} className={cn("max-w-[24rem]", COARSE_TALL)} />)}</TypeRow>,
     m.prs.length > 0 && <TypeRow key="prs" label="PRs">{m.prs.map((p) => <PrChip key={p} pr={p} state={lookups.prState(p)} />)}</TypeRow>,
     branches.length > 0 && <TypeRow key="branches" label="Branches">{branches.map((b) => <BranchChip key={b} name={b} />)}</TypeRow>,
     deploys.length > 0 && <TypeRow key="deploys" label="Deploys">{deploys.map((d) => <DeployChip key={d.id} d={d} now={now} />)}</TypeRow>,

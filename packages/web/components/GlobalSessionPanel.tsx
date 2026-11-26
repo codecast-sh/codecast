@@ -96,8 +96,6 @@ import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
 import { priorityPlaceReader, priorityRanksSig, rankLabelOf, sessionPriorityLinkSig, sortByPriority } from "../store/priorityOrder";
-import { useSyncPriorities } from "../hooks/usePriorities";
-import { useIsSyncHost } from "../hooks/useSyncRole";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
@@ -2431,12 +2429,8 @@ function SessionListPanelImpl({
   // feeder runs only while the lens is up.
   const planWsArgs = useWorkspaceArgs();
   useSyncPlansWithArgs(viewMode === "plan" ? planWsArgs : "skip");
-  // The priorities the Priorities view sorts by, fed only while it is up in a
-  // workspace with the feature on.
+  // The priorities the Priorities view sorts by are fed by the sync host's feeders (useSyncInboxPriorities).
   const prioritiesOn = useWorkspaceFeature("priorities");
-  // A global feeder in an always-mounted panel: only the sync host feeds it; followers get the rows replicated.
-  const syncHost = useIsSyncHost();
-  useSyncPriorities(syncHost && viewMode === "priorities" && prioritiesOn);
   const workspacePlans = useWorkspaceCollection<PlanItem>("plans", planLensSig);
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;

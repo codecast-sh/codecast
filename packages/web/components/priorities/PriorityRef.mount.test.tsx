@@ -187,11 +187,10 @@ test("a page line's secondary Answer names a session other than the one Next alr
   }
 }, 60_000);
 
-test("the page's Also waiting names an ask on Next's own milestone by its session; a long title clamps to three lines on a phone and opens on a tap", async () => {
+test("the page's Also waiting names an ask on Next's own milestone by its session; the title shows whole and Next's milestone wraps", async () => {
   const s2 = [sess("build", "Priorities feature build", "needs_you", 3), sess("other", "Scorer calibration", "needs_you", 5)];
   answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s2" ? { ...l, sessions: s2 } : l)) };
   const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
-  const { act } = React as any;
   try {
     await page.waitFor(() => !!page.container.querySelector(`[data-also-waiting] [data-waiting-item="${fixtureId("other")}"]`));
     const waiting = page.container.querySelector("[data-also-waiting]")!;
@@ -200,11 +199,14 @@ test("the page's Also waiting names an ask on Next's own milestone by its sessio
     expect(waiting.querySelector(`[data-waiting-item="${fixtureId("other")}"]`)!.textContent).not.toContain("Calibrate goal finding");
     // An ask on another milestone keeps the milestone's name.
     expect(waiting.querySelector(`[data-waiting-item="${fixtureId("polish")}"]`)!.textContent).toContain("Priorities page redesign");
+    // The priority's own page never clamps its title, and Next's milestone wraps rather than truncating.
     const h1 = page.container.querySelector("h1[data-priority-title]") as HTMLElement;
-    expect(h1.className).toContain("max-sm:line-clamp-3");
-    await act(async () => { h1.click(); });
-    expect(h1.className).not.toContain("line-clamp-3");
-    expect(h1.getAttribute("aria-expanded")).toBe("true");
+    expect(h1.className).not.toContain("line-clamp");
+    expect(h1.hasAttribute("aria-expanded")).toBe(false);
+    const next = page.container.querySelector("[data-next-title]") as HTMLElement;
+    expect(next.textContent).toBe("Calibrate goal finding and session mapping");
+    expect(next.className).not.toContain("truncate");
+    expect(next.className).toContain("break-words");
   } finally {
     answers["priorities:show"] = DETAIL;
     await page.unmount();
@@ -331,12 +333,18 @@ test("the list row wins: the detail holds only what show alone returns, and the 
   expect(isDetailPinned("priorityDetails", DETAIL._id)).toBe(false);
 });
 
-test("a teammate's priority says who placed it", async () => {
+test("a teammate's active priority shows no rank badge, and never Set aside", async () => {
   answers["priorities:show"] = { ...DETAIL, mine: false, owner: "Sam Teammate", person_pos: 3, rank_source: "person" };
   const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-priority-page]"));
-    expect(page.container.querySelector("[data-rank-by]")?.textContent).toBe("Sam Teammate placed it");
+    const meta = page.container.querySelector("[data-priority-meta]")!;
+    expect(meta.querySelector("[data-rank]")).toBeNull();
+    expect(meta.querySelector("[data-rank-by]")).toBeNull();
+    expect(meta.textContent).not.toContain("Set aside");
+    expect(meta.textContent).toContain("pri-60");
+    // The line starts with the meter, not a separator left over from the badge.
+    expect(meta.textContent!.startsWith("·")).toBe(false);
   } finally {
     await page.unmount();
     answers["priorities:show"] = DETAIL;

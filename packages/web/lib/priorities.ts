@@ -72,12 +72,14 @@ const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === Stri
 /**
  * The rows with `rank` and `rank_source` read live from their places
  * (shared/contracts/priorities priorityPositions), not the server's
- * snapshot, so a move paints at once. A row whose rank holds is the same row.
+ * snapshot, so a move paints at once. A rank is the viewer's own order: a
+ * teammate's priority has none (its place in their list still orders it).
+ * A row whose rank holds is the same row.
  */
 export function withLiveRanks(rows: readonly PriorityRow[]): PriorityRow[] {
   const positions = priorityPositions(rows, (r) => String(r._id));
   return rows.map((r) => {
-    const rank = positions.get(String(r._id)) ?? null;
+    const rank = r.mine ? positions.get(String(r._id)) ?? null : null;
     const rank_source = rankSourceOf(r);
     return rank === r.rank && rank_source === r.rank_source ? r : { ...r, rank, rank_source };
   });

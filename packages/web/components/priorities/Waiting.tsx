@@ -13,6 +13,8 @@ import { cn } from "../../lib/utils";
 
 const WIDE_SHOWN = 5;
 const PHONE_SHOWN = 3;
+// Grid tracks grow evenly from nothing to their text's width: the milestone gives way first, and the who-part keeps at least half.
+const WHO_COLS = "grid-cols-[minmax(0,max-content)_auto_minmax(0,max-content)]";
 
 
 export function WaitingRow({ item, now, full, tall }: { item: WaitingItem; now: number; full?: boolean; tall?: boolean }) {
@@ -21,16 +23,21 @@ export function WaitingRow({ item, now, full, tall }: { item: WaitingItem; now: 
       href={item.session.href}
       data-waiting-item={item.session.conversation_id}
       title={`${item.milestone} · ${item.session.title}`}
-      className={cn("flex min-w-0 items-center gap-1.5 rounded-control px-1.5 text-meta hover:bg-sol-yellow/15", tall ? "h-11 w-full text-ui" : "h-7 max-w-[20rem] [@media(pointer:coarse)]:h-11", full && "w-full max-w-none")}
+      className={cn(
+        "flex min-w-0 items-center gap-1.5 rounded-control px-1.5 text-meta hover:bg-sol-yellow/15",
+        // An ask named "milestone · who" may take the box's width, so its two parts still read apart.
+        tall ? "h-11 w-full text-ui" : cn("h-7 [@media(pointer:coarse)]:h-11", item.who ? "max-w-full" : "max-w-[20rem]"),
+        full && "w-full max-w-none",
+      )}
     >
       <i aria-hidden className="block size-[7px] shrink-0 rounded-full bg-sol-yellow" />
       {item.rank != null && <span className="shrink-0 font-semibold tabular-nums text-sol-text">#{item.rank}</span>}
-      {/* Each part ellipsizes by width, so two asks on one milestone still read apart in the wide box. */}
+      {/* Short of room the two parts share it evenly, a shorter one whole: the who-part keeps its words up to half, so two asks on one milestone still read apart. */}
       {item.who ? (
-        <span data-waiting-label className="flex min-w-0 items-baseline text-sol-text">
-          <span className="min-w-0 truncate">{item.milestone}</span>
-          <span className="shrink-0 px-1 text-sol-text-dim">·</span>
-          <span className="min-w-0 truncate">{item.who}</span>
+        <span data-waiting-label className={cn("grid min-w-0 items-baseline text-sol-text", WHO_COLS)}>
+          <span data-waiting-milestone className="min-w-0 truncate">{item.milestone}</span>
+          <span className="px-1 text-sol-text-dim">·</span>
+          <span data-waiting-who className="min-w-0 truncate">{item.who}</span>
         </span>
       ) : (
         <span data-waiting-label className="min-w-0 truncate text-sol-text">{item.label}</span>

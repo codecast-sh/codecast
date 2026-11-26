@@ -131,7 +131,7 @@ function PriorityBody({ row }: { row: Row }) {
           <RNText style={[objectStyles.title, styles.title]}>{row.title}</RNText>
         </RNView>
         <RNView style={styles.meta}>
-          <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>{placed}</RNText>
+          {placed && <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>{placed}</RNText>}
           {total > 0 && (
             <RNView style={styles.meter} accessibilityLabel={`${done} of ${total} critical milestones done`}>
               {Array.from({ length: total }, (_, i) => (

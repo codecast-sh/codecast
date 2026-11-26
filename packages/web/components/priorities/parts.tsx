@@ -142,8 +142,11 @@ export function InSession({ s }: { s: SessionLine }) {
   return <span data-in-session className="min-w-0 shrink truncate text-meta text-sol-text-dim" title={label}>in <span className="text-sol-text-muted">{label}</span></span>;
 }
 
-/** A plan: square corners and a hairline, a target glyph, its title, a small bar and the count. */
-export function PlanChip({ plan, prefix, showSize, className }: { plan: PriorityPlanRef; prefix?: string; showSize?: boolean; className?: string }) {
+/**
+ * A plan: square corners and a hairline, a target glyph, its title, a small bar and the count.
+ * `bar={false}` on a milestone's line, where the count says the progress and the room goes to the title.
+ */
+export function PlanChip({ plan, prefix, showSize, bar = true, className }: { plan: PriorityPlanRef; prefix?: string; showSize?: boolean; bar?: boolean; className?: string }) {
   const pct = plan.total ? Math.round((plan.done / plan.total) * 100) : 0;
   return (
     <Link
@@ -156,10 +159,12 @@ export function PlanChip({ plan, prefix, showSize, className }: { plan: Priority
       <Target className="size-3 shrink-0 text-sol-text-dim" aria-hidden />
       {prefix && <span className="shrink-0 text-sol-text-dim">{prefix}</span>}
       {/* A "Part of" chip keeps 6rem for the title: in a narrow row (a phone) the bar leaves first, then "(N tasks)". */}
-      <span className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>
-      <span aria-hidden data-plan-bar className={cn("relative block h-[3px] w-6 shrink-0 overflow-hidden rounded-full bg-sol-text/15", showSize && "[@container(max-width:24rem)]:hidden")}>
-        <span className="absolute inset-y-0 left-0 bg-sol-text-muted" style={{ width: `${pct}%` }} />
-      </span>
+      <span data-plan-title className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>
+      {bar && (
+        <span aria-hidden data-plan-bar className={cn("relative block h-[3px] w-6 shrink-0 overflow-hidden rounded-full bg-sol-text/15", showSize && "[@container(max-width:24rem)]:hidden")}>
+          <span className="absolute inset-y-0 left-0 bg-sol-text-muted" style={{ width: `${pct}%` }} />
+        </span>
+      )}
       <span className="shrink-0 tabular-nums text-sol-text-dim">{plan.done}/{plan.total}</span>
       {/* A big plan a milestone is part of says how big, inside its chip: "Part of Platform program (140 tasks)". */}
       {showSize && <span data-plan-size className="shrink-0 tabular-nums text-sol-text-dim [@container(max-width:17rem)]:hidden">({plan.size} tasks)</span>}

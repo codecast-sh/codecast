@@ -31,8 +31,10 @@ const { lastDays, layoutForWidth, readFilters, filtersHref } = await import("../
 
 // The milestone line's row measures itself (PriorityBlock LineChips). jsdom lays nothing out and the shared
 // stub gives every element 800px, so the row gets a layout of its own, the way a browser lays it out: the
-// action button 65px, "+N" 24px, each kind's count chip 36px, 6px between parts and 12px of left padding,
-// in a chips cell of `lineCell` px (600 unless a test narrows it).
+// action button 65px, "+N" 24px (its " sessions" 5px a character more), each kind's count chip 36px, a session
+// label drawn at 80px, the plan's chrome 72px, 6px between parts and 12px of left padding, in a chips cell of
+// `lineCell` px (600 unless a test narrows it). Words that ellipsize (a label's, a plan's title) are drawn in
+// 60px and take 5px a character whole.
 let lineCell = 600;
 /** A closed line's parts, first to last, as it shows them. */
 const partsOf = (line: Element) => [...line.children].filter((c) => (c as HTMLElement).dataset.fit).map((c) => {
@@ -46,9 +48,20 @@ const partsOf = (line: Element) => [...line.children].filter((c) => (c as HTMLEl
   const proto = (window as any).HTMLElement.prototype;
   const offset = Object.getOwnPropertyDescriptor(proto, "offsetWidth")!;
   const client = Object.getOwnPropertyDescriptor(proto, "clientWidth")!;
-  const FIT: Record<string, number> = { fixed: 65, more: 24, kind: 36 };
-  Object.defineProperty(proto, "offsetWidth", { configurable: true, get(this: HTMLElement) { const f = this.dataset?.fit; return f ? FIT[f] ?? 0 : offset.get!.call(this); } });
-  Object.defineProperty(proto, "clientWidth", { configurable: true, get(this: HTMLElement) { return this.hasAttribute?.("data-line-chips") ? lineCell : client.get!.call(this); } });
+  const scroll = Object.getOwnPropertyDescriptor((window as any).Element.prototype, "scrollWidth")!;
+  const FIT: Record<string, number> = { fixed: 65, more: 24, kind: 36, label: 80, plan: 132 };
+  const chars = (el: Element) => 5 * (el.textContent ?? "").length;
+  const ellipsized = (el: HTMLElement) => !!el.closest?.('[data-fit="label"], [data-fit="plan"]') && (el.classList.contains("truncate") || el.hasAttribute("data-plan-title"));
+  Object.defineProperty(proto, "offsetWidth", { configurable: true, get(this: HTMLElement) {
+    if (this.hasAttribute?.("data-more-words")) return chars(this);
+    const f = this.dataset?.fit;
+    if (!f) return offset.get!.call(this);
+    const words = f === "more" ? this.querySelector("[data-more-words]") : null;
+    return (FIT[f] ?? 0) + (words ? chars(words) : 0);
+  } });
+  Object.defineProperty(proto, "clientWidth", { configurable: true, get(this: HTMLElement) { return this.hasAttribute?.("data-line-chips") ? lineCell : ellipsized(this) ? 60 : client.get!.call(this); } });
+  Object.defineProperty(proto, "scrollWidth", { configurable: true, get(this: HTMLElement) { return ellipsized(this) ? chars(this) : this.clientWidth; } });
+  void scroll;
   for (const host of [window as any, globalThis as any]) {
     const real = host.getComputedStyle.bind(host);
     host.getComputedStyle = (el: Element, pseudo?: string) => (el.hasAttribute?.("data-line-chips") ? { paddingLeft: "12px", paddingRight: "0px", columnGap: "6px" } : real(el, pseudo));
@@ -209,6 +222,16 @@ test("the bracket rail spans the lines one session covers; the plan sits on the 
     const pri2 = block(page.container, "pri-2");
     expect([...pri2.querySelectorAll("[data-rail]")].map((r) => [r.closest("[data-milestone]")!.getAttribute("data-milestone"), r.getAttribute("data-rail")]))
       .toEqual([["s1", "head"], ["s2", "mid"], ["s3", "mid"], ["s4", "end"]]);
+    // Each segment hangs off a cell as tall as its line (so a line made taller by its title or "Looks done?" leaves no gap), never the fixed-height chips row.
+    for (const r of pri2.querySelectorAll("[data-rail]")) {
+      expect(r.closest("[data-line-chips]")).toBeNull();
+      const cell = r.parentElement!;
+      expect(cell.hasAttribute("data-line-chips-cell")).toBe(true);
+      expect(cell.className).toContain("relative");
+      expect(cell.className).toContain("self-stretch");
+      expect(cell.className).not.toMatch(/(^| )h-/);
+      expect(cell.parentElement!.className).toContain("self-stretch");
+    }
     expect(pri2.querySelector("[data-meta] [data-chip='plan']")!.textContent).toContain("Every change merges green");
     // pri-3: pl-1075 on "Deploy drops the eval job"'s line, not its meta line.
     const pri3 = block(page.container, "pri-3");
@@ -230,14 +253,31 @@ test("the bracket rail spans the lines one session covers; the plan sits on the 
   }
 }, 60_000);
 
+const zeroToday = (el: Element) => [...el.querySelectorAll("[data-today]")].map((n) => n.textContent).filter((t) => /^0( today)?$/.test(t ?? ""));
+
 test("a teammate's priority offers no action, and a teammate's ask on the viewer's milestone is not the viewer's to answer", async () => {
-  const theirs = ROWS.map((r) => ({ ...r, mine: false, user_id: "teammate", owner: "Bea" }));
-  const team = await mount(view({ rows: theirs, filters: readFilters(new URLSearchParams("mine=0")) }));
-  try {
-    expect(order(team.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5"]);
-    expect(team.container.querySelectorAll("[data-action]")).toHaveLength(0);
-  } finally {
-    await team.unmount();
+  const theirs = withLiveRanks(ROWS.map((r) => ({ ...r, mine: false, user_id: "teammate", owner: "Bea" })) as any);
+  for (const layout of ["wide", "phone"] as const) {
+    const team = await mount(view({ rows: theirs, layout, filters: readFilters(new URLSearchParams("mine=0")) }));
+    try {
+      expect(order(team.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5"]);
+      expect(team.container.querySelectorAll("[data-action]")).toHaveLength(0);
+      // A rank is the viewer's own order: no #N, no rank on hover, and no "0 today" nudge a top three gets.
+      for (const id of ["pri-1", "pri-2", "pri-3"]) {
+        expect(block(team.container, id).querySelector("[data-rank-source], [data-rank-handle]")).toBeNull();
+        expect(block(team.container, id).querySelector('[title^="#"]')).toBeNull();
+      }
+      expect(zeroToday(team.container)).toEqual([]);
+    } finally {
+      await team.unmount();
+    }
+    // The viewer's own untouched top three does say so.
+    const mine = await mount(view({ rows: withLiveRanks(ROWS as any), layout }));
+    try {
+      expect(zeroToday(mine.container)).toEqual([layout === "wide" ? "0" : "0 today"]);
+    } finally {
+      await mine.unmount();
+    }
   }
   // pri-1's ask belongs to a teammate's session: Resume the viewer's own, and nothing waits on them there.
   const rows = ROWS.map((r) => (r.short_id !== "pri-1" ? r : { ...r, links: r.links!.map((l: any) => ({ ...l, sessions: l.sessions.map((x: any) => ({ ...x, mine: x.title !== "Change requests flow design" })) })) }));
@@ -287,6 +327,34 @@ test("Looks done?, correction pending and Stalled read on every width", async ()
       // The pending correction is on a milestone: the header does not repeat it.
       expect(b.querySelector("[data-priority-head] [data-correction-pending]")).toBeNull();
       expect(b.querySelector("[data-priority-head] [data-stalled]")!.textContent).toBe("Stalled 30d");
+    } finally {
+      await page.unmount();
+    }
+  }
+}, 60_000);
+
+test("compact at a phone's and Daylight's width: the title keeps 8rem and breaks between words; today and Stalled leave its cell", async () => {
+  const stalled = row(8, "Trustworthy eval suite", 1, [step("s1", "Grader faults", "critical")], { first_seen_at: NOW - 30 * DAY });
+  for (const layout of ["phone", "wide"] as const) {
+    const page = await mount(view({ rows: [stalled], layout, compact: true }));
+    try {
+      const head = block(page.container, "pri-8").querySelector("[data-priority-head]")!;
+      const title = [...head.querySelectorAll("span[title]")].find((n) => n.textContent === "Trustworthy eval suite")!;
+      expect(title.className).toContain("min-w-[8rem]");
+      expect(title.className).toContain("break-normal");
+      const cell = title.parentElement!;
+      // The action wraps under the title before the title gives way.
+      expect(cell.className).toContain("flex-wrap");
+      expect(cell.querySelector("[data-today]")).toBeNull();
+      expect(cell.querySelector("[data-stalled]")).toBeNull();
+      expect(cell.textContent).not.toContain("Stalled");
+      // Stalled is its mark beside the strip, named for a screen reader and on hover.
+      const mark = head.querySelector("[data-stalled]")!;
+      expect(mark.getAttribute("role")).toBe("img");
+      expect(mark.getAttribute("aria-label")).toBe("Stalled 30d");
+      expect(mark.textContent).toBe("");
+      if (layout === "phone") expect(mark.parentElement!.querySelector("[data-day-strip]")).not.toBeNull();
+      else expect(mark.parentElement!.querySelector("[data-today]")).not.toBeNull();
     } finally {
       await page.unmount();
     }
@@ -664,6 +732,12 @@ test("an open milestone shows every kind of link whatever Show says, and its who
     const detail = b.querySelector("[data-milestone-detail]")!;
     expect([...detail.querySelectorAll("[data-type-row]")].map((r) => r.getAttribute("data-type-row"))).toEqual(["Plan", "Tasks", "PRs", "Branches", "Deploys"]);
     for (const kind of CHIP_KINDS) expect(detail.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
+    // Under a coarse pointer the plan and task chips are 44px tall, and their rows' labels keep to the first line.
+    for (const kind of ["plan", "task"]) {
+      const chip = detail.querySelector(`[data-chip="${kind}"]`)!;
+      expect(chip.className).toContain("[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11");
+      expect(chip.closest("[data-type-row]")!.firstElementChild!.className).toContain("[@media(pointer:coarse)]:h-11");
+    }
     expect(title().className).not.toContain("truncate");
     expect(title().className).toContain("whitespace-normal");
   } finally {
@@ -699,7 +773,8 @@ test("every priority says how many landed and how long since, on every layout; a
   const compact = await mount(view({ layout: "phone", compact: true }));
   try {
     const head = block(compact.container, "pri-1").querySelector("[data-priority-head]")!;
-    expect(head.textContent).toContain("4 today");
+    // Its strip shows today: no "4 today" beside the title.
+    expect(head.textContent).not.toContain("today");
     // One line a priority: the mini sparkline stays in the row, and no meta line of words under it.
     expect(head.querySelector("[data-day-strip]")).not.toBeNull();
     expect(head.querySelector("[data-meta]")).toBeNull();
@@ -715,7 +790,9 @@ test("every priority says how many landed and how long since, on every layout; a
     const head = block(wideCompact.container, "pri-5").querySelector("[data-priority-head]")!;
     expect(head.querySelector("[data-momentum-words]")).toBeNull();
     expect(head.querySelector("[data-momentum]")!.textContent).toContain("1 landed");
-    expect(head.querySelector("[data-polish-slot]")!.className).toContain("[@container(max-width:44rem)]:invisible");
+    // Hidden, not invisible: the slot gives its width back at Daylight's narrow grid.
+    expect(head.querySelector("[data-polish-slot]")!.className).toContain("[@container(max-width:44rem)]:hidden");
+    expect(head.querySelector("[data-polish-slot]")!.className).not.toContain("invisible");
   } finally {
     await wideCompact.unmount();
   }
@@ -787,7 +864,8 @@ test("a milestone line's chips use the today and momentum columns, its today cou
     expect(line.className.split(" ")).toContain("flex-nowrap");
     expect(line.querySelector('[data-fit="fixed"]')!.className.split(" ")).toContain("shrink-0");
     const words = line.querySelector('[data-fit="label"]')!;
-    for (const c of ["min-w-[5rem]", "shrink"]) expect(words.className.split(" ")).toContain(c);
+    // At least 5rem, and with the plan shown the width the fit held for them (--line-label).
+    for (const c of ["min-w-[max(5rem,var(--line-label,0px))]", "shrink"]) expect(words.className.split(" ")).toContain(c);
     expect(words.querySelector("[data-in-session]")!.className.split(" ")).toContain("truncate");
   } finally {
     await page.unmount();
@@ -871,20 +949,45 @@ test("a linked session's branch and a PR's state repaint their chips when they c
 }, 60_000);
 
 test("Waiting on you tells two sessions on one milestone apart: \"milestone · session\", in the box, the popover and on a phone", async () => {
-  const twice = row(12, "Two asks", 1, [step("s1", "Ship it", "critical"), step("s2", "Tidy it", "critical")], {
-    links: [links("s1", [sess("aska", "Copy review", "needs_you", 1), sess("askb", "Review · ct-9001 the copy", "needs_you", 2)]), links("s2", [sess("askc", "Tidy session", "needs_you", 3)])],
+  const LONG = "Ship it with the whole long milestone title the box cannot hold";
+  const twice = row(12, "Two asks", 1, [step("s1", LONG, "critical"), step("s2", "Tidy it", "critical"), ...[3, 4, 5, 6].map((i) => step(`s${i}`, `Other ${i}`, "critical"))], {
+    links: [
+      links("s1", [sess("aska", "Copy review", "needs_you", 1), sess("askb", "Review · ct-9001 the copy", "needs_you", 2)]), links("s2", [sess("askc", "Tidy session", "needs_you", 3)]),
+      ...[3, 4, 5, 6].map((i) => links(`s${i}`, [sess(`ask${i}`, `Session ${i}`, "needs_you", 3 + i)])),
+    ],
   });
+  const read = (root: ParentNode) => [...root.querySelectorAll("[data-waiting-item] [data-waiting-label]")].map((a) => [...a.children].map((c) => c.textContent).join(" ") || a.textContent);
+  const parts = (root: ParentNode) => {
+    // Short of room the parts share it evenly, a shorter one whole (grid tracks grow evenly to their text's width), so the
+    // who-part keeps its words up to half; an item naming one is not capped at 20rem.
+    const whos = [...root.querySelectorAll("[data-waiting-who]")];
+    expect(whos.length).toBeGreaterThanOrEqual(2);
+    for (const who of whos) {
+      const label = who.closest("[data-waiting-label]")!;
+      expect(label.className).toContain("grid-cols-[minmax(0,max-content)_auto_minmax(0,max-content)]");
+      expect(who.className).toContain("min-w-0 truncate");
+      expect(label.querySelector("[data-waiting-milestone]")!.className).toContain("min-w-0 truncate");
+      expect(who.closest("[data-waiting-item]")!.className).not.toContain("max-w-[20rem]");
+    }
+  };
+  // 1280 and Daylight's 947 draw the wide box, 402 the phone's rows; each opens "+N more" too.
   for (const layout of ["wide", "phone"] as const) {
     const page = await mount(view({ rows: [twice], layout }));
+    const { act } = React as any;
     try {
-      const labels = [...page.container.querySelectorAll("[data-waiting-item] [data-waiting-label]")].map((a) => [...a.children].map((c) => c.textContent).join(" ") || a.textContent);
-      expect(labels[0]).toBe("Ship it · Copy review");
-      expect(labels[1]).toBe("Ship it · Review: the copy");
-      // Each part ellipsizes by width, not by a count of characters.
-      for (const part of page.container.querySelectorAll("[data-waiting-label] > span:not(:nth-child(2))")) expect(part.className).toContain("truncate");
-      // A milestone only one session waits on reads as the milestone alone.
-      expect(labels[2]).toContain("Tidy it");
-      expect(labels[2]).not.toContain("·");
+      const labels = read(page.container);
+      expect(labels[0]).toBe(`${LONG} · Copy review`);
+      expect(labels[1]).toBe(`${LONG} · Review: the copy`);
+      parts(page.container);
+      // A milestone only one session waits on reads as the milestone alone, under the 20rem cap on the wide box.
+      expect(labels[2]).toBe("Tidy it");
+      if (layout === "wide") expect(page.container.querySelectorAll("[data-waiting-item]")[2].className).toContain("max-w-[20rem]");
+      // The popover lists every ask, the two on one milestone still apart.
+      await act(async () => { (page.container.querySelector("[data-waiting-more]") as HTMLElement).click(); });
+      await page.waitFor(() => !!document.querySelector("[data-radix-popper-content-wrapper] [data-waiting-item]"));
+      const pop = document.querySelector("[data-radix-popper-content-wrapper]")!;
+      expect(read(pop).slice(0, 2)).toEqual([`${LONG} · Copy review`, `${LONG} · Review: the copy`]);
+      parts(pop);
     } finally {
       await page.unmount();
     }
@@ -992,10 +1095,12 @@ test("an untouched top-three priority keeps its title's colour and says \"0\" in
 }, 60_000);
 
 // The milestone line's one-row rule, locked across chips-cell widths. Layout is stubbed the way a browser lays
-// the row out: the action button 65px, "+N" 24px, each kind's count chip 36px, 6px between parts, 12px of
-// left padding; the session's words hold 80px (5rem) and the plan needs 128px (8rem) to show.
+// the row out (the stub at the top of this file): the action button 65px, "+N" 24px, each kind's count chip
+// 36px, 6px between parts, 12px of left padding; the session's words hold 80px (5rem) always, and before the
+// plan shows they take their natural width up to 192px (12rem) while the plan keeps its chrome and 128px (8rem)
+// of its title.
 /** The chips cell's width at 1280 with the inbox open, measured in the browser on the fixture list. */
-const DESK_INBOX_CELL = 359;
+const DESK_INBOX_CELL = 463;
 async function lineAt(cell: number, rows: unknown[], filters = readFilters(new URLSearchParams("show=sessions,plans,tasks,prs")), priority = "pri-14", milestone = "s1") {
   lineCell = cell;
   try {
@@ -1009,6 +1114,8 @@ async function lineAt(cell: number, rows: unknown[], filters = readFilters(new U
         moreLabel: line.querySelector("[data-more-sessions]")?.getAttribute("aria-label") ?? null,
         kinds: [...line.querySelectorAll("[data-chip-count]")].map((c) => `${c.getAttribute("data-chip-count")} ${c.textContent}`),
         plan: line.querySelector('[data-chip="plan"]')?.textContent ?? null,
+        // What the fit held for the session's words and the plan, when the plan shows.
+        held: (line as HTMLElement).style.getPropertyValue("--line-label") ? [(line as HTMLElement).style.getPropertyValue("--line-label"), (line as HTMLElement).style.getPropertyValue("--line-plan")] : null,
       };
     } finally {
       await page.unmount();
@@ -1018,7 +1125,7 @@ async function lineAt(cell: number, rows: unknown[], filters = readFilters(new U
   }
 }
 
-test("the line's one row across chips-cell widths: action, its session and +N always; the counts from 300px; the plan from 420px", async () => {
+test("the line's one row across chips-cell widths: action, its session and +N always; the counts from 300px; the plan once the session has 12rem and the plan's title 8rem", async () => {
   const title = "Rework the scorer calibration so session mapping clears 0.75";
   expect(title.length).toBe(60);
   const busy = row(14, "Busy line", 1, [step("s1", "Ship the scorer", "critical", false, { refs: [{ kind: "task", id: "ct-8101" }, { kind: "pr", id: "codecast-sh/codecast#4601" }, { kind: "pr", id: "codecast-sh/codecast#4602" }] }), step("s2", "Another", "critical")], {
@@ -1026,13 +1133,26 @@ test("the line's one row across chips-cell widths: action, its session and +N al
   });
   const at = async (w: number) => lineAt(w, [busy]);
   const base = { action: true, label: `in ${title}`, more: "+4", moreLabel: "4 more sessions" };
-  expect(await at(220)).toEqual({ ...base, kinds: [], plan: null });
-  expect(await at(300)).toEqual({ ...base, kinds: ["task 1", "pr 2"], plan: null });
-  for (const w of [420, 600]) {
-    const line = await at(w);
-    expect(line).toMatchObject({ ...base, kinds: ["task 1", "pr 2"] });
-    expect(line.plan).toContain("Every change merges green");
-  }
+  expect(await at(220)).toEqual({ ...base, kinds: [], plan: null, held: null });
+  expect(await at(300)).toEqual({ ...base, kinds: ["task 1", "pr 2"], plan: null, held: null });
+  // 420px held 8rem for the plan once; now the session's words come first: 265px for the rest, 112px more for
+  // the words (to 12rem), and 206px for the plan (72px of chrome, 128px of title) need a 595px cell.
+  expect(await at(420)).toEqual({ ...base, kinds: ["task 1", "pr 2"], plan: null, held: null });
+  expect(await at(590)).toEqual({ ...base, kinds: ["task 1", "pr 2"], plan: null, held: null });
+  const line = await at(600);
+  expect(line).toMatchObject({ ...base, kinds: ["task 1", "pr 2"], held: ["192px", "200px"] });
+  expect(line.plan).toContain("Every change merges green");
+}, 60_000);
+
+test("a plan with a short title needs only that title's width, not 8rem", async () => {
+  const short = { ...PL_1075, title: "Ship it" };
+  const busy = row(14, "Busy line", 1, [step("s1", "Ship the scorer", "critical"), step("s2", "Another", "critical")], {
+    links: [links("s1", [sess("busy1", "Scorer", "dormant", 1)], { plan: short }), links("s2", [])],
+  });
+  // "in Scorer" fits its 5rem; the plan takes 72px of chrome and its 7-character title's 35px.
+  const line = await lineAt(300, [busy]);
+  expect(line.plan).toContain("Ship it");
+  expect(line.held).toEqual(["80px", "107px"]);
 }, 60_000);
 
 test("the Done-list case: at the 1280-with-inbox chips cell, \"Deploy drops the eval job\" shows its plan", async () => {
@@ -1040,6 +1160,38 @@ test("the Done-list case: at the 1280-with-inbox chips cell, \"Deploy drops the 
   expect(line.action).toBe(true);
   expect(line.label).toBe("in Eval cost reduction");
   expect(line.plan).toContain("Every change merges green");
+  // The session's words whole (130px) and the plan's title its 8rem.
+  expect(line.held).toEqual(["130px", "200px"]);
+}, 60_000);
+
+test("a lone \"+N\" (a rail line, after Start) reads \"+N sessions\" when it fits; beside a session's name it stays \"+N\"", async () => {
+  // s1 heads the bracket and names its driver; s2, under the rail, has only one older session; s3 (the next
+  // milestone with no session) is Start's, three more sessions after the button.
+  const driver = sess("lone0", "Driver session", "dormant", 1);
+  const rail = row(15, "Rail", 1, [step("s1", "Head", "critical"), step("s2", "Under the rail", "critical"), step("s3", "Starts here", "critical")], {
+    links: [links("s1", [driver]), links("s2", [driver], { sessions_more: 1 }), links("s3", [], { sessions_more: 3 })],
+  });
+  const under = await lineAt(600, [rail], FILTERS, "pri-15", "s2");
+  expect(under.label).toBeNull();
+  expect(under.more).toBe("+1\u00a0session");
+  expect(under.moreLabel).toBe("1 more session");
+  // A narrow line keeps "+1".
+  expect((await lineAt(40, [rail], FILTERS, "pri-15", "s2")).more).toBe("+1");
+  const start = { ...rail, links: [links("s1", []), links("s2", []), links("s3", [], { sessions_more: 3 })], steps: rail.steps.map((st: any, i: number) => (i < 2 ? { ...st, done: true, done_at: NOW - DAY } : st)) };
+  const after = await lineAt(600, [start], FILTERS, "pri-15", "s3");
+  expect(after.action).toBe(true);
+  expect(after.label).toBeNull();
+  expect(after.more).toBe("+3\u00a0sessions");
+  // Beside "in ‹session›" it stays "+N" with its label, wide or tight.
+  const named = row(16, "Named", 1, [step("s1", "Ship", "critical")], {
+    links: [links("s1", [sess("named1", "First session", "dormant", 1), sess("named2", "Second session", "dormant", 2)], { sessions_more: 7 })],
+  });
+  for (const w of [220, 600]) {
+    const line = await lineAt(w, [named], FILTERS, "pri-16", "s1");
+    expect(line.label).toBe("in First session");
+    expect(line.more).toBe("+8");
+    expect(line.moreLabel).toBe("8 more sessions");
+  }
 }, 60_000);
 
 test("the route shows the feature-off landing while the workspace has Priorities off", async () => {

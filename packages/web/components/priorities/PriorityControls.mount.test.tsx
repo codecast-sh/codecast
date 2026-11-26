@@ -290,8 +290,21 @@ test("the milestone's whole left gutter toggles Done, a 44px target on a phone",
       expect(b.className).toContain("size-11");
       expect(b.className).not.toContain("opacity-0");
     }
+    // The box sits by the title's first line, not the middle of a title that wraps or carries its marks under it:
+    // the line starts its parts at the top, and the 44px press area rises 8px to centre the box on the first line.
+    expect(line("pri-2", "s1").querySelector("[data-line-title]")!.className).toContain("items-start");
+    expect(toggle.className).toContain("-my-2");
   } finally {
     await page.unmount();
+  }
+  // Daylight (wide, coarse pointer) does the same under the coarse pointer; a fine pointer keeps the one-line row centred.
+  const wide = await mount(<Live />);
+  try {
+    const title = line("pri-2", "s1").querySelector("[data-line-title]")!;
+    expect(title.className).toContain("items-center [@media(pointer:coarse)]:items-start");
+    expect(title.querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:-my-2 [@media(pointer:coarse)]:h-11");
+  } finally {
+    await wide.unmount();
   }
 }, 60_000);
 
@@ -347,7 +360,9 @@ test("a teammate's priority shows no write control: no toggles, no milestone or 
     expect(mate.querySelector("[data-session-menu]")).toBeNull();
     await key(priorityMenu("pri-4"), "Enter");
     expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["copy-link"]);
-    expect(document.querySelector("[data-menu-rank-by]")?.textContent).toBe("#1 · ranked by AI");
+    // A rank is the viewer's own order: a teammate's priority has none, in its menu or its rank cell.
+    expect(document.querySelector("[data-menu-rank-by]")).toBeNull();
+    expect(mate.querySelector("[data-rank-source]")).toBeNull();
   } finally {
     await page.unmount();
   }
@@ -429,7 +444,11 @@ test("the page and the card of a teammate's priority show no write control", asy
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-critical-path]"));
     for (const sel of ["[data-correct-priority]", "[data-milestone-toggle]", "[data-milestone-menu]", "[data-delete-correction]"]) expect(page.container.querySelector(sel)).toBeNull();
-    expect(page.container.querySelector("[data-rank-by]")?.textContent).toBe("ranked by AI");
+    // An active priority with no rank shows no badge, never "Set aside".
+    const meta = page.container.querySelector("[data-priority-meta]")!;
+    expect(meta.querySelector("[data-rank]")).toBeNull();
+    expect(meta.querySelector("[data-rank-by]")).toBeNull();
+    expect(meta.textContent).not.toContain("Set aside");
     // Each milestone is a status mark, not a box that looks pressable.
     expect(page.container.querySelector('[data-critical-path] [data-milestone="s1"] [data-milestone-mark="open"]')).not.toBeNull();
     expect(page.container.querySelector('[data-critical-path] [aria-label="Open"]:not([data-milestone-mark])')).toBeNull();

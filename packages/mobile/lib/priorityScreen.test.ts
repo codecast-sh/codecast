@@ -29,6 +29,8 @@ describe('the phone priority screen', () => {
     expect(ownerWords(row())).toBe('You');
     const placedByThem = row({ mine: false, owner: 'Sarah Chen', rank: 1, rank_source: 'person' });
     expect(standing(placedByThem)).toBe('#1 · Sarah Chen placed it');
+    // A teammate's active priority carries no rank: it says nothing, never "Set aside".
+    expect(standing(row({ mine: false, owner: 'Sarah Chen', rank: null }))).toBeNull();
     expect(ownerWords(placedByThem)).toBeNull();
     expect(standing(row({ status: 'set_aside', rank: null }))).toBe('Set aside');
   });

@@ -389,15 +389,26 @@ export function filtersHref(f: ListFilters, params: URLSearchParams | null | und
 
 export type ListLayout = "phone" | "wide";
 
+/** The width a line's session words ("in ‹session›", or its session chip) always keep, and the most they take before a plan shows. */
+export const LINE_LABEL_MIN = 80;
+export const LINE_LABEL_MAX = 192;
+/** The width a line's plan keeps for its title's words (8rem, or the whole title when shorter). */
+export const LINE_PLAN_TITLE_MIN = 128;
+
 /**
  * Which of a milestone line's optional parts fit its row (`room` px, `gap`
- * between parts), after the parts that always show (`fixed`: the action,
- * its session's 5rem, "+N"): each kind's count chip in order while it fits,
- * then the plan only with `planMin` to itself. So with no room the plan
- * leaves first, then the counts from the end.
+ * between parts), after the parts that always show (`fixed`: the action and
+ * "+N"; each session label at 5rem, `labels` being their natural widths):
+ * each kind's count chip in order while it fits; then the plan (`plan`: its
+ * chrome and its title's 8rem), only once each label has its words up to
+ * 12rem; then, on a line with no session label, the words after "+N"
+ * (`words`: " sessions"). So with no room the words leave first, then the
+ * plan, then the counts from the end.
  */
-export function fitLine({ room, gap, fixed, kinds, hasPlan, planMin = 128 }: { room: number; gap: number; fixed: number[]; kinds: number[]; hasPlan: boolean; planMin?: number }): { kinds: number; plan: boolean } {
-  let used = fixed.reduce((sum, w, i) => sum + w + (i ? gap : 0), 0);
+export function fitLine({ room, gap, fixed, labels, kinds, plan, words }: {
+  room: number; gap: number; fixed: number[]; labels: number[]; kinds: number[]; plan: number | null; words: number;
+}): { kinds: number; plan: boolean; words: boolean } {
+  let used = [...fixed, ...labels.map(() => LINE_LABEL_MIN)].reduce((sum, w, i) => sum + w + (i ? gap : 0), 0);
   const step = (w: number) => (used > 0 ? gap : 0) + w;
   let fits = 0;
   for (const w of kinds) {
@@ -405,7 +416,10 @@ export function fitLine({ room, gap, fixed, kinds, hasPlan, planMin = 128 }: { r
     used += step(w);
     fits++;
   }
-  return { kinds: fits, plan: hasPlan && used + step(planMin) <= room };
+  const grow = labels.reduce((sum, w) => sum + Math.max(0, Math.min(w, LINE_LABEL_MAX) - LINE_LABEL_MIN), 0);
+  const showPlan = plan != null && used + grow + step(plan) <= room;
+  if (showPlan) used += grow + step(plan);
+  return { kinds: fits, plan: showPlan, words: words > 0 && labels.length === 0 && used + words <= room };
 }
 
 /**

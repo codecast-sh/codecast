@@ -1,13 +1,15 @@
 // Priorities (convex priorities.ts): the feeder and reader of the `priorities`
 // collection, and the person's controls with their put-back on a refusal.
-// Fed by /priorities and by the inbox while its Priorities view is up.
+// Fed by /priorities and, while the inbox's Priorities view is up, by the
+// sync host's feeders (useSyncInboxPriorities).
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { serverErrorText } from "../lib/errorCause";
 import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
 import { priorityWrites } from "../lib/priorityWrites";
-import { useInboxStore } from "../store/inboxStore";
+import { resolveInboxViewMode, useInboxStore } from "../store/inboxStore";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { useSyncCollection } from "./useSyncCollection";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -22,6 +24,18 @@ const api = _api as any;
 export function useSyncPriorities(on = true) {
   const workspace = useActiveWorkspaceKey();
   return useSyncCollection("priorities", api.priorities.list, on && workspace ? { workspace } : "skip", { select: listRows });
+}
+
+/**
+ * The priorities the inbox's Priorities view sorts by, while that view is up in
+ * a workspace with the feature on. Mounted in the sync host's feeders
+ * (DashboardLayout HostFeeders), so the host feeds them whether or not its own
+ * window draws the inbox panel; followers read the replicated rows.
+ */
+export function useSyncInboxPriorities() {
+  const view = useInboxStore((s) => resolveInboxViewMode(s.clientState.ui) === "priorities");
+  const on = useWorkspaceFeature("priorities");
+  useSyncPriorities(view && on);
 }
 
 /** When the pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */

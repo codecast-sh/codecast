@@ -66,7 +66,6 @@ export default function PriorityPage({ id }: { id: string }) {
 
 function PriorityBody({ row }: { row: PriorityView }) {
   const now = useCoarseNow(30_000);
-  const [titleOpen, setTitleOpen] = useState(false);
   const focus = useSearchParams()?.get("milestone") ?? null;
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
@@ -97,19 +96,13 @@ function PriorityBody({ row }: { row: PriorityView }) {
       <header className="flex items-start gap-3">
         <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Target className="size-[18px]" aria-hidden /></span>
         <div className="min-w-0 flex-1">
-          {/* A long title clamps to three lines on a phone; a tap shows it whole. */}
-          <h1
-            data-priority-title
-            aria-expanded={titleOpen}
-            onClick={() => setTitleOpen((o) => !o)}
-            className={cn("text-[22px] font-semibold leading-tight text-sol-text max-sm:cursor-pointer", !titleOpen && "max-sm:line-clamp-3")}
-          >
-            {row.title}
-          </h1>
+          {/* The priority's own page shows its title whole. */}
+          <h1 data-priority-title className="break-words text-[22px] font-semibold leading-tight text-sol-text">{row.title}</h1>
           <div data-priority-meta className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-sol-text-dim">
-            {active && row.rank != null ? <span data-rank className="font-semibold tabular-nums text-sol-text">#{row.rank}</span> : <span>{pastBadge(row)}</span>}
+            {/* An active priority with no rank (a teammate's) shows no badge; only a past one says why it is past. */}
+            {active ? (row.rank != null && <span data-rank className="font-semibold tabular-nums text-sol-text">#{row.rank}</span>) : <span>{pastBadge(row)}</span>}
             {active && why && <span data-rank-by>{why}</span>}
-            <Dot />
+            {(!active || row.rank != null) && <Dot />}
             <CriticalMeter done={row.counts.critical_done} total={row.counts.critical_total} />
             {/* "Sarah Chen placed it" already names a teammate who placed it. */}
             {!(active && why && !row.mine && row.rank_source === "person") && <><Dot /><span>{row.mine ? "You" : row.owner}</span></>}
@@ -137,7 +130,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
               <div className="text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Next</div>
               <div className="mt-1 flex min-w-0 items-center gap-2">
                 <MilestoneToggle row={row} step={action.milestone.step} className={TOUCH_AREA} />
-                <span className="min-w-0 truncate text-body font-medium text-sol-text">{action.milestone.step.title}</span>
+                <span data-next-title className="min-w-0 break-words text-body font-medium text-sol-text">{action.milestone.step.title}</span>
               </div>
               <div className="mt-2 flex min-w-0 pl-[22px]"><ActionButton row={row} action={action} /></div>
             </>

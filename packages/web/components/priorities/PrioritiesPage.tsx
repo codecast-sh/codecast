@@ -233,7 +233,7 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
       {filters.mine && <WaitingOnYou items={waiting} now={now} layout={layout} />}
       {layout === "wide" && (
         <div aria-hidden className={cn(LIST_GRID.wide, "border-b border-sol-border/50 pb-1 text-mark font-medium uppercase tracking-wide text-sol-text-dim")}>
-          <span className="col-start-3 flex w-full justify-end gap-2"><span className="px-1">Critical</span><span className={POLISH_SLOT} /></span>
+          <span className="col-start-3 flex w-full justify-end gap-2"><span className="px-1">Critical</span><span className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:hidden")} /></span>
           <span className="col-start-4 justify-self-center">Today</span>
           <span className="col-start-5">10 days</span>
         </div>

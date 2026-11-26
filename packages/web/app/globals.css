@@ -2302,6 +2302,13 @@ diffs-container {
   margin: 0;
   min-width: 0;
 }
+/* In the Priorities view the card's rank stays on the one line, before the
+   status: the order the list is sorted by. */
+.inbox-compact [data-sv-rail] [data-sv-meta] > [data-priority-rank] {
+  display: inline-flex;
+  grid-row: 1;
+  margin: 0;
+}
 /* When the cluster is squeezed only the plan and task chips give way; the
    dots are empty spans with no content width and would collapse first. */
 .inbox-compact [data-sv-rail] [data-sv-status] > :not(.truncate) {
