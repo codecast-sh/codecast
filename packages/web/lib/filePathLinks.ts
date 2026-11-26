@@ -203,9 +203,9 @@ export const FilePathContext = createContext<FilePathContextValue | null>(null);
  * here so the link names the file regardless of which vault is open; without it,
  * the raw path rides along and the page does its best.
  */
-export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null, column?: number): string {
+export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null, column?: number, endLine?: number): string {
   const abs = resolveMentionPath(path, ctx);
-  return filesHref({ localPath: abs ?? path, line, column, device: ctx?.deviceId });
+  return filesHref({ localPath: abs ?? path, line, column, endLine, device: ctx?.deviceId });
 }
 
 /** Reads a mention back out of a link the plugin minted, so a component can
