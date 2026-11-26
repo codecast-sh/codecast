@@ -9097,6 +9097,9 @@ export default defineSchema({
     // The spawner is only the project lead's standing session, given to a run no session started (createFromCli):
     // the intent check (flows.md FL11) reads such a run as one no session started.
     spawner_stand_in: v.optional(v.boolean()),
+    // The run is nobody's (`cast workflow run --no-subject`, or started by a subagent, ct-101911): its gates never
+    // ask the session the task's change came from in place of a spawner.
+    no_subject: v.optional(v.boolean()),
     // The run is waiting on the session its change came from (flows.md FL4): the station that sent it work, since
     // when, and what it sent, cut short. Cleared when the session settles and when the run ends. `blocked`: the session
     // pinned blocked and the run waits for a person, the note then its pin.

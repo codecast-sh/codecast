@@ -293,7 +293,7 @@ export async function pauseAtGateCore(
   // A run no session started (a plain shell, say over ssh on another machine) asks from the session its task's change
   // came from (changeSessionOf, what /cli/work/get names to the CLI), so the card opens where the work is, not on the
   // run's own log. The caller must be able to read it.
-  const made = !run.spawner_conversation_id && task ? await changeSessionOf(ctx, task, await taskCommentsOf(ctx, task._id)) : null;
+  const made = !run.spawner_conversation_id && !run.no_subject && task ? await changeSessionOf(ctx, task, await taskCommentsOf(ctx, task._id)) : null;
   const subject = made && (await canAccessConversation(ctx, auth.userId, made)) ? made._id : null;
   const askerId = station?._id ?? run.spawner_conversation_id ?? subject ?? run.primary_conversation_id;
   const asker = decision ? null : askerId ? await ctx.db.get(askerId) : null;
@@ -714,6 +714,8 @@ export async function createRunCore(
     spawner_conversation_id?: Id<"conversations">;
     // The spawner is the project lead's standing session standing in for a session that started the run.
     spawner_stand_in?: boolean;
+    // Nobody's run: no session stands in for its subject (schema workflow_runs.no_subject).
+    no_subject?: boolean;
     // The role whose line starts this run (orgLine.startRoleRun).
     org_role_id?: Id<"org_roles">;
     // The team the primary session routes to when no directory rule names
@@ -748,6 +750,7 @@ export async function createRunCore(
     ...scope,
     ...(opts.spawner_conversation_id ? { spawner_conversation_id: opts.spawner_conversation_id } : {}),
     ...(opts.spawner_conversation_id && opts.spawner_stand_in ? { spawner_stand_in: true } : {}),
+    ...(opts.no_subject ? { no_subject: true } : {}),
     ...(opts.org_role_id ? { org_role_id: opts.org_role_id } : {}),
     status: "pending",
     node_statuses: [],
@@ -827,6 +830,8 @@ export const createFromCli = mutation({
     project_path: v.optional(v.string()),
     // Any ref to one of the caller's sessions (see findConversationByAnyRef).
     spawner_session: v.optional(v.string()),
+    // No session started the run (a subagent's, or --no-subject): its gates never ask the task's change session.
+    no_subject: v.optional(v.boolean()),
     force: v.optional(v.boolean()),
     // Execute on this machine's daemon instead of in the calling process
     // (`cast workflow run --detach`), so a caller that cannot wait (a backend
@@ -950,6 +955,7 @@ export const createFromCli = mutation({
       project_path: place?.project_path ?? chosen?.project_path ?? args.project_path,
       spawner_conversation_id: spawner?._id,
       ...(!args.spawner_session ? { spawner_stand_in: true } : {}),
+      ...(args.no_subject ? { no_subject: true } : {}),
       ...(place ? { org_role_id: lead._id } : {}),
       force: args.force,
       fresh_branch: args.detach && lineRun,

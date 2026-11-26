@@ -19,6 +19,7 @@ function cast(env: NodeJS.ProcessEnv, cliPost?: FlowDeps["cliPost"]) {
     cliPost: cliPost ?? (async (path, body) => { posts.push({ path, body: structuredClone(body) }); return { run_id: "run_1", node_id: "review__review", attempt: 1 }; }),
     // How `cast` names the session it runs inside: from the agent's own environment.
     callingSession: () => sessionIdFromEnv(env) ?? undefined,
+    subjectSession: refuse("subjectSession"),
     realCwd: () => process.cwd(),
     readWorkspace: refuse("readWorkspace"),
     directoryTeam: refuse("directoryTeam"),

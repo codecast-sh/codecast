@@ -31,6 +31,10 @@ export interface FlowDeps {
   cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
   /** The session this `cast` runs inside (its codecast id or agent session id), or undefined at a plain shell. */
   callingSession: () => string | undefined;
+  /** The session a run started here is about (flows.md FL4): callingSession when that session's own agent runs this
+   *  `cast` (undefined at a plain shell), false when one of its subagents does, since the session never asked and
+   *  nothing may stand in for it (subagentCaller.ts). */
+  subjectSession: () => Promise<string | false | undefined>;
   realCwd: () => string;
   /** The workspace a read names: the team given, else the one this shell reads. */
   readWorkspace: (team?: string) => Promise<Workspace>;
@@ -65,18 +69,27 @@ async function sessionTitleOf(conversation: string, deps: Pick<FlowDeps, "cliPos
 }
 
 /** What `cast flow run` prints for a change upstream already holds: JSON for a caller that parses it (`--json`), else a sentence. */
+/** What `cast workflow run` is told about its spawner. Its own process cannot tell a subagent asked, so a run nobody's
+ *  session asked for (asker false) names the session given with --session, else none: never the subagent's parent. */
+export function spawnerArgs(asker: string | false | undefined, session: string | boolean | undefined): string[] {
+  if (asker !== false) return [];
+  return typeof session === "string" ? ["--spawner", session] : ["--no-subject"];
+}
+
 export function landedOutput(json: boolean, what: string, upstream: string, landed: string): string {
   return json ? JSON.stringify({ landed, upstream }) : `${what} is already on ${upstream} at ${landed.slice(0, 10)}: nothing to run.`;
 }
 
 /**
- * The run's subject when the change is named (a task, branch or pull request) from inside a session: that session
- * started the run, so it hears what each stage finds (flows.md FL4). From a plain shell (a run started over ssh on
- * another machine), the session the task's change came from (`change_session` on /cli/work/get). Undefined when there is neither.
+ * The run's subject when the change is named (a task, branch or pull request): `asker`, the session that started the
+ * run (named with --session, else the one this runs in), so it hears what each stage finds (flows.md FL4). With no
+ * asker (a plain shell, a run started over ssh on another machine), the session the task's change came from
+ * (`change_session` on /cli/work/get). None when there is neither, or when `asker` is false: a subagent asked, or
+ * --no-subject said so, and the task's session is not adopted in its place.
  */
-export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSession">, task?: string): Promise<{ session: string; conversation: string } | undefined> {
-  const ref = deps.callingSession();
-  const row = ref ? await sessionRowOf(ref, deps) : null;
+export async function callingSubject(deps: Pick<FlowDeps, "cliPost">, asker: string | undefined | false, task?: string): Promise<{ session: string; conversation: string } | undefined> {
+  if (asker === false) return undefined;
+  const row = asker ? await sessionRowOf(asker, deps) : null;
   if (row?.id) return { session: String(row.id).slice(0, 7), conversation: String(row.id) };
   const made = task ? (await deps.cliPost("/cli/work/get", { short_id: task }).catch(() => null))?.change_session : null;
   return made?.conversation_id ? { session: String(made.short_id), conversation: String(made.conversation_id) } : undefined;
@@ -341,7 +354,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--library", "Run the library's flow of that name even though the repo's default branch has its own")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; checkout?: boolean; title?: string; only?: string; foreground?: boolean; device?: string; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
+    .option("--no-subject", "With --task, --branch, --pr or --checkout: no session is the run's subject, so none hears its stages or is asked at its gates")
+    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; checkout?: boolean; title?: string; only?: string; foreground?: boolean; device?: string; dryRun?: boolean; json?: boolean; team?: string; library?: boolean; subject: boolean }) => {
+      // Who asked, read before anything else: this session's own agent, false when a subagent runs this or
+      // --no-subject says nobody did (ct-101911).
+      const asker = opts.subject ? await deps.subjectSession() : false;
+      const nobody = opts.subject ? "a subagent's run" : "a --no-subject run";
       // Flows must be on in the workspace the run reads its pool from, not merely the active one (flows.md FL2).
       const at = poolWorkspace(deps, opts.team);
       const where = await at.catch((err: unknown) => {
@@ -353,6 +371,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         console.error("--checkout runs the whole checkout's change: it takes no --session, --branch, --pr or --only");
         process.exit(1);
       }
+      if (!opts.subject && opts.session !== undefined) { console.error("--no-subject runs a named change with no session: a session's own edits (--session) always have that session as subject"); process.exit(1); }
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
       const cwd = deps.realCwd();
       const read = await readPool(deps, at);
@@ -378,9 +397,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (placed && opts.checkout) { console.error(`--checkout runs this checkout's own pass, which only this machine can freeze again: pass --device here to run it here`); process.exit(1); }
 
       // Which change: a branch or PR names its own; else a session's edits, unless only a task was named.
-      let sessionRef = opts.checkout ? undefined : typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
+      let sessionRef = opts.checkout ? undefined : typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? asker || undefined : undefined;
       if (!opts.task && !opts.branch && !opts.pr && !sessionRef && !opts.checkout) {
-        console.error("Name the change: run this from inside a session (its own edits), or pass --task, --branch, --pr or --session <id>");
+        console.error(asker === false
+          ? `Name the change: ${nobody} takes no session's edits, so name a branch with --branch or --pr, or a session's edits with --session <id>`
+          : "Name the change: run this from inside a session (its own edits), or pass --task, --branch, --pr or --session <id>");
         process.exit(1);
       }
       let branch = opts.branch;
@@ -405,9 +426,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           const { previewSessionChange } = await import("./workflow/flowChange.js");
           return previewSessionChange(top, session, only, { fetch: false }).then((p) => p.paths.length > 0, () => false);
         };
-        const taken = await taskChange(top, runSlug(graph, { task_id: task }, "run"), task, deps.callingSession(), ownEdits);
+        const taken = await taskChange(top, runSlug(graph, { task_id: task }, "run"), task, asker || undefined, ownEdits);
         if (!taken) {
-          console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from inside the session that made the change (its own edits), or name the change with --branch or --pr`);
+          console.error(asker === false
+            ? `${found.label} works on a change, and ${task} has no branch here yet; ${nobody} takes no session's edits, so name the change with --branch or --pr, or a session's edits with --session <id>`
+            : `${found.label} works on a change, and ${task} has no branch here yet: run it from inside the session that made the change (its own edits), or name the change with --branch or --pr`);
           process.exit(1);
         }
         if ("branch" in taken) branch = taken.branch;
@@ -474,7 +497,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         task = (made.out + made.err).match(/\bct-\d+\b/)?.[0];
         if (!task) { console.error(`Could not make the task for this change: ${(made.err || made.out).trim()}`); process.exit(1); }
         // Bound only from the session itself: `task start` binds the session it runs in.
-        if (subjectRun && sessionRef === deps.callingSession()) {
+        if (subjectRun && sessionRef === asker) {
           const bound = await cast(["task", "start", task], top);
           if (bound.code !== 0) console.error(dim(`  ${task} was not bound to this session: ${(bound.err || bound.out).trim().split("\n").pop()}`));
         }
@@ -500,12 +523,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
         const remoteTip = await originTip(top, branch);
         // The files the branch changes, so a station gated on paths (when=) runs when they say it should.
-        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, task)), base: head, tip: head, ...(remoteTip ? { remote_tip: remoteTip } : {}), branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
+        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, typeof opts.session === "string" ? opts.session : asker, task)), base: head, tip: head, ...(remoteTip ? { remote_tip: remoteTip } : {}), branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
       } else if (opts.checkout) {
         const { freezeCheckoutChange } = await import("./workflow/flowChange.js");
         try {
           // The session that ran this hears the findings that name none of the change's files.
-          change = { ...(await freezeCheckoutChange(top, { branch: `codecast/${worktree}`, worktree, title: changeTitle, roster, fetched: true })), ...(await callingSubject(deps, task)) };
+          change = { ...(await freezeCheckoutChange(top, { branch: `codecast/${worktree}`, worktree, title: changeTitle, roster, fetched: true })), ...(await callingSubject(deps, typeof opts.session === "string" ? opts.session : asker, task)) };
         } catch (err) {
           console.error(err instanceof Error ? err.message : String(err));
           process.exit(1);
@@ -538,6 +561,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
 
       const runArgs = ["workflow", "run", found.file ?? found.slug, "--task", task!];
       if (!opts.foreground) runArgs.push("--detach", "--json");
+      runArgs.push(...spawnerArgs(asker, opts.session));
       if (placed) runArgs.push("--device", placed.device_id, ...(changeFile ? ["--change", changeFile] : []));
       if (opts.foreground) {
         const { resolveCastInvocation } = await import("./castInvocation.js");
