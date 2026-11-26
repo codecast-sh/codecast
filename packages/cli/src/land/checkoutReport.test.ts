@@ -38,6 +38,20 @@ describe("the level sweep's state on a checkout", () => {
     expect(nextLevel(b.state, refused("/r", ["c.ts"]), 10_000).level).toMatchObject({ since: 10_000, told: [] });
   });
 
+  test("a hold whose files change while any of them still conflicts keeps its clock and who it told, so a busy checkout still reaches its ask", () => {
+    const told: CheckoutTold[] = [{ at: 5_000, files: 1, to: "session", conversation_id: "conv_a" }];
+    const a = nextLevel({}, refused("/r", ["a.ts"]), 1_000);
+    // Main touched another dirty file, then a writer fixed the first: the same hold all along.
+    const grown = nextLevel({ ...a.state, stuck: { ...a.state.stuck!, told } }, refused("/r", ["a.ts", "b.ts"]), 2_000);
+    expect(grown.level).toMatchObject({ state: "stuck", files: ["a.ts", "b.ts"], since: 1_000, told });
+    const moved = nextLevel(grown.state, refused("/r", ["b.ts", "c.ts"]), 3_000);
+    expect(moved.level).toMatchObject({ files: ["b.ts", "c.ts"], since: 1_000, told });
+    // A refusal naming no file (HEAD moved under the level) says nothing new: the hold and its files stand.
+    const raced = nextLevel(moved.state, refused("/r", []), 4_000);
+    expect(raced.level).toMatchObject({ state: "stuck", files: ["b.ts", "c.ts"], since: 1_000, told });
+    expect(nextLevel(raced.state, refused("/r", ["c.ts"]), 5_000).level).toMatchObject({ since: 1_000, told });
+  });
+
   test("a level ends the episode and says when; a skip says why; at upstream reads level", () => {
     const stuck = nextLevel({}, refused("/r", ["a.ts"]), 1_000).state;
     const done = nextLevel(stuck, levelled("/r"), 2_000);

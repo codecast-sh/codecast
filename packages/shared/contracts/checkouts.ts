@@ -52,7 +52,7 @@ export const LEVEL_TOLD_PATHS_MAX = 8;
 export type CheckoutLevel =
   /** At origin's default branch: levelled then (null: never moved by the sweep since the daemon started). */
   | { state: "level"; levelled_at: number | null }
-  /** Refused, the same files each pass since `since`. `told`: who has been asked for help this episode, each about its own files (empty until the grace passes). */
+  /** Refused since `since`, on `files` now (the set may change while any file it was held on still conflicts). `told`: who has been asked for help this episode, each about its own files (empty until the grace passes). */
   | { state: "stuck"; files: string[]; reason: string; since: number; told: CheckoutTold[] }
   /** Not levelled by the sweep, and why: off for this repo, a worktree, off the default branch, holds commits main lacks, a ship running. */
   | { state: "off"; reason: string };

@@ -5,7 +5,7 @@
  * session that wrote it (attribute.ts, as `cast ship checkout` reads it), and
  * the sweep's state on it. Reported when that changes, never every minute.
  *
- * A level held on the same files for LEVEL_STUCK_FILE_MS asks for help, once
+ * A level held for LEVEL_STUCK_FILE_MS asks for help, once
  * per episode per writer: each session that last wrote some of the
  * conflicting files hears about those files only, as a machine wake with the
  * brief and merge files of levelConflicts.ts, and the files no session wrote
@@ -79,11 +79,18 @@ export function nextLevel(prev: RootState, o: LevelSweepOutcome, now: number): {
   const r = o.result;
   if (r.ok) return { level: { state: "level", levelled_at: now }, state: { ...prev, levelled_at: now, stuck: undefined } };
   const files = [...r.conflicts].sort();
-  // The reason names the commit it was levelling to, which moves as main does: the episode is the files.
+  // The reason names the commit it was levelling to, which moves as main does: an episode with no files is its reason.
   const key = files.length ? files.join("\n") : (r.reason ?? "refused").replace(/\b[0-9a-f]{7,40}\b/g, "");
   const reason = r.reason ?? "refused";
-  const stuck: Episode = prev.stuck?.key === key ? { ...prev.stuck, files, reason } : { key, files, reason, since: now, told: [] };
-  return { level: { state: "stuck", files, reason, since: stuck.since, told: toldOf(stuck) }, state: { ...prev, stuck } };
+  const prior = prev.stuck;
+  // The hold lasts while any file it was held on still conflicts. In a busy checkout main adds files to the set and a
+  // writer's fix drops some every few minutes, so an episode keyed by the exact set restarted its clock before
+  // LEVEL_STUCK_FILE_MS and its writers were never told. Only a set sharing no file with the last starts a new one; a
+  // refusal naming no file (HEAD moved under the level) leaves the episode as it was.
+  const stuck: Episode = prior && !files.length && prior.files.length ? { ...prior, reason }
+    : prior && (prior.key === key || files.some((f) => prior.files.includes(f))) ? { ...prior, key, files, reason }
+    : { key, files, reason, since: now, told: [] };
+  return { level: { state: "stuck", files: stuck.files, reason, since: stuck.since, told: toldOf(stuck) }, state: { ...prev, stuck } };
 }
 
 const num = (s: string | null | undefined) => (s && /^\d+$/.test(s.trim()) ? Number(s.trim()) : null);
