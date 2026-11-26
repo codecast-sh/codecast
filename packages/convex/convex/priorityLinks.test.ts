@@ -393,6 +393,16 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s3")).done).toBe(false);
   });
 
+  test("a milestone the pass judged done earlier takes a later --serves pin's own time, with the evidence mark", async () => {
+    const { t, p1, cPin } = await world();
+    await t.run(async (ctx: any) => {
+      const p = await ctx.db.get(p1);
+      await ctx.db.patch(p1, { steps: p.steps.map((s: any) => (s.key === "s3" ? { ...s, done: true, done_at: NOW - 5 * H } : s)) });
+    });
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: (await convOf(t, cPin)).thread_state_at, done_set_by: "evidence" });
+  });
+
   test("one pass maps an unlinked session onto the milestone its done pin named and judges it done: the pin's time and mark win", async () => {
     const { t, ada, p1, cFree } = await world();
     await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });

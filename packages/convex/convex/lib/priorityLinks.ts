@@ -150,8 +150,8 @@ async function evidenceFor(ctx: Ctx, p: Priority, step: Step, sessionAt: number 
     if (!resolved) return null;
     return !open && merged ? { done: true, at } : { done: false };
   }
-  // A pin naming the milestone outranks a done the pass judged: it keeps the earlier time, and the mark.
-  if (sessionAt !== undefined && step.done_set_by !== "evidence") return { done: true, at: step.done && step.done_at != null ? Math.min(step.done_at, sessionAt) : sessionAt, session: true };
+  // A pin naming the milestone outranks a done the pass judged: the pin's own time, and the mark.
+  if (sessionAt !== undefined && step.done_set_by !== "evidence") return { done: true, at: sessionAt, session: true };
   return null;
 }
 
