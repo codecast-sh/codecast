@@ -243,6 +243,32 @@ describe("sampleTicks", () => {
     }
   });
 
+  test("a quiet author keeps ticks in a thread someone else dominates", () => {
+    const you = new Set([0, 3, 8, 11, 17, 19, 20, 24, 25, 26, 160, 318, 452, 571, 618]);
+    const rows = Array.from({ length: 626 }, (_, i) => ({ _id: String(i), i, who: you.has(i) ? "you" : "cam" }));
+    const ticks = sampleTicks(rows, 72, -1, (r) => r.who);
+    expect(ticks.length).toBe(72);
+    const yours = ticks.filter((t) => t.row.who === "you").map((t) => t.row.i);
+    expect(yours.length).toBeGreaterThanOrEqual(4);
+    expect(yours[0]).toBe(0);
+    expect(yours[yours.length - 1]).toBe(618);
+    const idx = ticks.map((t) => t.row.i);
+    expect([...idx].sort((a, b) => a - b)).toEqual(idx);
+    expect(new Set(idx).size).toBe(72);
+  });
+
+  test("an author with fewer rows than the floor gets every one", () => {
+    const rows = Array.from({ length: 300 }, (_, i) => ({ _id: String(i), i, who: i === 150 || i === 290 ? "you" : "cam" }));
+    const ticks = sampleTicks(rows, 24, 150, (r) => r.who);
+    expect(ticks.filter((t) => t.row.who === "you").map((t) => t.row.i)).toEqual([150, 290]);
+    expect(ticks.find((t) => t.active)!.row.i).toBe(150);
+  });
+
+  test("one author samples exactly as without authors", () => {
+    const rows = rowsOf(200);
+    expect(sampleTicks(rows, 24, 77, () => "you")).toEqual(sampleTicks(rows, 24, 77));
+  });
+
   test("activeTickIndex prefers the current message, then scroll progress", () => {
     const rows = rowsOf(10);
     expect(activeTickIndex(rows, "7", 0)).toBe(7);
