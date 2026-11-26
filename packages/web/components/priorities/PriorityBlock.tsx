@@ -250,7 +250,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
 }) {
   const { row } = model;
   const wide = layout === "wide";
-  // A top-three priority nothing was typed into today reads a little quieter: it is not getting today's attention.
+  // A top-three priority nothing was typed into today says so in its today cell ("0"), its title unmuted.
   const untouched = row.status === "active" && (row.rank ?? 99) <= 3 && model.today === 0;
   // The row's own correction, when no milestone line carries it.
   const pending = row.correction_pending && !model.milestones.some((m) => m.correctionPending);
@@ -259,10 +259,10 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
     <div data-priority-head className={cn(LIST_GRID[layout], "gap-y-0.5")}>
       <Rank row={row} drag={drag} />
       <span className={cn(C_TITLE, "flex min-w-0 items-center gap-2")}>
-        <span title={row.summary || row.title} className={cn("min-w-0 font-semibold", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", untouched ? "text-sol-text-muted" : "text-sol-text")}>
+        <span title={row.summary || row.title} className={cn("min-w-0 font-semibold", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", "text-sol-text")}>
           {row.title}
         </span>
-        {!wide && model.today > 0 && <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
+        {!wide && (model.today > 0 || untouched) && <span data-today className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
         {/* Where the momentum column has no room for words (a narrow list, a phone), Stalled sits by the title. */}
         {model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
         {/* On a phone and in the compact view the title keeps the row's width; the mark goes on the meta line below. */}
@@ -273,7 +273,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
       <span className={cn(C_PROGRESS, "flex items-center justify-end gap-2", wide && "w-full")}>
         <Progress model={model} layout={layout} onToggle={onProgress} />
         {wide && (
-          <span data-polish-slot className={POLISH_SLOT}>
+          <span data-polish-slot className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:invisible")}>
             {polish && (
               <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className={cn("inline-flex items-center gap-0.5 whitespace-nowrap rounded px-1 text-meta text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text-muted", TOUCH_AREA)}>
                 Polish <span className="tabular-nums">{polish.done}/{polish.total}</span>
@@ -285,7 +285,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
       </span>
       {wide ? (
         <>
-          <span data-today className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text">{model.today > 0 ? model.today : ""}</span>
+          <span data-today className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text">{model.today > 0 || untouched ? model.today : ""}</span>
           <span className="col-start-5 row-start-1 justify-self-start"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
           <span className={cn(C_MENU, "[@media(pointer:coarse)]:flex [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:items-center")}><PriorityMenu row={row} /></span>
         </>
@@ -309,6 +309,11 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           <MomentumWords model={model} className="ml-auto" />
         </div>
       )}
+      {!wide && plan && (
+        <div data-meta-plan className="col-start-2 col-end-6 row-start-3 flex min-w-0 items-center [@media(pointer:coarse)]:min-h-11">
+          <PlanChip plan={plan} className="min-w-[7rem] max-w-full" />
+        </div>
+      )}
       {plan && wide && (
         <div data-meta className="col-start-2 col-end-3 row-start-2 flex min-h-6 min-w-0 items-center gap-1.5 overflow-hidden [@container(min-width:44rem)]:col-end-6 [@media(pointer:coarse)]:min-h-11">
           <PlanChip plan={plan} className="min-w-[7rem] max-w-[22rem]" />
@@ -316,7 +321,8 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
       )}
       {wide && compact && pending && <span data-meta className="col-start-2 col-end-3 row-start-2 flex min-w-0 items-center"><PendingMark /></span>}
       {/* A narrow wide list (Daylight beside the inbox) has no room for the words beside the strip: they go on the meta line under it, compact or not. */}
-      {wide && <MomentumWords model={model} className="col-start-3 col-end-6 row-start-2 justify-self-end [@container(min-width:44rem)]:hidden" />}
+      {/* Compact stays one line: there the words show only beside the strip, where they fit. */}
+      {wide && !compact && <MomentumWords model={model} className="col-start-3 col-end-6 row-start-2 justify-self-end [@container(min-width:44rem)]:hidden" />}
     </div>
   );
 }
@@ -324,12 +330,12 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
 /**
  * A milestone's chips on a wide line, first to last: the bracket's head
  * session where the driver starts, the priority's action on its line with
- * the session it acts in ("in ‹session›", which keeps a minimum width and is
- * never dropped), else one session (Answer when it asks); then "+N sessions",
- * only while the line has no other kind of link the Show filter asks for
- * (those count at the line's end, lineKinds); then the plan, which is what
- * gives way: a chip that would wrap is clipped away, and the open line lists
- * the plan in full.
+ * the session it acts in ("in ‹session›", which ellipsizes), else one session
+ * (Answer when it asks); then "+N sessions"; then the other kinds the Show
+ * filter asks for, as counts ("1 task", "2 PRs"); then the plan. A chip that
+ * would wrap is clipped away, so they give way from the end: the plan first,
+ * then the counts, and "+N sessions" never while a count still shows. The
+ * open line lists them all.
  */
 function lineChips({ model, m, railed, filters, lookups }: {
   model: PriorityModel;
@@ -355,9 +361,11 @@ function lineChips({ model, m, railed, filters, lookups }: {
     if (shown) chips.push(<SessionSlot key="s" s={shown} className="min-w-[4.5rem] max-w-[15rem]" />);
   }
   const others = own.filter((s) => s !== shown).length + m.more;
-  if (filters.show.sessions && !m.done && others > 0 && !hasKinds(m, filters, lookups)) {
+  if (filters.show.sessions && !m.done && others > 0) {
     chips.push(<span key="o" data-more-sessions className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1.5 text-meta tabular-nums text-sol-text-dim">+{others} {others === 1 ? "session" : "sessions"}</span>);
   }
+  const kinds = m.done ? [] : kindCounts(m, filters, lookups);
+  if (kinds.length) chips.push(<span key="k" data-line-kinds className="flex shrink-0 items-center gap-1">{kinds.map((k) => <KindCount key={k.kind} kind={k.kind} n={k.n} />)}</span>);
   if (filters.show.plans && m.plan) chips.push(<span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span>);
   return chips;
 }
@@ -370,22 +378,6 @@ function kindCounts(m: MilestoneModel, filters: ListFilters, lookups: LinkLookup
     { kind: "branch" as const, n: filters.show.branches ? branchesOf(m, lookups).length : 0 },
     { kind: "deploy" as const, n: filters.show.deploys ? lookups.deploysOf(m).length : 0 },
   ].filter((k) => k.n > 0);
-}
-const hasKinds = (m: MilestoneModel, filters: ListFilters, lookups: LinkLookups) => kindCounts(m, filters, lookups).length > 0;
-
-/**
- * A closed line's other kinds of link as counts ("1 task", "2 PRs") at its
- * end, outside the clip, so every kind asked for shows however long the
- * session chips are; the open line lists each one.
- */
-function lineKinds(m: MilestoneModel, filters: ListFilters, lookups: LinkLookups): ReactNode {
-  const kinds = kindCounts(m, filters, lookups);
-  if (kinds.length === 0) return null;
-  return (
-    <span data-line-kinds className="flex h-8 shrink-0 items-center gap-1 [@media(pointer:coarse)]:h-12">
-      {kinds.map((k) => <KindCount key={k.kind} kind={k.kind} n={k.n} />)}
-    </span>
-  );
 }
 
 const RAIL: Record<RailPart, string> = {
@@ -467,7 +459,6 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
                   {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
                   {lineChips({ model, m, railed: rail, filters, lookups })}
                 </span>
-                {!m.done && lineKinds(m, filters, lookups)}
                 {m.today > 0 && <span data-line-today className="flex h-8 shrink-0 items-center whitespace-nowrap text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today} today</span>}
               </span>
             </div>

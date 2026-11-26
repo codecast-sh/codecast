@@ -35,11 +35,19 @@ afterAll(() => {
 
 // Only the transports are faked; the panel, the cards, the hooks and the
 // store are real.
+const { getFunctionName } = await import("convex/server");
+const asked: string[] = [];
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({
   ...convexReact,
   useQuery: () => undefined,
-  useQueries: () => ({}),
+  // Records each query the panel subscribes to, by name.
+  useQueries: (reqs: Record<string, { query: unknown }>) => {
+    for (const r of Object.values(reqs ?? {})) {
+      try { asked.push(getFunctionName(r.query as never)); } catch {}
+    }
+    return {};
+  },
   useMutation: () => async () => undefined,
   useAction: () => async () => undefined,
   useConvex: () => ({ query: async () => null, mutation: async () => null }),
@@ -204,4 +212,25 @@ test("Decisions rows carry their rank or None too, sorted by it", async () => {
   const g = await mountInbox();
   expect(g.host.querySelector("[data-inbox-decision-queue] [data-priority-rank]")).toBeNull();
   await g.unmount();
+});
+
+test("only the sync host feeds the priorities the view sorts by; a follower window reads the replicated rows", async () => {
+  const subscribes = async (role: "host" | "follower") => {
+    seed("priorities");
+    useInboxStore.setState((s: any) => ({
+      syncRole: role,
+      teams: [{ _id: "t1", name: "Team", role: "admin", features: { priorities: true } }],
+      clientState: { ...s.clientState, ui: { ...s.clientState.ui, active_team_id: "t1" } },
+    }));
+    asked.length = 0;
+    const m = await mountInbox();
+    const fed = asked.includes("priorities:list");
+    // Either way the cards rank from the store's rows.
+    expect(m.host.querySelector(`[data-session-id="${FIRST}"] [data-priority-rank]`)?.textContent).toBe("#1");
+    await m.unmount();
+    return fed;
+  };
+  expect(await subscribes("host")).toBe(true);
+  expect(await subscribes("follower")).toBe(false);
+  useInboxStore.setState({ syncRole: "host" } as any);
 });

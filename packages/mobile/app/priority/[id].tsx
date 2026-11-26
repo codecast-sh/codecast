@@ -97,8 +97,8 @@ function PriorityBody({ row }: { row: Row }) {
   };
   // Web's Start: the same brief, and the session linked to the milestone at creation.
   const start = (m: MilestoneModel) => {
-    const { seed, start: link } = startCompose(row, m, (id) => lookup(useInboxStore.getState().tasks, id));
-    openCompose(seed, [], link);
+    const { seed, start: link, task } = startCompose(row, m, (id) => lookup(useInboxStore.getState().tasks, id));
+    openCompose(seed, [], link, task);
   };
 
   const action = model.action;

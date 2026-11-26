@@ -200,14 +200,15 @@ export function buildModels(
 
 /**
  * The session a milestone line names when the priority's action is not on
- * it: one that asks, else the best, preferring sessions other than the one
- * the action (or the bracket's driver) already names, as the list's bracket
- * does, so the list, the phone and the page name the same one.
+ * it, on the phone and the page: one that asks, other than the one the
+ * action already answers; else the best of the sessions a person drives,
+ * ahead of workflow runs, so the line reads Dormant rather than a review's
+ * Idle.
  */
-export function lineSession(model: Pick<PriorityModel, "action" | "rail">, m: Pick<MilestoneModel, "sessions">): SessionLine | undefined {
-  const named = new Set([model.action?.session?.conversation_id, model.rail?.session.conversation_id].filter(Boolean));
-  const own = m.sessions.filter((s) => !named.has(s.conversation_id));
-  return own.find(asksPerson) ?? bestSession(own) ?? m.sessions.find(asksPerson) ?? bestSession(m.sessions);
+export function lineSession(model: Pick<PriorityModel, "action">, m: Pick<MilestoneModel, "sessions">): SessionLine | undefined {
+  const answered = model.action?.session?.conversation_id;
+  const asking = m.sessions.find((s) => asksPerson(s) && s.conversation_id !== answered) ?? m.sessions.find(asksPerson);
+  return asking ?? bestSession(m.sessions.filter((s) => !s.workflow)) ?? bestSession(m.sessions);
 }
 
 /** Something waiting on the viewer: a session asking on an open milestone of one of their active priorities. */
@@ -223,6 +224,27 @@ export type WaitingItem = { key: string; priority: string; rank: number | null; 
 export function sessionWords(s: Pick<SessionLine, "title">): string {
   const step = /^([A-Z][A-Za-z]+) · (?:ct|pl)-\d+\s*(.*)$/.exec(s.title);
   return step ? `${step[1]}: ${step[2] || "work"}` : s.title || "Untitled session";
+}
+
+const wordsOf = (t: string) => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+
+/**
+ * A session's part of "milestone · session": its title, unless the title
+ * nearly repeats the milestone (it opens with two or more of the
+ * milestone's words, or has no word the milestone lacks). Then what
+ * differs: the title past the shared opening, or "session N" when nothing
+ * does.
+ */
+export function distinctFrom(milestone: string, title: string, n: number): string {
+  const known = new Set(wordsOf(milestone));
+  const parts = title.split(/\s+/).filter(Boolean);
+  const ms = wordsOf(milestone);
+  let shared = 0;
+  while (shared < parts.length && shared < ms.length && wordsOf(parts[shared]).join("") === ms[shared]) shared++;
+  const own = wordsOf(title).filter((w) => !known.has(w));
+  if (shared < 2 && own.length > 0) return title;
+  const tail = parts.slice(shared).join(" ").replace(/^[\s·:–—-]+/, "");
+  return tail && wordsOf(tail).some((w) => !known.has(w)) ? tail : `session ${n}`;
 }
 
 /** Every session asking the viewer, by rank, critical milestones before polish, each once. */
@@ -242,9 +264,12 @@ export function waitingOf(models: readonly PriorityModel[]): WaitingItem[] {
   }
   const perMilestone = new Map<string, number>();
   for (const w of out) perMilestone.set(`${w.priority}:${w.milestoneKey}`, (perMilestone.get(`${w.priority}:${w.milestoneKey}`) ?? 0) + 1);
+  const nth = new Map<string, number>();
   return out.map((w) => {
-    if ((perMilestone.get(`${w.priority}:${w.milestoneKey}`) ?? 0) < 2) return w;
-    const who = sessionWords(w.session);
+    const at = `${w.priority}:${w.milestoneKey}`;
+    if ((perMilestone.get(at) ?? 0) < 2) return w;
+    nth.set(at, (nth.get(at) ?? 0) + 1);
+    const who = distinctFrom(w.milestone, sessionWords(w.session), nth.get(at)!);
     return { ...w, label: `${w.milestone} · ${who}`, who };
   });
 }

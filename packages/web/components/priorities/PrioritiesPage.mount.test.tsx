@@ -543,16 +543,16 @@ test("with every kind shown, each link is a chip of its own shape, labelled by i
   try {
     expect(describeFailures(page)).toBe("");
     const b = block(page.container, "pri-9");
-    // The closed line gives way so every kind asked for shows: "+N sessions" goes first, and the other kinds
-    // count at the line's end, outside the clip that drops a chip that would wrap.
+    // The closed line, first to last: the action, "+N sessions", the other kinds as counts, the plan. A short line
+    // clips from the end, so "+N sessions" outlasts the counts and the counts the plan.
     const s1 = b.querySelector('[data-milestone="s1"]')!;
-    expect(s1.querySelector("[data-more-sessions]")).toBeNull();
+    const order = [...s1.querySelector("[data-line-chips]")!.children].map((c) =>
+      c.querySelector("[data-action]") ? "action" : c.hasAttribute("data-more-sessions") ? c.textContent : c.hasAttribute("data-line-kinds") ? "kinds" : c.querySelector('[data-chip="plan"]') ? "plan" : "?");
+    expect(order).toEqual(["action", "+1 session", "kinds", "plan"]);
     const kinds = s1.querySelector("[data-line-kinds]")!;
-    expect(kinds.closest("[data-line-chips]")).toBeNull();
     expect([...kinds.querySelectorAll("[data-chip-count]")].map((c) => [c.getAttribute("data-chip-count"), c.textContent])).toEqual([
       ["task", "1 task"], ["pr", "1 PR"], ["branch", "1 branch"], ["deploy", "1 deploy"],
     ]);
-    expect(s1.querySelector('[data-line-chips] [data-chip="plan"]')).not.toBeNull();
     // Open, the line lists each one as its own chip.
     await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
     for (const kind of CHIP_KINDS) expect(b.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
@@ -599,13 +599,13 @@ test("\"+N older sessions\" in an open milestone opens the priority's page at th
   }
 }, 60_000);
 
-test("one other kind asked for counts at the line's end too; none asked for keeps \"+N sessions\"", async () => {
+test("one other kind asked for counts after \"+N sessions\", which stays; none asked for keeps it too", async () => {
   seedKinds();
   const prs = await mount(view({ rows: [KINDS], filters: readFilters(new URLSearchParams("show=sessions,plans,prs")) }));
   try {
     const s1 = block(prs.container, "pri-9").querySelector('[data-milestone="s1"]')!;
     expect([...s1.querySelectorAll("[data-line-kinds] [data-chip-count]")].map((c) => c.textContent)).toEqual(["1 PR"]);
-    expect(s1.querySelector("[data-more-sessions]")).toBeNull();
+    expect(s1.querySelector("[data-more-sessions]")!.textContent).toBe("+1 session");
   } finally {
     await prs.unmount();
   }
@@ -677,15 +677,22 @@ test("every priority says how many landed and how long since, on every layout; a
   } finally {
     await compact.unmount();
   }
-  // Daylight's compact view (a narrow wide list) says them in the meta slot under the strip; a wider one beside it.
+  // A wide compact view stays one line per row: no meta-line words, and at Daylight's narrow grid the polish slot
+  // leaves too; a wide one keeps the words beside its strip.
   const wideCompact = await mount(view({ compact: true }));
   try {
-    const words = block(wideCompact.container, "pri-5").querySelector("[data-priority-head] [data-momentum-words]")!;
-    expect(words.textContent).toBe("1 landed · last 2d");
-    expect(words.className).toContain("row-start-2");
-    expect(words.className).toContain("[@container(min-width:44rem)]:hidden");
+    const head = block(wideCompact.container, "pri-5").querySelector("[data-priority-head]")!;
+    expect(head.querySelector("[data-momentum-words]")).toBeNull();
+    expect(head.querySelector("[data-momentum]")!.textContent).toContain("1 landed");
+    expect(head.querySelector("[data-polish-slot]")!.className).toContain("[@container(max-width:44rem)]:invisible");
   } finally {
     await wideCompact.unmount();
+  }
+  const full = await mount(view());
+  try {
+    expect(block(full.container, "pri-5").querySelector("[data-polish-slot]")!.className).not.toContain("invisible");
+  } finally {
+    await full.unmount();
   }
 }, 60_000);
 
@@ -741,13 +748,14 @@ test("a milestone line's chips use the today and momentum columns, its today cou
     expect(grid.className).toContain("col-end-6");
     // The line's today count is inside the line, not a column of its own.
     expect(block(page.container, "pri-1").querySelector('[data-milestone="s2"] [data-line-today]')!.textContent).toBe("3 today");
-    // pri-3: the Open action with "in ‹session›" right after the button, which never shrinks below its least
-    // (a 5rem floor on the words); the plan last, the chip a narrow line clips (the open line lists it).
+    // pri-3: the Open action with "in ‹session›" right after the button, ellipsizing inside the chips cell (the
+    // group and the words both shrink); the plan last, the chip a narrow line clips (the open line lists it).
     const chips = [...block(page.container, "pri-3").querySelector('[data-milestone="s1"] [data-line-chips]')!.children];
     expect(chips[0].querySelector('[data-action="open"]')).not.toBeNull();
-    expect(chips[0].querySelector("[data-in-session]")!.textContent).toBe("in Eval cost reduction");
-    expect(chips[0].querySelector("[data-in-session]")!.className).toContain("min-w-[5rem]");
-    expect(chips[0].className).not.toContain("min-w-0");
+    const words = chips[0].querySelector("[data-in-session]")!;
+    expect(words.textContent).toBe("in Eval cost reduction");
+    for (const c of ["min-w-0", "shrink", "truncate"]) expect(words.className.split(" ")).toContain(c);
+    expect(chips[0].className.split(" ")).toContain("min-w-0");
     expect(chips.at(-1)!.querySelector('[data-chip="plan"]')).not.toBeNull();
   } finally {
     await page.unmount();
@@ -870,6 +878,78 @@ test("at the desktop width the box never takes a third line: it shows fewer item
     for (const [k, d] of [["offsetTop", realTop], ["offsetHeight", realHeight], ["offsetWidth", realWidth]] as const) {
       if (d) Object.defineProperty(proto, k, d);
       else delete proto[k];
+    }
+  }
+}, 60_000);
+
+test("a new width re-fits the waiting box at once: a resize or a rotation starts over from five", async () => {
+  const many = row(13, "Many asks", 1, Array.from({ length: 7 }, (_, i) => step(`s${i}`, `Milestone ${i}`, "critical")), {
+    links: Array.from({ length: 7 }, (_, i) => links(`s${i}`, [sess(`many${i}`, `Session ${i}`, "needs_you", i + 1)])),
+  });
+  let perLine = 3;
+  const observers: Array<(entries: Array<{ contentRect: { width: number } }>) => void> = [];
+  const realRO = (globalThis as any).ResizeObserver;
+  (globalThis as any).ResizeObserver = class { constructor(cb: any) { observers.push(cb); } observe() {} disconnect() {} };
+  const proto = (window as any).HTMLElement.prototype;
+  const realTop = Object.getOwnPropertyDescriptor(proto, "offsetTop");
+  const realHeight = Object.getOwnPropertyDescriptor(proto, "offsetHeight");
+  Object.defineProperty(proto, "offsetTop", { configurable: true, get(this: HTMLElement) { const box = this.closest('[data-waiting="wide"]'); return box ? Math.floor([...box.children].indexOf(this) / perLine) * 28 : 0; } });
+  Object.defineProperty(proto, "offsetHeight", { configurable: true, get() { return 28; } });
+  const { act } = React as any;
+  try {
+    const page = await mount(view({ rows: [many] }));
+    const shown = () => page.container.querySelectorAll('[data-waiting="wide"] [data-waiting-item]').length;
+    try {
+      await page.waitFor(() => shown() === 4);
+      // The box widens (four slots a line now): its observer starts it over from five, which fit.
+      perLine = 4;
+      await act(async () => { for (const cb of observers) { cb([{ contentRect: { width: 800 } }]); cb([{ contentRect: { width: 1100 } }]); } });
+      await page.waitFor(() => shown() === 5);
+      expect(page.container.querySelector('[data-waiting="wide"] [data-waiting-more]')!.textContent).toBe("+2 more");
+      // It narrows again while five show: the new width alone re-runs the fit, which drops back to four.
+      perLine = 3;
+      await act(async () => { for (const cb of observers) cb([{ contentRect: { width: 700 } }]); });
+      await page.waitFor(() => shown() === 4);
+    } finally {
+      await page.unmount();
+    }
+  } finally {
+    (globalThis as any).ResizeObserver = realRO;
+    for (const [k, d] of [["offsetTop", realTop], ["offsetHeight", realHeight]] as const) {
+      if (d) Object.defineProperty(proto, k, d);
+      else delete proto[k];
+    }
+  }
+}, 60_000);
+
+test("a phone line's state word reads the person's session, not a workflow run; the priority's plan shows on its meta line", async () => {
+  const page = await mount(view({ layout: "phone" }));
+  try {
+    // pri-2's second milestone: the driver (dormant) and two review runs (one idle). The driver is the action's
+    // session on another line, which no longer hides it here.
+    const line = block(page.container, "pri-2").querySelector('[data-milestone="s2"]')!;
+    expect(line.textContent).toContain("Dormant");
+    expect(line.textContent).not.toContain("Idle");
+    expect(block(page.container, "pri-2").querySelector("[data-meta-plan] [data-chip=plan]")!.textContent).toContain("Every change merges green");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("an untouched top-three priority keeps its title's colour and says \"0\" in its today cell", async () => {
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(view({ layout }));
+    try {
+      // pri-3 (#3) has nothing typed today.
+      const head = block(page.container, "pri-3").querySelector("[data-priority-head]")!;
+      expect(head.querySelector("[title]")!.className).toContain("text-sol-text");
+      expect(head.innerHTML).not.toContain("text-sol-text-muted\">Cut eval spend");
+      expect(head.querySelector("[data-today]")!.textContent).toBe(layout === "wide" ? "0" : "0 today");
+      // A lower priority with nothing today leaves the cell empty.
+      const five = block(page.container, "pri-5").querySelector("[data-priority-head] [data-today]");
+      expect(five?.textContent ?? "").toBe("");
+    } finally {
+      await page.unmount();
     }
   }
 }, 60_000);

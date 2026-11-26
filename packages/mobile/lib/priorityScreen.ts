@@ -6,6 +6,7 @@ import type { PriorityRow } from '@codecast/shared/contracts/priorities';
 import type { NextAction } from '@codecast/shared/contracts/priorityDerive';
 import { milestoneStart, rankProvenance } from '@codecast/web/lib/priorities';
 import type { SessionStart } from '@codecast/web/store/composeSlice';
+import type { ComposeTask } from './compose';
 import type { MilestoneModel, SessionLine } from '@codecast/web/lib/priorityList';
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -39,20 +40,22 @@ export function nextWords(action: NextAction<MilestoneModel>): { title: string; 
   };
 }
 
-type StartTask = Parameters<typeof milestoneStart>[2];
+type TaskRow = { _id?: string; short_id?: string; title?: string; status?: string };
 
 /**
  * Start on a milestone, as web starts it: the composer seeded with the same
  * brief (milestones, open tasks and plan as live references) and the session
- * linked at creation to the priority, the milestone and its plan.
+ * linked at creation to the priority, the milestone and its plan, and bound
+ * to the milestone's first open task (the store's row, by its id).
  */
 export function startCompose(
   row: Parameters<typeof milestoneStart>[0],
   m: Parameters<typeof milestoneStart>[1],
-  task: StartTask,
-): { seed: string; start: SessionStart } {
-  const { draft, start } = milestoneStart(row, m, task);
-  return { seed: draft, start };
+  task: (shortId: string) => TaskRow | undefined,
+): { seed: string; start: SessionStart; task: ComposeTask | null } {
+  const { draft, start, task: first } = milestoneStart(row, m, task);
+  const t = first ? task(first) : undefined;
+  return { seed: draft, start, task: first && t?._id ? { _id: String(t._id), short_id: first, title: t.title, status: t.status } : null };
 }
 
 /**

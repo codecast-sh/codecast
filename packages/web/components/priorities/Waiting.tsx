@@ -4,7 +4,8 @@
 // last one and "+N more" would wrap onto a third; phone, rows 44px tall,
 // three of them, the rest behind "+N more". Each opens its session. Nothing
 // waits, nothing shows.
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import Link from "next/link";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ago, type ListLayout, type WaitingItem } from "../../lib/priorityList";
@@ -51,29 +52,45 @@ const lineOf = (top: number, firstTop: number, height: number) => (height > 0 ? 
 
 /**
  * The wide box: as many items as fit two lines with "+N more" after them.
- * Measured after each paint; a third line drops one item at a time, and a
- * new width starts over from five.
+ * Measured after each paint, a third line drops one item at a time; a new
+ * width (a resize, a rotation, the inbox opening beside it) starts over
+ * from five at once.
  */
 function WideWaiting({ items, now }: { items: WaitingItem[]; now: number }) {
   const [shown, setShown] = useState(WIDE_SHOWN);
-  const box = useRef<HTMLElement>(null);
+  // Bumped on a new width, so the fit below runs again even when five are already shown.
+  const [, setWidthEpoch] = useState(0);
+  const observer = useRef<ResizeObserver | null>(null);
   const width = useRef(0);
+  const box = useRef<HTMLElement | null>(null);
+  const measure = useCallback((el: HTMLElement | null) => {
+    box.current = el;
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    observer.current = new ResizeObserver(([entry]) => {
+      const w = Math.round(entry.contentRect.width);
+      if (w === width.current) return;
+      const first = width.current === 0;
+      width.current = w;
+      if (first) return;
+      setShown(WIDE_SHOWN);
+      setWidthEpoch((n) => n + 1);
+    });
+    observer.current.observe(el);
+  }, []);
+  useMountEffect(() => () => observer.current?.disconnect());
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     const first = el.querySelector<HTMLElement>("[data-waiting-item]");
     const tail = el.querySelector<HTMLElement>("[data-waiting-more]") ?? el.querySelector<HTMLElement>("[data-waiting-item]:last-of-type");
     if (!first || !tail) return;
-    if (el.offsetWidth !== width.current) {
-      const fresh = width.current !== 0 && shown !== WIDE_SHOWN;
-      width.current = el.offsetWidth;
-      if (fresh) return setShown(WIDE_SHOWN);
-    }
     if (shown > 1 && lineOf(tail.offsetTop, first.offsetTop, first.offsetHeight) >= 2) setShown(shown - 1);
   });
   const count = Math.min(shown, items.length);
   return (
-    <section ref={box} data-waiting="wide" className="mb-3 flex flex-wrap items-center gap-x-1 rounded-lg border border-sol-yellow/45 bg-sol-yellow/[0.06] py-0.5 pl-2.5 pr-1">
+    <section ref={measure} data-waiting="wide" className="mb-3 flex flex-wrap items-center gap-x-1 rounded-lg border border-sol-yellow/45 bg-sol-yellow/[0.06] py-0.5 pl-2.5 pr-1">
       <span className="mr-1 shrink-0 text-mark font-semibold uppercase tracking-wide text-sol-text-muted">Waiting on you</span>
       {items.slice(0, count).map((it) => <WaitingRow key={it.key} item={it} now={now} />)}
       {items.length > count && <More items={items} now={now} label={`+${items.length - count} more`} className="h-7 [@media(pointer:coarse)]:h-11" />}

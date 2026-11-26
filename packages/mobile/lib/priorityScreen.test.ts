@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'bun:test';
 import { buildModels, lastDays } from '@codecast/web/lib/priorityList';
 import { milestoneBox, nextWords, ownerWords, standing, startCompose } from './priorityScreen';
-import { openCompose, useCompose } from './compose';
+import { linkedCreateArgs, openCompose, useCompose } from './compose';
 import { milestoneStartHref } from '@codecast/web/lib/priorities';
 import { parseComposeLink } from '@codecast/web/lib/composeLink';
 
@@ -55,18 +55,24 @@ describe('the phone priority screen', () => {
       links: [link('s1'), { ...link('s2'), plan: PLAN }],
     });
     const m = model(r).milestones[1];
-    const tasks: Record<string, { title: string; status: string }> = { 'ct-9001': { title: 'Old scorer', status: 'done' }, 'ct-9002': { title: 'Write the scorer', status: 'open' } };
-    const { seed, start } = startCompose(r, m, (id) => tasks[id]);
+    const tasks: Record<string, { _id: string; title: string; status: string }> = { 'ct-9001': { _id: 'task-old', title: 'Old scorer', status: 'done' }, 'ct-9002': { _id: 'task-new', title: 'Write the scorer', status: 'open' } };
+    const { seed, start, task } = startCompose(r, m, (id) => tasks[id]);
     expect(start).toEqual({ priority: 'pri-7', priority_step: 's2', plan: 'pl-60' });
+    // The milestone's first open task is bound too, as web's Start binds it; never a finished one.
+    expect(task).toEqual({ _id: 'task-new', short_id: 'ct-9002', title: 'Write the scorer', status: 'open' });
+    // The sheet's create carries all of it: createSession's priority, priority_step, plan and the task as its linked object.
+    expect(linkedCreateArgs(start, task)).toEqual({ priority: 'pri-7', priority_step: 's2', plan: 'pl-60', linked_object: { type: 'task', id: 'task-new' } });
+    expect(linkedCreateArgs(null, null)).toEqual({});
     expect(seed).toBe('pri-7, milestone: Calibrate goal finding\nOpen tasks:\n- ct-9002 Write the scorer\nPlan: pl-60\nRun `cast priorities show pri-7` for current detail.');
     // Exactly what web's Start link carries.
     const web = parseComposeLink(new URL(milestoneStartHref(r, m, (id) => tasks[id]), 'https://app.test').searchParams)!;
     expect(web.draft).toBe(seed);
     expect([web.priority, web.step, web.plan]).toEqual([start.priority, start.priority_step, start.plan]);
     // The sheet opens with the brief and holds the link for its create.
-    openCompose(seed, [], start);
-    expect(useCompose.getState()).toMatchObject({ open: true, seed, start });
+    openCompose(seed, [], start, task);
+    expect(useCompose.getState()).toMatchObject({ open: true, seed, start, task });
     openCompose('plain');
     expect(useCompose.getState().start).toBeNull();
+    expect(useCompose.getState().task).toBeNull();
   });
 });

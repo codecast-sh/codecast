@@ -8,6 +8,20 @@ import {
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
+import { distinctFrom } from "../priorityList";
+
+describe("distinctFrom: a session's part of \"milestone · session\"", () => {
+  const M = "Calibrate goal finding and session mapping";
+  test("a title of its own stays whole", () => {
+    expect(distinctFrom(M, "Scorer calibration", 1)).toBe("Scorer calibration");
+    expect(distinctFrom("Ship it", "Copy review", 1)).toBe("Copy review");
+  });
+  test("a title that repeats the milestone shows what differs, or which session it is", () => {
+    expect(distinctFrom(M, "Calibrate goal finding: scorer pass", 1)).toBe("scorer pass");
+    expect(distinctFrom(M, "Calibrate goal finding", 2)).toBe("session 2");
+    expect(distinctFrom("Ship it", "Ship it", 3)).toBe("session 3");
+  });
+});
 
 const step = (key: string, tier: "critical" | "polish", done = false, refs: PriorityStep["refs"] = []): PriorityStep => ({ key, title: `Step ${key}`, tier, tier_set_by: "pass", refs, done });
 
