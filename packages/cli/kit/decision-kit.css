@@ -16,7 +16,9 @@
   --dk-line: color-mix(in srgb, var(--sol-border, #93a1a1) 42%, transparent);
   --dk-line-strong: color-mix(in srgb, var(--sol-border, #93a1a1) 80%, transparent);
   --dk-red: var(--sol-red, #dc322f);
-  --dk-green: var(--sol-green, #859900);
+  /* Solarized green is olive, and thin over a dark page it reads as yellow; a
+     share of cyan keeps "added" and "fixed" apart from caution. */
+  --dk-green: color-mix(in srgb, var(--sol-green, #859900) 55%, var(--sol-cyan, #2aa198));
   --dk-blue: var(--sol-blue, #268bd2);
   --dk-yellow: var(--sol-yellow, #b58900);
 
@@ -94,7 +96,7 @@ code { font: 0.86em var(--dk-mono); background: var(--dk-sunk); padding: 0.1em 0
 small { font-size: 0.86rem; color: var(--dk-ink-2); }
 /* Text as it stands in a file: a prompt, a rule, a template, code. */
 pre { margin: 1.75rem 0 0; padding: 0.9rem 1.1rem; background: var(--dk-sunk); border-radius: 8px; font: 0.82rem/1.6 var(--dk-mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dk-ink); }
-pre mark { background: color-mix(in srgb, var(--dk-yellow) 24%, transparent); color: inherit; padding: 0 0.1em; border-radius: 2px; }
+pre mark { background: color-mix(in srgb, var(--dk-ink) 12%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--dk-ink) 55%, transparent); color: inherit; padding: 0 0.1em; border-radius: 2px; }
 p > small:only-child { display: block; line-height: 1.5; }
 :focus-visible { outline: 2px solid var(--dk-blue); outline-offset: 2px; border-radius: 4px; }
 section > :is(dk-thread, dk-pair, dk-diff, dk-examples, dk-facts, dk-answers, dk-tally, dk-cells, dk-timeline, dk-measures, dk-gap, dl, blockquote, pre) { margin-top: 1.75rem; }
@@ -188,29 +190,38 @@ dk-msg:not([data-dk]) { white-space: pre-line; }
 .dk-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.7rem; margin: 0 0.15rem 0.32rem; font-size: 0.86rem; line-height: 1.4; color: var(--dk-ink-2); }
 dk-msg[us] > .dk-meta { justify-content: flex-end; }
 .dk-meta b { font-weight: 620; color: var(--dk-ink); }
-.dk-bubble {
+.dk-frame {
   background: color-mix(in srgb, var(--dk-surface) 60%, var(--dk-bg));
   border: 1px solid var(--dk-line-strong);
   border-radius: 4px 16px 16px 16px;
-  padding: 0.85rem 1.05rem 0.95rem;
-  font-size: 1rem;
-  line-height: 1.52;
+  overflow: hidden;
 }
-dk-msg[us] > .dk-bubble { border-radius: 16px 4px 16px 16px; background: color-mix(in srgb, var(--dk-blue) 12%, var(--dk-surface)); border-color: color-mix(in srgb, var(--dk-blue) 30%, var(--dk-line)); }
+dk-msg[us] > .dk-frame { border-radius: 16px 4px 16px 16px; background: color-mix(in srgb, var(--dk-blue) 12%, var(--dk-surface)); border-color: color-mix(in srgb, var(--dk-blue) 30%, var(--dk-line)); }
+.dk-bubble { padding: 0.85rem 1.05rem 0.95rem; font-size: 1rem; line-height: 1.52; }
 .dk-subject { font-weight: 640; margin-bottom: 0.4rem; text-wrap: balance; }
 .dk-body { white-space: pre-line; }
 .dk-body[data-clamped] { max-height: 13.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 62%, transparent); mask-image: linear-gradient(#000 62%, transparent); }
-/* A mark points at the words that matter; it reads as a fault only inside the message at fault. */
-mark { --dk-mark: var(--dk-yellow); background: color-mix(in srgb, var(--dk-mark) 24%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--dk-mark) 70%, transparent); color: inherit; padding: 0.08em 0.1em; margin: 0 -0.1em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* A mark points at the words that matter in ink; only inside the message at
+   fault is it red. Yellow is kept for caution (a caveat, a cost, an open finding). */
+mark { --dk-mark: var(--dk-ink); background: color-mix(in srgb, var(--dk-mark) 9%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--dk-mark) 55%, transparent); color: inherit; font-weight: 560; padding: 0.08em 0.1em; margin: 0 -0.1em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+
+/* Each of several people on the other side has a colour beside their name. */
+.dk-meta b[data-face]::before, dk-thread > .dk-who b[data-face]::before { content: ""; display: inline-block; width: 0.6em; height: 0.6em; margin-right: 0.45em; border-radius: 50%; background: var(--dk-face); vertical-align: 0.05em; }
+.dk-meta b[data-face="0"], dk-thread > .dk-who b[data-face="0"] { --dk-face: var(--sol-violet, #6c71c4); }
+.dk-meta b[data-face="1"], dk-thread > .dk-who b[data-face="1"] { --dk-face: var(--sol-magenta, #d33682); }
+.dk-meta b[data-face="2"], dk-thread > .dk-who b[data-face="2"] { --dk-face: var(--sol-cyan, #2aa198); }
+.dk-meta b[data-face="3"], dk-thread > .dk-who b[data-face="3"] { --dk-face: var(--sol-orange, #cb4b16); }
 
 /* The message the page is about. */
-dk-msg[miss] mark { --dk-mark: var(--dk-red); }
+dk-msg[miss] mark { --dk-mark: var(--dk-red); background: color-mix(in srgb, var(--dk-red) 16%, transparent); }
 .dk-why { display: inline-block; margin: 0 0.2em 0 0.45em; padding: 0 0.45em; border-radius: 4px; font: 600 0.74rem/1.5 var(--dk-text); letter-spacing: 0.01em; color: var(--dk-ink-2); background: var(--dk-sunk); vertical-align: 0.08em; white-space: normal; }
-dk-msg[miss] > .dk-bubble { border: 1.5px solid var(--dk-red); box-shadow: 0 0 0 5px color-mix(in srgb, var(--dk-red) 9%, transparent); }
-.dk-note { display: flex; gap: 0.6rem; margin: 0.7rem 0.15rem 0; font-size: 0.93rem; line-height: 1.42; color: var(--dk-ink); }
-.dk-note::before { content: ""; flex: none; width: 0.55rem; height: 0.55rem; margin-top: 0.42em; border-radius: 50%; background: var(--dk-red); }
-dk-msg[us] > .dk-note { justify-content: flex-end; text-align: left; }
-dk-msg:not([miss]) > .dk-note[data-mark]::before { background: var(--dk-yellow); }
+dk-msg[miss] > .dk-frame { border: 1.5px solid var(--dk-red); box-shadow: 0 0 0 5px color-mix(in srgb, var(--dk-red) 9%, transparent); }
+/* The page's note on a message: under a rule in the message's frame, in the
+   page's own voice, so it reads as said about the message. */
+.dk-note { display: flex; gap: 0.6rem; padding: 0.65rem 1.05rem 0.75rem; border-top: 1px solid var(--dk-line); background: color-mix(in srgb, var(--dk-ink) 4%, transparent); font: italic 400 0.97rem/1.45 var(--dk-display); color: var(--dk-ink); text-align: left; white-space: normal; }
+.dk-note::before { content: ""; flex: none; width: 0.5rem; height: 0.5rem; margin-top: 0.45em; border-radius: 50%; background: var(--dk-ink-3); }
+dk-msg[miss] .dk-note { border-top-color: color-mix(in srgb, var(--dk-red) 45%, transparent); background: color-mix(in srgb, var(--dk-red) 9%, transparent); }
+dk-msg[miss] .dk-note::before { background: var(--dk-red); }
 
 /* Something that happened between messages: a call, a gap, a decision.
    A short one is a marker between rules; a long one is a fact, read at full size. */
@@ -316,7 +327,7 @@ dk-diff > .dk-code-fold:first-child { margin-top: 0; }
 .dk-prose .dk-h { color: var(--dk-ink); }
 /* Deleted words step back and are struck through in solid red, so a line mixing old and new reads as an edit in any palette. */
 .dk-prose del, .dk-row del { text-decoration: line-through; text-decoration-thickness: 0.09em; text-decoration-color: var(--dk-red); background: color-mix(in srgb, var(--dk-red) 12%, transparent); color: var(--dk-ink-3); border-radius: 2px; padding: 0.06em 0; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-.dk-prose ins, .dk-row ins { text-decoration: none; background: color-mix(in srgb, var(--dk-green) 24%, transparent); color: var(--dk-ink); border-radius: 2px; padding: 0.06em 0; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.dk-prose ins, .dk-row ins { text-decoration: none; background: color-mix(in srgb, var(--dk-green) 22%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--dk-green) 70%, transparent); color: var(--dk-ink); border-radius: 2px; padding: 0.06em 0; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .dk-prose del + ins { margin-left: 0.3em; }
 /* Template logic inside a prompt steps back so the words read. */
 .dk-tpl { font: 0.78em var(--dk-mono); color: var(--dk-ink-3); background: none; }
@@ -366,7 +377,7 @@ dk-answer > p:first-of-type { margin-top: 0; }
 dk-answer[lean] > h3::after { content: "my lean"; margin-left: 0.6rem; font: 500 0.8rem/1 var(--dk-text); color: var(--dk-green); white-space: nowrap; }
 
 /* A caveat the reader must not miss. */
-dk-caveat { display: block; margin-top: 1.5rem; padding: 0.95rem 1.1rem 1.05rem; border-radius: 12px; background: color-mix(in srgb, var(--dk-yellow) 13%, transparent); font-size: 0.99rem; line-height: 1.5; }
+dk-caveat { display: block; margin-top: 1.5rem; padding: 0.95rem 1.1rem 1.05rem; border-radius: 4px 12px 12px 4px; border-left: 3px solid var(--dk-yellow); background: color-mix(in srgb, var(--dk-yellow) 10%, transparent); font-size: 0.99rem; line-height: 1.5; }
 dk-caveat > :is(b, strong):first-child { font-weight: 640; }
 dk-caveat p:first-child { margin-top: 0; }
 
@@ -518,7 +529,7 @@ dk-examples[compact] dk-example { display: block; padding: 0; border: 0; border-
 .dk-case-who > * { margin: 0; font-size: 0.86rem; color: var(--dk-ink-2); }
 .dk-case-who > h3 { font-size: 0.97rem; color: var(--dk-ink); margin-bottom: 0.15rem; }
 .dk-case-fold > summary > q { quotes: none; line-height: 1.45; }
-.dk-case-fold > summary > q mark { background: color-mix(in srgb, var(--dk-yellow) 22%, transparent); color: inherit; padding: 0 0.1em; border-radius: 2px; }
+.dk-case-fold > summary > q mark { background: color-mix(in srgb, var(--dk-ink) 10%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--dk-ink) 50%, transparent); color: inherit; padding: 0 0.1em; border-radius: 2px; }
 .dk-case-fold > summary > q mark[data-miss] { background: color-mix(in srgb, var(--dk-red) 16%, transparent); box-shadow: inset 0 -2px 0 var(--dk-red); }
 .dk-case-fold > :not(summary) { padding-bottom: 1.4rem; }
 @media (max-width: 44rem) {

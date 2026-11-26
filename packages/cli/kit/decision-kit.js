@@ -53,16 +53,20 @@
     if (m.getAttribute("time")) meta.appendChild(el("span", "dk-time", m.getAttribute("time")));
     if (meta.firstChild) m.appendChild(meta);
 
+    // The frame holds the message as sent and, below a rule, the page's notes
+    // on it, so a note reads as said about the message and never as part of it.
+    var frame = el("div", "dk-frame");
     var bubble = el("div", "dk-bubble");
     if (m.getAttribute("subject")) bubble.appendChild(el("div", "dk-subject", m.getAttribute("subject")));
     bubble.appendChild(body);
-    m.appendChild(bubble);
-    if (m.getAttribute("note")) m.appendChild(el("div", "dk-note", m.getAttribute("note")));
+    frame.appendChild(bubble);
+    m.appendChild(frame);
+    if (m.getAttribute("note")) frame.appendChild(el("div", "dk-note", m.getAttribute("note")));
     // A mark's note inside a message reads under it, so the sentence stays whole.
     [].forEach.call(body.querySelectorAll("mark[note]"), function (mk) {
       var n = el("div", "dk-note", mk.getAttribute("note"));
       n.setAttribute("data-mark", "");
-      m.appendChild(n);
+      frame.appendChild(n);
     });
     m.setAttribute("data-dk", "");
 
@@ -128,6 +132,16 @@
       t.insertBefore(who, t.firstChild);
     }
     t.setAttribute("data-dk", "");
+    // When more than one person writes from the other side, each gets a colour
+    // of their own beside their name, so two people never read as one.
+    var others = [];
+    items.forEach(function (c) { var f = c.getAttribute("from"); if (c.tagName === "DK-MSG" && f && !c.hasAttribute("us") && others.indexOf(f) < 0) others.push(f); });
+    if (others.length > 1) items.forEach(function (c) {
+      var i = others.indexOf(c.getAttribute("from")), b = c.querySelector(".dk-meta > b");
+      if (i >= 0 && b && !c.hasAttribute("us")) b.setAttribute("data-face", String(i % 4));
+    });
+    var whoName = t.querySelector(":scope > .dk-who > b");
+    if (others.length > 1 && whoName && others.indexOf(t.getAttribute("who")) >= 0) whoName.setAttribute("data-face", String(others.indexOf(t.getAttribute("who")) % 4));
     var show = parseInt(t.getAttribute("show") || "", 10);
     if (!(show > 0)) show = items.length <= 6 ? items.length : 4;
     // The first message the page points at (the miss, or one carrying a mark)
