@@ -16,9 +16,9 @@ import { composeViewComponent } from "../lib/composeViewLoader";
 export function ComposeHost() {
   const composes = useInboxStore((s) => s.composes);
   const closeCompose = useInboxStore((s) => s.closeCompose);
-  // ComposeView's guarded close (draft keep/discard confirm) — the backdrop
-  // routes clicks through it. Null until the modal mounts.
-  const closeGuardRef = useRef<(() => void) | null>(null);
+  // ComposeView's backdrop handler: docks the modal when a draft is typed,
+  // closes it when empty. Null until the modal mounts.
+  const backdropClickRef = useRef<(() => void) | null>(null);
   const { containerRef, beforeReorder } = useFlipAnimation({ scale: true, durationMs: 240 });
   // Store subscribers run inside set(), before React commits: the frames still
   // sit where they were, which is the "first" measurement a FLIP needs. This
@@ -32,8 +32,8 @@ export function ComposeHost() {
     <div ref={containerRef} className="fixed inset-x-0 bottom-0 z-[200] flex flex-row-reverse items-end gap-3 px-4 pointer-events-none">
       {hasModal && (
         <div
-          className="fixed inset-0 z-10 bg-sol-bg/95 pointer-events-auto animate-in fade-in-0 duration-150"
-          onClick={() => (closeGuardRef.current ?? closeCompose)()}
+          className="fixed inset-0 z-10 bg-sol-bg/40 pointer-events-auto animate-in fade-in-0 duration-150"
+          onClick={() => (backdropClickRef.current ?? closeCompose)()}
         />
       )}
       {composes.map((c) => (
@@ -50,7 +50,7 @@ export function ComposeHost() {
               initialQuery={c.initialQuery}
               context={c.context}
               onClose={() => closeCompose(c.id)}
-              closeGuardRef={c.mode === "modal" ? closeGuardRef : undefined}
+              backdropClickRef={c.mode === "modal" ? backdropClickRef : undefined}
             />
           </Suspense>
         </div>

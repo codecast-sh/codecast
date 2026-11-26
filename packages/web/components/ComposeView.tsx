@@ -56,7 +56,7 @@ const draftContentFor = (id: string | null) => {
  * non-modal, one of several along the bottom edge, collapsible to its title
  * bar. A docked composer owns the keyboard only while focus is inside it.
  */
-export function ComposeView({ initialQuery, context, onClose, closeGuardRef, instance }: { initialQuery?: string; context?: ComposeContext; onClose?: () => void; closeGuardRef?: React.MutableRefObject<(() => void) | null>; instance?: ComposeInstance }) {
+export function ComposeView({ initialQuery, context, onClose, backdropClickRef, instance }: { initialQuery?: string; context?: ComposeContext; onClose?: () => void; backdropClickRef?: React.MutableRefObject<(() => void) | null>; instance?: ComposeInstance }) {
   const router = useRouter();
   const docked = instance?.mode === "dock";
   const collapsed = docked && !!instance?.collapsed;
@@ -369,13 +369,21 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     setRestored(false);
   }, []);
 
-  // Hand the guarded close to the host so its backdrop click gets the same
-  // draft confirm as Escape (the backdrop lives outside this component).
+  // The host's backdrop click (the backdrop lives outside this component). A
+  // click past the popup is usually aimed at the conversation behind it (to
+  // read a message, copy its link), so with a draft typed the composer docks,
+  // same mount and draft, and the next click lands on the app. Only an empty
+  // composer closes; Escape still asks Keep or Discard.
+  const stepAside = useCallback(() => {
+    const inst = instanceRef.current;
+    if (inst && !sentRef.current && draftContentFor(stubIdRef.current)) useInboxStore.getState().dockCompose(inst.id);
+    else requestClose();
+  }, [requestClose]);
   useWatchEffect(() => {
-    if (!closeGuardRef) return;
-    closeGuardRef.current = requestClose;
-    return () => { closeGuardRef.current = null; };
-  }, [closeGuardRef, requestClose]);
+    if (!backdropClickRef) return;
+    backdropClickRef.current = stepAside;
+    return () => { backdropClickRef.current = null; };
+  }, [backdropClickRef, stepAside]);
 
   // Escape DISMISSES the popup (via the draft guard) — abandoning the un-sent
   // stub is NOT done here; it falls out of the dismissal (the overlay unmounts →
@@ -634,11 +642,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
         // The same click on a dock the user had left brings the caret back.
         if (docked && !collapsed && !rootRef.current?.contains(document.activeElement)) refocusComposer();
       }}
-      // The page layout's composer is its own card, so over ComposeHost's
-      // backdrop the popup draws no frame: the heading, chips and composer sit
-      // on the backdrop. The desktop palette window has no backdrop (it is
-      // transparent over other apps), so there the popup keeps its frame.
-      className={`relative ${pageLayout && instance ? "" : "border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40"} overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
+      // ComposeHost's backdrop only dims the conversation behind (it stays
+      // readable), so the popup always draws its own frame.
+      className={`relative border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 duration-150 ${
         // The assistant needs no project, agent or model pickers, so its
         // sheet is sized to one ask rather than to the developer's form.
         // The assistant's sheet is sized to its content (mark, heading,
