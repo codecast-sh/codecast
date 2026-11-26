@@ -34,6 +34,7 @@ import type { LinkedPr } from "../../lib/sessionPullRequests";
 import { SessionShipChip } from "../ship/SessionShipChip";
 import type { SessionCardViewProps } from "./sessionCardTypes";
 import { ACTIVE_CARD_CLASS } from "./sessionCardTypes";
+import { PriorityRankChip } from "./PriorityRankChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
@@ -74,6 +75,7 @@ export function SessionCardView({
   liveTitle,
   isFavorite,
   sessionLabel,
+  priorityRank,
   variant = "default",
   sectionStatus,
   forkColorKey,
@@ -647,6 +649,7 @@ export function SessionCardView({
           </button>
         )}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
+          {priorityRank !== undefined && <PriorityRankChip rank={priorityRank} />}
           {author && (
             <span className="flex items-center gap-1 min-w-0 max-w-[130px]" title={`${author.name}'s session`}>
               {author.role ? (

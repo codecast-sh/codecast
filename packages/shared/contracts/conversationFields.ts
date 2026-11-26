@@ -95,6 +95,9 @@ export const CONVERSATION_FIELDS = {
   agent_type: { send: true, patch: true },
   // A staged "Rewind to here" in the session's checkout, reported by its daemon (treeSnapshots.reportRewindStaged).
   rewind_staged: { send: true },
+  // The priority this session serves and its milestone, as the pass mapped them (convex/priorityPassRun). The inbox's Priorities order reads them.
+  priority_id: { send: true },
+  priority_step_key: { send: true },
 } as const satisfies Record<string, ConversationFieldSpec>;
 
 export type ConversationField = keyof typeof CONVERSATION_FIELDS;

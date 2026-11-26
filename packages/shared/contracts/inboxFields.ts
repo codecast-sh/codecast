@@ -73,6 +73,8 @@ export const INBOX_ROW_FIELDS = [
   // A staged "Rewind to here" in the checkout (treeSnapshots.reportRewindStaged): the
   // conversation header reads it live from the row, for a fork's parent too.
   "rewind_staged",
+  // The priority the pass mapped this session to, and its milestone: the inbox's Priorities order.
+  "priority_id", "priority_step_key",
   "parent_conversation_id", "parent_message_uuid", "spawned_by_conversation_id", "forked_from", "project_id",
   "is_subagent", "is_workflow_sub", "is_workflow_primary", "agent_team_name", "agent_name",
   "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",

@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { CalendarPlus, Check, ChevronDown, FolderKanban, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
+import { CalendarPlus, Check, ChevronDown, Crosshair, FolderKanban, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
 import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -9,6 +9,7 @@ type ViewOption = { key: InboxViewMode; label: string; icon: typeof List };
 
 const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
   grouped: { label: "Status", icon: List },
+  priorities: { label: "Priorities", icon: Crosshair },
   recent: { label: "Updated", icon: History },
   time: { label: "Created", icon: CalendarPlus },
   bucket: { label: "Label", icon: Tag },

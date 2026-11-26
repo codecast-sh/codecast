@@ -32,6 +32,7 @@ import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsCh
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
 import type { SessionCardViewProps } from "./SessionCardView";
 import "./modernSessionCard.css";
+import { PriorityRankChip } from "./PriorityRankChip";
 
 // The inbox session card in the Modern style: the same props as SessionCardView
 // (SessionCard chooses between them by the person's style), drawn for a glance.
@@ -80,6 +81,7 @@ export function ModernSessionCardView({
   teamSession,
   answeredBy,
   sessionLabel,
+  priorityRank,
   variant = "default",
   sectionStatus,
   forkColorKey,
@@ -208,6 +210,7 @@ export function ModernSessionCardView({
     : null;
   const shipHref = ship?.deploy ? entityRoute("deploy", ship.deploy) : null;
   const chips: React.ReactNode[] = [];
+  if (priorityRank !== undefined) chips.push(<PriorityRankChip key="priority" rank={priorityRank} />);
   if (!nested) {
     chips.push(
       <ModernProjectChip
