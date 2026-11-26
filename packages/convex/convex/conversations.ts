@@ -167,7 +167,7 @@ import {
   toggleFavoriteWithRevision,
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
-import { inheritLink, sessionEvidence, unnamedMilestone } from "./lib/priorityLinks";
+import { inheritLink, mappedMilestone, sessionEvidence, unnamedMilestone } from "./lib/priorityLinks";
 import { pinsAskForPass, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier } from "./lib/priorityClassifierHook";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
@@ -12579,7 +12579,10 @@ export const setThreadState = mutation({
     const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
     // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
     const milestone = status === "done" && !serves ? await unnamedMilestone(ctx, conv) : null;
-    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced, ...(milestone ? { milestone } : {}) };
+    // One that names another milestone than the session's closes none either: the CLI says so.
+    const mapped = status === "done" && serves ? await mappedMilestone(ctx, conv) : null;
+    const serves_mismatch = mapped && mapped !== serves ? { serves, milestone: mapped } : null;
+    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced, ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}) };
   },
 });
 

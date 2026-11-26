@@ -321,9 +321,14 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
       user_id: ada, agent_type: "claude_code", session_id: "sess-jx7wrk1", short_id: "jx7wrk1", title: "w", started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
       priority_id: p1, priority_step_key: "s4", parent_conversation_id: cPin,
     }));
-    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s4" });
-    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7wrk1", text: "Shipped", status: "done", serves: "pri-1/s4" });
+    const other = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s4" });
+    // The reply says so: the CLI prints "--serves pri-1/s4 doesn't match this session's milestone pri-1/s3; nothing closed".
+    expect(other.serves_mismatch).toEqual({ serves: "pri-1/s4", milestone: "pri-1/s3" });
+    const worker = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7wrk1", text: "Shipped", status: "done", serves: "pri-1/s4" });
+    expect(worker.serves_mismatch).toBeUndefined();
     expect([(await stepOf(t, p1, "s3")).done, (await stepOf(t, p1, "s4")).done]).toEqual([false, false]);
+    // A matching one carries no mismatch.
+    expect((await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" })).serves_mismatch).toBeUndefined();
   });
 
   test("a team task linked only from a private session lands on its team milestone", async () => {

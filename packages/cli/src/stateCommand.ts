@@ -175,7 +175,9 @@ function printState(text: string, provenance: string): void {
  * delivered). When the session is linked to one, the server names it, and
  * this line says how to close it.
  */
-export function servesHint(result: { milestone?: { serves: string; title: string } | null }): string | null {
+export function servesHint(result: { milestone?: { serves: string; title: string } | null; serves_mismatch?: { serves: string; milestone: string } | null }): string | null {
+  const x = result.serves_mismatch;
+  if (x) return `--serves ${x.serves} doesn't match this session's milestone ${x.milestone}; nothing closed`;
   const m = result.milestone;
   return m ? `Linked to ${m.serves} ${m.title}: if this finished it, re-pin with --serves ${m.serves}` : null;
 }

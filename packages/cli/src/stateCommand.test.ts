@@ -20,6 +20,10 @@ describe("servesHint", () => {
     expect(servesHint({ milestone: { serves: "pri-3/s2", title: "Grader in CI" } })).toBe("Linked to pri-3/s2 Grader in CI: if this finished it, re-pin with --serves pri-3/s2");
   });
 
+  test("a done pin whose --serves names another milestone than the session's says it closed nothing", () => {
+    expect(servesHint({ serves_mismatch: { serves: "pri-3/s2", milestone: "pri-4/s1" } })).toBe("--serves pri-3/s2 doesn't match this session's milestone pri-4/s1; nothing closed");
+  });
+
   test("nothing to say when the server names no milestone (not done, --serves given, or linked to none)", () => {
     expect(servesHint({})).toBeNull();
     expect(servesHint({ milestone: null })).toBeNull();
