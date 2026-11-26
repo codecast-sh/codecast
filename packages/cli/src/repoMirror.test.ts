@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor } from "./repoMirror.js";
+import { answerLocalRead, buildRepoMirror, LOCAL_READ_DECLINE_SPREAD_MS, refsFingerprint, repositoryKeyFor, shouldSendDecline } from "./repoMirror.js";
 
 // The rows a checkout publishes must be the rows GitHub would have written:
 // same keys, same payload fields. These tests build a real repository and
@@ -222,5 +222,19 @@ describe("answerLocalRead", () => {
     expect(answer.commit.files[0]).toMatchObject({ filename: "src/index.ts", status: "modified", additions: 2, deletions: 1, changes: 3 });
     expect(answer.commit.files[0].patch).toContain("-export const x = 1;");
     expect(await ask(repo, "commit", "e".repeat(40), "")).toEqual({ error: `${"e".repeat(40)} is not a commit in this checkout` });
+  });
+});
+
+describe("shouldSendDecline", () => {
+  test("drops the decline once a sibling machine's decline took the request off this person's list", async () => {
+    const pending = new Set(["r1"]);
+    const waited: number[] = [];
+    const sent = await shouldSendDecline("r1", (id) => pending.has(id), async (ms) => { waited.push(ms); pending.delete("r1"); }, () => 0.5);
+    expect(sent).toBe(false);
+    expect(waited).toEqual([LOCAL_READ_DECLINE_SPREAD_MS / 2]);
+  });
+
+  test("sends the decline while the request is still pending for this person", async () => {
+    expect(await shouldSendDecline("r1", () => true, async () => {}, () => 0.99)).toBe(true);
   });
 });

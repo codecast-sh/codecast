@@ -125,7 +125,7 @@ import { hashPath } from "./hash.js";
 import { GIT_PLANE_REPORT_CAP, repoRootFor, sweepGitPlane, type RepoPlaneState } from "./gitPlane.js";
 import { buildWorktreeMirror, mainRootFor, workspaceStatesFor, worktreeFingerprint } from "./worktreeMirror.js";
 import { recordWorkspaceSession } from "./workspace/contract.js";
-import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, type LocalReadRequest } from "./repoMirror.js";
+import { answerLocalRead, buildRepoMirror, refsFingerprint, repositoryKeyFor, shouldSendDecline, type LocalReadRequest } from "./repoMirror.js";
 import { GitActivityTailer } from "./gitActivity.js";
 import { deviceGitPubkey, ensureDeviceGitKey, gitEnvFor } from "./gitIdentity.js";
 import {
@@ -22171,6 +22171,32 @@ export function heartbeatHealthCheckBucket(sessionId: string, mod: number): numb
 // One flush per HEARTBEAT_FLUSH_INTERVAL_MS for the WHOLE fleet: collapses N
 // per-session heartbeat transactions into ⌈N/25⌉ batched ones, so the inbox
 // subscription recomputes ~once per flush instead of ~once per session.
+// The browser tabs each live session has open, for the web inbox's Browser
+// view (browser/sessionBrowserTabs.ts). Rides the heartbeat cadence on its own
+// guard; loaded on first use, off the daemon's boot graph.
+let browserTabsReporter: import("./browser/sessionBrowserTabs.js").BrowserTabsReporter | null = null;
+let browserTabsInFlight = false;
+async function browserTabsTick(): Promise<void> {
+  const sync = syncServiceRef;
+  if (!sync || browserTabsInFlight) return;
+  browserTabsInFlight = true;
+  try {
+    if (!browserTabsReporter) {
+      const { BrowserTabsReporter } = await import("./browser/sessionBrowserTabs.js");
+      browserTabsReporter = new BrowserTabsReporter((sessions) => sync.reportBrowserTabs(sessions));
+    }
+    const sessions = [...managedHeartbeatSessions].map((id) => {
+      const file = findSessionFile(id, { staleOk: true });
+      return { id, transcript: file?.agentType === "claude" ? file.path : null };
+    });
+    await browserTabsReporter.tick(sessions);
+  } catch (err) {
+    log(`[BROWSER-TABS] report failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    browserTabsInFlight = false;
+  }
+}
+
 async function flushManagedHeartbeats(): Promise<void> {
   if (!syncServiceRef || managedHeartbeatSessions.size === 0) return;
   // The liveness send and the maintenance pass are guarded SEPARATELY. The send
@@ -22190,6 +22216,7 @@ async function flushManagedHeartbeats(): Promise<void> {
       heartbeatFlushInProgress = false;
     }
   }
+  void browserTabsTick();
   // Fire-and-forget: a maintenance pass must never delay the next send. Its own
   // guard skips ticks while the prior pass is still in flight so passes don't
   // pile up; the next tick resumes the cadence.
@@ -35025,16 +35052,22 @@ async function main(): Promise<void> {
   // request is answered once per daemon; several machines may race, and the
   // server keeps the first answer. Engine in repoMirror.ts.
   const localReadsInFlight = new Set<string>();
+  // The ids the latest push still lists for this person: a decline that a
+  // sibling machine already recorded drops out of it.
+  let localReadsPending = new Set<string>();
   const handleLocalReads = async (requests: unknown) => {
-    if (!Array.isArray(requests) || requests.length === 0) return;
+    if (!Array.isArray(requests)) return;
+    localReadsPending = new Set((requests as LocalReadRequest[]).map((r) => r?._id).filter(Boolean));
+    if (requests.length === 0) return;
     for (const request of requests as LocalReadRequest[]) {
       if (!request?._id || localReadsInFlight.has(request._id)) continue;
       if (!fs.existsSync(request.root)) continue;
       localReadsInFlight.add(request._id);
       (async () => {
         const answer = await answerLocalRead(request);
-        const result = await syncService.answerLocalRead({ request_id: request._id, ...answer });
         const what = `${request.repository} ${request.kind} ${request.ref}${request.path ? `:${request.path}` : ""}`;
+        if ("error" in answer && !(await shouldSendDecline(request._id, (id) => localReadsPending.has(id)))) return;
+        const result = await syncService.answerLocalRead({ request_id: request._id, ...answer });
         if ("error" in answer) log(`[REPOMIRROR] could not answer ${what}: ${answer.error}`);
         else if (result?.ok) log(`[REPOMIRROR] answered ${what}`);
         else if (result?.reason !== "gone") log(`[REPOMIRROR] answer for ${what} not accepted${result?.reason ? ` (${result.reason})` : ""}`);

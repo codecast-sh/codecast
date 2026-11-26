@@ -498,6 +498,29 @@ export type LocalReadAnswer =
   | { commit: { files: DiffFileRow[]; additions: number; deletions: number } }
   | { error: string };
 
+/** Longest a decline waits for a sibling machine's decline to land first. */
+export const LOCAL_READ_DECLINE_SPREAD_MS = 3000;
+
+/**
+ * Whether this daemon should still send its decline. Every machine one person
+ * runs (a laptop and its cloud hosts) publishes the same repository and
+ * declines the same request at the same instant, and all those identical
+ * writes collide on the one request row. The server keeps one decline per
+ * person, so the machines spread theirs out and send one only while the
+ * request is still pending for this person: once a sibling's decline lands,
+ * the subscription stops listing it here. The spread stays well inside the
+ * server's grace window before GitHub takes the read.
+ */
+export async function shouldSendDecline(
+  requestId: string,
+  stillPending: (id: string) => boolean,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  random: () => number = Math.random,
+): Promise<boolean> {
+  await wait(Math.floor(random() * LOCAL_READ_DECLINE_SPREAD_MS));
+  return stillPending(requestId);
+}
+
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|ico|avif)$/i;
 /** Same cap as the GitHub blob fetcher: past it the row says how big, not what. */
 const MAX_BLOB_BYTES = 1024 * 1024;
