@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { computeVisualOrder, placeInboxRows, type InboxSession } from "../inboxStore";
-import { priorityPlaceReader, sortByPriority } from "../priorityOrder";
+import { priorityPlaceReader, rankLabelOf, sortByPriority } from "../priorityOrder";
 
 // The inbox's Priorities view: the status sections stay, each sorted by the
-// viewer's priority a session serves (rank, then milestone order), sessions
-// serving none of the viewer's ranked priorities last in their existing order.
+// viewer's priority a session serves (rank, then milestone order), every other
+// session last in its existing order: unlinked, a teammate's priority, one with
+// no rank, or one in another workspace (not loaded here: "elsewhere").
 // computeVisualOrder is what Ctrl+J/K walks and walkOrder (Ctrl+I) reads.
 
 const cid = (t: string) => `${t}z${t.length}`.padEnd(32, "0");
@@ -54,6 +55,8 @@ const rows = [
   session("none2"),
   session("a1", link("pA", "s1")),
   session("anostep", link("pA")),
+  // Its priority is in another workspace, so this window never loaded it.
+  session("other", link("pOtherWorkspace", "s1")),
   session("wknone", { is_idle: false }),
   session("wkb", { is_idle: false, ...link("pB", "s1") }),
   session("wka", { is_idle: false, ...link("pA", "s1") }),
@@ -81,32 +84,40 @@ describe("sortByPriority", () => {
   it("orders by rank, then milestone, then unranked in their given order", () => {
     const placeOf = priorityPlaceReader(priorities, ME);
     expect(sortByPriority(rows.filter((s) => s.is_idle), placeOf).map(tag)).toEqual([
-      "a1", "a2", "anostep", "bs1", "none1", "b", "theirs", "aside", "none2",
+      "a1", "a2", "anostep", "bs1", "none1", "b", "theirs", "aside", "none2", "other",
     ]);
   });
 
-  it("reads no rank for a teammate's priority, a priority without a rank, or no viewer", () => {
+  it("reads no rank for no link, a teammate's priority, a priority without a rank, or no viewer", () => {
     const placeOf = priorityPlaceReader(priorities, ME);
+    expect(placeOf(session("x"))).toBeNull();
     expect(placeOf(session("x", link("pTheirs", "s1")))).toBeNull();
     expect(placeOf(session("x", link("pAside", "s1")))).toBeNull();
-    expect(placeOf(session("x", link("missing")))).toBeNull();
     expect(priorityPlaceReader(priorities, null)(session("x", link("pA", "s1")))).toBeNull();
     expect(placeOf(session("x", link("pB", "s1")))).toEqual({ rank: 2, step: 0 });
+  });
+
+  it("a link to a priority not loaded here reads elsewhere, not None", () => {
+    const placeOf = priorityPlaceReader(priorities, ME);
+    expect(placeOf(session("x", link("pOtherWorkspace", "s1")))).toBe("elsewhere");
+    expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace", "s1"))))).toBe("elsewhere");
+    expect(rankLabelOf(placeOf(session("x")))).toBeNull();
+    expect(rankLabelOf(placeOf(session("x", link("pB", "s1"))))).toBe(2);
   });
 });
 
 describe("computeVisualOrder in the Priorities view", () => {
   it("keeps the status sections and sorts each by rank, milestone, then unlinked in the Status view's order", () => {
     const grouped = computeVisualOrder(state("grouped")).map(tag);
-    const unranked = new Set(["none1", "b", "theirs", "aside", "none2", "wknone"]);
+    const unranked = new Set(["none1", "b", "theirs", "aside", "none2", "other", "wknone"]);
     const statusOrderOf = (section: string[]) => grouped.filter((t) => section.includes(t) && unranked.has(t));
-    const needsYou = ["none1", "b", "theirs", "a2", "aside", "bs1", "none2", "a1", "anostep"];
+    const needsYou = ["none1", "b", "theirs", "a2", "aside", "bs1", "none2", "a1", "anostep", "other"];
     expect(computeVisualOrder(state("priorities")).map(tag)).toEqual([
       "a1", "a2", "anostep", "bs1", ...statusOrderOf(needsYou),
       "wka", "wkb", "wknone",
     ]);
     // Same sections as the Status view: Needs You above Working there too.
-    expect(grouped.slice(0, 9).sort()).toEqual([...needsYou].sort());
+    expect(grouped.slice(0, needsYou.length).sort()).toEqual([...needsYou].sort());
   });
 
   it("Ctrl+I (walkOrder needsYou) lands on the highest-ranked Needs You session", () => {
@@ -116,6 +127,22 @@ describe("computeVisualOrder in the Priorities view", () => {
     expect(walked).not.toContain("wka");
   });
 
+  it("Ctrl+I never lands on a Couldn't finish row first, however it ranks", () => {
+    // A hosted conversation that ended on a stop sits in Needs You's placement
+    // but the panel draws it under "Couldn't finish", below Needs You.
+    // Its priority outranks every other: the plain rank sort would put it first.
+    const stopped = session("stopped", { agent_type: "codecast", hosted_stop: "error", ...link("pTop", "s1") } as Partial<InboxSession>);
+    const s = state("priorities");
+    s.sessions = { ...s.sessions, [stopped._id]: stopped };
+    s.priorities = { ...priorities, pTop: priority("pTop", 0, ["s1"]) };
+    const walked = computeVisualOrder(s, { walk: "needsYou" }).map(tag);
+    expect(walked[0]).toBe("a1");
+    expect(walked.at(-1)).toBe("stopped");
+    // And the full order draws it after every Needs You row, before Working.
+    const order = computeVisualOrder(s).map(tag);
+    expect(order.indexOf("stopped")).toBe(order.indexOf("wka") - 1);
+  });
+
   it("a collapsed section is skipped, as in the Status view", () => {
     const s = { ...state("priorities"), collapsedSections: { needs_input: true } };
     expect(computeVisualOrder(s).map(tag)).toEqual(["wka", "wkb", "wknone"]);
@@ -123,7 +150,7 @@ describe("computeVisualOrder in the Priorities view", () => {
 
   it("the placed sections are the ones the Status view places", () => {
     const placed = placeInboxRows(state("priorities") as any, { focusedId: null });
-    expect(placed.needsInput.length).toBe(9);
+    expect(placed.needsInput.length).toBe(10);
     expect(placed.working.length).toBe(3);
   });
 });

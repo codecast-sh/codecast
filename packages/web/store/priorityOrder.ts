@@ -1,8 +1,7 @@
 // The inbox's Priorities order: each status section sorted by the viewer's
 // priority a session serves (its rank, then the milestone's place in that
-// priority), sessions serving none of the viewer's ranked priorities after,
-// in the order they already had. A leaf (types only) so the store and the
-// panel share it without a cycle.
+// priority), every other session after, in the order it already had. A leaf
+// (types only) so the store and the panel share it without a cycle.
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { makeCollectionSig } from "./wakeSig";
 
@@ -22,34 +21,52 @@ export function priorityRankOf(row: Pick<PriorityRow, "rank">): number | null {
   return row.rank ?? null;
 }
 
-/** The session's place when it serves one of the viewer's own ranked priorities, else null. */
+/** Linked to a priority this window has not loaded: the feeder holds only the
+ *  active workspace's priorities, and the inbox lists every workspace's sessions. */
+export const PRIORITY_ELSEWHERE = "elsewhere";
+
+/** A session's standing in the viewer's order: its place, "elsewhere", or null
+ *  (no link, a teammate's priority, one with no rank). */
+export type PriorityStanding = PriorityPlace | typeof PRIORITY_ELSEWHERE | null;
+
+/** What a card's rank label says: "#N", "—" for elsewhere, "None" for null. */
+export type PriorityRankLabel = number | typeof PRIORITY_ELSEWHERE | null;
+
 export function sessionPriorityPlace(
   s: PriorityLinked,
   priorities: Record<string, RankedRow> | undefined,
   viewerId: string | null | undefined,
-): PriorityPlace | null {
+): PriorityStanding {
   const link = sessionPriorityOf(s);
-  if (!link || !viewerId) return null;
+  if (!link) return null;
   const row = priorities?.[link.priorityId];
-  if (!row || String(row.user_id) !== viewerId) return null;
+  if (!row) return PRIORITY_ELSEWHERE;
+  if (!viewerId || String(row.user_id) !== viewerId) return null;
   const rank = priorityRankOf(row);
   if (rank == null) return null;
   const step = link.stepKey ? row.steps.findIndex((st) => st.key === link.stepKey) : -1;
   return { rank, step: step < 0 ? Infinity : step };
 }
 
-/** The place reader the Priorities view sorts and labels by, over one state's priorities and viewer. */
+export function rankLabelOf(standing: PriorityStanding): PriorityRankLabel {
+  return standing === PRIORITY_ELSEWHERE ? standing : standing?.rank ?? null;
+}
+
+/** The standing reader the Priorities view sorts and labels by, over one state's priorities and viewer. */
 export function priorityPlaceReader(
   priorities: Record<string, RankedRow> | undefined,
   viewerId: string | null | undefined,
-): (s: PriorityLinked) => PriorityPlace | null {
+): (s: PriorityLinked) => PriorityStanding {
   const viewer = viewerId ? String(viewerId) : null;
   return (s) => sessionPriorityPlace(s, priorities, viewer);
 }
 
-/** Stable: ranked rows by rank then milestone, unranked rows after in their given order. */
-export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => PriorityPlace | null): T[] {
-  const keyed = items.map((s, i) => ({ s, i, p: placeOf(s) }));
+/** Stable: ranked rows by rank then milestone, every other row after in its given order. */
+export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => PriorityStanding): T[] {
+  const keyed = items.map((s, i) => {
+    const p = placeOf(s);
+    return { s, i, p: p === PRIORITY_ELSEWHERE ? null : p };
+  });
   keyed.sort((a, b) => {
     if (a.p && b.p) return a.p.rank - b.p.rank || a.p.step - b.p.step || a.i - b.i;
     if (a.p || b.p) return a.p ? -1 : 1;

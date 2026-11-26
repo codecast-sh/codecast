@@ -9,6 +9,7 @@ import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import type { SessionShip } from "../../lib/ship/sessionShip";
 import type { LinkedPr } from "../../lib/sessionPullRequests";
 import type { CoOwners } from "../../lib/coOwners";
+import type { PriorityRankLabel } from "../../store/priorityOrder";
 
 // The props of the inbox session card (SessionCardView): the row, its chrome
 // toggles, its live facts and the handlers every gesture leaves through.
@@ -81,8 +82,9 @@ export type SessionCardViewProps = {
   answeredBy?: string | null;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
-  /** The Priorities view only: the rank of the viewer's priority this session serves, null for "None". Absent in every other view. */
-  priorityRank?: number | null;
+  /** The Priorities view only: the rank of the viewer's priority this session serves, "elsewhere" for one in
+   *  another workspace, null for "None" (store/priorityOrder rankLabelOf). Absent in every other view. */
+  priorityRank?: PriorityRankLabel;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
   /** The declared status the row's section header already says (Needs you
    *  under NEEDS YOU): the card leaves that chip off rather than repeat it. */
