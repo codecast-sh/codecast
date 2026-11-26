@@ -1,10 +1,10 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost", pretendToBeVisual: true });
-const restore = replaceGlobals({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true });
+const restore = replaceGlobals({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), Event: dom.window.Event, CustomEvent: dom.window.CustomEvent, FocusEvent: dom.window.FocusEvent, MouseEvent: dom.window.MouseEvent, KeyboardEvent: dom.window.KeyboardEvent, IS_REACT_ACT_ENVIRONMENT: true });
 const { createRoot } = await import("react-dom/client");
 // The app's own link, forced for the one scenario that drops it; every other
 // scenario reads the real hook. This file runs in a process of its own.
@@ -176,4 +176,54 @@ test("a cloud host within 30 minutes of its run limit says so beside its session
   expect(chip()).toBeUndefined();
   await runLimit(inMinutes(25), { is_remote: false });
   expect(chip()).toBeUndefined();
+});
+
+// ct-102051: the offline panel's Copy lands on the clipboard of the machine
+// running this browser, so its command row must say which machine the command
+// is for: the owner by name, and whether that is this browser's machine only
+// when the app actually knows.
+describe("offline panel names the machine to run the command on", () => {
+  const offline = (deviceId: string) => act(() => useInboxStore.getState().setMachineRoster(
+    healthRows(Date.now()).map(d => d.device_id === deviceId ? { ...d, online: false, last_seen: Date.now() - 2 * 3_600_000 } : d),
+  ));
+  // Opens the pill's hover panel and returns its command row (the button that
+  // holds the copyable command) plus the pill's own aria-label.
+  const openPanel = async (scope: string) => {
+    const pill = host.querySelector(`${scope} [data-daemon-pill]`) as HTMLElement | null;
+    expect(pill).not.toBeNull();
+    await act(() => { pill!.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true })); pill!.dispatchEvent(new dom.window.FocusEvent("focusin", { bubbles: true })); });
+    await settle(400);
+    const code = [...document.querySelectorAll("code")].find(c => c.textContent === "cast restart");
+    expect(code, "the hover panel with the cast restart row should be open").toBeDefined();
+    const row = code!.closest("button")!;
+    return { row: `${row.textContent ?? ""} ${row.getAttribute("aria-label") ?? ""}`, pill: pill!.getAttribute("aria-label") ?? "" };
+  };
+
+  test("session chip, owner known to be another machine: the command row says to run it on the owner, not here", async () => {
+    cache(); await mount(); await settle();
+    await offline("mini");
+    const { row, pill } = await openPanel('[data-session="mini"]');
+    expect(row).toContain("Mac-mini");
+    expect(row.toLowerCase()).toMatch(/not this (machine|browser)|another machine|different machine|not on this/);
+    expect(pill).toContain("Mac-mini");
+  });
+
+  test("session chip, this browser's machine unknown: the row names the owner and claims neither here nor elsewhere", async () => {
+    globalThis.fetch = (async () => Response.json({}, { status: 401 })) as typeof fetch;
+    await mount(); await settle(450);
+    await offline("mini");
+    const { row } = await openPanel('[data-session="mini"]');
+    expect(row).toContain("Mac-mini");
+    expect(row.toLowerCase()).not.toContain("this machine");
+    expect(row.toLowerCase()).not.toMatch(/another machine|different machine|not this/);
+  });
+
+  test("header chip: the command row says the command is for this machine, by name", async () => {
+    cache(); await mount(); await settle();
+    await offline("laptop");
+    const { row } = await openPanel("[data-global]");
+    expect(row.toLowerCase()).toContain("this machine");
+    expect(row).toContain("MacBook");
+    expect(row.toLowerCase()).not.toMatch(/another machine|different machine|not this/);
+  });
 });
