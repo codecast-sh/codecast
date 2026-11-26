@@ -16,7 +16,8 @@
 // The ceilings are the same idea one level up. Each is a multiple of its step,
 // and a step is weeks of the graph's ordinary growth, so a branch that
 // adds a leaf or a few KB touches no line here and two such branches never
-// conflict on one. Crossing a ceiling is the moment to look at what grew.
+// conflict on one. Crossing a ceiling is the moment to look at what grew, and
+// a ceiling a whole step above the graph must come down, so a cut stays taken.
 
 import { describe, expect, test } from "bun:test";
 import * as path from "node:path";
@@ -43,10 +44,15 @@ const DAEMON_FILES: Ceiling = { ceiling: 700, step: 100 };
 
 function expectUnderCeiling(measured: number, what: string, { ceiling, step }: Ceiling) {
   expect(ceiling % step, `${what}: a ceiling moves in whole steps of ${step}`).toBe(0);
+  const fits = Math.ceil(measured / step) * step;
   expect(
     measured,
-    `${what} is ${measured}, over its ceiling of ${ceiling}. Find what grew, and move whatever only some commands need behind a dynamic import() first. Raise the ceiling one step, to ${ceiling + step}, only for real growth, with the reason in the commit.`,
+    `${what} is ${measured}, over its ceiling of ${ceiling}. Find what grew, and move whatever only some commands need behind a dynamic import() first. Raise the ceiling to ${fits} only for real growth, with the reason in the commit.`,
   ).toBeLessThanOrEqual(ceiling);
+  expect(
+    measured,
+    `${what} is ${measured}, a whole step under its ceiling of ${ceiling}: lower it to ${fits} so the ground stays taken.`,
+  ).toBeGreaterThan(ceiling - step);
 }
 
 /** The group modules, as absolute paths. `./browser/cli.js` is `browser/cli.ts` on disk. */
