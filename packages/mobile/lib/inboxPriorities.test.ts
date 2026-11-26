@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { priorityInboxSig, priorityInboxView } from './inboxPriorities';
-import { rankLabelWords } from '@codecast/web/store/priorityOrder';
+import { rankTitle, workspaceMarkOf } from '@codecast/web/store/priorityOrder';
 import { resolveInboxViewMode } from '@codecast/web/store/inboxStore';
 
 // The phone's inbox, lens bar and drawer read the view through the same resolver as the web.
@@ -25,38 +25,49 @@ const PRIORITIES = {
   p2: priority('p2', 2),
   theirs: priority('theirs', 1, 'someone'),
 };
+// The viewer's personal #1, in another workspace than the active team t1.
+const RANKS = { personal: { _id: 'personal', workspace: 'user:me', rank: 1 } };
 const row = (_id: string, priority_id?: string, priority_step_key?: string) => ({ _id, priority_id, priority_step_key });
+const state = (viewer: string | null = 'me', sessions: Record<string, ReturnType<typeof row>> = {}) => ({
+  priorities: PRIORITIES as any, priorityRanks: RANKS, sessions, currentUser: viewer ? { _id: viewer } : null, clientState: { ui: { active_team_id: 't1' } },
+});
 
 describe('priorityInboxView', () => {
-  const view = priorityInboxView(PRIORITIES as any, 'me');
+  const view = priorityInboxView(state());
 
-  it('sorts a section by rank, then milestone, the rest after in the order they had', () => {
+  it("sorts a section by this workspace's rank and milestone, then other workspaces' ranks, the rest after in the order they had", () => {
     const rows = [
       row('none-a'),
       row('p2-s1', 'p2', 's1'),
       row('teammate', 'theirs', 's1'),
+      row('personal', 'personal', 's1'),
       row('p1-s2', 'p1', 's2'),
-      row('elsewhere', 'not-loaded', 's1'),
+      row('not-loaded', 'not-loaded', 's1'),
       row('p1-s1', 'p1', 's1'),
       row('none-b'),
     ];
-    expect(view.sort(rows).map((r) => r._id)).toEqual(['p1-s1', 'p1-s2', 'p2-s1', 'none-a', 'teammate', 'elsewhere', 'none-b']);
+    expect(view.sort(rows).map((r) => r._id)).toEqual(['p1-s1', 'p1-s2', 'p2-s1', 'personal', 'none-a', 'teammate', 'not-loaded', 'none-b']);
   });
 
-  it("labels each row with its rank, 'other ws' for a priority not loaded here, else None", () => {
-    // The phone is a touch screen: it shows the touch words, never a bare "—".
-    const words = (r: ReturnType<typeof row>) => rankLabelWords(view.rankOf(r)).touch;
-    expect(words(row('a', 'p1', 's2'))).toBe('#1');
-    expect(words(row('b', 'p2', 's1'))).toBe('#2');
-    expect(words(row('c', 'not-loaded', 's1'))).toBe('other ws');
-    expect(words(row('d', 'theirs', 's1'))).toBe('None');
-    expect(words(row('e'))).toBe('None');
+  it('labels a ranked row with its rank and other workspace, and every other row with nothing', () => {
+    expect(view.rankOf(row('a', 'p1', 's2'))).toEqual({ rank: 1, workspace: null });
+    expect(view.rankOf(row('b', 'p2', 's1'))).toEqual({ rank: 2, workspace: null });
+    const personal = view.rankOf(row('c', 'personal'))!;
+    expect(personal).toEqual({ rank: 1, workspace: 'user:me' });
+    expect(rankTitle(personal, workspaceMarkOf(personal.workspace!, [], 'me'))).toBe('Your priority #1 in your personal workspace');
+    expect(view.rankOf(row('d', 'not-loaded', 's1'))).toBeNull();
+    expect(view.rankOf(row('e', 'theirs', 's1'))).toBeNull();
+    expect(view.rankOf(row('f'))).toBeNull();
+  });
+
+  it("names a team's workspace by the team and its icon", () => {
+    expect(workspaceMarkOf('team:t2', [{ _id: 't2', name: 'Union', icon: 'flame', icon_color: 'orange' }], 'me')).toEqual({ personal: false, name: 'Union', icon: 'flame', color: 'orange' });
   });
 
   it("wakes on a session's priority link, so a moved session re-sorts", () => {
     const before = { a: row('a', 'p2', 's1'), b: row('b', 'p1', 's1') };
     const after = { ...before, a: row('a', 'p1', 's1'), b: row('b', 'p2', 's1') };
-    const sig = (sessions: Record<string, ReturnType<typeof row>>) => priorityInboxSig({ sessions, priorities: PRIORITIES as any, currentUser: { _id: 'me' } });
+    const sig = (sessions: Record<string, ReturnType<typeof row>>) => priorityInboxSig(state('me', sessions));
     expect(sig(after)).not.toBe(sig(before));
     // A field the order does not read leaves it asleep.
     expect(sig({ ...before, a: { ...before.a, title: 'renamed' } as any })).toBe(sig(before));
@@ -65,7 +76,7 @@ describe('priorityInboxView', () => {
   });
 
   it('places nothing without a viewer', () => {
-    const anon = priorityInboxView(PRIORITIES as any, null);
+    const anon = priorityInboxView(state(null));
     const rows = [row('x'), row('y', 'p1', 's1')];
     expect(anon.sort(rows).map((r) => r._id)).toEqual(['x', 'y']);
     expect(anon.rankOf(row('y', 'p1', 's1'))).toBeNull();

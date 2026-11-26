@@ -5582,7 +5582,7 @@ export function groupSessionsByPlan(
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
-import { priorityPlaceReader, sortByPriority, type PriorityStanding } from "./priorityOrder";
+import { priorityPlaceReader, sortByPriority, type PriorityRankEntry, type PriorityStanding } from "./priorityOrder";
 import { splitHostedStops } from "../lib/hostedNotice";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
@@ -6284,8 +6284,10 @@ export function computeVisualOrder(state: {
   machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
   // Open browser tabs per session: the Browser view lists only those sessions.
   browserTabs?: Record<string, BrowserTabRow>;
-  // The priorities the Priorities view orders by (store/priorityOrder).
+  // What the Priorities view orders by (store/priorityOrder): the active
+  // workspace's priority rows, and the viewer's ranks in every workspace.
   priorities?: Record<string, PriorityRow>;
+  priorityRanks?: Record<string, PriorityRankEntry>;
   // Loaded transcripts: the hosted stop rule's fallback splits "Couldn't finish" out of Needs You.
   messages?: Record<string, readonly any[] | undefined>;
   // What the org lenses group by (orgLensSourcesOf); optional for callers
@@ -6364,7 +6366,7 @@ export function computeVisualOrder(state: {
     collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
     walk: opts.walk,
     projectOf: projectOfFromState(state),
-    priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state.priorities, state.currentUser?._id, state.sessions) : undefined,
+    priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,
     messagesOf: (id) => state.messages?.[id],
   });
   if (mode === "bucket") {

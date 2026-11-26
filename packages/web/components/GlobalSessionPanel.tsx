@@ -99,7 +99,7 @@ import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
-import { priorityPlaceReader, priorityRanksSig, rankLabelOf, sessionPriorityLinkSig, sortByPriority } from "../store/priorityOrder";
+import { priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority } from "../store/priorityOrder";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
@@ -1764,7 +1764,7 @@ function SessionListPanelImpl({
     s => (resolveInboxViewMode(s) === "plan" ? allPlansSig(s.plans) : ""),
     // What the Priorities view sorts and labels by: each session's priority
     // link and each priority's owner, rank and milestones. Only while it is up.
-    s => (resolveInboxViewMode(s) === "priorities" ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}` : ""),
+    s => (resolveInboxViewMode(s) === "priorities" ? priorityOrderSig(s) : ""),
     // The view mode itself: Priorities reads as grouped while the workspace has the feature off.
     s => resolveInboxViewMode(s),
     // Open browser tabs per session (the Browser view): changes only when a daemon reports.
@@ -2073,12 +2073,10 @@ function SessionListPanelImpl({
   // viewer's priority a session serves, as the keyboard walk does
   // (visualOrderSessions); Pinned keeps the person's own order. Decisions
   // sorts its own groups (InboxDecisionQueue).
-  const priorityKey = resolveInboxViewMode(s) === "priorities"
-    ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ""}`
-    : "";
+  const priorityKey = resolveInboxViewMode(s) === "priorities" ? priorityOrderSig(s) : "";
   // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(s.priorities, s.currentUser?._id, useInboxStore.getState().sessions) : null), [priorityKey]);
+  const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(useInboxStore.getState()) : null), [priorityKey]);
   const byPriority = useCallback((rows: InboxSession[]) => (priorityPlaceOf ? sortByPriority(rows, priorityPlaceOf) : rows), [priorityPlaceOf]);
   const statusPinned = filteredPinned;
   const statusNew = useMemo(() => byPriority(filteredNew), [byPriority, filteredNew]);

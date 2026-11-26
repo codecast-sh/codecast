@@ -3,9 +3,10 @@ import { computeVisualOrder, placeInboxRows, resolveInboxViewMode, type InboxSes
 import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority, sortQueueByPriority, walkPick } from "../priorityOrder";
 
 // The inbox's Priorities view: the status sections stay, each sorted by the
-// viewer's priority a session serves (rank, then milestone order), every other
+// viewer's priority a session serves: the active workspace's (rank, then
+// milestone order), then other workspaces' by rank (priorityRanks), every other
 // session last in its existing order: unlinked, a teammate's priority, one with
-// no rank, or one in another workspace (not loaded here: "elsewhere").
+// no rank, or one in another workspace whose rank has not loaded.
 // computeVisualOrder is what Ctrl+J/K walks and walkOrder (Ctrl+I) reads.
 
 const cid = (t: string) => `${t}z${t.length}`.padEnd(32, "0");
@@ -34,7 +35,7 @@ const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>
 
 // A rank here is the pass's slot (ai_rank); null is a priority set aside, which has none.
 const priority = (id: string, rank: number | null, steps: string[], user_id = ME) => ({
-  _id: id, short_id: id, status: rank == null ? "set_aside" : "active", ai_rank: rank, person_pos: null, workspace: "team:t1", last_active_at: 0, user_id,
+  _id: id, short_id: id, status: rank == null ? "set_aside" : "active", ai_rank: rank, person_pos: null, workspace: "team:team_p", last_active_at: 0, user_id,
   steps: steps.map((key) => ({ key })),
 });
 const priorities = {
@@ -106,29 +107,55 @@ describe("sortQueueByPriority", () => {
   });
 });
 
+/** The reader over these priorities, other workspaces' ranks and a viewer, in team_p. */
+const readerOf = (p: any = priorities, ranks: Record<string, { _id: string; workspace: string; rank: number }> = {}, viewer: string | null = ME) =>
+  priorityPlaceReader({ priorities: p, priorityRanks: ranks, currentUser: viewer ? { _id: viewer } : null, clientState: { ui: { active_team_id: PRIORITIES_TEAM._id } } });
+const PERSONAL = `user:${ME}`;
+const elsewhere = { pOtherWorkspace: { _id: "pOtherWorkspace", workspace: PERSONAL, rank: 1 } };
+
 describe("sortByPriority", () => {
   it("orders by rank, then milestone, then unranked in their given order", () => {
-    const placeOf = priorityPlaceReader(priorities, ME);
+    const placeOf = readerOf();
     expect(sortByPriority(rows.filter((s) => s.is_idle), placeOf).map(tag)).toEqual([
       "a1", "a2", "anostep", "bs1", "none1", "b", "theirs", "aside", "none2", "other",
     ]);
   });
 
+  it("puts another workspace's ranked sessions after this workspace's, before the unranked, by rank", () => {
+    const ranks = { ...elsewhere, pFar: { _id: "pFar", workspace: "team:other", rank: 2 }, pNear: { _id: "pNear", workspace: PERSONAL, rank: 3 } };
+    const extra = [session("far", link("pFar")), session("near", link("pNear"))];
+    expect(sortByPriority([...extra, ...rows.filter((s) => s.is_idle)], readerOf(priorities, ranks)).map(tag)).toEqual([
+      "a1", "a2", "anostep", "bs1", "other", "far", "near", "none1", "b", "theirs", "aside", "none2",
+    ]);
+  });
+
   it("reads no rank for no link, a teammate's priority, a priority without a rank, or no viewer", () => {
-    const placeOf = priorityPlaceReader(priorities, ME);
+    const placeOf = readerOf();
     expect(placeOf(session("x"))).toBeNull();
     expect(placeOf(session("x", link("pTheirs", "s1")))).toBeNull();
     expect(placeOf(session("x", link("pAside", "s1")))).toBeNull();
-    expect(priorityPlaceReader(priorities, null)(session("x", link("pA", "s1")))).toBeNull();
-    expect(placeOf(session("x", link("pB", "s1")))).toEqual({ rank: 2, step: 0 });
+    expect(readerOf(priorities, elsewhere, null)(session("x", link("pA", "s1")))).toBeNull();
+    expect(placeOf(session("x", link("pB", "s1")))).toEqual({ rank: 2, step: 0, workspace: null });
+    // A priority whose rank is not loaded anywhere has no chip, not a placeholder.
+    expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace", "s1"))))).toBeNull();
   });
 
-  it("a link to a priority not loaded here reads elsewhere, not None", () => {
-    const placeOf = priorityPlaceReader(priorities, ME);
-    expect(placeOf(session("x", link("pOtherWorkspace", "s1")))).toBe("elsewhere");
-    expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace", "s1"))))).toBe("elsewhere");
-    expect(rankLabelOf(placeOf(session("x")))).toBeNull();
-    expect(rankLabelOf(placeOf(session("x", link("pB", "s1"))))).toBe(2);
+  it("reads another workspace's rank off priorityRanks, labelled with that workspace", () => {
+    const placeOf = readerOf(priorities, elsewhere);
+    expect(placeOf(session("x", link("pOtherWorkspace", "s1")))).toEqual({ rank: 1, step: Infinity, workspace: PERSONAL });
+    expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace"))))).toEqual({ rank: 1, workspace: PERSONAL });
+    expect(rankLabelOf(placeOf(session("x", link("pB", "s1"))))).toEqual({ rank: 2, workspace: null });
+    // One label object per rank and workspace, so a card's prop keeps its identity.
+    expect(rankLabelOf(placeOf(session("y", link("pB"))))).toBe(rankLabelOf(placeOf(session("x", link("pB", "s1")))));
+  });
+
+  it("reads the active workspace's rank off its loaded rows, and a lingering row of another workspace off priorityRanks", () => {
+    // priorities.list's push has not come yet: the active workspace's rank is in priorityRanks and draws with no mark.
+    const cold = readerOf({}, { pB: { _id: "pB", workspace: `team:${PRIORITIES_TEAM._id}`, rank: 2 } });
+    expect(cold(session("x", link("pB")))).toEqual({ rank: 2, step: Infinity, workspace: null });
+    // A row cached from the personal workspace is not this workspace's rank.
+    const lingering = { ...priorities, pOtherWorkspace: { ...priority("pOtherWorkspace", 5, ["s1"]), workspace: PERSONAL } };
+    expect(readerOf(lingering, elsewhere)(session("x", link("pOtherWorkspace", "s1")))).toEqual({ rank: 1, step: 0, workspace: PERSONAL });
   });
 });
 
@@ -136,7 +163,7 @@ describe("priorityRanks", () => {
   it("reads the effective order: a priority the person placed above the pass's ranks first", () => {
     const placed = { ...priorities, pB: { ...priorities.pB, person_pos: 0.5 } };
     expect([...priorityRanks(placed)]).toEqual([["pB", 1], ["pA", 2], ["pTheirs", 1]]);
-    const placeOf = priorityPlaceReader(placed, ME);
+    const placeOf = readerOf(placed);
     expect(sortByPriority([session("a1", link("pA", "s1")), session("bs1", link("pB", "s1"))], placeOf).map(tag)).toEqual(["bs1", "a1"]);
   });
 });

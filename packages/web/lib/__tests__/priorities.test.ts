@@ -108,7 +108,8 @@ describe("a session's move, \"not this\" and a merge relink its inbox row at onc
     const sessions: Record<string, any> = { "c-one": { _id: "c-one", priority_id: one._id, priority_step_key: "s1" }, "c-two": { _id: "c-two", priority_id: two._id, priority_step_key: "s1" } };
     return { one, two, s: { priorities: { [one._id]: one, [two._id]: two }, sessions } };
   };
-  const rankOf = (w: ReturnType<typeof world>, conv: string) => priorityPlaceReader(w.s.priorities as any, "me", w.s.sessions)(w.s.sessions[conv]) as { rank: number; step: number } | null;
+  const rankOf = (w: ReturnType<typeof world>, conv: string) =>
+    priorityPlaceReader({ priorities: w.s.priorities as any, sessions: w.s.sessions, currentUser: { _id: "me" }, clientState: { ui: { active_team_id: "t1" } } })(w.s.sessions[conv]);
 
   test("a move puts the conversation on its new priority and milestone: its inbox rank follows before the server echoes", () => {
     const w = world();

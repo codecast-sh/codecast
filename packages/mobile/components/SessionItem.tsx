@@ -298,7 +298,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
           />
         </RNView>
         <RNView style={styles.rightMeta}>
-          {priorityRank !== undefined && <PriorityRankTag rank={priorityRank} />}
+          {priorityRank && <PriorityRankTag rank={priorityRank} />}
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
           {ownersModel && <RowCoOwners id={session._id} />}
           <RNText style={styles.timeText}>
@@ -422,7 +422,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   clock?: number;
   /** When a revive was asked for this row (store blockedReviveRequestedAt). */
   reviveAt?: number;
-  /** The inbox's Priorities view only (lib/inboxPriorities): "#N", "—" or None. */
+  /** The inbox's Priorities view only (lib/inboxPriorities): the rank and its other workspace; null, no tag. */
   priorityRank?: PriorityRankLabel;
 }) {
   const Theme = useTheme();

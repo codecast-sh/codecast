@@ -224,7 +224,7 @@ function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent
     <>
       <span className="flex h-5 w-5 shrink-0 items-center justify-center"><WorkspaceTile row={row ?? {}} size={20} showAgent={showAgent} /></span>
       <span className="min-w-0 flex-1 truncate text-body font-medium text-sol-text">{title}</span>
-      {rank !== undefined && <PriorityRankChip rank={rank} />}
+      {rank && <PriorityRankChip rank={rank} />}
     </>
   );
   const chips = (where || workProject || flow) && (
