@@ -8,6 +8,7 @@ import { isHostedAgentType, isToolResultCarrier, parseWorkflowHarnessFrame } fro
 import { callModel, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { earlierTitlesAfter } from "./searchCore";
 import { redactSecrets } from "./redact";
+import { askClassifier } from "./lib/priorityClassifierHook";
 
 // Floor between generateTitle schedulings for one conversation. The
 // no-subtitle fallback fires on every sync batch of an untitled conversation;
@@ -84,6 +85,8 @@ export const setTitleAndSubtitle = internalMutation({
     }
     if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.conversation_id, patch);
+    // A first title places the session under a milestone (lib/priorityClassifierHook).
+    if (patch.title) await askClassifier(ctx, { ...conv, ...patch });
     // A project named after this session (started with the new project
     // switch) takes the session's title until a person renames it.
     if (patch.title && conv.project_id) {

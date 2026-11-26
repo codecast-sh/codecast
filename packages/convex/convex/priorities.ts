@@ -764,7 +764,7 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
   const { move, recount } = sessionMover(ctx);
   for (const conv of sessions) {
     const not = (conv.priority_not ?? []).some((id) => String(id) === String(into._id));
-    await move(conv, not ? undefined : into._id, conv.priority_step_key ? remap.get(conv.priority_step_key) : undefined, conv.priority_set_by === "person" ? "person" : undefined);
+    await move(conv, not ? undefined : into._id, conv.priority_step_key ? remap.get(conv.priority_step_key) : undefined, conv.priority_set_by);
   }
   await recount(viewer);
   for (const c of await correctionsOf(ctx, viewer, p)) {

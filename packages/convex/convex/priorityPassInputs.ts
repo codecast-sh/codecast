@@ -125,7 +125,7 @@ export async function activitySince(ctx: { db: any }, userId: Id<"users">, since
 }
 
 /** The tasks a session links (the association rail, the tasks it filed, its active task), in this workspace. */
-async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string): Promise<PassTask[]> {
+export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string): Promise<PassTask[]> {
   const ids = new Set<string>();
   const rail = await ctx.db.query("entity_conversations").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).take(50);
   for (const row of rail) if (row.entity_type === "task") ids.add(String(row.entity_id));

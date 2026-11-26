@@ -10,7 +10,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice";
+export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice" | "priority_classifier";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -161,6 +161,15 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     name: "Priorities",
     desc: "Each person's priorities, inferred from their own sessions, with the steps left on each and how far along it is.",
     short: "What each person is driving at, and how far along",
+    inDevelopment: true,
+    snippets: [],
+    personal: true,
+  },
+  {
+    key: "priority_classifier",
+    name: "Priorities: place sessions at once",
+    desc: "A session is placed under one of its person's milestones when it first gets a title or pin, instead of at the next priorities pass. Needs Priorities on.",
+    short: "Sessions placed under a milestone at once",
     inDevelopment: true,
     snippets: [],
     personal: true,

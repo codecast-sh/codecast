@@ -125,6 +125,27 @@ export const priorityTables = {
     token: v.optional(v.number()),
   }).index("by_user_workspace", ["user_id", "workspace"]),
 
+  // One ask of the per-session classifier (priorityClassifier.ts): written
+  // "pending" when it is asked (a session's first title or pin, or a re-run
+  // after a new priority or milestone), settled with what it chose. No
+  // content: the choice, its cost and, while pending, the worst case it holds
+  // against the pair's daily cap.
+  priority_classifications: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    conversation_id: v.id("conversations"),
+    at: v.number(),
+    status: v.union(v.literal("pending"), v.literal("placed"), v.literal("new"), v.literal("skipped"), v.literal("error")),
+    model: v.string(),
+    held_usd: v.number(),
+    cost_usd: v.optional(v.number()),
+    priority_id: v.optional(v.id("priorities")),
+    step_key: v.optional(v.string()),
+    error: v.optional(v.string()),
+  })
+    .index("by_user_workspace_at", ["user_id", "workspace", "at"])
+    .index("by_conversation_at", ["conversation_id", "at"]),
+
   // What the person told the pass about one of their priorities (or one of
   // its milestones), in their words. Every later pass in its workspace reads
   // it until the person deletes it; the first that succeeds after reading it

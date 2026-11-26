@@ -28,6 +28,7 @@ const AFTER_CONVERSATIONS: ReadonlyArray<readonly [string, string, string]> = [
   ["priorities", "by_user_workspace_status", "user_id"],
   ["priority_pass_runs", "by_user_workspace_started", "user_id"],
   ["priority_pass_schedules", "by_user_workspace", "user_id"],
+  ["priority_classifications", "by_user_workspace_at", "user_id"],
   ["priority_corrections", "by_user_workspace_created", "user_id"],
   ["suggestion_outcomes", "by_user_created", "user_id"],
   ["notifications", "by_recipient", "recipient_user_id"],

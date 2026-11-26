@@ -205,23 +205,28 @@ export async function sessionEvidence(ctx: Ctx, conv: Pick<Conv, "priority_id" |
 /**
  * Map a session to its owner's priority (and milestone, when it still has
  * that one) in the session's own workspace, keeping both priorities' session
- * counts. Refused (false) for a session the person placed, someone else's
- * priority, a merged one, one the person said the session is not part of, a
- * milestone they dropped, or another workspace; a no-op when the session is
- * already there. It reads the
+ * counts, and mark who linked it: a known link ("link") or the classifier
+ * (priorityClassifier.ts). Precedence: the person > a known link > the
+ * classifier > the pass, so the classifier maps only a session mapped
+ * nowhere, and the pass moves neither (priorityPassRun applyPlan). Refused
+ * (false) for a session the person placed, someone else's priority, a merged
+ * one, one the person said the session is not part of, a milestone they
+ * dropped, or another workspace; a no-op when the session is already there,
+ * linked the same way. It reads the
  * priority itself: callers find it in the per-mutation cache (ownPriorities),
  * whose rows may be stale on anything but ids, refs and keys.
  */
-export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined): Promise<boolean> {
-  if (conv.priority_set_by === "person" || (conv.priority_not ?? []).some((id) => String(id) === String(priorityId))) return false;
+export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined, by: "link" | "classifier" = "link"): Promise<boolean> {
+  if (conv.priority_set_by === "person" || (by === "classifier" && conv.priority_id)) return false;
+  if ((conv.priority_not ?? []).some((id) => String(id) === String(priorityId))) return false;
   const priority: Priority | null = await ctx.db.get(priorityId);
   if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id)) return false;
   const target = priority.steps.find((s) => s.key === step);
   if (target?.dropped) return false;
   const stepKey = target ? step : undefined;
-  if (String(conv.priority_id ?? "") === String(priority._id) && conv.priority_step_key === stepKey) return false;
+  if (String(conv.priority_id ?? "") === String(priority._id) && conv.priority_step_key === stepKey && conv.priority_set_by === by) return false;
   if ((await sessionVisibility(ctx).workspaceOf(conv)) !== priority.workspace) return false;
-  await ctx.db.patch(conv._id, { priority_id: priority._id, priority_step_key: stepKey });
+  await ctx.db.patch(conv._id, { priority_id: priority._id, priority_step_key: stepKey, priority_set_by: by });
   await moveSessionCount(ctx, conv.priority_id, priority._id);
   return true;
 }

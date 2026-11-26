@@ -7,7 +7,7 @@
 // of an open golden step.
 import { describe, expect, test } from 'bun:test';
 
-import { score, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
+import { score, seedState, seededJudge, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
 
 const golden: Golden = {
   person: 'Ana',
@@ -191,5 +191,19 @@ describe('seedState', () => {
     expect(state.priorities[0]!.steps.map((s) => [s.key, s.title, s.done])).toEqual([['s1', 'Cases', false], ['s2', 'Grader faults', false]]);
     const withTask = seedState({ ...golden, priorities: [{ ...golden.priorities[0]!, critical: [{ title: 'Cases', done: true, task: 'ct-7' }] }] }, 0);
     expect(withTask.priorities[0]!.steps[0]!.refs).toEqual([{ kind: 'task', id: 'ct-7' }]);
+  });
+});
+
+describe('seededJudge', () => {
+  test('the seeded pri-N in each workspace is golden priority N, with no model and no steps aligned; session mapping scores placement', async () => {
+    const seeded = (key: string, sessions: string[]): Produced => ({ key, workspace: key.split(':')[0]!, title: '', summary: '', status: 'active', steps: [], sessions });
+    const placed = [seeded('acme:pri-1', ['s1', 's2']), seeded('acme:pri-2', ['s9']), seeded('acme:pri-3', ['s3']), seeded('personal:pri-3', ['s4'])];
+    const { judge, spent } = seededJudge(golden);
+    const s = await score(golden, placed, read, judge, tasksNow());
+    expect(s.matches.map((m) => [m.produced, m.golden])).toEqual([['acme:pri-1', 'g1'], ['acme:pri-2', 'g2'], ['acme:pri-3', 'g3'], ['personal:pri-3', 'g3']]);
+    // s1, s2 and s4 placed right, s3 under the wrong one, s5 never placed, the standing st1 and st2 left alone (s9 was not read).
+    expect(s.metrics.sessions).toBe(5 / 7);
+    expect(s.steps.pairs).toEqual([]);
+    expect(spent).toEqual({ usd: 0, calls: 0 });
   });
 });

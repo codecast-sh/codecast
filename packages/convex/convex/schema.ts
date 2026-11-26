@@ -1028,14 +1028,17 @@ export default defineSchema({
     thread_state_result: v.optional(v.string()),
     thread_state_result_at: v.optional(v.number()),
     // The priority the priorities pass mapped this session to, and the step of
-    // it the session serves (prioritiesSchema.ts). Written by the pass, or by
-    // the person (`priority_set_by: "person"`, which the pass never changes);
-    // drives the priority line under the pinned state. `priority_not` lists
+    // it the session serves (prioritiesSchema.ts). Written by the pass, by the
+    // person (`priority_set_by: "person"`), by a known link at creation
+    // ("link", lib/priorityLinks) or by the classifier ("classifier",
+    // priorityClassifier.ts). Precedence: person > link > classifier > pass;
+    // the pass changes none of the three. It drives the priority line under
+    // the pinned state. `priority_not` lists
     // the priorities the person said it is not part of: the pass never maps
     // it to one of them again.
     priority_id: v.optional(v.id("priorities")),
     priority_step_key: v.optional(v.string()),
-    priority_set_by: v.optional(v.union(v.literal("pass"), v.literal("person"))),
+    priority_set_by: v.optional(v.union(v.literal("pass"), v.literal("person"), v.literal("link"), v.literal("classifier"))),
     priority_not: v.optional(v.array(v.id("priorities"))),
     // The page an agent offered as a pane (`cast browser pane <url>`). One
     // latest offer, never a list: an agent that started three dev servers is

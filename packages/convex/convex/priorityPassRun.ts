@@ -21,6 +21,7 @@ import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { passOn } from "./lib/priorityPassSchedule";
+import { askRerun } from "./lib/priorityClassifierHook";
 import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
@@ -232,11 +233,11 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
  * every priority a session moved to or from, so a count that drifted heals:
  * the person's own in any workspace (a session made private leaves a team
  * priority from the personal pass). A move is the pass's unless `set_by`
- * says the person made it.
+ * says who else made it (a merge carries the session's own).
  */
 export function sessionMover(ctx: { db: any }) {
   const moved = new Map<Id<"priorities">, number>();
-  const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined, set_by?: "person") => {
+  const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined, set_by?: Doc<"conversations">["priority_set_by"]) => {
     if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
     if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
     await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key, priority_set_by: to ? set_by : undefined });
@@ -297,7 +298,8 @@ export const releaseStrays = internalMutation({
  * holds too). The pass's output is rejected wherever it would change one: a
  * placed rank (the plan writes ai_rank, and person_pos only to carry a
  * merged priority's place to a survivor without one); a step's
- * tier, title, done state or drop (holdPersonSteps); a set-aside, done or merged status; a session the person placed, or one
+ * tier, title, done state or drop (holdPersonSteps); a set-aside, done or merged status; a session the person placed,
+ * a known link or the classifier mapped, or one
  * mapped to a priority they said it is not part of. A step added to a
  * priority since the input was read (a person's merge) is kept, and a new
  * step of the plan's that took its key gets the next one. A merge moves the
@@ -345,6 +347,7 @@ export const applyPlan = internalMutation({
     // Per priority this plan rewrote: its live step keys after the write, and the plan's new keys that moved.
     const liveSteps = new Map<string, Set<string>>();
     const rekeyed = new Map<string, Map<string, string>>();
+    let newMilestone = false;
     for (const u of plan.updates) {
       const row = await mine(u.short_id);
       if (!row || row.status === "merged") continue;
@@ -368,6 +371,7 @@ export const applyPlan = internalMutation({
         });
         patch.steps = holdPersonSteps(row.steps, [...steps, ...unseen]);
         liveSteps.set(row.short_id, new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key)));
+        newMilestone ||= patch.steps.some((st) => !st.dropped && !row.steps.some((x) => x.key === st.key));
         if (moved.size) rekeyed.set(row.short_id, moved);
       }
       // A rewrite the priority needed is done: its title and summary are this pass's.
@@ -401,9 +405,9 @@ export const applyPlan = internalMutation({
         : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
       return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
     };
-    // The person's placement stands, and a priority they said a session is not part of never gets it.
+    // The person's placement, a known link and the classifier's stand, and a priority they said a session is not part of never gets it.
     const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
-      conv.priority_set_by === "person" || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
+      (!!conv.priority_set_by && conv.priority_set_by !== "pass") || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
     for (const s of plan.sessions) {
       const conv = await conversationOf(s.session);
       const priority = await resolve(s.priority);
@@ -425,17 +429,19 @@ export const applyPlan = internalMutation({
     }
     await letGoStrays(ctx, vis, move, args, strays ?? [], new Set(plan.rewritten));
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown;
-    // one the person placed stays theirs there, and one they said is not part of the survivor lets go.
+    // one the person placed (or a link or the classifier mapped) keeps that there, and one they said is not part of the survivor lets go.
     for (const [from, into] of mergedInto) {
       const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
       for (const conv of left) {
         if (!(await inWorkspace(vis, conv, args.user_id, args.workspace))) continue;
         const not = (conv.priority_not ?? []).some((id) => String(id) === String(into));
-        await move(conv, not ? undefined : into, undefined, conv.priority_set_by === "person" ? "person" : undefined);
+        await move(conv, not ? undefined : into, undefined, conv.priority_set_by);
       }
     }
 
     await recount(args.user_id);
+    // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
+    if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);
 
     for (const id of corrections ?? []) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
