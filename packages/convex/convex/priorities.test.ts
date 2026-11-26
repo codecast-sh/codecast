@@ -374,12 +374,16 @@ describe("reads", () => {
     await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
     const pin = await t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7two5")).first())!._id);
     const listed = (await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
-    expect(listed.rank).toBeNull();
-    expect((await as(bea).query(pri.show, { short_id: "pri-2" })).rank).toBeNull();
+    const shown = await as(bea).query(pri.show, { short_id: "pri-2" });
+    // No place of any kind: not the position, not the scale, not who set it.
+    for (const row of [listed, shown]) expect([row.rank, row.person_pos, row.ai_rank, row.rank_source]).toEqual([null, null, null, null]);
     expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank ?? null).toBeNull();
     // The owner reads the same rank from all three.
     const own = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
     expect([own.rank, (await as(ada).query(pri.show, { short_id: "pri-2" })).rank, (await as(ada).query(pri.pinLine, { conversation_id: pin })).rank]).toEqual([2, 2, 2]);
+    expect([own.ai_rank, own.rank_source]).toEqual([2, "ai"]);
+    // A write's echo is the owner's, with the place.
+    expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ rank: 1, rank_source: "person" });
   });
 
   test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {

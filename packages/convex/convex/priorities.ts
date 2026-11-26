@@ -190,9 +190,10 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     summary: p.summary,
     status: p.status,
     rank: position,
-    person_pos: p.person_pos ?? null,
-    ai_rank: p.ai_rank ?? null,
-    rank_source: rankSourceOf(p),
+    // A teammate reads no place at all: the scale counts priorities they cannot see.
+    person_pos: isOwner(viewer, p) ? p.person_pos ?? null : null,
+    ai_rank: isOwner(viewer, p) ? p.ai_rank ?? null : null,
+    rank_source: isOwner(viewer, p) ? rankSourceOf(p) : null,
     status_set_by: p.status_set_by ?? "pass",
     serves: p.serves ?? null,
     steps,
