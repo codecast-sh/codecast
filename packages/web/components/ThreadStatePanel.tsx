@@ -1,12 +1,12 @@
 "use client";
 
-import React, { memo, useMemo, useRef, useState } from "react";
+import React, { memo, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useLayoutFlag } from "../hooks/useOverflows";
 import { Check, ChevronDown, Copy, Maximize2, X } from "lucide-react";
 import { useDecisionOpener } from "../lib/decisionOpenRegistry";
 import { toast } from "sonner";
 import { threadStateAskParts, type ThreadStateRow, type ThreadStateStatus } from "@codecast/shared/contracts";
-import { sidebarStatusOf, useInboxStore } from "../store/inboxStore";
+import { placedInboxVersion, sidebarStatusOf, subscribePlacedInbox, useInboxStore } from "../store/inboxStore";
 import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { PrStack, PrStatusChip } from "./PrStatusChip";
@@ -67,7 +67,9 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // The status the sidebar shows this session under: the chip shows the pin's
   // declared status only when it agrees. A scalar, so row churn that leaves the
   // verdict alone re-renders nothing. Undefined for a session not in the store:
-  // its pin speaks for itself.
+  // its pin speaks for itself. The sidebar places after the store publishes, so
+  // the panel also re-reads each time it places (placedInboxVersion).
+  useSyncExternalStore(subscribePlacedInbox, placedInboxVersion, placedInboxVersion);
   const placed = useInboxStore((s) => {
     const row = s.sessions[conversationId];
     return row ? sidebarStatusOf(s, row, now) : undefined;

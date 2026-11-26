@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
   lastPlacedInbox,
+  placedInboxVersion,
   placeInboxRows,
+  subscribePlacedInbox,
   railRowPlacement,
   sidebarStatusOf,
   __resetInboxPlacementCacheForTests,
@@ -104,6 +106,24 @@ describe("sidebarStatusOf: the chip follows the section the sidebar drew", () =>
     nowSpy.mockReturnValue(later);
     expect(placeInboxRows(s, { now: later }).questions.map((r) => r._id)).toEqual([ASKER]);
     expect(sidebarStatusOf(s, asker, later)).toBe("blocked");
+  });
+
+  it("a surface reading the placement hears each new placement once, after the render that made it", async () => {
+    const asker = session(ASKER, { user_id: ME, agent_status: "dormant", thread_state_status: "dormant" });
+    const s = state({ [ASKER]: asker }, "mine");
+    let heard = 0;
+    const off = subscribePlacedInbox(() => { heard++; });
+    const before = placedInboxVersion();
+    placeInboxRows(s, { now: NOW });
+    expect(heard).toBe(0);
+    await Promise.resolve();
+    expect(heard).toBe(1);
+    expect(placedInboxVersion()).toBeGreaterThan(before);
+    // The same placement again is no news.
+    placeInboxRows(s, { now: NOW });
+    await Promise.resolve();
+    expect(heard).toBe(1);
+    off();
   });
 
   it("a row the sidebar has not drawn reads its own placement", () => {

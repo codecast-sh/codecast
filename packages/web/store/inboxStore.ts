@@ -4277,6 +4277,35 @@ export function projectReplicaInbox(
 // placement key; `val` also seeds the stable-ref reuse below.
 const _placedMemo = new Map<string, { key: unknown[]; sessions: Record<string, InboxSession>; val: PlacedInbox }>();
 const PLACED_MEMO_CAP = 8;
+
+// A surface that reads the last placement (sidebarStatusOf) re-reads when the
+// sidebar places again, not only on its own next store write: the sidebar
+// places while it renders, after the store published. Listeners hear once per
+// batch, in a microtask, so no render updates another component mid-render.
+let _placedVersion = 0;
+let _placedNotifyQueued = false;
+const _placedListeners = new Set<() => void>();
+function writePlacedMemo(slot: string, entry: { key: unknown[]; sessions: Record<string, InboxSession>; val: PlacedInbox }): void {
+  const changed = _placedMemo.get(slot)?.val !== entry.val;
+  _placedMemo.set(slot, entry);
+  if (!changed) return;
+  _placedVersion++;
+  if (_placedNotifyQueued || _placedListeners.size === 0) return;
+  _placedNotifyQueued = true;
+  queueMicrotask(() => {
+    _placedNotifyQueued = false;
+    for (const listener of _placedListeners) listener();
+  });
+}
+/** Subscribe to the sidebar placing again (useSyncExternalStore with placedInboxVersion). */
+export function subscribePlacedInbox(listener: () => void): () => void {
+  _placedListeners.add(listener);
+  return () => { _placedListeners.delete(listener); };
+}
+/** Moves each time a placement memo holds a new result. */
+export function placedInboxVersion(): number {
+  return _placedVersion;
+}
 const EMPTY_TRUNCATED: InboxTruncation[] = [];
 
 // Stable-ref helpers: hand back the PREVIOUS object when the new one is
@@ -4490,7 +4519,7 @@ export function placeInboxRows(
     if (memo.sessions === state.sessions) return memo.val;
     const refreshed = refreshPlacedRows(memo, state.sessions, now);
     if (refreshed) {
-      _placedMemo.set(slot, { key, sessions: state.sessions, val: refreshed });
+      writePlacedMemo(slot, { key, sessions: state.sessions, val: refreshed });
       return refreshed;
     }
   }
@@ -4957,7 +4986,7 @@ export function placeInboxRows(
     assertPlacementParity(state, { scope, focusedId, epoch, now, scoped, askingOf, inFlight, placements, membership });
   }
 
-  _placedMemo.set(slot, { key, sessions: state.sessions, val });
+  writePlacedMemo(slot, { key, sessions: state.sessions, val });
   if (_placedMemo.size > PLACED_MEMO_CAP) {
     const first = _placedMemo.keys().next().value;
     if (first !== undefined && first !== slot) _placedMemo.delete(first);
