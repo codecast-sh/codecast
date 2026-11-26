@@ -13,7 +13,11 @@ type SessionExtra = { user_id?: string; priority?: { id: string; title: string |
 type CommitExtra = Lines & { pr_number?: number; branch?: string | null };
 
 export type BoardSession = NonNullable<QueueCommit["session"]> & SessionExtra;
-export type BoardQueueCommit = Omit<QueueCommit, "session"> & CommitExtra & { session: BoardSession | null };
+export type BoardQueueCommit = Omit<QueueCommit, "session"> & CommitExtra & {
+  session: BoardSession | null;
+  /** When it reached main. */
+  main_at?: number;
+};
 export type BoardQueueGroup = Omit<QueueGroup, "commits" | "session"> & { session: BoardSession | null; commits: BoardQueueCommit[] };
 export type BoardDeployRow = NonNullable<TeamDeployRow["commit_rows"]>[number] & CommitExtra;
 export type BoardDeploySession = DeploySession & SessionExtra & {
@@ -39,6 +43,13 @@ export type ShipRun = {
   fail_reason?: string;
   gate_prompt?: string;
   gate_decision_short_id?: string;
+  gate_node_id?: string;
+  /** What CI said about the PR, once it did. */
+  ci_verdict?: { green: boolean } | null;
+  /** What review said, once it did. */
+  review_verdict?: { verdict: "ship" | "changes" | "rejected" } | null;
+  /** The merge the run recorded: its change is on main. */
+  merge?: { sha?: string | null } | null;
   spawner_conversation_id?: string;
   spawner_title?: string | null;
   primary_conversation_id?: string;
@@ -64,40 +75,73 @@ export function repositoryOfRun(run: Pick<ShipRun, "pr" | "project_path">, check
   return best ? best.repository.toLowerCase() : null;
 }
 
-/** The stations a change passes before main, each read from the run's own station ids. */
+/**
+ * The four steps before main and their stations, by the last part of a station's id: codecast's change flow names
+ * them plainly (`pr`, `ci`), Union's land segment inside a segment (`land__pr`, `land__ci_alone`).
+ */
 export const STEPS = [
-  { word: "PR", ids: ["land__pr"] },
-  { word: "CI", ids: ["land__ci", "land__checks", "check", "check__verify"] },
-  { word: "Review", ids: ["land__review", "review", "review__review", "land__changes", "review__changes"] },
-  { word: "Merge", ids: ["land__merge", "land__landed", "merge"] },
+  { word: "PR", stations: ["pr"] },
+  { word: "CI", stations: ["checks", "ci", "ci_alone", "retest"] },
+  { word: "Review", stations: ["review", "changes"] },
+  { word: "Merge", stations: ["merge", "landed"] },
 ] as const;
 export type StepState = "done" | "active" | "waiting" | "failed" | "idle";
 
-const statusesOf = (run: Pick<ShipRun, "node_statuses">) => new Map(run.node_statuses.map((n) => [n.node_id, n.status]));
-
-/** Merged: a merge station passed, or the run has moved on to deploying. Its work then waits on the right. */
-export function isMerged(run: Pick<ShipRun, "node_statuses" | "current_node_id">): boolean {
-  const by = statusesOf(run);
-  return STEPS[3].ids.some((id) => by.get(id) === "completed") || (run.current_node_id ?? "").startsWith("deploy");
+/** The step a station belongs to, -1 for one outside the four. */
+export function stepOfStation(id: string | null | undefined): number {
+  const leaf = id?.split("__").pop();
+  return leaf ? STEPS.findIndex((s) => (s.stations as readonly string[]).includes(leaf)) : -1;
 }
 
-/** PR · CI · Review · Merge. A stopped run is red on exactly one step, the one where it stopped. */
-export function stepper(run: Pick<ShipRun, "status" | "node_statuses" | "current_node_id">): StepState[] {
-  const by = statusesOf(run);
-  const stopped = run.status === "failed";
-  const steps: StepState[] = STEPS.map((s) => {
-    const st = s.ids.map((id) => by.get(id)).filter((x): x is string => !!x);
-    // A failed station is the run's to fix while it runs, a person's turn while it waits; red only once it stopped.
-    if (st.includes("failed")) return stopped ? "failed" : run.status === "paused" ? "waiting" : "active";
+/** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
+type Read = "done" | "trouble" | "active" | "idle";
+function readSteps(run: Pick<ShipRun, "node_statuses" | "pr" | "ci_verdict" | "review_verdict" | "merge">): Read[] {
+  const byStep: string[][] = STEPS.map(() => []);
+  for (const [id, status] of new Map(run.node_statuses.map((n) => [n.node_id, n.status]))) {
+    const i = stepOfStation(id);
+    if (i >= 0) byStep[i].push(status);
+  }
+  const facts: Array<Read | null> = [
+    run.pr ? "done" : null,
+    run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null,
+    run.review_verdict ? (run.review_verdict.verdict === "ship" ? "done" : "trouble") : null,
+    run.merge ? "done" : null,
+  ];
+  // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
+  return facts.map((fact, i) => {
+    if (fact) return fact;
+    const st = byStep[i];
+    if (st.includes("failed")) return "trouble";
     if (st.includes("running")) return "active";
-    if (st.length && st.every((x) => x === "completed" || x === "skipped")) return "done";
-    return "idle";
+    return st.length && st.every((x) => x === "completed" || x === "skipped") ? "done" : "idle";
   });
-  if (!stopped) return steps;
-  // Where it stopped: the first failed step, else the step it was on, else the first it had not finished.
-  let at = steps.indexOf("failed");
-  if (at < 0) at = STEPS.findIndex((s) => (s.ids as readonly string[]).includes(run.current_node_id ?? ""));
-  if (at < 0) at = steps.findIndex((x) => x !== "done");
+}
+
+/** Merged: the run recorded a merge, a merge station passed, or it moved on to deploying. Its work then waits on the right. */
+export function isMerged(run: Pick<ShipRun, "node_statuses" | "current_node_id" | "merge">): boolean {
+  return !!run.merge || run.node_statuses.some((n) => stepOfStation(n.node_id) === 3 && n.status === "completed") || (run.current_node_id ?? "").startsWith("deploy");
+}
+
+/**
+ * PR · CI · Review · Merge. Trouble is the run's to fix while it runs (active); a paused run is blue on the step it
+ * waits at; a stopped run is red on exactly one step, the one where it stopped, with everything after it not reached.
+ */
+export function stepper(run: Pick<ShipRun, "status" | "node_statuses" | "current_node_id" | "gate_node_id" | "pr" | "ci_verdict" | "review_verdict" | "merge">): StepState[] {
+  const read = readSteps(run);
+  const steps: StepState[] = read.map((x) => (x === "trouble" ? "active" : x));
+  const firstNotDone = () => read.findIndex((x) => x !== "done");
+  if (run.status === "paused") {
+    let at = stepOfStation(run.current_node_id);
+    if (at < 0) at = stepOfStation(run.gate_node_id);
+    if (at < 0) at = firstNotDone();
+    if (at >= 0) steps[at] = "waiting";
+    return steps;
+  }
+  if (run.status !== "failed") return steps;
+  let at = read.indexOf("trouble");
+  if (at < 0) at = stepOfStation(run.current_node_id);
+  if (at < 0) at = [...run.node_statuses].reverse().map((n) => stepOfStation(n.node_id)).find((i) => i >= 0) ?? -1;
+  if (at < 0) at = firstNotDone();
   if (at < 0) return steps;
   return steps.map((x, i) => (i < at ? "done" : i === at ? "failed" : "idle"));
 }
@@ -105,17 +149,14 @@ export function stepper(run: Pick<ShipRun, "status" | "node_statuses" | "current
 export type RunState = { word: string; tone: "yellow" | "blue" | "red"; detail?: string };
 
 /** What the run is doing now, in words a person reads at a glance. */
-export function runState(run: Pick<ShipRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "node_statuses">): RunState {
+export function runState(run: Pick<ShipRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "node_statuses" | "pr" | "ci_verdict" | "review_verdict" | "merge">): RunState {
   if (run.status === "failed") {
     const detail = run.fail_reason?.replace(/^Stopped:\s*/i, "").trim();
     return detail ? { word: "Stopped", tone: "red", detail } : { word: "Stopped", tone: "red" };
   }
   if (run.status === "paused") return { word: run.gate_prompt || run.gate_decision_short_id ? "Waiting on a decision" : "Paused", tone: "blue" };
   const node = run.current_node_label;
-  if (node === "Fix findings") {
-    const by = statusesOf(run);
-    return { word: STEPS[1].ids.some((id) => by.get(id) === "failed") ? "Fixing CI failures" : "Fixing review findings", tone: "yellow" };
-  }
+  if (node === "Fix findings") return { word: readSteps(run)[1] === "trouble" ? "Fixing CI failures" : "Fixing review findings", tone: "yellow" };
   if (node === "CI and review") return { word: "CI and review running", tone: "yellow" };
   return { word: node || "Starting", tone: "yellow" };
 }
@@ -138,25 +179,48 @@ export function shippingRuns(
 
 /* ───────────── Crediting: the session that pressed Ship ───────────── */
 
+const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
+
 export type SessionRef = { id: string; short_id: string | null; title: string | null; user_id: string | null; priority: { id: string; title: string | null } | null };
 
-export type Shipper = (taskShortIds: ReadonlyArray<string>, own: SessionRef | null) => SessionRef | null;
+/** One Ship run as crediting reads it (the server's `shippers`, completed runs included). */
+export type ShipperEntry = {
+  run_id: string;
+  task_short_id?: string | null;
+  /** The commit its merge put on main. */
+  merged_sha?: string | null;
+  spawner_conversation_id?: string | null;
+  spawner_title?: string | null;
+  /** Its spawner only stands in for whoever pressed Ship: never credited. */
+  stand_in?: boolean;
+  /** The spawner's owner, when the server sends it (Mine and the blue dot read it). */
+  user_id?: string | null;
+  created_at: number;
+};
+
+/** A commit as crediting reads it; `at` bounds which runs could have shipped it. */
+export type CreditedCommit = { sha?: string; at?: number; tasks: ReadonlyArray<string> };
+export type Shipper = (commit: CreditedCommit, own: SessionRef | null) => SessionRef | null;
 
 /**
- * Who a commit belongs to: the session that sent its task through Ship (the newest run of that task that names one),
- * else the session its own trailer names. A flow's station sessions ("Review · ct-N") land commits but did not write
- * the change. Give it every run the page has, completed ones included: both columns credit through it.
+ * Who a commit belongs to: the session that pressed Ship on it, else the session its own trailer names. A flow's
+ * station sessions ("Review · ct-N") land commits but did not write the change. The run whose merge put this very
+ * commit on main decides it; else the newest run of one of its tasks started before the commit. Stand-in spawners
+ * and runs without one credit nobody. Both columns credit through it.
  */
-export function shipperOf(runs: ReadonlyArray<Pick<ShipRun, "task_short_id" | "spawner_conversation_id" | "spawner_title" | "user_id" | "created_at">>): Shipper {
-  const byTask = new Map<string, (typeof runs)[number]>();
-  for (const r of runs) {
-    if (!r.task_short_id || !r.spawner_conversation_id) continue;
-    const was = byTask.get(r.task_short_id);
-    if (!was || r.created_at > was.created_at) byTask.set(r.task_short_id, r);
+export function shipperOf(entries: ReadonlyArray<ShipperEntry>): Shipper {
+  const bySha = new Map<string, ShipperEntry[]>();
+  const byTask = new Map<string, ShipperEntry[]>();
+  for (const e of entries) {
+    if (e.merged_sha && e.merged_sha.length >= 7) bySha.set(e.merged_sha.slice(0, 7), [...(bySha.get(e.merged_sha.slice(0, 7)) ?? []), e]);
+    if (e.task_short_id) byTask.set(e.task_short_id, [...(byTask.get(e.task_short_id) ?? []), e]);
   }
-  return (tasks, own) => {
-    const run = tasks.map((t) => byTask.get(t)).find(Boolean);
-    if (!run) return own;
+  const credits = (e: ShipperEntry | undefined): e is ShipperEntry => !!e && !!e.spawner_conversation_id && !e.stand_in;
+  return (c, own) => {
+    const merged = c.sha && c.sha.length >= 7 ? bySha.get(c.sha.slice(0, 7))?.find((e) => sameSha(e.merged_sha!, c.sha!)) : undefined;
+    // The run that merged this commit settles it, even when it credits nobody.
+    const run = merged ?? c.tasks.flatMap((t) => byTask.get(t) ?? []).filter((e) => credits(e) && (c.at == null || e.created_at < c.at)).sort((a, b) => b.created_at - a.created_at)[0];
+    if (!credits(run)) return own;
     const id = run.spawner_conversation_id!;
     const same = own?.id === id ? own : null;
     return { id, short_id: same?.short_id ?? null, title: run.spawner_title ?? same?.title ?? null, user_id: run.user_id ?? same?.user_id ?? null, priority: same?.priority ?? null };
@@ -169,10 +233,14 @@ const refOf = (s: { conversation_id: string; short_id?: string | null; title?: s
 
 /* ───────────── The queue: commits on main waiting to deploy ───────────── */
 
-/** The queue's commits, newest first. */
-export const queueCommits = (groups: ReadonlyArray<BoardQueueGroup>): BoardQueueCommit[] => groups.flatMap((g) => g.commits).sort((a, b) => b.at - a.at);
-
-const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
+/**
+ * The queue's commits, newest on main first: by when each reached main when the server says, else in the server's
+ * order. Never by commit time: a commit written last week and merged today is the newest.
+ */
+export function queueCommits(groups: ReadonlyArray<BoardQueueGroup>): BoardQueueCommit[] {
+  const all = groups.flatMap((g) => g.commits);
+  return all.every((c) => c.main_at != null) ? all.sort((a, b) => b.main_at! - a.main_at!) : all;
+}
 
 /** What an unfinished deploy at `sha` sends: that commit and everything older. Nothing when it is not waiting. */
 export function upTo(commits: ReadonlyArray<BoardQueueCommit>, sha: string): BoardQueueCommit[] {
@@ -214,14 +282,14 @@ const fill = (to: SessionRef, x: SessionRef) => {
   to.priority ??= x.priority;
 };
 
-type Raw = { sha: string; subject: string; pr_number?: number; branch?: string | null; tasks: string[]; own: SessionRef | null } & Lines;
+type Raw = { sha: string; at?: number; subject: string; pr_number?: number; branch?: string | null; tasks: string[]; own: SessionRef | null } & Lines;
 
-function carriedOf(raw: ReadonlyArray<Raw>, credit: Shipper, extra: { more: number; branchesKnown: boolean; sessions?: ReadonlyArray<SessionRef & { tasks?: string[] }>; tasks?: ReadonlyArray<{ short_id?: string | null; title?: string | null }> }): Carried {
+function carriedOf(raw: ReadonlyArray<Raw>, credit: Shipper, extra: { more: number; branchesKnown: boolean; at?: number; sessions?: ReadonlyArray<SessionRef & { tasks?: string[] }>; tasks?: ReadonlyArray<{ short_id?: string | null; title?: string | null }> }): Carried {
   const sessions = new Map<string, CarriedSession>();
   const commits: CarriedCommit[] = [];
   let loose = 0;
   for (const c of raw) {
-    const who = credit(c.tasks, c.own);
+    const who = credit({ sha: c.sha, at: c.at ?? extra.at, tasks: c.tasks }, c.own);
     const { pr: subjectPr, subject } = prOfSubject(c.subject);
     commits.push({ sha: c.sha, subject, pr: c.pr_number ?? subjectPr, branch: c.branch ?? null, insertions: c.insertions, deletions: c.deletions, session: who?.id ?? null, tasks: c.tasks });
     if (!who) { loose++; continue; }
@@ -237,7 +305,7 @@ function carriedOf(raw: ReadonlyArray<Raw>, credit: Shipper, extra: { more: numb
   // commits all went to their shipper is a station session and stays off.
   const named = new Set(raw.map((c) => c.own?.id).filter(Boolean));
   for (const { tasks, ...x } of extra.sessions ?? []) {
-    const who = (tasks && credit(tasks, x)) || x;
+    const who = (tasks && credit({ at: extra.at, tasks }, x)) || x;
     const s = sessions.get(who.id);
     if (s) fill(s, who);
     else if (who.id !== x.id || !named.has(x.id)) sessions.set(who.id, { ...who, commits: 0 });
@@ -263,7 +331,7 @@ export function carriedOfQueue(commits: ReadonlyArray<BoardQueueCommit>, credit:
 }
 
 /** A finished deploy's recorded commits as its card lists them. */
-export function carriedOfDeploy(d: Pick<BoardDeploy, "commit_rows" | "sessions" | "tasks" | "commits">, credit: Shipper): Carried {
+export function carriedOfDeploy(d: Pick<BoardDeploy, "commit_rows" | "sessions" | "tasks" | "commits" | "created_at">, credit: Shipper): Carried {
   const rows = d.commit_rows ?? [];
   const listed = sessionsOf(d) as BoardDeploySession[];
   const info = new Map(listed.map((s) => [s.conversation_id, refOf(s)]));
@@ -271,30 +339,39 @@ export function carriedOfDeploy(d: Pick<BoardDeploy, "commit_rows" | "sessions" 
   return carriedOf(
     rows.map((c) => ({ ...c, tasks: c.tasks ?? [], own: c.conversation_id ? (info.get(c.conversation_id) ?? refOf({ conversation_id: c.conversation_id })) : null })),
     credit,
-    { more: d.commits - rows.length, branchesKnown: rows.some((c) => c.branch !== undefined), sessions, tasks: d.tasks },
+    // Its rows carry no commit time; the deploy's own time bounds which runs could have shipped them.
+    { more: d.commits - rows.length, branchesKnown: rows.some((c) => c.branch !== undefined), at: d.created_at, sessions, tasks: d.tasks },
   );
 }
 
 /* ───────────── Deploy cards ───────────── */
 
-/** Deploys newest first, every attempt at one commit on one card, its newest attempt leading. */
-export function attemptGroups<D extends Pick<TeamDeployRow, "sha">>(deploys: ReadonlyArray<D>): D[][] {
+/**
+ * Deploys newest first, every attempt at one commit on one card, its newest attempt leading. A rollback or a
+ * redeploy is its own event, never an attempt at an earlier deploy of the same commit: it stands on its own card.
+ */
+export function attemptGroups<D extends Pick<TeamDeployRow, "sha" | "action">>(deploys: ReadonlyArray<D>): D[][] {
   const bySha = new Map<string, D[]>();
   const out: D[][] = [];
   for (const d of deploys) {
-    const g = d.sha ? bySha.get(d.sha) : undefined;
+    const attempt = d.sha && d.action === "deploy" ? d.sha : null;
+    const g = attempt ? bySha.get(attempt) : undefined;
     if (g) { g.push(d); continue; }
     const fresh = [d];
-    if (d.sha) bySha.set(d.sha, fresh);
+    if (attempt) bySha.set(attempt, fresh);
     out.push(fresh);
   }
   return out;
 }
 
-/** What one card carried: an unfinished deploy is sending the waiting commits up to its sha; any other, what an attempt recorded. */
+/**
+ * What one card carried: an unfinished deploy whose sha is waiting is sending the waiting commits up to it; any other
+ * (or one at a sha no longer waiting), what an attempt recorded.
+ */
 export function carriedOfAttempts(group: ReadonlyArray<BoardDeploy>, queue: ReadonlyArray<BoardQueueCommit>, credit: Shipper): Carried {
   const lead = group[0];
-  if (isOpen(lead) && lead.sha) return carriedOfQueue(upTo(queue, lead.sha), credit);
+  const sending = isOpen(lead) && lead.sha ? upTo(queue, lead.sha) : [];
+  if (sending.length) return carriedOfQueue(sending, credit);
   const recorded = group.find((d) => (d.commit_rows ?? []).length) ?? lead;
   return carriedOfDeploy(recorded, credit);
 }
@@ -337,10 +414,22 @@ export function yourSessions(next: Carried | null, cards: ReadonlyArray<DeployCa
   return { buckets, bySession, newer };
 }
 
-/** Each task's newest place on main: waiting ("next"), else the newest deploy that carried it. */
+/**
+ * The queue around the newest unfinished deploy: what it is sending (its sha and older) and what is left for Next
+ * deploy. With none going, or one at a sha no longer waiting, everything is next.
+ */
+export function splitQueue(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>): { going: BoardDeploy | null; sending: BoardQueueCommit[]; next: BoardQueueCommit[] } {
+  const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => isOpen(d) && d.sha) ?? null;
+  if (!going) return { going, sending: [], next: [...queue] };
+  return { going, sending: upTo(queue, going.sha!), next: after(queue, going.sha!) };
+}
+
+/** Each task's newest place on main: waiting ("next"), going out in an unfinished deploy, else the newest deploy that carried it. */
 export function tasksOnMain(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>): Map<string, CardId> {
   const out = new Map<string, CardId>();
-  for (const c of queue) for (const t of c.tasks) if (t.short_id && !out.has(t.short_id)) out.set(t.short_id, "next");
+  const { going, sending, next } = splitQueue(queue, deploys);
+  for (const c of next) for (const t of c.tasks) if (t.short_id && !out.has(t.short_id)) out.set(t.short_id, "next");
+  for (const c of sending) for (const t of c.tasks) if (t.short_id && !out.has(t.short_id)) out.set(t.short_id, going!.short_id);
   for (const d of [...deploys].sort((a, b) => b.created_at - a.created_at)) {
     for (const t of d.tasks ?? []) if (t.short_id && !out.has(t.short_id)) out.set(t.short_id, d.short_id);
     for (const c of d.commit_rows ?? []) for (const id of c.tasks ?? []) if (!out.has(id)) out.set(id, d.short_id);

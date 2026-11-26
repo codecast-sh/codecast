@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   after, attemptGroups, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
-  runState, shipperOf, shippingRuns, stepper, tasksOnMain, upTo, yourSessions,
-  type BoardDeploy, type BoardQueueCommit, type ShipRun,
+  runState, shipperOf, shippingRuns, splitQueue, stepper, tasksOnMain, upTo, yourSessions,
+  type BoardDeploy, type BoardQueueCommit, type ShipRun, type ShipperEntry,
 } from "../board";
 
 const DAY = 24 * 60 * 60_000;
@@ -43,6 +43,7 @@ describe("the Shipping column", () => {
     run("dropped", { updated_at: NOW - 8 * DAY }),
     run("merged", { node_statuses: [{ node_id: "land__merge", status: "completed" }] }),
     run("deploying", { current_node_id: "deploy__await" }),
+    run("recorded", { merge: { sha: "abc1234" } }),
     run("elsewhere", { pr: { repository: "o/x", number: 2 } }),
   ];
   const o = { repository: "o/r", checkouts: [], now: NOW, mine: false };
@@ -63,16 +64,27 @@ describe("the PR · CI · Review · Merge stepper", () => {
     const r = run("s", { status: "failed", node_statuses: ns(["land__pr", "completed"], ["land__ci", "failed"], ["land__review", "failed"]) });
     expect(stepper(r)).toEqual(["done", "failed", "idle", "idle"]);
   });
-  test("a stopped run with no failed station is red where it was", () => {
+  test("a stopped run with no failed station is red where it was, else at its last station, else the first unfinished step", () => {
     expect(stepper(run("s", { status: "failed", current_node_id: "land__review", node_statuses: ns(["land__pr", "completed"]) }))).toEqual(["done", "done", "failed", "idle"]);
+    expect(stepper(run("s", { status: "failed", current_node_id: "fix", node_statuses: ns(["pr", "completed"], ["ci", "completed"], ["fix", "failed"]) }))).toEqual(["done", "failed", "idle", "idle"]);
+    expect(stepper(run("s", { status: "failed", pr: undefined }))).toEqual(["failed", "idle", "idle", "idle"]);
   });
-  test("a failed station is active while the run fixes it, waiting while a person decides", () => {
+  test("facts outrank stations: verdicts and the merge decide their steps", () => {
+    const node_statuses = ns(["ci", "failed"], ["review", "completed"]);
+    expect(stepper(run("f", { node_statuses, ci_verdict: { green: true }, review_verdict: { verdict: "changes" } }))).toEqual(["done", "done", "active", "idle"]);
+    expect(stepper(run("m", { ci_verdict: { green: true }, review_verdict: { verdict: "ship" }, merge: { sha: "abc1234" } }))).toEqual(["done", "done", "done", "done"]);
+    expect(stepper(run("r", { status: "failed", ci_verdict: { green: true }, review_verdict: { verdict: "rejected" } }))).toEqual(["done", "done", "failed", "idle"]);
+  });
+  test("without a verdict a completed CI station counts as done, in either flow's naming", () => {
+    expect(stepper(run("c", { pr: undefined, node_statuses: ns(["pr", "completed"], ["checks", "completed"], ["ci", "completed"], ["review", "running"]) }))).toEqual(["done", "done", "active", "idle"]);
+    expect(stepper(run("u", { node_statuses: ns(["land__ci_alone", "completed"], ["land__retest", "skipped"], ["land__changes", "running"]) }))).toEqual(["done", "done", "active", "idle"]);
+  });
+  test("trouble is active while the run fixes it; a paused run is blue on the step it waits at", () => {
     const node_statuses = ns(["land__pr", "completed"], ["land__ci", "completed"], ["land__review", "failed"]);
     expect(stepper(run("f", { node_statuses }))).toEqual(["done", "done", "active", "idle"]);
     expect(stepper(run("p", { status: "paused", node_statuses }))).toEqual(["done", "done", "waiting", "idle"]);
-  });
-  test("running and skipped stations", () => {
-    expect(stepper(run("r", { node_statuses: ns(["land__pr", "completed"], ["land__checks", "skipped"], ["land__ci", "completed"], ["land__review", "running"]) }))).toEqual(["done", "done", "active", "idle"]);
+    expect(stepper(run("g", { status: "paused", current_node_id: "land__card__decide", gate_node_id: "land__merge", node_statuses }))).toEqual(["done", "done", "active", "waiting"]);
+    expect(stepper(run("c", { status: "paused", current_node_id: "ci", node_statuses: ns(["pr", "completed"]) }))).toEqual(["done", "waiting", "idle", "idle"]);
   });
 });
 
@@ -81,58 +93,81 @@ describe("the run's state in words", () => {
     expect(runState(run("s", { status: "failed", fail_reason: "Stopped: CI could not start" }))).toEqual({ word: "Stopped", tone: "red", detail: "CI could not start" });
     expect(runState(run("p", { status: "paused", gate_prompt: "Merge it?" }))).toEqual({ word: "Waiting on a decision", tone: "blue" });
   });
-  test("fixing names what it fixes", () => {
+  test("fixing names what it fixes, from the verdict first", () => {
     const fix = { current_node_label: "Fix findings" };
     expect(runState(run("c", { ...fix, node_statuses: [{ node_id: "land__ci", status: "failed" }] })).word).toBe("Fixing CI failures");
-    expect(runState(run("v", { ...fix, node_statuses: [{ node_id: "land__review", status: "failed" }] })).word).toBe("Fixing review findings");
+    expect(runState(run("v", { ...fix, ci_verdict: { green: false } })).word).toBe("Fixing CI failures");
+    expect(runState(run("w", { ...fix, ci_verdict: { green: true }, node_statuses: [{ node_id: "ci", status: "failed" }] })).word).toBe("Fixing review findings");
     expect(runState(run("b", { current_node_label: "CI and review" }))).toEqual({ word: "CI and review running", tone: "yellow" });
     expect(runState(run("o", { current_node_label: "Open PR" }))).toEqual({ word: "Open PR", tone: "yellow" });
   });
 });
 
 describe("crediting a commit to the session that pressed Ship", () => {
+  const entry = (run_id: string, extra: Partial<ShipperEntry>): ShipperEntry => ({ run_id, task_short_id: "ct-1", spawner_conversation_id: run_id, spawner_title: `Shipper ${run_id}`, created_at: 10, ...extra });
   const credit = shipperOf([
-    { task_short_id: "ct-1", spawner_conversation_id: "old", spawner_title: "Old", user_id: "u0", created_at: 1 },
-    { task_short_id: "ct-1", spawner_conversation_id: "shipper", spawner_title: "Shipper", user_id: "me", created_at: 2 },
+    entry("first", { merged_sha: "aaaaaaa1ffff", user_id: "me" }),
+    entry("second", { created_at: 20 }),
+    entry("stand-in", { task_short_id: "ct-2", merged_sha: "bbbbbbb1", stand_in: true, created_at: 5 }),
+    entry("nobody", { task_short_id: "ct-3", spawner_conversation_id: null }),
   ]);
-  const own = { id: "review-station", short_id: null, title: "Review · ct-1", user_id: null, priority: null };
-  test("through the task's newest run", () => {
-    expect(credit(["ct-1"], own)).toMatchObject({ id: "shipper", title: "Shipper", user_id: "me" });
+  const own = { id: "review-station", short_id: null, title: "Review · ct-1", user_id: null, priority: { id: "p1", title: "Launch" } };
+  test("the run that merged this very commit decides, before any newer run of its task", () => {
+    expect(credit({ sha: "aaaaaaa1", at: 30, tasks: ["ct-1"] }, own)).toEqual({ id: "first", short_id: null, title: "Shipper first", user_id: "me", priority: null });
   });
-  test("falls back to the commit's own session", () => {
-    expect(credit(["ct-9"], own)).toBe(own);
-    expect(credit([], null)).toBeNull();
+  test("else the newest run of its task started before the commit", () => {
+    expect(credit({ sha: "ccccccc1", at: 30, tasks: ["ct-1"] }, own)?.id).toBe("second");
+    expect(credit({ sha: "ccccccc1", at: 15, tasks: ["ct-1"] }, own)?.id).toBe("first");
+    expect(credit({ sha: "ccccccc1", at: 5, tasks: ["ct-1"] }, own)).toBe(own);
+  });
+  test("stand-ins and runs without a spawner credit nobody; the commit keeps its own session", () => {
+    expect(credit({ sha: "ccccccc1", at: 30, tasks: ["ct-2"] }, own)).toBe(own);
+    expect(credit({ sha: "bbbbbbb1", at: 30, tasks: ["ct-1"] }, own)).toBe(own);
+    expect(credit({ sha: "ccccccc1", at: 30, tasks: ["ct-3"] }, own)).toBe(own);
+    expect(credit({ tasks: [] }, null)).toBeNull();
+  });
+  test("a credited session keeps the trailer's priority only when it is the same session", () => {
+    const same = { ...own, id: "second" };
+    expect(credit({ at: 30, tasks: ["ct-1"] }, same)?.priority).toEqual({ id: "p1", title: "Launch" });
+    expect(credit({ at: 30, tasks: ["ct-1"] }, own)?.priority).toBeNull();
   });
   test("both columns credit the same way: queue and deploy rows land on the shipper", () => {
-    const q = carriedOfQueue([commit("aaaaaaa1", 2, { task: "ct-1", session: sess("review-station"), insertions: 5, deletions: 1 })], credit);
-    const d = carriedOfDeploy(deploy("dp-1", 1, { commits: 1, sessions: [sess("review-station")], commit_rows: [{ sha: "bbbbbbb1", subject: "x", conversation_id: "review-station", tasks: ["ct-1"] }] }), credit);
-    expect(q.sessions.map((s) => s.id)).toEqual(["shipper"]);
-    expect(d.sessions.map((s) => s.id)).toEqual(["shipper"]);
+    const q = carriedOfQueue([commit("ddddddd1", 30, { task: "ct-1", session: sess("review-station"), insertions: 5, deletions: 1 })], credit);
+    const d = carriedOfDeploy(deploy("dp-1", 30, { commits: 1, sessions: [sess("review-station")], commit_rows: [{ sha: "ddddddd2", subject: "x", conversation_id: "review-station", tasks: ["ct-1"] }] }), credit);
+    expect(q.sessions.map((s) => s.id)).toEqual(["second"]);
+    expect(d.sessions.map((s) => s.id)).toEqual(["second"]);
   });
   test("a deploy's session beyond its listed rows is credited through the tasks it names, else kept as listed", () => {
-    const rows = [{ sha: "ccccccc1", subject: "x", conversation_id: "s2", branch: null }];
+    const rows = [{ sha: "eeeeeee1", subject: "x", conversation_id: "s2", branch: null }];
     const station = { ...sess("review-station"), task_short_ids: ["ct-1"] };
-    const d = carriedOfDeploy(deploy("dp-1", 1, { commits: 3, sessions: [station, sess("s2")], commit_rows: rows }), credit);
-    expect(d.sessions.map((s) => [s.id, s.title])).toEqual([["s2", "Session s2"], ["shipper", "Shipper"]]);
+    const d = carriedOfDeploy(deploy("dp-1", 30, { commits: 3, sessions: [station, sess("s2")], commit_rows: rows }), credit);
+    expect(d.sessions.map((s) => [s.id, s.title])).toEqual([["s2", "Session s2"], ["second", "Shipper second"]]);
     expect(d.branchesKnown).toBe(true);
-    const old = carriedOfDeploy(deploy("dp-1", 1, { commits: 3, sessions: [sess("review-station"), sess("s2")], commit_rows: rows }), credit);
+    const old = carriedOfDeploy(deploy("dp-1", 30, { commits: 3, sessions: [sess("review-station"), sess("s2")], commit_rows: rows }), credit);
     expect(old.sessions.map((s) => s.id)).toEqual(["s2", "review-station"]);
   });
 });
 
-describe("queue slicing around a running deploy", () => {
-  const q = queueCommits([
-    { key: "a", session: null, ci: "passed", commits: [commit("c1aaaaaa", 1), commit("c3aaaaaa", 3)] },
-    { key: "b", session: null, ci: "passed", commits: [commit("c2aaaaaa", 2), commit("c4aaaaaa", 4)] },
-  ]);
-  test("newest first; the deploy sends its commit and older, Next deploy keeps the newer", () => {
+describe("the queue in main's order", () => {
+  const groups = (main?: boolean) => [
+    { key: "a", session: null, ci: "passed" as const, commits: [commit("c1aaaaaa", 9, main ? { main_at: 1 } : {}), commit("c3aaaaaa", 3, main ? { main_at: 3 } : {})] },
+    { key: "b", session: null, ci: "passed" as const, commits: [commit("c2aaaaaa", 2, main ? { main_at: 2 } : {}), commit("c4aaaaaa", 4, main ? { main_at: 4 } : {})] },
+  ];
+  const q = queueCommits(groups(true));
+  test("by when each reached main, else the server's order, never by commit time", () => {
     expect(q.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa", "c2aaaaaa", "c1aaaaaa"]);
+    expect(queueCommits(groups(false)).map((c) => c.sha)).toEqual(["c1aaaaaa", "c3aaaaaa", "c2aaaaaa", "c4aaaaaa"]);
+  });
+  test("a deploy sends its commit and older, Next deploy keeps the newer", () => {
     expect(upTo(q, "c2aaaaa").map((c) => c.sha)).toEqual(["c2aaaaaa", "c1aaaaaa"]);
     expect(after(q, "c2aaaaa").map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
   });
   test("a sha not waiting sends nothing new and leaves everything next", () => {
     expect(upTo(q, "ffffffff")).toEqual([]);
     expect(after(q, "ffffffff")).toHaveLength(4);
+    const going = deploy("dp-3", 3, { status: "running", sha: "ffffffff" });
+    expect(splitQueue(q, [going])).toMatchObject({ going: { short_id: "dp-3" }, sending: [] });
+    expect(splitQueue(q, [deploy("dp-4", 4, { status: "running", sha: "c2aaaaaa" })]).next.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
   });
 });
 
@@ -160,12 +195,21 @@ describe("what a card carried", () => {
     const retried = [deploy("dp-5", 5, { sha: "x" }), deploy("dp-4", 4, { sha: "x", status: "failed", commits: 1, commit_rows: [{ sha: "x", subject: "y", conversation_id: "s9" }] })];
     expect(carriedOfAttempts(retried, queue, noRuns).sessions.map((s) => s.id)).toEqual(["s9"]);
   });
+  test("an unfinished deploy at a sha no longer waiting lists what it recorded", () => {
+    const queue = [commit("e2aaaaaa", 2, { session: sess("s2") })];
+    const going = deploy("dp-6", 6, { status: "running", sha: "f9aaaaaa", commits: 1, commit_rows: [{ sha: "f9aaaaaa", subject: "y", conversation_id: "s7" }] });
+    expect(carriedOfAttempts([going], queue, noRuns).sessions.map((s) => s.id)).toEqual(["s7"]);
+  });
 });
 
 describe("deploy cards", () => {
   test("every attempt at one sha shares a card, the newest leading", () => {
     const ds = [deploy("dp-9", 9, { sha: "s2" }), deploy("dp-8", 8, { sha: "s1" }), deploy("dp-7", 7, { sha: "s2", status: "failed" }), deploy("dp-6", 6, { sha: null })];
     expect(attemptGroups(ds).map((g) => g.map((d) => d.short_id))).toEqual([["dp-9", "dp-7"], ["dp-8"], ["dp-6"]]);
+  });
+  test("a rollback or redeploy stands on its own card, never folded with a deploy of the same sha", () => {
+    const ds = [deploy("dp-4", 4, { sha: "s1", action: "rollback" }), deploy("dp-3", 3, { sha: "s1", action: "redeploy" }), deploy("dp-2", 2, { sha: "s1" }), deploy("dp-1", 1, { sha: "s1", status: "failed" })];
+    expect(attemptGroups(ds).map((g) => g.map((d) => d.short_id))).toEqual([["dp-4"], ["dp-3"], ["dp-2", "dp-1"]]);
   });
 
   test("your sessions: each counted once by its newest work, each bucket linking to its card", () => {
@@ -185,10 +229,14 @@ describe("deploy cards", () => {
     expect(Object.fromEntries(newer)).toEqual({ a: "next", b: "dp-3" });
   });
 
-  test("a task's newest place on main", () => {
-    const queue = [commit("q1aaaaaa", 5, { task: "ct-1" })];
-    const ds = [deploy("dp-1", 1, { tasks: [{ short_id: "ct-2" }] }), deploy("dp-2", 2, { commit_rows: [{ sha: "z", subject: "z", tasks: ["ct-1", "ct-2"] }] })];
-    expect(Object.fromEntries(tasksOnMain(queue, ds))).toEqual({ "ct-1": "next", "ct-2": "dp-2" });
+  test("a task's newest place on main: next, the deploy sending it, else the newest deploy that carried it", () => {
+    const queue = [commit("q2aaaaaa", 6, { task: "ct-3" }), commit("q1aaaaaa", 5, { task: "ct-1" })];
+    const ds = [
+      deploy("dp-1", 1, { tasks: [{ short_id: "ct-2" }] }),
+      deploy("dp-2", 2, { commit_rows: [{ sha: "z", subject: "z", tasks: ["ct-1", "ct-2", "ct-4"] }] }),
+      deploy("dp-3", 3, { status: "running", sha: "q1aaaaaa" }),
+    ];
+    expect(Object.fromEntries(tasksOnMain(queue, ds))).toEqual({ "ct-3": "next", "ct-1": "dp-3", "ct-2": "dp-2", "ct-4": "dp-2" });
   });
 });
 
