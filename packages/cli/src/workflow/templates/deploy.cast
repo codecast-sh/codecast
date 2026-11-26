@@ -13,7 +13,7 @@
 // blocker on the task and stops at Deploy stuck. A run with no merged commit
 // stops at once at Not merged. The wait parks: while it stands here the run
 // holds no slot and no session. A flow that composes it may name targets the
-// change does not wait for (`except="aivery-operator"`): one held back on
+// change does not wait for (`except="agent-worker"`): one held back on
 // purpose, whose live sha is not what the change's watch should start on; it
 // still holds the targets that go after it. It runs in the run's checkout, never
 // the run's worktree: what it needs is merge.json's sha, origin and the

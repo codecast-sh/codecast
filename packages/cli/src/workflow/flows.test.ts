@@ -116,7 +116,7 @@ describe("expanding a segment", () => {
   test("a segment's params read the composing node's attributes, empty when it sets none", () => {
     const main = (attrs: string) => `digraph m { start [shape=Mdiamond] deploy [flow="deploy"${attrs}] exit [shape=Msquare] start -> deploy -> exit }`;
     const wait = (attrs: string) => parseWorkflowSource(main(attrs), root).nodes.get("deploy__wait")!.script!;
-    expect(wait(`, except="aivery-operator"`)).toContain(`--except "aivery-operator"`);
+    expect(wait(`, except="agent-worker"`)).toContain(`--except "agent-worker"`);
     expect(wait("")).toContain(`--except ""`);
     // send defaults to release; a flow whose deploys a person sends composes it empty and only waits.
     expect(wait("")).toContain(`--send "release"`);

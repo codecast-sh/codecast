@@ -167,8 +167,8 @@ describe("line profile (LP2)", () => {
 
   test("a finder names itself for people: label, a one-line what, and its group", () => {
     const finder = (extra: string) => `[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\n${extra}`;
-    const parsed = parseLineProfileText(finder(`label = "Aivery corrections"\nwhat = "A thumbs-down on one of Aivery's posts"\ngroup = "people"`));
-    expect(parsed.values.finders![0]).toMatchObject({ label: "Aivery corrections", what: "A thumbs-down on one of Aivery's posts", group: "people" });
+    const parsed = parseLineProfileText(finder(`label = "Bot corrections"\nwhat = "A thumbs-down on one of the bot's posts"\ngroup = "people"`));
+    expect(parsed.values.finders![0]).toMatchObject({ label: "Bot corrections", what: "A thumbs-down on one of the bot's posts", group: "people" });
     expect(parseLineProfileText(finder("")).values.finders![0]).not.toHaveProperty("label");
     expect(() => parseLineProfileText(finder(`group = "ops"`))).toThrow('[[line.finders]] "a" group must be one of conversations, people, product, pipeline');
   });

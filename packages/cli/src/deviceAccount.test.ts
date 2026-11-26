@@ -13,9 +13,9 @@ import {
 
 describe("device account switch", () => {
   test("a changed user id is a restart, the same id is not", () => {
-    expect(accountSwitchRestartReason("dev", "aivery")).toMatch(/dev/);
+    expect(accountSwitchRestartReason("dev", "ops")).toMatch(/dev/);
     expect(accountSwitchRestartReason("dev", "dev")).toBeNull();
-    expect(accountSwitchRestartReason(null, "aivery")).toBeNull();
+    expect(accountSwitchRestartReason(null, "ops")).toBeNull();
   });
 
   test("the stamp names the previous account only when it differs", () => {
@@ -23,8 +23,8 @@ describe("device account switch", () => {
     expect(readDeviceAccountStamp(dir)).toBeNull();
     writeDeviceAccountStamp(dir, "dev");
     expect(readDeviceAccountStamp(dir)).toBe("dev");
-    expect(previousAccountToClaim("dev", "aivery")).toBe("dev");
-    expect(previousAccountToClaim("aivery", "aivery")).toBeNull();
+    expect(previousAccountToClaim("dev", "ops")).toBe("dev");
+    expect(previousAccountToClaim("ops", "ops")).toBeNull();
     expect(fs.statSync(path.join(dir, "device-account.json")).mode & 0o077).toBe(0);
   });
 

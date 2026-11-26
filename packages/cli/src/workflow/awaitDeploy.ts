@@ -488,8 +488,8 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
 
 /**
  * The run's duties for a merged commit, from the targets that commit declares: never the checkout's working tree or
- * the server's published list, either of which can still name a target the commit removed (aivery-operator, waited on
- * for 23h from Nov 20 after union-mobile dropped it).
+ * the server's published list, either of which can still name a target the commit removed (an agent target, waited on
+ * for 23h from Nov 20 after a repo dropped it).
  */
 export async function landedDuties(cwd: string, merged: { sha: string; files: ReadonlyArray<string> }, opts: Pick<AwaitDeployOptions, "except" | "send">): Promise<DeployDuties> {
   const { commitTargets } = await import("../lineDeploy.js");
