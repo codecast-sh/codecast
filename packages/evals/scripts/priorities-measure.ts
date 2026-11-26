@@ -24,6 +24,8 @@
 //       as the pass scores it  placement and standing together, the quantity of the pass's seeded session mapping
 //     Read "as the pass scores it" against the pass's 0.86 (its --seed-golden run) only at --holdout 0, where both
 //     replays hold the same goals; with goals held out the seed has fewer distractors, so it reads a little high.
+//     --local runs the classifier here, on the working tree's prompt and the evals' key, with prod supplying only the
+//     sessions' facts (read-only), saved to <out>/facts.json; --facts <path> reuses them with no prod read at all.
 //   bun packages/evals/scripts/priorities-measure.ts --rescore <result.json> [--golden <path>] [--out <dir>]
 //     scores a saved run's produced priorities again, without running the pass.
 //
@@ -40,7 +42,8 @@ import { join, resolve } from 'node:path';
 
 import { STRONG_MODEL, modelCost, parseJsonBlock, postMessages, replyText } from '../../convex/convex/lib/anthropic';
 import { PRIORITY_PASS_MODEL, PRIORITY_PASS_SYSTEM, type PassPriority } from '../../convex/convex/lib/priorityPass';
-import { PRIORITY_CLASSIFIER_MODEL, type ClassifierChoice } from '../../convex/convex/lib/priorityClassifier';
+import { PRIORITY_CLASSIFIER_MODEL, classifierPriorities, classifierRequest, parseClassifierReply, type ClassifierChoice, type ClassifierTask } from '../../convex/convex/lib/priorityClassifier';
+import type { EvalSession } from '../../convex/convex/priorityClassifierEval';
 import { evalsApiKey } from '../src/adapters/apiCall';
 import { REPO_ROOT } from '../src/paths';
 
@@ -127,8 +130,9 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
   const recall = { matched: goldenActive.filter((g) => matchedGolden.has(g.id)).length, of: goldenActive.length, missed: goldenActive.filter((g) => !matchedGolden.has(g.id)).map((g) => g.id) };
   const precision = { matched: producedActive.filter((p) => goldenOf.has(p.key)).length, of: producedActive.length, unmatched: producedActive.filter((p) => !goldenOf.has(p.key)).map((p) => p.key) };
 
+  read = byLabelId(read);
   const holder = new Map<string, string>();
-  for (const p of produced) for (const s of p.sessions) holder.set(s, p.key);
+  for (const p of produced) for (const s of p.sessions) holder.set(labelId(s), p.key);
   const labels: Array<[string, string]> = [...Object.entries(golden.session_labels), ...golden.standing_sessions.map((s) => [s, 'standing'] as [string, string])];
   const sessionResults = labels.filter(([s]) => read.has(s)).map(([session, label]) => {
     const by = holder.get(session) ?? null;
@@ -231,6 +235,10 @@ export function modelJudge(apiKey: string) {
 
 // ---------------------------------------------------------------- the classifier's score
 
+/** A golden label names a session by its 7-character short id; a run names one whose short id collides by a longer prefix of its id (priorityPassInputs sessionId). */
+const labelId = (id: string) => id.slice(0, 7);
+const byLabelId = (read: Map<string, string>) => new Map([...read].map(([id, title]) => [labelId(id), title] as [string, string]));
+
 /** The golden priorities held out of a classifier replay's seed: every `every`th (none at 0). */
 export function heldOut(golden: Golden, every: number): Set<string> {
   return new Set(every > 0 ? golden.priorities.filter((_, i) => i % every === every - 1).map((g) => g.id) : []);
@@ -245,8 +253,9 @@ export function heldOut(golden: Golden, every: number): Set<string> {
  */
 export function scoreClassifier(golden: Golden, produced: Produced[], read: Map<string, string>, held: Set<string>) {
   const goldenOf = (key: string) => golden.priorities[Number(/:pri-(\d+)$/.exec(key)?.[1] ?? 0) - SEED_BASE - 1]?.id ?? null;
+  read = byLabelId(read);
   const holder = new Map<string, string>();
-  for (const p of produced) for (const id of p.sessions) holder.set(id, p.key);
+  for (const p of produced) for (const id of p.sessions) holder.set(labelId(id), p.key);
   const labels: Array<[string, string]> = [...Object.entries(golden.session_labels), ...golden.standing_sessions.map((id) => [id, 'standing'] as [string, string])];
   const results = labels.filter(([id]) => read.has(id)).map(([session, label]) => {
     const by = holder.get(session) ?? null;
@@ -328,14 +337,14 @@ async function main() {
         args: { ...rescore.args, golden: goldenPath },
       }
     : classifier
-      ? runClassifier(golden, goldenPath, arg)
+      ? process.argv.includes('--local') ? await runClassifierLocal(golden, goldenPath, arg) : runClassifier(golden, goldenPath, arg)
       : runPasses(golden, goldenPath, arg);
   const { produced, read, args } = run;
   if (classifier) return reportClassifier(golden, run, out, rescore ? home(arg('rescore')) : null);
   // One workspace is scored only against the golden priorities whose sessions it read.
   const scopedGolden: Golden = args.workspace === 'all'
     ? golden
-    : { ...golden, priorities: golden.priorities.filter((g) => Object.entries(golden.session_labels).some(([s, id]) => id === g.id && read.has(s))) };
+    : { ...golden, priorities: golden.priorities.filter((g) => Object.entries(golden.session_labels).some(([s, id]) => id === g.id && byLabelId(read).has(s))) };
 
   const { judge, spent } = modelJudge(key!);
   const s = await score(scopedGolden, produced, read, judge, castTaskStatus);
@@ -492,6 +501,117 @@ function runClassifier(golden: Golden, goldenPath: string, arg: (name: string, f
     workspaces: runs.map((r) => ({ workspace: r.workspace, name: r.name, scored: r.scored, sessions_read: r.result.sessions_read, cost_usd: r.result.cost_usd, placements: r.result.placements })),
     passUsd: runs.reduce((sum, r) => sum + r.result.cost_usd, 0),
     args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk: null, seed_golden: true, classifier: true, model, holdout },
+  };
+}
+
+/** What live would ask in one workspace over the window (evalFacts), read once from prod: the classifier's whole input but the priorities. */
+type ClassifierFacts = { person: string; sessions: EvalSession[]; tasks: ClassifierTask[]; sessions_read: Array<{ id: string; title: string }> };
+
+/** Reads one workspace's facts through passInputs and evalFacts, chunk by chunk as evalClassify does. Read-only. */
+function readClassifierFacts(user_id: string, workspace: string, window_start: number, window_end: number, taskIds: string[]): ClassifierFacts {
+  const now = Math.min(window_end + 5 * 60_000, Date.now());
+  const facts: ClassifierFacts = { person: '', sessions: [], tasks: [], sessions_read: [] };
+  let cursor = window_start;
+  for (;;) {
+    const read = convexRun<{ input: { person: string; sessions: Array<{ id: string; title: string; kind?: string; typed: Array<{ at: number }>; pin_events: Array<{ at: number }>; last_active: number }> }; more: boolean; read_to: number }>(
+      'priorityPassInputs:passInputs', { user_id, workspace, now, window_start: cursor });
+    facts.person = read.input.person;
+    const firstAt = (s: (typeof read.input.sessions)[number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
+    const chunk = convexRun<{ sessions: EvalSession[]; tasks: ClassifierTask[] }>('priorityClassifierEval:evalFacts', {
+      workspace,
+      sessions: read.input.sessions.filter((s) => s.kind !== 'role').map((s) => ({ id: s.id, first_at: firstAt(s) })),
+      tasks: facts.tasks.length ? [] : taskIds,
+    });
+    if (!facts.tasks.length) facts.tasks = chunk.tasks;
+    facts.sessions.push(...chunk.sessions);
+    facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: s.id, title: s.title })));
+    if (!read.more || read.read_to <= cursor) return facts;
+    cursor = read.read_to;
+  }
+}
+
+/**
+ * --local: the classifier replay run here, on the working tree's prompt and
+ * the evals' key, so a prompt or input change is measured before it deploys.
+ * Prod only supplies the facts (read-only), saved to <out>/facts.json and
+ * reused with --facts <path>. The loop is evalClassify's: oldest first, a
+ * child takes its placed parent's placement, a "new" at the title is asked
+ * again at the first pin, and each placement becomes an example for later
+ * sessions. Each ask's reason is kept in the result.
+ */
+async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name: string, fallback?: string) => string): Promise<PassRun> {
+  const key = evalsApiKey();
+  if (!key) throw new Error('no evals API key: set CODECAST_EVALS_ANTHROPIC_KEY or the keychain item (./evals doctor)');
+  const model = process.argv.includes('--model') ? arg('model') : PRIORITY_CLASSIFIER_MODEL;
+  const holdout = Number(arg('holdout', '4'));
+  const held = heldOut(golden, holdout);
+  const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
+  const factsPath = process.argv.includes('--facts') ? resolve(arg('facts').replace(/^~/, homedir())) : null;
+  type Saved = { args: { from: string; to: string; workspace: string }; window_start: number; workspaces: Array<{ workspace: string; name: string; facts: ClassifierFacts }> };
+  let saved: Saved;
+  if (factsPath) saved = JSON.parse(readFileSync(factsPath, 'utf8'));
+  else {
+    const { scope, from, to, user_id, workspaces, window_start, window_end } = replayScope(golden, arg);
+    const taskIds = [...new Set(golden.priorities.flatMap((g) => (g.critical ?? []).flatMap((s) => (s.task ? [s.task] : []))))];
+    saved = { args: { from, to, workspace: scope }, window_start, workspaces: workspaces.map((w) => {
+      console.error(`${w.name}: reading facts…`);
+      return { ...w, facts: readClassifierFacts(user_id, w.workspace, window_start, window_end, taskIds) };
+    }) };
+  }
+  let usd = 0;
+  const ask = async (input: Parameters<typeof classifierRequest>[0]) => {
+    for (let attempt = 0; ; attempt++) {
+      const res = await postMessages(classifierRequest(input, model), { apiKey: key });
+      if (res?.ok) {
+        const body = await res.json();
+        usd += modelCost(model, body.usage);
+        const json = parseJsonBlock(replyText(body));
+        return { choice: parseClassifierReply(json, input), reason: String((json as { reason?: unknown })?.reason ?? '') };
+      }
+      if (attempt >= 3) return { choice: null, reason: `API ${res?.status ?? 'no key'}` };
+      await Bun.sleep(2_000 * (attempt + 1));
+    }
+  };
+  const runs = await Promise.all(saved.workspaces.map(async (w) => {
+    const priorities = classifierSeed(golden, saved.window_start, held);
+    const tasks = new Map(w.facts.tasks.map((t) => [t.short_id, t]));
+    const placements: Array<{ session: string; title: string; choice: ClassifierChoice | null; asks: Array<{ trigger: string; choice: ClassifierChoice | null; reason: string }>; inherited_from?: string }> = [];
+    const placementOf = (id: string) => {
+      for (const p of priorities) for (const s of p.sessions) if (s.id === id) return { priority: p.short_id, step: s.step_key };
+      return null;
+    };
+    for (const s of w.facts.sessions) {
+      const inherited = s.parent ? placementOf(s.parent) : null;
+      let choice: ClassifierChoice | null = inherited;
+      const asks: (typeof placements)[number]['asks'] = [];
+      if (!inherited) {
+        for (const a of s.asks) {
+          if (asks.length && choice !== 'new') break;
+          const reply = await ask({ person: w.facts.person, priorities: classifierPriorities(priorities, tasks), session: a.session });
+          choice = reply.choice;
+          asks.push({ trigger: a.trigger, ...reply });
+        }
+      }
+      placements.push({ session: s.id, title: s.title, choice, asks, ...(inherited ? { inherited_from: s.parent! } : {}) });
+      if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
+    }
+    const scored = saved.args.workspace !== 'all' || w.facts.sessions_read.some((s) => labeled.has(s.id));
+    return { workspace: w.workspace, name: w.name, scored, sessions_read: w.facts.sessions_read, priorities, placements };
+  }));
+  const scoredRuns = runs.filter((r) => r.scored);
+  const out = resolve(arg('out', join(homedir(), '.codecast', 'emergent-goals', 'calibration', new Date().toISOString().replace(/[:.]/g, '-'))).replace(/^~/, homedir()));
+  if (!factsPath) {
+    mkdirSync(out, { recursive: true });
+    writeFileSync(join(out, 'facts.json'), JSON.stringify(saved));
+    console.error(`facts saved: ${join(out, 'facts.json')} (reuse with --facts)`);
+  }
+  return {
+    read: new Map(scoredRuns.flatMap((r) => r.sessions_read.map((s) => [s.id, s.title] as [string, string]))),
+    produced: producedOf(scoredRuns.map((r) => ({ name: r.name, priorities: r.priorities }))),
+    scoredNames: scoredRuns.map((r) => r.name),
+    workspaces: runs.map(({ priorities: _, ...r }) => r),
+    passUsd: usd,
+    args: { golden: goldenPath, user: process.argv.includes('--user') ? arg('user') : '', workspace: saved.args.workspace, from: saved.args.from, to: saved.args.to, chunk: null, seed_golden: true, classifier: true, model, holdout },
   };
 }
 

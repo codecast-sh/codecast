@@ -13,6 +13,7 @@ import { passActivity } from "./lib/priorityPassSchedule";
 import type { PriorityCorrection, PriorityRow, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Ctx, OWN_SCAN_READ, type Priority, type Result, correctionOut, echo, owned, positionsOf } from "./priorityRead";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 
 /** Where the person moves a priority: a position (1 = first), or one up or down from where it shows. */
 type MoveTo = number | "up" | "down";
@@ -160,11 +161,8 @@ export async function doMerge(ctx: Ctx & { scheduler: any }, viewer: Id<"users">
 
 /** One of the viewer's own sessions, by short id or id, or the plain reason it is not. */
 async function ownSession(ctx: Ctx, viewer: Id<"users">, ref: string): Promise<Result<Doc<"conversations">>> {
-  const id = ctx.db.normalizeId("conversations", ref.trim());
-  const conv: Doc<"conversations"> | null = id
-    ? await ctx.db.get(id)
-    : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.trim())).first();
-  if (!conv || String(conv.user_id) !== String(viewer)) return { error: `no session ${ref} of yours` };
+  const conv: Doc<"conversations"> | null = await findConversationByAnyRefWhere(ctx, ref, (c) => String(c.user_id) === String(viewer));
+  if (!conv) return { error: `no session ${ref} of yours` };
   return conv;
 }
 

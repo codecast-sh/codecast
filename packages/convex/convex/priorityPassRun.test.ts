@@ -138,6 +138,33 @@ describe("runPass", () => {
   });
 });
 
+describe("a short id other conversations share", () => {
+  test("the pass names the person's session by a prefix no other conversation shares, and maps that one, not an older one of someone else's", async () => {
+    const w = await world();
+    const [theirs, mine, shortId] = await w.t.run(async (ctx) => {
+      const base = { agent_type: "claude_code", title: "dupe", first_prompt: "dupe", started_at: w.now - DAY, updated_at: w.now - H, message_count: 3, status: "active" };
+      const theirs = await ctx.db.insert("conversations", { ...base, user_id: w.carl, team_id: w.other, session_id: "carl-dupe", short_id: "tmp" } as any);
+      const mine = await ctx.db.insert("conversations", { ...base, user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full", session_id: "ana-dupe", short_id: "tmp" } as any);
+      // As in production, a short id is the first 7 characters of the id; here both carry Ana's.
+      const shortId = String(mine).slice(0, 7);
+      for (const id of [theirs, mine]) await ctx.db.patch(id, { short_id: shortId });
+      return [theirs, mine, shortId] as const;
+    });
+    await w.send(w.ana, mine, w.now - 2 * H, "get grader faults under ten percent");
+    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    const named = input.sessions.find((s: any) => s.id.startsWith(shortId)).id;
+    // A prefix of Ana's id longer than the short id, which Carl's id does not share.
+    expect(named.length).toBeGreaterThan(shortId.length);
+    expect(String(mine).startsWith(named)).toBe(true);
+    expect(String(theirs).startsWith(named)).toBe(false);
+    model.reply = () => JSON.stringify({ priorities: [proposal({ steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], sessions: [{ session: named, step: "s1" }] })], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const [created] = await w.priorities();
+    expect(await w.conversation(mine)).toMatchObject({ priority_id: created._id, priority_step_key: "s1" });
+    expect((await w.conversation(theirs)).priority_id).toBeUndefined();
+  });
+});
+
 describe("relative rank across pass runs", () => {
   test("a pass run after the person's moves keeps what they placed in their order; a new priority slots in between them", async () => {
     const w = await world();

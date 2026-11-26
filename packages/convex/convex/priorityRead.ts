@@ -15,6 +15,7 @@ import { attributePlans, isWorkflowSession, orderSessions, type PlanFacts } from
 import type { PriorityCorrection, PriorityDetail, PriorityLinkedSession, PriorityLinkWhy, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { planFactsOf } from "./lib/priorityLinks";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 
 export const DAY = 86_400_000;
 /** Sessions a list shows per priority, and how many of the owner's mapped sessions it reads to count them before the pass stored a count ("50+" past that). */
@@ -209,6 +210,8 @@ type LinkPlan = PlanFacts & { current: string | null };
 
 type LinkReads = {
   conv: (id: string) => Promise<Doc<"conversations"> | null>;
+  /** A step's session ref (a short id), as the priority owner's own conversation. */
+  ownedConv: (ref: string, owner: string) => Promise<Doc<"conversations"> | null>;
   task: (shortId: string) => Promise<Doc<"tasks"> | null>;
   plan: (id: string) => Promise<LinkPlan | null>;
   listed: (c: Doc<"conversations">) => Promise<boolean>;
@@ -238,8 +241,14 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     const id = ctx.db.normalizeId("conversations", ref);
     return id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   });
+  // A step's session ref is a short id, a 7-character prefix other conversations share: it means the priority owner's own.
+  const ownedConvs = memo((key): Promise<Doc<"conversations"> | null> => {
+    const [owner, ref] = key.split(" ");
+    return findConversationByAnyRefWhere(ctx, ref, (c) => String(c.user_id) === owner);
+  });
   return {
     conv: convs,
+    ownedConv: (ref, owner) => ownedConvs(`${owner} ${ref}`),
     task: memo((shortId) => ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first()),
     plan: memo(async (id): Promise<LinkPlan | null> => {
       const plan: Doc<"plans"> | null = await ctx.db.get(id as Id<"plans">);
@@ -288,7 +297,7 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     const plans: Array<string | null> = [];
     let allDone = true;
     for (const ref of s.refs) {
-      if (ref.kind === "session") await add(s.key, await reads.conv(ref.id), "linked");
+      if (ref.kind === "session") await add(s.key, await reads.ownedConv(ref.id, String(p.user_id)), "linked");
       if (ref.kind !== "task") continue;
       const task = await reads.task(ref.id);
       allDone &&= task?.status === "done";

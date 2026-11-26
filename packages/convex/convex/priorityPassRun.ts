@@ -28,6 +28,7 @@ import { PRIORITY_PASS_MODEL, mergePriorities, priorityPassRequest, type MergePl
 import { stepKeyMax, holdPersonSteps, isPersonHeld, withPersonFields } from "./lib/priorityPassSteps";
 import { SESSION_PAGE, clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
@@ -466,13 +467,9 @@ export const applyPlan = internalMutation({
 
     const { move, recount } = sessionMover(ctx);
 
-    const conversationOf = async (ref: string): Promise<Doc<"conversations"> | null> => {
-      const id = ctx.db.normalizeId("conversations", ref);
-      const conv: Doc<"conversations"> | null = id
-        ? await ctx.db.get(id)
-        : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
-      return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
-    };
+    // A short id is a 7-character prefix other conversations share: the person's own in this workspace is the one the pass read.
+    const conversationOf = (ref: string): Promise<Doc<"conversations"> | null> =>
+      findConversationByAnyRefWhere(ctx, ref, (c) => inWorkspace(vis, c, args.user_id, args.workspace));
     // The person's placement, a known link and the classifier's stand, and a priority they said a session is not part of never gets it.
     const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
       (!!conv.priority_set_by && conv.priority_set_by !== "pass") || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));

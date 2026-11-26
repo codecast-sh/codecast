@@ -68,7 +68,24 @@ export type PassInputs = {
   superseded: Id<"priority_corrections">[];
 };
 
-const sessionId = (conv: Doc<"conversations">) => conv.short_id ?? String(conv._id);
+/**
+ * A session's id as the pass, its replays and step refs name it: its short id,
+ * or, when other conversations share that 7-character prefix of the id, the
+ * shortest longer prefix of its own id none of them shares (the form `cast
+ * read` prints for a collision, jx7137jn). findConversationByAnyRefWhere then
+ * lands on this one; a bare short id would land on whichever collider it
+ * accepts first, often a workflow's station agent of the same person.
+ */
+export async function sessionId(ctx: { db: any }, conv: Doc<"conversations">): Promise<string> {
+  const own = String(conv._id);
+  if (!conv.short_id) return own;
+  const others = (await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", conv.short_id)).take(16))
+    .map((c: Doc<"conversations">) => String(c._id))
+    .filter((id: string) => id !== own);
+  if (!others.length) return conv.short_id;
+  for (let n = conv.short_id.length + 1; n < own.length; n++) if (!others.some((id: string) => id.startsWith(own.slice(0, n)))) return own.slice(0, n);
+  return own;
+}
 /** The person's own session, counting in this workspace (lib/prioritySessionVisibility: its team's only while listed there). */
 export const inWorkspace = async (vis: SessionVisibility, conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
   String(conv.user_id) === String(userId) && (await vis.workspaceOf(conv)) === workspace;
@@ -248,7 +265,7 @@ async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">): Promis
   // A fork (parent_message_uuid) is the person's own session from that point on, not a worker.
   if (!conv.parent_conversation_id || conv.parent_message_uuid) return { kind: "session" };
   const parent: Doc<"conversations"> | null = await ctx.db.get(conv.parent_conversation_id);
-  return { kind: "worker", parent: parent ? sessionId(parent) : String(conv.parent_conversation_id) };
+  return { kind: "worker", parent: parent ? await sessionId(ctx, parent) : String(conv.parent_conversation_id) };
 }
 
 /**
@@ -420,7 +437,7 @@ export const passInputs = internalQuery({
     for (const t of oldestFirst) {
       const conv = t.conv;
       sessions.push({
-        id: sessionId(conv),
+        id: await sessionId(ctx, conv),
         ...(await sessionKind(ctx, conv)),
         title: conv.title ?? "",
         first_prompt: conv.first_prompt ?? "",
@@ -474,10 +491,11 @@ export const passInputs = internalQuery({
         serves: p.serves ?? null,
         steps: p.steps,
         last_active_at: p.last_active_at,
-        sessions: readable.map((c) => ({
-          id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
+        // Only an active priority's sessions get the collision check: the pass maps into no other, and the reads stay bounded.
+        sessions: await Promise.all(readable.map(async (c) => ({
+          id: p.status === "active" ? await sessionId(ctx, c) : c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
           ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
-        })),
+        }))),
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
         ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),

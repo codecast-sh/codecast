@@ -25,8 +25,10 @@ import type { Doc } from "./_generated/dataModel";
 import { classifierPriorities, type ClassifierChoice, type ClassifierSession, type ClassifierTask } from "./lib/priorityClassifier";
 import { classifierReads } from "./lib/priorityClassifierHook";
 import type { PassPriority } from "./lib/priorityPass";
-import { LATE_MARGIN_MS, MINUTE, type PassInputs } from "./priorityPassInputs";
+import { LATE_MARGIN_MS, MINUTE, inWorkspace, type PassInputs } from "./priorityPassInputs";
 import { classifierTasks, classifyOnce, sessionFor } from "./priorityClassifier";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { sessionVisibility } from "./lib/prioritySessionVisibility";
 
 // Codegen catches up on the next push.
 const fns = internal as any;
@@ -60,12 +62,11 @@ export type ClassifierEvalResult = {
  * message), else at its first activity in the window.
  */
 export const evalFacts = internalQuery({
-  args: { workspace: v.string(), sessions: v.array(v.object({ id: v.string(), first_at: v.number() })), tasks: v.array(v.string()) },
+  args: { user_id: v.id("users"), workspace: v.string(), sessions: v.array(v.object({ id: v.string(), first_at: v.number() })), tasks: v.array(v.string()) },
   handler: async (ctx, args): Promise<{ sessions: EvalSession[]; tasks: ClassifierTask[] }> => {
-    const byRef = async (ref: string): Promise<Doc<"conversations"> | null> => {
-      const id = ctx.db.normalizeId("conversations", ref);
-      return id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", ref)).first();
-    };
+    // A short id is a 7-character prefix that other conversations share: the person's own, in this workspace, is the one passInputs read.
+    const vis = sessionVisibility(ctx);
+    const byRef = (ref: string): Promise<Doc<"conversations"> | null> => findConversationByAnyRefWhere(ctx, ref, (c) => inWorkspace(vis, c, args.user_id, args.workspace));
     const sessions: EvalSession[] = [];
     for (const { id, first_at } of args.sessions) {
       const conv = await byRef(id);
@@ -103,6 +104,7 @@ export const evalClassify = internalAction({
       const read: PassInputs = await ctx.runQuery(fns.priorityPassInputs.passInputs, { user_id: args.user_id, workspace: args.workspace, now, window_start: state.cursor_at });
       const firstAt = (s: PassInputs["input"]["sessions"][number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
       const facts: { sessions: EvalSession[]; tasks: ClassifierTask[] } = await ctx.runQuery(fns.priorityClassifierEval.evalFacts, {
+        user_id: args.user_id,
         workspace: args.workspace,
         sessions: read.input.sessions.filter((s) => s.kind !== "role").map((s) => ({ id: s.id, first_at: firstAt(s) })),
         tasks: tasks ? [] : taskIds,

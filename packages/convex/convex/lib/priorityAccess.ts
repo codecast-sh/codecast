@@ -12,6 +12,7 @@ import { sessionVisibility, type SessionVisibility } from "./prioritySessionVisi
 import { isSessionOwner } from "../sessionOwners";
 import type { PriorityRef, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "../_generated/dataModel";
+import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 
 export const FEATURE = "priorities" as const;
 /**
@@ -94,13 +95,13 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
 
   // A step ref shown to a teammate: a session listed to them, a task they can read, a pull request or commit in a repository of the team's.
   const shown = new Map<string, Promise<boolean>>();
-  const refShown = (ref: PriorityRef, teamId: string | null) => {
-    const key = `${ref.kind}:${ref.id}`;
+  const refShown = (ref: PriorityRef, teamId: string | null, owner: string) => {
+    const key = `${ref.kind}:${ref.id}:${owner}`;
     if (!shown.has(key)) {
       shown.set(key, (async () => {
         if (ref.kind === "session") {
-          const id = ctx.db.normalizeId("conversations", ref.id);
-          const conv: Doc<"conversations"> | null = id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.id)).first();
+          // A short id other conversations share: it means the priority owner's own.
+          const conv: Doc<"conversations"> | null = await findConversationByAnyRefWhere(ctx, ref.id, (c) => String(c.user_id) === owner);
           return !!conv && (await listed(conv));
         }
         if (ref.kind === "task") {
@@ -131,7 +132,7 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     for (const step of p.steps) {
       if (step.dropped) continue;
       const refs: PriorityRef[] = [];
-      for (const ref of step.refs) if (await refShown(ref, teamId)) refs.push(ref);
+      for (const ref of step.refs) if (await refShown(ref, teamId, String(p.user_id))) refs.push(ref);
       if (!refs.length && step.refs.length && step.refs.every((ref) => ref.kind === "session")) continue;
       out.push({ ...step, refs });
     }
