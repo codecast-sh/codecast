@@ -9475,6 +9475,11 @@ export async function scanInboxConversations(
           .query("conversations")
           .withIndex("by_wait_up_person", (q: any) => q.eq("wait_up_person", userId).gte("wait_up_at", dismissedCutoff))
           .order("desc")
+          // A killed or closed session waits on nobody, so it never takes a seat.
+          .filter((q: any) => q.and(
+            q.eq(q.field("inbox_killed_at"), undefined),
+            q.or(q.eq(q.field("inbox_closed_at"), undefined), q.neq(q.field("inbox_closed_at"), q.field("inbox_dismissed_at"))),
+          ))
           .take(INBOX_WINDOW_CAPS.escalated + 1),
       ]);
       if (nested.length > INBOX_WINDOW_CAPS.nested) truncated.add("nested");

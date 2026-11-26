@@ -331,6 +331,17 @@ describe("an escalated wait is in the inbox of whoever it rings (review of ct-10
     expect(perRow).toBe(0);
   });
 
+  test("killed and closed sessions with a standing stamp take no escalated seat, so 200 of them leave room for a live wait", async () => {
+    const db = escalated();
+    for (let i = 0; i < 200; i++) {
+      const gone = i % 2 ? { inbox_killed_at: EPOCH - H } : { inbox_closed_at: EPOCH - H, inbox_dismissed_at: EPOCH - H };
+      await db.insert("conversations", { user_id: BOT, org_role_id: "org_roles_r", role_started: true, status: "active", title: `gone${i}`, is_private: false, updated_at: EPOCH, started_at: EPOCH - H, message_count: 6, wait_up_at: EPOCH - 1_000 + i, wait_up_count: 6, wait_up_person: LEAD, ...gone });
+    }
+    const { sessions, truncated } = await computeInboxSessions({ db }, LEAD as any, { includeLiveness: false });
+    expect(ids(sessions)).toEqual(["bot_run"]);
+    expect(truncated).toEqual([]);
+  });
+
   test("an ended wait takes no escalated seat, even before its stamps are cleared", async () => {
     const db = escalated();
     // A message followed the escalation; the stamps are still on the row.

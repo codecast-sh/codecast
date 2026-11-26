@@ -14,6 +14,13 @@ describe("planCargoApply — session owners", () => {
     expect([up.fields.wait_up_at, up.refetch]).toEqual([4, false]);
   });
 
+  test("off the model a role filing or an owner stamp refetches nothing", () => {
+    const off = { _id: "s1", org_role_id: null };
+    expect(planCargoApply("sessions", { patch: { org_role_id: "r" } }, off).refetch).toBe(false);
+    expect(planCargoApply("sessions", { patch: { owners_changed_at: 2 } }, off).refetch).toBe(false);
+    expect(planCargoApply("sessions", { patch: { active_task_id: "t" } }, off).refetch).toBe(true);
+  });
+
   test("the owners model's fields land on a model row only, as the list ships them", () => {
     const patch = { needs_input_notified_key: "5:permission_blocked", wait_up_at: 4, wait_up_count: 5, role_started: true };
     expect(planCargoApply("sessions", { patch }, { _id: "s1", owners_model: true }).fields).toEqual(patch);

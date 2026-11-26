@@ -2,7 +2,7 @@
 import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { backfillRoleStartedPage } from "./lib/roleStartedBackfill";
+import { backfillRoleStartedPage, releaseBindingHoldsPage } from "./lib/roleStartedBackfill";
 
 // Stamp `role_started` on sessions a role started before spawn.recordHandStart
 // wrote it, so the owner rule gives them no implicit starter. A session is the
@@ -29,6 +29,28 @@ export const backfillRoleStarted = internalMutation({
     const res = await backfillRoleStartedPage(ctx, args);
     if (!res.dryRun && res.next) {
       await ctx.scheduler.runAfter(0, internal.ownerMigrations.backfillRoleStarted, { team_id: args.team_id, dryRun: false, numItems: args.numItems, ...res.next });
+    }
+    return res;
+  },
+});
+
+// Take a task binding's hold off the team's live sessions no role started
+// (lib/roleStartedBackfill releaseBindingHoldsPage says why). After
+// backfillRoleStarted; dry by default, continued by the scheduler on a real
+// run, idempotent.
+//   packages/convex/run.sh ownerMigrations:releaseBindingHolds '{"team_id":"<id>","dryRun":true}'
+export const releaseBindingHolds = internalMutation({
+  args: {
+    team_id: v.id("teams"),
+    dryRun: v.optional(v.boolean()),
+    roleIndex: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const res = await releaseBindingHoldsPage(ctx, args);
+    if (!res.dryRun && res.next) {
+      await ctx.scheduler.runAfter(0, internal.ownerMigrations.releaseBindingHolds, { team_id: args.team_id, dryRun: false, numItems: args.numItems, ...res.next });
     }
     return res;
   },

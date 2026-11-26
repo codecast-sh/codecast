@@ -1126,11 +1126,13 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
   // or hands it to a person (team sessions spec).
   if (c && await isTeamOwnedConversation(ctx, c._id, c)) return { change: "keep" };
   const change = await holdChangeFor(ctx, c);
-  if (change.kind === "keep") return { change: "keep" };
+  // Under the owner model a role owner takes a session from its starter, so a binding never files one no role started.
+  const model = change.kind !== "keep" && await ownersModelOn(ctx, c);
+  if (change.kind === "keep" || (model && change.kind !== "release" && !c.role_started)) return { change: "keep" };
   const actor = c.owner_user_id ?? c.user_id;
   if (change.kind === "release") {
     // Under the owner model a person target keeps the role, so the release names the role coming off.
-    const target: ReparentSessionTarget = await ownersModelOn(ctx, c) ? { kind: "owners", role: null } : { kind: "user", user_id: actor, mode: "add" };
+    const target: ReparentSessionTarget = model ? { kind: "owners", role: null } : { kind: "user", user_id: actor, mode: "add" };
     await performReparentSession(ctx, actor, { session_id: String(c._id), target, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
     return { change: "release", role: change.from.handle };
   }
