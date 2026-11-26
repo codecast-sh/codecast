@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { writeFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
+import type { ResumeRow } from "./runResume";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -94,7 +95,8 @@ function world(o: { check: string; verdicts: string[] }) {
 const isBrief = (body: string) => !/ is over: | stopped at |^Decide: /.test(body);
 
 /** The server: each reviewer leaves the next queued verdict on the task; the session fixes a.txt when a brief reaches it. */
-function server(w: ReturnType<typeof world>) {
+function server(w: ReturnType<typeof world>, o: { endAt?: string } = {}) {
+  let endAt = o.endAt;
   const calls: Array<{ route: string; body: any }> = [];
   const spawned: any[] = [];
   let verdict: { verdict: string; note: string; at: number } | null = null;
@@ -104,6 +106,11 @@ function server(w: ReturnType<typeof world>) {
     const body = structuredClone(JSON.parse(init?.body || "{}"));
     calls.push({ route, body });
     const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+    // A person stops the run as it reaches `endAt`, once: the runner stops there, its checkpoint written.
+    if (route === "/cli/workflow-runs/progress" && endAt && body.node_id === endAt && body.node_status === "running") {
+      endAt = undefined;
+      return reply({ ended: { status: "failed", reason: "stopped by a person" } });
+    }
     if (route === "/cli/work/get") return reply({ title: "Make a.txt good", status: "in_progress", ...(verdict ? { review_verdict: verdict } : {}) });
     if (route === "/cli/spawn") {
       spawned.push(body);
@@ -135,12 +142,12 @@ function server(w: ReturnType<typeof world>) {
   };
 }
 
-async function run(w: ReturnType<typeof world>) {
+async function run(w: ReturnType<typeof world>, resume?: ResumeRow) {
   const tip = git(w.root, "rev-parse", "feat");
-  writeFrozenChange(w.runDir, { source: "branch", session: CONV.slice(0, 7), conversation: CONV, base: git(w.root, "rev-parse", "main"), tip, branch: "feat", worktree: "change-ct-9", paths: ["a.txt"], shared: [], held: [] });
+  if (!resume) writeFrozenChange(w.runDir, { source: "branch", session: CONV.slice(0, 7), conversation: CONV, base: git(w.root, "rev-parse", "main"), tip, branch: "feat", worktree: "change-ct-9", paths: ["a.txt"], shared: [], held: [] });
   console.log = process.env.SHOW_RUN ? origLog : () => {};
   try {
-    return await runWorkflow(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change), { cwd: w.root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 });
+    return await runWorkflow(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change), { cwd: w.root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...(resume ? { resume } : {}) });
   } finally {
     console.log = origLog;
   }
@@ -179,6 +186,26 @@ describe("the shipped change flow, in a repository that ships straight to main",
     expect(git(w.origin, "rev-parse", "main")).toBe(git(w.root, "rev-parse", "feat"));
     expect(s.spawned).toHaveLength(1);
   }, 120_000);
+
+  // A run's facts are its own: what main says when it resumes (another mode, or a file that no longer parses) neither
+  // moves it off its path nor lets the checkout's ship command land it.
+  for (const [name, workspace] of [["now says pull request", `[ship]\nmode = "pr"\n`], ["no longer parses", `[ship\nmode = \n`]] as const) {
+    test(`a resumed direct run keeps its own facts when main ${name}: main's original ship command lands it`, async () => {
+      const w = world({ check: "test -f a.txt", verdicts: ["changes", "approve"] });
+      const s = server(w, { endAt: "direct_revise" });
+      expect(await run(w)).toBe("failed");
+      expect(s.briefs()).toEqual([]);
+      fs.writeFileSync(path.join(w.root, ".codecast", "workspace.toml"), workspace);
+      git(w.root, "commit", "-qam", "main changes how it ships");
+      git(w.root, "push", "-q", "origin", "main");
+      fs.writeFileSync(path.join(w.root, ".codecast", "line.toml"), `[line.commands]\ncheck = "true"\nship = "touch \\"$FAKE_STATE/pwned\\"; echo landed"\n`);
+      expect(await run(w, { status: "running", current_node_id: "direct_revise" })).toBe("completed");
+      expect(fs.existsSync(path.join(process.env.FAKE_STATE!, "pwned"))).toBe(false);
+      expect(s.briefs()).toHaveLength(1);
+      expect(w.calls().filter((c) => PR_PATH.includes(c))).toEqual([]);
+      expect(git(w.origin, "show", "main:a.txt")).toBe("good");
+    }, 120_000);
+  }
 
   test("a repository whose main runs CI on GitHub stays on the pull request path, whatever its mode says", async () => {
     const w = world({ check: "test -f a.txt", verdicts: ["approve"] });

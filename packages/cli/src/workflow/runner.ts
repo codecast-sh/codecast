@@ -11,7 +11,7 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
-import { factsFor, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
+import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
@@ -2196,10 +2196,11 @@ export type WorkflowRunOutcome = "completed" | "failed" | "invalid";
 export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<WorkflowRunOutcome> {
   const cwd = options.cwd || process.cwd();
   // What the repository's default branch says before anything runs (its ship mode), read only for a flow whose start
-  // routes on it: a start it decides runs, and shows, only its own path; a resumed run keeps the start it took.
-  let facts: Record<string, string>;
+  // routes on it: a start it decides runs, and shows, only its own path. A resumed run keeps the start it took and the
+  // facts it saved, and never reads them again: a main that says otherwise now cannot move it or pick its commands.
+  let facts: Record<string, string> = {};
   try {
-    facts = factsFor(graph, cwd);
+    if (!options.resume) facts = factsFor(graph, cwd);
     graph = runGraph(graph, facts, options.resume ? { resumeAt: options.resume.current_node_id } : {});
   } catch (err) {
     if (!(err instanceof StartFactsError)) throw err;
@@ -2345,6 +2346,12 @@ async function driveRun(
     // What the run learned before stays; what every run reads fresh (the
     // task, the profile, the run's ids) is read again.
     state.context = { ...resumeAt.context, ...initialContext };
+    // The working tree's profile came in above: a direct run checks and lands with the commands its facts saved.
+    pinDirectCommands(state.context);
+    if (!holdsItsFacts(graph, state.context)) {
+      console.error(`${c.red}✗ cannot resume: this run went its way on facts its checkpoint held, and this machine has no checkpoint of it${c.reset}`);
+      return "invalid";
+    }
     state.visitCounts = resumeAt.visit_counts;
     for (const [id, n] of Object.entries(state.visitCounts)) state.context[`${id}.visits`] = String(n);
     state.completed = resumeAt.completed;

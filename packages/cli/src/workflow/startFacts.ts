@@ -123,6 +123,16 @@ export function pinDirectCommands(context: Record<string, string>): void {
   context["line.commands.ship"] = context["land_ship"] ?? "";
 }
 
+/**
+ * Whether a resumed run holds the facts the start it kept went on. A run resumed from its row alone (no checkpoint on
+ * this machine) saved none, and a direct run without them would check and land with the working tree's commands.
+ */
+export function holdsItsFacts(graph: WorkflowGraph, context: Record<string, string>): boolean {
+  const start = startOf(graph);
+  const out = start ? graph.edges.filter((e) => e.from === start.id) : [];
+  return !(out.length === 1 && out[0].condition && readsOnlyFacts(out[0].condition) && !evalCondition(out[0].condition, context));
+}
+
 /** Whether a condition reads only start facts, each compared with = or != to one of its own values. */
 function readsOnlyFacts(condition: string): boolean {
   const walk = (n: any): boolean => {

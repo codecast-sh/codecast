@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { repoFlowsReport } from "./repoFlowsReport";
-import { decideStart, factsFor, keepStart, pinDirectCommands, reviewNodeOf, runGraph, shipModeOf, startFacts, StartFactsError } from "./startFacts";
+import { decideStart, factsFor, holdsItsFacts, keepStart, pinDirectCommands, reviewNodeOf, runGraph, shipModeOf, startFacts, StartFactsError } from "./startFacts";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { evalCondition } from "./condition";
 
@@ -162,6 +162,17 @@ describe("runGraph", () => {
     expect(direct.nodes.has("pr")).toBe(false);
     expect(graphHash(direct)).toBe(graphHash(decideStart(g, { ship_mode: "direct" })));
     expect(keepStart(g, null)).toBe(g);
+  });
+
+  test("a resumed run holds the facts its start went on, or it cannot go on: a direct run with none would land unpinned", () => {
+    const g = change();
+    const direct = runGraph(g, {}, { resumeAt: "land__ship" });
+    expect(holdsItsFacts(direct, { ship_mode: "direct", land_ship: "scripts/ship.sh" })).toBe(true);
+    // A run resumed from its row alone saved no facts.
+    expect(holdsItsFacts(direct, {})).toBe(false);
+    expect(holdsItsFacts(direct, { ship_mode: "pr" })).toBe(false);
+    // A pull request run needs none: its path is the one a run with no facts takes.
+    expect(holdsItsFacts(runGraph(g, {}, { resumeAt: "wait_main" }), {})).toBe(true);
   });
 
   test("a variant's station hung only on the pull request path stops a direct run, naming it", () => {
