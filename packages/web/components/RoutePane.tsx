@@ -47,6 +47,7 @@ const SessionMap = lazyPage("@/app/map/page", () => import("@/app/map/page"));
 // A web page as a pane: the address rides the query string (?u= / ?watch=).
 const Browser = lazyPage("@/app/browser/page", () => import("@/app/browser/page"));
 const Simulator = lazyPage("@/app/simulator/page", () => import("@/app/simulator/page"));
+const Triage = lazyPage("@/app/triage/page", () => import("@/app/triage/page"));
 // One component for the Org screen and every object's sheet on it, so opening
 // a sheet reconciles instead of remounting the screen (the conversation and
 // the map keep their place).
@@ -195,6 +196,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/map$/, paramNames: [], component: SessionMap },
   { pattern: /^\/browser$/, paramNames: [], component: Browser },
   { pattern: /^\/simulator$/, paramNames: [], component: Simulator },
+  { pattern: /^\/triage$/, paramNames: [], component: Triage },
   { pattern: /^\/org$/, paramNames: [], component: OrgScope },
   { pattern: /^\/org\/([^/]+)$/, paramNames: ["id"], component: OrgScope },
   { pattern: /^\/org\/([^/]+)\/([^/]+)$/, paramNames: ["view", "id"], component: OrgScope },

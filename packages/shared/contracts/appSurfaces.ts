@@ -43,6 +43,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("org", "the people and agent roles who carry the work, and what waits on you (/org/<or-N|@handle> opens one)"),
   dash("browser", "a web page as a pane: the address rides the query string (?u=<url>)"),
   dash("simulator", "an agent session's iOS simulator as a pane, live and touchable: the session rides the query string (?s=<session uuid>)"),
+  dash("triage", "the inbox grouped by who moves next (needs you, working, parked, settled), with a lab for trying each situation by hand"),
   dash("chat", "human channels and direct messages"),
   dash("search", "search across sessions, docs, tasks and people"),
   dash("notifications", "notification list"),
