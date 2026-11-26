@@ -226,33 +226,62 @@ describe("reservation-specific lock", () => {
     }
   });
 
-  // An orphan is told from a sibling by its adoption by launchd (pid 1), which only macOS promises: elsewhere a
-  // subreaper may adopt it, and a non-leader owner's lock is never reclaimed there.
-  test.skipIf(process.platform !== "darwin").each([
-    ["holds an orphan, fails closed", "sleep 60 >/dev/null 2>&1 & echo $$", true],
-    ["holds no orphan, is reclaimed", "echo $$", false],
-  ])("a dead owner that ran inside another's living group that %s", async (_label, inner, refused) => {
-    // The group's leader lives on; the owner inside it exits, leaving its child (if any) to init.
+  /** Run `fn` as if on `platform`: the orphan scan's soundness is the platform's, so each branch runs on any OS. */
+  async function onPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...real, value: platform });
+    try { return await fn(); } finally { Object.defineProperty(process, "platform", real); }
+  }
+
+  /** A living group whose member `inner` runs and exits; the owner's pid, and the pid of what it left (if anything). */
+  async function deadMemberOfLivingGroup(inner: string) {
     const leader = Bun.spawn(["/bin/bash", "-c", `bash -c '${inner}'; exec sleep 60 >/dev/null`], { stdout: "pipe", stderr: "ignore", detached: true });
     const reader = leader.stdout.getReader();
-    const ownerPid = Number(new TextDecoder().decode((await reader.read()).value).trim());
+    const [ownerPid, leftPid] = new TextDecoder().decode((await reader.read()).value).trim().split(/\s+/).map(Number);
     reader.releaseLock();
+    for (let i = 0; i < 200; i++) {
+      try { process.kill(ownerPid, 0); } catch { break; }
+      await Bun.sleep(25);
+    }
+    const parentOf = (pid: number) => Number(Bun.spawnSync(["ps", "-o", "ppid=", "-p", String(pid)]).stdout.toString().trim());
+    return { leader, ownerPid, leftParent: leftPid ? parentOf(leftPid) : undefined };
+  }
+
+  test("a dead owner inside another's living group that left no orphan is reclaimed where orphans go to launchd", async () => {
+    const { leader, ownerPid } = await deadMemberOfLivingGroup("echo $$");
     try {
-      for (let i = 0; i < 200; i++) {
-        try { process.kill(ownerPid, 0); } catch { break; }
-        await Bun.sleep(25);
-      }
+      fs.writeFileSync(lock, JSON.stringify({ pid: ownerPid, pgid: leader.pid, token: "dead-holder" }));
+      expect(await onPlatform("darwin", () => withPortReservations(root, async () => "entered"))).toBe("entered");
+      expect(fs.existsSync(lock)).toBe(false);
+    } finally {
+      process.kill(-leader.pid, "SIGKILL");
+    }
+  });
+
+  test("a dead owner inside another's living group that left an orphan fails closed", async () => {
+    const { leader, ownerPid, leftParent } = await deadMemberOfLivingGroup("sleep 60 >/dev/null 2>&1 & echo $$ $!");
+    try {
+      // The scan reads an orphan as a member init adopted; where a subreaper adopted it instead the premise does not
+      // hold, which is why off macOS the scan is never trusted (the test below).
+      if (leftParent !== 1) return;
       const contents = JSON.stringify({ pid: ownerPid, pgid: leader.pid, token: "dead-holder" });
       fs.writeFileSync(lock, contents);
       const callback = mock(async () => "entered");
-      if (refused) {
-        await expect(withPortReservations(root, callback)).rejects.toThrow("interrupted owner");
-        expect(callback).not.toHaveBeenCalled();
-        expect(fs.readFileSync(lock, "utf8")).toBe(contents);
-      } else {
-        expect(await withPortReservations(root, callback)).toBe("entered");
-        expect(fs.existsSync(lock)).toBe(false);
-      }
+      await expect(onPlatform("darwin", () => withPortReservations(root, callback))).rejects.toThrow("interrupted owner");
+      expect(callback).not.toHaveBeenCalled();
+      expect(fs.readFileSync(lock, "utf8")).toBe(contents);
+    } finally {
+      process.kill(-leader.pid, "SIGKILL");
+    }
+  });
+
+  test("off macOS a dead owner inside another's living group fails closed even with no orphan: a subreaper may hold it", async () => {
+    const { leader, ownerPid } = await deadMemberOfLivingGroup("echo $$");
+    try {
+      const contents = JSON.stringify({ pid: ownerPid, pgid: leader.pid, token: "dead-holder" });
+      fs.writeFileSync(lock, contents);
+      await expect(onPlatform("linux", () => withPortReservations(root, async () => "entered"))).rejects.toThrow("interrupted owner");
+      expect(fs.readFileSync(lock, "utf8")).toBe(contents);
     } finally {
       process.kill(-leader.pid, "SIGKILL");
     }
@@ -262,12 +291,8 @@ describe("reservation-specific lock", () => {
     // This process stands in for whatever was handed the dead owner's pid; the owner's own group is gone.
     const group = await deadLeader();
     fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, pgid: group, started: "Mon Jan 1 00:00:00 2001", token: "dead-holder" }));
-    if (process.platform === "darwin") {
-      expect(await withPortReservations(root, async () => "entered")).toBe("entered");
-      expect(fs.existsSync(lock)).toBe(false);
-    } else {
-      await expect(withPortReservations(root, async () => "entered")).rejects.toThrow("interrupted owner");
-    }
+    expect(await onPlatform("darwin", () => withPortReservations(root, async () => "entered"))).toBe("entered");
+    expect(fs.existsSync(lock)).toBe(false);
   });
 
   test("an owner alive since the start time its lock records keeps it", async () => {
@@ -283,10 +308,36 @@ describe("reservation-specific lock", () => {
     });
   });
 
-  test("records the owner's process group and start time", async () => {
+  test("records the owner's process group and start time in one form, whatever the owner's locale and timezone", async () => {
+    // A fresh process, since an owner reads its identity once, started far from UTC and outside the C locale; it holds
+    // the lock until told to let go, so its start can be read back while it lives.
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { withPortReservations } from ${JSON.stringify(path.join(import.meta.dir, "portReservations.ts"))};
+      import * as fs from "node:fs";
+      await withPortReservations(${JSON.stringify(root)}, async () => {
+        console.log(fs.readFileSync(${JSON.stringify(lock)}, "utf8"));
+        for await (const _ of console) break;
+      });
+    `], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, TZ: "Pacific/Kiritimati", LC_ALL: "fr_FR.UTF-8", LANG: "fr_FR.UTF-8" } });
+    try {
+      const reader = child.stdout.getReader();
+      const owner = JSON.parse(new TextDecoder().decode((await reader.read()).value).trim());
+      reader.releaseLock();
+      const [pgid, ...started] = Bun.spawnSync(["ps", "-o", "pgid=,lstart=", "-p", String(child.pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } }).stdout.toString().trim().split(/\s+/);
+      expect(owner.pid).toBe(child.pid);
+      expect(owner.pgid).toBe(Number(pgid));
+      expect(owner.started).toBe(started.join(" "));
+    } finally {
+      child.stdin.write("done\n");
+      child.stdin.end();
+      await child.exited;
+    }
+  });
+
+  test("an owner's start time is compared in UTC, so a caller elsewhere still sees the same owner", async () => {
     await withPortReservations(root, async () => {
       const owner = JSON.parse(fs.readFileSync(lock, "utf8"));
-      const [pgid, ...started] = Bun.spawnSync(["ps", "-o", "pgid=,lstart=", "-p", String(process.pid)]).stdout.toString().trim().split(/\s+/);
+      const [pgid, ...started] = Bun.spawnSync(["ps", "-o", "pgid=,lstart=", "-p", String(process.pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" } }).stdout.toString().trim().split(/\s+/);
       expect(owner.pgid).toBe(Number(pgid));
       expect(owner.started).toBe(started.join(" "));
     });

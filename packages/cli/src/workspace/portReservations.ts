@@ -62,7 +62,8 @@ interface ReservationLockOwner {
 
 /** A process's group and start time as `ps` reports them; empty when ps does not answer. */
 function psIdentity(pid: number): { pgid?: number; started?: string } {
-  const r = spawnSync("ps", ["-o", "pgid=,lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+  // lstart is printed in the caller's locale and timezone: fixed, so every process that compares it reads one form.
+  const r = spawnSync("ps", ["-o", "pgid=,lstart=", "-p", String(pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, env: { ...process.env, LC_ALL: "C", TZ: "UTC" } });
   const m = /^\s*(\d+)\s+(\S.*\S)\s*$/.exec(String(r.stdout ?? ""));
   const pgid = Number(m?.[1]);
   return m && Number.isSafeInteger(pgid) && pgid > 0 ? { pgid, started: m[2].replace(/\s+/g, " ") } : {};
