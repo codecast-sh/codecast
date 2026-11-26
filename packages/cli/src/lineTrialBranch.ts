@@ -147,7 +147,7 @@ async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promi
  * worktree, and whether it held uncommitted work. Refused while anything still
  * works in the worktree (clearTree).
  */
-async function freeBranch(repo: string, slug: string, branch: string, task: string, hands?: RunHands): Promise<{ committed: boolean } | null> {
+export async function freeBranch(repo: string, slug: string, branch: string, task: string, hands?: RunHands): Promise<{ committed: boolean } | null> {
   const tree = worktreeOf(repo, branch);
   if (!tree) return null;
   await clearTree(tree, hands);

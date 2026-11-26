@@ -9,8 +9,10 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
+import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, putChangeInWorktree, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
 import { behindWords, readFrozenChange } from "./flowChangeFile";
+import { acquireWorkspace } from "../workspace/lifecycle";
+import { readState } from "../workspace/contract";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
 
@@ -256,6 +258,60 @@ describe("a named branch's fix comes back to the run", () => {
     expect(again.change.tip).toBe(amended);
     expect(fs.readFileSync(path.join(worktree, "a.txt"), "utf-8")).toBe("v2\n");
   }, 180_000);
+
+  // ct-101654 on Nov 26: the run's worktree, named per flow and task, still held the first run's -ledger branch when a
+  // second run on the task brought -checks, and the refreeze stopped the run on the mismatch (ct-101845). Each run here
+  // puts its change in the workspace as `cast flow run` does: acquire on the change's branch, then the earlier tree.
+  test("each run on the task with a new branch gets the workspace on that branch, its record agreeing, and the old branch keeps its work", async () => {
+    const here = path.join(sandbox, "here-reused");
+    fs.mkdirSync(here);
+    git(here, "init", "-q", "-b", "main");
+    write(here, ".codecast/workspace.toml", "[setup]\ninstall = []\n");
+    write(here, ".gitignore", ".codecast/worktrees/\n.codecast/workspaces/\n.codecast/logs/\n");
+    write(here, "a.txt", "base\n");
+    git(here, "add", "-A");
+    git(here, "commit", "-qm", "base");
+    const tips: Record<string, string> = {};
+    for (const b of ["ledger", "checks", "model"]) {
+      git(here, "switch", "-qc", `ct-1-${b}`, "main");
+      write(here, `${b}.txt`, `${b}\n`);
+      git(here, "add", "-A");
+      git(here, "commit", "-qm", b);
+      tips[b] = git(here, "rev-parse", "HEAD");
+    }
+    git(here, "switch", "-q", "main");
+    const slug = "change-ct-1";
+    const run = async (b: string) => {
+      const earlier = readState(here, slug)?.path;
+      await putChangeInWorktree(here, slug, earlier && fs.existsSync(earlier) ? earlier : null, { branch: `ct-1-${b}`, tip: tips[b] }, "ct-1", async () => {
+        await acquireWorkspace(here, slug, { branch: `ct-1-${b}`, skipPool: true });
+      });
+      const tree = readState(here, slug)!.path;
+      expect(readState(here, slug)!.branch).toBe(`ct-1-${b}`);
+      expect(git(tree, "symbolic-ref", "--short", "HEAD")).toBe(`ct-1-${b}`);
+      expect(git(tree, "rev-parse", "HEAD")).toBe(tips[b]);
+      return tree;
+    };
+
+    // The first run leaves work it never committed.
+    const first = await run("ledger");
+    write(first, "ledger.txt", "ledger, unfinished\n");
+    write(first, "notes.md", "left behind\n");
+    const second = await run("checks");
+    // The old branch only gained its leftovers, on top of where it was.
+    expect(git(here, "rev-parse", "ct-1-ledger^")).toBe(tips.ledger);
+    expect(git(here, "show", "ct-1-ledger:ledger.txt")).toBe("ledger, unfinished");
+    expect(git(here, "show", "ct-1-ledger:notes.md")).toBe("left behind");
+    expect(git(second, "status", "--porcelain")).toBe("");
+    const third = await run("model");
+    expect(git(here, "rev-parse", "ct-1-checks")).toBe(tips.checks);
+
+    const runDir = path.join(sandbox, "run-dir-reused");
+    writeFrozenChange(runDir, { source: "branch", session: "jx7aaaa", base: tips.model, tip: tips.model, branch: "ct-1-model", worktree: slug, paths: ["model.txt"], shared: [], held: [] });
+    const refrozen = await refreezeSessionChange(here, runDir, third);
+    expect(refrozen.moved).toBe(false);
+    expect(refrozen.change.tip).toBe(tips.model);
+  }, 120_000);
 });
 
 // A shared checkout whose HEAD lags its upstream: the change is cut on HEAD,
