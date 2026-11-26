@@ -31,7 +31,7 @@ function entryBesideThisModule(ext: string): string | null {
   return fs.existsSync(candidate) ? candidate : null;
 }
 
-function isCompiledEntry(argv1: string): boolean {
+export function isCompiledEntry(argv1: string): boolean {
   return argv1.startsWith("/$bunfs/") || argv1.includes("~BUN/");
 }
 

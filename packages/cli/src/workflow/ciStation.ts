@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { LINE_PROFILE_REL_PATH, parseLineProfileText } from "../lineProfile.js";
 import { jobFailures, type CiFailure, type NamedFailure } from "@codecast/shared/contracts/ciFailures";
+import { stationCli, type StationCli } from "./stationReexec.js";
 
 export type Gh = (args: string[]) => { code: number; out: string };
 
@@ -180,7 +181,12 @@ export interface CiStationOptions {
   pollMs?: number;
   /** Each new progress line (the card's line for the station while it waits). */
   progress?: (line: string) => void;
+  /** Moves the wait onto a newer installed CLI between polls (stationReexec.ts). */
+  cli?: StationCli;
 }
+
+/** Where the wait stands, handed to a newer CLI: a resumed station keeps its deadline and never reruns twice. */
+type CiPlace = { started: number; reran: boolean; reruns: Array<[number, number]>; seen: string | null; settled: boolean; said: string };
 
 const minutes = (ms: number) => `${Math.floor(ms / 60_000)}m`;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -217,6 +223,7 @@ class Station {
   private now: () => number;
   private sleep: (ms: number) => Promise<void>;
   private progress: (line: string) => void;
+  private cli: StationCli;
   private repo = "";
   private files = new Map<string, string[] | null>();
   private moved = new Map<string, boolean>();
@@ -234,6 +241,7 @@ class Station {
     this.now = o.now ?? Date.now;
     this.sleep = o.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
     this.progress = o.progress ?? (() => {});
+    this.cli = o.cli ?? stationCli();
   }
 
   private call(args: string[]): { code: number; out: string } {
@@ -242,16 +250,23 @@ class Station {
 
   async watch(): Promise<string> {
     const { o, result } = this;
-    const started = this.now();
+    const back = this.cli.resumed<CiPlace>();
+    const started = back?.started ?? this.now();
     const deadline = started + o.deadlineMs;
     const clock = () => `${minutes(this.now() - started)} of ${minutes(o.deadlineMs)}`;
     // The attempt each rerun run was on: until GitHub starts the next attempt and finishes it, the run is still going.
-    let reruns = new Map<number, number>();
+    let reruns = new Map<number, number>(back?.reruns ?? []);
+    result.reran = back?.reran ?? false;
     // A green must hold over two looks, so an outside check that registers once Actions finishes is still seen.
-    let settled = false;
-    let said = "";
+    let settled = back?.settled ?? false;
+    let said = back?.said ?? "";
     // The head the last look saw. ci.json's head_sha names only a head the station judged.
-    let seen: string | null = null;
+    let seen: string | null = back?.seen ?? null;
+    // Between polls nothing is in flight, so that is where the wait may move onto a newer CLI.
+    const rest = async () => {
+      await this.sleep(o.pollMs ?? POLL_MS);
+      await this.cli.between({ started, reran: result.reran, reruns: [...reruns], seen, settled, said } satisfies CiPlace);
+    };
     for (;;) {
       const read = this.read();
       if (typeof read === "string") {
@@ -262,7 +277,7 @@ class Station {
         }
         const line = `Cannot read CI for #${o.pr} (${read.split("\n")[0]}); trying again, ${clock()}`;
         if (line !== said) this.progress((said = line));
-        await this.sleep(o.pollMs ?? POLL_MS);
+        await rest();
         continue;
       }
       const { pr, runs, files, expected } = read;
@@ -318,7 +333,7 @@ class Station {
             result.reran = true;
             reruns = new Map(rerun.map((r) => [r.databaseId, r.attempt ?? 1]));
             this.progress((said = `Rerunning the failed jobs of ${rerun.map((r) => r.workflowName ?? `run ${r.databaseId}`).join(", ")} on #${o.pr}`));
-            await this.sleep(o.pollMs ?? POLL_MS);
+            await rest();
             continue;
           }
         }
@@ -348,7 +363,7 @@ class Station {
       }
       const line = `Waiting on ${result.reran ? "the rerun of CI" : "CI"} for #${o.pr} at ${head}: ${waitingOn ?? "a second look before calling it green"}, ${clock()}`;
       if (line !== said) this.progress((said = line));
-      await this.sleep(o.pollMs ?? POLL_MS);
+      await rest();
     }
   }
 
