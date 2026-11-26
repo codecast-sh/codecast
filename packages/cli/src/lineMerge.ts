@@ -173,8 +173,12 @@ export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: st
   for (const file of lines(git("diff", "--name-only", "--no-renames", onto, landing).stdout)) {
     const mine = blob(landing, file);
     if (mine === blob(onto, file)) continue;
-    const commit = lines(git("log", "--format=%H", "-n", String(depth), onto, "--", `:(top,literal)${file}`).stdout).find((c) => blob(`${c}^`, file) === mine);
-    if (commit && !reverted.has(commit)) (mine ? setBack : dropped).push({ file, commit });
+    const changes = lines(git("log", "--format=%H", "-n", String(depth), onto, "--", `:(top,literal)${file}`).stdout);
+    const commit = changes.find((c) => blob(`${c}^`, file) === mine);
+    // A revert excuses its commit only while that commit is still the file's newest change on main: setting the
+    // file back past it would also erase what main changed there since, so that newest change is named instead.
+    if (commit && reverted.has(commit) && commit === changes[0]) continue;
+    if (commit) (mine ? setBack : dropped).push({ file, commit: reverted.has(commit) ? changes[0] : commit });
     if (setBack.length >= most) break;
   }
   if (setBack.length || !dropped.length) return [...setBack, ...dropped].slice(0, most);
@@ -184,7 +188,8 @@ export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: st
 
 /** The commits the branch's own commits revert on purpose, from where `head` left `onto`: `git revert` names each in
  *  its message ("This reverts commit <sha>."). Setting a file back to before one of them is the branch's point, not a
- *  stale tree, so the guard lets that one commit's undoing through and still reads every other file. */
+ *  stale tree, so the guard lets that one commit's undoing through, while it is still the file's newest change on
+ *  main, and still reads every other file. */
 function branchReverts(git: (...args: string[]) => ReturnType<Exec>, onto: string, head: string): Set<string> {
   const base = git("merge-base", onto, head).stdout.trim();
   if (!base) return new Set();
