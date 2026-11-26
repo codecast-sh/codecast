@@ -45,8 +45,9 @@ export async function schedulePushTask(ctx: any, task: any, updates: Record<stri
  * Patch a task row and push whatever synced field the patch moved. `task` is
  * the row as read BEFORE the write: the diff against it is what decides the
  * push, so a write that changes nothing the provider shows costs no call.
- * `actor` is the session that made the change, when one did (a machine's
- * asks no priorities pass: lib/priorityLinks taskStatusChanged).
+ * `actor` is the session that made the change, when one did, or its id
+ * (read only where priorities is on); a machine's asks no priorities pass
+ * (lib/priorityLinks taskStatusChanged).
  */
 export async function patchTask(ctx: any, task: any, updates: Record<string, any>, actor?: any): Promise<void> {
   await ctx.db.patch(task._id, updates);

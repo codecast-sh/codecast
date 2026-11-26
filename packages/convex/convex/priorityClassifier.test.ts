@@ -326,7 +326,7 @@ describe("a fork, spawn worker or handoff takes its parent's strength", () => {
           user_id: w.ana, agent_type: "claude_code", session_id: `jx7kid${i}`, short_id: `jx7kid${i}`, team_id: w.acme, is_private: false, team_visibility: "full",
           started_at: 1, updated_at: 1, message_count: 1, status: "active", parent_conversation_id: w.teamConv,
         } as any);
-        expect(await inheritLink(ctx, child, w.teamConv)).toBe(true);
+        expect(await inheritLink(ctx, child, w.teamConv, w.ana)).toBe(true);
         return child;
       });
       const conv = await w.conversation(child);
@@ -342,7 +342,7 @@ describe("a fork, spawn worker or handoff takes its parent's strength", () => {
         user_id: w.ana, agent_type: "claude_code", session_id: "jx7kid", short_id: "jx7kid", team_id: w.acme, is_private: false, team_visibility: "full",
         started_at: 1, updated_at: 1, message_count: 1, status: "active", parent_conversation_id: w.teamConv,
       } as any);
-      await inheritLink(ctx, child, w.teamConv);
+      await inheritLink(ctx, child, w.teamConv, w.ana);
       return child;
     });
     await w.t.mutation(pass.applyPlan, {

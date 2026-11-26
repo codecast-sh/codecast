@@ -511,7 +511,7 @@ export async function moveTaskStatus(
   }
   // The fake test db patches the row in place: afterStatusMove reads the old status.
   const before = { ...task };
-  await patchTask(ctx, task, updates, o.conversationId ? await ctx.db.get(o.conversationId) : null);
+  await patchTask(ctx, task, updates, o.conversationId ?? null);
   await afterStatusMove(ctx, before, next, o.actorUserId, o.conversationId);
   return moved;
 }

@@ -13,7 +13,7 @@ import { patchTask } from "./lib/taskWrite";
 import { priorityPassRequest } from "./lib/priorityPass";
 import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier } from "./lib/priorityClassifierHook";
-import { linkFromPlan, linkFromTask, linkSession, pullRequestClosed } from "./lib/priorityLinks";
+import { inheritLink, linkFromPlan, linkFromTask, linkSession, pullRequestClosed, taskStatusChanged } from "./lib/priorityLinks";
 import { answerAsksForPass } from "./sessionDecisions";
 import { passAllowedAt } from "./priorityPassSchedule";
 import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
@@ -371,6 +371,40 @@ describe("with priorities off, a pin, title, PR close or link costs about a read
     const linkCost = await reads(w, (ctx) => linkSession(ctx, conv!, p, undefined));
     expect(linkCost).toEqual(["get", "get"]);
     expect((await w.conversation(carlConv))?.priority_id).toBeUndefined();
+  });
+
+  test("a pin reads its owner's flag once; a task close reads its acting session, and a fork its parent, only where priorities is on", async () => {
+    const w = await world();
+    const { carlConv, carl, other } = w;
+    const gets: string[] = [];
+    const queries: string[] = [];
+    const recorded = (fn: (ctx: any) => Promise<unknown>) => w.t.run(async (ctx: any) => {
+      gets.length = 0;
+      queries.length = 0;
+      const db = new Proxy(ctx.db, {
+        get(target: any, prop: string) {
+          if (prop === "query") return (table: string) => (queries.push(table), target.query(table));
+          if (prop === "get") return (id: any) => (gets.push(String(id)), target.get(id));
+          const value = target[prop];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      await fn({ ...ctx, db });
+    });
+    // One pin asks the pass and the classifier: the owner's teams are read once.
+    await recorded(async (ctx) => performSetThreadState(ctx, (await ctx.db.get(carlConv))!, "Working on it", "working"));
+    expect(queries.filter((q) => q === "team_memberships")).toHaveLength(1);
+    // A task close in Other (off) never reads the session that made it.
+    const task = await w.t.run((ctx) => ctx.db.insert("tasks", {
+      user_id: carl, workspace: `team:${other}`, short_id: "ct-77", title: "t", status: "open", task_type: "task", priority: "medium", source: "human", created_at: 1, updated_at: 1,
+    } as any));
+    await recorded(async (ctx) => taskStatusChanged(ctx, (await ctx.db.get(task))!, carlConv));
+    expect(gets).not.toContain(String(carlConv));
+    // A fork of Carl's session never reads the parent.
+    const child = await w.t.run((ctx) => ctx.db.insert("conversations", { user_id: carl, agent_type: "claude_code", session_id: "jx7kid9", short_id: "jx7kid9", started_at: 1, updated_at: 1, message_count: 1, status: "active", parent_conversation_id: carlConv } as any));
+    await recorded((ctx) => inheritLink(ctx, child, carlConv, carl));
+    expect(gets).not.toContain(String(carlConv));
+    expect(queries.filter((q) => q !== "team_memberships")).toEqual([]);
   });
 
   test("an answered card reads the flag before its session; a PR with no team reads no milestone where priorities is off", async () => {

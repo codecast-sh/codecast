@@ -189,7 +189,7 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
  * unless the session that made the change is a machine's (a role's seat, a
  * trigger's run, a workflow's): those come round the clock (pinsAskForPass).
  */
-export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">, actor?: Conv | null): Promise<void> {
+export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">, acting?: Conv | Id<"conversations"> | null): Promise<void> {
   const workspace = task.workspace;
   if (!workspace || !(await prioritiesOn(ctx, workspace))) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
@@ -199,6 +199,8 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
   const sessions = await sessionsOf(ctx, [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)]);
   const places = [task.user_id, ...sessions.map((c) => c.user_id)].map((user) => ({ user, workspace }));
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
+  // The acting session, read only now that priorities is on here (a caller may hand its id).
+  const actor: Conv | null = typeof acting === "string" ? await ctx.db.get(acting) : acting ?? null;
   if (actor && !pinsAskForPass(actor)) return;
   for (const { user } of places) await passActivity(ctx, user, workspace);
 }
@@ -422,8 +424,10 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
  * Task-tool subagent the daemon syncs does not: it rolls up under its parent
  * and is never counted on its own.
  */
-export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parentId: Id<"conversations"> | undefined): Promise<boolean> {
-  const parent: Conv | null = parentId ? await ctx.db.get(parentId) : null;
+export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parentId: Id<"conversations"> | undefined, ownerId: Id<"users">): Promise<boolean> {
+  // The flag first: with priorities on in none of the owner's workspaces, the parent is never read.
+  if (!parentId || !(await prioritiesOn(ctx, `user:${ownerId}`))) return false;
+  const parent: Conv | null = await ctx.db.get(parentId);
   if (!parent?.priority_id) return false;
   const child: Conv | null = await ctx.db.get(childId);
   const by: LinkedBy = parent.priority_set_by === "person" || parent.priority_set_by === "link" ? "link" : parent.priority_set_by === "classifier" ? "classifier" : "pass";

@@ -1648,7 +1648,7 @@ export const createConversation = mutation({
     // A fork or plan handoff the daemon found by its parent message continues the parent's milestone
     // (lib/priorityLinks); a Task-tool subagent rolls up under its parent instead, and a fork from
     // `args.fork` inherits in recordFork.
-    if (args.parent_message_uuid && !forkOrigin) await inheritLink(ctx, conversationId, parentConversationId);
+    if (args.parent_message_uuid && !forkOrigin) await inheritLink(ctx, conversationId, parentConversationId, args.user_id);
     // Funnel: the user's first synced session ever. Stamped on the users doc so
     // this stays an O(1) check instead of a conversations scan per create.
     const creator = await ctx.db.get(args.user_id);
@@ -5933,7 +5933,7 @@ async function recordFork(
 ) {
   if (opts.counted !== false) await ctx.db.patch(origin._id, { fork_count: (origin.fork_count ?? 0) + 1 });
   await inheritLabelAssignment(ctx, userId, origin._id, forkId);
-  await inheritLink(ctx, forkId, origin._id);
+  await inheritLink(ctx, forkId, origin._id, userId);
 }
 
 export const forkConversation = mutation({

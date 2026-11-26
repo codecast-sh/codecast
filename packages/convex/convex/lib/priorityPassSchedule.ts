@@ -107,11 +107,18 @@ export const pinsAskForPass = (
   conv: Pick<Doc<"conversations">, "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id" | "is_workflow_primary" | "is_workflow_sub">,
 ): boolean => !isStandingSession(conv) && !conv.agent_task_id && !isRunLog(conv) && !conv.is_workflow_sub;
 
-/** Whether the priorities feature is on in a workspace: a team's own flag (one read), or for a personal one any of its person's teams'. */
-export async function prioritiesOn(ctx: { db: any }, workspace: string): Promise<boolean> {
-  const ws = parseWorkspaceKey(workspace);
-  if (!ws) return false;
-  return ws.type === "team" ? teamHasFeature(ctx, ws.teamId, "priorities") : workspaceHasFeature(ctx, { user_id: ws.userId }, "priorities");
+// Each workspace's priorities flag, read once per transaction: one pin asks it from several hooks.
+const flagsIn = new WeakMap<object, Map<string, Promise<boolean>>>();
+
+/** Whether the priorities feature is on in a workspace: a team's own flag (one read), or for a personal one any of its person's teams'. Read once per transaction. */
+export function prioritiesOn(ctx: { db: any }, workspace: string): Promise<boolean> {
+  let flags = flagsIn.get(ctx.db);
+  if (!flags) flagsIn.set(ctx.db, (flags = new Map()));
+  if (!flags.has(workspace)) {
+    const ws = parseWorkspaceKey(workspace);
+    flags.set(workspace, !ws ? Promise.resolve(false) : ws.type === "team" ? teamHasFeature(ctx, ws.teamId, "priorities") : workspaceHasFeature(ctx, { user_id: ws.userId }, "priorities"));
+  }
+  return flags.get(workspace)!;
 }
 
 /**
@@ -120,8 +127,8 @@ export async function prioritiesOn(ctx: { db: any }, workspace: string): Promise
  * with the feature on, else its owner's personal workspace's.
  */
 export async function prioritiesPossibleFor(ctx: { db: any }, conv: Pick<Doc<"conversations">, "team_id" | "user_id">): Promise<boolean> {
-  if (conv.team_id && (await teamHasFeature(ctx, conv.team_id, "priorities"))) return true;
-  return workspaceHasFeature(ctx, { user_id: conv.user_id }, "priorities");
+  if (conv.team_id && (await prioritiesOn(ctx, `team:${conv.team_id}`))) return true;
+  return prioritiesOn(ctx, `user:${conv.user_id}`);
 }
 
 /** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
