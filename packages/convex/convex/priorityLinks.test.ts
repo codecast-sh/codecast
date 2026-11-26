@@ -41,6 +41,9 @@ async function world() {
     for (const [u, token] of [[ada, TOKEN], [bea, BEA_TOKEN]] as const) {
       await ctx.db.insert("api_tokens", { user_id: u, token_hash: await hashToken(token), name: "cli", created_at: NOW, last_used_at: NOW } as any);
     }
+    // Priorities is on for both, so it is on in their personal workspaces too.
+    const home = await ctx.db.insert("teams", { name: "Home", created_at: NOW, features: { priorities: true } } as any);
+    for (const u of [ada, bea]) await ctx.db.insert("team_memberships", { user_id: u, team_id: home, role: "member", joined_at: 1 } as any);
     const ws = `user:${ada}`;
     const p1 = await ctx.db.insert("priorities", {
       user_id: ada, workspace: ws, short_id: "pri-1", title: "Ship it", summary: "", status: "active", ai_rank: 1,
@@ -115,6 +118,22 @@ describe("a pass never undoes what tasks and pull requests say", () => {
     const steps = (await t.run((ctx: any) => ctx.db.get(p1))).steps;
     await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps: steps.map((s: any) => (s.key === "s2" ? { key: s.key, title: s.title, tier: s.tier, tier_set_by: "pass", refs: s.refs, done: false } : s)) } }]);
     expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
+  });
+
+  test("a done pin naming its milestone lands while the model reads: the stale plan keeps it done; the person can reopen it", async () => {
+    const { t, ada, p1, cPin } = await world();
+    const read = (await t.run((ctx: any) => ctx.db.get(p1))).steps;
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    const pinnedAt = (await convOf(t, cPin)).thread_state_at;
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: pinnedAt, done_set_by: "evidence" });
+    // The stale plan shows s3 open and renames s4; a later one leaves s3 out altogether.
+    await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps: read.map((s: any) => (s.key === "s4" ? { ...s, title: "Renamed" } : s)) } }]);
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: pinnedAt, done_set_by: "evidence" });
+    expect((await stepOf(t, p1, "s4")).title).toBe("Renamed");
+    await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps: read.filter((s: any) => s.key !== "s3") } }]);
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: pinnedAt, done_set_by: "evidence" });
+    await t.withIdentity({ subject: `${ada}|session` }).mutation((api as any).priorities.setStepDone, { short_id: "pri-1", step_key: "s3", done: false });
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: false, done_set_by: "person" });
   });
 
   test("nor its closed task's; a task reopening does reopen it", async () => {

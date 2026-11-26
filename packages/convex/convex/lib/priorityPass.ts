@@ -283,7 +283,7 @@ function priorityBlock(p: PassPriority, position: number | undefined, taskStatus
   for (const s of p.steps.filter((s) => !s.dropped)) {
     const refs = s.refs.map((r) => (r.kind === "task" ? `task ${r.id} (${taskStatus.get(r.id) ?? "unknown"})` : `${r.kind} ${r.id}`));
     const title = hide ? "(title withheld)" : `${s.title}${s.title_set_by === "person" ? " (title set by the person)" : ""}`;
-    const done = s.done_set_by === "person" ? ` · ${s.done ? "done" : "not done"} (set by the person)` : s.done ? " · done" : "";
+    const done = s.done_set_by === "person" ? ` · ${s.done ? "done" : "not done"} (set by the person)` : s.done_set_by === "evidence" ? " · done (its session's done pin named it)" : s.done ? " · done" : "";
     lines.push(`  - ${p.short_id}/${s.key} [${s.tier}${s.tier_set_by === "person" ? ", set by the person" : ""}] ${title}${done}${refs.length ? ` · ${refs.join(", ")}` : ""}`);
   }
   const dropped = p.steps.filter((s) => s.dropped);
@@ -642,9 +642,12 @@ export function stepDone(refs: PriorityRef[], judged: boolean | undefined, taskS
   return tasks.every((s) => s === "done" || s === "dropped") && tasks.some((s) => s === "done");
 }
 
-/** The step with its done state recomputed; a step that stays done keeps its first done time. The person's done state, and a dropped step, stand. */
+/** A done state the pass never changes: the person's, or one evidence set (a done pin naming the milestone). */
+const doneHeld = (s: PriorityStep): boolean => s.done_set_by === "person" || s.done_set_by === "evidence";
+
+/** The step with its done state recomputed; a step that stays done keeps its first done time. A held done state (doneHeld), and a dropped step, stand. */
 function withDone(step: PriorityStep, judged: boolean | undefined, was: PriorityStep | null, taskStatus: Map<string, string>, now: number): PriorityStep {
-  if (step.done_set_by === "person" || step.dropped) return step;
+  if (doneHeld(step) || step.dropped) return step;
   const { done_at: _, ...rest } = step;
   const done = stepDone(step.refs, judged, taskStatus);
   return done ? { ...rest, done, done_at: was?.done ? was.done_at ?? now : now } : { ...rest, done };
@@ -655,9 +658,9 @@ const criticalDone = (steps: PriorityStep[]) => {
   return critical.length > 0 && critical.every((s) => s.done);
 };
 
-/** A step carrying something the person set: its tier, title or done state, or its drop. */
+/** A step carrying something the person set (its tier, title or done state, or its drop), or a done state evidence set. */
 export const isPersonHeld = (s: PriorityStep): boolean =>
-  s.tier_set_by === "person" || s.title_set_by === "person" || s.done_set_by === "person" || !!s.dropped;
+  s.tier_set_by === "person" || s.title_set_by === "person" || doneHeld(s) || !!s.dropped;
 
 /** A step the pass wrote, with what the person set on `was` laid over it. A dropped `was` stays the tombstone it is. */
 export function withPersonFields(step: PriorityStep, was: PriorityStep): PriorityStep {
@@ -665,9 +668,9 @@ export function withPersonFields(step: PriorityStep, was: PriorityStep): Priorit
   let out: PriorityStep = { ...step };
   if (was.tier_set_by === "person") out = { ...out, tier: was.tier, tier_set_by: "person" };
   if (was.title_set_by === "person") out = { ...out, title: was.title, title_set_by: "person" };
-  if (was.done_set_by === "person") {
+  if (doneHeld(was)) {
     const { done_at: _, ...rest } = out;
-    out = { ...rest, done: was.done, ...(was.done_at !== undefined ? { done_at: was.done_at } : {}), done_set_by: "person" };
+    out = { ...rest, done: was.done, ...(was.done_at !== undefined ? { done_at: was.done_at } : {}), done_set_by: was.done_set_by };
   }
   return out;
 }

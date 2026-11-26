@@ -49,8 +49,8 @@ export type PriorityStep = {
   /** Computed: every referenced task done; with no task, judged by the pass from its sessions and PRs. The person's call, once made, stands. */
   done: boolean;
   done_at?: number;
-  /** "person" once the person marked it done or not done. */
-  done_set_by?: PrioritySetBy;
+  /** "person" once the person marked it done or not done; "evidence" once a done pin naming it closed it. The pass changes neither. */
+  done_set_by?: PrioritySetBy | "evidence";
   /**
    * The person dropped it: a tombstone kept in the row so the pass neither
    * proposes it again nor adds a new one repeating its title (the same words,

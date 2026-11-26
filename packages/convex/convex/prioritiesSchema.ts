@@ -35,7 +35,8 @@ const priorityStep = v.object({
   refs: v.array(priorityRef),
   done: v.boolean(),
   done_at: v.optional(v.number()),
-  done_set_by: v.optional(setBy),
+  // "evidence": a done pin naming it closed it (lib/priorityLinks). The pass keeps it as it keeps the person's.
+  done_set_by: v.optional(v.union(v.literal("pass"), v.literal("person"), v.literal("evidence"))),
   /** The person dropped it: kept as a tombstone the pass reads, never shown. */
   dropped: v.optional(v.boolean()),
 });

@@ -105,7 +105,8 @@ async function sessionsOf(ctx: Ctx, ids: Array<Id<"conversations"> | undefined>)
 /** A pull request counts only toward a priority in its own team's workspace, or, with no team, a personal one. */
 const prInWorkspace = (pr: Doc<"pull_requests">, workspace: string) => (pr.team_id ? workspace === `team:${pr.team_id}` : workspace.startsWith("user:"));
 
-type Evidence = { done: true; at: number } | { done: false } | null;
+/** `session`: the done came from a pin naming the milestone, which the pass then keeps (done_set_by "evidence"). */
+type Evidence = { done: true; at: number; session?: true } | { done: false } | null;
 
 /**
  * What the milestone's records say: done (since when its done condition
@@ -141,7 +142,7 @@ async function evidenceFor(ctx: Ctx, p: Priority, step: Step, sessionAt: number 
   }
   if (open) return null;
   if (merged) return { done: true, at };
-  if (sessionAt !== undefined && !step.done) return { done: true, at: sessionAt };
+  if (sessionAt !== undefined && !step.done) return { done: true, at: sessionAt, session: true };
   return null;
 }
 
@@ -160,9 +161,11 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
   if (step.done_set_by === "person" || step.dropped) return false;
   const evidence = await evidenceFor(ctx, p, step, sessionAt);
   if (!evidence) return false;
-  const { done_at: _, ...rest } = step;
-  const next: Step = evidence.done ? { ...rest, done: true, done_at: evidence.at } : { ...rest, done: false };
-  if (next.done === step.done && next.done_at === step.done_at) return false;
+  // Tasks and pull requests decide on their own: a pin's mark goes when they speak.
+  const { done_at: _, done_set_by, ...rest } = step;
+  const base: Step = done_set_by && done_set_by !== "evidence" ? { ...rest, done_set_by } : rest;
+  const next: Step = !evidence.done ? { ...base, done: false } : evidence.session ? { ...base, done: true, done_at: evidence.at, done_set_by: "evidence" } : { ...base, done: true, done_at: evidence.at };
+  if (next.done === step.done && next.done_at === step.done_at && next.done_set_by === step.done_set_by) return false;
   await ctx.db.patch(p._id, { steps: p.steps.map((s, k) => (k === i ? next : s)), updated_at: Date.now() });
   return true;
 }

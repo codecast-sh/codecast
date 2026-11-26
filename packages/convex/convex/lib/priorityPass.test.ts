@@ -291,6 +291,20 @@ describe("merging a pass into the list", () => {
     ]);
   });
 
+  test("a milestone a done pin closed (done_set_by evidence) stays done, whether the reply matches it as open or leaves it out", () => {
+    const pinned = (key: string) => step(key, { done: true, done_at: NOW - H, done_set_by: "evidence" });
+    const prior = priority("pri-1", { steps: [{ ...pinned("s1"), title: "Grader faults under 10%" }, { ...pinned("s2"), title: "Ship to Union" }] });
+    const plan = mergePriorities(input({ priorities: [prior] }), out([
+      proposal({ short_id: "pri-1", steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [], done_judged: false }, { title: "Something new", tier: "polish", refs: [] }] }),
+    ]));
+    expect(plan.updates[0].patch.steps!.map((s) => [s.key, s.done, s.done_at, s.done_set_by])).toEqual([
+      ["s1", true, NOW - H, "evidence"],
+      ["s3", false, undefined, undefined],
+      ["s2", true, NOW - H, "evidence"],
+    ]);
+    expect(buildPriorityPassPrompt(input({ priorities: [prior] })).prompt).toContain("pri-1/s1 [critical] Grader faults under 10% · done (its session's done pin named it)");
+  });
+
   test("a stronger match is never taken by a weaker one first", () => {
     const existing = [step("s1", { title: "Fix the grader", refs: [{ kind: "pr", id: "o/r#1" }] }), step("s2", { title: "Fix the grader" })];
     const m = matchSteps(existing, [{ title: "Fix the grader", refs: [] }, { title: "Different", refs: [{ kind: "pr", id: "o/r#1" }] }]);
