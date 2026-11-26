@@ -14,7 +14,7 @@
 
 import { useInboxStore } from "../store/inboxStore";
 import { isInboxMember, underOwnersModel } from "@codecast/shared/contracts";
-import { ownerFactsOf, ownerIdsOf, ownersHomeOf, ownersModelOnFor, ownersReadOf, type SessionOwnersRow } from "../store/sessionOwnersSlice";
+import { ownerFactsOf, ownerIdsOf, ownersHomeOf, ownersModelOnFor, ownersReadOf, seatRoleOf, type SessionOwnersRow } from "../store/sessionOwnersSlice";
 import { useOrgRoles } from "./useOrgRoles";
 import { teamMembersOf } from "../lib/activeTeam";
 import type { DraftRole, OwnersDraft } from "../lib/ownersDraft";
@@ -30,6 +30,12 @@ export const roleLikeOf = (r: OwnerRoleFace) => ({ _id: r.role_id, short_id: r.s
 
 const NONE = "";
 
+/** The parent session as an owner of its own, or null when it is the role's
+ *  own standing session: the same agent, so the role stands for both. */
+export function shownParentOf(view: Pick<SessionOwnersView, "parent" | "role">): SessionOwnersView["parent"] {
+  return view.parent && !(view.role && view.parent.seatRoleId === view.role.role_id) ? view.parent : null;
+}
+
 /** What the owners UI draws of a session, as one string: its wake signature. */
 function ownersSig(s: any, conversationId: string): string {
   if (!ownersModelOnFor(s, conversationId)) return NONE;
@@ -42,6 +48,7 @@ function ownersSig(s: any, conversationId: string): string {
     ids.join(","),
     facts ? facts.org_role_id ?? "" : home?.org_role_id ?? "",
     facts ? facts.parent_conversation_id ?? "" : home?.owner_session_id ?? "",
+    seatRoleOf(s, facts ? facts.parent_conversation_id : home?.owner_session_id) ?? "",
     home && isInboxMember(home, s.currentUser?._id) ? "member" : "",
     read ? `${read.owners_changed_at ?? ""}:${read.can_edit ? 1 : 0}:${read.role?.name ?? ""}:${read.parent_session?.title ?? ""}:${read.people_ids.map((id) => `${id}=${read.people_info[id]?.name ?? ""}`).join(";")}` : "-",
     home?.user_id ?? "",
@@ -53,8 +60,9 @@ export type SessionOwnersView = {
   meId: string | null;
   people: OwnerPerson[];
   role: OwnerRoleFace | null;
-  /** The session that owns it, with its title when the viewer may read it. */
-  parent: { id: string; title: string } | null;
+  /** The session that owns it, with its title when the viewer may read it,
+   *  and the role it is the standing session of. */
+  parent: { id: string; title: string; seatRoleId: string | null } | null;
   /** The agent that answers it: its role, else its parent session. */
   agent: { kind: "role"; role: OwnerRoleFace } | { kind: "session"; id: string; title: string } | null;
   mine: boolean;
@@ -102,7 +110,7 @@ export function useSessionOwners(conversationId: string): SessionOwnersView {
   const parentTitle = parentId
     ? (read?.parent_session?.conversation_id === parentId ? read.parent_session.title : null) ?? s.sessions?.[parentId]?.title ?? s.conversations?.[parentId]?.title ?? "Session that started it"
     : null;
-  const parent = parentId ? { id: parentId, title: parentTitle! } : null;
+  const parent = parentId ? { id: parentId, title: parentTitle!, seatRoleId: seatRoleOf(s, parentId) } : null;
   const runnerId = home?.user_id ? String(home.user_id) : null;
   return {
     on: true,

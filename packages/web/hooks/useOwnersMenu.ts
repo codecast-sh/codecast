@@ -103,7 +103,10 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
 
   const add = (c: OwnerCandidate) => {
     setNotice(null);
-    setDraft((d) => (c.kind === "role" ? setRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id)));
+    // Putting back the role whose seat started it puts its seat back too
+    // (removing that role let both go).
+    const seatBack = c.kind === "role" && !!initial.parent && view.parent?.seatRoleId === c.role._id;
+    setDraft((d) => (c.kind === "role" ? { ...setRole(d, roleOwnerOf(c.role)), ...(seatBack ? { parent: initial.parent } : {}) } : addPerson(d, c.person._id)));
   };
   const selectAllTeammates = () => setDraft((d) => addPeople(d, unselected.map((m) => String(m._id))));
 
@@ -113,8 +116,11 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
     .map((p) => ({ user_id: String(p.user_id), added_by: String(p.added_by), added_at: p.added_at!, ...(p.seen_at != null ? { seen_at: p.seen_at } : {}), ...(p.note ? { note: p.note } : {}) }));
   const diff = diffOwners(initial, draft, { meId: meId ?? undefined, snapshots, meRuns: !!meId && view.runnerId === meId });
 
+  // A parent that is the role's own standing session is the same agent: the
+  // role's row stands for both, and removing it releases both.
+  const parentIsRole = !!draft.parent && !!draft.role && view.parent?.seatRoleId === draft.role.role_id;
   // The only owner left cannot go: the session must keep one.
-  const ownerCount = draft.people.length + (draft.role ? 1 : 0) + (draft.parent ? 1 : 0);
+  const ownerCount = draft.people.length + (draft.role ? 1 : 0) + (draft.parent && !parentIsRole ? 1 : 0);
   const solo = ownerCount <= 1;
   const rows: OwnerMenuRow[] = draft.people.map((id) => {
     const mine = id === meId;
@@ -132,10 +138,11 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
     rows.push({
       key: `r:${r.role_id}`, kind: "role", role: r, name: r.name,
       sub: diff.roleAdded ? "Role · answers for you · new" : "Role · answers for you", mine: false,
-      onRemove: solo ? null : () => setDraft(removeRole), removeLabel: solo ? "The only owner" : `Remove ${r.name}`,
+      onRemove: solo ? null : () => setDraft((d) => (parentIsRole ? releaseParent(removeRole(d)) : removeRole(d))),
+      removeLabel: solo ? "The only owner" : `Remove ${r.name}`,
     });
   }
-  if (draft.parent) {
+  if (draft.parent && !parentIsRole) {
     rows.push({
       key: `s:${draft.parent}`, kind: "session", name: view.parent?.title ?? "Session that started it",
       sub: "Session that started it", mine: false,
@@ -149,7 +156,7 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
     ...(diff.roleAdded ? [{ key: "+role", label: `+ ${diff.roleAdded.name}`, face: { role: diff.roleAdded as OwnerRoleFace } }] : []),
     ...diff.removed.map((id) => ({ key: `-${id}`, label: id === meId ? "You leave" : short(id), face: { person: personOf(id) }, gone: true })),
     ...(diff.roleRemoved ? [{ key: "-role", label: diff.roleRemoved.name, face: { role: diff.roleRemoved as OwnerRoleFace }, gone: true }] : []),
-    ...(diff.parentReleased ? [{ key: "-parent", label: view.parent?.title ?? "Its session", face: { session: true }, gone: true }] : []),
+    ...(diff.parentReleased && !(diff.roleRemoved && view.parent?.seatRoleId === diff.roleRemoved.role_id) ? [{ key: "-parent", label: view.parent?.title ?? "Its session", face: { session: true }, gone: true }] : []),
   ];
 
   /** Save: true when it sent something (the menu then closes). A change the
