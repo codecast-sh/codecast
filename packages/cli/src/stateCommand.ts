@@ -175,7 +175,24 @@ function printState(text: string, provenance: string): void {
  * delivered). When the session is linked to one, the server names it, and
  * this line says how to close it.
  */
-export function servesHint(result: { milestone?: { serves: string; title: string } | null; serves_mismatch?: { serves: string; milestone: string } | null; serves_unlinked?: { serves: string } | null }): string | null {
+/** Why a done pin naming its milestone closed nothing (the server's serves_refused reason). */
+const REFUSED: Record<string, (serves: string) => string> = {
+  worker: (s) => `--serves ${s}: a worker's pin doesn't close a milestone; the session that started it closes it`,
+  machine: (s) => `--serves ${s}: a role's, trigger's or workflow's pin doesn't close a milestone`,
+  done: (s) => `--serves ${s} is already done; nothing changed`,
+  person: (s) => `--serves ${s}: the person marked this milestone not done; nothing changed`,
+};
+
+export function servesHint(result: {
+  milestone?: { serves: string; title: string } | null;
+  serves_mismatch?: { serves: string; milestone: string } | null;
+  serves_unlinked?: { serves: string } | null;
+  serves_refused?: { serves: string; reason: string } | null;
+  serves_decided_by?: "tasks" | "pull_requests" | null;
+}, serves?: string): string | null {
+  const r = result.serves_refused;
+  if (r) return REFUSED[r.reason]?.(r.serves) ?? `--serves ${r.serves}: nothing closed`;
+  if (result.serves_decided_by) return `${serves ?? "this milestone"} closes when its ${result.serves_decided_by === "tasks" ? "tasks close" : "pull requests merge"}; the pin closed nothing`;
   const x = result.serves_mismatch;
   if (x) return `--serves ${x.serves} doesn't match this session's milestone ${x.milestone}; nothing closed`;
   const u = result.serves_unlinked;
@@ -305,7 +322,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       if ((result as { resurfaced?: boolean }).resurfaced) {
         console.log(`${c.yellow}!${c.reset} this session was hidden; declaring ${result.status ?? status} returned it to the user's inbox`);
       }
-      const hint = servesHint(result);
+      const hint = servesHint(result, serves);
       if (hint) console.log(fmt.muted(hint));
     });
 }

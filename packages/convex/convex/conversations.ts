@@ -167,7 +167,7 @@ import {
   toggleFavoriteWithRevision,
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
-import { inheritLink, mappedMilestone, sessionEvidence, unnamedMilestone } from "./lib/priorityLinks";
+import { inheritLink, mappedMilestone, sessionEvidence, unnamedMilestone, type ServesOutcome } from "./lib/priorityLinks";
 import { pinsAskForPass, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier } from "./lib/priorityClassifierHook";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
@@ -12472,7 +12472,7 @@ export async function performSetThreadState(
   status: ThreadStateStatus,
   result?: string | null,
   serves?: string,
-): Promise<{ at: number; resurfaced: boolean }> {
+): Promise<{ at: number; resurfaced: boolean; serves_outcome?: ServesOutcome | null }> {
   const at = Date.now();
   await ctx.db.patch(conv._id, {
     thread_state: text,
@@ -12497,7 +12497,7 @@ export async function performSetThreadState(
     await askClassifier(ctx, conv, "pin");
   }
   // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
-  if (status === "done") await sessionEvidence(ctx, conv, at, serves);
+  const serves_outcome = status === "done" ? await sessionEvidence(ctx, conv, at, serves) : null;
   // A `blocked` declaration from a HIDDEN session is a claim on the user's
   // eyes — the same claim `cast trigger complete --needs-attention` makes,
   // cleared the same way (agentTasks.completeTaskRun). If the session is
@@ -12531,7 +12531,7 @@ export async function performSetThreadState(
   // worktree (subagentFleet.ts).
   const outcome = outcomeOfDeclaration(status);
   if (outcome && conv.parent_conversation_id) await subagentEnded(ctx, conv, outcome);
-  return { at, resurfaced };
+  return { at, resurfaced, serves_outcome };
 }
 
 export const setThreadState = mutation({
@@ -12576,7 +12576,7 @@ export const setThreadState = mutation({
     }
 
     const status = parseThreadStateStatus(args.status) ?? "working";
-    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
+    const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
     // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
     const milestone = status === "done" && !serves ? await unnamedMilestone(ctx, conv) : null;
     // One that names another milestone than the session's closes none either: the CLI says so.
@@ -12587,6 +12587,9 @@ export const setThreadState = mutation({
     return {
       ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced,
       ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}), ...(serves_unlinked ? { serves_unlinked } : {}),
+      // A pin naming its milestone that closed nothing says why.
+      ...(serves_outcome && "refused" in serves_outcome ? { serves_refused: { serves, reason: serves_outcome.refused } } : {}),
+      ...(serves_outcome && "decided_by" in serves_outcome ? { serves_decided_by: serves_outcome.decided_by } : {}),
     };
   },
 });

@@ -315,6 +315,25 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s3")).done_at).toBe(pinnedAt);
   });
 
+  test("a plan handoff's pin closes its milestone; a pin that closes nothing says why: a worker's, one already done, one its tasks decide", async () => {
+    const { t, ada, p1, cPin } = await world();
+    const make = (short_id: string, step: string, fields: Record<string, unknown>) => t.run((ctx: any) => ctx.db.insert("conversations", {
+      user_id: ada, agent_type: "claude_code", session_id: `sess-${short_id}`, short_id, title: short_id, started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
+      priority_id: p1, priority_step_key: step, ...fields,
+    }));
+    const handoff = await make("jx7hand", "s4", { parent_conversation_id: cPin, parent_message_uuid: "m-1" });
+    await make("jx7wrkr", "s3", { parent_conversation_id: cPin });
+    await make("jx7task", "s1", {});
+    const done = (session: string, serves: string) => t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session, text: "Shipped", status: "done", serves });
+    const handed = await done("jx7hand", "pri-1/s4");
+    expect(handed.serves_refused).toBeUndefined();
+    expect(await stepOf(t, p1, "s4")).toMatchObject({ done: true, done_at: (await convOf(t, handoff)).thread_state_at, done_set_by: "evidence" });
+    expect((await done("jx7hand", "pri-1/s4")).serves_refused).toEqual({ serves: "pri-1/s4", reason: "done" });
+    expect((await done("jx7wrkr", "pri-1/s3")).serves_refused).toEqual({ serves: "pri-1/s3", reason: "worker" });
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+    expect((await done("jx7task", "pri-1/s1")).serves_decided_by).toBe("tasks");
+  });
+
   test("one pass maps an unlinked session onto the milestone its done pin named and judges it done: the pin's time and mark win", async () => {
     const { t, ada, p1, cFree } = await world();
     await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });

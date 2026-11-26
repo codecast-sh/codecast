@@ -215,20 +215,39 @@ export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Pro
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 
-/** A person drives it: a top-level session of their own, not a role's seat, a trigger's run, a workflow's, a worker or a subagent. */
-const personDriven = (c: Conv) => pinsAskForPass(c) && !c.parent_conversation_id && !c.is_subagent;
+/** A worker another session started (`cast spawn`), or a Task-tool subagent: a plan handoff or a fork (parent_message_uuid) is the person's own session from there. */
+const isWorker = (c: Conv) => !!c.is_subagent || (!!c.parent_conversation_id && !c.parent_message_uuid);
+/** A person drives it: not a role's seat, a trigger's run, a workflow's, a worker or a subagent. */
+const personDriven = (c: Conv) => pinsAskForPass(c) && !isWorker(c);
+
+/**
+ * What a done pin naming its session's milestone did: closed it, or why not.
+ * `decided_by`: the milestone closes with its tasks or pull requests, never a
+ * pin. Refused: a worker's or a machine's pin, or a milestone already done (by
+ * a pin or the person) or one the person marked not done.
+ */
+export type ServesOutcome = { closed: true } | { refused: "worker" | "machine" | "done" | "person" } | { decided_by: "tasks" | "pull_requests" };
 
 /**
  * A pin declared done on `conv` at `at`, naming what it finished (`serves`,
  * "pri-N/sK"): evidence for its milestone only when that is the milestone the
  * session is mapped to and the session is person-driven. Without the name a
- * done pin closes nothing.
+ * done pin closes nothing (null: nothing to report beyond what setThreadState
+ * says about the name).
  */
-export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, serves: string | undefined): Promise<void> {
-  if (!serves || !conv?.priority_id || !conv.priority_step_key || !personDriven(conv)) return;
+export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, serves: string | undefined): Promise<ServesOutcome | null> {
+  if (!serves || !conv?.priority_id || !conv.priority_step_key) return null;
   const p: Priority | null = await ctx.db.get(conv.priority_id);
-  if (!p || serves !== `${p.short_id}/${conv.priority_step_key}`) return;
-  await recomputeStepDone(ctx, conv.priority_id, conv.priority_step_key, at);
+  const step = p?.steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
+  if (!p || !step || serves !== `${p.short_id}/${step.key}`) return null;
+  if (!pinsAskForPass(conv)) return { refused: "machine" };
+  if (isWorker(conv)) return { refused: "worker" };
+  if (step.refs.some((r) => r.kind === "task")) return { decided_by: "tasks" };
+  if (step.refs.some((r) => r.kind === "pr")) return { decided_by: "pull_requests" };
+  if (step.done_set_by === "person") return { refused: step.done ? "done" : "person" };
+  if (step.done_set_by === "evidence") return { refused: "done" };
+  await recomputeStepDone(ctx, p._id, step.key, at);
+  return { closed: true };
 }
 
 /** The most of a session's newest pins read for one that named a milestone it was just linked to. */
