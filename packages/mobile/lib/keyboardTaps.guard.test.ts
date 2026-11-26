@@ -109,11 +109,14 @@ describe("a tap outside the composer puts the keyboard away", () => {
   });
 
   test("a chat row dismisses on a plain tap and keeps its long-press menu", () => {
-    const tags = pressableTags(read("components/chat/MessageRow.tsx")).filter((t) =>
+    // The avatar, author link and reaction chips open the same menu on a long
+    // press and act on a tap of their own; the row is the one whose tap does
+    // nothing but put the keyboard away.
+    const menus = pressableTags(read("components/chat/MessageRow.tsx")).filter((t) =>
       t.tag.includes("onLongPress={openMenu}"),
     );
-    expect(tags.length).toBe(1);
-    expect(tags[0].tag).toContain("onPress={Keyboard.dismiss}");
+    expect(menus.filter((t) => t.tag.includes("onPress={Keyboard.dismiss}")).length).toBe(1);
+    for (const { tag } of menus) expect(tag).toMatch(/onPress=\{(?!undefined\})/);
   });
 
   test.each(ROW_RENDERERS)("%s: no pressable takes a tap it does nothing with", (path) => {

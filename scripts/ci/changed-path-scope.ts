@@ -85,8 +85,11 @@ export const JOB_AREAS: Record<string, Area[]> = {
   // The mobile guards, which walk the native bundle's import graph with cli's
   // bench walker, run in test-always on every change.
   "test-mobile": ["mobile", "web", "convex", "electron", "shared", "platform"],
-  // The shell requires @platform/desktop and nothing else in the repo.
-  "test-electron": ["electron", "platform"],
+  // The shell requires @platform/desktop. The installed-apps tests read their
+  // contracts from the other side: tiers.json is generated from
+  // shared/contracts/pageApp.ts, and the sandboxed preload test runs convex's
+  // castData client in a real Electron renderer, which test-always cannot host.
+  "test-electron": ["electron", "convex", "shared", "platform"],
 };
 
 export const GATED_JOBS = Object.keys(JOB_AREAS);

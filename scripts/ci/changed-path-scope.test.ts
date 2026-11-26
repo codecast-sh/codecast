@@ -114,9 +114,9 @@ describe("classifyChangedPaths", () => {
     );
   });
 
-  test("a convex change runs the convex, web, cli and mobile tests", () => {
+  test("a convex change runs the convex, web, cli, mobile and electron tests", () => {
     expect(ran(["packages/convex/convex/tasks.ts"])).toEqual(
-      ["build", "test-cli", "test-convex", "test-mobile", "test-web", "typecheck"],
+      ["build", "test-cli", "test-convex", "test-electron", "test-mobile", "test-web", "typecheck"],
     );
   });
 
@@ -129,7 +129,7 @@ describe("classifyChangedPaths", () => {
 
   test("a shared change runs every job that reads shared", () => {
     expect(ran(["packages/shared/contracts/inboxProjection.ts"])).toEqual(
-      ["build", "test-cli", "test-convex", "test-mobile", "test-shared", "test-web", "typecheck"],
+      ["build", "test-cli", "test-convex", "test-electron", "test-mobile", "test-shared", "test-web", "typecheck"],
     );
   });
 
@@ -193,11 +193,13 @@ describe("classifyChangedPaths", () => {
     expect(ran(["packages/browser-extension/background.js"])).toEqual(["build", "test-cli"]);
   });
 
-  test("the electron tests rerun for the vendored @platform/desktop they require", () => {
+  // The installed-apps tests read shared's pageApp contract and convex's castData.
+  test("the electron tests rerun for the vendored @platform/desktop and the contracts they read", () => {
     expect(flags(["platform/packages/desktop/src/index.js"]).run_test_electron).toBe(true);
     expect(flags(["packages/electron/package.json"]).run_test_electron).toBe(true);
     expect(flags(["packages/web/components/DiffView.tsx"]).run_test_electron).toBe(false);
-    expect(flags(["packages/shared/contracts/agentClients.ts"]).run_test_electron).toBe(false);
+    expect(flags(["packages/shared/contracts/pageApp.ts"]).run_test_electron).toBe(true);
+    expect(flags(["packages/convex/convex/lib/castData.ts"]).run_test_electron).toBe(true);
   });
 
   test("an empty diff runs everything", () => {

@@ -115,8 +115,9 @@ test("process: the timeout resolves even when a grandchild holds the pipes", { s
   const r = await ops["process.run"]("/bin/sh", ["-c", "sleep 7.31 & sleep 7.31"], { timeoutMs: 300 });
   assert.equal(r.timedOut, true);
   assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
-  // The background sleep was in the killed group too.
-  assert.equal(execFileSync("/bin/sh", ["-c", "pgrep -f 'sleep 7.31' || true"]).toString().trim(), "");
+  // The background sleep was in the killed group too. The pattern is bracketed
+  // so it never matches a command line that names it (a shell running pgrep).
+  assert.equal(execFileSync("/bin/sh", ["-c", "pgrep -f 'sleep 7[.]31' || true"]).toString().trim(), "");
 });
 
 test("process: the timeout never exceeds the cap", async () => {
