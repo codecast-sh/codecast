@@ -5,7 +5,7 @@
 // hooks/useSyncVisibleSessionOwners), the same facts the header reads
 // (ownerFactsOf), so the card and the header agree. Until the read lands the card shows no faces;
 // a session only you own shows none either.
-import { ownerFactsOf, ownerIdsOf, ownersModelOnFor, ownersReadOf } from "../store/sessionOwnersSlice";
+import { ownerFactsOf, ownerIdsOf, ownersModelOnFor, ownersReadOf, seatRoleOf } from "../store/sessionOwnersSlice";
 
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string };
 type State = Parameters<typeof ownerIdsOf>[0];
@@ -30,7 +30,9 @@ export function coOwnersOf(s: State, conversationId: string, meId: string | null
   // shows here as it does there.
   const others = ids.filter((id) => id !== meId);
   const roleId = facts.org_role_id ? String(facts.org_role_id) : null;
-  const parentId = facts.parent_conversation_id ? String(facts.parent_conversation_id) : null;
+  const parentLink = facts.parent_conversation_id ? String(facts.parent_conversation_id) : null;
+  // A parent that is the role's own standing session is that role: one owner.
+  const parentId = parentLink && !(roleId && seatRoleOf(s, parentLink) === roleId) ? parentLink : null;
   if (!others.length && !roleId && !parentId) return null;
   const person = (id: string) => {
     const m = members.find((x) => String(x._id) === id);
@@ -64,6 +66,7 @@ export function coOwnersSig(s: State, conversationId: string): string {
     (ownerIdsOf(s, conversationId) ?? []).join(","),
     facts.org_role_id ?? "",
     facts.parent_conversation_id ?? "",
+    seatRoleOf(s, facts.parent_conversation_id) ?? "",
     read.role?.name ?? "",
     read.parent_session?.title ?? "",
     read.people_ids.map((id) => `${id}=${read.people_info[id]?.name ?? ""}:${read.people_info[id]?.image ?? ""}`).join(";"),

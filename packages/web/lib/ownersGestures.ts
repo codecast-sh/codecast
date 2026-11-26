@@ -3,10 +3,10 @@
 import { useInboxStore } from "../store/inboxStore";
 import { gestureToast } from "../store/undoStack";
 import type { SessionOwnersChange } from "../store/sessionOwnersSlice";
-import type { SessionOwnersView } from "../hooks/useSessionOwners";
+import { shownParentOf, type SessionOwnersView } from "../hooks/useSessionOwners";
 
 export function ownersTitle(view: Pick<SessionOwnersView, "people" | "role" | "parent" | "meId">): string {
-  return `Owners: ${[...view.people.map((p) => (p._id === view.meId ? "You" : p.name)), ...(view.role ? [view.role.name] : []), ...(view.parent ? [view.parent.title] : [])].join(", ")}`;
+  return `Owners: ${[...view.people.map((p) => (p._id === view.meId ? "You" : p.name)), ...(view.role ? [view.role.name] : []), ...(shownParentOf(view) ? [view.parent!.title] : [])].join(", ")}`;
 }
 
 /** Applies an owners change with its toast and Undo. */

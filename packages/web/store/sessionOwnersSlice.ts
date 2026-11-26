@@ -104,6 +104,17 @@ export function ownersModelOnFor(s: OwnersState, conversationId: string): boolea
 
 const sameIds = (a: unknown, b: readonly string[]) => Array.isArray(a) && a.length === b.length && a.every((id, i) => String(id) === b[i]);
 
+/** The role a session is the standing session of: its own row says so, else
+ *  the org tree names it as a role's standing session. A parent session that
+ *  is its child's role's seat is that role, not a second owner. */
+export function seatRoleOf(s: any, sessionId: unknown): string | null {
+  if (!sessionId) return null;
+  const id = String(sessionId);
+  const seat = s.sessions?.[id]?.standing_role_id ?? s.conversations?.[id]?.standing_role_id
+    ?? (((windowOrgTree(s) as any)?.roles ?? []) as Array<{ _id: string; standing?: { conversation_id?: string } | null }>).find((r) => r.standing?.conversation_id === id)?._id;
+  return seat ? String(seat) : null;
+}
+
 // ownerFactsOf per conversation, kept while its inputs are the same objects:
 // every card and the header ask on every store change.
 const factsMemo = new Map<string, { read: SessionOwnersRow; runner: unknown; facts: SessionOwnerFacts }>();

@@ -13,7 +13,7 @@ import { identityRowOf, identitySig } from '@codecast/web/lib/sessionIdentity';
 import { coOwnersOf, type CoOwners } from '@codecast/web/lib/coOwners';
 import { ownersReadOf } from '@codecast/web/store/sessionOwnersSlice';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
-import { roleLikeOf, type OwnerPerson, type OwnerRoleFace, type SessionOwnersView } from '@codecast/web/hooks/useSessionOwners';
+import { roleLikeOf, shownParentOf, type OwnerPerson, type OwnerRoleFace, type SessionOwnersView } from '@codecast/web/hooks/useSessionOwners';
 
 /** A person's face: their picture, else their initials on a tinted disc that
  *  stands off any header. Under 20pt one letter, which fits the disc. */
@@ -62,12 +62,13 @@ export function ParentSessionFace({ sessionId, size = 18 }: { sessionId: string;
 /** Every owner's face, in order: people (three, then +N), the role, the parent session. */
 export function OwnerFaces({ view, size = 16 }: { view: Pick<SessionOwnersView, 'people' | 'role' | 'parent'>; size?: number }) {
   const Theme = useTheme();
+  const parent = shownParentOf(view);
   return (
     <View style={styles.stack}>
       {view.people.slice(0, 3).map((p) => <PersonFace key={p._id} name={p.name} image={p.image} size={size} />)}
       {view.people.length > 3 && <Text style={{ fontSize: 11, color: Theme.textMuted }}>+{view.people.length - 3}</Text>}
       {view.role && <OwnerFace role={view.role} size={size} />}
-      {view.parent && <ParentSessionFace sessionId={view.parent.id} size={size} />}
+      {parent && <ParentSessionFace sessionId={parent.id} size={size} />}
     </View>
   );
 }
@@ -87,17 +88,12 @@ export function CoOwnerFaces({ owners }: { owners: CoOwners }) {
   );
 }
 
-/** "You, Ashot Petrosian, Eval Suite lead, <session>": the faces read aloud. */
 /** The owners a session's header chip says aloud: its row's owners line once
  *  the owners read is in, and only "Owners" while it loads, naming no one it
  *  has not read. */
 export function ownersSpoken(s: Parameters<typeof coOwnersOf>[0] & { currentUser?: { _id?: unknown } | null }, conversationId: string): string {
   if (!ownersReadOf(s as never, conversationId)) return 'Owners';
   return coOwnersOf(s, conversationId, s.currentUser?._id ? String(s.currentUser._id) : null, teamMembersOf(s as never))?.title ?? 'Owners: You';
-}
-
-export function ownersLabel(view: Pick<SessionOwnersView, 'people' | 'role' | 'parent' | 'meId'>): string {
-  return [...view.people.map((p) => (p._id === view.meId ? 'You' : p.name)), ...(view.role ? [view.role.name] : []), ...(view.parent ? [view.parent.title] : [])].join(', ');
 }
 
 const styles = StyleSheet.create({

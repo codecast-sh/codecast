@@ -24,7 +24,7 @@ import { teamMembersOf } from "../lib/activeTeam";
 import { identityRowOf, identitySig } from "../lib/sessionIdentity";
 import { applyOwnersWithToast, ownersTitle } from "../lib/ownersGestures";
 import { useOwnersMenu, type OwnerMenuRow } from "../hooks/useOwnersMenu";
-import { roleLikeOf, roleOwnerOf, useSessionOwners, type OwnerPerson, type OwnerRoleFace, type SessionOwnersView } from "../hooks/useSessionOwners";
+import { roleLikeOf, roleOwnerOf, shownParentOf, useSessionOwners, type OwnerPerson, type OwnerRoleFace, type SessionOwnersView } from "../hooks/useSessionOwners";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { memberPresenceVisual, presenceLabel } from "./presence/memberPresence";
@@ -76,14 +76,16 @@ export function OwnerFace({ person, role, size }: { person?: OwnerPerson; role?:
 }
 
 /** "Owners: You, Ashot Petrosian, Eval Suite lead, <session>". */
-/** Every owner's face, in order: people, the role, the parent session. */
+/** Every owner's face, in order: people, the role, the parent session (unless
+ *  it is the role's own standing session, which the role's face stands for). */
 export function OwnerFaces({ view, size = 16 }: { view: SessionOwnersView; size?: number }) {
+  const parent = shownParentOf(view);
   return (
     <span className="own-stack">
       {view.people.slice(0, 3).map((p) => <OwnerFace key={p._id} person={p} size={size} />)}
       {view.people.length > 3 && <span className="text-meta tabular-nums">+{view.people.length - 3}</span>}
       {view.role && <OwnerFace role={view.role} size={size} />}
-      {view.parent && <ParentSessionFace sessionId={view.parent.id} title={view.parent.title} size={size} />}
+      {parent && <ParentSessionFace sessionId={parent.id} title={parent.title} size={size} />}
     </span>
   );
 }
