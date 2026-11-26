@@ -374,7 +374,10 @@ export function SessionPage(props: InboxConversationProps) {
 
 // SessionCard moved to GlobalSessionPanel.tsx as part of the shared SessionListPanel
 
-export function QueuePageClient() {
+/** `sessionId` is the conversation to open when the inbox is drawn at that
+ *  conversation's own address (/conversation/<id>, ConversationPageClient)
+ *  rather than at /inbox?s=<id>: the two spellings select the same way. */
+export function QueuePageClient({ sessionId }: { sessionId?: string } = {}) {
   const searchParams = useSearchParams();
   const homeTitlebarRef = useTitlebarHead<HTMLDivElement>();
   // When this inbox lives inside a tab, only the ACTIVE tab owns global view
@@ -430,7 +433,7 @@ export function QueuePageClient() {
 
   const isPopstateRef = useRef(false);
   const lastAppliedParamId = useRef<string | null>(null);
-  const paramProcessedRef = useRef(!searchParams.get("s"));
+  const paramProcessedRef = useRef(!(searchParams.get("s") || sessionId));
 
   const injectSession = useInboxStore((s) => s.injectSession);
 
@@ -448,7 +451,7 @@ export function QueuePageClient() {
   const { row: missingRow, failed: missingRowFailed } = useMissingSessionLookup(pendingInjectId ?? unavailableId);
 
   // Select session from URL param -- only when the param actually changes
-  const paramSessionId = searchParams.get("s") || null;
+  const paramSessionId = searchParams.get("s") || sessionId || null;
   const router = useRouter();
   useWatchEffect(() => {
     if (sendToSetup) router.replace("/start");
