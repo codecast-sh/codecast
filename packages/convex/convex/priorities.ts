@@ -18,7 +18,7 @@ import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
 import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
+import { lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
 import { inWorkspace } from "./priorityPassInputs";
@@ -646,11 +646,15 @@ async function doMove(ctx: Ctx, viewer: Id<"users">, shortId: string, to: MoveTo
   if ("error" in p) return p;
   if (p.status !== "active") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only active priorities are ranked (restore it first)` };
   if (typeof to === "number" && (!Number.isInteger(to) || to < 1)) return { error: "a rank is a whole number from 1" };
-  const group = await activeOf(ctx, viewer, p.workspace);
-  const row = group.find((r) => String(r._id) === String(p._id))!;
-  const at = positionsOf(group).get(String(p._id))!;
+  // Every status, so a renumber keeps a quiet or done priority's place for when it comes back.
+  const rows: Priority[] = (await ctx.db
+    .query("priorities")
+    .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace))
+    .take(OWN_SCAN_READ)).filter((r: Priority) => r.status !== "merged");
+  const row = rows.find((r) => String(r._id) === String(p._id))!;
+  const at = positionsOf(rows).get(String(p._id))!;
   const now = Date.now();
-  for (const w of placePriority(group, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
+  for (const w of placePriority(rows, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
     await ctx.db.patch(w.row._id, { ...(w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank }), updated_at: now });
   }
   return echo(ctx, viewer, p._id);
@@ -694,7 +698,7 @@ const UNRANKED = { person_pos: undefined, ai_rank: undefined };
 
 /**
  * Set aside leaves the ranking. Restore brings a set-aside or done priority
- * back active, last until the person or the pass places it: undoing the person's own done hands
+ * back active, last, as the pass's (lastPriorityKey): undoing the person's own done hands
  * the status back to the pass; reopening one the pass marked done is the
  * person's call, which the pass then keeps.
  */
@@ -708,7 +712,7 @@ async function doSetAside(ctx: Ctx, viewer: Id<"users">, shortId: string, aside:
   }
   if (p.status !== "set_aside" && p.status !== "done") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only a set-aside or done priority is restored` };
   const status_set_by = p.status === "done" && p.status_set_by !== "person" ? ("person" as const) : undefined;
-  await ctx.db.patch(p._id, { status: "active", status_set_by, done_at: undefined, ...UNRANKED, updated_at: now });
+  await ctx.db.patch(p._id, { status: "active", status_set_by, done_at: undefined, person_pos: undefined, ai_rank: lastPriorityKey(await activeOf(ctx, viewer, p.workspace)), updated_at: now });
   return echo(ctx, viewer, p._id);
 }
 

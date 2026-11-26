@@ -633,18 +633,38 @@ describe("writes", () => {
     expect(await t.mutation(pri.cliSetStepTier, { api_token: TOKEN, short_id: "pri-1", step_key: "s9", tier: "critical" })).toEqual({ error: "pri-1 has no milestone s9; its milestones: s1, s2, s3" });
   });
 
-  test("set aside leaves the ranking; restore brings it back unplaced, after the ranked ones", async () => {
+  test("set aside leaves the ranking; restore brings it back as the pass's, after every ranked one", async () => {
     const { t, as, ada, p1, p2, p3 } = await world();
     await as(ada).mutation(pri.moveTo, { short_id: "pri-1", to: 1 });
     await as(ada).mutation(pri.setAside, { short_id: "pri-1" });
     expect(await places(t, [p1, p2, p3])).toEqual([["pri-1", null, null], ["pri-2", null, 2], ["pri-3", null, null]]);
     expect((await t.run(async (ctx) => ctx.db.get(p1)))!.status).toBe("set_aside");
     expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3"]);
-    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-1" })).toMatchObject({ short_id: "pri-1", status: "active", rank: 2, rank_source: "ai" });
+    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-1" })).toMatchObject({ short_id: "pri-1", status: "active", rank: 2, rank_source: "ai", ai_rank: 3 });
     expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-1", "3:pri-3"]);
     await expect(as(ada).mutation(pri.restore, { short_id: "pri-1" })).rejects.toThrow("pri-1 is active; only a set-aside or done priority is restored");
     // Reopening one the pass marked done is the person's call: the pass keeps it open.
     expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-4" })).toMatchObject({ short_id: "pri-4", status: "active", status_set_by: "person", done_at: null });
+  });
+
+  test("a quiet priority the person placed comes back to its place after other moves and a restore", async () => {
+    const { t, as, ada, ws, p1, p2, p3 } = await world();
+    // A, Q (quiet), B, C as the person placed them; R (done) restored last.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(p1, { person_pos: 1, ai_rank: undefined });
+      await ctx.db.patch(p2, { person_pos: 1.5, ai_rank: undefined, status: "quiet" });
+      await ctx.db.patch(p3, { person_pos: 2 });
+      await ctx.db.insert("priorities", {
+        user_id: ada, workspace: ws, short_id: "pri-8", title: "C", summary: "", status: "active", person_pos: 3,
+        steps: [], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      } as any);
+    });
+    await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-4" });
+    await as(ada).mutation(pri.moveTo, { short_id: "pri-8", to: 1 });
+    await as(ada).mutation(pri.moveTo, { short_id: "pri-3", to: 4 });
+    expect(await positions(as(ada))).toEqual(["1:pri-8", "2:pri-1", "3:pri-4", "4:pri-3"]);
+    await t.run(async (ctx) => ctx.db.patch(p2, { status: "active" }));
+    expect(await positions(as(ada))).toEqual(["1:pri-8", "2:pri-1", "3:pri-2", "4:pri-4", "5:pri-3"]);
   });
 
   test("only the owner changes a priority", async () => {

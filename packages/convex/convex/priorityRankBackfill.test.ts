@@ -1,7 +1,7 @@
 // The relative-rank backfill (priorityRankBackfill.ts): the order a list showed
 // under the absolute rank is the order it shows after, the person's ranks
 // become their places, a dry run writes nothing, and a second run finds
-// nothing left to do.
+// nothing left to do, even after passes and moves made between the deploy and the backfill.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
@@ -45,7 +45,7 @@ const positions = async (w: Awaited<ReturnType<typeof world>>, workspace = w.ws)
 
 /** Every page, as auto would schedule them, `numItems` at a time. */
 async function drain(w: Awaited<ReturnType<typeof world>>, args: Record<string, unknown>) {
-  const totals = { placed: 0, slotted: 0, cleared: 0 };
+  const totals = { placed: 0, slotted: 0, appended: 0, cleared: 0 };
   let cursor: string | undefined;
   for (;;) {
     const out = await w.t.mutation(backfill, { ...args, numItems: 2, ...(cursor ? { cursor } : {}) });
@@ -61,10 +61,10 @@ describe("priorityRankBackfill", () => {
     const legacy = await w.t.run(async (ctx) => legacyOrder((await ctx.db.query("priorities").collect()).filter((p) => p.workspace === w.ws && p.status === "active")).map((p) => p.short_id));
     expect(legacy).toEqual(["pri-3", "pri-1", "pri-5", "pri-2", "pri-4"]);
 
-    expect(await drain(w, {})).toEqual({ placed: 3, slotted: 3, cleared: 1 });
+    expect(await drain(w, {})).toEqual({ placed: 3, slotted: 3, appended: 0, cleared: 1 });
     expect(await w.t.run(async (ctx) => (await ctx.db.query("priorities").collect()).filter((p) => p.person_pos !== undefined || p.ai_rank !== undefined))).toEqual([]);
 
-    expect(await drain(w, { dryRun: false })).toEqual({ placed: 3, slotted: 3, cleared: 1 });
+    expect(await drain(w, { dryRun: false })).toEqual({ placed: 3, slotted: 3, appended: 0, cleared: 1 });
     expect(await positions(w)).toEqual(["1:pri-3:person", "2:pri-1:ai", "3:pri-5:person", "4:pri-2:ai", "5:pri-4:ai"]);
     const rows = await w.t.run(async (ctx) => ctx.db.query("priorities").collect());
     for (const p of rows) expect([p.rank, p.rank_set_by]).toEqual([undefined, undefined]);
@@ -73,7 +73,30 @@ describe("priorityRankBackfill", () => {
     ]);
 
     // Idempotent: nothing is left to rewrite, and the order holds.
-    expect(await drain(w, { dryRun: false })).toEqual({ placed: 0, slotted: 0, cleared: 0 });
+    expect(await drain(w, { dryRun: false })).toEqual({ placed: 0, slotted: 0, appended: 0, cleared: 0 });
+    expect(await w.t.run(async (ctx) => ctx.db.query("priorities").collect())).toEqual(rows);
+  });
+
+  test("a move made after the deploy keeps its place, a priority the pass made since follows the old order, and a run after a pass writes nothing", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      // Between the deploy and the backfill: the person moved pri-2 to the top, and a pass made pri-9 at its own #1.
+      const two = (await ctx.db.query("priorities").collect()).find((p) => p.short_id === "pri-2")!;
+      await ctx.db.patch(two._id, { person_pos: 0.5 });
+      await ctx.db.insert("priorities", {
+        user_id: w.ada, workspace: w.ws, short_id: "pri-9", title: "pri-9", summary: "", status: "active", ai_rank: 1,
+        steps: [], first_seen_at: 1, last_active_at: NOW, pass_at: 1, created_at: 1, updated_at: 1,
+      } as any);
+    });
+    expect(await drain(w, { dryRun: false })).toEqual({ placed: 4, slotted: 2, appended: 1, cleared: 1 });
+    expect(await positions(w)).toEqual(["1:pri-2:person", "2:pri-3:person", "3:pri-1:ai", "4:pri-5:person", "5:pri-4:ai", "6:pri-9:ai"]);
+    // A pass reslots one of its own; the backfill run again changes nothing.
+    await w.t.run(async (ctx) => {
+      const one = (await ctx.db.query("priorities").collect()).find((p) => p.short_id === "pri-1")!;
+      await ctx.db.patch(one._id, { ai_rank: 5.5 });
+    });
+    const rows = await w.t.run(async (ctx) => ctx.db.query("priorities").collect());
+    expect(await drain(w, { dryRun: false })).toEqual({ placed: 0, slotted: 0, appended: 0, cleared: 0 });
     expect(await w.t.run(async (ctx) => ctx.db.query("priorities").collect())).toEqual(rows);
   });
 });

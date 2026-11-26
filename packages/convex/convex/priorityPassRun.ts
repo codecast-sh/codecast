@@ -296,7 +296,8 @@ export const releaseStrays = internalMutation({
  * a session is theirs and in this workspace, and everything the person set
  * stands, as the rows are now (so a setting made while the model was reading
  * holds too). The pass's output is rejected wherever it would change one: a
- * placed rank (the plan writes only ai_rank, never person_pos); a step's
+ * placed rank (the plan writes ai_rank, and person_pos only to carry a
+ * merged priority's place to a survivor without one); a step's
  * tier, title, done state or drop (holdPersonSteps); a set-aside, done or merged status; a session the person placed, or one
  * mapped to a priority they said it is not part of. A step added to a
  * priority since the input was read (a person's merge) is kept, and a new
@@ -349,6 +350,8 @@ export const applyPlan = internalMutation({
       const row = await mine(u.short_id);
       if (!row || row.status === "merged") continue;
       const patch: Partial<PriorityWrite> = { ...u.patch };
+      // A merge survivor's carried place lands only where the person has not placed it since.
+      if (row.person_pos != null) delete patch.person_pos;
       if (row.status === "set_aside" || row.status_set_by === "person") {
         delete patch.status;
         delete patch.done_at;

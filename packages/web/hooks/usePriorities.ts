@@ -5,7 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { serverErrorText } from "../lib/errorCause";
-import { listMeta, listRows, prioritySig, writeOrRestore, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
+import { listMeta, listRows, prioritySig, withLiveRanks, writeOrRestore, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
 import { useInboxStore } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { useSyncCollection } from "./useSyncCollection";
@@ -31,9 +31,10 @@ export function usePriorityListMeta(): PriorityListMeta {
   return listMeta(data as PriorityList | null | undefined);
 }
 
-/** Reader: the active workspace's priorities, waking on what a row paints. */
+/** Reader: the active workspace's priorities, waking on what a row paints, each rank read live from its place. */
 export function usePriorities(): PriorityRow[] {
-  return useWorkspaceCollection<PriorityRow>("priorities", prioritySig);
+  const rows = useWorkspaceCollection<PriorityRow>("priorities", prioritySig);
+  return useMemo(() => withLiveRanks(rows), [rows]);
 }
 
 /**

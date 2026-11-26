@@ -4,7 +4,7 @@
 // the server refuses one, and the pass's timing. What the list page derives
 // from them lives in lib/priorityList.
 import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
-import { effectivePriorityOrder, placePriority, rankSourceOf } from "@codecast/shared/contracts/priorities";
+import { effectivePriorityOrder, lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { composeLinkHref } from "./composeLink";
 import { serverErrorText } from "./errorCause";
@@ -60,11 +60,18 @@ const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === Stri
 // The paints the store's priority actions make on their draft rows
 // (store/prioritiesSlice), in place. The server's push settles each one.
 
-/** Writes the rank and its source on each of the row's owner's priorities in its workspace, from their effective order. */
-function rerank(rows: PriorityRow[], of: PriorityRow): void {
-  const peers = rows.filter((r) => sameOwner(r, of));
-  for (const r of peers) { r.rank = null; r.rank_source = rankSourceOf(r); }
-  effectivePriorityOrder(peers).forEach((r, i) => { r.rank = i + 1; });
+/**
+ * The rows with `rank` and `rank_source` read live from their places
+ * (shared/contracts/priorities priorityPositions), not the server's
+ * snapshot, so a move paints at once. A row whose rank holds is the same row.
+ */
+export function withLiveRanks(rows: readonly PriorityRow[]): PriorityRow[] {
+  const positions = priorityPositions(rows, (r) => String(r._id));
+  return rows.map((r) => {
+    const rank = positions.get(String(r._id)) ?? null;
+    const rank_source = rankSourceOf(r);
+    return rank === r.rank && rank_source === r.rank_source ? r : { ...r, rank, rank_source };
+  });
 }
 
 /** Where the person moves a priority: a position (1 = first), or one up or down. */
@@ -74,13 +81,12 @@ export type PriorityMove = number | "up" | "down";
 export function paintMove(rows: PriorityRow[], shortId: string, to: PriorityMove): void {
   const row = rows.find((r) => r.short_id === shortId);
   if (!row || row.status !== "active") return;
-  const peers = effectivePriorityOrder(rows.filter((r) => sameOwner(r, row)));
-  const at = peers.indexOf(row) + 1;
+  const peers = rows.filter((r) => sameOwner(r, row) && r.status !== "merged");
+  const at = effectivePriorityOrder(peers).indexOf(row) + 1;
   for (const w of placePriority(peers, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
     if (w.person_pos !== undefined) w.row.person_pos = w.person_pos;
     else w.row.ai_rank = w.ai_rank ?? null;
   }
-  rerank(rows, row);
 }
 
 /** Puts one step on the critical path or among the polish, as the person's choice. */
@@ -92,15 +98,14 @@ export function paintTier(row: PriorityRow, stepKey: string, tier: PriorityStepT
   row.counts = criticalCounts(row.steps);
 }
 
-/** Set aside leaves the ranking; restore brings it back active, unplaced, after its owner's ranked ones. */
+/** Set aside leaves the ranking; restore brings it back active as the pass's, after its owner's ranked ones (lastPriorityKey, as the server does). */
 export function paintStatus(rows: PriorityRow[], shortId: string, status: "active" | "set_aside"): void {
   const row = rows.find((r) => r.short_id === shortId);
   if (!row) return;
   row.person_pos = null;
-  row.ai_rank = null;
+  row.ai_rank = status === "active" ? lastPriorityKey(rows.filter((r) => sameOwner(r, row))) : null;
   row.status = status;
   if (status === "active") row.done_at = null;
-  rerank(rows, row);
 }
 
 export function criticalCounts(steps: readonly PriorityStep[]): { critical_done: number; critical_total: number } {

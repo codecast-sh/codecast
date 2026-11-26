@@ -1,18 +1,22 @@
 // One-time backfill for relative rank (prioritiesSchema person_pos, ai_rank):
 // every priority still carrying the absolute `rank` and `rank_set_by` they
 // replaced. An active one's owner's active priorities in its workspace are
-// rewritten together, in the order they show now: the ones the person ranked
-// get that position as their person_pos, the pass's get it as their ai_rank,
-// so the order holds exactly. Any other status only loses the old fields. A
-// rewritten row has neither field left, so a second run writes nothing.
-// Dry run by default; auto:true drains the table page by page.
+// rewritten together, in the order the absolute rank showed: the ones the
+// person ranked get that position as their person_pos, the pass's get it as
+// their ai_rank. A row that already holds a person_pos (a move made after the
+// deploy) keeps it, and the group's active rows with no old fields (made or
+// rewritten since the deploy) follow, as the pass's, in the order they show.
+// Any other status only loses the old fields. A rewritten row has neither old
+// field, so a run after another, or after passes, writes nothing.
+// Run it right after deploy.sh, before the next pass:
 //   packages/convex/run.sh priorityRankBackfill:run '{"dryRun":false,"auto":true}'
-// Once it reports done, delete `rank` and `rank_set_by` from the schema and this file.
+// Dry run by default; auto:true drains the table page by page.
 
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 
 type Priority = Doc<"priorities">;
 
@@ -51,7 +55,7 @@ export const run = internalMutation({
     const numItems = args.numItems ?? 100;
     const page = await ctx.db.query("priorities").paginate({ cursor: args.cursor ?? null, numItems });
     // What it rewrites (a dry run: what it would, row by row).
-    const counts = { placed: 0, slotted: 0, cleared: 0 };
+    const counts = { placed: 0, slotted: 0, appended: 0, cleared: 0 };
     for (const listed of page.page) {
       // Read again: a group rewritten earlier in this run has moved on.
       const p = await ctx.db.get(listed._id);
@@ -69,10 +73,15 @@ export const run = internalMutation({
         .query("priorities")
         .withIndex("by_user_workspace_status", (q) => q.eq("user_id", p.user_id).eq("workspace", p.workspace).eq("status", "active"))
         .take(GROUP_READ);
-      for (const [i, r] of legacyOrder(group.filter(legacy)).entries()) {
-        const placed = r.rank_set_by === "person";
-        await ctx.db.patch(r._id, { rank: undefined, rank_set_by: undefined, ...(placed ? { person_pos: i + 1 } : { ai_rank: i + 1 }) });
+      const old = legacyOrder(group.filter(legacy));
+      for (const [i, r] of old.entries()) {
+        const placed = r.person_pos != null || r.rank_set_by === "person";
+        await ctx.db.patch(r._id, { rank: undefined, rank_set_by: undefined, ...(r.person_pos != null ? {} : placed ? { person_pos: i + 1 } : { ai_rank: i + 1 }) });
         counts[placed ? "placed" : "slotted"]++;
+      }
+      for (const [i, r] of effectivePriorityOrder(group.filter((r) => !legacy(r) && r.person_pos == null)).entries()) {
+        await ctx.db.patch(r._id, { ai_rank: old.length + i + 1 });
+        counts.appended++;
       }
     }
     if (args.auto && !page.isDone) {

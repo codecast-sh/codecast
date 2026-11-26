@@ -491,8 +491,15 @@ export type PriorityWrite = {
   title: string;
   summary: string;
   status: Exclude<PriorityStatus, "merged">;
-  /** Where the pass slots it among the placed priorities (null when not active). The pass never writes person_pos. */
+  /** Where the pass slots it among the placed priorities (null when not active). */
   ai_rank: number | null;
+  /**
+   * Set only on a merge survivor the person never placed: the smallest place
+   * among the placed priorities it absorbed, the person's own value carried
+   * over (applyPlan writes it only to a row still without one). The pass
+   * never chooses a person_pos.
+   */
+  person_pos?: number;
   serves: string | null;
   steps: PriorityStep[];
   last_active_at: number;
@@ -801,9 +808,16 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       plan.notes.push(`${target}: kept active, its critical path is not done`);
     }
 
+    // Absorbing a priority the person placed carries their place over, unless the survivor has its own.
+    const heldPlace = prior?.person_pos == null ? Math.min(...absorbed.map((a) => a.person_pos ?? Infinity)) : Infinity;
+    if (heldPlace !== Infinity) plan.notes.push(`${target}: took the person's place of the priority it absorbed`);
+
     rows.push({
       target, prior, proposal: prop, absorbed, remap, stepKeyFor, order,
-      write: { title: prop.title, summary: prop.summary, status, ai_rank: prior?.ai_rank ?? null, serves: prop.serves, steps, last_active_at: 0, done_at: null, pass_at: now },
+      write: {
+        title: prop.title, summary: prop.summary, status, ai_rank: prior?.ai_rank ?? null, serves: prop.serves, steps, last_active_at: 0, done_at: null, pass_at: now,
+        ...(heldPlace !== Infinity ? { person_pos: heldPlace } : {}),
+      },
     });
   }
 
@@ -869,7 +883,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     }
   }
 
-  slotRanks(rows, positionsOf(input.priorities), plan.notes);
+  slotRanks(rows, positionsOf(input.priorities));
 
   for (const r of rows) {
     const w = r.write;
@@ -906,53 +920,53 @@ function positionsOf(priorities: PassPriority[]): Map<string, number> {
   return new Map(effectivePriorityOrder(priorities).map((p, i) => [p.short_id, i + 1]));
 }
 
-type SlotRow = { target: string; prior: PassPriority | null; proposal: PriorityProposal | null; absorbed: PassPriority[]; order: number; write: PriorityWrite };
+type SlotRow = { prior: PassPriority | null; proposal: PriorityProposal | null; order: number; write: PriorityWrite };
 
 /**
  * The pass's ranks. A priority the person placed keeps its person_pos, so its
  * place among the others they placed: the pass never moves it. One the reply
  * left alone keeps its ai_rank, between the same neighbours. Every other
  * active one (the reply's, a new one, one with no place yet) is slotted in at
- * the position it wants (the reply's rank; else where it shows now; a survivor
- * that absorbed a placed priority takes that one's), and gets an ai_rank
- * between the neighbours it landed between, on their scale. Leaving active
- * ends the pass's rank.
+ * the position it wants (the reply's rank, else where it shows now) and gets
+ * an ai_rank between the neighbours it landed between, on their scale. When
+ * two neighbours are too close to fit one between, every priority the person
+ * did not place is slotted again, in the same order. Leaving active ends the
+ * pass's rank.
  */
-function slotRanks(rows: SlotRow[], position: Map<string, number>, notes: string[]): void {
+function slotRanks(rows: SlotRow[], position: Map<string, number>): void {
   const active = rows.filter((r) => r.write.status === "active");
-  const absorbedPlace = (r: SlotRow) => Math.min(...r.absorbed.filter((a) => a.person_pos != null && position.has(a.short_id)).map((a) => position.get(a.short_id)!));
-  const placed = (r: SlotRow) => r.prior?.person_pos != null;
-  const kept = (r: SlotRow) => placed(r) || (!r.proposal && r.write.ai_rank != null && absorbedPlace(r) === Infinity);
-  const key = (r: SlotRow) => r.prior?.person_pos ?? r.write.ai_rank!;
-  const list = active.filter(kept)
-    .sort((a, b) => key(a) - key(b) || Number(placed(b)) - Number(placed(a)) || (b.prior?.last_active_at ?? 0) - (a.prior?.last_active_at ?? 0))
+  const placeOf = (r: SlotRow) => r.prior?.person_pos ?? r.write.person_pos ?? null;
+  const keyOf = (r: SlotRow) => placeOf(r) ?? r.write.ai_rank!;
+  const list = active.filter((r) => placeOf(r) != null || (!r.proposal && r.write.ai_rank != null))
+    .sort((a, b) => keyOf(a) - keyOf(b) || Number(placeOf(b) != null) - Number(placeOf(a) != null) || (b.prior?.last_active_at ?? 0) - (a.prior?.last_active_at ?? 0))
     .map((r) => ({ r, kept: true }));
-  const want = (r: SlotRow): number => {
-    const took = absorbedPlace(r);
-    if (took !== Infinity) {
-      notes.push(`${r.target}: took the place of the placed priority it absorbed`);
-      return took;
-    }
-    if (r.proposal) return r.proposal.rank;
-    return (r.prior && position.get(r.prior.short_id)) ?? Infinity;
-  };
-  const slotted = active.filter((r) => !kept(r)).map((r) => ({ r, at: want(r) }))
+  const want = (r: SlotRow) => (r.proposal ? r.proposal.rank : (r.prior && position.get(r.prior.short_id)) ?? Infinity);
+  const slotted = active.filter((r) => !list.some((x) => x.r === r)).map((r) => ({ r, at: want(r) }))
     .sort((a, b) => a.at - b.at || Number(!a.r.proposal) - Number(!b.r.proposal) || a.r.order - b.r.order || (b.r.prior?.last_active_at ?? 0) - (a.r.prior?.last_active_at ?? 0));
   for (const { r, at } of slotted) list.splice(Math.min(at - 1, list.length), 0, { r, kept: false });
-  for (let k = 0; k < list.length;) {
-    if (list[k].kept) { k++; continue; }
-    let end = k;
-    while (end < list.length && !list[end].kept) end++;
-    const lo = k > 0 ? key(list[k - 1].r) : undefined;
-    const hi = end < list.length ? key(list[end].r) : undefined;
-    const run = end - k;
-    for (let t = 0; t < run; t++) {
-      list[k + t].r.write.ai_rank =
-        lo !== undefined && hi !== undefined ? lo + ((hi - lo) * (t + 1)) / (run + 1)
-          : hi !== undefined ? hi - (run - t)
-            : (lo ?? 0) + t + 1;
+  // Each run of slotted priorities between two kept neighbours, spread evenly between their keys; false when a key would not fall strictly between.
+  const spread = (): boolean => {
+    for (let k = 0; k < list.length;) {
+      if (list[k].kept) { k++; continue; }
+      let end = k;
+      while (end < list.length && !list[end].kept) end++;
+      const lo = k > 0 ? keyOf(list[k - 1].r) : undefined;
+      const hi = end < list.length ? keyOf(list[end].r) : undefined;
+      const run = end - k;
+      let prev = lo ?? -Infinity;
+      for (let t = 0; t < run; t++) {
+        const key = lo !== undefined && hi !== undefined ? lo + ((hi - lo) * (t + 1)) / (run + 1) : hi !== undefined ? hi - (run - t) : (lo ?? 0) + t + 1;
+        if (!(key > prev && (hi === undefined || key < hi))) return false;
+        list[k + t].r.write.ai_rank = key;
+        prev = key;
+      }
+      k = end;
     }
-    k = end;
+    return true;
+  };
+  if (!spread()) {
+    for (const x of list) x.kept = placeOf(x.r) != null;
+    spread();
   }
   for (const r of rows) if (r.write.status !== "active") r.write.ai_rank = null;
 }

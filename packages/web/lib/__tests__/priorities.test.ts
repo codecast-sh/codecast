@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMove, paintStatus, paintTier, pastBadge, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMove, paintStatus, paintTier, pastBadge, withLiveRanks, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -66,8 +66,8 @@ describe("the store actions' paints", () => {
     const rows = fresh();
     paintMove(rows, "pri-3", 1);
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-3", "pri-1", "pri-2"]);
-    expect(rows.map((r) => [r.short_id, r.rank, r.person_pos, r.rank_source])).toEqual([
-      ["pri-1", 2, null, "ai"], ["pri-2", 3, null, "ai"], ["pri-3", 1, 0, "person"], ["pri-4", null, null, "ai"],
+    expect(withLiveRanks(rows).map((r) => [r.short_id, r.rank, r.person_pos, r.rank_source])).toEqual([
+      ["pri-1", 2, null, "ai"], ["pri-2", 3, null, "ai"], ["pri-3", 1, 0, "person"], ["pri-4", 1, null, "ai"],
     ]);
   });
 
@@ -79,7 +79,7 @@ describe("the store actions' paints", () => {
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-2", "pri-1", "pri-3"]);
     paintMove(rows, "pri-2", "down");
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-1", "pri-2", "pri-3"]);
-    expect(rows.find((r) => r.short_id === "pri-2")!.rank).toBe(2);
+    expect(withLiveRanks(rows).find((r) => r.short_id === "pri-2")!.rank).toBe(2);
   });
 
   test("a step dragged across the line changes tier and the critical count follows", () => {
@@ -98,6 +98,8 @@ describe("the store actions' paints", () => {
     const back = [...fresh(), row("pri-6", { status: "quiet" })];
     paintStatus(back, "pri-6", "active");
     expect(ids(ownerGroups(back)[0].active)).toEqual(["pri-1", "pri-2", "pri-3", "pri-6"]);
+    // Restored with the place after every ranked one, as the server writes it: no active priority is left without a place.
+    expect(back.find((r) => r.short_id === "pri-6")!.ai_rank).toBe(4);
   });
 });
 
