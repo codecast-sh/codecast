@@ -108,7 +108,7 @@ export async function releaseEndedRunTree(cwd: string, context: Record<string, s
     const reason = off ? await contentKeepReason(tree, repoRoot) : null;
     if (reason) {
       // Kept for its work, not for a server: an ended run's tree holds no port (ct-101923).
-      const { releaseWorkspacePorts } = await import("../workspace/lifecycle.js");
+      const { releaseWorkspacePorts } = await import("../workspace/portRelease.js");
       const freed = await releaseWorkspacePorts(repoRoot, name).catch(() => false);
       console.log(`${c.dim}Kept worktree ${name}: ${reason} (${off})${freed ? "; its ports are free" : ""}${c.reset}`);
       return;
@@ -140,7 +140,7 @@ export async function releaseEndedRunTreePorts(repoRoot: string, liveRunIds?: ()
   if (!ids || !cwds) return [];
   const live = runTreesOf(repoRoot, ids);
   const { young } = await import("./runBranch.js");
-  const { releaseWorkspacePorts } = await import("../workspace/lifecycle.js");
+  const { releaseWorkspacePorts } = await import("../workspace/portRelease.js");
   const freed: string[] = [];
   for (const s of held) {
     const tree = fs.realpathSync(s.path);

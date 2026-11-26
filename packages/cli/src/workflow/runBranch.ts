@@ -117,6 +117,41 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
   return `Released worktree ${release}, which an ended run left holding ${branch}`;
 }
 
+type Post = (route: string, body: Record<string, any>) => Promise<any>;
+
+/** claimRunBranch as `cast flow run` asks it, its liveness and hands read from the server through `post`. */
+export async function claimRunBranchVia(repo: string, slug: string | null, branch: string, opts: { task?: string; rewrites: boolean }, post: Post): Promise<string | null> {
+  const { runHandsVia } = await import("../lineTrialBranch.js");
+  const live: RunLiveness = {
+    trees: async () => {
+      const { deviceId } = await import("../remote/device.js");
+      return liveTreeStates(repo, await post("/cli/workflow-runs/live-on-device", { device: deviceId() }).catch(() => null));
+    },
+    taskRun: async (task) => {
+      const read = await post("/cli/workflow-runs/list", { task_id: task, limit: 1, slim: true });
+      if (!Array.isArray(read?.runs)) throw new Error(read?.error ?? "no answer");
+      const status = String(read.runs[0]?.status ?? "");
+      return ["pending", "running", "paused"].includes(status) ? status : null;
+    },
+  };
+  return claimRunBranch(repo, slug, branch, { ...opts, live, hands: runHandsVia((route, body) => post(route, body)) });
+}
+
+/**
+ * The worktree an earlier run of this change made (`cast ws path` printed `earlierPath`), read before its branch moves,
+ * or null. When it is on `resets`, the branch the run is about to move under it, uncommitted work there refuses: the
+ * reset that follows would drop it. One on another branch (an earlier run's) keeps it and is released
+ * (flowChange.ts putChangeInWorktree).
+ */
+export function earlierRunTree(earlierPath: string, resets: string | null): string | null {
+  const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
+  if (!earlier || !resets || git(earlier, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== resets) return earlier;
+  if (git(earlier, ["status", "--porcelain", "--untracked-files=no"])) {
+    throw new Error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`);
+  }
+  return earlier;
+}
+
 /** When git added worktree `tree`: its `.git` file is written once, then; 0 when there is none. */
 function madeAt(tree: string): number {
   try { return fs.statSync(path.join(tree, ".git")).mtimeMs; } catch { return 0; }
