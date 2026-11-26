@@ -566,7 +566,7 @@ describe("writes", () => {
     const steps = await t.run(async (ctx) => (await ctx.db.get(p1))!.steps);
     expect(steps.find((s) => s.key === "s2")).toMatchObject({ tier: "polish", tier_set_by: "person" });
     expect(steps.find((s) => s.key === "s1")).toMatchObject({ tier: "critical", tier_set_by: "pass" });
-    expect(await t.mutation(pri.cliSetStepTier, { api_token: TOKEN, short_id: "pri-1", step_key: "s9", tier: "critical" })).toEqual({ error: "pri-1 has no step s9; its steps: s1, s2, s3" });
+    expect(await t.mutation(pri.cliSetStepTier, { api_token: TOKEN, short_id: "pri-1", step_key: "s9", tier: "critical" })).toEqual({ error: "pri-1 has no milestone s9; its milestones: s1, s2, s3" });
   });
 
   test("set aside leaves the ranking; restore brings it back after the pass-ranked ones", async () => {
@@ -578,8 +578,9 @@ describe("writes", () => {
     expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-1" })).toMatchObject({ short_id: "pri-1", status: "active", rank: 2 });
     expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 3, "pass"], ["pri-2", 2, "pass"], ["pri-3", null, "pass"]]);
     expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-1", "3:pri-3"]);
-    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-4" })).toEqual({ error: "pri-4 is done, not set aside; only a set-aside priority is restored" });
-    await expect(as(ada).mutation(pri.restore, { short_id: "pri-1" })).rejects.toThrow("only a set-aside priority is restored");
+    await expect(as(ada).mutation(pri.restore, { short_id: "pri-1" })).rejects.toThrow("pri-1 is active; only a set-aside or done priority is restored");
+    // Reopening one the pass marked done is the person's call: the pass keeps it open.
+    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-4" })).toMatchObject({ short_id: "pri-4", status: "active", status_set_by: "person", done_at: null });
   });
 
   test("only the owner changes a priority", async () => {

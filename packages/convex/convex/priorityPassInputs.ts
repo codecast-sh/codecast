@@ -16,7 +16,7 @@ import { isRestricted } from "./chatAccess";
 import { isStandingSession } from "./lib/orgOwnership";
 import { isRunLog, parseRoomKey } from "@codecast/shared/contracts";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
-import { PRIORITY_PASS_CAPS, type PassCall, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { PRIORITY_PASS_CAPS, type PassCall, type PassCorrection, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 
 export const DAY = 86_400_000;
 export const MINUTE = 60_000;
@@ -61,6 +61,8 @@ export type PassInputs = {
   read_to: number;
   /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. */
   strays: Id<"conversations">[];
+  /** The pending corrections the input holds: applyPlan marks them applied. */
+  corrections: Id<"priority_corrections">[];
 };
 
 const sessionId = (conv: Doc<"conversations">) => conv.short_id ?? String(conv._id);
@@ -165,6 +167,48 @@ async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: 
     out.set(key, pr);
   }
   return [...out.values()];
+}
+
+/** A priority's short id by its id, one read each per call. */
+function shortIds(ctx: { db: any }) {
+  const seen = new Map<string, Promise<string | null>>();
+  return (id: Id<"priorities">): Promise<string | null> => {
+    const key = String(id);
+    if (!seen.has(key)) seen.set(key, ctx.db.get(id).then((p: Doc<"priorities"> | null) => p?.short_id ?? null));
+    return seen.get(key)!;
+  };
+}
+
+/** Where the person put a session and which priorities they said it is not part of, as the pass shows them. */
+async function personLinks(conv: Doc<"conversations">, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<Pick<PassSession, "placed" | "not_for">> {
+  const out: Pick<PassSession, "placed" | "not_for"> = {};
+  const placedOn = conv.priority_set_by === "person" && conv.priority_id ? await shortId(conv.priority_id) : null;
+  if (placedOn) out.placed = { priority: placedOn, step_key: conv.priority_step_key ?? null };
+  const not: string[] = [];
+  for (const id of conv.priority_not ?? []) {
+    const short = await shortId(id);
+    if (short) not.push(short);
+  }
+  if (not.length) out.not_for = not;
+  return out;
+}
+
+/** The person's corrections in the workspace the pass reads, newest PRIORITY_PASS_CAPS.corrections, oldest first. */
+async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: string, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<{ input: PassCorrection[]; pending: Id<"priority_corrections">[] }> {
+  const rows: Doc<"priority_corrections">[] = await ctx.db
+    .query("priority_corrections")
+    .withIndex("by_user_workspace_created", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+    .order("desc")
+    .take(PRIORITY_PASS_CAPS.corrections);
+  const input: PassCorrection[] = [];
+  const pending: Id<"priority_corrections">[] = [];
+  for (const c of rows.reverse()) {
+    const priority = await shortId(c.priority_id);
+    if (!priority) continue;
+    input.push({ priority, step_key: c.step_key ?? null, text: c.text, at: c.created_at });
+    if (c.status === "pending") pending.push(c._id);
+  }
+  return { input, pending };
 }
 
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
@@ -338,6 +382,7 @@ export const passInputs = internalQuery({
     // Earliest first activity first, as they were read.
     const oldestFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
     const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
+    const shortId = shortIds(ctx);
     const sessions: PassSession[] = [];
     for (const t of oldestFirst) {
       const conv = t.conv;
@@ -353,6 +398,7 @@ export const passInputs = internalQuery({
         prs: await sessionPrs(ctx, conv, prBudget),
         pin_events: t.pin_events,
         typed: t.typed,
+        ...(await personLinks(conv, shortId)),
       });
     }
 
@@ -382,10 +428,14 @@ export const passInputs = internalQuery({
         status: p.status as PassPriority["status"],
         rank: p.rank ?? null,
         rank_set_by: p.rank_set_by,
+        ...(p.status_set_by ? { status_set_by: p.status_set_by } : {}),
         serves: p.serves ?? null,
         steps: p.steps,
         last_active_at: p.last_active_at,
-        sessions: readable.map((c) => ({ id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at })),
+        sessions: readable.map((c) => ({
+          id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
+          ...(c.priority_set_by === "person" ? { by_person: true } : {}),
+        })),
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
       });
@@ -403,6 +453,7 @@ export const passInputs = internalQuery({
     const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
     const ws = parseWorkspaceKey(args.workspace);
     const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
+    const corrections = await correctionsFor(ctx, args.user_id, args.workspace, shortId);
     const calls = team ? await callsIn(ctx, vis, args.user_id, team._id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until, (landed) => fresh(landed, landed)) : [];
     return {
       input: {
@@ -415,11 +466,13 @@ export const passInputs = internalQuery({
         step_tasks,
         sessions,
         calls,
+        corrections: corrections.input,
       },
       cursor_at,
       more: stopAt !== null,
       read_to: stopAt !== null ? Math.max(cursor_at, Math.max(stopAt, cursor_at) - 1) : until,
       strays,
+      corrections: corrections.pending,
     };
   },
 });

@@ -31,7 +31,7 @@ export type AccessStamp = {
 };
 
 // Tables whose rows only their owner reads, whatever workspace they are filed under.
-const OWNER_ONLY_TABLES: ReadonlySet<string> = new Set(["priority_pass_runs", "thread_state_events"]);
+const OWNER_ONLY_TABLES: ReadonlySet<string> = new Set(["priority_pass_runs", "thread_state_events", "priority_corrections"]);
 
 /** Pure stamp from a document that already carries its stored workspace key. */
 export function accessStampFromDoc(table: string, doc: any): AccessStamp | null {

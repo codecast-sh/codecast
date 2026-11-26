@@ -12,6 +12,7 @@ const row = (over: Partial<PriorityRow>): PriorityRow => ({
   _id: "p1", short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", rank: 1, rank_set_by: "pass", serves: null, steps: [],
   counts: { critical_done: 3, critical_total: 6 }, workspace: "team:t1", user_id: "u1", owner: "Ada", mine: true,
   first_seen_at: NOW - 30 * 24 * HOUR, last_active_at: NOW - 2 * HOUR, done_at: null, session_count: 0, session_count_more: false, sessions: [],
+  status_set_by: "pass", correction_pending: false,
   ...over,
 });
 
@@ -41,9 +42,10 @@ describe("output", () => {
       steps: [
         { key: "s1", title: "Judge window", tier: "critical", tier_set_by: "pass", refs: [{ kind: "task", id: "ct-12" }], done: true, sessions: [{ short_id: "jx7abc1", title: "", step_key: "s1", updated_at: NOW }] },
         { key: "s2", title: "Grader faults under 10%", tier: "critical", tier_set_by: "person", refs: [{ kind: "pr", id: "acme/web#4" }], done: false, sessions: [] },
-        { key: "s3", title: "Docs", tier: "polish", tier_set_by: "pass", refs: [], done: false, sessions: [] },
+        { key: "s3", title: "Docs", title_set_by: "person", tier: "polish", tier_set_by: "pass", refs: [], done: false, sessions: [] },
       ],
       other_sessions: [{ short_id: "jx7zzz9", title: "", step_key: null, updated_at: NOW }],
+      corrections: [{ _id: "c1", step_key: "s2", text: "The grader shipped already", status: "pending", created_at: NOW }],
     }, NOW);
     expect(detail).toEqual([
       "pri-1  Trusted evals",
@@ -55,9 +57,12 @@ describe("output", () => {
       "    s2  Grader faults under 10%  (yours)  acme/web#4",
       "",
       "Polish",
-      "    s3  Docs",
+      "    s3  Docs  (yours)",
       "",
       "Other sessions  jx7zzz9",
+      "",
+      "Corrections",
+      "  pending  s2  The grader shipped already  c1",
     ]);
   });
 
@@ -126,7 +131,7 @@ describe("cast priorities on the wire", () => {
     clearWorkspaceCache();
     h.answer = (p, body) => (p === "/cli/teams" ? roster : p === "/cli/priorities/run" ? { scheduled: ["team:t1"], note: "A pass is running." } : row({ short_id: body.short_id, rank: body.rank ?? 1 }));
     await h.run("rank", "pri-3", "2");
-    await h.run("step", "3", "s2", "--polish");
+    await h.run("milestone", "tier", "3/S2", "--polish");
     await h.run("set-aside", "pri-3");
     await h.run("restore", "pri-3");
     await h.run("run");
@@ -137,14 +142,55 @@ describe("cast priorities on the wire", () => {
       { path: "/cli/priorities/restore", body: { short_id: "pri-3" } },
       { path: "/cli/priorities/run", body: { team_id: "t1" } },
     ]);
-    expect(h.logs).toEqual(["ok pri-3 now #2", "ok pri-3 s2 -> polish", "ok pri-3 set aside", "ok pri-3 active", "A pass is running."]);
+    expect(h.logs).toEqual(["ok pri-3 now #2", "ok pri-3/s2 -> polish", "ok pri-3 set aside", "ok pri-3 active", "A pass is running."]);
     h.logs.length = 0;
     await h.run("set-aside", "pri-3", "--json");
     expect(JSON.parse(h.out())).toMatchObject({ short_id: "pri-3", session_count: 0 });
   });
 
+  test("overrides and corrections post what they name, milestones as pri-N/sK", async () => {
+    clearWorkspaceCache();
+    h.answer = (p, body) => (p === "/cli/priorities/correct" ? { _id: "c1", step_key: body.step_key ?? null, text: body.text, status: "pending", created_at: NOW } : p === "/cli/priorities/correction-delete" ? { deleted: "c1" } : row({ short_id: p === "/cli/priorities/merge" ? body.into : body.short_id ?? "pri-3" }));
+    await h.run("milestone", "done", "pri-3/s1");
+    await h.run("milestone", "undone", "pri-3/s1");
+    await h.run("milestone", "rename", "pri-3/s2", "Judge", "window", "live");
+    await h.run("milestone", "drop", "pri-3/s3");
+    await h.run("done", "pri-3");
+    await h.run("merge", "pri-3", "--into", "4");
+    await h.run("session", "move", "jx7abc1", "pri-3/s2");
+    await h.run("session", "move", "jx7abc2", "pri-3");
+    await h.run("session", "not-this", "jx7abc1");
+    await h.run("correct", "pri-3/s2", "the", "grader", "already", "shipped");
+    await h.run("correction", "delete", "c1");
+    expect(h.calls).toEqual([
+      { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s1", done: true } },
+      { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s1", done: false } },
+      { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s2", title: "Judge window live" } },
+      { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s3", drop: true } },
+      { path: "/cli/priorities/done", body: { short_id: "pri-3" } },
+      { path: "/cli/priorities/merge", body: { short_id: "pri-3", into: "pri-4" } },
+      { path: "/cli/priorities/session-move", body: { session: "jx7abc1", short_id: "pri-3", step_key: "s2" } },
+      { path: "/cli/priorities/session-move", body: { session: "jx7abc2", short_id: "pri-3" } },
+      { path: "/cli/priorities/session-not-this", body: { session: "jx7abc1" } },
+      { path: "/cli/priorities/correct", body: { short_id: "pri-3", step_key: "s2", text: "the grader already shipped" } },
+      { path: "/cli/priorities/correction-delete", body: { correction_id: "c1" } },
+    ]);
+    expect(h.logs).toEqual([
+      "ok pri-3/s1 done", "ok pri-3/s1 not done", "ok pri-3/s2 renamed", "ok pri-3/s3 dropped", "ok pri-3 done", "ok pri-3 merged into pri-4",
+      "ok jx7abc1 -> pri-3/s2", "ok jx7abc2 -> pri-3", "ok jx7abc1 is not part of pri-3",
+      "ok correction c1 on pri-3/s2: the next pass reads it", "ok correction c1 deleted",
+    ]);
+  });
+
+  test("a milestone verb needs pri-N/sK; nothing is posted otherwise", async () => {
+    await expect(h.run("milestone", "done", "pri-3")).rejects.toThrow(/exit 1/);
+    await expect(h.run("milestone", "drop", "pri-3/s1/x")).rejects.toThrow(/exit 1/);
+    await expect(h.run("correct", "ct-3", "wrong")).rejects.toThrow(/exit 1/);
+    expect(h.calls).toHaveLength(0);
+  });
+
   test("a step needs exactly one tier, and a rank a whole number; nothing is posted otherwise", async () => {
-    await expect(h.run("step", "pri-3", "s2")).rejects.toThrow(/exit 1/);
+    await expect(h.run("milestone", "tier", "pri-3/s2")).rejects.toThrow(/exit 1/);
     await expect(h.run("rank", "pri-3", "first")).rejects.toThrow(/exit 1/);
     await expect(h.run("show", "ct-3")).rejects.toThrow(/exit 1/);
     expect(h.calls).toHaveLength(0);

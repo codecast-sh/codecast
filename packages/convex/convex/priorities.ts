@@ -6,24 +6,28 @@
 // key only while the owner lists their sessions to that team; nothing is
 // readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority, and every change marks its field set by the person, so
-// the pass (lib/priorityPass.ts) never overrides it.
+// the pass (lib/priorityPass.ts, priorityPassRun applyPlan) never overrides it:
+// rank; a milestone's tier, done state, title and drop (steps are milestones);
+// set aside, done and merge; a session's move and "not this". Corrections are
+// the person's words to the pass, read by every later pass until deleted.
 
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation, query } from "./functions";
+import { internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { orderPriorities } from "./lib/priorityPass";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { hasOkRun, runBlocker } from "./priorityPassRun";
+import { hasOkRun, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
+import { inWorkspace } from "./priorityPassInputs";
 import { passTiming } from "./priorityPassSweep";
 import { getOwnerMembership } from "./privacy";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import type {
-  PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityPinLine, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
+  PriorityCorrection, PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityPinLine, PriorityRow, PrioritySession, PriorityStatus, PriorityStep,
 } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -100,7 +104,7 @@ async function positionOf(ctx: Ctx, p: Priority): Promise<number | null> {
 }
 
 function criticalCounts(p: Priority): { critical_done: number; critical_total: number } {
-  const critical = p.steps.filter((s) => s.tier === "critical");
+  const critical = p.steps.filter((s) => s.tier === "critical" && !s.dropped);
   return { critical_done: critical.filter((s) => s.done).length, critical_total: critical.length };
 }
 
@@ -110,7 +114,10 @@ type Mapped = Array<PrioritySession | null>;
 async function mappedSessions(r: Reader, p: Priority, read: number): Promise<Mapped> {
   const out: Mapped = [];
   for (const c of await r.sessionsOf(p, read)) {
-    out.push((await r.listed(c)) ? { short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at } : null);
+    out.push((await r.listed(c)) ? {
+      short_id: c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, updated_at: c.updated_at,
+      ...(c.priority_set_by === "person" ? { set_by_person: true } : {}),
+    } : null);
   }
   return out;
 }
@@ -145,13 +152,26 @@ async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, strin
   return names;
 }
 
+/** The owner's corrections on a priority, newest first (none for anyone else). */
+const CORRECTIONS_READ = 50;
+async function correctionsOf(ctx: Ctx, viewer: Id<"users">, p: Priority, limit = CORRECTIONS_READ): Promise<Doc<"priority_corrections">[]> {
+  if (!isOwner(viewer, p)) return [];
+  return await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", p._id)).order("desc").take(limit);
+}
+
+const correctionOut = (c: Doc<"priority_corrections">): PriorityCorrection => ({ _id: c._id, step_key: c.step_key ?? null, text: c.text, status: c.status, created_at: c.created_at });
+
+async function correctionPending(ctx: Ctx, viewer: Id<"users">, p: Priority): Promise<boolean> {
+  return (await correctionsOf(ctx, viewer, p)).some((c) => c.status === "pending");
+}
+
 /**
  * `position` is where it shows among the owner's active priorities (null when
  * not active); `steps` are the ones the viewer may see (Reader.stepsFor); the
  * row lists at most `limit` sessions. The critical-path counts are the
  * priority's own, over every step.
  */
-function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, steps: PriorityStep[], mapped: Mapped, limit = Infinity): PriorityRow {
+function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: number | null, steps: PriorityStep[], mapped: Mapped, pending: boolean, limit = Infinity): PriorityRow {
   const { count, more } = sessionCount(viewer, p, mapped);
   return {
     _id: p._id,
@@ -161,6 +181,7 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     status: p.status,
     rank: position,
     rank_set_by: p.rank_set_by,
+    status_set_by: p.status_set_by ?? "pass",
     serves: p.serves ?? null,
     steps,
     counts: criticalCounts(p),
@@ -174,6 +195,7 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     session_count: count,
     session_count_more: more,
     sessions: mapped.filter((c): c is PrioritySession => c !== null).slice(0, limit),
+    correction_pending: pending,
   };
 }
 
@@ -183,7 +205,7 @@ async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promis
   const names = await ownerNames(ctx, [p]);
   const r = await readerFor(ctx, viewer);
   const mapped = await mappedSessions(r, p, listRead(viewer, p));
-  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), await r.stepsFor(p), mapped, LIST_SESSIONS);
+  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), await r.stepsFor(p), mapped, await correctionPending(ctx, viewer, p), LIST_SESSIONS);
 }
 
 /**
@@ -258,7 +280,7 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || at(a) - at(b)
     || b.last_active_at - a.last_active_at);
   const out: PriorityRow[] = [];
-  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await r.stepsFor(p), await mappedSessions(r, p, listRead(viewer, p)), LIST_SESSIONS));
+  for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await r.stepsFor(p), await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS));
   return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
 }
 
@@ -282,12 +304,14 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
   const names = await ownerNames(ctx, [p]);
   const mapped = await mappedSessions(r, p, SHOW_SESSIONS);
   const steps = await r.stepsFor(p);
-  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), steps, mapped);
+  const corrections = await correctionsOf(ctx, viewer, p);
+  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), steps, mapped, corrections.some((c) => c.status === "pending"));
   const sessions = row.sessions;
   return {
     ...row,
     steps: steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
     other_sessions: sessions.filter((c) => !steps.some((s) => s.key === c.step_key)),
+    corrections: corrections.map(correctionOut),
   };
 }
 
@@ -464,33 +488,193 @@ async function doRank(ctx: Ctx, viewer: Id<"users">, shortId: string, rank: numb
   return echo(ctx, viewer, p._id);
 }
 
-async function doStepTier(ctx: Ctx, viewer: Id<"users">, shortId: string, stepKey: string, tier: "critical" | "polish"): Promise<Result<PriorityRow>> {
+/** A milestone the person changes: its tier, its done state, its title, or a drop. */
+type MilestoneChange = { tier: "critical" | "polish" } | { done: boolean } | { title: string } | { drop: true };
+const MAX_TITLE = 200;
+
+/** A live (not dropped) milestone of `p` by key, or the plain reason there is none. */
+function milestoneOf(p: Priority, stepKey: string): Result<PriorityStep> {
+  const key = stepKey.trim().toLowerCase();
+  const live = p.steps.filter((s) => !s.dropped);
+  return live.find((s) => s.key === key) ?? { error: `${p.short_id} has no milestone ${stepKey}; its milestones: ${live.map((s) => s.key).join(", ") || "none"}` };
+}
+
+async function doMilestone(ctx: Ctx, viewer: Id<"users">, shortId: string, stepKey: string, change: MilestoneChange): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
-  const key = stepKey.trim().toLowerCase();
-  if (!p.steps.some((s) => s.key === key)) return { error: `${p.short_id} has no step ${stepKey}; its steps: ${p.steps.map((s) => s.key).join(", ") || "none"}` };
-  const steps = p.steps.map((s) => (s.key === key ? { ...s, tier, tier_set_by: "person" as const } : s));
-  await ctx.db.patch(p._id, { steps, updated_at: Date.now() });
+  const step = milestoneOf(p, stepKey);
+  if ("error" in step) return step;
+  const now = Date.now();
+  let next: PriorityStep;
+  if ("tier" in change) next = { ...step, tier: change.tier, tier_set_by: "person" };
+  else if ("drop" in change) next = { ...step, dropped: true };
+  else if ("title" in change) {
+    const title = change.title.trim();
+    if (!title || title.length > MAX_TITLE) return { error: `a milestone title is 1 to ${MAX_TITLE} characters` };
+    next = { ...step, title, title_set_by: "person" };
+  } else if (change.done) next = { ...step, done: true, done_at: step.done ? step.done_at ?? now : now, done_set_by: "person" };
+  else {
+    const { done_at: _, ...rest } = step;
+    next = { ...rest, done: false, done_set_by: "person" };
+  }
+  await ctx.db.patch(p._id, { steps: p.steps.map((s) => (s.key === step.key ? next : s)), updated_at: now });
   return echo(ctx, viewer, p._id);
 }
 
-/** Set aside leaves the ranking; restore brings a set-aside priority back active, last among the pass-ranked. */
+/** Active priorities of the viewer's in one workspace: what a restore ranks after. */
+const activeOf = (ctx: Ctx, viewer: Id<"users">, workspace: string): Promise<Priority[]> =>
+  ctx.db.query("priorities").withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", workspace).eq("status", "active")).take(OWN_PRIORITIES_READ);
+
+/**
+ * Set aside leaves the ranking. Restore brings a set-aside or done priority
+ * back active, last among the pass-ranked: undoing the person's own done hands
+ * the status back to the pass; reopening one the pass marked done is the
+ * person's call, which the pass then keeps.
+ */
 async function doSetAside(ctx: Ctx, viewer: Id<"users">, shortId: string, aside: boolean): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const now = Date.now();
   if (aside) {
-    if (p.status !== "set_aside") await ctx.db.patch(p._id, { status: "set_aside", rank: undefined, rank_set_by: "pass", updated_at: now });
+    if (p.status !== "set_aside") await ctx.db.patch(p._id, { status: "set_aside", status_set_by: undefined, rank: undefined, rank_set_by: "pass", updated_at: now });
     return echo(ctx, viewer, p._id);
   }
-  if (p.status !== "set_aside") return { error: `${p.short_id} is ${p.status.replace("_", " ")}, not set aside; only a set-aside priority is restored` };
-  const active: Priority[] = await ctx.db
-    .query("priorities")
-    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
-    .take(OWN_PRIORITIES_READ);
-  const last = Math.max(0, ...active.filter((r) => r.rank_set_by === "pass").map((r) => r.rank ?? 0));
-  await ctx.db.patch(p._id, { status: "active", rank: last + 1, rank_set_by: "pass", updated_at: now });
+  if (p.status !== "set_aside" && p.status !== "done") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only a set-aside or done priority is restored` };
+  const status_set_by = p.status === "done" && p.status_set_by !== "person" ? ("person" as const) : undefined;
+  const last = Math.max(0, ...(await activeOf(ctx, viewer, p.workspace)).filter((r) => r.rank_set_by === "pass").map((r) => r.rank ?? 0));
+  await ctx.db.patch(p._id, { status: "active", status_set_by, done_at: undefined, rank: last + 1, rank_set_by: "pass", updated_at: now });
   return echo(ctx, viewer, p._id);
+}
+
+/** The person marks a priority done: it leaves the ranking, and the pass keeps it done. */
+async function doPriorityDone(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Result<PriorityRow>> {
+  const p = await owned(ctx, viewer, shortId);
+  if ("error" in p) return p;
+  if (p.status !== "done" || p.status_set_by !== "person") {
+    const now = Date.now();
+    await ctx.db.patch(p._id, { status: "done", status_set_by: "person", done_at: p.status === "done" ? p.done_at ?? now : now, rank: undefined, rank_set_by: "pass", updated_at: now });
+  }
+  return echo(ctx, viewer, p._id);
+}
+
+const keyNumber = (key: string | null | undefined) => {
+  const m = key ? /^s(\d+)$/.exec(key) : null;
+  return m ? Number(m[1]) : 0;
+};
+
+/**
+ * The person merges one priority into another of theirs in the same
+ * workspace: its milestones (dropped ones too, so the pass still sees them)
+ * join the survivor under new keys, its sessions and corrections follow with
+ * their milestone, and it is marked merged by the person.
+ */
+async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: string): Promise<Result<PriorityRow>> {
+  const p = await owned(ctx, viewer, shortId);
+  if ("error" in p) return p;
+  const into = await owned(ctx, viewer, intoId);
+  if ("error" in into) return into;
+  if (String(p._id) === String(into._id)) return { error: "a priority cannot be merged into itself" };
+  if (p.workspace !== into.workspace) return { error: `${p.short_id} and ${into.short_id} are in different workspaces` };
+  const now = Date.now();
+  const sessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).take(SESSION_COUNT_CAP);
+  const intoSessions: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", into._id)).take(SESSION_COUNT_CAP);
+  let next = Math.max(0, ...into.steps.map((s) => keyNumber(s.key)), ...intoSessions.map((c) => keyNumber(c.priority_step_key)));
+  const remap = new Map<string, string>();
+  const carried = p.steps.map((s) => {
+    const key = `s${++next}`;
+    remap.set(s.key, key);
+    return { ...s, key };
+  });
+  await ctx.db.patch(into._id, { steps: [...into.steps, ...carried], updated_at: now });
+  await ctx.db.patch(p._id, { status: "merged", merged_into: into._id, status_set_by: "person", rank: undefined, rank_set_by: "pass", updated_at: now });
+  const { move, recount } = sessionMover(ctx);
+  for (const conv of sessions) {
+    const not = (conv.priority_not ?? []).some((id) => String(id) === String(into._id));
+    await move(conv, not ? undefined : into._id, conv.priority_step_key ? remap.get(conv.priority_step_key) : undefined, conv.priority_set_by === "person" ? "person" : undefined);
+  }
+  await recount(viewer);
+  for (const c of await correctionsOf(ctx, viewer, p)) {
+    await ctx.db.patch(c._id, { priority_id: into._id, step_key: c.step_key ? remap.get(c.step_key) : undefined });
+  }
+  return echo(ctx, viewer, into._id);
+}
+
+/** One of the viewer's own sessions, by short id or id, or the plain reason it is not. */
+async function ownSession(ctx: Ctx, viewer: Id<"users">, ref: string): Promise<Result<Doc<"conversations">>> {
+  const id = ctx.db.normalizeId("conversations", ref.trim());
+  const conv: Doc<"conversations"> | null = id
+    ? await ctx.db.get(id)
+    : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.trim())).first();
+  if (!conv || String(conv.user_id) !== String(viewer)) return { error: `no session ${ref} of yours` };
+  return conv;
+}
+
+/** The person puts one of their sessions on a priority (and a milestone of it): the pass never moves it. */
+async function doSessionMove(ctx: Ctx, viewer: Id<"users">, sessionRef: string, shortId: string, stepKey: string | undefined): Promise<Result<PriorityRow>> {
+  const conv = await ownSession(ctx, viewer, sessionRef);
+  if ("error" in conv) return conv;
+  const p = await owned(ctx, viewer, shortId);
+  if ("error" in p) return p;
+  if (!(await inWorkspace((await readerFor(ctx, viewer)).vis, conv, viewer, p.workspace))) return { error: `${sessionRef} is not in ${p.short_id}'s workspace` };
+  let key: string | undefined;
+  if (stepKey) {
+    const step = milestoneOf(p, stepKey);
+    if ("error" in step) return step;
+    key = step.key;
+  }
+  const { move, recount } = sessionMover(ctx);
+  await move(conv, p._id, key, "person");
+  const not = (conv.priority_not ?? []).filter((id) => String(id) !== String(p._id));
+  if (not.length !== (conv.priority_not ?? []).length) await ctx.db.patch(conv._id, { priority_not: not.length ? not : undefined });
+  await recount(viewer);
+  return echo(ctx, viewer, p._id);
+}
+
+/** The person says a session is not part of the priority it is on: it leaves, and the pass never maps it there again. */
+async function doSessionNotThis(ctx: Ctx, viewer: Id<"users">, sessionRef: string): Promise<Result<PriorityRow>> {
+  const conv = await ownSession(ctx, viewer, sessionRef);
+  if ("error" in conv) return conv;
+  const held: Priority | null = conv.priority_id ? await ctx.db.get(conv.priority_id) : null;
+  if (!held) return { error: `${sessionRef} is not on any priority` };
+  const p = await owned(ctx, viewer, held.short_id);
+  if ("error" in p) return p;
+  const { move, recount } = sessionMover(ctx);
+  await move(conv, undefined, undefined);
+  const not = conv.priority_not ?? [];
+  if (!not.some((id) => String(id) === String(p._id))) await ctx.db.patch(conv._id, { priority_not: [...not, p._id] });
+  await recount(viewer);
+  return echo(ctx, viewer, p._id);
+}
+
+const MAX_CORRECTION = 2_000;
+
+/** The person tells the pass what it got wrong about a priority (or one of its milestones); every later pass reads it until deleted. */
+async function doCorrect(ctx: Ctx, viewer: Id<"users">, shortId: string, text: string, stepKey: string | undefined): Promise<Result<PriorityCorrection>> {
+  const p = await owned(ctx, viewer, shortId);
+  if ("error" in p) return p;
+  const body = text.trim();
+  if (!body || body.length > MAX_CORRECTION) return { error: `a correction is 1 to ${MAX_CORRECTION} characters` };
+  let step_key: string | undefined;
+  if (stepKey) {
+    const step = milestoneOf(p, stepKey);
+    if ("error" in step) return step;
+    step_key = step.key;
+  }
+  const row = {
+    user_id: viewer, workspace: p.workspace, priority_id: p._id, ...(step_key ? { step_key } : {}), text: body, status: "pending" as const, created_at: Date.now(),
+    // Frozen as the person saw it: with the text, the eval case (priorityCorrections exportCases).
+    snapshot: { short_id: p.short_id, title: p.title, summary: p.summary, status: p.status, steps: p.steps },
+  };
+  const id = await ctx.db.insert("priority_corrections", row);
+  return correctionOut({ _id: id, _creationTime: 0, ...row });
+}
+
+async function doCorrectionDelete(ctx: Ctx, viewer: Id<"users">, ref: string): Promise<Result<{ deleted: string }>> {
+  const id = ctx.db.normalizeId("priority_corrections", ref.trim());
+  const c: Doc<"priority_corrections"> | null = id ? await ctx.db.get(id) : null;
+  if (!c || String(c.user_id) !== String(viewer)) return { error: `no correction ${ref} of yours` };
+  await ctx.db.delete(c._id);
+  return { deleted: c._id };
 }
 
 function orThrow<T>(res: Result<T>): T {
@@ -580,7 +764,52 @@ export const rank = mutation({
 
 export const setStepTier = mutation({
   args: { short_id: v.string(), step_key: v.string(), tier: tierArg },
-  handler: async (ctx, args) => orThrow(await doStepTier(ctx, await authed(ctx), args.short_id, args.step_key, args.tier)),
+  handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { tier: args.tier })),
+});
+
+export const setStepDone = mutation({
+  args: { short_id: v.string(), step_key: v.string(), done: v.boolean() },
+  handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { done: args.done })),
+});
+
+export const renameStep = mutation({
+  args: { short_id: v.string(), step_key: v.string(), title: v.string() },
+  handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { title: args.title })),
+});
+
+export const dropStep = mutation({
+  args: { short_id: v.string(), step_key: v.string() },
+  handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { drop: true })),
+});
+
+export const markDone = mutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => orThrow(await doPriorityDone(ctx, await authed(ctx), args.short_id)),
+});
+
+export const merge = mutation({
+  args: { short_id: v.string(), into: v.string() },
+  handler: async (ctx, args) => orThrow(await doMerge(ctx, await authed(ctx), args.short_id, args.into)),
+});
+
+export const moveSession = mutation({
+  args: { session: v.string(), short_id: v.string(), step_key: v.optional(v.string()) },
+  handler: async (ctx, args) => orThrow(await doSessionMove(ctx, await authed(ctx), args.session, args.short_id, args.step_key)),
+});
+
+export const sessionNotThis = mutation({
+  args: { session: v.string() },
+  handler: async (ctx, args) => orThrow(await doSessionNotThis(ctx, await authed(ctx), args.session)),
+});
+
+export const correct = mutation({
+  args: { short_id: v.string(), text: v.string(), step_key: v.optional(v.string()) },
+  handler: async (ctx, args) => orThrow(await doCorrect(ctx, await authed(ctx), args.short_id, args.text, args.step_key)),
+});
+
+export const deleteCorrection = mutation({
+  args: { correction_id: v.string() },
+  handler: async (ctx, args) => orThrow(await doCorrectionDelete(ctx, await authed(ctx), args.correction_id)),
 });
 
 export const setAside = mutation({
@@ -636,7 +865,74 @@ export const cliSetStepTier = mutation({
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    return doStepTier(ctx, viewer, args.short_id, args.step_key, args.tier);
+    return doMilestone(ctx, viewer, args.short_id, args.step_key, { tier: args.tier });
+  },
+});
+
+/** `cast priorities milestone done|undone|rename|drop`: one change to one milestone. */
+export const cliMilestone = mutation({
+  args: { api_token: v.string(), short_id: v.string(), step_key: v.string(), done: v.optional(v.boolean()), title: v.optional(v.string()), drop: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    const changes = [args.done !== undefined, args.title !== undefined, !!args.drop].filter(Boolean).length;
+    if (changes !== 1) return { error: "name exactly one change: done, title or drop" };
+    const change: MilestoneChange = args.done !== undefined ? { done: args.done } : args.title !== undefined ? { title: args.title } : { drop: true };
+    return doMilestone(ctx, viewer, args.short_id, args.step_key, change);
+  },
+});
+
+export const cliDone = mutation({
+  args: { api_token: v.string(), short_id: v.string() },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doPriorityDone(ctx, viewer, args.short_id);
+  },
+});
+
+export const cliMerge = mutation({
+  args: { api_token: v.string(), short_id: v.string(), into: v.string() },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doMerge(ctx, viewer, args.short_id, args.into);
+  },
+});
+
+export const cliMoveSession = mutation({
+  args: { api_token: v.string(), session: v.string(), short_id: v.string(), step_key: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doSessionMove(ctx, viewer, args.session, args.short_id, args.step_key);
+  },
+});
+
+export const cliSessionNotThis = mutation({
+  args: { api_token: v.string(), session: v.string() },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doSessionNotThis(ctx, viewer, args.session);
+  },
+});
+
+export const cliCorrect = mutation({
+  args: { api_token: v.string(), short_id: v.string(), text: v.string(), step_key: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doCorrect(ctx, viewer, args.short_id, args.text, args.step_key);
+  },
+});
+
+export const cliDeleteCorrection = mutation({
+  args: { api_token: v.string(), correction_id: v.string() },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doCorrectionDelete(ctx, viewer, args.correction_id);
   },
 });
 
@@ -702,4 +998,35 @@ export const cliRun = mutation({
 export const run = mutation({
   args: { workspace: v.string() },
   handler: async (ctx, args) => orThrow(await runFor(ctx, await authed(ctx), args.workspace)),
+});
+
+/** The most correction cases one export returns, oldest first from `since`. */
+const EXPORT_CASES = 200;
+
+/**
+ * Every correction written after `since`, oldest first, as an eval case: the
+ * priority as the person saw it when they wrote it (`snapshot`), their words,
+ * and the priority as it stands now (what the passes since made of it). Staff
+ * read it through packages/convex/run.sh; packages/evals/scripts/
+ * priority-corrections-export.ts freezes each case under EVALS_HOME. Real
+ * content: never written into the repo.
+ */
+export const exportCases = internalQuery({
+  args: { since: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows: Doc<"priority_corrections">[] = await ctx.db
+      .query("priority_corrections")
+      .withIndex("by_created", (q: any) => q.gt("created_at", args.since ?? 0))
+      .take(EXPORT_CASES);
+    const out = [];
+    for (const c of rows) {
+      const now: Priority | null = await ctx.db.get(c.priority_id);
+      out.push({
+        id: c._id, user_id: c.user_id, workspace: c.workspace, created_at: c.created_at, status: c.status, applied_at: c.applied_at ?? null,
+        step_key: c.step_key ?? null, text: c.text, before: c.snapshot,
+        after: now ? { short_id: now.short_id, title: now.title, summary: now.summary, status: now.status, steps: now.steps } : null,
+      });
+    }
+    return { cases: out, more: rows.length === EXPORT_CASES };
+  },
 });

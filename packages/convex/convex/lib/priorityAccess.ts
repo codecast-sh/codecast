@@ -118,16 +118,18 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     return shown.get(key)!;
   };
   /**
-   * The owner sees every step whole. A teammate sees each step's refs they may
-   * read, and not at all a step whose refs were all sessions none of which is
-   * listed to them (its title came from work they cannot see).
+   * No one sees a step the person dropped (a tombstone only the pass reads).
+   * The owner sees every other step whole. A teammate sees each step's refs
+   * they may read, and not at all a step whose refs were all sessions none of
+   * which is listed to them (its title came from work they cannot see).
    */
   const stepsFor = async (p: Priority): Promise<PriorityStep[]> => {
-    if (String(p.user_id) === String(viewer)) return p.steps;
+    if (String(p.user_id) === String(viewer)) return p.steps.filter((s) => !s.dropped);
     const ws = parseWorkspaceKey(p.workspace);
     const teamId = ws?.type === "team" ? String(ws.teamId) : null;
     const out: PriorityStep[] = [];
     for (const step of p.steps) {
+      if (step.dropped) continue;
       const refs: PriorityRef[] = [];
       for (const ref of step.refs) if (await refShown(ref, teamId)) refs.push(ref);
       if (!refs.length && step.refs.length && step.refs.every((ref) => ref.kind === "session")) continue;
