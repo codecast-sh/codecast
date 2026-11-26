@@ -14,7 +14,8 @@ import { internalAction, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { runModelCall } from "./modelCalls";
-import { mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PassPriority, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { mergePriorities, priorityPassRequest, type MergePlan, type PassPriority, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { parsePriorityPassOutput } from "./lib/priorityPassParse";
 import { LATE_MARGIN_MS, MINUTE, type PassInputs } from "./priorityPassInputs";
 import { PASS_TIMEOUT_MS, callScope, fittingPrefix, runShare } from "./priorityPassRun";
 

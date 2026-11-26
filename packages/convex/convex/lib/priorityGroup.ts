@@ -6,7 +6,7 @@
 // the group is.
 
 import type { Doc, Id } from "../_generated/dataModel";
-import { stepKeyMax } from "./priorityPass";
+import { stepKeyMax } from "./priorityPassSteps";
 
 /** The most of one person's active priorities in one workspace a rank reads; past it the oldest are left out, the same way for every read. */
 export const ACTIVE_GROUP_READ = 1_000;

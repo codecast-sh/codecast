@@ -15,7 +15,7 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { stepKeyMax } from "./lib/priorityPass";
+import { stepKeyMax } from "./lib/priorityPassSteps";
 
 /** The most sessions one run reads. */
 export const SESSION_BUDGET = 1000;

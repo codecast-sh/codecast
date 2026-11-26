@@ -37,7 +37,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { PriorityRef } from "@codecast/shared/contracts/priorities";
 import { isRunLog } from "@codecast/shared/contracts";
 import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
-import { stepDone } from "./priorityPass";
+import { stepDone } from "./priorityPassSteps";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
 import { passActivity, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
