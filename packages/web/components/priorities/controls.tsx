@@ -147,7 +147,7 @@ function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "key" | "title">)
 }
 
 /** The priority's ⋯: who placed it, then the owner's moves, done, set aside or restore, merge, Correct…, and Copy link for anyone. */
-export function PriorityMenu({ row, touch, label, className }: { row: PriorityRow; touch?: boolean; label?: string; className?: string }) {
+export function PriorityMenu({ row, touch, reveal, label, className }: { row: PriorityRow; touch?: boolean; reveal?: string; label?: string; className?: string }) {
   const writes = usePriorityWrites();
   const [correcting, setCorrecting] = useState(false);
   const [merging, setMerging] = useState<PriorityRow | null>(null);
@@ -158,7 +158,7 @@ export function PriorityMenu({ row, touch, label, className }: { row: PriorityRo
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch)}>
+              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch, reveal)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>

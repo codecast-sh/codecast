@@ -50,7 +50,10 @@ const C_RANK = "col-start-1 row-start-1 text-right text-ui font-semibold tabular
 const C_TITLE = "col-start-2 row-start-1 min-w-0";
 const C_PROGRESS = "col-start-3 row-start-1 justify-self-end";
 const C_META = "col-start-2 col-end-6 row-start-2 min-w-0";
-const C_MENU = "col-start-6 row-start-1 justify-self-end";
+/** A wide row's ⋯: outside the grid, in the page's right gutter, level with the row's first line. */
+const C_MENU = "absolute left-full top-0 ml-2 flex h-5 items-center";
+/** A milestone line's ⋯, at the same x: the line's own box already reaches 6px into the gutter. */
+const C_LINE_MENU = "absolute left-full top-1 ml-0.5 flex";
 const C_MENU_PHONE = "col-start-5 row-start-1 justify-self-end";
 /** A wide row's title, one line on a mouse; under a coarse pointer it wraps onto a second, since nothing there hovers for the rest. */
 const COARSE_WRAP = "[@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
@@ -196,8 +199,9 @@ function Momentum({ model, todayIndex, peak, layout }: { model: PriorityModel; t
   return (
     <span data-momentum className="flex items-center gap-2" title={`${model.landed10} critical milestones landed in 10 days`}>
       <DayStrip counts={model.counts} landed={model.landed} todayIndex={todayIndex} peak={peak} />
-      <span className="hidden min-w-0 flex-col text-mark leading-[13px] [@container(min-width:44rem)]:flex">
+      <span className="hidden min-w-0 items-center gap-1 whitespace-nowrap text-mark [@container(min-width:44rem)]:flex">
         <span className="tabular-nums text-sol-text">{model.landed10} landed</span>
+        <span aria-hidden className="text-sol-text-dim">·</span>
         {model.stalledDays != null
           ? <StalledMark days={model.stalledDays} className="inline-flex" />
           : <span className="tabular-nums text-sol-text-dim">{lastLanded(model.lastLandedDays)}</span>}
@@ -267,7 +271,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
   const pending = row.correction_pending && !model.milestones.some((m) => m.correctionPending);
   const plan = filters.show.plans && !compact ? model.plan : null;
   return (
-    <div data-priority-head className={cn(LIST_GRID[layout], "gap-y-0.5")}>
+    <div data-priority-head className={cn(LIST_GRID[layout], "group/head relative gap-y-0.5")}>
       <Rank row={row} drag={drag} />
       {/* The title keeps 8rem and breaks between words only; a compact row's action wraps under it before the title gives way. */}
       <span className={cn(C_TITLE, "flex min-w-0 items-center gap-2", compact && "flex-wrap gap-y-1")}>
@@ -305,7 +309,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
             <span data-today className="text-meta tabular-nums text-sol-text">{model.today > 0 || untouched ? model.today : ""}</span>
           </span>
           <span className="col-start-5 row-start-1 justify-self-start"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
-          <span className={cn(C_MENU, "[@media(pointer:coarse)]:flex [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:items-center")}><PriorityMenu row={row} /></span>
+          <PriorityMenu row={row} reveal="group-hover/head:opacity-100" className={C_MENU} />
         </>
       ) : (
         <>
@@ -443,7 +447,7 @@ function LineChips({ model, m, railed, filters, lookups }: {
     <span ref={measureRow} data-line-chips style={held} className="flex h-8 min-w-0 flex-1 flex-nowrap items-center gap-x-1.5 overflow-hidden pl-3 [@media(pointer:coarse)]:h-12">
       {lead}
       {others > 0 && (
-        <span data-fit="more" data-more-sessions title={`${others} more ${others === 1 ? "session" : "sessions"}`} aria-label={`${others} more ${others === 1 ? "session" : "sessions"}`} className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1 text-meta tabular-nums text-sol-text-dim">
+        <span data-fit="more" data-more-sessions title={`${others} more ${others === 1 ? "session" : "sessions"}`} aria-label={`${others} more ${others === 1 ? "session" : "sessions"}`} className="inline-flex h-6 shrink-0 items-center whitespace-nowrap text-meta tabular-nums text-sol-text-dim">
           +{others}
           {lone && (measuring || fit!.words) && <span data-more-words>&nbsp;{others === 1 ? "session" : "sessions"}</span>}
         </span>
@@ -509,20 +513,21 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
   );
   const title = (
     // Where the title can wrap or carry its marks under it (a coarse pointer, a phone), the box sits by its first line, not the block's middle.
-    <span data-line-title className={cn("flex min-w-0 gap-2", wide ? "items-center [@media(pointer:coarse)]:items-start" : "items-start")}>
+    <span data-line-title className="flex min-w-0 items-start gap-2">
       {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. A teammate's is a status mark, nothing to press.
           Where the title can wrap (a coarse pointer, a phone) the press area starts 8px above the title and runs 52px, drawing the box 15px down,
           beside the first line; it takes 28px of the line's height, and the line clips it to its own rows. */}
       {row.mine
-        ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px] [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:pt-[15px]" : "-mb-4 -ml-[30px] -mt-2 h-[52px] items-start pl-[30px] pt-[15px]"} />
+        ? <MilestoneToggle row={row} step={step} className={wide ? "-ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px] [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:pt-[15px]" : "-mb-4 -ml-[30px] -mt-2 h-[52px] items-start pl-[30px] pt-[15px]"} />
         : <span className="flex h-7 shrink-0 items-center"><MilestoneMark done={step.done} /></span>}
       {wide ? (
         // Under a coarse pointer (Daylight) the marks go on a line of their own under the title, as on a phone.
-        <span className="flex min-w-0 items-center gap-2 [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:gap-0.5 [@media(pointer:coarse)]:py-1">
-          <span className="flex min-w-0 max-w-full items-center gap-2">
+        // The title's first line sits in the middle of the line's first 32px, level with the box and the chips, however far it wraps.
+        <span className="flex min-w-0 items-start gap-2 py-[7px] [@media(pointer:coarse)]:flex-col [@media(pointer:coarse)]:gap-0.5 [@media(pointer:coarse)]:py-1">
+          <span className="flex min-w-0 max-w-full items-start gap-2">
             {name}
             {/* Shown while the line is hovered, and always where nothing hovers. */}
-            {!renaming && <ChevronRight aria-hidden data-line-chevron className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100 [@media(hover:none)]:opacity-100", open && "rotate-90 opacity-100")} />}
+            {!renaming && <ChevronRight aria-hidden data-line-chevron className={cn("mt-[3px] size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100 [@media(hover:none)]:opacity-100", open && "rotate-90 opacity-100")} />}
           </span>
           {marks && <span data-milestone-marks className="flex shrink-0 items-center gap-2 [@media(pointer:coarse)]:flex-wrap">{marks}</span>}
         </span>
@@ -544,23 +549,24 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
         aria-expanded={open}
         onClick={onToggle}
         onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
-        className={cn(LIST_GRID[layout], "group/line -mx-1.5 cursor-pointer rounded-control px-1.5 hover:bg-sol-bg-alt/60", wide ? "min-h-8 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:overflow-y-clip" : "min-h-11 overflow-y-clip", open && "bg-sol-bg-alt/60")}
+        className={cn(LIST_GRID[layout], "group/line relative -mx-1.5 cursor-pointer rounded-control px-1.5 hover:bg-sol-bg-alt/60", wide ? "min-h-8 items-start [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:overflow-y-clip" : "min-h-11 overflow-y-clip", open && "bg-sol-bg-alt/60")}
       >
         {wide ? (
           <>
-            {/* Title and chips take the line up to its menu: a milestone line has no strip, so its chips use the today and momentum columns too.
-                The title takes up to 35% (at least 8rem) and the chips the rest, so a session's words and a plan's title fit side by side. */}
-            <div className="col-start-2 col-end-6 row-start-1 grid min-w-0 grid-cols-[minmax(8rem,35%)_minmax(0,1fr)] items-center gap-x-3 self-stretch">
+            {/* Title and chips take the title and progress columns. The title takes 40% (at least 12rem) and the chips the rest,
+                so a session's words and a plan's title fit side by side. Everything sits at the top: a wrapped title grows the line downward. */}
+            <div className="col-start-2 col-end-4 row-start-1 grid min-w-0 grid-cols-[minmax(12rem,40%)_minmax(0,1fr)] items-start gap-x-3 self-stretch">
               {title}
               {/* One row that never wraps (LineChips). Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside its clip.
                   The cell takes the line's whole height, and the bracket rail with it, however tall the title makes the line. */}
-              <span data-line-chips-cell className="relative flex min-w-0 items-center gap-1.5 self-stretch">
+              <span data-line-chips-cell className="relative flex min-w-0 items-start gap-1.5 self-stretch">
                 {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
                 <LineChips model={model} m={m} railed={rail} filters={filters} lookups={lookups} />
-                {m.today > 0 && <span data-line-today className="flex h-8 shrink-0 items-center whitespace-nowrap text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today} today</span>}
               </span>
             </div>
-            {row.mine && <MilestoneMenu row={row} step={step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" className={C_MENU} />}
+            {/* The milestone's own messages today, under the priority's in the Today column. */}
+            {m.today > 0 && <span data-line-today title={`${m.today} today`} className="col-start-4 row-start-1 flex h-8 items-center justify-self-center text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today}</span>}
+            {row.mine && <MilestoneMenu row={row} step={step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" className={C_LINE_MENU} />}
           </>
         ) : (
           <>
@@ -631,9 +637,9 @@ export function TypeRow({ label, tall, children }: { label: string; tall?: boole
 }
 
 /**
- * An open milestone: its sessions (people's first, workflow runs folded),
- * each with the owner's ⋯ when the session is theirs too, then every kind of
- * link it has. The Show filter governs only a closed line's chips.
+ * An open milestone: one labelled row per kind of link, Sessions first
+ * (people's first, workflow runs folded, each with the owner's ⋯ when the
+ * session is theirs too). The Show filter governs only a closed line's chips.
  */
 export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
   model: PriorityModel;
@@ -654,6 +660,17 @@ export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
   const branches = branchesOf(m, lookups);
   const deploys = lookups.deploysOf(m);
   const rows = [
+    (m.sessions.length > 0 || m.more > 0) && (
+      <TypeRow key="sessions" label="Sessions">
+        <div className="min-w-0 flex-1">
+          {people.length > 0 && <ul>{people.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} menu={menu(s)} />)}</ul>}
+          <WorkflowRuns runs={runs} now={now} menu={menu} />
+          {m.more > 0 && (olderHref
+            ? <Link href={olderHref} data-older-sessions className={cn("inline-flex min-h-7 items-center py-0.5 text-meta text-sol-text-muted hover:text-sol-text hover:underline", TOUCH_AREA)}>+{m.more} older {m.more === 1 ? "session" : "sessions"}</Link>
+            : <div className="py-0.5 text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</div>)}
+        </div>
+      </TypeRow>
+    ),
     plans.length > 0 && (
       <TypeRow key="plan" label="Plan" tall>
         {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className={cn("max-w-[24rem]", COARSE_TALL)} />)}
@@ -666,13 +683,8 @@ export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
   ].filter(Boolean);
   return (
     <div data-milestone-detail className="mb-2 ml-2 border-l border-sol-border/60 pl-3 pt-1">
-      {people.length > 0 && <ul>{people.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} menu={menu(s)} />)}</ul>}
-      <WorkflowRuns runs={runs} now={now} menu={menu} />
-      {m.more > 0 && (olderHref
-        ? <Link href={olderHref} data-older-sessions className={cn("inline-flex min-h-7 items-center py-0.5 text-meta text-sol-text-muted hover:text-sol-text hover:underline", TOUCH_AREA)}>+{m.more} older {m.more === 1 ? "session" : "sessions"}</Link>
-        : <div className="py-0.5 text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</div>)}
-      {rows.length > 0 && <div className="mt-1">{rows}</div>}
-      {m.sessions.length === 0 && rows.length === 0 && <div className="py-1 text-meta text-sol-text-dim">Nothing linked yet</div>}
+      {rows}
+      {rows.length === 0 && <div className="py-1 text-meta text-sol-text-dim">Nothing linked yet</div>}
     </div>
   );
 }

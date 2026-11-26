@@ -439,13 +439,15 @@ export const POLISH_SLOT = "flex w-[5.25rem] shrink-0 justify-start";
 /**
  * The one grid every priority row and the column heads share, so each column
  * sits at one x down the list (every class spelled whole: Tailwind generates
- * only what it reads). Wide: rank | title | progress | today | momentum |
- * menu, the momentum column its strip alone until the list (a container) is
- * 44rem wide. Each row is a grid of its own, so the progress column has one
- * width rather than its content's. Phone: rank | title | progress | strip | menu.
+ * only what it reads). Wide: rank | title | progress | today | momentum, the
+ * momentum column its strip alone until the list (a container) is 44rem
+ * wide, then the strip with its words on one line. A wide row's ⋯ sits
+ * outside the grid, in the page's right gutter. Each row is a grid of its
+ * own, so the progress column has one width rather than its content's.
+ * Phone: rank | title | progress | strip | menu.
  */
 export const LIST_GRID: Record<ListLayout, string> = {
-  wide: "grid grid-cols-[20px_minmax(0,1fr)_11.5rem_28px_64px_24px] items-center gap-x-2 [@container(min-width:44rem)]:grid-cols-[20px_minmax(0,1fr)_12.5rem_28px_150px_24px] [@container(min-width:44rem)]:gap-x-3",
+  wide: "grid grid-cols-[20px_minmax(0,1fr)_11.5rem_28px_64px] items-center gap-x-2 [@container(min-width:44rem)]:grid-cols-[20px_minmax(0,1fr)_12.5rem_32px_13rem] [@container(min-width:44rem)]:gap-x-3",
   phone: "grid grid-cols-[18px_minmax(0,1fr)_auto_auto_44px] items-center gap-x-2",
 };
 

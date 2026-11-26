@@ -297,11 +297,12 @@ test("the milestone's whole left gutter toggles Done, a 44px target on a phone",
   } finally {
     await page.unmount();
   }
-  // Daylight (wide, coarse pointer) does the same under the coarse pointer; a fine pointer keeps the one-line row centred.
+  // A wide line starts its parts at the top on every pointer, so a title that wraps grows downward with the box by its first line;
+  // Daylight (wide, coarse pointer) also draws the tall press area.
   const wide = await mount(<Live />);
   try {
     const title = line("pri-2", "s1").querySelector("[data-line-title]")!;
-    expect(title.className).toContain("items-center [@media(pointer:coarse)]:items-start");
+    expect(title.className.split(" ")).toContain("items-start");
     expect(title.querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px]");
   } finally {
     await wide.unmount();
