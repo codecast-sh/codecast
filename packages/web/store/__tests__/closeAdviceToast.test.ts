@@ -185,6 +185,27 @@ describe("the verdict on the bar", () => {
     expect(entryToast()?.title).toBe("Killed “Owners redesign”");
   });
 
+  test("a Kill's card keeps the receipt's note that the agent stays stopped on undo", async () => {
+    await animatedHideSessions([A], "kill");
+    answer([{ session: A, verdict: "needs_you", reason: "Pick a sort order" }]);
+    await flush();
+    expect(text(entryToast()!.description)).toBe("Pick a sort order|Agent stays stopped on undo");
+  });
+
+  test("a bulk Kill's card says the agents stay stopped", async () => {
+    await animatedHideSessions([A, B], "kill");
+    answer([{ session: A, verdict: "needs_you", reason: "Pick a sort order" }, { session: B, verdict: "needs_you", reason: "Reopen Chrome" }]);
+    await flush();
+    expect(text(entryToast()!.description)).toBe("2 asked you something|Agents stay stopped on undo");
+  });
+
+  test("a Close's card carries no stopped note", async () => {
+    await animatedCloseSessions([A]);
+    answer([{ session: A, verdict: "needs_you", reason: "Pick a sort order" }]);
+    await flush();
+    expect(text(entryToast()!.description)).toBe("Pick a sort order");
+  });
+
   test("the dock's Kill asks close advice too, and its card says Killed", async () => {
     killWithCloseAdvice(A);
     expect(calls).toEqual([[A]]);
@@ -268,7 +289,7 @@ describe("the verdict on the bar", () => {
     answer([{ session: A, verdict: "needs_you", reason: "Pick a sort order" }]);
     await flush();
     // …then the card takes its line and takes it down.
-    expect(text(entryToast()!.description)).toBe("Pick a sort order|Also canceled trigger \"Nightly\"");
+    expect(text(entryToast()!.description)).toBe("Pick a sort order|Also canceled trigger \"Nightly\"|Agent stays stopped on undo");
     expect(dismissed).toHaveBeenCalledWith("kill-triggers-t");
   });
 
@@ -277,7 +298,7 @@ describe("the verdict on the bar", () => {
     answer([{ session: A, verdict: "needs_you", reason: "Pick a sort order" }]);
     await flush();
     expect(closeAdviceTakesTriggers(advice, "Also canceled 2 triggers bound to this session", "kill-triggers-u")).toBe(true);
-    expect(text(entryToast()!.description)).toBe("Pick a sort order|Also canceled 2 triggers bound to this session");
+    expect(text(entryToast()!.description)).toBe("Pick a sort order|Also canceled 2 triggers bound to this session|Agent stays stopped on undo");
   });
 
   test("a later Kill of a session an earlier Close closed shows its triggers on their own, never on that card", async () => {
@@ -386,7 +407,7 @@ describe("while the interactive undo timeline is open", () => {
     expect(closeAdviceTakesTriggers(advice, "Also canceled trigger \"Nightly\"", "kill-triggers-behind")).toBe(false);
     answer([{ session: A, verdict: "needs_you", reason: "Pick a sort order" }]);
     await flush();
-    expect(text(entryToast()!.description)).toBe("Pick a sort order|Also canceled trigger \"Nightly\"");
+    expect(text(entryToast()!.description)).toBe("Pick a sort order|Also canceled trigger \"Nightly\"|Agent stays stopped on undo");
     expect(dismissed).toHaveBeenCalledWith("kill-triggers-behind");
   });
 
@@ -447,7 +468,7 @@ describe("the timeline opening after a gesture, before its verdict", () => {
     receipt.onDismiss?.({} as any);
     answer([{ session: A, verdict: "needs_you", reason: "Pick" }]);
     await flush();
-    expect(text(entryToast()!.description)).toBe("Pick|Also canceled trigger \"Nightly\"");
+    expect(text(entryToast()!.description)).toBe("Pick|Also canceled trigger \"Nightly\"|Agent stays stopped on undo");
     expect(dismissed).toHaveBeenCalledWith("kill-triggers-peek");
   });
 
