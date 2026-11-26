@@ -278,14 +278,16 @@ change again on the same branch and resets the run's worktree to it
 (`refreezeSessionChange`). A finding names the run's worktree, so the session
 may fix it there and leave it uncommitted. The runner records that worktree as a
 git tree in the run's directory before the brief (`snapshotRunTree`; a restart
-keeps the first record), and the refreeze commits every file that differs from
-it, held out as a checkout's change holds files out (credentials, stale copies,
-a lockfile nothing explains) and left in the worktree. A branch's carry goes on
-top of a tip pushed from elsewhere since; a change frozen from a checkout
-carries it on top of each later freeze (`frozen_tip`, its files in `carried`,
-apart from `paths`). The branch moves only once the carry is on the new tip; a
-conflict moves nothing. What differed already at the brief is the run's own
-stations' writing, and the reset puts it back (ct-99118). A session that pins blocked asks a person, for the
+keeps the first record, and writing `change.json` afresh drops it), and the
+refreeze commits every file that differs from it. A credential, or a lockfile
+or generated file that neither the change nor those edits make, is held out:
+moved into `$run_dir/held` and named in the run's output and the next brief
+(`carry_held`). A branch's carry goes on top of a tip pushed from elsewhere
+since and is pushed to origin, leased on origin's tip; a change frozen from a
+checkout carries it on top of each later freeze (`frozen_tip`, its files in
+`carried`, apart from `paths`). The branch moves only once the carry is on the
+new tip; a conflict moves nothing. What differed already at the brief is the
+run's own stations' writing, and the reset puts it back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run
 waits for that person rather than stopping: the run's row says so
 (`waiting_on_session.blocked`, its note the pin), and the Ship bar reads

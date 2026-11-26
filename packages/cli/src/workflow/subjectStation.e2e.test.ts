@@ -636,6 +636,22 @@ describe("a change named by branch from inside a session (ct-85594)", () => {
     expect(git(tree, "status", "--porcelain", "--untracked-files=all")).toMatch(/^\?\? \.codecast\/logs\/setup-[^\n]+\.log$/);
   }, 60_000);
 
+  test("a credential left in the run's worktree is held out, moved into the run's directory, and named in the next brief (ct-99118)", async () => {
+    const { root } = branchWorld("bad\n");
+    const tree = path.join(root, ".codecast", "worktrees", "change-ct-9");
+    let briefs = 0;
+    const s = server(() => {
+      if (++briefs === 1) fs.writeFileSync(path.join(tree, ".env"), "KEY=1\n");
+      else fs.writeFileSync(path.join(tree, "a.txt"), "good\n");
+    });
+    expect(await startOnBranch(root)).toBe("completed");
+    const [, second] = s.sent();
+    expect(second.body).toContain("Held out of the change and moved from the run's worktree to ");
+    expect(second.body).toContain(".env (named like a credential file)");
+    expect(fs.existsSync(path.join(tree, ".env"))).toBe(false);
+    expect(() => git(root, "cat-file", "-e", "feat:.env")).toThrow();
+  }, 60_000);
+
   // The check's own segment, shaped like the shipped check.cast: exit 2 is this machine's, not the change's.
   const machineGraph = (root: string) => {
     fs.writeFileSync(path.join(root, "mcheck.cast"), `digraph mcheck {

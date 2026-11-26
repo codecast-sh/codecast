@@ -51,6 +51,16 @@ export type FrozenChange = {
 };
 
 const CHANGE_FILE = "change.json";
+/** The run's worktree as a git tree when a brief last went out (flowChange.ts snapshotRunTree). */
+export const BRIEF_TREE = "brief-tree";
+/** Where files the session left in the run's worktree that the change holds out are kept, so the next stage checks the change alone. */
+export const heldDir = (runDir: string) => path.join(runDir, "held");
+
+/** What a refreeze held out of the change and set aside, said to the session in its next brief; empty when nothing. */
+export function heldWords(runDir: string, held: Array<{ path: string; why: string }>): string {
+  if (!held.length) return "";
+  return `Held out of the change and moved from the run's worktree to ${heldDir(runDir)}: ${held.map((h) => `${h.path} (${h.why})`).join("; ")}`;
+}
 
 /**
  * The files a branch changes against the repository's main line: `git diff --name-only <merge-base>..<branch>`,
@@ -69,10 +79,15 @@ export function branchChangePaths(top: string, branch: string): string[] {
   return out ? out.split("\n").filter(Boolean) : [];
 }
 
-/** Leave the change where the run's stations read it: `$run_dir/change.json`. */
+/**
+ * Leave the change where the run's stations read it: `$run_dir/change.json`. A change written afresh (a run's start,
+ * or a refreeze that took the session's edits) ends any brief's record of the worktree: a run directory is reused by
+ * the next run of the same flow and task, and a record from a stopped attempt would carry its stations' output.
+ */
 export function writeFrozenChange(runDir: string, change: FrozenChange): string {
   fs.mkdirSync(runDir, { recursive: true });
   const file = path.join(runDir, CHANGE_FILE);
+  fs.rmSync(path.join(runDir, BRIEF_TREE), { force: true });
   fs.writeFileSync(file, JSON.stringify(change, null, 2) + "\n");
   return file;
 }

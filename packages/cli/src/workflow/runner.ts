@@ -31,7 +31,7 @@ import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { RUN_CONVERSATION_ENV } from "../sessionIdentity.js";
-import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
+import { behindWords, frozenChangeContext, heldWords } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
@@ -455,7 +455,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   }
   // A subject someone stopped (or the run retired after an earlier land) still holds the change: the brief restarts it.
   if (row.is_killed) console.log(`  ${c.yellow}${subject.shortId} was stopped; the brief restarts it to work on this${c.reset}`);
-  const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const brief = withHeld(expandAgentPrompt(node.prompt ?? "", graph, context).trim(), context);
   // Quiet: a subject stashed out of sight while the run went on stays there; it surfaces itself if it pins blocked.
   if (!options.runSession) console.log(`${c.dim}  this run has no session of its own, so the brief to ${subject.shortId} cannot go quietly: it brings it back to the inbox${c.reset}`);
   await recordBriefTree(cwd, context);
@@ -480,13 +480,14 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   if (outcome !== "success") return outcome;
   try {
     const { refreezeSessionChange } = await import("./flowChange.js");
-    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
+    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
     Object.assign(context, frozenChangeContext(context["run_dir"]));
+    const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
     if (change.landed) context["change_landed"] = change.landed;
     const said = (change.landed ? `the session's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "");
+      : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "") + (heldNote ? `; ${heldNote}` : "");
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
   } catch (err) {
@@ -519,7 +520,7 @@ function lastSaid(state: WorkflowRunState): string | undefined {
 async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, named: Writer[], unclaimed: string[]): Promise<NodeOutcome> {
   const call = (route: string, body: Record<string, unknown>) => cliCall(options, route, body);
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
-  const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const brief = withHeld(expandAgentPrompt(node.prompt ?? "", graph, context).trim(), context);
   const subject = subjectOf(context);
   // The files nobody's edit names are the subject's to fix or hand on; it may also be a writer.
   let writers: Writer[] = named;
@@ -588,13 +589,14 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
     // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
     const since = Math.min(...waits.map((w) => w.sentAt));
-    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
+    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
+    const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
     if (change.landed) context["change_landed"] = change.landed;
     const said = `briefed ${names}; ${change.landed ? `the checkout's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the checkout's change is as it was: the stage runs again on the same change"}${unheard ? `. ${unheard}` : ""}`;
+      : "the checkout's change is as it was: the stage runs again on the same change"}${heldNote ? `; ${heldNote}` : ""}${unheard ? `. ${unheard}` : ""}`;
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
     context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
@@ -603,6 +605,17 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   }
   return "success";
 }
+
+/** Keep what a refreeze held out of the change in the run's context (`carry_held`), for the next brief; returns its words. */
+function noteHeld(context: Record<string, string>, held: Array<{ path: string; why: string }>): string {
+  const words = heldWords(context["run_dir"], held);
+  if (words) context["carry_held"] = words;
+  else delete context["carry_held"];
+  return words;
+}
+
+/** A brief, with what the last refreeze held out of the change, so the session knows where those files went and why. */
+const withHeld = (brief: string, context: Record<string, string>) => (context["carry_held"] ? `${brief}\n\n${context["carry_held"]}` : brief);
 
 /** The run's worktree as a brief finds it (snapshotRunTree): the refreeze carries what the session changes there after. */
 async function recordBriefTree(cwd: string, context: Record<string, string>): Promise<void> {
