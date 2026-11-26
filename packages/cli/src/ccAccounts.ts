@@ -29,6 +29,7 @@ import { readProfileIndexFile } from "./readForUpdate.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { createMtimeGatedCache } from "./mtimeGatedCache.js";
 import { parseRateLimitFingerprint, parseScopedRateLimitWindow, type RateLimitFingerprint } from "./ccRateLimitHeaders.js";
+import { attributeFingerprint } from "./ccMintIdentity.js";
 export { parseRateLimitFingerprint, parseScopedRateLimitWindow, type RateLimitFingerprint };
 import { renderProviderEnvFile, sourceFilePrefix } from "./providerKeyLaunch.js";
 import { defaultConfigDir } from "./config/configDir.js";
@@ -1283,72 +1284,6 @@ export function accountLaunchInfo(name: string): AccountLaunchInfo | null {
   return { file, stored_at: meta.stored_at, expires_at: meta.refresh_expires_at };
 }
 
-/** Whether Claude Code at `claudeBin` honors CLAUDE_SECURESTORAGE_CONFIG_DIR.
- *  A version that ignores it silently runs every pinned session on the keychain
- *  login, so the daemon asks once per binary: with the store pointed at an empty
- *  directory, `auth status` must report no login. Cached by binary identity.
- *
- *  Three answers, not two. A binary that reports a login from an empty store is
- *  proved "unsupported"; a probe that crashed, timed out or printed something
- *  other than JSON proves nothing and answers "unknown". Only a proved answer is
- *  cached: a first run of a freshly installed 215MB binary waits on Gatekeeper,
- *  and on 2026-09-17 that timeout was recorded as a permanent "unsupported",
- *  keyed by size+mtime so the binary was never asked again. The daemon then
- *  deleted every profile store on every beat, and each browser sign-in a person
- *  completed was erased seconds later. */
-export type SecureStorageVerdict = "supported" | "unsupported" | "unknown";
-
-export async function probeSecureStorageSupport(
-  claudeBin: string,
-  opts: { env?: NodeJS.ProcessEnv; execImpl?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string> } = {},
-): Promise<SecureStorageVerdict> {
-  const cachePath = path.join(defaultConfigDir(), "cc-store", ".support.json");
-  let identity = claudeBin;
-  try {
-    const st = fs.statSync(claudeBin);
-    identity = `${claudeBin}:${st.size}:${Math.floor(st.mtimeMs)}`;
-  } catch {}
-  try {
-    const cached = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
-    if (cached?.identity === identity && typeof cached.supported === "boolean") {
-      return cached.supported ? "supported" : "unsupported";
-    }
-  } catch {}
-  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-store-probe-"));
-  let verdict: SecureStorageVerdict = "unknown";
-  try {
-    const env = { ...(opts.env ?? process.env), CLAUDE_SECURESTORAGE_CONFIG_DIR: probeDir };
-    const exec =
-      opts.execImpl ??
-      (async (bin: string, args: string[], e: NodeJS.ProcessEnv) => {
-        const { execFile } = await import("./proc.js");
-        // `auth status` exits non-zero when nobody is signed in — which is the
-        // answer we are hoping for — so the output is the verdict, not the code.
-        return new Promise<string>((resolve, reject) => {
-          execFile(bin, args, { env: e, encoding: "utf-8", timeout: 30_000 }, (err, stdout) =>
-            err && !stdout ? reject(err) : resolve(stdout),
-          );
-        });
-      });
-    const out = await exec(claudeBin, ["auth", "status", "--json"], env);
-    const loggedIn = JSON.parse(out)?.loggedIn;
-    // Anything but a real boolean is a binary that answered in a shape we do
-    // not understand — that is an unknown, never a negative.
-    if (loggedIn === false) verdict = "supported";
-    else if (loggedIn === true) verdict = "unsupported";
-  } catch {
-    verdict = "unknown";
-  } finally {
-    fs.rmSync(probeDir, { recursive: true, force: true });
-  }
-  if (verdict === "unknown") return verdict;
-  try {
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true, mode: 0o700 });
-    atomicWriteFile(cachePath, JSON.stringify({ identity, supported: verdict === "supported" }), { mode: 0o600 });
-  } catch {}
-  return verdict;
-}
-
 // A setup-token is a static one-year token in a 0600 file, sourced into one
 // session. It outranks the keychain and the store, nothing rotates, and it
 // can only make model requests. Identity and usage stay on the profile.
@@ -1839,57 +1774,6 @@ export function extractSetupToken(text: string): string | null {
   return raw;
 }
 
-// ---------------------------------------------------------------------------
-// Account attribution for a scope-less token. A setup-token can't read its own
-// profile or usage, but every model response carries the account's unified
-// rate-limit windows. Two credentials whose 5h AND 7d reset timestamps match
-// to the second belong to the same account — that is how a freshly minted
-// token is proven to belong to the profile it was minted for before it is
-// stored (the browser may have been signed into a different account; the
-// token itself can't say whose it is).
-// ---------------------------------------------------------------------------
-
-/** Same account iff both reset timestamps are known and identical. Utilization
- *  is deliberately ignored — it moves between two probes seconds apart. */
-export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFingerprint): boolean {
-  return (
-    a.five_hour_reset != null &&
-    a.seven_day_reset != null &&
-    a.five_hour_reset === b.five_hour_reset &&
-    a.seven_day_reset === b.seven_day_reset
-  );
-}
-
-/** Which SAVED profile a scope-less token belongs to, judged from the usage
- *  snapshots (each carries that account's window reset times, fetched with the
- *  profile's own credential). The 7d reset is stable for a week and must match;
- *  the 5h reset must match too while the snapshot's window is still open (a
- *  closed window has rolled since, so its stale reset proves nothing). Exactly
- *  one hit names the owner; none or several = unknown. */
-export function attributeFingerprint(
-  fp: RateLimitFingerprint,
-  profiles: Record<string, { uuid?: string; email?: string }>,
-  usage: Record<string, CcUsageSnapshot>,
-  now: number,
-): string | null {
-  if (fp.seven_day_reset == null) return null;
-  const near = (ms: number | undefined, s: number | null): boolean =>
-    ms != null && s != null && Math.abs(ms / 1000 - s) <= 2;
-  const hits: string[] = [];
-  for (const [name, meta] of Object.entries(profiles)) {
-    const snap = usage[meta.uuid || meta.email || ""];
-    if (!snap || !near(snap.weekly?.resets_at, fp.seven_day_reset)) continue;
-    const sessionOpen = snap.session?.resets_at != null && snap.session.resets_at > now;
-    if (sessionOpen && !near(snap.session?.resets_at, fp.five_hour_reset)) continue;
-    hits.push(name);
-  }
-  return hits.length === 1 ? hits[0] : null;
-}
-
-export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: number = Date.now()): string | null {
-  return attributeFingerprint(fp, readProfileIndex().profiles, readUsageCache().accounts, now);
-}
-
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
 // Haiku 4.5, not 5.5: on a subscription token claude-haiku-5-5 answers a bare
 // call 429 with no window headers (three accounts, 2026-10-07).
@@ -1927,7 +1811,9 @@ export async function fetchRateLimitFingerprint(bearerToken: string, fetchImpl?:
   // A limit-parked account answers 429 — with the same window headers, which
   // is all the fingerprint needs (2026-09-01: a mint for an exhausted account
   // was thrown away because the probe treated its 429 as a failure).
-  if ((status < 200 || status >= 300) && !(fp.five_hour_reset != null && fp.seven_day_reset != null)) {
+  // The 7d reset is the part an identity check needs; an account with no
+  // 5-hour window never sends the 5h one.
+  if ((status < 200 || status >= 300) && fp.seven_day_reset == null) {
     throw new CcAccountError(`Account probe failed: HTTP ${status} ${(await body()).slice(0, 160)}`);
   }
   return fp;
