@@ -99,7 +99,7 @@ await test("inbox-load", "the inbox over 5,000 sessions draws a bounded list and
 await test("inbox-heartbeat", "a heartbeat on a drawn session re-renders nothing in a 5,000-session inbox", async () => {
   await setup("inbox-heartbeat");
   for (const r of await twice()) {
-    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered }).toEqual({ storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered, storeKeys: r.detail.storeKeys }).toEqual({ storeKeys: ["sessions", "sessionsProjection"], storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
   }
 });
 
@@ -131,7 +131,7 @@ await test("inbox-load-modern", "in the Modern style the inbox over 5,000 sessio
 await test("inbox-heartbeat-modern", "in the Modern style a heartbeat on a drawn session re-renders nothing", async () => {
   await setup("inbox-heartbeat-modern");
   for (const r of await twice()) {
-    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered }).toEqual({ storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered, storeKeys: r.detail.storeKeys }).toEqual({ storeKeys: ["sessions", "sessionsProjection"], storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
   }
 });
 
