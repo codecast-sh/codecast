@@ -16,7 +16,10 @@ export type BoardSession = NonNullable<QueueCommit["session"]> & SessionExtra;
 export type BoardQueueCommit = Omit<QueueCommit, "session"> & CommitExtra & { session: BoardSession | null };
 export type BoardQueueGroup = Omit<QueueGroup, "commits" | "session"> & { session: BoardSession | null; commits: BoardQueueCommit[] };
 export type BoardDeployRow = NonNullable<TeamDeployRow["commit_rows"]>[number] & CommitExtra;
-export type BoardDeploySession = DeploySession & SessionExtra;
+export type BoardDeploySession = DeploySession & SessionExtra & {
+  /** The tasks its commits on the deploy named, all of them (not only the listed rows). */
+  task_short_ids?: string[];
+};
 export type BoardDeploy = Omit<TeamDeployRow, "commit_rows" | "sessions"> & { commit_rows?: BoardDeployRow[]; sessions: BoardDeploySession[] };
 
 /* ───────────── Ship runs (workflow_runs.shippingRuns) ───────────── */
@@ -213,7 +216,7 @@ const fill = (to: SessionRef, x: SessionRef) => {
 
 type Raw = { sha: string; subject: string; pr_number?: number; branch?: string | null; tasks: string[]; own: SessionRef | null } & Lines;
 
-function carriedOf(raw: ReadonlyArray<Raw>, credit: Shipper, extra: { more: number; branchesKnown: boolean; sessions?: ReadonlyArray<SessionRef>; tasks?: ReadonlyArray<{ short_id?: string | null; title?: string | null }> }): Carried {
+function carriedOf(raw: ReadonlyArray<Raw>, credit: Shipper, extra: { more: number; branchesKnown: boolean; sessions?: ReadonlyArray<SessionRef & { tasks?: string[] }>; tasks?: ReadonlyArray<{ short_id?: string | null; title?: string | null }> }): Carried {
   const sessions = new Map<string, CarriedSession>();
   const commits: CarriedCommit[] = [];
   let loose = 0;
@@ -229,13 +232,15 @@ function carriedOf(raw: ReadonlyArray<Raw>, credit: Shipper, extra: { more: numb
     addLines(s, c);
     sessions.set(who.id, s);
   }
-  // The deploy's own session list names sessions beyond its listed commits; one whose listed commits all went to
-  // their shipper is a station session and stays off.
+  // The deploy's own session list names sessions beyond its listed commits. One that says which tasks its commits
+  // named is credited like a commit, so a station session becomes its shipper's row; without them, one whose listed
+  // commits all went to their shipper is a station session and stays off.
   const named = new Set(raw.map((c) => c.own?.id).filter(Boolean));
-  for (const x of extra.sessions ?? []) {
-    const s = sessions.get(x.id);
-    if (s) fill(s, x);
-    else if (!named.has(x.id)) sessions.set(x.id, { ...x, commits: 0 });
+  for (const { tasks, ...x } of extra.sessions ?? []) {
+    const who = (tasks && credit(tasks, x)) || x;
+    const s = sessions.get(who.id);
+    if (s) fill(s, who);
+    else if (who.id !== x.id || !named.has(x.id)) sessions.set(who.id, { ...who, commits: 0 });
   }
   const tasks = new Map<string, string | null>();
   for (const t of extra.tasks ?? []) if (t.short_id) tasks.set(t.short_id, t.title ?? null);
@@ -260,8 +265,9 @@ export function carriedOfQueue(commits: ReadonlyArray<BoardQueueCommit>, credit:
 /** A finished deploy's recorded commits as its card lists them. */
 export function carriedOfDeploy(d: Pick<BoardDeploy, "commit_rows" | "sessions" | "tasks" | "commits">, credit: Shipper): Carried {
   const rows = d.commit_rows ?? [];
-  const sessions = sessionsOf(d).map((s) => refOf(s as BoardDeploySession));
-  const info = new Map(sessions.map((s) => [s.id, s]));
+  const listed = sessionsOf(d) as BoardDeploySession[];
+  const info = new Map(listed.map((s) => [s.conversation_id, refOf(s)]));
+  const sessions = listed.map((s) => ({ ...info.get(s.conversation_id)!, tasks: s.task_short_ids }));
   return carriedOf(
     rows.map((c) => ({ ...c, tasks: c.tasks ?? [], own: c.conversation_id ? (info.get(c.conversation_id) ?? refOf({ conversation_id: c.conversation_id })) : null })),
     credit,

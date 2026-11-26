@@ -109,6 +109,15 @@ describe("crediting a commit to the session that pressed Ship", () => {
     expect(q.sessions.map((s) => s.id)).toEqual(["shipper"]);
     expect(d.sessions.map((s) => s.id)).toEqual(["shipper"]);
   });
+  test("a deploy's session beyond its listed rows is credited through the tasks it names, else kept as listed", () => {
+    const rows = [{ sha: "ccccccc1", subject: "x", conversation_id: "s2", branch: null }];
+    const station = { ...sess("review-station"), task_short_ids: ["ct-1"] };
+    const d = carriedOfDeploy(deploy("dp-1", 1, { commits: 3, sessions: [station, sess("s2")], commit_rows: rows }), credit);
+    expect(d.sessions.map((s) => [s.id, s.title])).toEqual([["s2", "Session s2"], ["shipper", "Shipper"]]);
+    expect(d.branchesKnown).toBe(true);
+    const old = carriedOfDeploy(deploy("dp-1", 1, { commits: 3, sessions: [sess("review-station"), sess("s2")], commit_rows: rows }), credit);
+    expect(old.sessions.map((s) => s.id)).toEqual(["s2", "review-station"]);
+  });
 });
 
 describe("queue slicing around a running deploy", () => {
