@@ -7041,8 +7041,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setDeviceAppearance: (deviceId: string, change: { display_name?: string; icon?: string; icon_color?: string }, ownerUserId?: string) => void;
   /** Put one of the viewer's accounts in exactly these teams' pools (empty
    *  takes it back): Settings > Claude Accounts' pool pill. Server home is
-   *  account_shares; the accountPool snapshot reconciles the draft. */
-  setAccountShares: (deviceId: string, email: string, teamIds: string[]) => void;
+   *  account_shares; the accountPool snapshot reconciles the draft. Resolves
+   *  when the server accepts, rejects when it refuses. */
+  setAccountShares: (deviceId: string, email: string, teamIds: string[]) => Promise<unknown>;
   /** Narrow one of your accounts to some of your machines, or open it to all of them (null). */
   setAccountDevices: (email: string, deviceIds: string[] | null) => void;
   setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
@@ -10665,7 +10666,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = Object.values(pool).find((r) => r.mine && r.email === key && !r.team_id);
     if (row) row.device_ids = deviceIds ? [...new Set(deviceIds)].sort() : null;
   }),
-  setAccountShares: action(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
+  setAccountShares: asyncAction(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
     const pool = this.accountPool as Record<string, any>;
     const key = email.toLowerCase();
     const wanted = new Set(teamIds);

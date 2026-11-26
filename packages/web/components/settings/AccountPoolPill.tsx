@@ -20,21 +20,27 @@ export function AccountPoolPill({ deviceId, email }: { deviceId: string; email: 
   if (teams.length === 0) return null;
   const key = email.toLowerCase();
   const shared = new Set(pool.filter((r) => r.mine && r.email === key).map((r) => String(r.team_id)));
-  const write = (next: Set<string>) => setAccountShares(deviceId, email, [...next]);
+  // The toast answers the server, never the request: a refused share has
+  // already been reported by the dispatch-failure toast, so only the
+  // acceptance gets one here.
+  const write = (next: Set<string>, onAccepted: () => void) =>
+    setAccountShares(deviceId, email, [...next]).then(onAccepted, () => {});
   return (
     <div className="flex shrink-0 gap-1.5" data-account-pool-pill={key}>
       <TeamSharePills
         teams={teams}
         shared={shared}
         onOpen={(t: ShareTeam) => {
-          write(new Set([...shared, String(t._id)]));
-          toast.success(`${email} is in ${t.name}'s pool`, { description: "Teammates' machines get it within a minute." });
+          write(new Set([...shared, String(t._id)]), () =>
+            toast.success(`${email} is in ${t.name}'s pool`, { description: "Teammates' machines get it within a minute." }),
+          );
         }}
         onClose={(t: ShareTeam) => {
           const next = new Set(shared);
           next.delete(String(t._id));
-          write(next);
-          toast(`${email} left ${t.name}'s pool`, { description: "Its copies are deleted and sessions move off it within a minute." });
+          write(next, () =>
+            toast(`${email} left ${t.name}'s pool`, { description: "Its copies are deleted and sessions move off it within a minute." }),
+          );
         }}
         confirm={{
           title: (t) => <>Put {email} in {t.name}&apos;s pool?</>,
