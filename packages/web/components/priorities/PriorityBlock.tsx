@@ -50,7 +50,8 @@ const C_RANK = "col-start-1 row-start-1 text-right text-ui font-semibold tabular
 const C_TITLE = "col-start-2 row-start-1 min-w-0";
 const C_PROGRESS = "col-start-3 row-start-1 justify-self-end";
 const C_META = "col-start-2 col-end-6 row-start-2 min-w-0";
-/** A wide row's ⋯: outside the grid, in the page's right gutter, level with the row's first line. */
+/** A wide row's ⋯: outside the grid, in the page's right gutter, level with the row's first line. It ends 32px past the grid,
+ *  inside the narrowest gutter (Classic's 32px), and its touch press area grows only leftward (controls `gutter`). */
 const C_MENU = "absolute left-full top-0 ml-2 flex h-5 items-center";
 /** A milestone line's ⋯, at the same x: the line's own box already reaches 6px into the gutter. */
 const C_LINE_MENU = "absolute left-full top-1 ml-0.5 flex";
@@ -309,7 +310,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
             <span data-today className="text-meta tabular-nums text-sol-text">{model.today > 0 || untouched ? model.today : ""}</span>
           </span>
           <span className="col-start-5 row-start-1 justify-self-start"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
-          <PriorityMenu row={row} reveal="group-hover/head:opacity-100" className={C_MENU} />
+          <PriorityMenu row={row} reveal="group-hover/head:opacity-100" gutter className={C_MENU} />
         </>
       ) : (
         <>
@@ -566,7 +567,7 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
             </div>
             {/* The milestone's own messages today, under the priority's in the Today column. */}
             {m.today > 0 && <span data-line-today title={`${m.today} today`} className="col-start-4 row-start-1 flex h-8 items-center justify-self-center text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today}</span>}
-            {row.mine && <MilestoneMenu row={row} step={step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" className={C_LINE_MENU} />}
+            {row.mine && <MilestoneMenu row={row} step={step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" gutter className={C_LINE_MENU} />}
           </>
         ) : (
           <>

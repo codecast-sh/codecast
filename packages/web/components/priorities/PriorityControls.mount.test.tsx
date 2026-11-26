@@ -498,7 +498,8 @@ test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer pres
   try {
     for (const b of [priorityMenu("pri-1"), line("pri-1", "s1").querySelector('[data-milestone-menu="s1"]')!]) {
       expect(b.className).toContain("size-6");
-      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-2.5");
+      // 44px each way under a coarse pointer, grown only leftward: each ⋯ sits in the page's right gutter, so the page never scrolls sideways.
+      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:-left-5 [@media(pointer:coarse)]:after:right-0");
       // Always shown where a finger points, as where nothing hovers.
       if (b.hasAttribute("data-milestone-menu")) {
         expect(b.className).toContain("[@media(hover:none)]:opacity-100");
