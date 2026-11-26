@@ -296,8 +296,8 @@ export const releaseStrays = internalMutation({
  * a session is theirs and in this workspace, and everything the person set
  * stands, as the rows are now (so a setting made while the model was reading
  * holds too). The pass's output is rejected wherever it would change one: a
- * rank; a step's tier, title, done state or drop (holdPersonSteps); a
- * set-aside, done or merged status; a session the person placed, or one
+ * placed rank (the plan writes only ai_rank, never person_pos); a step's
+ * tier, title, done state or drop (holdPersonSteps); a set-aside, done or merged status; a session the person placed, or one
  * mapped to a priority they said it is not part of. A step added to a
  * priority since the input was read (a person's merge) is kept, and a new
  * step of the plan's that took its key gets the next one. A merge moves the
@@ -349,11 +349,10 @@ export const applyPlan = internalMutation({
       const row = await mine(u.short_id);
       if (!row || row.status === "merged") continue;
       const patch: Partial<PriorityWrite> = { ...u.patch };
-      if (row.rank_set_by === "person") { delete patch.rank; delete patch.rank_set_by; }
       if (row.status === "set_aside" || row.status_set_by === "person") {
         delete patch.status;
         delete patch.done_at;
-        if (row.status !== "active") { delete patch.rank; delete patch.rank_set_by; }
+        if (row.status !== "active") delete patch.ai_rank;
       }
       if (patch.steps) {
         const seen = new Set(u.seen_steps ?? row.steps.map((st) => st.key));
@@ -381,7 +380,7 @@ export const applyPlan = internalMutation({
       const into = await resolve(m.merged_into);
       const intoRow: Doc<"priorities"> | null = into ? await ctx.db.get(into) : null;
       if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || intoRow.status === "merged") continue;
-      await ctx.db.patch(row._id, { status: "merged", merged_into: into, rank: undefined, updated_at: now });
+      await ctx.db.patch(row._id, { status: "merged", merged_into: into, ai_rank: undefined, updated_at: now });
       mergedInto.set(row._id, into);
       counts.merged++;
       // Its corrections follow it, onto the step their step became (step-less when that is unknown).

@@ -9,7 +9,7 @@ const NOW = Date.UTC(2026, 10, 24, 18);
 const HOUR = 3_600_000;
 
 const row = (over: Partial<PriorityRow>): PriorityRow => ({
-  _id: "p1", short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", rank: 1, rank_set_by: "pass", serves: null, steps: [],
+  _id: "p1", short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", rank: 1, person_pos: null, ai_rank: 1, rank_source: "ai", serves: null, steps: [],
   counts: { critical_done: 3, critical_total: 6 }, workspace: "team:t1", user_id: "u1", owner: "Ada", mine: true,
   first_seen_at: NOW - 30 * 24 * HOUR, last_active_at: NOW - 2 * HOUR, done_at: null, session_count: 0, session_count_more: false, sessions: [],
   status_set_by: "pass", correction_pending: false,
@@ -36,6 +36,12 @@ describe("output", () => {
     ]);
   });
 
+  test("show: the rank says who placed it", () => {
+    const detail = (over: Partial<PriorityRow>) => formatPriorityDetail({ ...row(over), steps: [], other_sessions: [], corrections: [] }, NOW)[1];
+    expect(detail({ rank: 3, rank_source: "person", person_pos: 2.5 })).toBe("active · #3 (you placed it) · critical 3/6 · last active 2h ago");
+    expect(detail({ rank: 2 })).toBe("active · #2 (ranked by AI) · critical 3/6 · last active 2h ago");
+  });
+
   test("show: steps under Critical path and Polish, done ones ticked, with their refs and sessions", () => {
     const detail = formatPriorityDetail({
       ...row({ summary: "Grader faults are the last blocker.", serves: "in-5", session_count: 50, session_count_more: true }),
@@ -49,7 +55,7 @@ describe("output", () => {
     }, NOW);
     expect(detail).toEqual([
       "pri-1  Trusted evals",
-      "active · #1 · critical 3/6 · serves in-5 · 50+ sessions · last active 2h ago",
+      "active · #1 (ranked by AI) · critical 3/6 · serves in-5 · 50+ sessions · last active 2h ago",
       "Grader faults are the last blocker.",
       "",
       "Critical path",
@@ -129,14 +135,14 @@ describe("cast priorities on the wire", () => {
 
   test("the person's controls post what they name", async () => {
     clearWorkspaceCache();
-    h.answer = (p, body) => (p === "/cli/teams" ? roster : p === "/cli/priorities/run" ? { scheduled: ["team:t1"], note: "A pass is running." } : row({ short_id: body.short_id, rank: body.rank ?? 1 }));
+    h.answer = (p, body) => (p === "/cli/teams" ? roster : p === "/cli/priorities/run" ? { scheduled: ["team:t1"], note: "A pass is running." } : row({ short_id: body.short_id, rank: body.to ?? 1 }));
     await h.run("rank", "pri-3", "2");
     await h.run("milestone", "tier", "3/S2", "--polish");
     await h.run("set-aside", "pri-3");
     await h.run("restore", "pri-3");
     await h.run("run");
     expect(h.calls.filter((c) => c.path !== "/cli/teams")).toEqual([
-      { path: "/cli/priorities/rank", body: { short_id: "pri-3", rank: 2 } },
+      { path: "/cli/priorities/move", body: { short_id: "pri-3", to: 2 } },
       { path: "/cli/priorities/step", body: { short_id: "pri-3", step_key: "s2", tier: "polish" } },
       { path: "/cli/priorities/set-aside", body: { short_id: "pri-3" } },
       { path: "/cli/priorities/restore", body: { short_id: "pri-3" } },

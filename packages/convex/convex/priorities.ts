@@ -7,7 +7,7 @@
 // readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority, and every change marks its field set by the person, so
 // the pass (lib/priorityPass.ts, priorityPassRun applyPlan) never overrides it:
-// rank; a milestone's tier, done state, title and drop (steps are milestones);
+// a placed rank; a milestone's tier, done state, title and drop (steps are milestones);
 // set aside, done and merge; a session's move and "not this". Corrections are
 // the person's words to the pass, read by every later pass until deleted.
 
@@ -18,7 +18,7 @@ import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
 import { accessStampFor, accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { orderPriorities } from "./lib/priorityPass";
+import { placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
 import { inWorkspace } from "./priorityPassInputs";
@@ -91,29 +91,19 @@ const LISTED_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside
 
 /**
  * Each active priority's position among its owner's active ones in its
- * workspace (orderPriorities: a person's rank is a fixed slot, the pass's fill
- * the rest). `rows` must hold every active priority of each owner and
- * workspace it covers.
+ * workspace (shared/contracts/priorities effectivePriorityOrder). `rows` must
+ * hold every active priority of each owner and workspace it covers.
  */
-function positionsOf(rows: Priority[]): Map<string, number> {
-  const groups = new Map<string, Priority[]>();
-  for (const r of rows) {
-    const k = `${r.user_id}|${r.workspace}`;
-    groups.set(k, [...(groups.get(k) ?? []), r]);
-  }
-  const out = new Map<string, number>();
-  for (const g of groups.values()) for (const { row, position } of orderPriorities(g)) out.set(String(row._id), position);
-  return out;
-}
+const positionsOf = (rows: Priority[]): Map<string, number> => priorityPositions(rows, (r) => String(r._id));
+
+/** One owner's active priorities in one workspace: what a position is among. */
+const activeOf = (ctx: Ctx, user: Id<"users">, workspace: string): Promise<Priority[]> =>
+  ctx.db.query("priorities").withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", user).eq("workspace", workspace).eq("status", "active")).take(OWN_PRIORITIES_READ);
 
 /** One priority's position, read from its owner's active priorities in its workspace. */
 async function positionOf(ctx: Ctx, p: Priority): Promise<number | null> {
   if (p.status !== "active") return null;
-  const active: Priority[] = await ctx.db
-    .query("priorities")
-    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", p.user_id).eq("workspace", p.workspace).eq("status", "active"))
-    .take(OWN_PRIORITIES_READ);
-  return positionsOf(active).get(String(p._id)) ?? null;
+  return positionsOf(await activeOf(ctx, p.user_id, p.workspace)).get(String(p._id)) ?? null;
 }
 
 function criticalCounts(p: Priority): { critical_done: number; critical_total: number } {
@@ -195,7 +185,9 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: string, position: numbe
     summary: p.summary,
     status: p.status,
     rank: position,
-    rank_set_by: p.rank_set_by,
+    person_pos: p.person_pos ?? null,
+    ai_rank: p.ai_rank ?? null,
+    rank_source: rankSourceOf(p),
     status_set_by: p.status_set_by ?? "pass",
     serves: p.serves ?? null,
     steps,
@@ -640,31 +632,27 @@ async function owned(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<Re
   return p;
 }
 
-async function doRank(ctx: Ctx, viewer: Id<"users">, shortId: string, rank: number): Promise<Result<PriorityRow>> {
+/** Where the person moves a priority: a position (1 = first), or one up or down from where it shows. */
+type MoveTo = number | "up" | "down";
+
+/**
+ * The person places one of their active priorities at a position among their
+ * active ones in its workspace (shared/contracts/priorities placePriority):
+ * its person_pos goes between its new neighbours', so every other priority
+ * keeps its place, and the pass never moves it after.
+ */
+async function doMove(ctx: Ctx, viewer: Id<"users">, shortId: string, to: MoveTo): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   if (p.status !== "active") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only active priorities are ranked (restore it first)` };
-  if (!Number.isInteger(rank) || rank < 1) return { error: "a rank is a whole number from 1" };
-  // `rank` is the position the person wants it shown at; it is stored as a slot
-  // (orderPriorities fits the pass's priorities around the person's). First every
-  // other slot the person set moves to where it shows now, so a slot past the end
-  // or across a gap reads as its position; then the one at the wanted slot, and
-  // any it lands on, moves down one, so the person's slots never collide.
+  if (typeof to === "number" && (!Number.isInteger(to) || to < 1)) return { error: "a rank is a whole number from 1" };
+  const group = await activeOf(ctx, viewer, p.workspace);
+  const row = group.find((r) => String(r._id) === String(p._id))!;
+  const at = positionsOf(group).get(String(p._id))!;
   const now = Date.now();
-  const active: Priority[] = await ctx.db
-    .query("priorities")
-    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
-    .take(OWN_PRIORITIES_READ);
-  const others = active.filter((r) => String(r._id) !== String(p._id));
-  const to = Math.min(rank, active.length);
-  let next = to;
-  for (const { row, position } of orderPriorities(others)) {
-    if (row.rank_set_by !== "person") continue;
-    let slot = position;
-    if (slot === next) slot = ++next;
-    if (slot !== row.rank) await ctx.db.patch(row._id, { rank: slot, updated_at: now });
+  for (const w of placePriority(group, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
+    await ctx.db.patch(w.row._id, { ...(w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank }), updated_at: now });
   }
-  await ctx.db.patch(p._id, { rank: to, rank_set_by: "person", updated_at: now });
   return echo(ctx, viewer, p._id);
 }
 
@@ -701,13 +689,12 @@ async function doMilestone(ctx: Ctx, viewer: Id<"users">, shortId: string, stepK
   return echo(ctx, viewer, p._id);
 }
 
-/** Active priorities of the viewer's in one workspace: what a restore ranks after. */
-const activeOf = (ctx: Ctx, viewer: Id<"users">, workspace: string): Promise<Priority[]> =>
-  ctx.db.query("priorities").withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", workspace).eq("status", "active")).take(OWN_PRIORITIES_READ);
+/** Leaving the ranking ends both places, the person's and the pass's. */
+const UNRANKED = { person_pos: undefined, ai_rank: undefined };
 
 /**
  * Set aside leaves the ranking. Restore brings a set-aside or done priority
- * back active, last among the pass-ranked: undoing the person's own done hands
+ * back active, last until the person or the pass places it: undoing the person's own done hands
  * the status back to the pass; reopening one the pass marked done is the
  * person's call, which the pass then keeps.
  */
@@ -716,13 +703,12 @@ async function doSetAside(ctx: Ctx, viewer: Id<"users">, shortId: string, aside:
   if ("error" in p) return p;
   const now = Date.now();
   if (aside) {
-    if (p.status !== "set_aside") await ctx.db.patch(p._id, { status: "set_aside", status_set_by: undefined, rank: undefined, rank_set_by: "pass", updated_at: now });
+    if (p.status !== "set_aside") await ctx.db.patch(p._id, { status: "set_aside", status_set_by: undefined, ...UNRANKED, updated_at: now });
     return echo(ctx, viewer, p._id);
   }
   if (p.status !== "set_aside" && p.status !== "done") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only a set-aside or done priority is restored` };
   const status_set_by = p.status === "done" && p.status_set_by !== "person" ? ("person" as const) : undefined;
-  const last = Math.max(0, ...(await activeOf(ctx, viewer, p.workspace)).filter((r) => r.rank_set_by === "pass").map((r) => r.rank ?? 0));
-  await ctx.db.patch(p._id, { status: "active", status_set_by, done_at: undefined, rank: last + 1, rank_set_by: "pass", updated_at: now });
+  await ctx.db.patch(p._id, { status: "active", status_set_by, done_at: undefined, ...UNRANKED, updated_at: now });
   return echo(ctx, viewer, p._id);
 }
 
@@ -732,7 +718,7 @@ async function doPriorityDone(ctx: Ctx, viewer: Id<"users">, shortId: string): P
   if ("error" in p) return p;
   if (p.status !== "done" || p.status_set_by !== "person") {
     const now = Date.now();
-    await ctx.db.patch(p._id, { status: "done", status_set_by: "person", done_at: p.status === "done" ? p.done_at ?? now : now, rank: undefined, rank_set_by: "pass", updated_at: now });
+    await ctx.db.patch(p._id, { status: "done", status_set_by: "person", done_at: p.status === "done" ? p.done_at ?? now : now, ...UNRANKED, updated_at: now });
   }
   return echo(ctx, viewer, p._id);
 }
@@ -766,7 +752,7 @@ async function doMerge(ctx: Ctx, viewer: Id<"users">, shortId: string, intoId: s
     return { ...s, key };
   });
   await ctx.db.patch(into._id, { steps: [...into.steps, ...carried], updated_at: now });
-  await ctx.db.patch(p._id, { status: "merged", merged_into: into._id, status_set_by: "person", rank: undefined, rank_set_by: "pass", updated_at: now });
+  await ctx.db.patch(p._id, { status: "merged", merged_into: into._id, status_set_by: "person", ...UNRANKED, updated_at: now });
   const { move, recount } = sessionMover(ctx);
   for (const conv of sessions) {
     const not = (conv.priority_not ?? []).some((id) => String(id) === String(into._id));
@@ -937,9 +923,19 @@ async function authed(ctx: any): Promise<Id<"users">> {
   return viewer;
 }
 
-export const rank = mutation({
-  args: { short_id: v.string(), rank: v.number() },
-  handler: async (ctx, args) => orThrow(await doRank(ctx, await authed(ctx), args.short_id, args.rank)),
+export const moveTo = mutation({
+  args: { short_id: v.string(), to: v.number() },
+  handler: async (ctx, args) => orThrow(await doMove(ctx, await authed(ctx), args.short_id, args.to)),
+});
+
+export const moveUp = mutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => orThrow(await doMove(ctx, await authed(ctx), args.short_id, "up")),
+});
+
+export const moveDown = mutation({
+  args: { short_id: v.string() },
+  handler: async (ctx, args) => orThrow(await doMove(ctx, await authed(ctx), args.short_id, "down")),
 });
 
 export const setStepTier = mutation({
@@ -1031,12 +1027,13 @@ export const cliHistory = query({
   },
 });
 
-export const cliRank = mutation({
-  args: { api_token: v.string(), short_id: v.string(), rank: v.number() },
+/** `cast priorities rank <id> <n>`: move to position n. */
+export const cliMove = mutation({
+  args: { api_token: v.string(), short_id: v.string(), to: v.number() },
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    return doRank(ctx, viewer, args.short_id, args.rank);
+    return doMove(ctx, viewer, args.short_id, args.to);
   },
 });
 

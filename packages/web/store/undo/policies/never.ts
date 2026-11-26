@@ -273,7 +273,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setWalkiePref: SETTINGS,
   setWeeklyCardEnabled: SETTINGS,
   setWeeklyCardOptions: SETTINGS,
-  rankPriority: PRIORITY,
+  movePriority: PRIORITY,
   setPriorityStepTier: PRIORITY,
   setPriorityAside: PRIORITY,
   restorePriority: PRIORITY,

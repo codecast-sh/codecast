@@ -23,7 +23,7 @@ describe("session counts", () => {
 
     // A second priority from before counts were kept, holding the old session.
     const b = await w.t.run(async (ctx) => {
-      const id = await ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-90", title: "Old", summary: "", status: "active", rank: 2, rank_set_by: "pass", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 });
+      const id = await ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-90", title: "Old", summary: "", status: "active", ai_rank: 2, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 });
       await ctx.db.patch(w.oldConv, { priority_id: id, priority_step_key: "s1" });
       return id;
     });
@@ -166,14 +166,14 @@ describe("session counts", () => {
       for (const [user, workspace] of dormant.slice(0, 7)) {
         for (let i = 0; i < 30; i++) {
           await ctx.db.insert("priorities", {
-            user_id: user, workspace, short_id: `pri-${++n}`, title: "quiet", summary: "", status: "done", rank_set_by: "pass", steps: [],
+            user_id: user, workspace, short_id: `pri-${++n}`, title: "quiet", summary: "", status: "done", steps: [],
             first_seen_at: 1, last_active_at: w.now - 2 * DAY, pass_at: 1, created_at: 1, updated_at: 1,
           } as any);
         }
       }
       // Ana's team pair, swept last, holds a session since locked private.
       const p = await ctx.db.insert("priorities", {
-        user_id: w.ana, workspace: w.team, short_id: "pri-999", title: "held", summary: "", status: "active", rank_set_by: "pass", steps: [],
+        user_id: w.ana, workspace: w.team, short_id: "pri-999", title: "held", summary: "", status: "active", steps: [],
         first_seen_at: 1, last_active_at: w.now - H, pass_at: 1, created_at: 1, updated_at: 1,
       } as any);
       await ctx.db.patch(w.teamConv, { priority_id: p, is_private: true, team_visibility: "private" });
@@ -187,7 +187,7 @@ describe("session counts", () => {
     const w = await world();
     await w.t.run(async (ctx) => {
       const priority = (short_id: string, last_active_at: number) => ctx.db.insert("priorities", {
-        user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", rank_set_by: "pass", steps: [],
+        user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", steps: [],
         first_seen_at: 1, last_active_at, pass_at: 1, created_at: 1, updated_at: 1,
       } as any);
       for (let i = 0; i < 31; i++) await priority(`pri-${i + 1}`, w.now - 60 * DAY);
@@ -211,14 +211,14 @@ describe("session counts", () => {
           if (++n > 9) continue;
           for (let i = 0; i < 25; i++) {
             await ctx.db.insert("priorities", {
-              user_id: user, workspace, short_id: `pri-${n}-${i}`, title: "quiet", summary: "", status: "done", rank_set_by: "pass", steps: [],
+              user_id: user, workspace, short_id: `pri-${n}-${i}`, title: "quiet", summary: "", status: "done", steps: [],
               first_seen_at: 1, last_active_at: w.now - 2 * DAY, pass_at: 1, created_at: 1, updated_at: 1,
             } as any);
           }
         }
       }
       const p = await ctx.db.insert("priorities", {
-        user_id: w.ana, workspace: w.team, short_id: "pri-999", title: "held", summary: "", status: "active", rank_set_by: "pass", steps: [],
+        user_id: w.ana, workspace: w.team, short_id: "pri-999", title: "held", summary: "", status: "active", steps: [],
         first_seen_at: 1, last_active_at: w.now - H, pass_at: 1, created_at: 1, updated_at: 1,
       } as any);
       await ctx.db.patch(w.teamConv, { priority_id: p, is_private: true, team_visibility: "private" });
@@ -238,7 +238,7 @@ describe("session counts", () => {
     const w = await world();
     await w.t.run(async (ctx) => {
       const priority = (short_id: string, last_active_at: number) => ctx.db.insert("priorities", {
-        user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "done", rank_set_by: "pass", steps: [],
+        user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "done", steps: [],
         first_seen_at: 1, last_active_at, pass_at: 1, created_at: 1, updated_at: 1,
       } as any);
       // Thirty-one older ones first, then the one that moved an hour ago, holding a session since locked private.

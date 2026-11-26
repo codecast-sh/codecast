@@ -65,7 +65,7 @@ export function applyPlanInMemory(state: EvalState, plan: MergePlan, input: Prio
   for (const c of plan.creates) {
     const short_id = `pri-${++next_id}`;
     ids.set(c.ref, short_id);
-    byId.set(short_id, { short_id, title: c.title, summary: c.summary, status: c.status, rank: c.rank, rank_set_by: c.rank_set_by, serves: c.serves, steps: c.steps, last_active_at: c.last_active_at, sessions: [] });
+    byId.set(short_id, { short_id, title: c.title, summary: c.summary, status: c.status, person_pos: null, ai_rank: c.ai_rank, serves: c.serves, steps: c.steps, last_active_at: c.last_active_at, sessions: [] });
   }
   for (const u of plan.updates) {
     const p = byId.get(u.short_id);

@@ -94,8 +94,9 @@ function row(_id: string, title: string, extra: Record<string, unknown> = {}) {
   };
 }
 
-const priority = (_id: string, rank: number, user_id = "me") => ({
-  _id, short_id: _id, title: _id, rank, user_id, status: "active", steps: [{ key: "s1", title: "One", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
+/** A priority the pass slotted at `ai_rank`; its rank is its position among its owner's (five fillers put p2 at #7). */
+const priority = (_id: string, ai_rank: number, user_id = "me") => ({
+  _id, short_id: _id, title: _id, ai_rank, person_pos: null, workspace: "team:t1", last_active_at: 0, user_id, status: "active", steps: [{ key: "s1", title: "One", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
 });
 
 function seed(mode: "priorities" | "grouped") {
@@ -109,7 +110,10 @@ function seed(mode: "priorities" | "grouped") {
   ];
   useInboxStore.setState({
     sessions: Object.fromEntries(rows.map((r) => [r._id, r])),
-    priorities: { p1: priority("p1", 1), p2: priority("p2", 7), pt: priority("pt", 1, "someone") },
+    priorities: {
+      p1: priority("p1", 1), p2: priority("p2", 7), pt: priority("pt", 1, "someone"),
+      ...Object.fromEntries([2, 3, 4, 5, 6].map((n) => [`f${n}`, priority(`f${n}`, n)])),
+    },
     conversations: {},
     pending: {},
     pendingMessages: {},

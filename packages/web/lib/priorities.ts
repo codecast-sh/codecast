@@ -4,6 +4,7 @@
 // the server refuses one, and the pass's timing. What the list page derives
 // from them lives in lib/priorityList.
 import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import { effectivePriorityOrder, placePriority, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { composeLinkHref } from "./composeLink";
 import { serverErrorText } from "./errorCause";
@@ -55,20 +56,31 @@ export type { PriorityDetail, PriorityHistory, PriorityHistoryLane };
 
 
 const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === String(b.user_id) && a.workspace === b.workspace;
-const byRank = (a: PriorityRow, b: PriorityRow) => (a.rank ?? Infinity) - (b.rank ?? Infinity);
 
 // The paints the store's priority actions make on their draft rows
 // (store/prioritiesSlice), in place. The server's push settles each one.
 
-/** Moves a priority to `rank` among its owner's active ones in its workspace and renumbers them. */
-export function paintRank(rows: PriorityRow[], shortId: string, rank: number): void {
+/** Writes the rank and its source on each of the row's owner's priorities in its workspace, from their effective order. */
+function rerank(rows: PriorityRow[], of: PriorityRow): void {
+  const peers = rows.filter((r) => sameOwner(r, of));
+  for (const r of peers) { r.rank = null; r.rank_source = rankSourceOf(r); }
+  effectivePriorityOrder(peers).forEach((r, i) => { r.rank = i + 1; });
+}
+
+/** Where the person moves a priority: a position (1 = first), or one up or down. */
+export type PriorityMove = number | "up" | "down";
+
+/** Places a priority as the server's move does (shared/contracts/priorities placePriority): its person_pos between its new neighbours'. */
+export function paintMove(rows: PriorityRow[], shortId: string, to: PriorityMove): void {
   const row = rows.find((r) => r.short_id === shortId);
   if (!row || row.status !== "active") return;
-  const peers = rows.filter((r) => sameOwner(r, row) && r.status === "active").sort(byRank);
-  peers.splice(peers.indexOf(row), 1);
-  peers.splice(Math.max(0, Math.min(peers.length, rank - 1)), 0, row);
-  peers.forEach((r, i) => { r.rank = i + 1; });
-  row.rank_set_by = "person";
+  const peers = effectivePriorityOrder(rows.filter((r) => sameOwner(r, row)));
+  const at = peers.indexOf(row) + 1;
+  for (const w of placePriority(peers, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
+    if (w.person_pos !== undefined) w.row.person_pos = w.person_pos;
+    else w.row.ai_rank = w.ai_rank ?? null;
+  }
+  rerank(rows, row);
 }
 
 /** Puts one step on the critical path or among the polish, as the person's choice. */
@@ -80,18 +92,15 @@ export function paintTier(row: PriorityRow, stepKey: string, tier: PriorityStepT
   row.counts = criticalCounts(row.steps);
 }
 
-/** Set aside leaves the ranking; restore brings it back active, last among its owner's. */
+/** Set aside leaves the ranking; restore brings it back active, unplaced, after its owner's ranked ones. */
 export function paintStatus(rows: PriorityRow[], shortId: string, status: "active" | "set_aside"): void {
   const row = rows.find((r) => r.short_id === shortId);
   if (!row) return;
-  if (status === "set_aside") {
-    row.status = "set_aside";
-    row.rank = null;
-    return;
-  }
-  row.status = "active";
-  row.done_at = null;
-  row.rank = rows.filter((r) => r !== row && sameOwner(r, row) && r.status === "active").length + 1;
+  row.person_pos = null;
+  row.ai_rank = null;
+  row.status = status;
+  if (status === "active") row.done_at = null;
+  rerank(rows, row);
 }
 
 export function criticalCounts(steps: readonly PriorityStep[]): { critical_done: number; critical_total: number } {
@@ -114,7 +123,7 @@ export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   }
   groups.sort((a, b) => Number(b.mine) - Number(a.mine) || a.owner.localeCompare(b.owner) || a.user_id.localeCompare(b.user_id));
   for (const g of groups) {
-    g.active.sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity));
+    g.active = effectivePriorityOrder(g.active);
     g.past.sort((a, b) => (PAST_ORDER[a.status] ?? 9) - (PAST_ORDER[b.status] ?? 9) || (b.done_at ?? b.last_active_at) - (a.done_at ?? a.last_active_at));
   }
   return groups;
@@ -167,12 +176,12 @@ export function prioritySig(r: PriorityRow): string {
   const sessions = r.sessions.map((s) => `${s.short_id}:${s.step_key ?? ""}:${s.title}`).join(",");
   const links = (r.links ?? []).map((l) => `${l.key}:${l.sessions_more}:${l.plan?.short_id ?? ""}:${l.plan?.done ?? ""}:${l.part_of.length}:${l.sessions.map((x) => `${x.short_id}.${x.state}.${x.title}.${x.last_active_at}`).join(";")}`).join(",");
   const plan = r.plan ? `${r.plan.short_id}:${r.plan.done}/${r.plan.total}` : "";
-  return [r.rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, steps, sessions, links, plan].join("|");
+  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, steps, sessions, links, plan].join("|");
 }
 
 /** The person's controls, as the page hands them to its rows. */
 export type PriorityWrites = {
-  rank: (shortId: string, rank: number) => void;
+  move: (shortId: string, to: PriorityMove) => void;
   setStepTier: (shortId: string, stepKey: string, tier: PriorityStepTier) => void;
   setAside: (shortId: string) => void;
   restore: (shortId: string) => void;

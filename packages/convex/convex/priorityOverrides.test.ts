@@ -108,7 +108,7 @@ describe("priority overrides survive the next pass", () => {
     await w.send(w.ana, w.oldConv, late(), "other work");
     await run(w);
     const row = await as(w, w.ana).mutation(pri.markDone, { short_id: "pri-1" });
-    expect(row).toMatchObject({ status: "done", status_set_by: "person", rank: null });
+    expect(row).toMatchObject({ status: "done", status_set_by: "person", rank: null, person_pos: null, ai_rank: null });
 
     await w.send(w.ana, w.teamConv, late(), "more grader work");
     model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", status: "active" }), proposal({ short_id: "pri-2", title: "Second", merges: ["pri-1"], steps: [], sessions: [] })], unassigned: [] });
@@ -232,13 +232,13 @@ describe("session overrides survive the next pass", () => {
       user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
       plan: {
         creates: [],
-        updates: [{ short_id: "pri-1", patch: { status: "active", rank: 1, steps: [pass_step("s1", "Grader faults under 10%"), pass_step("s2", "Theirs"), pass_step("s3", "Docs"), pass_step("s4", "Docs") ] } }],
+        updates: [{ short_id: "pri-1", patch: { status: "active", ai_rank: 1, steps: [pass_step("s1", "Grader faults under 10%"), pass_step("s2", "Theirs"), pass_step("s3", "Docs"), pass_step("s4", "Docs") ] } }],
         merges: [], sessions: [{ session: "jx7team", priority: "pri-1", step_key: "s1" }], unmap: ["jx7team"], notes: [], rewritten: [],
       },
     });
     const after = await byShort(w, "pri-1");
     expect(after.status).toBe("done");
-    expect(after.rank).toBeUndefined();
+    expect(after.ai_rank).toBeUndefined();
     expect(after.steps).toEqual([
       { ...pass_step("s1", "Grader faults under 10%"), done: true, done_at: before.steps[0].done_at, done_set_by: "person" },
       { ...pass_step("s2", "Mine"), title_set_by: "person" },
