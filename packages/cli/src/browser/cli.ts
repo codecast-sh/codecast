@@ -521,7 +521,6 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const targets = await listRealTargets(bridge);
       const owned = ownedRealTab(sessionKey);
       let targetId: string;
-      let created = false;
       if (!o.newTab && owned && targets.some((t) => t.targetId === owned)) {
         targetId = owned;
       } else {
@@ -533,13 +532,17 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
         // (focusRaise.guard.test.ts now fails a create without it — ct-49625).
         // Outwait the host's 40 s tabs.create budget: giving up first leaves a
         // tab this session never learns about, and the next `open` makes another.
-        targetId = (await narrated("opening a tab in Chrome", conn.send<{ targetId: string }>("Target.createTarget", { url, background: true }, undefined, 45_000))).targetId;
-        created = true;
+        // Blank first, navigated after the attach: the attach installs the
+        // agent-tab stamp for every new document, and a codecast page decides
+        // whether to hand itself to the desktop app in its <head>. A tab
+        // created on the URL parsed that head before the stamp existed and
+        // pulled the person's desktop app onto the agent's page.
+        targetId = (await narrated("opening a tab in Chrome", conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank", background: true }, undefined, 45_000))).targetId;
       }
       rememberRealTab(sessionKey, targetId);
       const page = await narrated("attaching to the tab through the extension", attachToTarget(conn, targetId));
       await armRecorder(page);
-      if (!created) await narrated("asking the tab to navigate", conn.send("Page.navigate", { url }, page.sessionId));
+      await narrated("asking the tab to navigate", conn.send("Page.navigate", { url }, page.sessionId));
       if (o.wait !== false) {
         const r = await narrated("waiting for the page to load", settle(page), { hint: "--no-wait returns as soon as the tab is attached" });
         if (!r.settled) console.log(fmt.muted(`  (did not fully settle: ${r.reason})`));

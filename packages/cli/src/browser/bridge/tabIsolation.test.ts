@@ -59,7 +59,7 @@ test("HTTP discovery carries the session and matches the WebSocket partition", a
   expect(new URL(version.webSocketDebuggerUrl).searchParams.get("session")).toBe("env-a-real");
 });
 
-test("a fresh session opens its requested page while human and other agent tabs stay untouched", async () => {
+test("a fresh session gets its own blank tab for the requested page while human and other agent tabs stay untouched", async () => {
   const other = await connect("env-other-real");
   const { targetId: otherId } = await other.send("Target.createTarget", { url: "https://other.example/" });
   const session = "env-workspace-real";
@@ -74,7 +74,7 @@ test("a fresh session opens its requested page while human and other agent tabs 
   const { sessionId } = await conn.send("Target.attachToTarget", { targetId, flatten: true });
   const result = await conn.send("Runtime.evaluate", { expression: "location.href" }, sessionId);
   expect(targetIdOfTab(result.echo.tabId)).toBe(targetId);
-  expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "https://other.example/", url]);
+  expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "https://other.example/", "about:blank"]);
   expect(extension.seen.filter(m => m.op === "attach")).toMatchObject([{ owned: true }]);
 });
 
@@ -90,7 +90,7 @@ test("opening a page allows a slow bridge browser-socket discovery", async () =>
   writeBridgeState({ port: proxy.port!, token: host.token });
   try {
     expect(await ensurePinnedTab("env-slow-discovery-real", "https://requested.example/")).toBe(true);
-    expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "https://requested.example/"]);
+    expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "about:blank"]);
   } finally {
     proxy.stop(true);
   }
@@ -130,7 +130,7 @@ test("a stale saved tab ID cannot claim a human tab even with a live engine; the
   // tab is never attached, granted or listed as the session's.
   expect(await ensurePinnedTab(session, "https://admin.google.com/")).toBe(true);
   expect(readBoundTarget(session)).not.toBe(targetIdOfTab(humanId));
-  expect((await listTargets(endpoint(session))).map((t) => t.url)).toEqual(["https://admin.google.com/"]);
+  expect((await listTargets(endpoint(session))).map((t) => t.url)).toEqual(["about:blank"]);
   expect(extension.seen.filter(m => m.op !== "tabs.list").map((m) => m.op)).toEqual(["tabs.create"]);
   expect(extension.tabs.find((t) => t.tabId === humanId)?.url).toBe(humanUrl);
 });
@@ -144,7 +144,7 @@ test("a closed owned tab is replaced on open without adopting another tab", asyn
   fs.writeFileSync(path.join(dir, `${session}.pid`), String(process.pid));
   expect(await ensurePinnedTab(session, "https://after.example/")).toBe(true);
   expect(readBoundTarget(session)).not.toBe(oldTarget);
-  expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "https://after.example/"]);
+  expect(extension.tabs.map(t => t.url)).toEqual([humanUrl, "about:blank"]);
 });
 
 test("a tab the human took back stops the session with the reason, never a quiet switch to another tab", async () => {

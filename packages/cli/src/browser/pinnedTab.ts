@@ -261,10 +261,15 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
   // Over the bridge the create is answered by the extension's worker, whose
   // process may be frozen for a while (stall.ts): the request outlasts the
   // host's own budget for it, and is asked once more after a stall.
+  // The tab opens blank and `open` navigates it once attached. The attach
+  // stamps every new document as agent-driven, and a codecast page decides
+  // in its <head> whether to hand itself to the desktop app: a tab created
+  // on the URL parsed that head unstamped and pulled the person's desktop
+  // app onto the agent's page.
   const create = async () => {
     const conn = await CdpConnection.fromPort(browser.endpoint, cdpHttpTimeout(browser.endpoint, 5_000, 45_000));
     try {
-      return await conn.send<{ targetId: string }>("Target.createTarget", { ...browser.create, url, background: true }, undefined, 45_000);
+      return await conn.send<{ targetId: string }>("Target.createTarget", { ...browser.create, url: "about:blank", background: true }, undefined, 45_000);
     } finally {
       conn.close();
     }
@@ -272,7 +277,7 @@ export async function ensurePinnedTab(session = engineSession(), url?: string): 
   setStage("opening this session's tab in Chrome (the extension creates it)");
   const r = await retryOnStall(create);
   if (!r?.targetId) throw new Error("the browser did not return the requested tab");
-  writeBoundTarget(session, r.targetId, engineStateDir(), url);
+  writeBoundTarget(session, r.targetId, engineStateDir());
   return true;
 }
 

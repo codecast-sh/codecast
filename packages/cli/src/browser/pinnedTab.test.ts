@@ -161,7 +161,10 @@ describe("page creation", () => {
     }
   }, 15_000);
 
-  test("open creates the requested URL in the background and reuses it without attaching", async () => {
+  // Blank, never on the URL: the attach that follows stamps each new document
+  // as agent-driven, and a codecast page created on its URL decided to hand
+  // itself to the person's desktop app before any stamp existed.
+  test("open creates a blank background tab and reuses it without attaching", async () => {
     const host = await testBridgeHost();
     const extension = await new FakeExtension([]).connect(host.port);
     const session = "env-page-real";
@@ -169,13 +172,14 @@ describe("page creation", () => {
     try {
       expect(await ensurePinnedTab(session, url)).toBe(true);
       const first = readBoundTarget(session);
+      expect(extension.tabs.map((tab) => tab.url)).toEqual(["about:blank"]);
+      extension.tabs[0].url = url; // the engine's navigation, once attached
       expect(await ensurePinnedTab(session)).toBe(false);
       fs.rmSync(path.join(dir, `${session}.target`));
       expect(await ensurePinnedTab(session, url)).toBe(false);
       expect(readBoundTarget(session)).toBe(first);
-      expect(extension.seen.filter((m) => m.op === "tabs.create")).toMatchObject([{ url, background: true }]);
+      expect(extension.seen.filter((m) => m.op === "tabs.create")).toMatchObject([{ url: "about:blank", background: true }]);
       expect(extension.seen.filter((m) => m.op === "attach")).toHaveLength(0);
-      expect(extension.tabs.map((tab) => tab.url)).toEqual([url]);
       expect(JSON.parse(fs.readFileSync(path.join(dir, `${session}.target`), "utf8")).url).toBe(url);
     } finally {
       extension.ws.close();
