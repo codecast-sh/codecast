@@ -214,6 +214,9 @@ export const recordRun = internalMutation({
   args: { ...runRowArgs, status: v.union(v.literal("error"), v.literal("skipped")), error: v.optional(v.string()), step_to: v.optional(v.number()), repeats: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Id<"priority_pass_runs">> => {
     const { step_to, ...run } = args;
+    // A run whose plan landed stays ok, whatever its action heard back.
+    const held: Doc<"priority_pass_runs"> | null = run.run_id ? await ctx.db.get(run.run_id) : null;
+    if (held?.status === "ok") return held._id;
     if (step_to === undefined || step_to <= run.cursor_at) return settleRun(ctx, run);
     if (run.status === "skipped") return settleRun(ctx, { ...run, cursor_at: step_to });
     if (!run.repeats) return settleRun(ctx, run);
@@ -714,6 +717,9 @@ type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chai
 /** Model-call failures that come back the same on the same input: a reply with no whole JSON, or a call the spec check refuses. */
 const REPEATING_CALL_ERRORS = /^the answer (held no JSON|ran past max_tokens)/;
 
+/** A plan that failed to land for a reason the next try need not share: a write conflict that outlasted Convex's retries, or a timeout. */
+const TRANSIENT_APPLY_ERRORS = /changed while this mutation was being run|OptimisticConcurrency|timed out|timeout/i;
+
 async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const started_at = Date.now();
   const pair = { user_id: args.user_id, workspace: args.workspace };
@@ -785,7 +791,8 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   try {
     counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
   } catch (e) {
-    return fail(`applying the plan failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), true);
+    const message = e instanceof Error ? e.message : String(e);
+    return fail(`applying the plan failed: ${message}`.slice(0, 500), !TRANSIENT_APPLY_ERRORS.test(message));
   }
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;

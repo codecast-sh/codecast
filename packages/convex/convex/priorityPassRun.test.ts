@@ -8,7 +8,7 @@ import type { MergePlan } from "./lib/priorityPass";
 import { LATE_MARGIN_MS } from "./priorityPassInputs";
 import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const pri = (api as any).priorities;
 
@@ -351,6 +351,43 @@ describe("what a pass may read, and how far", () => {
     expect(runs[0].cursor_at).toBe(runs[1].cursor_at);
     expect(runs[2].cursor_at).toBeGreaterThan(runs[0].cursor_at);
     expect(runs[2].error).toContain("stepped past");
+  });
+
+  test("a plan that fails to land on a write conflict or a timeout is not a repeat: the cursor stays", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    const real = (applyPlan as any)._handler;
+    const errors = [
+      'Documents read from or written to the "priorities" table changed while this mutation was being run and on every subsequent retry.',
+      "Function execution timed out (maximum duration: 1s)",
+      'Documents read from or written to the "conversations" table changed while this mutation was being run and on every subsequent retry.',
+    ];
+    let i = 0;
+    (applyPlan as any)._handler = async () => { throw new Error(errors[i++]); };
+    try {
+      for (let n = 0; n < 3; n++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    } finally {
+      (applyPlan as any)._handler = real;
+    }
+    const runs = await w.runs();
+    expect(runs.map((r: any) => [r.status, !!r.repeats, r.cost_usd > 0])).toEqual([["error", false, true], ["error", false, true], ["error", false, true]]);
+    expect(new Set(runs.map((r: any) => r.cursor_at)).size).toBe(1);
+    expect(runs.some((r: any) => r.error.includes("stepped past"))).toBe(false);
+  });
+
+  test("a failure recorded against a run that landed leaves it ok", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const ok = (await w.latestRun())!;
+    await w.t.mutation((internal as any).priorityPassRun.recordRun, {
+      user_id: w.ana, workspace: w.team, started_at: ok.started_at, cursor_at: ok.cursor_at, model: ok.model, run_id: ok._id,
+      status: "error", error: "applying the plan failed: the answer was lost", repeats: true, step_to: ok.cursor_at + 1,
+    });
+    expect(await w.latestRun()).toMatchObject({ _id: ok._id, status: "ok", cursor_at: ok.cursor_at });
+    expect((await w.latestRun())?.error).toBeUndefined();
   });
 
   test("an overloaded model three times in a row loses no work: the cursor stays until a pass goes through", async () => {
