@@ -113,7 +113,9 @@ async function typeChar(ch: string): Promise<Tally> {
   // with its layout effects (cmdk filters and sorts its items there).
   flushSync(() => { props.onChange({ target: input, currentTarget: input, nativeEvent: new w.Event("input") }); });
   const ms = performance.now() - t0;
-  const reads = layoutReads;
+  // A copy: the deferred render below reads layout into the same array, and
+  // that work is not the keystroke's.
+  const reads = [...layoutReads];
   rowMoves += mo.takeRecords().filter((r: MutationRecord) => r.type === "childList").reduce((n: number, r: MutationRecord) => n + r.addedNodes.length, 0);
   mo.disconnect();
   // Let the deferred ranking render finish before the next key.

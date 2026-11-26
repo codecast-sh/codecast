@@ -12,6 +12,8 @@
 #                         nothing reads, or a heartbeat, re-renders nothing
 #   listRowsHoldStill     list rows run no infinite animation
 #   transcriptRowsNoLayers  transcript rows are not compositor layers
+#   paletteTypingBudget   a keystroke into Cmd+K reads no layout and moves no
+#                         result rows; cmdk filters on the deferred query
 #   keys dispatch         a typed key that matches no shortcut never queries the DOM
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -22,6 +24,7 @@ cd "$root/packages/web"
 # 5s default and fails the setup, not the budget.
 bun test --isolate --timeout 120000 \
   components/__tests__/composerTypingBudget.mount.test.tsx \
+  components/__tests__/paletteTypingBudget.mount.test.tsx \
   store/__tests__/storeWriteBudget.mount.test.tsx \
   components/__tests__/listRowsHoldStill.test.tsx \
   components/__tests__/transcriptRowsNoLayers.guard.test.ts \

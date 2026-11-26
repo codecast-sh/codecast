@@ -2599,7 +2599,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   // The palette's commands, split: the ones whose label starts with the
   // query lead the list (see the leading group), the rest sit with Commands.
-  const commandQuery = query.trim().toLowerCase();
+  const commandQuery = rankQuery.trim().toLowerCase();
   const commandLabel = (cmd: (typeof GLOBAL_COMMANDS)[number]) => labelText(cmd.label);
   const shownCommands = GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.() && !(cmd.searchOnly && !commandQuery));
   const namedCommands = commandQuery ? shownCommands.filter((cmd) => [commandLabel(cmd), ...(cmd.names ?? [])].some((name) => name.toLowerCase().startsWith(commandQuery))) : [];
@@ -2614,7 +2614,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const localHit = askable && (
     namedCommands.length > 0 || recentMatches.length > 0 || searchRows.length > 0 || taskMatches.length > 0 || docMatches.length > 0 ||
     planMatches.length > 0 || triggerMatches.length > 0 ||
-    palettePages(featureOn, true, modernStyle).some((row) => paletteItemScore(palettePageValue(row), query) > 0)
+    palettePages(featureOn, true, modernStyle).some((row) => paletteItemScore(palettePageValue(row), rankQuery) > 0)
   );
   const askLeads = askable && !localHit;
   // A query that names a page ("notes", "rout", "ops", "issues") leads with
@@ -2686,7 +2686,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // The app's pages, to go to.
   const pagesGroup = (
         <CommandPrimitive.Group heading="Pages" className={groupClass}>
-          {palettePages(featureOn, !!query.trim(), modernStyle).map(({ page, label }) => {
+          {palettePages(featureOn, !!rankQuery.trim(), modernStyle).map(({ page, label }) => {
             return (
             <CommandPrimitive.Item
               key={typeof page.path === "string" ? page.path + label : label}
@@ -2799,9 +2799,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         </div>
       )}
       <PaletteSearchBar trailing={<KeyCap>Esc</KeyCap>}>
+        {/* cmdk filters, re-sorts its rows in the DOM and scrolls the first
+            one into view (a forced layout) whenever its Input's value
+            changes, inside the keystroke's own frame. Its value is the
+            deferred query, so that work rides the background ranking render
+            the next key interrupts; the box itself (the child, whose value
+            and onChange win in the merge) shows each key at once (ct-101635). */}
         <CommandPrimitive.Input
-          value={query}
-          onValueChange={setQuery}
+          asChild
+          value={rankQuery}
           placeholder={pick ? (pick.kinds.includes("person") ? "Search people, roles, sessions..." : "Search sessions, docs...") : hasTargets ? "Action or jump to..." : "Jump to..."}
           className={paletteInputClass}
           autoFocus
@@ -2838,13 +2844,15 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               else openFullSearch();
             }
           }}
-        />
+        >
+          <input value={query} onChange={(e) => setQuery(e.target.value)} />
+        </CommandPrimitive.Input>
       </PaletteSearchBar>
       <CommandPaletteList>
         {/* Only a typed query can match nothing: the always-match rows below
             (compose, ask) step aside while the server search is out, so the
             list says it is still looking rather than going blank. */}
-        {query.trim() && (
+        {rankQuery.trim() && (
           <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
             {searchAwaiting ? "Searching…" : "No results found."}
           </CommandPrimitive.Empty>
@@ -2890,9 +2898,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           );
         })}
 
-        {pick && (pick.extras ?? []).some((x) => !x.needsQuery || query.trim()) && (
+        {pick && (pick.extras ?? []).some((x) => !x.needsQuery || rankQuery.trim()) && (
           <CommandPrimitive.Group heading={whoRows.length ? "Agents" : undefined} className={groupClass}>
-            {(pick.extras ?? []).filter((x) => !x.needsQuery || query.trim()).map((x) => (
+            {(pick.extras ?? []).filter((x) => !x.needsQuery || rankQuery.trim()).map((x) => (
               <CommandPrimitive.Item
                 key={`pick-${x.key}`}
                 value={`__pick__ ${x.label}|||${x.key}`}
@@ -2915,7 +2923,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && query.trim() && <RepositoryPaletteItems query={query} navigate={navigate} itemClass={itemClass} groupClass={groupClass} />}
+        {!picking && rankQuery.trim() && <RepositoryPaletteItems query={rankQuery} navigate={navigate} itemClass={itemClass} groupClass={groupClass} />}
 
         {!picking && (nestedMatches.length > 0 || personVerbMatches.length > 0) && (
           <CommandPrimitive.Group heading="Go to action" className={groupClass}>
@@ -2957,7 +2965,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </CommandPrimitive.Group>
         )}
 
-        {!picking && !query.trim() && recentVisitRows.length > 0 && (
+        {!picking && !rankQuery.trim() && recentVisitRows.length > 0 && (
           <CommandPrimitive.Group heading="Recently visited" className={groupClass}>
             {recentVisitRows.map((row) => (
               <CommandPrimitive.Item
