@@ -69,6 +69,9 @@ export function useSyncPullRequest(args: { repository: string; number: number } 
   return useSyncCollection("pullRequests", api.pull_requests.getPRByNumber, args, ONE_ROW);
 }
 
+/** What usePullRequestMerge draws from a row: one stable function, so the reader keeps its memo across renders. */
+export const prMergeSig = (p: any) => `${p.state}|${p.merge_commit_sha ?? ""}`;
+
 /** Whether GitHub merged one pull request, and as what commit: its list row only (fed here, never its detail), for a
  *  surface that says where a change stands (a change run's page). Undefined while the store holds no row. */
 export function usePullRequestMerge(ref: { repository: string; number: number } | null): { merged: boolean; merge_sha: string | null } | undefined {
@@ -76,7 +79,7 @@ export function usePullRequestMerge(ref: { repository: string; number: number } 
   const repository = ref ? normalizeRepository(ref.repository) : null;
   const number = ref?.number ?? null;
   const where = useMemo(() => (p: any) => !!repository && normalizeRepository(p.repository) === repository && p.number === number, [repository, number]);
-  const rows = useCollectionRows<any>("pullRequests", { where, sig: (p: any) => `${p.state}|${p.merge_commit_sha ?? ""}` });
+  const rows = useCollectionRows<any>("pullRequests", { where, sig: prMergeSig });
   const row = rows[0];
   return useMemo(() => (row ? { merged: row.state === "merged", merge_sha: row.merge_commit_sha ?? null } : undefined), [row?.state, row?.merge_commit_sha]);
 }

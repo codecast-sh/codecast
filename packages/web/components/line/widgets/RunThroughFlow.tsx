@@ -23,8 +23,7 @@ import { approvalOf, approvalWords, shipConfirms } from "../../../lib/ship/appro
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
 import { useDeployReach, type DeployReachRow } from "../../../hooks/useDeployReach";
 import { shipLedgerFor } from "../../consequential/shipLedger";
-import { PRESS_WAIT_MS, pressFromSig, pressSig, pressWaiting, runThroughMessage, type Press, type PressMsg, type SentPress } from "../../../lib/line/flowMessages";
-import { sessionIdleAt } from "../../../lib/liveness";
+import { runThroughMessage, type Press } from "../../../lib/line/flowMessages";
 import { formatElapsed } from "../../../lib/taskLine";
 import { editedSince, fixRounds } from "../../../lib/ship/newEdits";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
@@ -39,27 +38,13 @@ import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import { usePressApproval } from "../../../hooks/usePressApproval";
+import { usePress, useSettled, useShipAgain } from "../../../hooks/useShipAgain";
 import { judgedFileWords } from "../../../lib/ship/judgedEdits";
 import "../../ship/ship.css";
 
 /** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
 export function RunThroughFlow(props: { conversationId: string; sessionTitle: string }) {
   return useWorkspaceFeature("line") ? <ShipButton {...props} /> : null;
-}
-
-function usePress(conversationId: string, newestRunAt: number): Press | null {
-  const sig = useInboxStore((s) => pressSig((s.messages as Record<string, PressMsg[]>)[conversationId] ?? [], newestRunAt));
-  return useMemo(() => pressFromSig(sig), [sig]);
-}
-
-/** Whether the session has settled: its turn is over, so a press it answered without a run will not start one. Unknown is not settled. */
-function useSettled(conversationId: string): boolean {
-  // Settling can come from time alone (a heartbeat that stops), so the read follows a clock as well as the row.
-  const now = useCoarseNow(15_000);
-  return useInboxStore((s) => {
-    const row = ((s as any).sessions?.[conversationId] ?? (s as any).conversations?.[conversationId]) as Parameters<typeof sessionIdleAt>[0] | undefined;
-    return row ? sessionIdleAt(row, now) : false;
-  });
 }
 
 /** The chip's words and tone for where the session's change is. The header has little room: a stop says only that it stopped. */
@@ -225,29 +210,13 @@ function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain
 /** Ship again from a run's card in the thread: the same flow, one click as a first Ship is. */
 export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }: { flow: AppFlow; conversationId: string; sessionTitle: string; primary: boolean }) {
   const [reviewing, setReviewing] = useState(false);
-  // The press is read back as the header's Ship reads it: waiting while the session has neither started its run nor
-  // declined, so a double click starts one run, and free again once the session answered without one. A press whose
-  // message never comes back (the thread not loaded here) frees it after a minute: no dead end.
-  // The approval is the judged files the confirm listed; a one-click press lists none, so it approves nothing.
-  const approval = usePressApproval(conversationId, reviewing);
-  const runs = useSessionFlowRuns(conversationId);
-  const newest = runs?.[0] ?? null;
-  const press = usePress(conversationId, newest?.created_at ?? 0);
-  const settled = useSettled(conversationId);
-  const [mine, setMine] = useState<SentPress | null>(null);
-  const sent = pressWaiting({ sent: mine, newestRun: newest?._id ?? null, press, settled });
-  const send = () => {
-    const at: SentPress = { run: newest?._id ?? null, press: press?.id ?? null };
-    setMine(at);
-    setTimeout(() => setMine((m) => (m === at ? null : m)), PRESS_WAIT_MS);
-    void approval.record();
-    useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
-  };
+  // One press in flight at a time; the confirm's judged files are what the press approves (hooks/useShipAgain).
+  const { sent, send, files } = useShipAgain(flow, conversationId, reviewing);
   return (
     <>
       <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} data-ship-again disabled={sent} aria-busy={sent || undefined}
         onClick={() => { if (sent) return; if (shipConfirms(approvalOf(flow))) setReviewing(true); else send(); }}>{sent ? "Starting…" : "Ship again"}</button>
-      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: approval.files?.map(judgedFileWords) })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); send(); }} /> : null}
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: files?.map(judgedFileWords) })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); send(); }} /> : null}
     </>
   );
 }

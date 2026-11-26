@@ -33,7 +33,8 @@ import { journeyOf, type TargetState } from '@codecast/web/lib/ship/journey';
 import { changeAction, changeHeadline, changeLinks, changePr, mergeIsOff, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
 import { roleRowsOf } from '@codecast/web/lib/roleRows';
 import { usePullRequestMerge } from '@codecast/web/hooks/useSyncTimeline';
-import { runThroughMessage } from '@codecast/web/lib/line/flowMessages';
+import { useShipAgain } from '@codecast/web/hooks/useShipAgain';
+import { judgedFileWords } from '@codecast/web/lib/ship/judgedEdits';
 import { approvalOf, shipConfirms } from '@codecast/web/lib/ship/approval';
 import { landedSha } from '@codecast/web/lib/ship/runRecord';
 import { reachTargets } from '@codecast/web/lib/ship/sessionShip';
@@ -173,6 +174,10 @@ export default function RunScreen() {
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.
   const mergeRole = useInboxStore((s) => (run?.org_role_id && run && mergeIsOff(run as any) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
   const act = journey && run && changeFlow ? changeAction(journey, run as any, changeFlow, { newer, pr: prMerge, mergeRole, targets }) : null;
+  // Ship again through the web's own press path (hooks/useShipAgain): one press in flight, and the confirm's judged files
+  // recorded as the person's approval.
+  const [confirmingAgain, setConfirmingAgain] = useState(false);
+  const again = useShipAgain(changeFlow, run?.spawner_conversation_id ?? null, confirmingAgain);
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -222,16 +227,11 @@ export default function RunScreen() {
   ]);
   const answerGate = (text: string) => { const t = text.trim(); if (!t) return; respondToGate(run._id, t); setGateText(''); };
   // Ship again: the session that made the change sends it through the same flow, as the web's Ship again does; a flow
-  // that asks before it lands (shipConfirms) is confirmed first.
+  // that asks before it lands (shipConfirms) is confirmed first, with the judged files the press approves.
   const shipAgain = () => {
-    const subject = run.spawner_conversation_id;
-    if (!subject || !changeFlow) return;
-    const send = () => useInboxStore.getState().sendMessage(String(subject), runThroughMessage(changeFlow));
-    if (!shipConfirms(approvalOf(changeFlow))) return send();
-    appAlert(`Ship again through ${changeFlow.label}?`, 'Its session sends its change through the flow again.', [
-      { text: 'Not now', style: 'cancel' },
-      { text: 'Ship again', onPress: send },
-    ]);
+    if (again.sent || !changeFlow) return;
+    if (shipConfirms(approvalOf(changeFlow))) setConfirmingAgain(true);
+    else again.send();
   };
 
   const othersShown = allOthers ? others : others.slice(0, OTHER_RUNS_SHOWN);
@@ -277,7 +277,17 @@ export default function RunScreen() {
             already open or answer is not offered twice. */}
         {act && !(act.kind === 'card' && (waitingOnCard || ask?.open)) ? (
           <RNView style={objectStyles.verbs}>
-            <ActionButton icon={ACT_ICON[act.kind]} label={act.label} color={Theme.blue} filled onPress={act.kind === 'again' ? shipAgain : () => act.href && void openLink(act.href)} testID={`run-change-act-${act.kind}`} />
+            <ActionButton icon={ACT_ICON[act.kind]} label={act.kind === 'again' && again.sent ? 'Starting…' : act.label} color={Theme.blue} filled disabled={act.kind === 'again' && again.sent} onPress={act.kind === 'again' ? shipAgain : () => act.href && void openLink(act.href)} testID={`run-change-act-${act.kind}`} />
+          </RNView>
+        ) : null}
+        {act?.kind === 'again' && confirmingAgain && changeFlow ? (
+          <RNView style={[styles.gate, { borderColor: Theme.blue + '55', backgroundColor: Theme.blue + '10' }]} testID="run-ship-again-confirm">
+            <RNText style={[styles.gatePrompt, { fontWeight: '600' }]}>{`Ship again through ${changeFlow.label}`}</RNText>
+            {(again.files ?? []).map((f) => <RNText key={f.path} style={styles.gatePrompt}>{judgedFileWords(f)}</RNText>)}
+            <RNView style={styles.gateChoices}>
+              <ActionButton icon="rocket" label="Ship again" color={Theme.blue} filled onPress={() => { setConfirmingAgain(false); again.send(); }} testID="run-ship-again-confirm-send" />
+              <ActionButton icon="times" label="Not now" color={Theme.textMuted} onPress={() => setConfirmingAgain(false)} testID="run-ship-again-confirm-cancel" />
+            </RNView>
           </RNView>
         ) : null}
         {asking && !head ? (
