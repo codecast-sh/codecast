@@ -161,7 +161,7 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
-  // ct-98089: Union's ct-97881 replaced two young files with one, main had not touched them, and the guard read the
+  // ct-98089: Acme's ct-97881 replaced two young files with one, main had not touched them, and the guard read the
   // deletion as undoing their creation.
   test("a branch that deletes files main created lands when nothing else it lands sets main back: the deletion is its own", () => {
     const r = gitRepo();

@@ -148,7 +148,7 @@ describe("following the deploy path's own run", () => {
     expect(jobsVerdict(jobs(["gate", "completed", "success"], ["evals", "completed", "success"]), ["gate", "evals"], false).state).toBe("passed");
     // A gate that failed leaves the rollout job skipped: the run ends failed, and no rollout happened.
     expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], true, "failure")).toMatchObject({ state: "failed", detail: "deploy was skipped: the run ended failure, so a job it needs did not pass" });
-    // While the run goes on (Union's finalize runs after a failed deploy), a skip cannot be told apart yet.
+    // While the run goes on (Acme's finalize runs after a failed deploy), a skip cannot be told apart yet.
     expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], false).state).toBe("waiting");
     // A job its workflow chose not to run (its if: said no) in a run that passed: passed, and said.
     expect(jobsVerdict(jobs(["gate", "completed", "skipped"], ["evals", "completed", "success"]), ["gate", "evals"], true, "success")).toEqual({ state: "passed", detail: "gate: skipped by the workflow, evals: success" });
@@ -271,7 +271,7 @@ describe("a release with no --sha", () => {
 });
 
 describe("cast line deploy show", () => {
-  const base = { short_id: "dp-9", target: "backend", sha: "7975db5eed352f8839223ea71023225380a5af86", status: "live", live_at: 1, trigger: "outside", source: "cast ship mark", started_by: { name: "Ashot" }, carries: [] };
+  const base = { short_id: "dp-9", target: "backend", sha: "7975db5eed352f8839223ea71023225380a5af86", status: "live", live_at: 1, trigger: "outside", source: "cast ship mark", started_by: { name: "Dev" }, carries: [] };
 
   test("a push from uncommitted files says so, with where it came from and what it changed", () => {
     const text = formatDeploy({ ...base, dirty: 78, pushed_via: "deploy.sh", machine: "MacBook-Pro-182", adds: ["table:voiceprints", "index:voiceprints.by_user"], drops: ["fn:old:gone"] });

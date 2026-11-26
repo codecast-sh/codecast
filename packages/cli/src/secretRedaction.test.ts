@@ -127,7 +127,7 @@ describe("redactSecrets — zero false positives on legitimate content", () => {
     ["env var with placeholder value", "API_KEY=<your-key-here>\nSECRET_TOKEN=changeme"],
     ["short sk- fragment", "The sk-learn library and sk-abc123 are fine."],
     ["bare AKIA word", "AKIA is a Japanese word; AKIA appears in docs."],
-    ["file path", "/Users/ashot/src/codecast/packages/cli/src/secretRedaction.ts"],
+    ["file path", "/Users/dev/src/codecast/packages/cli/src/secretRedaction.ts"],
     ["git commit hash", "commit a1b2c3d4e5f6789012345678901234567890abcd landed"],
     ["short git hash", "see 6a036abb and c58530d7 for context"],
     ["uuid", "session 550e8400-e29b-41d4-a716-446655440000 started"],

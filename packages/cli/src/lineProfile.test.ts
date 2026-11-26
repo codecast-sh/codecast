@@ -17,18 +17,18 @@ import {
 
 const LP2_EXAMPLE = `
 [line]
-team = "Union"
+team = "Acme"
 project = "Agent Quality"
-principles = ["outreach/docs/line/principles.md"]
-prompting = "outreach/docs/line/prompting.md"
+principles = ["server/docs/line/principles.md"]
+prompting = "server/docs/line/prompting.md"
 size_budget = 400
 watch_days = 7
 
 [line.commands]
-check = "cast check && cd outreach/backend && bun run test:touched"
-prove = "bun outreach/backend/scripts/line.ts prove --task $task_id --dir $run_dir"
-eval  = "bun outreach/backend/scripts/line.ts eval --base $default_branch --dir $run_dir --out $run_dir/reps.json"
-ship  = "bun outreach/backend/scripts/line.ts ship --task $task_id --branch $branch"
+check = "cast check && cd server/backend && bun run test:touched"
+prove = "bun server/backend/scripts/line.ts prove --task $task_id --dir $run_dir"
+eval  = "bun server/backend/scripts/line.ts eval --base $default_branch --dir $run_dir --out $run_dir/reps.json"
+ship  = "bun server/backend/scripts/line.ts ship --task $task_id --branch $branch"
 
 [line.caps]
 cards = 5
@@ -38,15 +38,15 @@ auto = false
 method = "squash"
 
 [line.deploy]
-command = "./outreach/deploy.sh --actor $actor"
+command = "./server/deploy.sh --actor $actor"
 target = "Production"
 trigger = "person"
 
 [[line.finders]]
 id = "invariants"
-source = "union.invariant"
+source = "acme.invariant"
 kind = "regression"
-fingerprint = "union:invariant:<id>"
+fingerprint = "acme:invariant:<id>"
 runs = "backend job captureInvariantSnapshots"
 project = "Infrastructure"
 `;
@@ -68,12 +68,12 @@ describe("line profile (LP2)", () => {
     const r = resolveLineProfile(values, { warnings });
     expect(warnings).toEqual([]);
     expect(r.profile).toMatchObject({
-      team: "Union",
+      team: "Acme",
       project: "Agent Quality",
-      principles: ["outreach/docs/line/principles.md"],
+      principles: ["server/docs/line/principles.md"],
       size_budget: 400,
       caps: { cards: 5 },
-      deploy: { command: "./outreach/deploy.sh --actor $actor", target: "production", trigger: "person" },
+      deploy: { command: "./server/deploy.sh --actor $actor", target: "production", trigger: "person" },
       finders: [{ id: "invariants", kind: ["regression"], project: "Infrastructure", runs: "backend job captureInvariantSnapshots" }],
     });
     expect(r.profile.commands.eval).toContain("reps.json");
@@ -167,8 +167,8 @@ describe("line profile (LP2)", () => {
 
   test("a finder names itself for people: label, a one-line what, and its group", () => {
     const finder = (extra: string) => `[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\n${extra}`;
-    const parsed = parseLineProfileText(finder(`label = "Aivery corrections"\nwhat = "A thumbs-down on one of Aivery's posts"\ngroup = "people"`));
-    expect(parsed.values.finders![0]).toMatchObject({ label: "Aivery corrections", what: "A thumbs-down on one of Aivery's posts", group: "people" });
+    const parsed = parseLineProfileText(finder(`label = "Bot corrections"\nwhat = "A thumbs-down on one of the bot's posts"\ngroup = "people"`));
+    expect(parsed.values.finders![0]).toMatchObject({ label: "Bot corrections", what: "A thumbs-down on one of the bot's posts", group: "people" });
     expect(parseLineProfileText(finder("")).values.finders![0]).not.toHaveProperty("label");
     expect(() => parseLineProfileText(finder(`group = "ops"`))).toThrow('[[line.finders]] "a" group must be one of conversations, people, product, pipeline');
   });
@@ -191,8 +191,8 @@ describe("line profile (LP2)", () => {
   });
 
   test("the loader walks up from a subdirectory to the profile, and stops at the repository root", () => {
-    const repo = tmpRepo({ ".codecast/line.toml": `[line]\nproject = "Agent Quality"\n`, "outreach/backend/x.ts": "" });
-    const r = loadLineProfile(path.join(repo, "outreach", "backend"));
+    const repo = tmpRepo({ ".codecast/line.toml": `[line]\nproject = "Agent Quality"\n`, "server/backend/x.ts": "" });
+    const r = loadLineProfile(path.join(repo, "server", "backend"));
     expect(r.file).toBe(path.join(repo, ".codecast/line.toml"));
     expect(r.root).toBe(repo);
     expect(r.profile.project).toBe("Agent Quality");
@@ -219,17 +219,17 @@ describe("line profile (LP2)", () => {
   });
 
   test("a .git directory that is no repository (a leftover of hooks) does not stop the walk", () => {
-    const repo = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Union"\n`, "outreach/.git/hooks/pre-commit": "", "outreach/x.ts": "" });
-    expect(loadLineProfile(path.join(repo, "outreach")).profile.team).toBe("Union");
-    const worktree = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Union"\n`, "wt/.git": "gitdir: /elsewhere\n", "wt/x.ts": "" });
+    const repo = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Acme"\n`, "server/.git/hooks/pre-commit": "", "server/x.ts": "" });
+    expect(loadLineProfile(path.join(repo, "server")).profile.team).toBe("Acme");
+    const worktree = tmpRepo({ ".codecast/line.toml": `[line]\nteam = "Acme"\n`, "wt/.git": "gitdir: /elsewhere\n", "wt/x.ts": "" });
     expect(findLineProfile(path.join(worktree, "wt"))).toEqual({ file: null, root: path.join(worktree, "wt") });
   });
 
-  test("Union's committed profile loads, and only its sentence kinds warn", () => {
-    const union = path.join(os.homedir(), "src/union-mobile/.codecast/worktrees/line-union/.codecast/line.toml");
-    if (!fs.existsSync(union)) return;
-    const r = loadLineProfile(path.dirname(path.dirname(union)));
-    expect(r.profile.team).toBe("Union");
+  test("Acme's committed profile loads, and only its sentence kinds warn", () => {
+    const acme = path.join(os.homedir(), "src/acme-mobile/.codecast/worktrees/line-acme/.codecast/line.toml");
+    if (!fs.existsSync(acme)) return;
+    const r = loadLineProfile(path.dirname(path.dirname(acme)));
+    expect(r.profile.team).toBe("Acme");
     expect(r.profile.finders.length).toBeGreaterThan(5);
     expect(r.profile.finders.find((f) => f.id === "people")?.kind).toBe("any");
     expect(r.warnings.every((w) => w.includes("is a sentence"))).toBe(true);
@@ -240,7 +240,7 @@ describe("line profile (LP2)", () => {
     const vars = lineProfileVars(resolveLineProfile(parseLineProfileText(LP2_EXAMPLE).values).profile);
     expect(vars["line.commands.check"]).toContain("test:touched");
     expect(vars["line.size_budget"]).toBe("400");
-    expect(vars["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set) and outreach/docs/line/principles.md (this project's own)`);
+    expect(vars["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set) and server/docs/line/principles.md (this project's own)`);
     const empty = lineProfileVars(resolveLineProfile({}).profile);
     expect(empty["line.commands.prove"]).toBe("");
     expect(empty["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set)`);
@@ -257,9 +257,9 @@ describe("line profile (LP2)", () => {
 describe("starterLineProfile", () => {
   test("parses back to exactly the defaults plus the project and team", async () => {
     const { starterLineProfile, parseLineProfileText, resolveLineProfile, LINE_PROFILE_DEFAULTS } = await import("./lineProfile");
-    const { values, warnings } = parseLineProfileText(starterLineProfile({ project: "Codecast \"core\"", team: "Union" }));
+    const { values, warnings } = parseLineProfileText(starterLineProfile({ project: "Codecast \"core\"", team: "Acme" }));
     expect(warnings).toEqual([]);
-    expect(resolveLineProfile(values).profile).toEqual({ ...LINE_PROFILE_DEFAULTS, project: "Codecast \"core\"", team: "Union" });
+    expect(resolveLineProfile(values).profile).toEqual({ ...LINE_PROFILE_DEFAULTS, project: "Codecast \"core\"", team: "Acme" });
     const bare = parseLineProfileText(starterLineProfile({ project: "Codecast" })).values;
     expect(bare.team).toBeUndefined();
     expect(bare.finders).toBeUndefined();

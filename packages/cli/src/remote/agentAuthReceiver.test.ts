@@ -100,8 +100,8 @@ d("agent auth receiver (python3) against a temp HOME", () => {
   test("absent removes only what this device pushed, plus the codex-accounts snapshots", () => {
     config("U");
     expect(run({ files: [file("~/.codex/auth.json", "mine", 5), file("~/.grok/auth.json", "{}")] }).outcome.files).toBe(2);
-    fs.mkdirSync(path.join(home, ".codecast", "codex-accounts", "ashot"), { recursive: true });
-    fs.writeFileSync(path.join(home, ".codecast", "codex-accounts", "ashot", "auth.json"), "snap");
+    fs.mkdirSync(path.join(home, ".codecast", "codex-accounts", "dev"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".codecast", "codex-accounts", "dev", "auth.json"), "snap");
     fs.writeFileSync(path.join(home, ".codecast", "codex-accounts.json"), "{}");
     fs.writeFileSync(path.join(home, ".codecast", "codex-usage-accounts.json"), "{}");
     const r = run({ absent: ["~/.codex/auth.json", "~/.grok/auth.json", "~/.gemini/oauth_creds.json"] });

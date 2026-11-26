@@ -40,7 +40,7 @@ afterEach(() => {
   tmp = "";
 });
 
-// The script that leaked on Union's machines, in small: a child that ignores
+// The script that leaked on Acme's machines, in small: a child that ignores
 // TERM, a `set -m` job (a group of its own, as proof-tree.sh runs its command)
 // and a setsid grandchild that ignores TERM; the last two hold the station's
 // output pipe, so `close` never fires while they live. All four pids land in `pids`.

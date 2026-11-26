@@ -146,32 +146,32 @@ describe("goalLevelLines", () => {
   test("each level: title, score with CI, noise, link with age, cost; a level never run says so", () => {
     const now = Date.parse("2026-11-17T12:00:00Z");
     const lines = goalLevelLines(plain, [
-      { env: "union/smoke", level: "L0", title: "Unit smoke", attempt: { short_id: "ea-3", candidate: { label: "base" }, split: "dev", n: 40, mean: 0.9, ci95: [0.85, 0.95], cost_usd: 0, finished_at: now - 3_600_000 } },
-      { env: "union/replay", level: "L2", note: "second side", attempt: { short_id: "ea-4", candidate: { label: "base" }, split: "held", n: 300, mean: 0.31, noise: { aa_sd: 0.012, aa_runs: 3 }, cost_usd: 4.2, finished_at: now }, link: { to: "L4:matched_to_opted_in", measure: "auc", value: 0.66, n: 300, measured_at: now - 2 * 86_400_000 } },
-      { env: "union/sim", level: "L3" },
+      { env: "acme/smoke", level: "L0", title: "Unit smoke", attempt: { short_id: "ea-3", candidate: { label: "base" }, split: "dev", n: 40, mean: 0.9, ci95: [0.85, 0.95], cost_usd: 0, finished_at: now - 3_600_000 } },
+      { env: "acme/replay", level: "L2", note: "second side", attempt: { short_id: "ea-4", candidate: { label: "base" }, split: "held", n: 300, mean: 0.31, noise: { aa_sd: 0.012, aa_runs: 3 }, cost_usd: 4.2, finished_at: now }, link: { to: "L4:matched_to_opted_in", measure: "auc", value: 0.66, n: 300, measured_at: now - 2 * 86_400_000 } },
+      { env: "acme/sim", level: "L3" },
     ], "in-9", now);
     expect(lines.join("\n")).toBe([
       "\n  Environments what predicts it, by level",
-      "  L0 Unit smoke union/smoke · Deterministic checks",
+      "  L0 Unit smoke acme/smoke · Deterministic checks",
       "     0.900 [0.850, 0.950] n=40 base dev ea-3 1h ago · noise unmeasured · $0.00",
       "     link to the level above: not measured",
-      "  L2 union/replay Outcome-labelled replay · second side",
+      "  L2 acme/replay Outcome-labelled replay · second side",
       "     0.310 n=300 base held ea-4 just now · A/A sd 0.012 over 3 runs · $4",
       "     link auc 0.66 to L4:matched_to_opted_in (n=300, 2d ago)",
-      "  L3 union/sim Forward simulation",
+      "  L3 acme/sim Forward simulation",
       "     no attempt yet · noise unmeasured",
       "     link to the level above: not measured",
     ].join("\n"));
   });
 
   test("an env with no title on its attempts takes this checkout's declared title, else prints its key once", () => {
-    const lines = goalLevelLines(plain, [{ env: "union/second-side-replay", level: "L2" }, { env: "union/sim", level: "L3" }], "in-8", 0, (k) => (k === "union/second-side-replay" ? "Second side replay" : undefined));
-    expect(lines[1]).toBe("  L2 Second side replay union/second-side-replay · Outcome-labelled replay");
-    expect(lines[4]).toBe("  L3 union/sim Forward simulation");
+    const lines = goalLevelLines(plain, [{ env: "acme/second-side-replay", level: "L2" }, { env: "acme/sim", level: "L3" }], "in-8", 0, (k) => (k === "acme/second-side-replay" ? "Second side replay" : undefined));
+    expect(lines[1]).toBe("  L2 Second side replay acme/second-side-replay · Outcome-labelled replay");
+    expect(lines[4]).toBe("  L3 acme/sim Forward simulation");
   });
 });
 
-describe("recordRun: a large attempt is filed in pages, each write retried (Union in-9, 468 held cases)", () => {
+describe("recordRun: a large attempt is filed in pages, each write retried (Acme in-9, 468 held cases)", () => {
   const decl = { key: "acme/replay", title: "Replay", level: "L2" as const, command: "true", splits: ["dev" as const] };
   const cases = Array.from({ length: 1200 }, (_, i) => ({ id: `second-side-pitch/${String(i).padStart(5, "0")}/${"x".repeat(60)}`, score: i % 4 ? 1 : 0 }));
   const result = { env: "acme/replay", env_version: "9f3a2c1d", level: "L2" as const, candidate: { label: "base" }, split: "dev" as const, cases, summary: { n: cases.length, mean: 0.75 }, started_at: Date.parse("2026-11-17T00:00:00Z"), finished_at: Date.parse("2026-11-17T00:01:00Z") };

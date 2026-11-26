@@ -87,7 +87,7 @@ describe("the profile a Pair click means while another is connected", () => {
     "Profile 14": { name: "Team", ext: "enabled" },
   }, "Profile 14"));
 
-  // Ashot's case (2026-11-18): Default was connected, the setup page in a
+  // Dev's case (2026-11-18): Default was connected, the setup page in a
   // second profile pressed Pair, and setup re-pinned Default and said Ready.
   test("the last-used profile, when it is not connected yet", () => {
     expect(unconnectedLastUsed(found(), (p) => p.dir === "Default")?.dir).toBe("Profile 14");

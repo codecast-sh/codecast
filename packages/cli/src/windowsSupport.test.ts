@@ -3,8 +3,8 @@ import { buildWslAutostartTaskRun, daemonSupportedOnPlatform } from "./windowsSu
 
 describe("buildWslAutostartTaskRun", () => {
   it("builds the hidden PowerShell + wsl.exe command", () => {
-    expect(buildWslAutostartTaskRun("Ubuntu", "ashot", "/home/ashot/.local/bin/codecast")).toBe(
-      "powershell.exe -NoProfile -WindowStyle Hidden -Command wsl.exe -d Ubuntu -u ashot -- /home/ashot/.local/bin/codecast start",
+    expect(buildWslAutostartTaskRun("Ubuntu", "dev", "/home/dev/.local/bin/codecast")).toBe(
+      "powershell.exe -NoProfile -WindowStyle Hidden -Command wsl.exe -d Ubuntu -u dev -- /home/dev/.local/bin/codecast start",
     );
   });
 

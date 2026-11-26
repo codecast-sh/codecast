@@ -56,7 +56,7 @@ describe("composeInstructionFile", () => {
     const n = ownedCount(host);
     expect(n).toBe(SNIPPET_CATALOG.filter((d) => d.section).length + 1);
     const out = composeInstructionFile(laptopUserMd, host);
-    expect(out.startsWith("# Ashot's rules\n\nAlways run the tests.\n\n## Memory\n\nMy own notes.\n\n## ")).toBe(true);
+    expect(out.startsWith("# Dev's rules\n\nAlways run the tests.\n\n## Memory\n\nMy own notes.\n\n## ")).toBe(true);
     expect(ownedCount(out)).toBe(n);
     expect((out.match(/<!-- \/codecast-/g) ?? []).length).toBe(n);
     expect(out.indexOf("My own notes.")).toBeLessThan(out.indexOf("<!-- /codecast-"));
@@ -125,7 +125,7 @@ describe("merges", () => {
   });
 
   test("mergeCodexToml keeps host [projects.*] and `[features] hooks = true`, takes the rest from the laptop", () => {
-    const merged = mergeCodexToml('model = "gpt-5"\n\n[projects."/Users/ashot/x"]\ntrust_level = "trusted"\n\n[features]\nweb_search = true\nhooks = false\n', HOST_CODEX_TOML);
+    const merged = mergeCodexToml('model = "gpt-5"\n\n[projects."/Users/dev/x"]\ntrust_level = "trusted"\n\n[features]\nweb_search = true\nhooks = false\n', HOST_CODEX_TOML);
     expect(merged).toBe('model = "gpt-5"\n\n[features]\nweb_search = true\nhooks = true\n\n[projects."/home/ubuntu/work/codecast"]\ntrust_level = "trusted"\n');
     expect(mergeCodexToml('model = "x"\n', HOST_CODEX_TOML)).toBe('model = "x"\n\n[features]\nhooks = true\n\n[projects."/home/ubuntu/work/codecast"]\ntrust_level = "trusted"\n');
     expect(mergeCodexToml('model = "x"\n', null)).toBe('model = "x"\n');
@@ -164,7 +164,7 @@ describe("applyMirrorBundle", () => {
     expect(r.applied.sort()).toEqual([".claude/CLAUDE.md", ".claude/hooks/my-hook.sh", ".claude/settings.json", ".claude/skills/mine/SKILL.md", ".codex/config.toml", ".codex/hooks.json", ".gitconfig"]);
     expect(refreshRuns).toBe(1);
     const md = read(".claude/CLAUDE.md");
-    expect(md.startsWith("# Ashot's rules")).toBe(true);
+    expect(md.startsWith("# Dev's rules")).toBe(true);
     expect(ownedCount(md)).toBe(ownedCount(hostClaudeMd()));
     const settings = JSON.parse(read(".claude/settings.json"));
     expect(settings.model).toBe("fable");
@@ -730,15 +730,15 @@ test("a file sent under a linked directory and its real path is written once, at
 });
 
 test("an instruction alias into a subdirectory of its own project writes through; one leaving the project is refused", async () => {
-  const root = "work/union";
-  write(`${root}/outreach/CLAUDE.md`, "# outreach\n", 0o600);
-  fs.symlinkSync("outreach/CLAUDE.md", path.join(home, root, "AGENTS.md"));
-  fs.symlinkSync("outreach/CLAUDE.md", path.join(home, root, "CLAUDE.md"));
-  const bundle = (paths: string[]) => parseMirrorBundle(buildMirrorBundle(paths.map((p) => ({ path: p, kind: p.endsWith("AGENTS.md") ? "agents-md" as const : "claude-md" as const, mode: "0600" as const, bytes: Buffer.from("# outreach\n") })), { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
-  const applied = await apply(await bundle([`${root}/AGENTS.md`, `${root}/CLAUDE.md`, `${root}/outreach/CLAUDE.md`]));
+  const root = "work/acme";
+  write(`${root}/server/CLAUDE.md`, "# server\n", 0o600);
+  fs.symlinkSync("server/CLAUDE.md", path.join(home, root, "AGENTS.md"));
+  fs.symlinkSync("server/CLAUDE.md", path.join(home, root, "CLAUDE.md"));
+  const bundle = (paths: string[]) => parseMirrorBundle(buildMirrorBundle(paths.map((p) => ({ path: p, kind: p.endsWith("AGENTS.md") ? "agents-md" as const : "claude-md" as const, mode: "0600" as const, bytes: Buffer.from("# server\n") })), { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  const applied = await apply(await bundle([`${root}/AGENTS.md`, `${root}/CLAUDE.md`, `${root}/server/CLAUDE.md`]));
   expect(applied.errors).toEqual([]);
-  expect(fs.readlinkSync(path.join(home, root, "AGENTS.md"))).toBe("outreach/CLAUDE.md");
-  expect(read(`${root}/outreach/CLAUDE.md`)).toContain("# outreach");
+  expect(fs.readlinkSync(path.join(home, root, "AGENTS.md"))).toBe("server/CLAUDE.md");
+  expect(read(`${root}/server/CLAUDE.md`)).toContain("# server");
   expect(verifyMirrorStamp(home)?.complete).toBe(true);
 
   write("work/other/CLAUDE.md", "# other\n", 0o600);

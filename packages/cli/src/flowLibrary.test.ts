@@ -14,7 +14,7 @@ const mkdtemp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "flowlib
 afterEach(() => { for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
 
 const SPINE = `digraph agentwatch {
-  graph [kind=line, label="Union fix flow", serves="judge:agent-review person"]
+  graph [kind=line, label="Acme fix flow", serves="judge:agent-review person"]
   start [shape=Mdiamond]
   investigate [label="Investigate", prompt="@agentwatch/investigate.md"]
   prove [label="Prove", prompt="Prove it."]
@@ -23,7 +23,7 @@ const SPINE = `digraph agentwatch {
   start -> investigate -> prove -> ship -> exit
 }`;
 const VARIANT = `digraph agentwatch_system {
-  graph [extends="agentwatch.cast", kind=line, label="Union fix flow for system findings", serves="sdk:union-errors posthog:union-posthog"]
+  graph [extends="agentwatch.cast", kind=line, label="Acme fix flow for system findings", serves="sdk:acme-errors posthog:acme-posthog"]
   investigate [prompt="@agentwatch-system/investigate.md"]
   reproduce [label="Reproduce", prompt="Reproduce it."]
   prove [removed=true]
@@ -35,17 +35,17 @@ const rows: PushedPoolRow[] = [
   {
     _id: "kvariant", slug: "agentwatch-system", name: "agentwatch_system", source: VARIANT, workspace: "team:t1", by: "Ana", mine: false,
     nodes: [{ id: "investigate", prompt: "Read the system finding." }, { id: "reproduce", prompt: "Reproduce it." }],
-    origin: { file: "outreach/line/agentwatch-system.cast", files: [{ node: "investigate", prompt: "outreach/line/agentwatch-system/investigate.md" }] },
+    origin: { file: "server/line/agentwatch-system.cast", files: [{ node: "investigate", prompt: "server/line/agentwatch-system/investigate.md" }] },
   },
   {
     _id: "kspine", slug: "agentwatch", name: "agentwatch", source: SPINE, workspace: "team:t1", by: "Ana", mine: false,
     nodes: [{ id: "investigate", prompt: "Read the review finding." }],
-    origin: { file: "outreach/line/agentwatch.cast", files: [{ node: "investigate", prompt: "outreach/line/agentwatch/investigate.md" }] },
+    origin: { file: "server/line/agentwatch.cast", files: [{ node: "investigate", prompt: "server/line/agentwatch/investigate.md" }] },
   },
 ];
 
 const live: LiveFlow = {
-  _id: "lf1", flow: { id: "kspine", slug: "agentwatch", label: "Union fix flow" }, sources: null, on: true,
+  _id: "lf1", flow: { id: "kspine", slug: "agentwatch", label: "Acme fix flow" }, sources: null, on: true,
   caps: { hands_per_day: 40 }, hands_today: 12, load: { working: 4, cap: 6 }, waiting: null, watcher: { role_id: "r1", handle: "agent-quality" },
   queue: [
     { task_id: "t1", short_id: "ct-1", title: "Calls drop", score: 82, scored: true, findings: 3, family: "calling", waiting: null },
@@ -131,22 +131,22 @@ describe("a live flow", () => {
   const plain = { bold: (s: string) => s, dim: (s: string) => s };
 
   test("names itself by its flow's slug, label or id, or its own id", () => {
-    for (const n of ["agentwatch", "Union fix flow", "kspine", "lf1"]) expect(namesLiveFlow(live, n)).toBe(true);
+    for (const n of ["agentwatch", "Acme fix flow", "kspine", "lf1"]) expect(namesLiveFlow(live, n)).toBe(true);
     expect(namesLiveFlow(live, "agentwatch-system")).toBe(false);
   });
 
   test("prints its switch, sources, queue, running and watcher, never an area's lead", () => {
     const text = liveFlowLines(live, { top: 1, ...plain }).join("\n");
-    expect(text).toContain("● on   Union fix flow  agentwatch");
+    expect(text).toContain("● on   Acme fix flow  agentwatch");
     expect(text).toContain("sources  every source");
     expect(text).toContain("queue    2 waiting");
     expect(text).toContain("running  4 of 6  · 12 of 40 sessions today");
     expect(text).toContain("watcher  @agent-quality");
     expect(text).toContain("ct-1  Calls drop  score 82 · 3 findings · calling");
     expect(text).toContain("and 1 more");
-    const off = liveFlowLines({ ...live, on: false, sources: ["sdk:union-errors"], watcher: null, queue: [], waiting: "off: a person switches it on" }, { top: 3, ...plain }).join("\n");
+    const off = liveFlowLines({ ...live, on: false, sources: ["sdk:acme-errors"], watcher: null, queue: [], waiting: "off: a person switches it on" }, { top: 3, ...plain }).join("\n");
     expect(off).toContain("○ off");
-    expect(off).toContain("sources  sdk:union-errors");
+    expect(off).toContain("sources  sdk:acme-errors");
     expect(off).toContain("queue    empty");
     expect(off).toContain("waiting: off: a person switches it on");
     expect(off).not.toContain("watcher");

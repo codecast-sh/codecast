@@ -92,16 +92,16 @@ describe("formatHistoryLine", () => {
 
 describe("a reader watch, and a series with no line", () => {
   test("--reader with --args makes a reader query; no --above/--below makes a plain series, for any source", () => {
-    expect(metricAddBody("Dollars per intro", { source: "union", reader: "metrics.read", args: '{"key":"dollars_per_intro"}', unit: "$", every: "1h" })).toEqual({
-      source: "union", name: "Dollars per intro", query_kind: "reader", query: 'metrics.read {"key":"dollars_per_intro"}', unit: "$", interval_ms: 3600_000,
+    expect(metricAddBody("Dollars per intro", { source: "acme", reader: "metrics.read", args: '{"key":"dollars_per_intro"}', unit: "$", every: "1h" })).toEqual({
+      source: "acme", name: "Dollars per intro", query_kind: "reader", query: 'metrics.read {"key":"dollars_per_intro"}', unit: "$", interval_ms: 3600_000,
     });
-    expect(metricAddBody("Bounces", { source: "union", reader: "metrics.read", args: '{"key":"b"}', above: "5" })).toMatchObject({ threshold: 5, direction: "above" });
+    expect(metricAddBody("Bounces", { source: "acme", reader: "metrics.read", args: '{"key":"b"}', above: "5" })).toMatchObject({ threshold: 5, direction: "above" });
     expect(metricAddBody("Weekly actives", { source: "p", hogql: "select 1" })).toEqual({ source: "p", name: "Weekly actives", query_kind: "hogql", query: "select 1" });
-    expect(() => metricAddBody("x", { source: "union", reader: "metrics.read", args: "[1]" })).toThrow("--args is a JSON object");
-    expect(() => metricAddBody("x", { source: "union", hogql: "select 1", args: "{}" , above: "1" })).toThrow("--args goes with --reader");
+    expect(() => metricAddBody("x", { source: "acme", reader: "metrics.read", args: "[1]" })).toThrow("--args is a JSON object");
+    expect(() => metricAddBody("x", { source: "acme", hogql: "select 1", args: "{}" , above: "1" })).toThrow("--args goes with --reader");
   });
   test("a series prints its value in its unit and says it is a series", () => {
-    const line = formatWatchLine({ _id: "w", short_id: "mw-12", name: "Dollars per intro", query_kind: "reader", query: "metrics.read", direction: "below", unit: "$", interval_ms: 3600_000, status: "active", points: [{ at: 1, value: 410 }, { at: 2, value: 382 }], last_value: 382, last_at: 2, source_name: "union" } as WatchRow, 2);
+    const line = formatWatchLine({ _id: "w", short_id: "mw-12", name: "Dollars per intro", query_kind: "reader", query: "metrics.read", direction: "below", unit: "$", interval_ms: 3600_000, status: "active", points: [{ at: 1, value: 410 }, { at: 2, value: 382 }], last_value: 382, last_at: 2, source_name: "acme" } as WatchRow, 2);
     expect(line).toContain("$382");
     expect(line).toContain("(series)");
   });

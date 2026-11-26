@@ -110,11 +110,11 @@ const FULL = {
   ],
   questions: [
     { key: "which_market_first", text: "Which market first?", at: ago(10), by: "@growth", answer: "Brokers", answered_at: ago(6) },
-    { key: "do_we_price_per_seat", text: "Do we price per seat?", at: ago(4), by: "@ashot", source: { kind: "session", ref: "jx7c6zk:142" } },
+    { key: "do_we_price_per_seat", text: "Do we price per seat?", at: ago(4), by: "@dev", source: { kind: "session", ref: "jx7c6zk:142" } },
   ],
-  decisions: [{ key: "ship_to_brokers_first", text: "Ship to brokers first", at: ago(6), by: "Ashot", source: { kind: "task", ref: "ct-12" } }],
+  decisions: [{ key: "ship_to_brokers_first", text: "Ship to brokers first", at: ago(6), by: "Dev", source: { kind: "task", ref: "ct-12" } }],
   sources: [
-    { kind: "call", ref: "cl-42:14", quote: "our goal is $250 or less per introduction", by: "Ashot", at: ago(4) },
+    { kind: "call", ref: "cl-42:14", quote: "our goal is $250 or less per introduction", by: "Dev", at: ago(4) },
     { kind: "note", quote: "brokers before lenders" },
   ],
   projects: [{ _id: "p", title: "Growth", status: "active", lead: "@growth", task_counts: { total: 8, done: 2 } }, { _id: "q", title: "Billing", status: "planning", task_counts: { total: 0, done: 0 } }],
@@ -139,7 +139,7 @@ describe("cast initiative: the arguments of the record", () => {
     expect(parseMilestoneArg("NPS=40-50")).toEqual({ title: "NPS=40-50" });
   });
   test("a source is an address, words, or both; nothing at all is refused", () => {
-    expect(readSourceArg("call:cl-42#14", { by: "Ashot", at: ago(4), quote: "brokers first" })).toEqual({ kind: "call", ref: "cl-42:14", quote: "brokers first", by: "Ashot", at: ago(4) });
+    expect(readSourceArg("call:cl-42#14", { by: "Dev", at: ago(4), quote: "brokers first" })).toEqual({ kind: "call", ref: "cl-42:14", quote: "brokers first", by: "Dev", at: ago(4) });
     expect(readSourceArg("said on the retreat")).toEqual({ kind: "note", quote: "said on the retreat" });
     expect(readSourceArg("  ")).toBeNull();
   });
@@ -280,8 +280,8 @@ describe("cast initiative: the op each record command sends", () => {
 
   test("ask and decide: the words, who said them and where", () => {
     expect(saidWrite("in-3", "questions", "Do we price per seat?", {})).toEqual({ verb: "Asked on", op: { list: "questions", action: "add", entry: { text: "Do we price per seat?" } } });
-    expect(saidWrite("in-3", "decisions", "Ship to brokers first", { by: "Ashot", source: "jx7c6zk:142" })).toEqual({
-      verb: "Recorded a decision on", op: { list: "decisions", action: "add", entry: { text: "Ship to brokers first", by: "Ashot", source: { kind: "session", ref: "jx7c6zk:142" } } },
+    expect(saidWrite("in-3", "decisions", "Ship to brokers first", { by: "Dev", source: "jx7c6zk:142" })).toEqual({
+      verb: "Recorded a decision on", op: { list: "decisions", action: "add", entry: { text: "Ship to brokers first", by: "Dev", source: { kind: "session", ref: "jx7c6zk:142" } } },
     });
     // 'none' clears on an edit only: a new entry that names nobody is signed by whoever adds it.
     expect((saidWrite("in-3", "questions", "Q?", { by: null, source: null }) as RecordWrite).op.entry).toEqual({ text: "Q?" });
@@ -293,8 +293,8 @@ describe("cast initiative: the op each record command sends", () => {
     expect(saidWrite("3", "questions", "Do we price per team?", { edit: "2" })).toEqual({
       verb: "Changed a question on", op: { list: "questions", action: "edit", entry: { text: "Do we price per team?" } }, pick: { text: "2", retry: 'cast goal ask in-3 --edit <n> "<new words>"' },
     });
-    expect(saidWrite("in-3", "decisions", undefined, { edit: "brokers", by: "@ashot", source: null })).toEqual({
-      verb: "Changed a decision on", op: { list: "decisions", action: "edit", entry: { by: "@ashot", source: null } }, pick: { text: "brokers", retry: 'cast goal decide in-3 --edit <n> "<new words>"' },
+    expect(saidWrite("in-3", "decisions", undefined, { edit: "brokers", by: "@dev", source: null })).toEqual({
+      verb: "Changed a decision on", op: { list: "decisions", action: "edit", entry: { by: "@dev", source: null } }, pick: { text: "brokers", retry: 'cast goal decide in-3 --edit <n> "<new words>"' },
     });
     expect(saidWrite("in-3", "questions", undefined, { edit: "2" })).toEqual({ error: "Nothing to change: give the new words, --by or --source" });
   });
@@ -311,9 +311,9 @@ describe("cast initiative: the op each record command sends", () => {
   });
 
   test("source: when it was said is a moment, so a day typed reads back as that day", () => {
-    const write = sourceWrite("call:cl-42#14", { quote: "our goal is $250 or less", by: "Ashot", at: "2026-10-03" }, NOW) as RecordWrite;
-    expect(write).toEqual({ verb: "Added a source to", op: { list: "sources", action: "add", entry: { kind: "call", ref: "cl-42:14", quote: "our goal is $250 or less", by: "Ashot", at: new Date(2026, 9, 3, 12).getTime() } } });
-    expect(sourceLine(write.op.entry as any, 1, NOW)).toBe('  1. Ashot, call:cl-42:14, yesterday: "our goal is $250 or less"');
+    const write = sourceWrite("call:cl-42#14", { quote: "our goal is $250 or less", by: "Dev", at: "2026-10-03" }, NOW) as RecordWrite;
+    expect(write).toEqual({ verb: "Added a source to", op: { list: "sources", action: "add", entry: { kind: "call", ref: "cl-42:14", quote: "our goal is $250 or less", by: "Dev", at: new Date(2026, 9, 3, 12).getTime() } } });
+    expect(sourceLine(write.op.entry as any, 1, NOW)).toBe('  1. Dev, call:cl-42:14, yesterday: "our goal is $250 or less"');
     const older = sourceWrite("ct-12", { at: "2026-09-01" }, NOW) as RecordWrite;
     expect(sourceLine(older.op.entry as any, 1, NOW)).toBe("  1. ct-12, 1 Sep");
     expect(sourceWrite("the Sep 30 founder call", { quote: "our goal is $250" }, NOW)).toMatchObject({ op: { entry: { kind: "note", quote: "the Sep 30 founder call: our goal is $250" } } });
@@ -352,16 +352,16 @@ describe("cast initiative: the lines of the record", () => {
   });
   test("a question says who asked, when and where, and carries its answer", () => {
     const [answered, open] = recordEntries(FULL, "questions");
-    expect(questionLines(c, open.entry, open.n, NOW)).toEqual(["  2. Do we price per seat? · @ashot · 2026-09-30 · session:jx7c6zk:142"]);
+    expect(questionLines(c, open.entry, open.n, NOW)).toEqual(["  2. Do we price per seat? · @dev · 2026-09-30 · session:jx7c6zk:142"]);
     expect(questionLines(c, answered.entry, answered.n, NOW)).toEqual(["  1. Which market first? · @growth · 2026-09-24", "     answer Brokers (2026-09-28)"]);
   });
   test("a decision says who decided, when and where", () => {
     const [decision] = recordEntries(FULL, "decisions");
-    expect(decisionLine(c, decision.entry, decision.n, NOW)).toBe("  1. Ship to brokers first · Ashot · 2026-09-28 · ct-12");
+    expect(decisionLine(c, decision.entry, decision.n, NOW)).toBe("  1. Ship to brokers first · Dev · 2026-09-28 · ct-12");
   });
   test("a source says who said it and where, in the shared words", () => {
     const [call, note] = recordEntries(FULL, "sources");
-    expect(sourceLine(call.entry, call.n, NOW)).toBe('  1. Ashot, call:cl-42:14, 4 days ago: "our goal is $250 or less per introduction"');
+    expect(sourceLine(call.entry, call.n, NOW)).toBe('  1. Dev, call:cl-42:14, 4 days ago: "our goal is $250 or less per introduction"');
     expect(sourceLine(note.entry, note.n, NOW)).toBe('  2. "brokers before lenders"');
   });
   test("one entry of any list prints as show prints it", () => {
@@ -394,15 +394,15 @@ describe("cast initiative: what a record write answers", () => {
     expect(recordVerb(milestoneWrite("in-3", undefined, { done: "1" }) as RecordWrite, { moved: false })).toBe("Nothing changed on");
     expect(recordWriteLines(c, recordVerb(add, stands), stands, "sources", NOW)).toEqual([
       "ok Already on the record of in-3: Win the private network",
-      '  1. Ashot, call:cl-42:14, 4 days ago: "our goal is $250 or less per introduction"',
+      '  1. Dev, call:cl-42:14, 4 days ago: "our goal is $250 or less per introduction"',
     ]);
   });
   test("a source typed again fills what the one on the record lacks, as one edit, and keeps what it says", () => {
     const bare = { kind: "session", ref: "jx7c6zk:142" };
-    const typed = sourceWrite("jx7c6zk:142", { quote: "our goal is $250 or less", by: "Ashot", at: "2026-09-30" }, NOW) as RecordWrite;
+    const typed = sourceWrite("jx7c6zk:142", { quote: "our goal is $250 or less", by: "Dev", at: "2026-09-30" }, NOW) as RecordWrite;
     expect(sourceFillIn(typed, { entry: bare, moved: false })).toEqual({
       kept: [],
-      write: { verb: "Updated a source on", op: { list: "sources", action: "edit", key: "session:jx7c6zk:142", entry: { quote: "our goal is $250 or less", by: "Ashot", at: new Date(2026, 8, 30, 12).getTime() } } },
+      write: { verb: "Updated a source on", op: { list: "sources", action: "edit", key: "session:jx7c6zk:142", entry: { quote: "our goal is $250 or less", by: "Dev", at: new Date(2026, 8, 30, 12).getTime() } } },
     });
     // What the record already says is never overwritten; it is named.
     expect(sourceFillIn(typed, { entry: { ...bare, by: "Sam", quote: "under $250" }, moved: false })).toEqual({
@@ -471,17 +471,17 @@ describe("cast initiative show", () => {
   ○ 4. General availability
 
   Open questions (1)
-  2. Do we price per seat? · @ashot · 2026-09-30 · session:jx7c6zk:142
+  2. Do we price per seat? · @dev · 2026-09-30 · session:jx7c6zk:142
 
   Answered questions (1)
   1. Which market first? · @growth · 2026-09-24
      answer Brokers (2026-09-28)
 
   Decisions (1)
-  1. Ship to brokers first · Ashot · 2026-09-28 · ct-12
+  1. Ship to brokers first · Dev · 2026-09-28 · ct-12
 
   Sources (2)
-  1. Ashot, call:cl-42:14, 4 days ago: "our goal is $250 or less per introduction"
+  1. Dev, call:cl-42:14, 4 days ago: "our goal is $250 or less per introduction"
   2. "brokers before lenders"
 
   Projects (2) 2/8 done (25%)

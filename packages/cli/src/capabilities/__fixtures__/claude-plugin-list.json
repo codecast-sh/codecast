@@ -5,7 +5,7 @@
       "version": "1.0.0",
       "scope": "user",
       "enabled": true,
-      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/code-simplifier/1.0.0",
+      "installPath": "/Users/dev/.claude/plugins/cache/claude-plugins-official/code-simplifier/1.0.0",
       "installedAt": "2026-03-12T16:43:08.361Z",
       "lastUpdated": "2026-03-12T16:43:08.361Z"
     },
@@ -14,7 +14,7 @@
       "version": "4c916814ff0e",
       "scope": "user",
       "enabled": true,
-      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/frontend-design/4c916814ff0e",
+      "installPath": "/Users/dev/.claude/plugins/cache/claude-plugins-official/frontend-design/4c916814ff0e",
       "installedAt": "2026-03-12T16:43:08.361Z",
       "lastUpdated": "2026-08-12T17:21:00.116Z"
     },
@@ -23,17 +23,17 @@
       "version": "4c916814ff0e",
       "scope": "project",
       "enabled": false,
-      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/playground/4c916814ff0e",
+      "installPath": "/Users/dev/.claude/plugins/cache/claude-plugins-official/playground/4c916814ff0e",
       "installedAt": "2026-03-13T03:25:52.211Z",
       "lastUpdated": "2026-06-29T23:20:41.987Z",
-      "projectPath": "/Users/ashot/src/union-mobile/outreach"
+      "projectPath": "/Users/dev/src/acme-mobile/server"
     },
     {
       "id": "ralph-loop@claude-plugins-official",
       "version": "1.0.0",
       "scope": "user",
       "enabled": false,
-      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/ralph-loop/1.0.0",
+      "installPath": "/Users/dev/.claude/plugins/cache/claude-plugins-official/ralph-loop/1.0.0",
       "installedAt": "2026-03-12T16:43:08.361Z",
       "lastUpdated": "2026-03-29T06:12:07.707Z"
     },
@@ -42,7 +42,7 @@
       "version": "1.0.0",
       "scope": "user",
       "enabled": false,
-      "installPath": "/Users/ashot/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0",
+      "installPath": "/Users/dev/.claude/plugins/cache/claude-plugins-official/typescript-lsp/1.0.0",
       "installedAt": "2026-03-12T16:43:08.361Z",
       "lastUpdated": "2026-03-12T16:43:08.361Z"
     }

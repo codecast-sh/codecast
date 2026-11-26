@@ -62,14 +62,14 @@ describe("naming a teammate's own other Mac (cast trigger add --device)", () => 
 describe("a teammate's machine named where yours is expected", () => {
   const team = [
     { device_id: "aaaa1111", label: "cam-mini", runner_name: "Cam", is_bot: false },
-    { device_id: "bbbb2222", label: "union-box-1", runner_name: "union-bot", bot_name: "union-bot", is_bot: true },
+    { device_id: "bbbb2222", label: "acme-box-1", runner_name: "acme-bot", bot_name: "acme-bot", is_bot: true },
   ];
   test("says whose machine it is", () => {
     expect(teammateMachineLine(team, "cam-mini", "--to")).toBe(`--to "cam-mini" is Cam's machine, cam-mini, not one of yours: --to takes a machine of yours (cast devices ls)`);
-    expect(teammateMachineLine(team, "union-box", "--device")).toContain("is a team agent box (union-bot), union-box-1");
+    expect(teammateMachineLine(team, "acme-box", "--device")).toContain("is a team agent box (acme-bot), acme-box-1");
   });
   test("names nothing when no team machine matches, or several do", () => {
     expect(teammateMachineLine(team, "nowhere", "--to")).toBeNull();
-    expect(teammateMachineLine(team, "i", "--to")).toBeNull();
+    expect(teammateMachineLine(team, "m", "--to")).toBeNull();
   });
 });

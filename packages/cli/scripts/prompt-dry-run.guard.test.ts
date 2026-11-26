@@ -171,8 +171,8 @@ describe("guard cast: served reads", () => {
     expect(classify("line", "trial")).toBe("read");
     for (const verb of ["run", "dispatch", "spend", "recard"]) expect(classify("line", "trial", verb, "x")).toBe("write");
     // What a connected product lets codecast read is a read; a connector's own verbs run actions.
-    expect(classify("connector", "readers", "union")).toBe("read");
-    expect(classify("connector", "resolve", "union", "x")).toBe("write");
+    expect(classify("connector", "readers", "acme")).toBe("read");
+    expect(classify("connector", "resolve", "acme", "x")).toBe("write");
     // Workflow runs and templates are listed; starting or re-asking a run writes.
     for (const verb of ["runs", "list"]) expect(classify("workflow", verb)).toBe("read");
     for (const verb of ["run", "reask"]) expect(classify("workflow", verb, "x")).toBe("write");

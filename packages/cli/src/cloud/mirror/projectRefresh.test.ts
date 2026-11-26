@@ -425,22 +425,22 @@ test("failed source inputs leave the previously mirrored files and stamp untouch
 
 test("a host that keeps tracked files gets only a project's untracked agent config, never its git-tracked files", async () => {
   const home = temp();
-  const root = path.join(home, "code/union-mobile");
-  write(root, "outreach/.claude/skills/deploy/SKILL.md", "tracked skill\n");
-  write(root, "outreach/backend/src/lib/apollo.ts", "export const tracked = 1;\n");
+  const root = path.join(home, "code/acme-mobile");
+  write(root, "server/.claude/skills/deploy/SKILL.md", "tracked skill\n");
+  write(root, "server/backend/src/lib/apollo.ts", "export const tracked = 1;\n");
   write(root, "CLAUDE.md", "tracked instructions\n");
   const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "ignore" });
   git("init", "-q");
   git("add", ".");
   git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
   write(root, "CLAUDE.local.md", "untracked instructions\n");
-  write(root, "outreach/.claude/settings.local.json", "{}\n");
+  write(root, "server/.claude/settings.local.json", "{}\n");
   const paths = async (narrowProjects: boolean) => (await parseMirrorBundle((await buildHomeMirror({
     home, hostHome: "/home/u", config: { user_id: "u" }, deviceId: "d", narrowProjects,
     gitEnv: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
-    projects: [{ host: "u@host", sourceRoot: root, targetRoot: "/home/u/code/union-mobile" }],
-  })).bytes)).files.map((f) => f.path).filter((p) => p.startsWith("code/union-mobile/")).sort();
-  expect(await paths(true)).toEqual(["code/union-mobile/CLAUDE.local.md", "code/union-mobile/outreach/.claude/settings.local.json"]);
+    projects: [{ host: "u@host", sourceRoot: root, targetRoot: "/home/u/code/acme-mobile" }],
+  })).bytes)).files.map((f) => f.path).filter((p) => p.startsWith("code/acme-mobile/")).sort();
+  expect(await paths(true)).toEqual(["code/acme-mobile/CLAUDE.local.md", "code/acme-mobile/server/.claude/settings.local.json"]);
 });
 
 test("a host never mirrored still answers --verify with its receiver's capabilities", () => {
@@ -451,39 +451,39 @@ test("a host never mirrored still answers --verify with its receiver's capabilit
   expect(answer.complete).toBe(false);
 });
 
-test("union-mobile's tracked outreach/.agents -> .claude link: placement mirrors untracked agent config once, at its real path, and never a tracked file", async () => {
+test("acme-mobile's tracked server/.agents -> .claude link: placement mirrors untracked agent config once, at its real path, and never a tracked file", async () => {
   const local = temp();
   const remote = temp();
-  const sourceRoot = path.join(local, "code", "union-mobile");
-  const targetRoot = path.join(remote, "work", "union-mobile");
+  const sourceRoot = path.join(local, "code", "acme-mobile");
+  const targetRoot = path.join(remote, "work", "acme-mobile");
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "ignore" });
   // The same commit on both machines: the host's checkout recreates the tracked link.
   for (const root of [sourceRoot, targetRoot]) {
-    write(root, "outreach/CLAUDE.md", "outreach rules\n");
-    write(root, "outreach/.claude/agents/arc.md", "tracked agent\n");
-    write(root, "outreach/.gitignore", ".claude/settings.local.json\n");
-    fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
+    write(root, "server/CLAUDE.md", "server rules\n");
+    write(root, "server/.claude/agents/arc.md", "tracked agent\n");
+    write(root, "server/.gitignore", ".claude/settings.local.json\n");
+    fs.symlinkSync(".claude", path.join(root, "server/.agents"));
     git(root, "init", "-q");
     git(root, "add", ".");
     git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
   }
   // The laptop moves on: an edit to a tracked agent file, an untracked skill, a gitignored settings file.
-  write(sourceRoot, "outreach/.claude/agents/arc.md", "tracked agent, edited on the laptop\n");
-  write(sourceRoot, "outreach/.claude/skills/flags/SKILL.md", "untracked skill\n");
-  write(sourceRoot, "outreach/.claude/settings.local.json", JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+  write(sourceRoot, "server/.claude/agents/arc.md", "tracked agent, edited on the laptop\n");
+  write(sourceRoot, "server/.claude/skills/flags/SKILL.md", "untracked skill\n");
+  write(sourceRoot, "server/.claude/settings.local.json", JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
   const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects: true, gitEnv: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
   const parsed = await parseMirrorBundle(built.bytes);
-  expect(parsed.files.map((f) => f.path).filter((p) => p.startsWith("work/union-mobile/")).sort()).toEqual([
-    "work/union-mobile/outreach/.claude/settings.local.json",
-    "work/union-mobile/outreach/.claude/skills/flags/SKILL.md",
+  expect(parsed.files.map((f) => f.path).filter((p) => p.startsWith("work/acme-mobile/")).sort()).toEqual([
+    "work/acme-mobile/server/.claude/settings.local.json",
+    "work/acme-mobile/server/.claude/skills/flags/SKILL.md",
   ]);
   const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
   expect(result.errors).toEqual([]);
   expect(result.host_edited).toEqual([]);
-  expect(fs.readlinkSync(path.join(targetRoot, "outreach/.agents"))).toBe(".claude");
-  expect(read(targetRoot, "outreach/.agents/skills/flags/SKILL.md")).toBe("untracked skill\n");
-  expect(JSON.parse(read(targetRoot, "outreach/.agents/settings.local.json")).permissions.allow).toEqual(["Bash(ls)"]);
-  expect(read(targetRoot, "outreach/.claude/agents/arc.md")).toBe("tracked agent\n");
+  expect(fs.readlinkSync(path.join(targetRoot, "server/.agents"))).toBe(".claude");
+  expect(read(targetRoot, "server/.agents/skills/flags/SKILL.md")).toBe("untracked skill\n");
+  expect(JSON.parse(read(targetRoot, "server/.agents/settings.local.json")).permissions.allow).toEqual(["Bash(ls)"]);
+  expect(read(targetRoot, "server/.claude/agents/arc.md")).toBe("tracked agent\n");
   expect(verifyMirrorStamp(remote)?.complete).toBe(true);
 }, 60_000);
 

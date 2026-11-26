@@ -269,7 +269,7 @@ describe("a frame that names its delivery", () => {
     expect(text.split("\n")[0]).toBe('<session-message from="jx7abcd" name="Lead" delivery="k17abc">');
     expect(deliveryIdsOf(text)).toEqual(["k17abc"]);
     expect(deliveryIdsOf(stampDeliveryId(text, "k17other"))).toEqual(["k17other"]);
-    expect(deliveryIdsOf(stampDeliveryId(formatUserMessage("Ashot", "hi"), "k17u"))).toEqual(["k17u"]);
+    expect(deliveryIdsOf(stampDeliveryId(formatUserMessage("Dev", "hi"), "k17u"))).toEqual(["k17u"]);
   });
 
   test("unframed text, a raw slash command and an unsafe id are left alone", () => {

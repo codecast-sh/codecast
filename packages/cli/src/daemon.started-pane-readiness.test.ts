@@ -24,8 +24,8 @@ const claudePrompt = AGENT_CLIENTS.claude.promptReadyPattern;
 
 // Real capture of the stranded pane (cc-claude-14aehd8dm63p), trimmed.
 const LAUNCH_ECHO =
-  "/Users/ashot/.bun/bin/bun /Users/ashot/src/codecast/packages/cli/src/index.ts _disclaimed -- env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT " +
-  "/Users/ashot/.codecast/bin/claude --permission-mode bypassPermissions --session-id a2373c3a-74fe-40d0-80a0-aefb50730803 --model fable";
+  "/Users/dev/.bun/bin/bun /Users/dev/src/codecast/packages/cli/src/index.ts _disclaimed -- env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT " +
+  "/Users/dev/.codecast/bin/claude --permission-mode bypassPermissions --session-id a2373c3a-74fe-40d0-80a0-aefb50730803 --model fable";
 const READY_PANE = [
   LAUNCH_ECHO,
   "~/src/codecast (main):" + LAUNCH_ECHO,

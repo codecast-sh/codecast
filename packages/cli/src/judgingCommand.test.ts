@@ -11,7 +11,7 @@ describe("the setup pass (learning-loop.md LL4)", () => {
   });
 
   test("starting from one judge asks the one question first and keeps the rest of the pass", () => {
-    const text = renderJudgingSetup({ title: "Union", ref: "pr-7" }, { judge: "comms" });
+    const text = renderJudgingSetup({ title: "Acme", ref: "pr-7" }, { judge: "comms" });
     expect(text).toContain("Start from one judge, comms");
     expect(text).toContain("missing from what it was shown, or there and misread");
     expect(text).toContain("Turn on");

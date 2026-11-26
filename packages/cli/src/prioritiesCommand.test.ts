@@ -18,7 +18,7 @@ const row = (over: Partial<PriorityRow>): PriorityRow => ({
 const FIXTURE: PriorityRow[] = [
   row({}),
   row({ short_id: "pri-4", title: "Priorities in Codecast", rank: 2, counts: { critical_done: 1, critical_total: 5 }, last_active_at: NOW - 20 * 60_000 }),
-  row({ short_id: "pri-12", title: "Caller tools for the Union desk that Cameron asked for last week", rank: null, status: "quiet", counts: { critical_done: 0, critical_total: 2 }, last_active_at: NOW - 9 * 24 * HOUR }),
+  row({ short_id: "pri-12", title: "Caller tools for the Delta desk that Charlie asked for last week", rank: null, status: "quiet", counts: { critical_done: 0, critical_total: 2 }, last_active_at: NOW - 9 * 24 * HOUR }),
   row({ short_id: "pri-7", title: "Deploy gate", rank: null, status: "done", done_at: Date.UTC(2026, 10, 19, 18), counts: { critical_done: 4, critical_total: 4 }, last_active_at: NOW - 5 * 24 * HOUR }),
   row({ short_id: "pri-9", title: "Eval loop", rank: 1, mine: false, owner: "Bea", counts: { critical_done: 2, critical_total: 3 }, last_active_at: NOW - 26 * HOUR }),
 ];
@@ -29,7 +29,7 @@ describe("output", () => {
     expect(lines).toEqual([
       " #1  pri-1   Trusted evals                                     critical 3/6   active           2h ago",
       " #2  pri-4   Priorities in Codecast                            critical 1/5   active           20m ago",
-      "  -  pri-12  Caller tools for the Union desk that Cameron as…  critical 0/2   quiet            9d ago",
+      "  -  pri-12  Caller tools for the Delta desk that Charlie as…  critical 0/2   quiet            9d ago",
       "  -  pri-7   Deploy gate                                       critical 4/4   ✓ done Nov 19    5d ago",
       " #1  pri-9   Eval loop                                         critical 2/3   active           1d ago   · Bea",
     ]);

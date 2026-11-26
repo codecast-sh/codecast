@@ -9,7 +9,7 @@
 // scraped `jx7c6zk`, the placeholder id out of `cast own`'s OWN examples, and
 // the CLI tried to own a session that never existed. The `||` fallback failed
 // too, because a lone argument filled the SESSION slot rather than the member
-// slot: `No session found for "ashot@almostcandid.com"`.
+// slot: `No session found for "dev@almostcandid.com"`.
 import { describe, test, expect } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
@@ -21,7 +21,7 @@ const NONE = () => null;
 
 describe("looksLikeMember", () => {
   test("emails and spaced names are people", () => {
-    expect(looksLikeMember("ashot@almostcandid.com")).toBe(true);
+    expect(looksLikeMember("dev@almostcandid.com")).toBe(true);
     expect(looksLikeMember("Jason Benn")).toBe(true);
   });
 
@@ -42,10 +42,10 @@ describe("looksLikeMember", () => {
 
 describe("resolveOwnTarget", () => {
   test("a lone email targets the CURRENT session — the bug", () => {
-    expect(resolveOwnTarget("ashot@almostcandid.com", undefined, CURRENT)).toEqual({
+    expect(resolveOwnTarget("dev@almostcandid.com", undefined, CURRENT)).toEqual({
       ok: true,
       sessionId: "CURRENT-SESSION",
-      member: "ashot@almostcandid.com",
+      member: "dev@almostcandid.com",
     });
   });
 
@@ -66,10 +66,10 @@ describe("resolveOwnTarget", () => {
   });
 
   test("two arguments keep their original meaning", () => {
-    expect(resolveOwnTarget("jx7c6zk", "ashot@almostcandid.com", CURRENT)).toEqual({
+    expect(resolveOwnTarget("jx7c6zk", "dev@almostcandid.com", CURRENT)).toEqual({
       ok: true,
       sessionId: "jx7c6zk",
-      member: "ashot@almostcandid.com",
+      member: "dev@almostcandid.com",
     });
   });
 
@@ -83,9 +83,9 @@ describe("resolveOwnTarget", () => {
   });
 
   test("a lone member with no detectable session reports failure, never guesses", () => {
-    expect(resolveOwnTarget("ashot@almostcandid.com", undefined, NONE)).toEqual({
+    expect(resolveOwnTarget("dev@almostcandid.com", undefined, NONE)).toEqual({
       ok: false,
-      member: "ashot@almostcandid.com",
+      member: "dev@almostcandid.com",
     });
   });
 

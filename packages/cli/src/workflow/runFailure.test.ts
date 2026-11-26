@@ -17,7 +17,7 @@ const CT_85594 = {
     { name: "touched tests (1372)", ok: false, detail: `exit 1; failed without a database: ${Array.from({ length: 20 }, (_, i) => `tests/unit/t${i}.test.ts`).join(", ")}`, log: "check-2.log" },
     { name: "prompt fidelity (eval-judge, ops-agent)", ok: true, detail: "passed" },
   ],
-  logs: "/Users/someone/code/union-mobile/.git/worktrees/change-ct-85594/cast-line",
+  logs: "/Users/someone/code/acme-mobile/.git/worktrees/change-ct-85594/cast-line",
 };
 
 describe("outputSummary", () => {

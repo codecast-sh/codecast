@@ -177,7 +177,7 @@ describe("staleTmuxServerKillPlan", () => {
 // founder's laptop; the rest are the other two install shapes and the
 // neighbours that carry the same tokens without being a daemon.
 const daemonTable = parseProcessTable(`
- 59965     1 /Users/ashot/.bun/bin/bun /Users/ashot/src/codecast/packages/cli/src/daemon.ts _daemon
+ 59965     1 /Users/dev/.bun/bin/bun /Users/dev/src/codecast/packages/cli/src/daemon.ts _daemon
  59966     1 node /Users/x/.codecast/dist/daemon.js
  59967     1 /Users/x/.local/bin/codecast -- _daemon
  59968     1 /Users/x/.local/bin/cast _daemon

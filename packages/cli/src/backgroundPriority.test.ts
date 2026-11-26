@@ -48,7 +48,7 @@ test("start-time jitter between samples is the same process", async () => {
   expect(calls).toEqual([[1, true], [1, false]]);
 });
 
-test("the governor's set and a person's set are one union: releasing one keeps what the other holds", async () => {
+test("the governor's set and a person's set are one acme: releasing one keeps what the other holds", async () => {
   const calls: Array<[number, boolean]> = [];
   const run = async (pid: number, bg: boolean) => { calls.push([pid, bg]); return true; };
   await applyBackground([proc(1, "s1"), proc(2, "s2")], run);

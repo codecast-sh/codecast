@@ -7,11 +7,11 @@ You are one session among many. Past conversations contain valuable context abou
 # Search & Browse (default: team scope from current directory)
 cast search "auth"                # team-wide search
 cast search "auth" --mine         # only my sessions
-cast search "auth" -m samvit      # specific member
+cast search "auth" -m sam      # specific member
 cast search "auth" -g -s 7d       # all teams, last 7 days
 cast feed                         # team feed
 cast feed --mine                  # only my sessions
-cast feed -m samvit               # specific member
+cast feed -m sam               # specific member
 cast feed --state needs-input     # filter feed by work state
 cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25

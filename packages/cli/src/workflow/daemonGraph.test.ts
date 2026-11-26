@@ -103,7 +103,7 @@ describe("graphForDaemonRun", () => {
       const checkout = path.join(home, "repo");
       fs.mkdirSync(path.join(checkout, ".codecast", "flows"), { recursive: true });
       fs.writeFileSync(path.join(checkout, ".codecast", "flows", "land.cast"), land("The checkout's land."));
-      const onefix = { workflow_id: "w1", version_id: "v30", slug: "onefix", snapshot: { name: "onefix", source: `digraph onefix { start [shape=Mdiamond]; fix [prompt="Fix."]; land [flow="land"]; exit [shape=Msquare]; start -> fix -> land -> exit }`, nodes: [], file: "outreach/line/onefix.cast", files: [] } };
+      const onefix = { workflow_id: "w1", version_id: "v30", slug: "onefix", snapshot: { name: "onefix", source: `digraph onefix { start [shape=Mdiamond]; fix [prompt="Fix."]; land [flow="land"]; exit [shape=Msquare]; start -> fix -> land -> exit }`, nodes: [], file: "server/line/onefix.cast", files: [] } };
       const recorded = { workflow_id: "w9", version_id: "v4", slug: "land", snapshot: { name: "land", source: land("The recorded land."), nodes: [], file: ".codecast/flows/land.cast", files: [] } };
       const run = { workflow_name: "onefix", project_path: checkout };
       const merge = (versions: any[]) => daemonRunGraph(run, { name: "onefix", nodes: [], edges: [], library: { versions } }, checkout, "dev-b").graph!.nodes.get("land__merge")!.prompt;
@@ -163,7 +163,7 @@ describe("graphForDaemonRun", () => {
       return root;
     };
     // Team A's checkout names its own `change`; team B's has none, so the shipped one is B's.
-    const teamA = checkout(`digraph change { start [shape=Mdiamond]; a_pr [script="bun outreach/backend/scripts/line.ts pr"]; review [prompt="A's review"]; exit [shape=Msquare]; start -> a_pr -> review -> exit }`);
+    const teamA = checkout(`digraph change { start [shape=Mdiamond]; a_pr [script="bun server/backend/scripts/line.ts pr"]; review [prompt="A's review"]; exit [shape=Msquare]; start -> a_pr -> review -> exit }`);
     const teamB = checkout();
     const aRow = { origin: { device_id: "dev-a", root: teamA, file: ".codecast/flows/change.cast" } };
     const run = { workflow_name: "change", project_path: teamB, goal_override: "B's change" };

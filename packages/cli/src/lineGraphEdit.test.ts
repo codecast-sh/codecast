@@ -24,10 +24,10 @@ let castAbs: string;
 beforeEach(() => {
   root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "graph-edit-")));
   spawnSync("git", ["init", "-q", root]);
-  fs.mkdirSync(path.join(root, "outreach/line/watch"), { recursive: true });
-  castAbs = path.join(root, "outreach/line/watch.cast");
+  fs.mkdirSync(path.join(root, "server/line/watch"), { recursive: true });
+  castAbs = path.join(root, "server/line/watch.cast");
   fs.writeFileSync(castAbs, CAST);
-  fs.writeFileSync(path.join(root, "outreach/line/watch/investigate.md"), PROMPT);
+  fs.writeFileSync(path.join(root, "server/line/watch/investigate.md"), PROMPT);
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
@@ -36,8 +36,8 @@ describe("graphOrigin", () => {
     const graph = parseWorkflowFile(castAbs);
     const o = graphOrigin(castAbs, graph, "dev-1")!;
     expect(o.root).toBe(root);
-    expect(o.file).toBe("outreach/line/watch.cast");
-    expect(o.files).toEqual([{ node: "investigate", prompt: "outreach/line/watch/investigate.md" }]);
+    expect(o.file).toBe("server/line/watch.cast");
+    expect(o.files).toEqual([{ node: "investigate", prompt: "server/line/watch/investigate.md" }]);
     expect(o.graph_hash).toBe(graphHash(graph));
     expect(o.nodes).toEqual(graphNodeHashes(graph));
   });
@@ -56,11 +56,11 @@ describe("planGraphEdit", () => {
     const before = graphNodeHashes(parseWorkflowFile(castAbs));
     const plan = planGraphEdit(castAbs, { node: "investigate", text: "Find the mechanism. Say it in one line.\n" }, { root });
     expect(plan.changed).toBe(true);
-    expect(plan.writes).toEqual([{ file: path.join(root, "outreach/line/watch/investigate.md"), content: "Find the mechanism. Say it in one line.\n" }]);
+    expect(plan.writes).toEqual([{ file: path.join(root, "server/line/watch/investigate.md"), content: "Find the mechanism. Say it in one line.\n" }]);
     expect(plan.was_hash).toBe(before.find((n) => n.id === "investigate")!.h);
     expect(plan.node_hash).not.toBe(plan.was_hash);
     // Nothing was written by the plan.
-    expect(fs.readFileSync(path.join(root, "outreach/line/watch/investigate.md"), "utf8")).toBe(PROMPT);
+    expect(fs.readFileSync(path.join(root, "server/line/watch/investigate.md"), "utf8")).toBe(PROMPT);
     // After the write, the graph parses to the planned hashes.
     for (const w of plan.writes) fs.writeFileSync(w.file, w.content);
     const after = parseWorkflowFile(castAbs);
@@ -93,7 +93,7 @@ describe("planGraphEdit", () => {
     // The text the person edited from is what the checkout holds: the save goes ahead.
     expect(planGraphEdit(castAbs, { node: "investigate", text: "Find it.\n", base_text: PROMPT }, { root }).changed).toBe(true);
     // The checkout already holds the edit (an earlier save landed): nothing to refuse, nothing to write.
-    fs.writeFileSync(path.join(root, "outreach/line/watch/investigate.md"), "Find it.\n");
+    fs.writeFileSync(path.join(root, "server/line/watch/investigate.md"), "Find it.\n");
     expect(planGraphEdit(castAbs, { node: "investigate", text: "Find it.\n", base_text: PROMPT }, { root }).changed).toBe(false);
   });
 
@@ -110,13 +110,13 @@ describe("runLineGraphEdit", () => {
     const admitted: string[] = [];
     const writes: string[] = [];
     let published = 0;
-    const reply = await runLineGraphEdit({ root, file: "outreach/line/watch.cast", node: "investigate", text: "New.\n" }, {
+    const reply = await runLineGraphEdit({ root, file: "server/line/watch.cast", node: "investigate", text: "New.\n" }, {
       admit: async (f) => { admitted.push(f); return f; },
       write: (f, c) => { writes.push(f); fs.writeFileSync(f, c); },
       publish: () => { published++; return { ok: "pending" }; },
     });
-    expect(admitted).toEqual([castAbs, path.join(root, "outreach/line/watch/investigate.md")]);
-    expect(writes).toEqual([path.join(root, "outreach/line/watch/investigate.md")]);
+    expect(admitted).toEqual([castAbs, path.join(root, "server/line/watch/investigate.md")]);
+    expect(writes).toEqual([path.join(root, "server/line/watch/investigate.md")]);
     expect(published).toBe(1);
     expect(reply.changed).toBe(true);
     expect(reply.published).toEqual({ ok: "pending" });
@@ -124,7 +124,7 @@ describe("runLineGraphEdit", () => {
 
   test("a graph the fence refuses writes nothing", async () => {
     const writes: string[] = [];
-    await expect(runLineGraphEdit({ root, file: "outreach/line/watch.cast", node: "investigate", text: "New.\n" }, {
+    await expect(runLineGraphEdit({ root, file: "server/line/watch.cast", node: "investigate", text: "New.\n" }, {
       admit: async () => null,
       write: (f) => { writes.push(f); },
     })).rejects.toThrow(/not a graph in a project this machine tracks/);
@@ -132,7 +132,7 @@ describe("runLineGraphEdit", () => {
   });
 
   test("only a .cast is a graph", async () => {
-    await expect(runLineGraphEdit({ root, file: "outreach/line/watch/investigate.md", node: "investigate", text: "x" }, { admit: async (f) => f, write: () => {} })).rejects.toThrow(/names a \.cast file/);
+    await expect(runLineGraphEdit({ root, file: "server/line/watch/investigate.md", node: "investigate", text: "x" }, { admit: async (f) => f, write: () => {} })).rejects.toThrow(/names a \.cast file/);
   });
 });
 
@@ -141,7 +141,7 @@ describe("the fence for graph files", () => {
     const { fenceAdmits } = await import("./configFence");
     const opts = { home: "/nohome", roots: [root] };
     expect(fenceAdmits(castAbs, { ...opts, kind: "line_graph" })).toBe(true);
-    expect(fenceAdmits(path.join(root, "outreach/line/watch/investigate.md"), { ...opts, kind: "line_graph" })).toBe(true);
+    expect(fenceAdmits(path.join(root, "server/line/watch/investigate.md"), { ...opts, kind: "line_graph" })).toBe(true);
     expect(fenceAdmits(path.join(root, ".git/hooks/pre-commit.sh"), { ...opts, kind: "line_graph" })).toBe(false);
     expect(fenceAdmits(path.join(root, "src/app.ts"), { ...opts, kind: "line_graph" })).toBe(false);
     expect(fenceAdmits("/elsewhere/x.md", { ...opts, kind: "line_graph" })).toBe(false);

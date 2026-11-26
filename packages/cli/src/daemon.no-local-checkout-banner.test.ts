@@ -19,17 +19,17 @@ describe("noLocalCheckoutBannerActionable", () => {
       noLocalCheckoutBannerActionable({ remote: null, recordedPath: "/Users/m1/work/codecast/packages/cli" }),
     ).toBe(false);
     expect(
-      noLocalCheckoutBannerActionable({ remote: "", recordedPath: "/Users/ec2-user/src/union-mobile/outreach" }),
+      noLocalCheckoutBannerActionable({ remote: "", recordedPath: "/Users/ec2-user/src/acme-mobile/server" }),
     ).toBe(false);
   });
 
   test("actionable when we know the git remote to clone", () => {
     expect(
-      noLocalCheckoutBannerActionable({ remote: "git@github.com:ashot/codecast.git", recordedPath: undefined }),
+      noLocalCheckoutBannerActionable({ remote: "git@github.com:dev/codecast.git", recordedPath: undefined }),
     ).toBe(true);
     expect(
       noLocalCheckoutBannerActionable({
-        remote: "git@github.com:ashot/codecast.git",
+        remote: "git@github.com:dev/codecast.git",
         recordedPath: "/Users/ec2-user/work/codecast",
       }),
     ).toBe(true);

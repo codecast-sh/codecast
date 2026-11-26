@@ -100,10 +100,10 @@ describe("cast flow edit change", () => {
   test("comments and the rest of a hand-written file stay; a repo flow that extends a file gets the line", () => {
     const root = repo({
       "line/change.cast": `digraph change {\n  graph [kind="line"]\n  start [shape=Mdiamond]\n  check [shape=parallelogram, script="true"]\n  exit [shape=Msquare]\n  fix [prompt="Fix it."]\n  start -> check -> exit\n  check -> fix [condition="outcome = failure"]\n  fix -> check\n}\n`,
-      ".codecast/flows/change.cast": `// Union's flow\ndigraph change { graph [extends="../../line/change.cast"] }\n`,
+      ".codecast/flows/change.cast": `// Acme's flow\ndigraph change { graph [extends="../../line/change.cast"] }\n`,
     });
     const plan = edit(root, { op: "add", station: "lint", after: "check", run: "bun lint" });
-    expect(flowFile(root)).toBe(`// Union's flow\ndigraph change { graph [extends="../../line/change.cast"]\n  lint [after="check", label="Lint", shape=parallelogram, script="bun lint"]\n}\n`);
+    expect(flowFile(root)).toBe(`// Acme's flow\ndigraph change { graph [extends="../../line/change.cast"]\n  lint [after="check", label="Lint", shape=parallelogram, script="bun lint"]\n}\n`);
     expect(plan.edit.base).toBe("../../line/change.cast");
     const g = parseWorkflowFile(path.join(root, ".codecast/flows/change.cast"));
     expect(g.edges.filter((e) => e.from === "lint")).toEqual([

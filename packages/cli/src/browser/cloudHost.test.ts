@@ -131,7 +131,7 @@ esac
 
 describe("instanceNameTag", () => {
   test("reads the Name tag a person gave the instance, and nothing for a blank or missing one", () => {
-    expect(instanceNameTag({ Tags: [{ Key: "managed-by", Value: "codecast" }, { Key: "Name", Value: " union-line-1 " }] })).toBe("union-line-1");
+    expect(instanceNameTag({ Tags: [{ Key: "managed-by", Value: "codecast" }, { Key: "Name", Value: " acme-line-1 " }] })).toBe("acme-line-1");
     expect(instanceNameTag({ Tags: [{ Key: "Name", Value: "  " }] })).toBeUndefined();
     expect(instanceNameTag({})).toBeUndefined();
     expect(instanceNameTag(null)).toBeUndefined();
@@ -140,10 +140,10 @@ describe("instanceNameTag", () => {
 
 describe("resolveCloudHost — the default skips a host reserved for one job", () => {
   test("no host named: the first open host; named: the reserved one too; all reserved: refused", () => {
-    patchHost("i-1", { reservedFor: "Union line" });
+    patchHost("i-1", { reservedFor: "Acme line" });
     expect(resolveCloudHost().id).toBe("i-2");
     expect(resolveCloudHost("i-1").id).toBe("i-1");
     patchHost("i-2", { reservedFor: "evals" });
-    expect(() => resolveCloudHost()).toThrow("every registered cloud host is reserved for one job (i-1: Union line, i-2: evals)");
+    expect(() => resolveCloudHost()).toThrow("every registered cloud host is reserved for one job (i-1: Acme line, i-2: evals)");
   });
 });

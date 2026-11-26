@@ -45,7 +45,7 @@ describe("cast expectations show <id>", () => {
   const base = {
     project: { id: "p", title: "Calls" },
     current_version: 3,
-    doc: { project: { id: "p", title: "Calls" }, version: 3, prefix: "calls", next_n: 3, items: [line], applied_at: 1, applied_by: "Ashot", how: "person", summary: "s" } as any,
+    doc: { project: { id: "p", title: "Calls" }, version: 3, prefix: "calls", next_n: 3, items: [line], applied_at: 1, applied_by: "Dev", how: "person", summary: "s" } as any,
     versions: [],
     proposals: [{ short_id: "xp-9", status: "open", summary: "Sharpen", changes: 1, created_at: 0 }],
     cursor: null,

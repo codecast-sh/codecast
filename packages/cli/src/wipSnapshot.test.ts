@@ -323,7 +323,7 @@ describe("defaultRemote", () => {
 describe("isPermanentPushFailure", () => {
   test("access problems are permanent — waiting never fixes them", () => {
     for (const err of [
-      "remote: Permission to octocat/Hello-World.git denied to ashot.",
+      "remote: Permission to octocat/Hello-World.git denied to dev.",
       "remote: Repository not found.",
       "fatal: 'origin' does not appear to be a git repository",
       "remote: Write access to repository not granted. fatal: Authentication failed",

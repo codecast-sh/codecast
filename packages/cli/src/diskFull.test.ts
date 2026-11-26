@@ -5,10 +5,10 @@ import * as path from "node:path";
 import { diskFullFailReason, diskFullHold, isDiskFullError, requeueAfterDiskFull } from "./diskFull";
 
 const GB = 1024 ** 3;
-// A Union line host's 290 GB disk with `free` GB left.
+// A Acme line host's 290 GB disk with `free` GB left.
 const host = (free: number) => ({ free: free * GB, size: 290 * GB });
 
-// The Start failure on Union's full line hosts (2026-10-24).
+// The Start failure on Acme's full line hosts (2026-10-24).
 const START_ERROR = "git worktree add -b codecast/agentwatch-ct-61002: error: unable to write file packages/app/src/index.ts";
 
 let saved: string | undefined;

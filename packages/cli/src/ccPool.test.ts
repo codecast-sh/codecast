@@ -83,7 +83,7 @@ describe("the shared account pool on two machines", () => {
       state: async (): Promise<PoolState> => ({
         seal: [],
         copies: shared && copies.has("drawer")
-          ? [{ share_id: "s1", email: "claude4@x.com", name: "pool-claude4", contributor_name: "Ashot", tier: "default_claude_max_20x", subscription: "max", ...copies.get("drawer")! }]
+          ? [{ share_id: "s1", email: "claude4@x.com", name: "pool-claude4", contributor_name: "Dev", tier: "default_claude_max_20x", subscription: "max", ...copies.get("drawer")! }]
           : [],
       }),
       store: async () => { throw new Error("a drawer stores nothing"); },
@@ -103,11 +103,11 @@ describe("the shared account pool on two machines", () => {
     expect(await runPoolPass(s.holder, cfg(holderHome), NOW)).toEqual([]);
 
     use(drawerHome);
-    expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual(["added pool-claude4 (claude4@x.com, from Ashot)"]);
+    expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual(["added pool-claude4 (claude4@x.com, from Dev)"]);
     expect(readAccountTokenValue("pool-claude4")).toBe(TOKEN);
     // The copy's lifetime is the token's, not the day it arrived.
     expect(Math.abs(accountTokenInfo("pool-claude4")!.stored_at - storedAt)).toBeLessThan(1000);
-    expect(readProfileIndex().profiles["pool-claude4"]).toMatchObject({ email: "claude4@x.com", pool_share_id: "s1", pool_contributor: "Ashot", tier: "default_claude_max_20x" });
+    expect(readProfileIndex().profiles["pool-claude4"]).toMatchObject({ email: "claude4@x.com", pool_share_id: "s1", pool_contributor: "Dev", tier: "default_claude_max_20x" });
     expect(switchModeFor("pool-claude4", NOW)).toBe("token");
     expect(fleetBearer("pool-claude4", null, NOW)?.via).toBe("token");
     // The heartbeat names the share and sends no meter of its own.
@@ -178,7 +178,7 @@ describe("the shared account pool on two machines", () => {
     use(holderHome);
     await runPoolPass(s.holder, cfg(holderHome), NOW);
     use(drawerHome);
-    expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual(["added pool-claude4-2 (claude4@x.com, from Ashot)"]);
+    expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual(["added pool-claude4-2 (claude4@x.com, from Dev)"]);
 
     use(holderHome);
     const later = new Date(NOW + 60_000);
@@ -187,7 +187,7 @@ describe("the shared account pool on two machines", () => {
     fs.utimesSync(accountTokenInfo("claude4")!.file, later, later);
     expect(await runPoolPass(s.holder, cfg(holderHome), NOW)).toEqual(["sealed claude4@x.com for 1 machine(s)"]);
     use(drawerHome);
-    expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual(["refreshed pool-claude4-2 (claude4@x.com, from Ashot)"]);
+    expect(await runPoolPass(s.drawer, cfg(drawerHome), NOW)).toEqual(["refreshed pool-claude4-2 (claude4@x.com, from Dev)"]);
     expect(readAccountTokenValue("pool-claude4-2")).toBe(fresh);
   });
 

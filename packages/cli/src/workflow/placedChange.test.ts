@@ -14,14 +14,14 @@ import { refreezeSessionChange } from "./flowChange";
 const ORIGIN = "git@github.com:codecast-sh/codecast.git";
 
 describe("flowDeviceChoice", () => {
-  const config = { device: "nose", devices: { "codecast-sh/codecast": "union-box" } };
+  const config = { device: "nose", devices: { "codecast-sh/codecast": "acme-box" } };
   test("--device wins over every default, and here keeps the run local", () => {
     expect(flowDeviceChoice("b8335a40", config, ORIGIN)).toEqual({ name: "b8335a40", from: "--device" });
     expect(flowDeviceChoice("here", config, ORIGIN)).toBeNull();
     expect(flowDeviceChoice("Local", config, ORIGIN)).toBeNull();
   });
   test("a repository's default comes before the default for every repository", () => {
-    expect(flowDeviceChoice(undefined, config, ORIGIN)).toEqual({ name: "union-box", from: "flow.device.codecast-sh/codecast" });
+    expect(flowDeviceChoice(undefined, config, ORIGIN)).toEqual({ name: "acme-box", from: "flow.device.codecast-sh/codecast" });
     expect(flowDeviceChoice(undefined, config, "https://github.com/someone/else")).toEqual({ name: "nose", from: "flow.device" });
     expect(flowDeviceChoice(undefined, { devices: config.devices }, "https://github.com/someone/else")).toBeNull();
     expect(flowDeviceChoice(undefined, undefined, null)).toBeNull();

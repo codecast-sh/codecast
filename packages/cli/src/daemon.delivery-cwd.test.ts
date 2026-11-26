@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { conversationNamesRepo, noLocalCheckoutError, placeFreshDeliverySession } from "./resumePlacement.js";
 import { resolveResumeCwd } from "./projectPathResolver.js";
 
-// 2026-09-22: a session that had run for three hours in /Users/ashot/src/codecast
+// 2026-09-22: a session that had run for three hours in /Users/dev/src/codecast
 // on the Mac was taken over by the Linux box when the Mac looked offline for two
 // minutes. The box had a checkout of the same remote at /home/ubuntu/work/codecast,
 // but both the rebuild (regenerationCwd) and the delivery fallback
@@ -16,7 +16,7 @@ import { resolveResumeCwd } from "./projectPathResolver.js";
 // resolver (git remote, then convention), and $HOME is only for a conversation
 // that names no project at all.
 
-const MAC = "/Users/ashot/src/codecast";
+const MAC = "/Users/dev/src/codecast";
 const LINUX = "/home/ubuntu/work/codecast";
 const LINUX_HOME = "/home/ubuntu";
 const REMOTE = "git@github.com:codecast-sh/codecast.git";

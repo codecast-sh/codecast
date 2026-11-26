@@ -398,50 +398,50 @@ describe("awaitDeploy", () => {
   });
 });
 
-// ct-98114, Nov 20: union-mobile dropped aivery-operator from deploy.toml, and a change landed on top of that removal
+// ct-98114, Nov 20: acme-mobile dropped agent-worker from deploy.toml, and a change landed on top of that removal
 // still waited 23h for it, because the wait read its targets from somewhere other than the commit it landed.
 describe("a target the landed commit no longer declares", () => {
-  const PROD = `[[target]]\nname = "production"\nwhen = ["outreach/backend/**"]\nrun = "./deploy.sh"\nlive = "json:https://api.example.com/health#gitSha"\n`;
-  const AIVERY = `[[target]]\nname = "aivery-operator"\nwhen = ["outreach/backend/**"]\nrun = "./deploy.sh --components aivery"\nlive = "json:https://aivery.example.com/health#gitSha"\n`;
+  const PROD = `[[target]]\nname = "production"\nwhen = ["server/backend/**"]\nrun = "./deploy.sh"\nlive = "json:https://api.example.com/health#gitSha"\n`;
+  const AGENT_WORKER = `[[target]]\nname = "agent-worker"\nwhen = ["server/backend/**"]\nrun = "./deploy.sh --components agent"\nlive = "json:https://agent.example.com/health#gitSha"\n`;
 
   test("the wait's duties come from the landed commit, not a shared checkout's working tree", async () => {
     const repo = path.join(dir, "shared");
     execFileSync("git", ["init", "-q", "-b", "main", repo], { env: ENV });
-    write(repo, ".codecast/deploy.toml", PROD + AIVERY);
-    write(repo, "outreach/backend/a.ts", "a1\n");
+    write(repo, ".codecast/deploy.toml", PROD + AGENT_WORKER);
+    write(repo, "server/backend/a.ts", "a1\n");
     git(repo, "add", "-A");
     git(repo, "commit", "-qm", "both targets");
     write(repo, ".codecast/deploy.toml", PROD);
-    git(repo, "commit", "-qam", "remove aivery-operator");
-    write(repo, "outreach/backend/a.ts", "a2\n");
+    git(repo, "commit", "-qam", "remove agent-worker");
+    write(repo, "server/backend/a.ts", "a2\n");
     git(repo, "commit", "-qam", "the change");
     const landed = git(repo, "rev-parse", "HEAD");
     // The shared checkout's files read as they did before the removal (another session's tree, a ref moved under it).
-    write(repo, ".codecast/deploy.toml", PROD + AIVERY);
+    write(repo, ".codecast/deploy.toml", PROD + AGENT_WORKER);
 
-    const plan = await landedDuties(repo, { sha: landed, files: ["outreach/backend/a.ts"] }, {});
+    const plan = await landedDuties(repo, { sha: landed, files: ["server/backend/a.ts"] }, {});
     expect(plan.duties.map((d) => d.target)).toEqual(["production"]);
   });
 
   test("a target the server has no record of is named as unknown, never waited on", async () => {
     const both = deployDuties(parseDeployTargets({ target: [
       { name: "production", run: "p.sh", when: "api/**" },
-      { name: "aivery-operator", run: "a.sh", when: "api/**" },
+      { name: "agent-worker", run: "a.sh", when: "api/**" },
     ] }, []), ["api/b.ts"]);
-    expect(both.duties.map((d) => [d.target, d.action])).toEqual([["production", "wait"], ["aivery-operator", "wait"]]);
+    expect(both.duties.map((d) => [d.target, d.action])).toEqual([["production", "wait"], ["agent-worker", "wait"]]);
     const f = fake((tick) => [{ name: "production", history: tick >= 1 ? [dp("dp-2148", "live")] : [] }]);
     const r = await awaitDeploy({ sha: SHA, base: "main", plan: both, intervalMs: MIN }, f.io);
-    expect(r).toEqual({ code: 0, line: "Live: 1a2b3c4 on production dp-2148. aivery-operator has no record on the server, so nothing says when it is live; not waited on." });
+    expect(r).toEqual({ code: 0, line: "Live: 1a2b3c4 on production dp-2148. agent-worker has no record on the server, so nothing says when it is live; not waited on." });
     expect(f.blocks).toEqual([]);
 
   });
 
   test("with no target that can say it is live (an empty answer, every target unrecorded) it waits and ends stuck, never passes", async () => {
-    const only = deployDuties(parseDeployTargets({ target: [{ name: "aivery-operator", run: "a.sh", when: "api/**" }] }, []), ["api/b.ts"]);
+    const only = deployDuties(parseDeployTargets({ target: [{ name: "agent-worker", run: "a.sh", when: "api/**" }] }, []), ["api/b.ts"]);
     for (const rows of [[], [{ name: "dashboard", history: [] }]]) {
       const f = fake(() => rows);
       const r = await awaitDeploy({ sha: SHA, base: "main", plan: only, intervalMs: 30 * MIN }, f.io);
-      expect(r).toEqual({ code: 5, line: "Deploy stuck: aivery-operator is not live with 1a2b3c4 after 24h (last: no record on the server, so nothing says when it is live)." });
+      expect(r).toEqual({ code: 5, line: "Deploy stuck: agent-worker is not live with 1a2b3c4 after 24h (last: no record on the server, so nothing says when it is live)." });
       expect(f.blocks).toHaveLength(1);
     }
   });

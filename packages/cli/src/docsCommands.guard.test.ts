@@ -1,8 +1,8 @@
 // Every `cast ...` a design doc tells someone to run names a real command.
 //
 // Agents read docs/architecture as instructions: a role's standing text is
-// written there first and copied into the role. union-ops-role.md told the ops
-// role to run `cast app union read` and `cast app union do`, but `cast app`
+// written there first and copied into the role. acme-ops-role.md told the ops
+// role to run `cast app acme read` and `cast app acme do`, but `cast app`
 // drives the codecast app itself and the connector lives under
 // `cast connector`, so both calls failed on every wake. Nothing checked the
 // words against the CLI, so the doc read as correct.
@@ -63,18 +63,18 @@ const context = liveAgentContext();
 describe("cast commands named in docs/architecture", () => {
   test("the resolver tells a real command from a broken one", () => {
     // Without this, a resolver that stopped seeing the tree would pass every doc.
-    expect(unknownCommandWords(context, ["connector", "read", "union"])).toBeNull();
-    expect(unknownCommandWords(context, ["connector", "do", "union"])).toBeNull();
-    expect(unknownCommandWords(context, ["app", "union", "read"])).toBe("'cast app' has no subcommand 'union'");
+    expect(unknownCommandWords(context, ["connector", "read", "acme"])).toBeNull();
+    expect(unknownCommandWords(context, ["connector", "do", "acme"])).toBeNull();
+    expect(unknownCommandWords(context, ["app", "acme", "read"])).toBe("'cast app' has no subcommand 'acme'");
     expect(unknownCommandWords(context, ["pl", "show"])).toBe("no command 'pl'");
     // `cast sync <word>` runs the bare command, so the word is an argument.
     expect(unknownCommandWords(context, ["sync", "anything"])).toBeNull();
   });
 
   test("the scan finds the mentions it exists to check", () => {
-    const doc = "Run `cast app union read <reader>`.\n\n```bash\ncast connector do union jobs.rerun --yes\n$ cast events groups\n```\n";
-    expect(castMentions(doc)).toEqual(["app union read", "connector do union", "events groups"]);
-    expect(brokenMentions(context, "x.md", doc)).toEqual(["x.md: `cast app union read`: 'cast app' has no subcommand 'union'"]);
+    const doc = "Run `cast app acme read <reader>`.\n\n```bash\ncast connector do acme jobs.rerun --yes\n$ cast events groups\n```\n";
+    expect(castMentions(doc)).toEqual(["app acme read", "connector do acme", "events groups"]);
+    expect(brokenMentions(context, "x.md", doc)).toEqual(["x.md: `cast app acme read`: 'cast app' has no subcommand 'acme'"]);
   });
 
   test("every mention resolves to a registered command", () => {

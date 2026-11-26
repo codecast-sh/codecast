@@ -4,15 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { runEvalResult } from "./lineProfileCommand";
 
-// `cast line eval-result` on reps.json in the shape Union's eval writes
-// (outreach/backend/src/lib/eval/lineEval.ts RepsFile): the station's exit
+// `cast line eval-result` on reps.json in the shape Acme's eval writes
+// (server/backend/src/lib/eval/lineEval.ts RepsFile): the station's exit
 // code is the result's verdict, and an unreadable file is never a pass.
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "eval-result-"));
 afterEach(() => { for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f)); });
 
 const rep = (passed: boolean) => ({ passed, score: passed ? 0.9 : 0.1, reply: passed ? "Thursday at 7, Barn Hall." : "I am not sure.", judge_note: passed ? "names the venue" : "no venue", cost_usd: 0.02 });
-const unionReps = (branchPasses: boolean, gates: string[] = []) => ({
+const acmeReps = (branchPasses: boolean, gates: string[] = []) => ({
   version: 1,
   base: { ref: "main", sha: "aaa" },
   head: { sha: "bbb", dirty: false },
@@ -20,7 +20,7 @@ const unionReps = (branchPasses: boolean, gates: string[] = []) => ({
   dry: false,
   reps: 5,
   surfaces: [{
-    surface: "outreach.reply",
+    surface: "server.reply",
     title: "Reply drafter",
     route: "api_call",
     freezes: [{
@@ -28,7 +28,7 @@ const unionReps = (branchPasses: boolean, gates: string[] = []) => ({
       base: { batch: "run_base", sha: "aaa", reps: Array.from({ length: 5 }, () => rep(false)), input: "where is it?" },
       branch: { batch: "run_branch", sha: "bbb", reps: Array.from({ length: 5 }, () => rep(branchPasses)) },
     }],
-  }, { surface: "outreach.digest", title: "Digest", route: null, freezes: [], skipped: "no freeze exercises this prompt yet; prove makes them from its moments" }],
+  }, { surface: "server.digest", title: "Digest", route: null, freezes: [], skipped: "no freeze exercises this prompt yet; prove makes them from its moments" }],
   gates_failed: gates,
   gate: gates.length ? { select: "core,venue", run_id: "er_1", exit: 1, failed: gates, note: "1 of 40 failed" } : null,
   cost_usd: 0.2,
@@ -43,7 +43,7 @@ function write(name: string, body: unknown): string {
 describe("cast line eval-result", () => {
   test("a proven miss fixed on the branch passes: exit 0, and the card's file is written", () => {
     const out = path.join(dir, "eval-result.json");
-    const run = runEvalResult(write("reps.json", unionReps(true)), out);
+    const run = runEvalResult(write("reps.json", acmeReps(true)), out);
     expect(run.code).toBe(0);
     const written = JSON.parse(fs.readFileSync(out, "utf8"));
     expect(written).toMatchObject({ version: 1, ok: true, costUsd: 0.2, base: { sha: "aaa" } });
@@ -53,14 +53,14 @@ describe("cast line eval-result", () => {
   });
 
   test("the miss still failing, or a suite gate failing, exits 1", () => {
-    expect(runEvalResult(write("reps.json", unionReps(false)), path.join(dir, "r.json")).code).toBe(1);
-    const gated = runEvalResult(write("reps.json", unionReps(true, ["core/venue"])), path.join(dir, "r.json"));
+    expect(runEvalResult(write("reps.json", acmeReps(false)), path.join(dir, "r.json")).code).toBe(1);
+    const gated = runEvalResult(write("reps.json", acmeReps(true, ["core/venue"])), path.join(dir, "r.json"));
     expect(gated.code).toBe(1);
     expect(gated.lines.at(-1)).toBe("FAIL suite gates failed: core/venue");
   });
 
   test("a side with no scored rep exits 2: the eval could not judge the change", () => {
-    const reps = unionReps(true);
+    const reps = acmeReps(true);
     reps.surfaces[0].freezes[0].branch.reps = reps.surfaces[0].freezes[0].branch.reps.map((r: any) => ({ ...r, passed: false, error: "API error 429" }));
     const run = runEvalResult(write("reps.json", reps), path.join(dir, "r.json"));
     expect(run.code).toBe(2);
@@ -70,16 +70,16 @@ describe("cast line eval-result", () => {
   test("an unreadable or malformed reps file is an error, never a result", () => {
     expect(() => runEvalResult(path.join(dir, "missing.json"), path.join(dir, "r.json"))).toThrow(/cannot read/);
     expect(() => runEvalResult(write("bad.json", "{not json"), path.join(dir, "r.json"))).toThrow(/cannot read/);
-    expect(() => runEvalResult(write("old.json", { ...unionReps(true), version: 0 }), path.join(dir, "r.json"))).toThrow(/version must be 1/);
+    expect(() => runEvalResult(write("old.json", { ...acmeReps(true), version: 0 }), path.join(dir, "r.json"))).toThrow(/version must be 1/);
     expect(fs.existsSync(path.join(dir, "r.json"))).toBe(false);
   });
 });
 
-// `cast line profile --publish` on Union's profile: one group per project the
+// `cast line profile --publish` on Acme's profile: one group per project the
 // finders file into, the profile's default project marked, and a finder
 // without a project goes to the default.
 describe("publishGroups", () => {
-  test("groups Union's finders by project", async () => {
+  test("groups Acme's finders by project", async () => {
     const { parseLineProfileText, resolveLineProfile } = await import("./lineProfile");
     const { publishGroups } = await import("./lineProfileCommand");
     const toml = `
@@ -89,18 +89,18 @@ project = "Agent Quality"
 id = "clusters"
 source = "agentwatch"
 kind = "prompt_miss or bug"
-fingerprint = "union:cluster:<id>"
+fingerprint = "acme:cluster:<id>"
 project = "Agent Quality"
 [[line.finders]]
 id = "invariants"
-source = "union.invariant"
+source = "acme.invariant"
 kind = "regression"
-fingerprint = "union:invariant:<id>"
+fingerprint = "acme:invariant:<id>"
 [[line.finders]]
 id = "errors"
-source = "union.error"
+source = "acme.error"
 kind = "bug or regression"
-fingerprint = "union:error:<fingerprint>"
+fingerprint = "acme:error:<fingerprint>"
 runs = "daily"
 project = "Infrastructure"
 `;
@@ -112,7 +112,7 @@ project = "Infrastructure"
       ["Infrastructure", false, ["errors"]],
     ]);
     // A finder that names its project, even the default one, is single-purpose: its signals land there. One that names none only files there by default.
-    expect(groups[1].finders[0]).toEqual({ id: "errors", source: "union.error", kind: ["bug", "regression"], fingerprint: "union:error:<fingerprint>", runs: "daily", single_purpose: true });
+    expect(groups[1].finders[0]).toEqual({ id: "errors", source: "acme.error", kind: ["bug", "regression"], fingerprint: "acme:error:<fingerprint>", runs: "daily", single_purpose: true });
     expect(groups[0].finders.map((f) => [f.id, !!f.single_purpose])).toEqual([["clusters", true], ["invariants", false]]);
   });
 
@@ -127,11 +127,11 @@ project = "Infrastructure"
 // Every publish carries the rest of the resolved profile: values, where each
 // came from, the loader's notes and warnings, and the file relative to its root.
 describe("publishFacts", () => {
-  test("Union's profile without its finders, the file repo relative", async () => {
+  test("Acme's profile without its finders, the file repo relative", async () => {
     const { parseLineProfileText, resolveLineProfile } = await import("./lineProfile");
     const { publishFacts } = await import("./lineProfileCommand");
     const { values, warnings } = parseLineProfileText(`[line]\nproject = "Agent Quality"\nwatch_days = 14\n[line.commands]\ncheck = "bun test"\n[[line.finders]]\nid = "c"\nsource = "s"\nkind = "bug or regression"\nfingerprint = "x"\n`);
-    const facts = publishFacts(resolveLineProfile(values, { root: "/src/union", file: "/src/union/.codecast/line.toml", warnings }));
+    const facts = publishFacts(resolveLineProfile(values, { root: "/src/acme", file: "/src/acme/.codecast/line.toml", warnings }));
     expect(facts).not.toHaveProperty("finders");
     expect(facts).toMatchObject({ project: "Agent Quality", watch_days: 14, size_budget: 400, file: ".codecast/line.toml", commands: { check: "bun test", prove: null } });
     expect(facts.sources).toMatchObject({ project: "file", watch_days: "file", size_budget: "default", "commands.check": "file", finders: "file" });

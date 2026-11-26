@@ -167,7 +167,7 @@ describe("CursorCloudWatcher", () => {
   test("mirrors an agent into a Cursor JSONL transcript with its meta, and emits a session event", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cursor-cloud-"));
     cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-    const agent = { id: AGENT, name: "codecast probe", status: "IDLE", repos: [{ url: "https://github.com/ashot/codecast" }], url: `https://cursor.com/agents/${AGENT}`, createdAt: RUN.createdAt, updatedAt: RUN.updatedAt, latestRunId: RUN.id };
+    const agent = { id: AGENT, name: "codecast probe", status: "IDLE", repos: [{ url: "https://github.com/dev/codecast" }], url: `https://cursor.com/agents/${AGENT}`, createdAt: RUN.createdAt, updatedAt: RUN.updatedAt, latestRunId: RUN.id };
     const EMPTY_RUN: CursorCloudRun = { ...RUN, id: "run-empty", createdAt: "2026-09-29T07:53:00.000Z" };
     const watcher = cursorWatcher({
       rootDir: root,

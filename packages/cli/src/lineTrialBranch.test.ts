@@ -48,7 +48,7 @@ describe("freshRunBranch", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }, 60_000);
 
-  // Nov 20 and Nov 23: runs waiting at Queue each held a full workspace built at Start, and filled the Union line hosts' disks.
+  // Nov 20 and Nov 23: runs waiting at Queue each held a full workspace built at Start, and filled the Acme line hosts' disks.
   test("in a repo with a workspace manifest, a fresh run makes only its branch: no worktree and no workspace", async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "trial-manifest-")));
     const origin = path.join(root, "origin.git");

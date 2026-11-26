@@ -75,7 +75,7 @@ export const CODEX_TRUST_ACCEPTED_PANE = `  Do you trust the contents of this di
 // this against the WHOLE pane, not the live-region tail.
 export const GROK_TRUST_PANE = `
   Do you trust the contents of this directory?
-  /Users/ashot/src/mail
+  /Users/dev/src/mail
 
   Grok Build may run or modify contents in this directory,
   posing security risks.

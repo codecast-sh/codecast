@@ -30,7 +30,7 @@ const MCP_PANEL = `
 ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ tmux focus-events off
    Manage MCP servers
    3 servers
-     User MCPs (/Users/ashot/.claude.json)
+     User MCPs (/Users/dev/.claude.json)
    ❯ … electron
      Built-in MCPs (always available)
      ◯ computer-use

@@ -18,10 +18,10 @@ describe("signalAddBody", () => {
   });
 
   test("a product's finding files under its issue key, with its judge, version and severity (learning-loop.md LL3)", () => {
-    expect(signalAddBody({ source: "agentwatch", kind: "bug", title: "Narrates effort", issue: " union:cluster:a ", judge: "comms", judgeVersion: "v7", severity: "8" })).toEqual({
-      source: "agentwatch", kind: "bug", title: "Narrates effort", fingerprint: "union:cluster:a", issue: true, judge: "comms", judge_version: "v7", severity: 8,
+    expect(signalAddBody({ source: "agentwatch", kind: "bug", title: "Narrates effort", issue: " acme:cluster:a ", judge: "comms", judgeVersion: "v7", severity: "8" })).toEqual({
+      source: "agentwatch", kind: "bug", title: "Narrates effort", fingerprint: "acme:cluster:a", issue: true, judge: "comms", judge_version: "v7", severity: 8,
     });
-    expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", issue: "union:cluster:a", fingerprint: "x" })).toThrow("not both");
+    expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", issue: "acme:cluster:a", fingerprint: "x" })).toThrow("not both");
     expect(() => signalAddBody({ source: "agentwatch", kind: "bug", title: "t", severity: "high" })).toThrow("--severity takes a number");
   });
 
@@ -126,8 +126,8 @@ describe("cast signal on the wire", () => {
 
   test("move sends the key, the cause it leaves, and where it goes", async () => {
     answer = () => ({ from: "ct-7", to: "ct-9", moved: 2, created: true });
-    await run("move", "--fingerprint", "union:cluster:c1", "--from", "ct-7", "--title", "Held call cards dial outside hours", "--json");
-    expect(calls[0]).toEqual({ path: "/cli/signal/move", body: { fingerprint: "union:cluster:c1", from: "ct-7", title: "Held call cards dial outside hours", project_path: "/repo", conversation_id: "s1" } });
+    await run("move", "--fingerprint", "acme:cluster:c1", "--from", "ct-7", "--title", "Held call cards dial outside hours", "--json");
+    expect(calls[0]).toEqual({ path: "/cli/signal/move", body: { fingerprint: "acme:cluster:c1", from: "ct-7", title: "Held call cards dial outside hours", project_path: "/repo", conversation_id: "s1" } });
   });
 
   test("move sg-N looks up each finding's key and problem and moves each pair once, the rest joining a new problem", async () => {
@@ -162,8 +162,8 @@ describe("cast signal on the wire", () => {
 
   test("ls --fingerprint asks the server for that one key in the workspace", async () => {
     answer = () => ({ signals: [] });
-    await run("ls", "--fingerprint", "union:cluster:c1", "-n", "1", "--json");
-    expect(calls[0]).toEqual({ path: "/cli/signal/ls", body: { fingerprint: "union:cluster:c1", limit: 1, project_path: "/repo", conversation_id: "s1" } });
+    await run("ls", "--fingerprint", "acme:cluster:c1", "-n", "1", "--json");
+    expect(calls[0]).toEqual({ path: "/cli/signal/ls", body: { fingerprint: "acme:cluster:c1", limit: 1, project_path: "/repo", conversation_id: "s1" } });
   });
 
   test("ls --task reads one cause's signals; ls --source reads the workspace", async () => {
@@ -176,10 +176,10 @@ describe("cast signal on the wire", () => {
 
   test("add --project sends the ref for the server to resolve in the write workspace; ls --project reads one project", async () => {
     answer = (path) => (path === "/cli/signal/ls" ? { signals: [] } : { short_id: "sg-3", task_short_id: "ct-8", attach: "new", signal_count: 1 });
-    // The argv Union's finder door sends (outreach/backend/src/lib/line/signal.ts signalAddArgv), less the stdin detail.
-    await run("add", "--source", "agentwatch", "--kind", "prompt_miss", "--fingerprint", "union:cluster:c1", "--title", "Agent repeats itself", "--url", "https://u.test/c1", "--subject", "outreach.reply", "--goal-hint", "reply_rate", "--project", "Agent Quality", "--json");
+    // The argv Acme's finder door sends (server/backend/src/lib/line/signal.ts signalAddArgv), less the stdin detail.
+    await run("add", "--source", "agentwatch", "--kind", "prompt_miss", "--fingerprint", "acme:cluster:c1", "--title", "Agent repeats itself", "--url", "https://u.test/c1", "--subject", "server.reply", "--goal-hint", "reply_rate", "--project", "Agent Quality", "--json");
     await run("ls", "--project", "Agent Quality");
-    expect(calls[0].body).toMatchObject({ source: "agentwatch", fingerprint: "union:cluster:c1", project: "Agent Quality", project_path: "/repo" });
+    expect(calls[0].body).toMatchObject({ source: "agentwatch", fingerprint: "acme:cluster:c1", project: "Agent Quality", project_path: "/repo" });
     expect(calls[1]).toEqual({ path: "/cli/signal/ls", body: { project: "Agent Quality", project_path: "/repo", conversation_id: "s1" } });
   });
 
@@ -187,9 +187,9 @@ describe("cast signal on the wire", () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
     fs.mkdirSync(path.join(repo, ".git"));
     fs.mkdirSync(path.join(repo, ".codecast"));
-    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nteam = "Union"\nproject = "Agent Quality"\n`);
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nteam = "Acme"\nproject = "Agent Quality"\n`);
     process.env.CODECAST_CWD = repo;
-    answer = (path) => (path === "/cli/teams" ? { teams: [{ _id: "team1", name: "Union" }], user_id: "u1" } : path === "/cli/signal/ls" ? { signals: [] } : { short_id: "sg-4", task_short_id: "ct-9", attach: "fingerprint", signal_count: 2 });
+    answer = (path) => (path === "/cli/teams" ? { teams: [{ _id: "team1", name: "Acme" }], user_id: "u1" } : path === "/cli/signal/ls" ? { signals: [] } : { short_id: "sg-4", task_short_id: "ct-9", attach: "fingerprint", signal_count: 2 });
     await run("add", "--source", "person", "--kind", "bug", "--title", "Checkout breaks");
     await run("ls");
     const add = calls.find((c) => c.path === "/cli/signal/add")!;
@@ -206,11 +206,11 @@ describe("cast signal on the wire", () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
     fs.mkdirSync(path.join(repo, ".git"));
     fs.mkdirSync(path.join(repo, ".codecast"));
-    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nteam = "Union"\nproject = "Agent Quality"\n`);
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nteam = "Acme"\nproject = "Agent Quality"\n`);
     process.env.CODECAST_CWD = repo;
-    answer = (path) => (path === "/cli/teams" ? { teams: [{ _id: "team1", name: "Union" }], user_id: "u1" } : { short_id: "sg-5", task_short_id: "ct-9", attach: "new", signal_count: 1 });
+    answer = (path) => (path === "/cli/teams" ? { teams: [{ _id: "team1", name: "Acme" }], user_id: "u1" } : { short_id: "sg-5", task_short_id: "ct-9", attach: "new", signal_count: 1 });
     await run("add", "--source", "person", "--kind", "bug", "--title", "x", "--team", "personal");
-    await run("add", "--source", "person", "--kind", "bug", "--title", "y", "--team", "union");
+    await run("add", "--source", "person", "--kind", "bug", "--title", "y", "--team", "acme");
     const adds = calls.filter((c) => c.path === "/cli/signal/add");
     expect(adds[0].body.project).toBeUndefined();
     expect(adds[0].body.default_project).toBeUndefined();

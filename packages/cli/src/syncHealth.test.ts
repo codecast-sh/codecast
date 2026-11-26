@@ -95,7 +95,7 @@ function grokLine(tsSec: number, kind: string) {
 function grokSession(now: number, lines: string[], lastSyncedAt: number) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-health-grok-'));
   dirs.push(dir);
-  const sessionDir = path.join(dir, '.grok', 'sessions', '%2FUsers%2Fashot%2Fsrc%2Fcodecast', GROK_ID);
+  const sessionDir = path.join(dir, '.grok', 'sessions', '%2FUsers%2Fdev%2Fsrc%2Fcodecast', GROK_ID);
   fs.mkdirSync(sessionDir, { recursive: true });
   const file = path.join(sessionDir, 'updates.jsonl');
   fs.writeFileSync(file, lines.join(''));
@@ -186,7 +186,7 @@ test('a grok session with real writes after last ingest is stuck under its uuid,
   expect(stuck).toHaveLength(1);
   expect(stuck[0].sessionId).toBe(GROK_ID);
   expect(stuck[0].agentType).toBe('grok');
-  expect(stuck[0].projectPath).toBe('/Users/ashot/src/codecast');
+  expect(stuck[0].projectPath).toBe('/Users/dev/src/codecast');
   expect(stuck[0].reason).toBe('unexamined_writes');
   expect(stuck[0].unsyncedBytes).toBe(0);
   expect(stuck[0].sessionId).not.toBe('updates');

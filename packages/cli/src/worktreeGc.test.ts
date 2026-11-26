@@ -330,7 +330,7 @@ function spawnSyncOk(repo: string, args: string[]): boolean {
   try { execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" }); return true; } catch { return false; }
 }
 
-// Two of Union's line hosts filled their disks with 202 and 222 run worktrees
+// Two of Acme's line hosts filled their disks with 202 and 222 run worktrees
 // (agentwatch-ct-N) of failed, dissolved and unmerged runs, each kept for
 // holding work not on origin (2026-10-24).
 describe("line run worktrees: released once no live run or session works in them", () => {

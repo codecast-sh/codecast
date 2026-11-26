@@ -12,7 +12,7 @@ test("Codex plugin-prefixed setup never becomes a human message or title", () =>
 });
 
 test("Codex project-context setup turn is hidden like the AGENTS.md one", () => {
-  const projectContext = "# Project context\nWorking directory: /Users/ashot/src/union-mobile";
+  const projectContext = "# Project context\nWorking directory: /Users/dev/src/acme-mobile";
   const messages = parseCodexSessionFile([entry(projectContext), entry("try the new kimi3 model")].join("\n"));
   expect(messages.map(m => m.content)).toEqual(["try the new kimi3 model"]);
   expect(isMachineDeliveredMessage(projectContext)).toBe(true);

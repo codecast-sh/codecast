@@ -515,7 +515,7 @@ describe("watcher exit", () => {
 });
 
 
-// union-mobile (Nov 8): `cast check landing` said only "watcher went away: 74: 0x181ad5d54 start [/usr/lib/dyld]".
+// acme-mobile (Nov 8): `cast check landing` said only "watcher went away: 74: 0x181ad5d54 start [/usr/lib/dyld]".
 describe("a tsc that runs out of heap", () => {
   test("an inherited NODE_OPTIONS can raise the heap cap but never lower it", () => {
     expect(tscNodeOptions(undefined)).toBe(`--max-old-space-size=${TSC_HEAP_MB}`);

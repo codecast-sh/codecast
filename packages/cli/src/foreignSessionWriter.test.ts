@@ -14,7 +14,7 @@ const PS = [
   `    1     0 ??       /sbin/launchd`,
   `  900     1 ??       /Users/x/.bun/bin/bun /Users/x/.codecast/cli/main.ts _daemon`,
   // Codecast's own resume pane: per-session tmux server, shell, agent.
-  `12262     1 ??       /opt/homebrew/bin/tmux -L cast-cc-resume-outreach-0a671390 new-session -d -x 220 -y 50 -s cc-resume-outreach-0a671390`,
+  `12262     1 ??       /opt/homebrew/bin/tmux -L cast-cc-resume-server-0a671390 new-session -d -x 220 -y 50 -s cc-resume-server-0a671390`,
   `12263 12262 ttys000  -bash`,
   `12291 12263 ttys000  /Users/x/.codecast/bin/claude --resume ${SID} --model opus`,
   // Codecast's Claude SDK host.

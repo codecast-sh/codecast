@@ -83,9 +83,9 @@ describe("set", () => {
   });
 
   test("an absent key is added after the table's last entry", () => {
-    const out = edit(REPO, { op: "set", key: "commands.ship", value: "bun ship" }, { op: "set", key: "team", value: "Union" });
+    const out = edit(REPO, { op: "set", key: "commands.ship", value: "bun ship" }, { op: "set", key: "team", value: "Acme" });
     expect(out).toContain('eval  = "bun scripts/line.ts eval --base $default_branch --dir $run_dir"\nship = "bun ship"\n');
-    expect(out).toContain('watch_days = 7\nteam = "Union"\n');
+    expect(out).toContain('watch_days = 7\nteam = "Acme"\n');
     expect(footprint(REPO, out).removed).toEqual([]);
   });
 

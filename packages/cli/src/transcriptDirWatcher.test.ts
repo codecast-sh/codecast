@@ -291,19 +291,19 @@ describe("transcriptDirWatcherConfig — pi config", () => {
 describe("pi cwd-slug encode/decode", () => {
   // Encoder verbatim to pi's session-manager rule; verified against REAL dir names.
   test("encodes real cwds to the exact on-disk dir names", () => {
-    expect(encodePiCwdSlug("/Users/ashot")).toBe("--Users-ashot--");
-    expect(encodePiCwdSlug("/Users/ashot/src/codecast")).toBe("--Users-ashot-src-codecast--");
+    expect(encodePiCwdSlug("/Users/dev")).toBe("--Users-dev--");
+    expect(encodePiCwdSlug("/Users/dev/src/codecast")).toBe("--Users-dev-src-codecast--");
     expect(encodePiCwdSlug("/private/tmp")).toBe("--private-tmp--");
   });
 
   test("round-trips paths that have no real dashes", () => {
-    for (const cwd of ["/Users/ashot", "/Users/ashot/src/codecast", "/private/tmp", "/"]) {
+    for (const cwd of ["/Users/dev", "/Users/dev/src/codecast", "/private/tmp", "/"]) {
       expect(decodePiCwdSlug(encodePiCwdSlug(cwd))).toBe(cwd);
     }
   });
 
   test("decodes real on-disk slugs back to their cwd", () => {
-    expect(decodePiCwdSlug("--Users-ashot--")).toBe("/Users/ashot");
+    expect(decodePiCwdSlug("--Users-dev--")).toBe("/Users/dev");
     expect(decodePiCwdSlug("--private-tmp--")).toBe("/private/tmp");
     expect(decodePiCwdSlug("----")).toBe("/");
   });
@@ -423,7 +423,7 @@ describe("grok cwd-slug encode/decode", () => {
   // Encoder verbatim to grok's encode_cwd_dirname (the Rust `urlencoding` crate):
   // percent-encode every byte outside [A-Za-z0-9_.~-], uppercase hex.
   test("encodes real cwds to the exact on-disk dir names", () => {
-    expect(encodeGrokCwdSlug("/Users/ashot/src/codecast")).toBe("%2FUsers%2Fashot%2Fsrc%2Fcodecast");
+    expect(encodeGrokCwdSlug("/Users/dev/src/codecast")).toBe("%2FUsers%2Fdev%2Fsrc%2Fcodecast");
     expect(encodeGrokCwdSlug("/private/tmp")).toBe("%2Fprivate%2Ftmp");
   });
 
@@ -436,7 +436,7 @@ describe("grok cwd-slug encode/decode", () => {
 
   test("round-trips losslessly (unlike pi's dash-collapsing slug)", () => {
     for (const cwd of [
-      "/Users/ashot/src/codecast",
+      "/Users/dev/src/codecast",
       "/private/tmp",
       "/Users/dev/footage-app",
       "/tmp/a!b'c(d)e*f",

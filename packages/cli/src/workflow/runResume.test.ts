@@ -104,7 +104,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
 
   // Every hand of a run is placed on the machine running it. A shared hand
   // placed by its path alone landed on another host with the same checkout
-  // path and could not read the run's branch (union-line-1 and -3, 2026-10-23).
+  // path and could not read the run's branch (acme-line-1 and -3, 2026-10-23).
   test("every station hand is placed on the runner's own machine, isolated or not", async () => {
     hangOn = "/cli/workflow-runs/gate";
     void runWorkflow(graph(), options());
@@ -201,7 +201,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
   }, 30000);
 
   // A run's line commands are the repo's profile as it is when a station runs, not as it was when the
-  // run started: union-shared's runs started before a7d2cb4090 kept evaluating in place, on scratch, for days.
+  // run started: acme-shared's runs started before a7d2cb4090 kept evaluating in place, on scratch, for days.
   describe("a line profile changed while a run waits", () => {
     const evalGraph = () => parseWorkflowSource(`digraph line {
       start [shape=Mdiamond]
@@ -410,7 +410,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     expect(calls.slice(0, settle).filter((c) => c.route === "/cli/inbox" && c.body.session_ids?.[0] === "conv_build_2").length).toBeGreaterThanOrEqual(6);
   }, 30000);
 
-  // Union's change line: CI (a script) and Review (a session) side by side, joined at Read, which routes on CI's JSON.
+  // Acme's change line: CI (a script) and Review (a session) side by side, joined at Read, which routes on CI's JSON.
   // A daemon restart mid-review resumed the run at Review alone: CI never ran, and Read sent the session a brief
   // for a CI it had not read (ct-98869, 2026-11-21).
   const fanout = () => parseWorkflowSource(`digraph line {

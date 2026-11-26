@@ -1,4 +1,4 @@
-// The eval gate under a time limit (ct-97276's sixth run: Union's proof-tree.sh
+// The eval gate under a time limit (ct-97276's sixth run: Acme's proof-tree.sh
 // waited three hours on an ssh whose remote process was gone).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -54,7 +54,7 @@ test("the limit: declared in climb.toml at the base, else twice the longest gate
   fs.writeFileSync(path.join(repo, "a.txt"), "a\n"); g("add", "-A"); g("commit", "-q", "-m", "a");
   const bare = g("rev-parse", "HEAD");
   expect(gateLimitS(repo, bare, [])).toEqual({ s: GATE_LIMIT_DEFAULT_S, from: "default" });
-  // Union's full gate takes 25 to 60 minutes: twice the longest it took.
+  // Acme's full gate takes 25 to 60 minutes: twice the longest it took.
   expect(gateLimitS(repo, bare, [25 * 60_000, 60 * 60_000])).toEqual({ s: 2 * 60 * 60, from: "recent" });
   fs.mkdirSync(path.join(repo, ".codecast"));
   fs.writeFileSync(path.join(repo, ".codecast/climb.toml"), "[guard]\ntimeout_s = 5400\n");

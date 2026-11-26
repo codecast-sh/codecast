@@ -334,7 +334,7 @@ describe("gradeAssessment", () => {
   const rejected = (origin: string) => `rejected\nsource=Unnotarized Developer ID\n${origin}\n`;
 
   test("accepts codecast's own unnotarized Developer ID bundle", () => {
-    const graded = gradeAssessment(3, rejected(`origin=Developer ID Application: Ashot Petrosian (${HELPER_SIGNING_TEAM})`));
+    const graded = gradeAssessment(3, rejected(`origin=Developer ID Application: Dev Smith (${HELPER_SIGNING_TEAM})`));
     expect(graded.ok).toBe(true);
     expect(graded.reason).toBe("Developer ID signed, not notarized");
   });
@@ -365,7 +365,7 @@ describe("gradeAssessment", () => {
 
   test("the team is the one the release signs with", () => {
     // scripts/build-binaries.sh defaults CODECAST_SIGN_IDENTITY to
-    // "Developer ID Application: Ashot Petrosian (WRG9THCK9Q)" and the release
+    // "Developer ID Application: Dev Smith (WRG9THCK9Q)" and the release
     // workflow sets the same string. If that identity ever changes, this fails
     // here rather than at a user's first `cast computer` verb.
     expect(HELPER_SIGNING_TEAM).toBe("WRG9THCK9Q");

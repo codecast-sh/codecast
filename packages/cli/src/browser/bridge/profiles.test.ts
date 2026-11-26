@@ -53,12 +53,12 @@ async function pairedProfile(port: number, key: string, tabs: number[], name: st
 describe("pairing with a one-time code", () => {
   test("a code is exchanged for a profile key once; the key reconnects; the code does not work twice", async () => {
     const h = await host();
-    const code = mintPairingCode({ dir: "Default", name: "Ashot" });
+    const code = mintPairingCode({ dir: "Default", name: "Dev" });
     const ext = await new FakeExtension([]).connect(h.port, {}, { mode: "code", key: KEY_A, code });
     exts.push(ext);
-    expect(ext.issued?.profile).toBe("ashot-default");
+    expect(ext.issued?.profile).toBe("dev-default");
     const rec = readPairing().profiles[KEY_A];
-    expect(rec.id).toBe("ashot-default");
+    expect(rec.id).toBe("dev-default");
     expect(rec.hash).not.toBe(ext.issued!.secret); // only the hash is stored
     expect(JSON.stringify(readPairing())).not.toContain(ext.issued!.secret);
     ext.ws.close();
@@ -67,7 +67,7 @@ describe("pairing with a one-time code", () => {
     // The key it got works.
     const again = await new FakeExtension([]).connect(h.port, {}, { mode: "key", key: KEY_A, secret: ext.issued!.secret });
     exts.push(again);
-    expect(h.profiles()).toEqual(["ashot-default"]);
+    expect(h.profiles()).toEqual(["dev-default"]);
   });
 
   test("wrong codes count; at the limit every pending code is thrown away", async () => {
@@ -89,15 +89,15 @@ describe("pairing with a one-time code", () => {
 
 describe("the shared token's migration", () => {
   test("a profile-aware extension on the shared token is issued its own key, named after the pinned profile", async () => {
-    const h = await host({ pinnedProfile: () => "Default", profileName: () => "Ashot" });
+    const h = await host({ pinnedProfile: () => "Default", profileName: () => "Dev" });
     const ext = await new FakeExtension([]).connect(h.port, {}, { mode: "legacy", key: KEY_A });
     exts.push(ext);
-    expect(ext.issued?.profile).toBe("ashot-default");
+    expect(ext.issued?.profile).toBe("dev-default");
     expect(readPairing().profiles[KEY_A].via).toBe("migrated");
     ext.ws.close();
     const keyed = await new FakeExtension([]).connect(h.port, {}, { mode: "key", key: KEY_A, secret: ext.issued!.secret });
     exts.push(keyed);
-    expect(h.profiles()).toEqual(["ashot-default"]);
+    expect(h.profiles()).toEqual(["dev-default"]);
   });
 
   test("a revoked profile cannot migrate back in on the shared token; a code pairs it again", async () => {

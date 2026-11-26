@@ -302,11 +302,11 @@ describe("import --status", () => {
   test("leads with what is stored, and says a follow-up run covers only what is new", () => {
     const now = Date.UTC(2026, 10, 14, 12);
     const text = formatReplayImportStatus(
-      { name: "union-posthog", replay_backfill: { ...base, since: now - 3 * 3600_000, until: now - 3600_000, started_at: now - 3600_000, updated_at: now - 3600_000, finished_at: now - 3600_000 } },
+      { name: "acme-posthog", replay_backfill: { ...base, since: now - 3 * 3600_000, until: now - 3600_000, started_at: now - 3600_000, updated_at: now - 3600_000, finished_at: now - 3600_000 } },
       { count: 2804, oldest_at: Date.UTC(2026, 9, 15), newest_at: Date.UTC(2026, 10, 14) },
       now,
     );
-    expect(text).toContain("union-posthog: 2804 recordings stored, recorded 2026-10-15 to 2026-11-14");
+    expect(text).toContain("acme-posthog: 2804 recordings stored, recorded 2026-10-15 to 2026-11-14");
     expect(text).toContain("follow-up");
     expect(text).toContain("recordings new since 2026-11-14 09:00 UTC");
     expect(text).not.toContain("the last 7d");

@@ -27,9 +27,9 @@ import {
 
 describe("isRecognizedAgentComm", () => {
   test("recognizes Muse's versioned executable after its launcher execs it", () => {
-    const binary = "/Users/ashot/.local/bin/muse-bin-1.3.0-R3401.1";
+    const binary = "/Users/dev/.local/bin/muse-bin-1.3.0-R3401.1";
     expect(isRecognizedAgentComm(binary)).toBe(true);
-    expect(agentBinaryFromPsRow("/Users/ashot/.lo", `${binary} resume 01a0b9e4-d00c-7321-8003-742a94210384 --yolo`)).toBe("muse");
+    expect(agentBinaryFromPsRow("/Users/dev/.lo", `${binary} resume 01a0b9e4-d00c-7321-8003-742a94210384 --yolo`)).toBe("muse");
     expect(isResumeInvocation("muse", `${binary} resume 01a0b9e4-d00c-7321-8003-742a94210384`)).toBe(true);
     expect(isRecognizedAgentComm("muse-bin-helper")).toBe(false);
     expect(isRecognizedAgentComm("not-muse-bin-1.3.0-R3401.1")).toBe(false);
@@ -58,14 +58,14 @@ describe("isRecognizedAgentComm", () => {
 
   test("still recognizes codex via its node interpreter (comm 'node')", () => {
     // codex is a node script that does NOT rename itself: comm 'node',
-    // args 'node /Users/ashot/.bun/bin/codex'.
+    // args 'node /Users/dev/.bun/bin/codex'.
     expect(isRecognizedAgentComm("node")).toBe(true);
     expect(isRecognizedAgentComm("/opt/homebrew/bin/node")).toBe(true);
   });
 
   test("still recognizes claude (bun-compiled binary, comm 'claude')", () => {
     expect(isRecognizedAgentComm("claude")).toBe(true);
-    expect(isRecognizedAgentComm("/Users/ashot/.local/bin/claude")).toBe(true);
+    expect(isRecognizedAgentComm("/Users/dev/.local/bin/claude")).toBe(true);
   });
 
   test("recognizes bun and deno interpreters", () => {
@@ -84,45 +84,45 @@ describe("isRecognizedAgentComm", () => {
 
 describe("isResumeInvocation", () => {
   test("matches codex resume subcommand", () => {
-    const line = "ashot 123 0.0 0.0 ... /path/to/codex/codex resume 019c9626-6f6e-7fb1-b340-cdea1d861268";
+    const line = "dev 123 0.0 0.0 ... /path/to/codex/codex resume 019c9626-6f6e-7fb1-b340-cdea1d861268";
     expect(isResumeInvocation("codex", line)).toBe(true);
   });
 
   test("matches codex --resume flag", () => {
-    const line = "ashot 123 0.0 0.0 ... codex --resume 019c9626-6f6e-7fb1-b340-cdea1d861268";
+    const line = "dev 123 0.0 0.0 ... codex --resume 019c9626-6f6e-7fb1-b340-cdea1d861268";
     expect(isResumeInvocation("codex", line)).toBe(true);
   });
 
   test("does not match codex without resume", () => {
-    const line = "ashot 123 0.0 0.0 ... /path/to/codex/codex -c shell_environment_policy.inherit=all";
+    const line = "dev 123 0.0 0.0 ... /path/to/codex/codex -c shell_environment_policy.inherit=all";
     expect(isResumeInvocation("codex", line)).toBe(false);
   });
 
   test("matches claude --resume and not plain resume subcommand", () => {
-    const withFlag = "ashot 123 0.0 0.0 ... claude --resume 5b1c47b3-16c0-42d5-a6d2-82459a01f640";
-    const withSubcommand = "ashot 123 0.0 0.0 ... claude resume 5b1c47b3-16c0-42d5-a6d2-82459a01f640";
+    const withFlag = "dev 123 0.0 0.0 ... claude --resume 5b1c47b3-16c0-42d5-a6d2-82459a01f640";
+    const withSubcommand = "dev 123 0.0 0.0 ... claude resume 5b1c47b3-16c0-42d5-a6d2-82459a01f640";
     expect(isResumeInvocation("claude", withFlag)).toBe(true);
     expect(isResumeInvocation("claude", withSubcommand)).toBe(false);
   });
 
   test("matches gemini --resume and resume subcommand", () => {
-    const withFlag = "ashot 123 0.0 0.0 ... gemini --resume latest";
-    const withSubcommand = "ashot 123 0.0 0.0 ... gemini resume session-abc";
+    const withFlag = "dev 123 0.0 0.0 ... gemini --resume latest";
+    const withSubcommand = "dev 123 0.0 0.0 ... gemini resume session-abc";
     expect(isResumeInvocation("gemini", withFlag)).toBe(true);
     expect(isResumeInvocation("gemini", withSubcommand)).toBe(true);
   });
 
   test("matches grok --resume <uuid> (the registry resumeCmd shape) and not a fresh launch", () => {
-    const withFlag = "ashot 123 0.0 0.0 ... grok --resume 01a04000-4d49-70f3-88b4-316e8f48a5fb";
-    const fresh = "ashot 123 0.0 0.0 ... grok --permission-mode bypassPermissions -m grok-4.6";
+    const withFlag = "dev 123 0.0 0.0 ... grok --resume 01a04000-4d49-70f3-88b4-316e8f48a5fb";
+    const fresh = "dev 123 0.0 0.0 ... grok --permission-mode bypassPermissions -m grok-4.6";
     expect(isResumeInvocation("grok", withFlag)).toBe(true);
     expect(isResumeInvocation("grok", fresh)).toBe(false);
   });
 
   test("detects codex session file from lsof output", () => {
     const lsofOutput = [
-      "codex 83954 ashot 20w REG ... /Users/ashot/.codex/sessions/2026/02/25/rollout-2026-02-25T10-53-47-019c9626-6f6e-7fb1-b340-cdea1d861268.jsonl",
-      "codex 83954 ashot 21u unix ...",
+      "codex 83954 dev 20w REG ... /Users/dev/.codex/sessions/2026/02/25/rollout-2026-02-25T10-53-47-019c9626-6f6e-7fb1-b340-cdea1d861268.jsonl",
+      "codex 83954 dev 21u unix ...",
     ].join("\n");
     expect(hasCodexSessionFileOpen(lsofOutput, "019c9626-6f6e-7fb1-b340-cdea1d861268")).toBe(true);
     expect(hasCodexSessionFileOpen(lsofOutput, "00000000-0000-0000-0000-000000000000")).toBe(false);
@@ -592,14 +592,14 @@ describe("agentBinaryFromPsRow", () => {
   test("names claude from argv when macOS clips comm to 16 chars", () => {
     expect(
       agentBinaryFromPsRow(
-        "/Users/ashot/.co",
-        "/Users/ashot/.codecast/bin/claude --permission-mode bypassPermissions --session-id e14247b2-23f2-4d66-b2c0-f6013b29334c",
+        "/Users/dev/.co",
+        "/Users/dev/.codecast/bin/claude --permission-mode bypassPermissions --session-id e14247b2-23f2-4d66-b2c0-f6013b29334c",
       ),
     ).toBe("claude");
   });
 
   test("names a script client through its interpreter (codex under node)", () => {
-    expect(agentBinaryFromPsRow("node", "node /Users/ashot/.bun/bin/codex")).toBe("codex");
+    expect(agentBinaryFromPsRow("node", "node /Users/dev/.bun/bin/codex")).toBe("codex");
   });
 
   test("falls back to comm when argv says nothing", () => {
@@ -610,7 +610,7 @@ describe("agentBinaryFromPsRow", () => {
   test("is null for shells, tmux, the daemon and a bare interpreter", () => {
     expect(agentBinaryFromPsRow("/bin/bash", "/bin/bash -c source snapshot.sh")).toBeNull();
     expect(agentBinaryFromPsRow("tmux", "tmux new-session -d -s x")).toBeNull();
-    expect(agentBinaryFromPsRow("bun", "bun /Users/ashot/src/codecast/packages/cli/dist/daemon.js")).toBeNull();
+    expect(agentBinaryFromPsRow("bun", "bun /Users/dev/src/codecast/packages/cli/dist/daemon.js")).toBeNull();
     expect(agentBinaryFromPsRow("node", "node")).toBeNull();
   });
 });

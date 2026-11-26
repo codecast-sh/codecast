@@ -69,7 +69,7 @@ describe("cast ship mark", () => {
       const body = JSON.parse(String(init.body));
       calls.push({ url, body });
       const answer = url.endsWith("/cli/teams")
-        ? { teams: [{ _id: "team_codecast", name: "codecast" }, { _id: "team_union", name: "Union" }], active_team_id: null }
+        ? { teams: [{ _id: "team_codecast", name: "codecast" }, { _id: "team_acme", name: "Acme" }], active_team_id: null }
         : { ok: true, event_id: "ev_1", team_id: body.team_id ?? "team_codecast", repository: body.repository, surface: body.surface, sha: body.sha, version: body.version ?? null };
       return new Response(JSON.stringify(answer), { status: 200 });
     }) as typeof fetch;
@@ -100,10 +100,10 @@ describe("cast ship mark", () => {
   });
 
   test("--team resolves a name the person sees to the team id", async () => {
-    await run("--surface", "web", "--version", "1.2.3", "--team", "union", "--json");
+    await run("--surface", "web", "--version", "1.2.3", "--team", "acme", "--json");
     expect(calls.map((c) => c.url)).toEqual(["https://cast.example/cli/teams", "https://cast.example/cli/changes/mark-deploy"]);
-    expect(calls[1].body).toMatchObject({ team_id: "team_union", version: "1.2.3" });
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ ok: true, team_id: "team_union", surface: "web" });
+    expect(calls[1].body).toMatchObject({ team_id: "team_acme", version: "1.2.3" });
+    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ ok: true, team_id: "team_acme", surface: "web" });
   });
 
   test("an unknown --team is refused with the real choices, before anything is posted", async () => {
@@ -123,7 +123,7 @@ describe("cast ship added-by", () => {
   const realLog = console.log;
   let calls: Array<{ url: string; body: any }>;
   let printed: string[];
-  const FOUND: AddedBy[] = [{ name: "index:voiceprints.by_user", deploy: "dp-2372", dev_push: false, by: "Ashot Petrosian", machine: "MacBook-Pro-182", via: "deploy.sh", at: Date.UTC(2026, 10, 22, 5, 21), dirty: 78 }];
+  const FOUND: AddedBy[] = [{ name: "index:voiceprints.by_user", deploy: "dp-2372", dev_push: false, by: "Dev Smith", machine: "MacBook-Pro-182", via: "deploy.sh", at: Date.UTC(2026, 10, 22, 5, 21), dirty: 78 }];
 
   beforeEach(() => {
     calls = [];
@@ -148,7 +148,7 @@ describe("cast ship added-by", () => {
     writeFileSync(file, JSON.stringify({ adds: ["fn:x:y"], drops: ["table:voiceprints"] }));
     await run("--surface", "backend", "--names", file, "index:voiceprints.by_user");
     expect(calls).toEqual([{ url: "https://cast.example/cli/deploys/added-by", body: { api_token: "tok", repository: "codecast-sh/codecast", surface: "backend", names: ["index:voiceprints.by_user", "table:voiceprints"] } }]);
-    expect(printed.at(-1)).toContain("index:voiceprints.by_user  dp-2372 push with 78 uncommitted files by Ashot Petrosian on MacBook-Pro-182");
+    expect(printed.at(-1)).toContain("index:voiceprints.by_user  dp-2372 push with 78 uncommitted files by Dev Smith on MacBook-Pro-182");
   });
 
   test("with nothing to ask it posts nothing", async () => {
@@ -165,7 +165,7 @@ describe("cast ship added-by", () => {
   });
 
   test("a deploy reads with its dp-N", () => {
-    expect(formatAddedBy([{ ...FOUND[0], dirty: 0 }])).toContain("index:voiceprints.by_user  dp-2372 push of a commit by Ashot Petrosian on MacBook-Pro-182");
+    expect(formatAddedBy([{ ...FOUND[0], dirty: 0 }])).toContain("index:voiceprints.by_user  dp-2372 push of a commit by Dev Smith on MacBook-Pro-182");
     expect(formatAddedBy([{ ...FOUND[0], committed_in: "dp-2380" }])).toContain("; committed since (dp-2380 carried it)");
   });
 });

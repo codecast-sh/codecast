@@ -3,12 +3,12 @@ import { optionsLike } from "./create";
 import { hostActionArgs } from "../cloud/hostReports";
 import type { CloudHost } from "../browser/cloudHost";
 
-const host: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k.pem", profile: "union" };
+const host: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k.pem", profile: "acme" };
 const inst = { SubnetId: "subnet-1", SecurityGroups: [{ GroupId: "sg-1" }], KeyName: "kp" };
 
 test("--like copies region, network, key and profile; given options win", () => {
   expect(optionsLike({}, host, inst, "linux", "abc123")).toEqual({
-    name: "codecast-linux-abc123", key: "/k.pem", keyName: "kp", subnet: "subnet-1", securityGroup: "sg-1", region: "us-west-2", profile: "union",
+    name: "codecast-linux-abc123", key: "/k.pem", keyName: "kp", subnet: "subnet-1", securityGroup: "sg-1", region: "us-west-2", profile: "acme",
   });
   expect(optionsLike({ subnet: "subnet-9", name: "mine" }, host, inst, "linux", "x")).toMatchObject({ subnet: "subnet-9", name: "mine" });
   expect(() => optionsLike({}, host, { SubnetId: "s" }, "linux", "x")).toThrow("no subnet, security group or key pair");

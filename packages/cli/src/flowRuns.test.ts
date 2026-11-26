@@ -1,5 +1,5 @@
 // `cast flow runs <flow> --at <stations>`: every running run of a flow at those stations, the list a line's own
-// queue reads. Union's onefix Queue read `cast workflow runs`, which pages at 200 newest first, and the runs that
+// queue reads. Acme's onefix Queue read `cast workflow runs`, which pages at 200 newest first, and the runs that
 // had waited longest were never let in (Nov 20, 2026).
 import { afterEach, describe, expect, test } from "bun:test";
 import { Command } from "commander";
@@ -15,7 +15,7 @@ afterEach(() => {
   console.error = realError;
 });
 
-const team = async () => ({ kind: "team", teamId: "team_union" } as const);
+const team = async () => ({ kind: "team", teamId: "team_acme" } as const);
 
 async function run(argv: string[], query: ConvexQuery, readWorkspace: FlowDeps["readWorkspace"] = team): Promise<{ out: string[]; err: string[]; code: number | null }> {
   const out: string[] = [];
@@ -45,9 +45,9 @@ describe("cast flow runs", () => {
   test("asks for the named flow's runs at the named stations and prints the answer whole", async () => {
     const asked: Array<[string, Record<string, unknown>]> = [];
     const answer = { runs: [{ _id: "r1", task_id: "t1", task_short_id: "ct-1", current_node_id: "queue", runner_device: "line-1", created_at: 1, updated_at: 2, results: { harm: "{\"harm\":2}" } }], truncated: false };
-    const { out, code } = await run(["flow", "runs", "onefix", "--team", "Union", "--at", "queue, build", "--results", "harm", "--tasks", "--json"], async (fn, args) => { asked.push([fn, args]); return answer; });
+    const { out, code } = await run(["flow", "runs", "onefix", "--team", "Acme", "--at", "queue, build", "--results", "harm", "--tasks", "--json"], async (fn, args) => { asked.push([fn, args]); return answer; });
     expect(code).toBeNull();
-    expect(asked).toEqual([["workflow_runs.listRunsAtStations", { team_id: "team_union", workflow_name: "onefix", stations: ["queue", "build"], results: ["harm"], tasks: true }]]);
+    expect(asked).toEqual([["workflow_runs.listRunsAtStations", { team_id: "team_acme", workflow_name: "onefix", stations: ["queue", "build"], results: ["harm"], tasks: true }]]);
     expect(JSON.parse(out.join("\n"))).toEqual(answer);
   });
 

@@ -76,15 +76,15 @@ const CRED = JSON.stringify({
 
 const OAUTH_ACCOUNT = {
   accountUuid: "11bbd477-94d6-4412-ac36-518cc5f10353",
-  emailAddress: "ashot@footage.com",
-  organizationName: "ashot@footage.com's Organization",
+  emailAddress: "dev@footage.com",
+  organizationName: "dev@footage.com's Organization",
 };
 
 describe("buildProfile", () => {
   it("snapshots credential + identity + timestamp", () => {
     const p = buildProfile(CRED, OAUTH_ACCOUNT, 1000);
     expect(p.credentials.claudeAiOauth.refreshToken).toBe("rt-456");
-    expect(p.oauthAccount.emailAddress).toBe("ashot@footage.com");
+    expect(p.oauthAccount.emailAddress).toBe("dev@footage.com");
     expect(p.saved_at).toBe(1000);
   });
 
@@ -133,7 +133,7 @@ describe("profileMeta", () => {
   it("extracts non-secret fields only", () => {
     const meta = profileMeta(buildProfile(CRED, OAUTH_ACCOUNT, 99));
     expect(meta).toEqual({
-      email: "ashot@footage.com",
+      email: "dev@footage.com",
       uuid: "11bbd477-94d6-4412-ac36-518cc5f10353",
       tier: "default_claude_max_20x",
       subscription: "max",
@@ -157,13 +157,13 @@ describe("assertValidProfileName", () => {
 describe("deriveProfileName", () => {
   it("uses the email's local part, lowercased", () => {
     expect(deriveProfileName("claude2@almostcandid.com", [])).toBe("claude2");
-    expect(deriveProfileName("Ashot@footage.com", [])).toBe("ashot");
+    expect(deriveProfileName("Dev@footage.com", [])).toBe("dev");
   });
 
   it("falls back to the domain's org part, then -2/-3, when taken", () => {
-    expect(deriveProfileName("ashot@Union.APP", ["ashot"])).toBe("union");
-    expect(deriveProfileName("ashot@footage.com", ["Ashot", "footage"])).toBe("ashot-2");
-    expect(deriveProfileName("ashot@footage.com", ["ashot", "footage", "ashot-2"])).toBe("ashot-3");
+    expect(deriveProfileName("dev@Acme.APP", ["dev"])).toBe("acme");
+    expect(deriveProfileName("dev@footage.com", ["Dev", "footage"])).toBe("dev-2");
+    expect(deriveProfileName("dev@footage.com", ["dev", "footage", "dev-2"])).toBe("dev-3");
   });
 
   it("falls back to 'account' when the email yields no usable name", () => {
@@ -296,8 +296,8 @@ describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
 
   it("saves an unsaved active login once, then reports covered", () => {
     const saved = autoSaveActiveProfile();
-    expect(saved?.name).toBe("ashot");
-    expect(saved?.email).toBe("ashot@footage.com");
+    expect(saved?.name).toBe("dev");
+    expect(saved?.email).toBe("dev@footage.com");
     // Idempotent: the account is now covered (matched by uuid).
     expect(autoSaveActiveProfile()).toBeNull();
     // Same email under a NEW uuid is still covered by the email match.
@@ -313,11 +313,11 @@ describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
     // and must notice the file change on its own.
     fs.writeFileSync(
       path.join(home, ".codecast", "cc-accounts.json"),
-      JSON.stringify({ profiles: { footage: { email: "ashot@footage.com" } } }),
+      JSON.stringify({ profiles: { footage: { email: "dev@footage.com" } } }),
     );
     const after = getAccountsHeartbeatPayload();
     expect(after?.profiles.map((p) => p.name)).toEqual(["footage"]);
-    expect(after?.active_email).toBe("ashot@footage.com");
+    expect(after?.active_email).toBe("dev@footage.com");
   });
 
   it("returns null with no login at all", () => {
@@ -422,21 +422,21 @@ describe("deleteProfile (sandboxed $HOME)", () => {
     // Log the machine into a DIFFERENT account so "footage" goes dormant. A
     // real login swaps the credential too — relabelling one credential is the
     // poisoned shape saveProfile now refuses.
-    const other = { accountUuid: "other-uuid", emailAddress: "ashot@union.app" };
+    const other = { accountUuid: "other-uuid", emailAddress: "dev@acme.app" };
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: other }));
     fs.writeFileSync(
       path.join(home, ".claude", ".credentials.json"),
       JSON.stringify({
-        claudeAiOauth: { ...JSON.parse(CRED).claudeAiOauth, accessToken: "at-union", refreshToken: "rt-union" },
+        claudeAiOauth: { ...JSON.parse(CRED).claudeAiOauth, accessToken: "at-acme", refreshToken: "rt-acme" },
       }),
     );
-    saveProfile("union");
+    saveProfile("acme");
 
     const meta = deleteProfile("footage");
-    expect(meta.email).toBe("ashot@footage.com");
+    expect(meta.email).toBe("dev@footage.com");
     expect(fs.existsSync(path.join(home, ".codecast", "cc-accounts", "footage.json"))).toBe(false);
-    expect(listProfiles().map((p) => p.name)).toEqual(["union"]);
-    expect(getAccountsHeartbeatPayload()?.profiles.map((p) => p.name)).toEqual(["union"]);
+    expect(listProfiles().map((p) => p.name)).toEqual(["acme"]);
+    expect(getAccountsHeartbeatPayload()?.profiles.map((p) => p.name)).toEqual(["acme"]);
   });
 
   it("refuses to remove the profile covering the active login", () => {
@@ -2129,29 +2129,29 @@ describe("minted setup-token file (isolated CODECAST_DIR)", () => {
   const TOKEN = "sk-ant-oat01-" + "x".repeat(60);
 
   it("stores the token as a 0600 export file of its own and reports its lifetime", () => {
-    const file = writeAccountToken("union", TOKEN);
-    expect(file).toBe(path.join(sandbox.dir, "cc-token-union.env"));
+    const file = writeAccountToken("acme", TOKEN);
+    expect(file).toBe(path.join(sandbox.dir, "cc-token-acme.env"));
     // Not the store's launch file: the two coexist under one profile name.
-    expect(file).not.toBe(accountLaunchFilePath("union"));
+    expect(file).not.toBe(accountLaunchFilePath("acme"));
     expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
     expect(fs.readFileSync(file, "utf-8")).toBe(`export CLAUDE_CODE_OAUTH_TOKEN='${TOKEN}'\n`);
-    const info = accountTokenInfo("union")!;
+    const info = accountTokenInfo("acme")!;
     expect(info.file).toBe(file);
     expect(info.expires_at - info.stored_at).toBe(SETUP_TOKEN_LIFETIME_MS);
   });
 
   it("stores the token alone when the secure-storage sentence was glued on", () => {
     const real = "sk-ant-oat01-" + "a".repeat(86) + "-" + "bcdefghi";
-    const file = writeAccountToken("union", real + "Storethistokensecurely");
+    const file = writeAccountToken("acme", real + "Storethistokensecurely");
     expect(fs.readFileSync(file, "utf-8")).toBe(`export CLAUDE_CODE_OAUTH_TOKEN='${real}'\n`);
-    expect(readAccountTokenValue("union")).toBe(real);
+    expect(readAccountTokenValue("acme")).toBe(real);
   });
 
   it("rejects anything that is not a setup-token (keychain access tokens, API keys, blanks)", () => {
     for (const bad of ["", "sk-ant-api03-abc", "at-123", "sk-ant-oat01-short", "sk-ant-oat01-" + "x".repeat(60) + " trailing"]) {
-      expect(() => writeAccountToken("union", bad)).toThrow(CcAccountError);
+      expect(() => writeAccountToken("acme", bad)).toThrow(CcAccountError);
     }
-    expect(accountTokenInfo("union")).toBeNull();
+    expect(accountTokenInfo("acme")).toBeNull();
   });
 
   it("validates the profile name so the file path can't escape the config dir", () => {
@@ -2162,32 +2162,32 @@ describe("minted setup-token file (isolated CODECAST_DIR)", () => {
 
   it("wins the launch: a live token is sourced ahead of any store, and the secret stays in the file", () => {
     const warnings: string[] = [];
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe("");
+    expect(accountSourcePrefix("acme", (m) => warnings.push(m))).toBe("");
     expect(warnings).toHaveLength(1);
-    const file = writeAccountToken("union", TOKEN);
+    const file = writeAccountToken("acme", TOKEN);
     // The account NAME rides along so the statusLine hook can attribute the
     // session's live usage; the token stays inside the sourced file.
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(
-      `${ACCOUNT_LAUNCH_UNSET}. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=union; `,
+    expect(accountSourcePrefix("acme", (m) => warnings.push(m))).toBe(
+      `${ACCOUNT_LAUNCH_UNSET}. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=acme; `,
     );
     expect(warnings).toHaveLength(1);
-    expect(accountSourcePrefix("union")).not.toContain("sk-ant");
+    expect(accountSourcePrefix("acme")).not.toContain("sk-ant");
   });
 
   it("an expired token warns and falls through to the store path instead of launching on it", () => {
-    const file = writeAccountToken("union", TOKEN);
+    const file = writeAccountToken("acme", TOKEN);
     const past = new Date(Date.now() - SETUP_TOKEN_LIFETIME_MS - 60_000);
     fs.utimesSync(file, past, past);
     const warnings: string[] = [];
-    expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe("");
+    expect(accountSourcePrefix("acme", (m) => warnings.push(m))).toBe("");
     expect(warnings.some((w) => /one-year lifetime/.test(w))).toBe(true);
   });
 
   it("removes the file and reports whether one existed", () => {
-    expect(removeAccountToken("union")).toBe(false);
-    writeAccountToken("union", TOKEN);
-    expect(removeAccountToken("union")).toBe(true);
-    expect(accountTokenInfo("union")).toBeNull();
+    expect(removeAccountToken("acme")).toBe(false);
+    writeAccountToken("acme", TOKEN);
+    expect(removeAccountToken("acme")).toBe(true);
+    expect(accountTokenInfo("acme")).toBeNull();
   });
 });
 
@@ -2339,7 +2339,7 @@ describe("switchProfile: keychain vs token (sandboxed $HOME)", () => {
     writeAccountToken("tok", TOKEN);
     switchProfile("tok");
     // A relabeled ~/.claude.json is not a change: the label can name another
-    // account (2026-09-23: the file said ashot@ while the credential was
+    // account (2026-09-23: the file said dev@ while the credential was
     // jamesapeterson955@), and a rotated token is unverified until asked.
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: { ...OAUTH_ACCOUNT, accountUuid: "33bbd477-94d6-4412-ac36-518cc5f10353", emailAddress: "new@example.com" } }));
     invalidateAccountsCache();

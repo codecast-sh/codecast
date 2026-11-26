@@ -85,7 +85,7 @@ const vault: Pick<SecretTypeDeps, "meta" | "read"> = {
     n === "nyp-connect"
       ? ({ _id: "s", short_id: "sc-1", name: n, kind: "login", status: "ready", workspace: "team:t", sites: ["myconnect.nyp.org"], created_by: "u", created_at: 0, updated_at: 0 } as SecretMeta)
       : null,
-  read: async (n): Promise<ReadSecret> => ({ id: "s", short_id: "sc-1", name: n, kind: "login", sites: ["myconnect.nyp.org"], payload: { username: "ashot.p", password: PASSWORD } }),
+  read: async (n): Promise<ReadSecret> => ({ id: "s", short_id: "sc-1", name: n, kind: "login", sites: ["myconnect.nyp.org"], payload: { username: "dev.p", password: PASSWORD } }),
 };
 
 const input = (over: Partial<SecretInput>): SecretInput => ({ mode: "vault", target: "#e3", name: "nyp-connect", submit: false, json: false, stepFlags: [], ...over });
@@ -107,7 +107,7 @@ describe("typeSecretInput", () => {
   test("/username types the username", async () => {
     const f = fakePage();
     await typeSecretInput("fill", input({ field: "username" }), { page: f.page, vault, policy: null });
-    expect(f.inserted).toEqual(["ashot.p"]);
+    expect(f.inserted).toEqual(["dev.p"]);
   });
 
   test("a page off the secret's sites gets nothing", async () => {

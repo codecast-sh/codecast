@@ -205,9 +205,9 @@ describe("tool logins", () => {
 
 describe("collectAgentAuthBundle — a fake HOME", () => {
   const live = () => codexBlob(NOW / 1000 + 86400);
-  test("a file still naming laptop paths stays behind alone; Codex and the rest ship (union-line hosts, 2026-10-23)", () => {
+  test("a file still naming laptop paths stays behind alone; Codex and the rest ship (acme-line hosts, 2026-10-23)", () => {
     write(".codex/auth.json", live());
-    write(".netrc", `machine example.test login a password b\n# ${home}/src/union-mobile\n`);
+    write(".netrc", `machine example.test login a password b\n# ${home}/src/acme-mobile\n`);
     const { bundle, skipped } = collectAgentAuthBundle({ home, env: {}, now: NOW, userId: "u1", deviceId: "d1", hostHome: "/home/ubuntu" });
     expect(bundle.files.map((f) => f.path)).toContain("~/.codex/auth.json");
     expect(bundle.files.map((f) => f.path)).not.toContain("~/.netrc");

@@ -73,13 +73,13 @@ describe("stable-context recording", () => {
     const asked: Record<string, any> = {};
     const where = {
       workspace: { kind: "team", id: "t1", name: "Acme" },
-      session: { short_id: "jx1", title: "Sitemap fix", person: "Ashot", lead: null },
+      session: { short_id: "jx1", title: "Sitemap fix", person: "Dev", lead: null },
       work: { task: null, plan: null, project: null },
       seat: { how: "none", handles: [] },
       card: null,
       chain: [],
-      roles: [{ handle: "growth", name: "Growth lead", reports_to: "Ashot", scope: ["Growth"], whole_workspace: false, seat: false }],
-      people: [{ name: "Ashot", role: "admin", is_me: true }],
+      roles: [{ handle: "growth", name: "Growth lead", reports_to: "Dev", scope: ["Growth"], whole_workspace: false, seat: false }],
+      people: [{ name: "Dev", role: "admin", is_me: true }],
     };
     globalThis.fetch = (async (input, init) => {
       const url = String(input);
@@ -92,7 +92,7 @@ describe("stable-context recording", () => {
     expect(asked["https://example.site/cli/org/where"]).toEqual({ api_token: "secret", session: "conversations123" });
     // The org leads; the pool's one <flows> line (flows.md FL7) may sit between it and the feed.
     expect(built!.text).toMatch(/^<org-context workspace="Acme">[\s\S]*<\/org-context>\n\n(<flows>[^\n]*<\/flows>\n\n)?<stable-context mode="team">/);
-    expect(built!.text).toContain("@growth Growth lead · reports to Ashot · looks after Growth");
+    expect(built!.text).toContain("@growth Growth lead · reports to Dev · looks after Growth");
   });
 
   test("leaves the org out when the workspace has none", async () => {
@@ -107,7 +107,7 @@ describe("stable-context recording", () => {
       id: `conversation${i}`, title: `Card ${i}`, updated_at: Date.now() - i * 60_000, message_count: 40,
       preview: Array.from({ length: 4 }, (_, j) => ({ line: j + 1, role: j % 2 ? "assistant" : "user", content: "x".repeat(300) })),
     }));
-    const mods = [{ name: "union", title: "Union", agents: "Name Union rows by id. ".repeat(40), fences: [], objects: [{ prefix: "contact", title: "Contact", fields: [], external: true }] }];
+    const mods = [{ name: "acme", title: "Acme", agents: "Name Acme rows by id. ".repeat(40), fences: [], objects: [{ prefix: "contact", title: "Contact", fields: [], external: true }] }];
     globalThis.fetch = (async (input) => {
       const url = String(input);
       if (url.endsWith("/cli/mods/guide")) return new Response(JSON.stringify({ mods }), { status: 200 });
@@ -144,13 +144,13 @@ describe("stable-context at session start", () => {
   const config = { auth_token: "secret", convex_url: "https://example.cloud" };
   const where = {
     workspace: { kind: "team" as const, id: "t1", name: "Acme" },
-    session: { short_id: "jx7aaaa", title: "Old session", person: "Ashot", lead: { short_id: "jx7bbbb", title: "Lead" } },
+    session: { short_id: "jx7aaaa", title: "Old session", person: "Dev", lead: { short_id: "jx7bbbb", title: "Lead" } },
     work: { task: { short_id: "ct-1", title: "Task" }, plan: null, project: null },
     seat: { how: "owner" as const, handles: ["growth"] },
     card: null,
-    chain: ["Ashot"],
-    roles: [{ handle: "growth", name: "Growth lead", reports_to: "Ashot", scope: ["Growth"], whole_workspace: false, seat: true }],
-    people: [{ name: "Ashot", role: "admin", is_me: true }],
+    chain: ["Dev"],
+    roles: [{ handle: "growth", name: "Growth lead", reports_to: "Dev", scope: ["Growth"], whole_workspace: false, seat: true }],
+    people: [{ name: "Dev", role: "admin", is_me: true }],
   };
   const conversations = [{ id: "conversation1", title: "Prior work", updated_at: Date.now(), message_count: 3, preview: [] }];
   const serve = (fail: string[] = []) => (async (input: unknown) => {
@@ -171,7 +171,7 @@ describe("stable-context at session start", () => {
     globalThis.fetch = (async () => { throw new Error("no network at session start"); }) as unknown as typeof fetch;
     const built = await buildStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7cccccccccccccccc", cacheDir, start: { budgetMs: 1500, source: "startup" } });
     expect(built!.stale).toBe(true);
-    expect(built!.text).toContain("This session: jx7cccc, Ashot's session");
+    expect(built!.text).toContain("This session: jx7cccc, Dev's session");
     expect(built!.text).toContain("Working on: no task or plan is bound to this session yet.");
     expect(built!.text).not.toContain("Spawned by");
     expect(built!.text).toContain("Prior work");

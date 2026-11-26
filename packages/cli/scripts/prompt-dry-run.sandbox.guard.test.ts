@@ -48,7 +48,7 @@ describe("prompt-dry-run.ts: the closed world", () => {
   test.if(process.platform === "darwin" && !!PYTHON)("a replayed agent reads, writes and reaches nothing real, and leaves nothing running", () => {
     const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
     // The real machine as the agent would find it: another repo with a .env and a secret skill under the home folder.
-    const other = path.join(h.dir, "src", "union-mobile", "outreach");
+    const other = path.join(h.dir, "src", "acme-mobile", "server");
     write(path.join(other, ".env"), "GOOGLE_ADS_CLIENT_SECRET=real\n");
     write(path.join(other, ".claude", "skills", "secret", "scripts", "secret"), "#!/bin/sh\necho GOOGLE_ADS_CLIENT_SECRET\n", 0o755);
     // The tree the agent is given to read holds the same two, which stay unreadable even there.

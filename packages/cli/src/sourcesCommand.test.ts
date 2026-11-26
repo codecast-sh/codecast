@@ -19,12 +19,12 @@ describe("sourceAddBody", () => {
   });
 
   test("settings land in config, lists split on commas, blanks drop", () => {
-    expect(sourceAddBody("sentry", "web", { org: "acme", projects: "web, api,", environments: "production", project: "Ops", fingerprintPrefix: " union ", promote: "new,spike", host: " " })).toEqual({
+    expect(sourceAddBody("sentry", "web", { org: "acme", projects: "web, api,", environments: "production", project: "Ops", fingerprintPrefix: " acme ", promote: "new,spike", host: " " })).toEqual({
       provider: "sentry",
       name: "web",
       config: { org: "acme", projects: ["web", "api"], environments: ["production"] },
       project: "Ops",
-      fingerprint_prefix: "union",
+      fingerprint_prefix: "acme",
       promote: ["new", "spike"],
     });
   });
@@ -44,7 +44,7 @@ describe("sourceAddBody", () => {
   });
 
   test("--base-url makes an app source's signed connection in the same step, and belongs to app alone", () => {
-    expect(sourceAddBody("app", "union", { baseUrl: " https://api.union.example/api " })).toEqual({ provider: "app", name: "union", base_url: "https://api.union.example/api" });
+    expect(sourceAddBody("app", "acme", { baseUrl: " https://api.acme.example/api " })).toEqual({ provider: "app", name: "acme", base_url: "https://api.acme.example/api" });
     expect(() => sourceAddBody("posthog", "web", { baseUrl: "https://other" })).toThrow("--base-url belongs to an app source");
   });
 });
@@ -55,17 +55,17 @@ describe("codecast.json", () => {
   test("add writes the nearest codecast.json up to the checkout root, else the root's, and merges", () => {
     const root = tmp();
     fs.mkdirSync(path.join(root, ".git"));
-    const app = path.join(root, "outreach", "backend");
+    const app = path.join(root, "server", "backend");
     fs.mkdirSync(app, { recursive: true });
     expect(codecastJsonPath(app, undefined)).toBe(path.join(root, "codecast.json"));
     fs.writeFileSync(path.join(app, "codecast.json"), "{}");
     expect(codecastJsonPath(app, undefined)).toBe(path.join(app, "codecast.json"));
-    const out = recordInCodecastJson({ name: "union-errors", short_id: "src-5", workspace: "team:k57" }, { cwd: app, write: undefined, ingestKey: "cc_ing_abc", endpoint: "https://convex.codecast.sh/cli/ingest" });
+    const out = recordInCodecastJson({ name: "acme-errors", short_id: "src-5", workspace: "team:k57" }, { cwd: app, write: undefined, ingestKey: "cc_ing_abc", endpoint: "https://convex.codecast.sh/cli/ingest" });
     expect(out).toContain("wrote");
-    recordInCodecastJson({ name: "union", short_id: "src-6", workspace: "team:k57" }, { cwd: app, write: undefined, endpoint: "https://convex.codecast.sh/cli/ingest" });
+    recordInCodecastJson({ name: "acme", short_id: "src-6", workspace: "team:k57" }, { cwd: app, write: undefined, endpoint: "https://convex.codecast.sh/cli/ingest" });
     expect(JSON.parse(fs.readFileSync(path.join(app, "codecast.json"), "utf8"))).toEqual({
       ingestKey: "cc_ing_abc",
-      sources: { union: { id: "src-6", workspace: "team:k57" }, "union-errors": { id: "src-5", workspace: "team:k57" } },
+      sources: { acme: { id: "src-6", workspace: "team:k57" }, "acme-errors": { id: "src-5", workspace: "team:k57" } },
     });
     expect(committedIngestKey(app)).toBe("cc_ing_abc");
   });

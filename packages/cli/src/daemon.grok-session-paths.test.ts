@@ -36,8 +36,8 @@ describe("grokSessionCwdFromTranscriptPath", () => {
   });
 
   test("falls back to decoding the url-encoded grandparent dir when summary.json is absent", () => {
-    const updates = makeSessionDir("%2FUsers%2Fashot%2Fsrc%2Fcodecast");
-    expect(grokSessionCwdFromTranscriptPath(updates)).toBe("/Users/ashot/src/codecast");
+    const updates = makeSessionDir("%2FUsers%2Fdev%2Fsrc%2Fcodecast");
+    expect(grokSessionCwdFromTranscriptPath(updates)).toBe("/Users/dev/src/codecast");
   });
 
   test("a long-path hash dir (not %-decodable to an absolute path) yields undefined, never garbage", () => {

@@ -406,7 +406,7 @@ describe("the climb's dry run", () => {
     } finally { delete process.env.FAKE_BASE_ABSENT; }
   });
 
-  // From the first real climb (Union in-9).
+  // From the first real climb (Acme in-9).
   test("a void L0 check is pending, never a pass: nothing is promoted until a re-run lands a real verdict", async () => {
     await gauge(io(), dir, { card: CARD, base });
     await admit(io(), dir, proposed);
@@ -472,7 +472,7 @@ describe("the climb's dry run", () => {
     await expect(gauge(io(), `${dir}-none`, { card: { ...CARD, production_lift: undefined }, base })).rejects.toThrow("production_lift");
   });
 
-  // From the first run of the climb through the flow (Union in-9, ct-97125): an L0 unit-test env with no case set in
+  // From the first run of the climb through the flow (Acme in-9, ct-97125): an L0 unit-test env with no case set in
   // codecast beside an L2 env with one. The station ran 50 minutes and ended on a refusal, filing nothing.
   test("an env with no case set in codecast runs as before beside one that has a set, through the climb's own runs", async () => {
     const opened: string[] = [];
@@ -639,15 +639,15 @@ describe("the climb's dry run", () => {
   });
 
   test("the eval gate is resolved through its wrapper and the command after --, run on the base's copies, and named when it cannot be", async () => {
-    // Union's shape: bash $project_path/backend/scripts/eval/proof-tree.sh ... -- bun scripts/line.ts eval, run from the repo root.
-    fs.mkdirSync(path.join(repo, "outreach/backend/scripts/eval"), { recursive: true });
-    fs.writeFileSync(path.join(repo, "outreach/backend/scripts/eval/wrap.sh"), `while [ "$1" != "--" ]; do shift; done; shift\ncd "$(dirname "$0")/../.." && exec "$@"\n`);
-    fs.writeFileSync(path.join(repo, "outreach/backend/scripts/gate.mjs"), `import fs from "node:fs";\nfs.writeFileSync(process.env.run_dir + "/reps.json", JSON.stringify({ worse: false }));\n`);
+    // Acme's shape: bash $project_path/backend/scripts/eval/proof-tree.sh ... -- bun scripts/line.ts eval, run from the repo root.
+    fs.mkdirSync(path.join(repo, "server/backend/scripts/eval"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "server/backend/scripts/eval/wrap.sh"), `while [ "$1" != "--" ]; do shift; done; shift\ncd "$(dirname "$0")/../.." && exec "$@"\n`);
+    fs.writeFileSync(path.join(repo, "server/backend/scripts/gate.mjs"), `import fs from "node:fs";\nfs.writeFileSync(process.env.run_dir + "/reps.json", JSON.stringify({ worse: false }));\n`);
     fs.writeFileSync(path.join(repo, ".codecast/line.toml"), `[line.commands]\neval = "bash $project_path/backend/scripts/eval/wrap.sh --name x -- bun scripts/gate.mjs eval"\n`);
     g("add", "-A"); g("commit", "-q", "-m", "gate behind a wrapper");
     base = g("rev-parse", "HEAD");
     branch("climb/good2", { "effect.txt": "dev=0.06\nheld=0.06\n" });
-    branch("climb/gatehack2", { "outreach/backend/scripts/gate.mjs": `import fs from "node:fs";\nfs.writeFileSync(process.env.run_dir + "/reps.json", "{}");\n`, "effect.txt": "dev=0.2\nheld=0.2\n" });
+    branch("climb/gatehack2", { "server/backend/scripts/gate.mjs": `import fs from "node:fs";\nfs.writeFileSync(process.env.run_dir + "/reps.json", "{}");\n`, "effect.txt": "dev=0.2\nheld=0.2\n" });
     await gauge(io(), dir, { card: CARD, base });
     await admit(io(), dir, [{ branch: "climb/good2", hypothesis: "h", predicted_delta: 0.06 }, { branch: "climb/gatehack2", hypothesis: "h", predicted_delta: 0.2 }]);
     // The run fills $project_path with the checkout it started in: the repo root, where backend/ is not.

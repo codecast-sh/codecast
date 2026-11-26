@@ -38,7 +38,7 @@ describe("a settle finds a transcript born while an index walk was in flight", (
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "settle-fresh-"));
     const priorHome = process.env.HOME;
     const priorConfig = process.env.CODECAST_DIR;
-    const project = path.join(home, ".claude", "projects", "-Users-ashot-src-union-mobile--codecast-worktrees-agentwatch-trial-ct-59925");
+    const project = path.join(home, ".claude", "projects", "-Users-dev-src-acme-mobile--codecast-worktrees-agentwatch-trial-ct-59925");
     const file = path.join(project, `${ID}.jsonl`);
     let release!: () => void;
     let reached!: () => void;

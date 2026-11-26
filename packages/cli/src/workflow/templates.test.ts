@@ -17,16 +17,16 @@ import { BUILTIN_WORKFLOW_TEMPLATES, LINE_TEMPLATE_FILES, inlineTemplateFiles, r
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
 import type { WorkflowGraph } from "./types";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
-import { UNION_PROFILE } from "../test-helpers/unionLineProfile";
+import { ACME_PROFILE } from "../test-helpers/acmeLineProfile";
 isolateCodecastDirEachTest("cast-wf-state-");
 
 const TEMPLATE_DIR = path.join(import.meta.dir, "templates");
 const AGENT_NODES = ["ground", "plan", "analyze", "prove", "prove_line", "implement", "implement_line", "review", "card_write"];
 const from = (graph: WorkflowGraph, id: string) => graph.edges.filter((e) => e.from === id).map((e) => `${e.to}:${e.condition ?? ""}`);
 
-// Union's profile and a repo with none: the template must run on both.
+// Acme's profile and a repo with none: the template must run on both.
 const profileVars = (toml: string) => lineProfileVars(resolveLineProfile(parseLineProfileText(toml).values).profile);
-const UNION_VARS = profileVars(UNION_PROFILE);
+const ACME_VARS = profileVars(ACME_PROFILE);
 const EMPTY_VARS = profileVars("");
 
 describe("line.cast template", () => {
@@ -295,10 +295,10 @@ describe("line.cast template", () => {
 
   test("ship: a landed ship watches the cause, with or without a ship command; a refused ship ends the run", () => {
     expect(fired("ship", { outcome: "success", ...EMPTY_VARS })).toEqual(["watch"]);
-    expect(fired("ship", { outcome: "success", ...UNION_VARS })).toEqual(["watch"]);
-    expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...UNION_VARS })).toEqual(["exit"]);
+    expect(fired("ship", { outcome: "success", ...ACME_VARS })).toEqual(["watch"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...ACME_VARS })).toEqual(["exit"]);
     expect(fired("ship", { outcome: "failure", "ship.exit_code": "1", ...EMPTY_VARS })).toEqual(["exit"]);
-    expect(fired("ship", { outcome: "failure", "ship.exit_code": "3", ...UNION_VARS })).toEqual(["rebase"]);
+    expect(fired("ship", { outcome: "failure", "ship.exit_code": "3", ...ACME_VARS })).toEqual(["rebase"]);
   });
 
   test("ship: CI red (exit 7) goes back to the builder for three rounds a run, and a fourth red ends it not merged", () => {
@@ -338,18 +338,18 @@ describe("line.cast template", () => {
     };
   };
 
-  test("renders with Union's profile: its commands, principles, prompting, budget and watch days, and no $line left", () => {
-    const { prompts, scripts } = rendered(UNION_VARS);
+  test("renders with Acme's profile: its commands, principles, prompting, budget and watch days, and no $line left", () => {
+    const { prompts, scripts } = rendered(ACME_VARS);
     for (const t of [...prompts, ...Object.values(scripts)]) expect(t).not.toMatch(/\$line\./);
-    expect(scripts.verify).toContain("bash -c 'bun outreach/backend/scripts/line.ts check --base $default_branch'");
-    expect(scripts.red).toContain("cmd='bun outreach/backend/scripts/line.ts prove --task $task_id --dir $run_dir'");
-    expect(scripts.eval).toContain("cmd='bun outreach/backend/scripts/line.ts eval --base $default_branch --dir $run_dir --out $run_dir/reps.json'");
+    expect(scripts.verify).toContain("bash -c 'bun server/backend/scripts/line.ts check --base $default_branch'");
+    expect(scripts.red).toContain("cmd='bun server/backend/scripts/line.ts prove --task $task_id --dir $run_dir'");
+    expect(scripts.eval).toContain("cmd='bun server/backend/scripts/line.ts eval --base $default_branch --dir $run_dir --out $run_dir/reps.json'");
     expect(scripts.eval).toContain("cast line eval-result --reps \"$dir/reps.json\" --out \"$dir/eval-result.json\"");
     expect(scripts.ship).toContain("--run $run_id --dir $run_dir --into $default_branch'");
     expect(scripts.watch).toBe("cast task update 'ct-1' --watch-days '7'");
     const all = prompts.join("\n");
-    expect(all).toContain("outreach/docs/line/principles.md");
-    expect(all).toContain("outreach/docs/line/prompting.md");
+    expect(all).toContain("server/docs/line/principles.md");
+    expect(all).toContain("server/docs/line/prompting.md");
     expect(all).toContain("about 400 changed lines");
   });
 

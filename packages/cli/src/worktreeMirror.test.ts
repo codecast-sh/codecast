@@ -23,7 +23,7 @@ function fakeGit(calls: string[] = []): GitRunner {
     const key = args.join(" ");
     calls.push(`${cwd} :: ${key}`);
     if (key === "worktree list --porcelain") return LISTING;
-    if (key === "remote get-url origin") return "git@github.com:union/union-mobile.git\n";
+    if (key === "remote get-url origin") return "git@github.com:acme/acme-mobile.git\n";
     if (key === "rev-parse --abbrev-ref HEAD") return "main\n";
     if (key === "symbolic-ref --short refs/remotes/origin/HEAD") return "origin/main\n";
     if (key.startsWith("status --porcelain")) return cwd === WT ? " M app.ts\n" : "";
@@ -56,7 +56,7 @@ describe("buildWorktreeMirror", () => {
 
   test("publishes one worktrees row under the repository's key", async () => {
     const mirror = (await buildWorktreeMirror(ROOT, { now: () => 5 }, fakeGit()))!;
-    expect(mirror.repository).toBe("union/union-mobile");
+    expect(mirror.repository).toBe("acme/acme-mobile");
     expect(mirror.default_branch).toBe("main");
     expect(mirror.head_sha).toBe("aaaa111");
     expect(mirror.commits).toEqual([]);

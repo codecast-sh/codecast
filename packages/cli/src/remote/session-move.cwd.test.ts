@@ -15,12 +15,12 @@ function transcript(launch: string, cwds: string[]): string {
 
 describe("cwdFromTranscript", () => {
   test("an agent's cd into a subfolder does not move the session there", () => {
-    const root = "/Users/ashot/src/codecast";
+    const root = "/Users/dev/src/codecast";
     expect(cwdFromTranscript(transcript(root, [root, `${root}/packages/web`, `${root}/packages/web`]))).toBe(root);
   });
 
   test("the newest launch-folder entry wins after a round trip", () => {
-    const here = "/Users/ashot/src/codecast";
+    const here = "/Users/dev/src/codecast";
     expect(cwdFromTranscript(transcript(here, ["/home/ubuntu/work/codecast", here]))).toBe(here);
   });
 

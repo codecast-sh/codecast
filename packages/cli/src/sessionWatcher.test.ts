@@ -246,7 +246,7 @@ describe("SessionWatcher", () => {
   test("isTestProjectDir matches harness markers", () => {
     expect(isTestProjectDir("-private-tmp-codecast-test-cwd-D1V9e5")).toBe(true);
     expect(isTestProjectDir("-tmp-codecast-fake-claude-AbC")).toBe(true);
-    expect(isTestProjectDir("-Users-ashot-src-codecast")).toBe(false);
+    expect(isTestProjectDir("-Users-dev-src-codecast")).toBe(false);
     expect(isTestProjectDir("real-project-abc123")).toBe(false);
   });
 

@@ -59,11 +59,11 @@ function listTree(dir: string): string[] {
 
 describe("localFolderFor", () => {
   test("maps another user's home onto this one", () => {
-    expect(localFolderFor("/Users/m1/src/family", "/Users/ashot")).toBe("/Users/ashot/src/family");
-    expect(localFolderFor("/home/dev/work/x", "/Users/ashot")).toBe("/Users/ashot/work/x");
+    expect(localFolderFor("/Users/m1/src/family", "/Users/dev")).toBe("/Users/dev/src/family");
+    expect(localFolderFor("/home/dev/work/x", "/Users/dev")).toBe("/Users/dev/work/x");
   });
   test("leaves paths outside a home alone", () => {
-    expect(localFolderFor("/opt/data/x", "/Users/ashot")).toBe("/opt/data/x");
+    expect(localFolderFor("/opt/data/x", "/Users/dev")).toBe("/opt/data/x");
   });
 });
 

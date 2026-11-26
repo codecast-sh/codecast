@@ -25,7 +25,7 @@ describe("extractInlineImages", () => {
 
   test("leaves output without a marker byte-identical", () => {
     // The common case by far — this must not reformat ordinary tool output.
-    const out = "total 4\ndrwxr-xr-x  3 ashot  staff   96 Aug 14 10:00 .\n";
+    const out = "total 4\ndrwxr-xr-x  3 dev  staff   96 Aug 14 10:00 .\n";
     expect(extractInlineImages(out)).toEqual({ text: out, paths: [] });
   });
 
@@ -61,7 +61,7 @@ describe("extractInlineImages", () => {
   });
 
   test("handles a path containing spaces", () => {
-    const p = "/Users/ashot/My Screenshots/shot 1.png";
+    const p = "/Users/dev/My Screenshots/shot 1.png";
     expect(extractInlineImages(inlineImageMarker(p)).paths).toEqual([p]);
   });
 
