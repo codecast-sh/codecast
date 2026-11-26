@@ -317,7 +317,7 @@ export function narrowSessionScan<T>(pool: readonly T[], lowerQuery: string, las
  *  on its score from its age alone. */
 const MAX_LIFT = Math.max(...Object.values(STATE_LIFT));
 
-/** Match and rank rows best first, keeping at most `cap`. Rows given newest
+/** Match and rank rows best first, keeping at most `limit`. Rows given newest
  *  first (`newestFirst`) stop the scan once a row's age alone ranks it below
  *  every row kept: every later row is older still, so the answer is the same
  *  as a full scan's. */
@@ -325,7 +325,7 @@ export function rankSessions<T extends HaystackRow & { title?: string; updated_a
   rows: Iterable<T>,
   lowerQuery: string,
   standingOf: (row: T) => SessionStanding,
-  cap: number,
+  limit: number,
   now = Date.now(),
   opts: {
     newestFirst?: boolean;
@@ -340,7 +340,7 @@ export function rankSessions<T extends HaystackRow & { title?: string; updated_a
   const personify = identityPrefsNow();
   const out = opts.out;
   if (out) { out.q = q; out.matched = []; out.complete = true; }
-  // The best `cap` rows of all hits and of the strong ones (tier < 3), worst
+  // The best `limit` rows of all hits and of the strong ones (tier < 3), worst
   // last; dropWeakHits chooses between them by how many strong hits there are.
   type Hit = { row: T; score: number; tier: number; at: number };
   const all: Hit[] = [];
@@ -348,15 +348,15 @@ export function rankSessions<T extends HaystackRow & { title?: string; updated_a
   let strongCount = 0;
   const before = (a: Hit, b: Hit) => a.score < b.score || (a.score === b.score && a.at > b.at);
   const keep = (top: Hit[], hit: Hit) => {
-    if (top.length === cap && !before(hit, top[cap - 1])) return;
-    let i = top.length < cap ? top.length : cap - 1;
+    if (top.length === limit && !before(hit, top[limit - 1])) return;
+    let i = top.length < limit ? top.length : limit - 1;
     while (i > 0 && before(hit, top[i - 1])) { top[i] = top[i - 1]; i--; }
     top[i] = hit;
   };
-  const bound = (top: Hit[], floor: number) => top.length === cap && top[cap - 1].score <= floor;
+  const bound = (top: Hit[], floor: number) => top.length === limit && top[limit - 1].score <= floor;
   for (const row of rows) {
     const at = row.updated_at ?? 0;
-    if (opts.newestFirst && cap > 0) {
+    if (opts.newestFirst && limit > 0) {
       const floor = Math.log2(1 + Math.max(0, now - at) / 3_600_000) - MAX_LIFT;
       if (bound(strong, floor) && (strongCount >= WEAK_HIT_CUTOFF || bound(all, floor))) {
         if (out) out.complete = false;

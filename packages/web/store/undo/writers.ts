@@ -247,6 +247,11 @@ export const UNDO_WRITERS: Record<string, UndoWriter> = {
 
 /** Local-first keys off the patch rail that need no writer, with the reason. */
 export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
+  callDetails:
+    "Written by setCallAgentFace and the speaker corrections (assignCallSpeaker, confirmCallSpeaker, moveCallLineSpeaker), which are never undoable.",
+  myVoiceprint: "Written only by setVoiceIdEnabled and deleteMyVoiceprints, which delete voice samples and are never undoable.",
+  orgPersonDetails:
+    "Written by setOrgPersonProfile, whose spec carries an inverse with the prior about text; nothing else writes it.",
   anchors: "Written only by setAnchorCleanChat, which re-sends the seat its opening and is never undoable.",
   capabilityBindings: "Written only by bindCapability, a create; creates are never undoable.",
   checkouts: "Written only by askCheckout, which sends a message or files a finding and is never undoable.",

@@ -35,8 +35,9 @@ const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
  * and each enrichment they caught re-throwing moved onto useQueryNoThrow.
  * Down to 22 on 2026-10-24: ActivityFeed's feed query moved into hooks/useTeamFeed.
  * Down to 21 on 2026-11-09: app/team/activity/page.tsx no longer calls useQuery directly.
+ * Down to 19 on 2026-11-26: the plan page and PlanDetailPanel read plan details from the store (planDetails).
  */
-const PIN = 21;
+const PIN = 19;
 
 const result = checkRatchet({
   name: "raw useQuery outside hooks",

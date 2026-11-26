@@ -2,7 +2,7 @@
 // jsdom has no layout, so j/k (which measure lines) land anywhere: tests move
 // between lines with counts and G instead.
 
-// Import it after installDom(), and call useHarness() in the test file.
+// Import it after installDom(), and call installHarness() in the test file.
 
 import { afterEach } from "bun:test";
 import { EditorState, type Extension } from "@codemirror/state";
@@ -15,7 +15,7 @@ import { splitEngineKeys } from "../keys";
 const views: EditorView[] = [];
 const offs: Array<() => void> = [];
 
-export function useHarness(): void {
+export function installHarness(): void {
   afterEach(() => {
     for (const v of views.splice(0)) v.destroy();
     for (const off of offs.splice(0)) off();

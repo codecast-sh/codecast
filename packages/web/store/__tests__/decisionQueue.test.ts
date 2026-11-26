@@ -237,20 +237,36 @@ describe("answering a decision", () => {
     expect(parseDecisionAnswer(sent.content)).toEqual({ id: "d1", question: row.question, answer: "Approve" });
   });
 
-  it("is idempotent — answering twice does not double-send", async () => {
+  it("is idempotent — picking the recorded answer again does not double-send", async () => {
     const convId = convexId("conv2");
     useInboxStore.setState({
       sessionDecisions: { d2: decision("d2", { conversation_id: convId }) },
     } as any);
 
     useInboxStore.getState().answerDecision("d2", { index: 0 });
-    useInboxStore.getState().answerDecision("d2", { index: 1 });
+    useInboxStore.getState().answerDecision("d2", { index: 0 });
     await new Promise((r) => setTimeout(r, 0));
 
     const after = useInboxStore.getState().sessionDecisions.d2;
     expect(after.answer_index).toBe(0);
     const pending = useInboxStore.getState().pendingMessages[convId] ?? [];
     expect(pending.length).toBe(1);
+  });
+
+  it("changing a recorded answer sends one more message naming the answer it replaces", async () => {
+    const convId = convexId("conv2b");
+    useInboxStore.setState({
+      sessionDecisions: { d2b: decision("d2b", { conversation_id: convId }) },
+    } as any);
+
+    useInboxStore.getState().answerDecision("d2b", { index: 0 });
+    useInboxStore.getState().answerDecision("d2b", { index: 1 });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(useInboxStore.getState().sessionDecisions.d2b.answer_index).toBe(1);
+    const pending = useInboxStore.getState().pendingMessages[convId] ?? [];
+    expect(pending.length).toBe(2);
+    expect(pending.some((m: any) => m.content.includes("This changes my earlier answer, which was: Yes"))).toBe(true);
   });
 
   it("dismissing resolves the row without messaging the session", async () => {

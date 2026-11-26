@@ -15,6 +15,9 @@ const restoreGlobals = replaceGlobals({
   document: dom.window.document,
   navigator: dom.window.navigator,
   location: dom.window.location,
+  // Prism (reached through the markdown renderer) polyfills Element.prototype at import.
+  Element: dom.window.Element,
+  HTMLElement: dom.window.HTMLElement,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {

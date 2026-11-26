@@ -30,7 +30,8 @@ afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 // The feeders are live Convex subscriptions; the tab paints from the store,
 // so the generic feeder is a no-op here and the store is seeded directly.
-mock.module("../../../../hooks/useSyncCollection", () => ({ useSyncCollection: () => ({ ready: true }), keyRowsBy: (rows: any[]) => rows ?? [] }));
+const realSyncCollection = { ...(await import("../../../../hooks/useSyncCollection")) };
+mock.module("../../../../hooks/useSyncCollection", () => ({ ...realSyncCollection, useSyncCollection: () => ({ ready: true }), keyRowsBy: (rows: any[]) => rows ?? [] }));
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
 mock.module("../../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: { name: string }) => React.createElement("span", { "data-avatar": name }) }));
 // The card names its assignee through AssigneeFace now, not the comment

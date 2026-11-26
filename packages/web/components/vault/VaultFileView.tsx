@@ -2,7 +2,8 @@
 // editor (components/code, loaded lazily), images, media and PDFs draw
 // themselves, and anything else gets an honest dead end.
 
-import { lazy, memo, Suspense, useMemo, useState } from "react";
+import { memo, Suspense, useMemo, useState } from "react";
+import { lazyNamed } from "../../lib/lazyNamed";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FileQuestion, FileWarning } from "lucide-react";
 import { VAULT_MAX_PREVIEW_BYTES, vaultFileKind } from "@codecast/shared/contracts";
@@ -62,7 +63,7 @@ function NoPreview({
 // CodeMirror. Files prewarms it once the browser is idle, so the first source
 // file opens without waiting on the download.
 const loadCodeFileView = () => import("../code/CodeFileView");
-const CodeFileView = lazy(loadCodeFileView);
+const CodeFileView = lazyNamed(loadCodeFileView, "CodeFileView");
 if (typeof window !== "undefined") {
   const prewarm = () => void loadCodeFileView().catch(() => {});
   if (typeof requestIdleCallback === "function") requestIdleCallback(prewarm, { timeout: 5000 });

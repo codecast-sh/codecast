@@ -79,7 +79,6 @@ export type InstallAsApp = {
 /** The "Install as app" act for one page. `gate` carries a gated page's keys when the caller holds them. */
 export function useInstallAsApp(slug: string, gate: GateKeys = {}): InstallAsApp {
   const convex = useConvex();
-  const apps = useDesktopApps();
   const [fallback, setFallback] = useState(false);
   // A handoff judged taken only because the page lost focus (a tab switch, the address bar) may have reached nothing.
   const judgedTaken = useRef(false);
@@ -90,7 +89,10 @@ export function useInstallAsApp(slug: string, gate: GateKeys = {}): InstallAsApp
       setFallback(!handled);
     });
   }, [slug, k, e, m]);
+  // The bridge is read at the press, not subscribed: a card that only offers
+  // the act has no reason to listen for the bridge arriving.
   const install = useCallback(() => {
+    const apps = desktopApps();
     if (apps) return void installFromDesktop(convex, apps, slug, { k, e, m });
     // Asking again after a handoff that seemed taken means it was not: offer the download choice, which can still retry.
     if (judgedTaken.current) {
@@ -98,7 +100,7 @@ export function useInstallAsApp(slug: string, gate: GateKeys = {}): InstallAsApp
       return setFallback(true);
     }
     handoff();
-  }, [apps, convex, handoff, slug, k, e, m]);
+  }, [convex, handoff, slug, k, e, m]);
   return { install, fallback, closeFallback: () => setFallback(false), retry: handoff };
 }
 

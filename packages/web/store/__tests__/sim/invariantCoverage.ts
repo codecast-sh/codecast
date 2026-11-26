@@ -49,6 +49,7 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   sidePanelSessionId: "local panel state, no server truth",
   callRecordings: "a call's video files, fed per view by useCallRecordings, which the sim does not mount",
   callRecordingCalls: "a call's recording state, fed per view by useCallRecordings (the same answer as callRecordings), which the sim does not mount",
+  planDetails: "fed by an opened plan's page (usePlanDetail) and the sync host's read-ahead (useSyncPlanDetailsAhead), bespoke hooks the sim does not mount",
   deployDetails: "fed by an opened deploy's own surface (hooks/useDeployDetail), a view the sim does not open",
   shippingRuns: "fed by the same workflow_runs.shippingRuns answer as shippingShippers, which INV-fixpoint compares; the sim's feed table (REGISTERED_FEEDS) holds one key per query, so it feeds shippingShippers only",
   deployTargets: "fed by the same deployTargets.view answer as teamDeploys, which INV-fixpoint compares; the sim's feed table (REGISTERED_FEEDS) holds one key per query, so it feeds teamDeploys only",

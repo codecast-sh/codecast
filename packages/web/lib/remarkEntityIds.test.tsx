@@ -75,7 +75,7 @@ describe("authored local file links", () => {
     const html = render("[browser instructions](/Users/ashot/.codex/AGENTS.md:1042)");
     expect(html).toContain('href="/files?path=%2FUsers%2Fashot%2F.codex%2FAGENTS.md&amp;l=1042"');
     expect(html).toContain('class="fs-link"');
-    expect(html).toContain('title="Open /Users/ashot/.codex/AGENTS.md in Files"');
+    expect(html).toContain('title="Open /Users/ashot/.codex/AGENTS.md:1042 in the editor"');
     expect(html).toContain('>browser instructions</a>');
   });
 

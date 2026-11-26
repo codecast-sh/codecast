@@ -3,6 +3,7 @@ import { useTrackedStore, sessionsWakeSig, filterInboxScope, resolveInboxViewMod
 import { priorityPlaceReader, priorityRanksSig, sessionPriorityLinkSig, sortQueueByPriority } from "../store/priorityOrder";
 import { agentStatusAt } from "../lib/liveness";
 import { makeCollectionSig } from "../store/wakeSig";
+import { mapSlots } from "../store/simSlot";
 import {
   askedOfViewer,
   decisionQueueItems,
@@ -98,6 +99,11 @@ function blockedSinceFor(conversationId: string, updatedAt: number | undefined):
   const stamp = Math.min(updatedAt ?? Date.now(), Date.now());
   blockedSince.set(conversationId, stamp);
   return stamp;
+}
+
+/** The sim's seam: each window stamps its own first sightings. */
+export function __decisionQueueSimSlots() {
+  return mapSlots({ blockedSince });
 }
 
 /** Drop the stamp when a session stops asking, so a later ask is timed fresh. */

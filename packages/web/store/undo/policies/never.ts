@@ -349,6 +349,13 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   // Sharing
   setCallShareVideo: SHARING,
   setCallAgentFace: SETTINGS,
+  // A voice note's speaker corrections: each assigns the note's speakers or
+  // segments whole, and the same naming controls set them again.
+  assignCallSpeaker: never("speaker correction: names who spoke on a call, and the same speaker controls name them again"),
+  confirmCallSpeaker: never("speaker correction: confirms a suggested speaker, and the same speaker controls rename them"),
+  moveCallLineSpeaker: never("speaker correction: moves one line to another voice, and the same control moves it back"),
+  setVoiceIdEnabled: never("settings: turning it off deletes every voice sample, which the server cannot bring back"),
+  deleteMyVoiceprints: DELETE,
   deleteCallFrameShare: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,

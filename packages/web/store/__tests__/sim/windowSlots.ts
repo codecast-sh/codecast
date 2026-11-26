@@ -420,6 +420,8 @@ const SEAMS: Record<string, () => SlotSeam> = {
     load<typeof import("../../../hooks/useBootstrapCollection")>("../../../hooks/useBootstrapCollection").__bootstrapSimSlots() as SlotSeam,
   "hooks/useSyncChangeFeed.ts": () =>
     load<typeof import("../../../hooks/useSyncChangeFeed")>("../../../hooks/useSyncChangeFeed").__changeFeedSimSlots() as SlotSeam,
+  "hooks/useDecisionQueue.ts": () =>
+    load<typeof import("../../../hooks/useDecisionQueue")>("../../../hooks/useDecisionQueue").__decisionQueueSimSlots() as SlotSeam,
   "hooks/reconcileCrawl.ts": () =>
     load<typeof import("../../../hooks/reconcileCrawl")>("../../../hooks/reconcileCrawl").__reconcileCrawlSimSlots() as SlotSeam,
 };
