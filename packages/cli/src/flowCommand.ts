@@ -530,7 +530,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const { runHandsVia } = await import("./lineTrialBranch.js");
         const { putChangeInWorktree } = await import("./workflow/flowChange.js");
         await putChangeInWorktree(top, worktree, earlier, change, task!, async () => {
-          const ws = await cast(["ws", "acquire", worktree, "--branch", change!.branch, "--skip-pool", "--json"], top);
+          // No port: no station of a change runs a dev server of its own, and `cast dev` takes a free one if asked (ct-101923).
+          const ws = await cast(["ws", "acquire", worktree, "--branch", change!.branch, "--skip-pool", "--no-ports", "--json"], top);
           if (ws.code !== 0) { console.error(acquireFailureLine(worktree, ws.out, ws.err)); process.exit(1); }
         }, runHandsVia((route, body) => deps.cliPost(route, body))).catch((err: Error) => { console.error(err.message); process.exit(1); });
         writeFrozenChange(runDir, change);

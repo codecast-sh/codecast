@@ -90,7 +90,8 @@ export async function preparePlacedChange(projectPath: string, runDir: string, p
   const change: FrozenChange = { ...placed, tip, pushed: true, ...(runId ? { run: runId } : {}) };
   const { putChangeInWorktree } = await import("./flowChange.js");
   await putChangeInWorktree(projectPath, change.worktree, earlier, change, opts.task ?? change.worktree, async () => {
-    const ws = await cast(["ws", "acquire", change.worktree, "--branch", change.branch, "--skip-pool", "--json"], projectPath);
+    // No port: no station of a change runs a dev server of its own, and `cast dev` takes a free one if asked (ct-101923).
+    const ws = await cast(["ws", "acquire", change.worktree, "--branch", change.branch, "--skip-pool", "--no-ports", "--json"], projectPath);
     if (ws.code !== 0) throw new Error(acquireFailureWords(change.worktree, ws.out, ws.err));
   }, opts.hands);
   writeFrozenChange(runDir, change);

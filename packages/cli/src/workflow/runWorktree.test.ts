@@ -397,6 +397,32 @@ describe("a run that ends without landing", () => {
     expect(fs.readFileSync(path.join(fixTree(), "NOTES.md"), "utf8")).toBe("half a note\n");
   }, 90_000);
 
+  // ct-101923: forty kept trees of unlanded change runs held every port slot of a laptop.
+  test("a change run that ends unmerged keeps its tree for its work but holds no port", async () => {
+    const { acquireWorkspace, releaseWorkspace } = await import("../workspace/lifecycle.js");
+    const { readState } = await import("../workspace/contract.js");
+    const runDir = lineRunDir(repoRoot, FIX);
+    fs.mkdirSync(runDir, { recursive: true });
+    const tip = git(repoRoot, "rev-parse", `codecast/${FIX}`);
+    fs.writeFileSync(path.join(runDir, "change.json"), JSON.stringify({ worktree: FIX, branch: `codecast/${FIX}`, tip }));
+    const log = console.log;
+    console.log = () => {};
+    try { await releaseEndedRunTree(repoRoot, { worktree: FIX, run_dir: runDir }); } finally { console.log = log; }
+    expect(fs.existsSync(fixTree())).toBe(true);
+    expect(readState(repoRoot, FIX)).toMatchObject({ noPorts: true, ports: {} });
+    const other = await acquireWorkspace(repoRoot, "another-run", { ...OPTS, skipPool: true });
+    expect(other.workspace.ports.web).toBe(47391);
+    await releaseWorkspace(repoRoot, "another-run");
+  }, 60_000);
+
+  test("a change run's tree put back mid-run takes no port", async () => {
+    const { readState } = await import("../workspace/contract.js");
+    fs.rmSync(fixTree(), { recursive: true, force: true });
+    expect(await restoreRunWorktree(repoRoot, FIX, `codecast/${FIX}`, { noPorts: true })).toBe("restored");
+    expect(readState(repoRoot, FIX)).toMatchObject({ noPorts: true, ports: {}, state: "ready" });
+    expect(git(fixTree(), "log", "-1", "--format=%s")).toBe("the built change");
+  }, 60_000);
+
   test("parked at its gate when its runner went away, its tree is released and the resume with the answer restores the same content", async () => {
     const graph = graphOf(`
       decide [label="Decide", shape=hexagon]
