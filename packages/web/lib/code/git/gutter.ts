@@ -646,14 +646,6 @@ const splitPlugin = ViewPlugin.fromClass(
 
 // ── the per-editor runner ───────────────────────────────────────────────────
 
-let focusedView: EditorView | null = null;
-
-/** The editor git commands act on when the caller names none: the last one
- *  focused that has a git gutter. */
-export function lastGitView(): EditorView | null {
-  return focusedView && focusedView.dom.isConnected && hasGitGutter(focusedView.state) ? focusedView : null;
-}
-
 const RECOMPUTE_MS = 200;
 
 const runner = ViewPlugin.fromClass(
@@ -661,12 +653,10 @@ const runner = ViewPlugin.fromClass(
     private timer: ReturnType<typeof setTimeout> | null = null;
     private readonly release = holdGitStatusFeed();
     constructor(readonly view: EditorView) {
-      if (view.hasFocus || !focusedView) focusedView = view;
       if (view.state.field(gitDiffField, false)?.pending) this.schedule();
     }
     update(u: ViewUpdate) {
       if (u.docChanged) this.schedule();
-      if (u.focusChanged && u.view.hasFocus) focusedView = u.view;
       const config = u.state.facet(gitConfig);
       if (config && u.startState.field(savedDocField, false) !== u.state.field(savedDocField, false)) {
         requestGitStatusRefresh(config.vaultId, { fresh: true, delayMs: 150 });
@@ -694,7 +684,6 @@ const runner = ViewPlugin.fromClass(
     destroy() {
       if (this.timer) clearTimeout(this.timer);
       this.release();
-      if (focusedView === this.view) focusedView = null;
     }
   },
 );

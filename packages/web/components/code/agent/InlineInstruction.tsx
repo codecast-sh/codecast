@@ -14,7 +14,7 @@ import { KeyCap } from "../../KeyCap";
 import { isMac } from "../../../shortcuts";
 import { inlineDraft, useAgentStore, type InlineRequest } from "../../../lib/code/agent/agentStore";
 import { newSessionText, rangeLabel, sendInstruction } from "../../../lib/code/agent/compose";
-import { vaultRootOf } from "../../../lib/code/agent/live";
+import { composeInVault } from "../../../lib/code/agent/live";
 import { SessionMark } from "./SessionMark";
 
 export const InlineInstruction = memo(function InlineInstruction({ request }: { request: InlineRequest }) {
@@ -59,10 +59,8 @@ export const InlineInstruction = memo(function InlineInstruction({ request }: { 
         else requestAnimationFrame(() => boxRef.current?.focus());
       },
       newSession: () => {
-        const root = vaultRootOf(request.vaultId);
-        if (!root) return false;
         const text = boxRef.current?.value.trim() ?? "";
-        useInboxStore.getState().openCompose(`${newSessionText(request.range)}${text}`, { projectPath: root });
+        if (!composeInVault(request.vaultId, `${newSessionText(request.range)}${text}`)) return false;
         close();
         return true;
       },

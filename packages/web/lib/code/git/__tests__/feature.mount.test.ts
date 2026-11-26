@@ -62,6 +62,13 @@ test("a tracked file gets its gutter and the branch shows in the status bar", as
   await until(() => host.view.dom.querySelector(".cm-git-branch")?.textContent === "main ↑2 ↓1", "the branch chip");
 });
 
+test("a command named without an editor (the palette) acts on the one the person was in", () => {
+  const view = host.view;
+  view.dispatch({ selection: { anchor: 0 } });
+  expect(runCodeCommand("git.nextHunk", undefined, { source: "palette" })).toBe(true);
+  expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(2);
+});
+
 test("the commands act on the editor", () => {
   const view = host.view;
   view.dispatch({ selection: { anchor: 0 } });

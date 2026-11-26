@@ -13,11 +13,11 @@ import { CODE_GIT_MERGE_BASE_REF as MERGE_BASE_REF } from "@codecast/shared/cont
 import { useVaultStore } from "../../../store/vaultStore";
 import { registerCodeCommands, type CodeCommandContext } from "../commands";
 import { fetchGitBase } from "../daemonClient";
-import { featureContext, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "../features";
+import { featureContext, focusedEditorView, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "../features";
 import { decodeFileText, textToDoc } from "../buffers";
 import { loadMergeKit, type MergeKit } from "../merge";
 import { gitGutterStandIn } from "../gutterSlots";
-import { ensureGitStatus, gitStatusOf, onGitHeadChange, useGitStatusStore, type VaultGitStatus } from "./status";
+import { ensureGitStatus, gitStatusOf, lastNoHeadPaths, onGitHeadChange, useGitStatusStore, type VaultGitStatus } from "./status";
 import type { DiffLayout, GitDiffTarget } from "./gutter";
 
 export type { DiffLayout, GitDiffTarget };
@@ -113,6 +113,8 @@ function eligible(ctx: EditorFeatureContext, status: VaultGitStatus | undefined)
   const vault = useVaultStore.getState();
   if (!vault.endpoint || vault.isRemote || vault.activeVaultId !== ctx.vaultId) return false;
   if (!status?.repo) return false;
+  // Ignored files never appear in the status and have nothing at HEAD.
+  if (vault.files[ctx.path]?.ignored) return false;
   const state = status.files[ctx.path];
   // Nothing at HEAD to compare with: the tree's color says it is new.
   return state !== "untracked" && state !== "added";
@@ -120,12 +122,15 @@ function eligible(ctx: EditorFeatureContext, status: VaultGitStatus | undefined)
 
 /** The gutter's column while its module, the status and HEAD's copy load:
  *  held for a file the status already calls eligible, or, before the first
- *  status, for any file in a repo root. */
-function gitPlaceholder(ctx: EditorFeatureContext) {
+ *  status, for a file in a repo root that the last known status (kept across
+ *  reloads) and the file table don't mark untracked, added or ignored. */
+export function gitPlaceholder(ctx: EditorFeatureContext) {
   const held = gitStatusOf(ctx.vaultId);
   if (held) return eligible(ctx, held) ? gitGutterStandIn : null;
   const vault = useVaultStore.getState();
-  return vault.endpoint && !vault.isRemote && vault.activeVaultId === ctx.vaultId && vault.isRepo ? gitGutterStandIn : null;
+  if (!vault.endpoint || vault.isRemote || vault.activeVaultId !== ctx.vaultId || !vault.isRepo) return null;
+  if (vault.files[ctx.path]?.ignored || lastNoHeadPaths(ctx.vaultId)?.has(ctx.path)) return null;
+  return gitGutterStandIn;
 }
 
 function build(ctx: EditorFeatureContext, m: GutterModule, k: MergeKit, base: string | null) {
@@ -165,10 +170,8 @@ function gitFeature(ctx: EditorFeatureContext) {
 // ── commands ────────────────────────────────────────────────────────────────
 
 function viewFor(ctx: CodeCommandContext): EditorView | null {
-  const m = gutterModule;
-  if (!m) return null;
-  if (ctx.view) return m.hasGitGutter(ctx.view.state) ? ctx.view : null;
-  return m.lastGitView();
+  const view = ctx.view ?? focusedEditorView();
+  return view && gutterModule?.hasGitGutter(view.state) ? view : null;
 }
 
 function withView(fn: (m: GutterModule, view: EditorView, args: Record<string, unknown> | undefined) => boolean) {

@@ -487,6 +487,11 @@ export const DEFAULT_KEYS: Array<{ lhs: string; command: CodeCommandId; context?
   { lhs: "]a", command: "agent.nextEdit" },
   { lhs: "[a", command: "agent.prevEdit" },
   { lhs: "ga", command: "agent.quoteSelection", context: "visual" },
+  // Cmd-K and Cmd-L as leader keys, for a vimrc that gives Cmd its own maps.
+  { lhs: "<leader>k", command: "agent.inlineInstruction" },
+  { lhs: "<leader>k", command: "agent.inlineInstruction", context: "visual" },
+  { lhs: "<leader>l", command: "agent.quoteSelection" },
+  { lhs: "<leader>l", command: "agent.quoteSelection", context: "visual" },
 ];
 
 const WINDOW_KEYS = ["h", "j", "k", "l", "w", "W", "p", "v", "s", "c", "q", "o", "<C-h>", "<C-j>", "<C-k>", "<C-l>", "<C-w>", "<C-v>", "<C-s>", "<C-o>", "<Left>", "<Down>", "<Up>", "<Right>"];

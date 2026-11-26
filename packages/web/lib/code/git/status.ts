@@ -69,6 +69,47 @@ export function foldStatus(prev: VaultGitStatus | undefined, res: CodeGitStatusR
   return next;
 }
 
+// ── files with nothing at HEAD, remembered across reloads ───────────────────
+// The editor reserves the git gutter's column before the first status lands
+// (gutterSlots), and a file with nothing at HEAD to compare (untracked, newly
+// added) never gets a gutter. The last status's list of those files lets a
+// reload skip the reservation instead of handing the column back a moment later.
+
+const NO_HEAD_PREFIX = "codecast.code.gitNoHead.";
+/** Past this many such files the list is not kept (a fresh clone's build dir). */
+const NO_HEAD_MAX = 2000;
+const noHeadCache = new Map<string, ReadonlySet<string> | null>();
+
+export function noHeadPaths(status: Pick<VaultGitStatus, "files">): string[] {
+  return Object.keys(status.files)
+    .filter((p) => status.files[p] === "untracked" || status.files[p] === "added")
+    .sort();
+}
+
+function rememberNoHead(vaultId: string, status: VaultGitStatus): void {
+  const paths = status.repo ? noHeadPaths(status) : [];
+  const keep = paths.length <= NO_HEAD_MAX ? paths : null;
+  noHeadCache.set(vaultId, keep && new Set(keep));
+  try {
+    if (keep?.length) localStorage.setItem(NO_HEAD_PREFIX + vaultId, JSON.stringify(keep));
+    else localStorage.removeItem(NO_HEAD_PREFIX + vaultId);
+  } catch {}
+}
+
+/** The files the vault's last status (this load or an earlier one) found with
+ *  nothing at HEAD; null when none was kept. */
+export function lastNoHeadPaths(vaultId: string): ReadonlySet<string> | null {
+  if (noHeadCache.has(vaultId)) return noHeadCache.get(vaultId)!;
+  let set: ReadonlySet<string> | null = null;
+  try {
+    const raw = localStorage.getItem(NO_HEAD_PREFIX + vaultId);
+    const list: unknown = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(list)) set = new Set(list.filter((p): p is string => typeof p === "string"));
+  } catch {}
+  noHeadCache.set(vaultId, set);
+  return set;
+}
+
 const inflight = new Map<string, Promise<VaultGitStatus | undefined>>();
 /** A refresh asked for while one runs: it runs once that one ends, for every
  *  caller who asked meanwhile, since the running one may predate what they saw. */
@@ -98,7 +139,10 @@ export function refreshGitStatus(vaultId: string, opts: { fresh?: boolean } = {}
     .then((res) => {
       const prev = gitStatusOf(vaultId);
       const next = foldStatus(prev, res);
-      if (next !== prev) useGitStatusStore.setState((s) => ({ byVault: { ...s.byVault, [vaultId]: next } }));
+      if (next !== prev) {
+        useGitStatusStore.setState((s) => ({ byVault: { ...s.byVault, [vaultId]: next } }));
+        if (next.files !== prev?.files || next.repo !== prev?.repo) rememberNoHead(vaultId, next);
+      }
       return next;
     })
     .catch(() => gitStatusOf(vaultId))

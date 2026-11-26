@@ -16,6 +16,9 @@ export interface VaultMetaRow {
   info: VaultInfo;
   files: VaultFileEntry[];
   scannedAt: number;
+  /** The root is a git checkout (the last scan said so), so a cached boot
+   *  paints a repo's whole tree rather than its notes first. */
+  isRepo?: boolean;
 }
 
 export interface VaultBodyRow {

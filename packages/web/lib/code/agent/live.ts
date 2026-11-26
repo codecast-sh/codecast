@@ -46,6 +46,18 @@ export function vaultPlaceOf(vaultId: string, s: InboxState = useInboxStore.getS
   return root ? { root, machine: vaultMachineOf(vaultId, s) } : null;
 }
 
+/** Open the composer for a new session in the vault's folder, stamped to run
+ *  on the vault's machine (a host vault's host, a mirror's source Mac), not
+ *  whichever machine the composer would default to. False with no folder. */
+export function composeInVault(vaultId: string, text: string): boolean {
+  const root = vaultRootOf(vaultId);
+  if (!root) return false;
+  const s = useInboxStore.getState();
+  const deviceId = vaultMachineOf(vaultId, s);
+  s.openCompose(text, { projectPath: root, ...(deviceId ? { deviceId } : {}) });
+  return true;
+}
+
 export const isWorkingRow = (row: AgentSessionRow, now = Date.now()) => sessionWorkState(row as InboxSession, now) === "working";
 
 /** Which folder each session works in and whether the viewer may steer it,

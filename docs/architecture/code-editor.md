@@ -63,6 +63,7 @@ packages/web/lib/code/            editor engine, no React
   blame/                          session blame gutter
   agent/                          send-to-session, agent edit highlights, presence
   commands.ts                     the workspace command registry ex adapters and palette call
+  gutterSlots.ts                  each lazy gutter's column, and its stand-in while it loads
 packages/web/components/code/     React shell: CodeEditor, tabs, groups, status bar, panels
 packages/web/store/codeStore.ts   workspace UI state (tabs, groups, panels) - never per keystroke
 packages/web/app/settings/editor/ Settings > Editor (vim, vimrc report, LSP servers, options)
@@ -98,6 +99,17 @@ packages/web/app/settings/editor/ Settings > Editor (vim, vimrc report, LSP serv
 7. **No personal data in the repo.** The repo is public. Tests of the vimrc
    translator use synthetic fixtures that mirror real config shapes, never a
    copy of anyone's vimrc.
+
+8. **Columns never shift the text.** A feature that loads after the first
+   paint and draws a gutter (blame, lint, git) or changes the core's options
+   (vim's `nonumber`) passes `placeholder` to `registerEditorFeature`: a
+   synchronous stand-in, decided from what is already known, that holds its
+   slot at the real gutter's precedence and width (`gutterSlots.ts`). The
+   real extension replaces it in the same compartment; a feature that ends
+   up drawing nothing, or fails, gives the column back.
+9. **One "editor the person was in".** Commands run without a view (the
+   palette, a chip) act on `focusedEditorView()` from features.ts, never a
+   tracker of their own.
 
 ## Vim
 
@@ -147,7 +159,12 @@ packages/web/app/settings/editor/ Settings > Editor (vim, vimrc report, LSP serv
   (`addReviewComment`); a press on that quote in the composer's tray opens
   the file at those lines. Cmd-K asks for an instruction inline and sends it to
   the linked session with the range; the agent's edit then streams into the
-  buffer.
+  buffer. A vimrc's own Cmd maps win over both (vim takes the key first), so
+  each has vim ways in that never collide: `:Ask [instruction]` opens the box
+  on the line, a typed range or the visual selection (prefilled with the
+  argument), `:Quote` quotes it, and `<leader>k` / `<leader>l` (normal and
+  visual) are bound unless the vimrc maps those keys or keys that start with
+  them.
 - **Which session.** A session the person picks for the folder wins, then the
   conversation beside this editor's Files pane (the one it was opened from,
   `AppTab.editorOpenedFrom`, while it is on stage; when the active tab holds

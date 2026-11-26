@@ -443,6 +443,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   const isEmbeddedPatch = tool.name !== "apply_patch" && applyPatchDiffs.length > 0;
   const isApplyPatch = tool.name === "apply_patch" || isEmbeddedPatch;
   const isStandardEdit = isEditTool(tool.name) || isWriteTool(tool.name);
+  const isMultiEdit = tool.name === "MultiEdit";
   const isFileChange = tool.name === "fileChange";
   const isEdit = isStandardEdit || isApplyPatch || isFileChange;
   const [expandedOverride, setExpanded] = useState<boolean>();
@@ -821,17 +822,19 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
       const at = first.hunks.find((h) => h.newStart > 0)?.newStart;
       return { path: first.filePath, ...(at ? { line: at } : {}) };
     }
-    if (!filePath || (!isStandardEdit && !isRead)) return null;
+    if (!filePath || (!isStandardEdit && !isMultiEdit && !isRead)) return null;
     if (isRead) {
       const offset = typeof parsedInput.offset === "number" && parsedInput.offset > 0 ? parsedInput.offset : undefined;
       return { path: filePath, ...(offset ? { line: offset } : {}) };
     }
     if (isWriteTool(tool.name)) return { path: filePath, line: 1 };
-    const firstEdit = Array.isArray(parsedInput.edits) ? (parsedInput.edits[0] as Record<string, unknown> | undefined) : undefined;
-    const newText = editStringsFromInput(firstEdit ?? parsedInput)?.newStr;
-    const range = result && !result.is_error ? editedLineRange(safeString(result.content), newText) : undefined;
-    return { path: filePath, ...(range ?? {}) };
-  }, [isApplyPatch, applyPatchDiffs, filePath, isStandardEdit, isRead, parsedInput, tool.name, result]);
+    const edits = Array.isArray(parsedInput.edits) ? (parsedInput.edits as Record<string, unknown>[]) : [parsedInput];
+    const newTexts = edits.map((e) => editStringsFromInput(e)?.newStr).filter((t): t is string => !!t?.trim());
+    const range = result && !result.is_error ? editedLineRange(safeString(result.content), newTexts[0]) : undefined;
+    // A result with no line numbers (MultiEdit's "Applied N edits") leaves the
+    // editor to find the edit's new text in the file once it shows.
+    return { path: filePath, ...(range ?? (newTexts.length ? { find: newTexts } : {})) };
+  }, [isApplyPatch, applyPatchDiffs, filePath, isStandardEdit, isMultiEdit, isRead, parsedInput, tool.name, result]);
 
   const toolColor = toolColorClass(isApplyPatch ? "apply_patch" : tool.name);
 
@@ -906,7 +909,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
         {mh && <RowIcon kind={mh.kind} />}<span data-cc-row-verb className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{mh?.verb ?? displayToolName}</span>
         {summary && (
           <span data-cc-row-object className="text-sol-text-muted font-mono truncate min-w-0">
-            {(isStandardEdit || isRead) && filePath ? (
+            {(isStandardEdit || isMultiEdit || isRead) && filePath ? (
               // The file a Read/Edit touched, linked into Files, cut in the
               // middle so the file name stays (PathText). Stop the click so it
               // opens the file rather than toggling the row. A link's dotted

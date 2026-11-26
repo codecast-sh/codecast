@@ -11,7 +11,7 @@ import { hoverFocus } from "../../../shortcuts/focusSource";
 import { modernDialog } from "../../ui/modernLook";
 import { formatRelativeTime } from "../../../lib/conversationFormat";
 import { useAgentStore, type PickerRequest } from "../../../lib/code/agent/agentStore";
-import { placeCandidates, steerableRow, vaultAgentSig, vaultMachineOf } from "../../../lib/code/agent/live";
+import { composeInVault, placeCandidates, steerableRow, vaultAgentSig, vaultMachineOf } from "../../../lib/code/agent/live";
 import type { AgentSessionRow } from "../../../lib/code/agent/sessions";
 import { SessionMark } from "./SessionMark";
 
@@ -67,7 +67,7 @@ export const SessionPicker = memo(function SessionPicker({ request, root }: { re
     const id = key === NONE ? null : key;
     if (key === NEW) {
       st.closePicker();
-      if (!request.newSession?.() && root) useInboxStore.getState().openCompose("", { projectPath: root });
+      if (!request.newSession?.()) composeInVault(vaultId, "");
       return;
     }
     st.setOverride(vaultId, id ?? "none");

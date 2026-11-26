@@ -10,7 +10,7 @@ const { useInboxStore } = await import("../../../../store/inboxStore");
 const { useVaultStore } = await import("../../../../store/vaultStore");
 const { hostVaultId } = await import("../../../vault/hosts/routes");
 const { useCodeStore } = await import("../../../../store/codeStore");
-const { computeVaultAgentState, placeCandidates, vaultMachineOf, vaultPlaceOf, writerNow } = await import("../live");
+const { composeInVault, computeVaultAgentState, placeCandidates, vaultMachineOf, vaultPlaceOf, writerNow } = await import("../live");
 
 const inboxBefore = useInboxStore.getState();
 const vaultBefore = useVaultStore.getState();
@@ -62,6 +62,21 @@ describe("a vault's machine", () => {
     expect(vaultMachineOf("local-app")).toBe("mac1");
     expect(vaultMachineOf(hostId)).toBe("mac2");
     expect(vaultMachineOf(mirrorId)).toBe("mac2");
+  });
+});
+
+describe("a new session from the editor", () => {
+  it("starts in the vault's folder on the vault's machine", () => {
+    const opened: unknown[] = [];
+    // The send boundary: the composer never opens.
+    useInboxStore.setState({ openCompose: (text: string, context: unknown) => void opened.push([text, context]) } as never);
+    for (const id of ["local-app", hostId, mirrorId]) expect(composeInVault(id, "x")).toBe(true);
+    expect(composeInVault("nowhere", "x")).toBe(false);
+    expect(opened).toEqual([
+      ["x", { projectPath: "/Users/a/src/app", deviceId: "mac1" }],
+      ["x", { projectPath: "/Users/a/src/app", deviceId: "mac2" }],
+      ["x", { projectPath: "/Users/a/src/app", deviceId: "mac2" }],
+    ]);
   });
 });
 

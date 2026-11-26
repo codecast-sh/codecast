@@ -25,6 +25,9 @@ import { isConvexId } from "../lib/entityLinks";
  *  milestone and binds it to a plan (a compose link, hooks/useComposeLink). */
 export type ComposeContext = {
   projectPath?: string;
+  /** The machine the session starts on, stamped on the stub as a pick (the
+   *  code editor's folder on a cloud host or another Mac runs there). */
+  deviceId?: string;
   gitRoot?: string;
   agentType?: string;
   linkedTask?: { _id: string; short_id: string; title?: string; status?: string };
