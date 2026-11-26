@@ -52,6 +52,7 @@ import { isBookmarked, type BookmarkInput } from "../../lib/vault/bookmarks";
 import { useVaultBookmarks } from "../../lib/vault/bookmarksHost";
 import { useVaultStore } from "../../store/vaultStore";
 import { GIT_STATE_COLOR, explorerGitDecorations, holdGitStatusFeed, useGitStatusStore } from "../../lib/code/git/status";
+import { PresenceDot } from "../code/agent/PresenceDot";
 
 export { noteDisplayName };
 export type { TreeNode };
