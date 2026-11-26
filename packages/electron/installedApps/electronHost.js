@@ -45,7 +45,7 @@ const NOTIFY_PER_MINUTE = 10;
 const TOAST_QUEUE = 3;
 // The toast script waits 30s for a click, so a process alive well past that
 // is hung; it is killed so the app's later toasts are not held behind it.
-const TOAST_KILL_MS = 45_000;
+const TOAST_KILL_MS = 15_000;
 /** The cover's one control. It opens a new window, which the open handler takes. */
 const OPEN_CODECAST = "codecast://open/";
 
@@ -144,14 +144,25 @@ const TOAST_TAG_MAX = 64;
  * windows_toast_notification.cc, Initialize), so neither toastXml nor
  * changing the AUMID later moves a toast to another app. The WinRT
  * ToastNotificationManager takes any AUMID that a Start menu shortcut
- * carries, which install writes. Clicks while this script waits come back as
- * notification-click with the tag; a later click from Action Center launches
- * the shortcut, which reaches us as --codecast-app=<slug> and focuses the app.
+ * carries, which install writes.
+ *
+ * The toast is a protocol toast: a click, on the banner or later in Action
+ * Center, opens its launch link, codecast://app-notification/<slug>?tag=<tag>,
+ * which reaches main as a deep link (host.js notificationClickFromUrl) and
+ * becomes notification-click with the tag. The script only shows the toast
+ * and exits: Windows PowerShell 5.1 cannot subscribe to a WinRT object's
+ * events, so nothing here waits for Activated or Dismissed.
  */
-function windowsToastScript({ appId, title, body, tag, silent }) {
+/** The link a toast opens when clicked; host.js notificationClickFromUrl reads it back. */
+function toastLaunchUrl(slug, tag) {
+  return `codecast://app-notification/${slug}${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`;
+}
+
+function windowsToastScript({ appId, slug, title, body, tag, silent }) {
   const text = body ? toastText(body, TOAST_BODY_MAX) : "";
   const tagText = tag == null ? "" : toastText(tag, TOAST_TAG_MAX);
-  const xml = `<toast><visual><binding template="ToastGeneric"><text>${xmlEscape(toastText(title, TOAST_TITLE_MAX))}</text>${text ? `<text>${xmlEscape(text)}</text>` : ""}</binding></visual>${silent ? '<audio silent="true"/>' : ""}</toast>`;
+  const launch = slug ? ` activationType="protocol" launch="${xmlEscape(toastLaunchUrl(slug, tagText))}"` : "";
+  const xml = `<toast${launch}><visual><binding template="ToastGeneric"><text>${xmlEscape(toastText(title, TOAST_TITLE_MAX))}</text>${text ? `<text>${xmlEscape(text)}</text>` : ""}</binding></visual>${silent ? '<audio silent="true"/>' : ""}</toast>`;
   return [
     "$ErrorActionPreference = 'Stop'",
     "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
@@ -160,12 +171,8 @@ function windowsToastScript({ appId, title, body, tag, silent }) {
     `$xml.LoadXml(${psQuote(xml)})`,
     "$toast = New-Object Windows.UI.Notifications.ToastNotification $xml",
     tagText ? `$toast.Tag = ${psQuote(tagText)}` : "",
-    "Register-ObjectEvent -InputObject $toast -EventName Activated -SourceIdentifier act | Out-Null",
-    "Register-ObjectEvent -InputObject $toast -EventName Dismissed -SourceIdentifier dis | Out-Null",
-    "Register-ObjectEvent -InputObject $toast -EventName Failed -SourceIdentifier fail | Out-Null",
     `[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(${psQuote(appId)}).Show($toast)`,
-    "$e = Wait-Event -Timeout 30",
-    "if ($e) { Write-Output $e.SourceIdentifier } else { Write-Output 'timeout' }",
+    "Write-Output 'shown'",
   ].filter(Boolean).join("\n");
 }
 
@@ -173,7 +180,7 @@ function windowsToastScript({ appId, title, body, tag, silent }) {
  * Shows one toast; `onDone` runs once, when its PowerShell process is gone or
  * after `killMs`, when a hung one is killed.
  */
-function windowsToast(opts, onClick, spawnImpl = spawn, onDone = () => {}, killMs = TOAST_KILL_MS) {
+function windowsToast(opts, spawnImpl = spawn, onDone = () => {}, killMs = TOAST_KILL_MS) {
   const script = windowsToastScript(opts);
   let finished = false;
   let timer = null;
@@ -196,13 +203,8 @@ function windowsToast(opts, onClick, spawnImpl = spawn, onDone = () => {}, killM
     finish();
   }, killMs);
   if (typeof timer.unref === "function") timer.unref();
-  let out = "";
-  child.stdout.on("data", (d) => (out += d));
   child.on("error", finish);
-  child.on("close", () => {
-    if (out.trim().split(/\s+/).pop() === "act") onClick();
-    finish();
-  });
+  child.on("close", finish);
 }
 
 /** A frameless popover's position: centered on the tray item, below it at the top of a display, above it at the bottom. */
@@ -649,6 +651,11 @@ function createElectronHost(deps) {
     },
 
     /** main.js unregisters every global shortcut when it rebinds its own; put the apps' back. */
+    /** A toast's launch link came back (host.js handleUrl): the person clicked that app's notification. */
+    notificationClicked(slug, tag) {
+      focusApp(slug);
+      emit(slug, "notification-click", { tag: tag ?? null });
+    },
     reregisterShortcuts() {
       for (const [slug, s] of apps) for (const acc of s.shortcuts) if (!globalShortcut.isRegistered(acc)) bindShortcut(slug, acc);
     },
@@ -665,14 +672,14 @@ function createElectronHost(deps) {
       if (toasts.times.length >= NOTIFY_PER_MINUTE) throw new AppError("failed", "too many notifications");
       toasts.times.push(at);
       if (isWin) {
-        const opts = { appId: aumid(ctx.slug), title, body, tag, silent };
+        const opts = { appId: aumid(ctx.slug), slug: ctx.slug, title, body, tag, silent };
         const next = () => {
           const job = toasts.queue.shift();
           if (!job) return void (toasts.running = false);
           toasts.running = true;
-          windowsToast(job.opts, job.onClick, spawnImpl, next);
+          windowsToast(job.opts, spawnImpl, next);
         };
-        toasts.queue.push({ opts, onClick });
+        toasts.queue.push({ opts });
         if (toasts.queue.length > TOAST_QUEUE) {
           const dropped = toasts.queue.shift();
           log(`${ctx.slug}: dropped a waiting notification ("${dropped.opts.title}"); ${TOAST_QUEUE} newer ones are queued`);
@@ -745,6 +752,7 @@ function createElectronHost(deps) {
 }
 
 module.exports = {
+  toastLaunchUrl,
   createElectronHost,
   pageUrlAllowed,
   externalAllowed,

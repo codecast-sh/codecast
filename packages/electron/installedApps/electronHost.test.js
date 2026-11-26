@@ -14,6 +14,7 @@ const {
   shortcutFileName,
   shortcutPathFor,
   windowsToastScript,
+  toastLaunchUrl,
   windowsToast,
   signedOutCoverUrl,
   OPEN_CODECAST,
@@ -407,6 +408,19 @@ test("the toast script quotes everything it carries and shows through the app's 
   assert.match(script, /<audio silent="true"\/>/);
 });
 
+test("a toast is a protocol toast that opens the app's click link, and the script only shows it", () => {
+  const script = windowsToastScript({ appId: `Codecast.App.${SLUG}`, slug: SLUG, title: "t", tag: "eg-1 & 2" });
+  assert.match(script, new RegExp(`<toast activationType="protocol" launch="codecast://app-notification/${SLUG}\\?tag=eg-1%20%26%202">`));
+  assert.doesNotMatch(script, /Register-ObjectEvent|Wait-Event/, "Windows PowerShell 5.1 cannot subscribe to WinRT events");
+  assert.equal(toastLaunchUrl(SLUG, null), `codecast://app-notification/${SLUG}`);
+  const { notificationClickFromUrl } = require("./host");
+  assert.deepEqual(notificationClickFromUrl(toastLaunchUrl(SLUG, "eg-1 & 2")), { slug: SLUG, tag: "eg-1 & 2" });
+  assert.deepEqual(notificationClickFromUrl(toastLaunchUrl(SLUG, null)), { slug: SLUG, tag: null });
+  assert.equal(notificationClickFromUrl("codecast://app-notification/abc/def"), null, "one plain slug, nothing nested");
+  assert.equal(notificationClickFromUrl("codecast://uninstall/abc"), null);
+  assert.equal(notificationClickFromUrl(`codecast://app-notification/${SLUG}?tag=%E0%A4%A`).slug, SLUG, "a malformed escape never throws");
+});
+
 test("a curly quote in a toast's text cannot end the PowerShell literal it rides in", () => {
   // PowerShell reads U+2018 to U+201B as single quotes; undoubled, this title ran its own command.
   const script = windowsToastScript({ appId: "a", title: "Bob\u2019; Write-Output INJECTED; \u2018", tag: "x\u201by" });
@@ -515,7 +529,7 @@ test("Windows toasts: one process at a time per app, three waiting at most, ten 
 test("a hung toast process is killed so the next toast can run", async () => {
   const fake = fakeSpawn();
   let done = 0;
-  windowsToast({ appId: "a", title: "t" }, () => {}, fake.spawn, () => done++, 20);
+  windowsToast({ appId: "a", title: "t" }, fake.spawn, () => done++, 20);
   await new Promise((r) => setTimeout(r, 60));
   assert.equal(fake.children[0].killed, true);
   assert.equal(done, 1);

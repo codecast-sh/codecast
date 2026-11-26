@@ -52,7 +52,7 @@ function powershell(script, env = {}) {
 }
 
 // What the toast script runs, in order: anything else is text that escaped its quotes.
-const TOAST_COMMANDS = ["Out-Null", "Out-Null", "New-Object", "New-Object", "Register-ObjectEvent", "Out-Null", "Register-ObjectEvent", "Out-Null", "Register-ObjectEvent", "Out-Null", "Wait-Event", "Write-Output", "Write-Output"];
+const TOAST_COMMANDS = ["Out-Null", "Out-Null", "New-Object", "New-Object", "Write-Output"];
 
 /**
  * Parses the toast script and lists the commands in it, then runs it. Resolves
@@ -250,7 +250,7 @@ test("install, call, republish and uninstall an app in the Electron-window host"
       await appPage.eval("cast.app.notify({ title: 'From the test', body: 'via cast.app.notify' })");
       // A toast through the AUMID the shortcut carries: a curly quote in the
       // title must reach the toast as text, and the toast must not fail.
-      const toast = await runToast(windowsToastScript({ appId: aumid(SLUG), title: "Test App\u2019s toast", body: "<b>&</b>", tag: "e2e", silent: true }));
+      const toast = await runToast(windowsToastScript({ appId: aumid(SLUG), slug: SLUG, title: "Test App\u2019s toast", body: "<b>&</b>", tag: "e2e", silent: true }));
       assert.equal(toast.parseErrors, 0, "the toast script parses");
       assert.deepEqual(toast.commands, TOAST_COMMANDS, "and runs only its own commands");
       if (toast.threw) {
@@ -258,7 +258,7 @@ test("install, call, republish and uninstall an app in the Electron-window host"
         assert.match(toast.threw.line, /^\[Windows\.UI\.Notifications\.ToastNotificationManager\]::CreateToastNotifier\(/, `the toast script failed: ${toast.threw.message}`);
         t.diagnostic(`no toast on this runner: ${toast.threw.message}`);
       } else {
-        assert.match(toast.result, /^(act|dis|fail|timeout)$/, `the toast reported ${toast.result}`);
+        assert.equal(toast.result, "shown", `the toast reported ${toast.result}`);
       }
       // Open at login: a Run value that starts this Codecast, its exe quoted
       // by Electron and the app path by the host, then removed again.

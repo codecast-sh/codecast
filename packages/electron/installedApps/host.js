@@ -130,6 +130,24 @@ function uninstallSlugFromUrl(url) {
   return isSlug(slug) ? slug : null;
 }
 
+/**
+ * The app and tag a clicked Windows toast names (codecast://app-notification/<slug>?tag=<tag>,
+ * electronHost.toastLaunchUrl), or null. Any program can open such a link, so it
+ * only focuses an installed app and hands its page a notification-click.
+ */
+function notificationClickFromUrl(url) {
+  if (typeof url !== "string" || !URL.canParse(url)) return null;
+  const u = new URL(url);
+  if (u.protocol !== "codecast:" || u.hostname !== "app-notification") return null;
+  const slug = u.pathname.replace(/^\/+|\/+$/g, "");
+  if (!isSlug(slug)) return null;
+  let tag = null;
+  try {
+    tag = u.searchParams.get("tag");
+  } catch {}
+  return { slug, tag: tag ? tag.slice(0, 64) : null };
+}
+
 /** The gate keys appInfo takes (k, e, m); the identity token stays in main. */
 const pickGate = (gate) => Object.fromEntries(["k", "e", "m"].filter((k) => gate[k]).map((k) => [k, gate[k]]));
 
@@ -400,6 +418,12 @@ function createAppsHost(deps) {
 
   /** A codecast:// link this host answers itself. True when it took the link. */
   function handleUrl(url) {
+    const click = notificationClickFromUrl(url);
+    if (click) {
+      if (!engine) pendingUrls.push(url);
+      else if (registry.get(click.slug) && platform.notificationClicked) platform.notificationClicked(click.slug, click.tag);
+      return true;
+    }
     const slug = uninstallSlugFromUrl(url);
     if (!slug) return false;
     if (!engine) pendingUrls.push(url);
@@ -529,4 +553,4 @@ function createAppsHost(deps) {
   return api;
 }
 
-module.exports = { createAppsHost, heldToStored, withIconKeys, engineFacts, appInfoProblem, appFromArgv, uninstallSlugFromUrl, APP_ARG };
+module.exports = { createAppsHost, heldToStored, withIconKeys, engineFacts, appInfoProblem, appFromArgv, uninstallSlugFromUrl, notificationClickFromUrl, APP_ARG };

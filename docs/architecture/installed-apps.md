@@ -302,8 +302,15 @@ implement the same adapter interface, documented at the top of
   app's name and icon. Each app shows one toast at a time (one PowerShell process),
   keeps at most three waiting (the oldest is dropped), and may call
   `notify` at most ten times a minute; past that the call fails with
-  "too many notifications". A toast process still alive after 45 seconds
-  is killed so the next one can show. The title is cut to 256 characters,
+  "too many notifications". The toast is a protocol toast whose launch link
+  is `codecast://app-notification/<slug>?tag=<tag>`: a click, on the banner
+  or later in Action Center, opens that link, main reads it as a deep link,
+  brings the app forward and sends its page `notification-click` with the
+  tag. The PowerShell process only shows the toast and exits (Windows
+  PowerShell 5.1 cannot subscribe to WinRT events, so nothing waits for a
+  click); one still alive after 15 seconds is killed so the next one can
+  show. Any program can open such a link, so it only focuses an installed
+  app and reports a click to its page. The title is cut to 256 characters,
   the body to 1024 and the tag to 64, never inside a character, and
   characters XML cannot hold are dropped, so a toast always fits the
   PowerShell command line and always parses.
