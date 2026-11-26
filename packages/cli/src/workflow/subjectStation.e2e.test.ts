@@ -56,6 +56,23 @@ describe("the session is the run's subject", () => {
     expect(progress.some((b) => b.session_id)).toBe(false);
   }, 60_000);
 
+  // A finding names the run's worktree, so the subject may fix it there and end its turn with nothing committed (ct-99118).
+  test("a fix left uncommitted in the run's worktree reaches the next Check, on top of the checkout's change", async () => {
+    const { root } = world("bad\n");
+    const tree = path.join(root, ".codecast", "worktrees", "change-ct-9");
+    const s = server(() => fs.writeFileSync(path.join(tree, "a.txt"), "good\n"));
+    const { outcome, runDir } = await start(root);
+    expect(outcome).toBe("completed");
+    expect(s.sent()[0].body).toContain("error: a.txt says bad, expected good");
+    expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
+    const change = readFrozenChange(runDir)!;
+    expect(change.tip).toBe(git(root, "rev-parse", "codecast/change-ct-9"));
+    expect(change.paths).toEqual(["a.txt"]);
+    // The checkout is the subject's and stays as it was; the run's worktree is the change, with nothing of the subject's left over.
+    expect(fs.readFileSync(path.join(root, "a.txt"), "utf-8")).toBe("bad\n");
+    expect(git(tree, "status", "--porcelain", "--", "a.txt")).toBe("");
+  }, 60_000);
+
   test("a session that pins dormant naming the run as its wake has answered: the run goes on (ct-85419)", async () => {
     const { root, edit } = world("bad\n");
     const s = server(() => edit("good\n"), { dormant: true });
@@ -601,6 +618,22 @@ describe("a change named by branch from inside a session (ct-85594)", () => {
     expect(brief.to).toBe(CONV);
     expect(brief.body).toContain("error: a.txt says bad, expected good");
     expect(s.calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
+  }, 60_000);
+
+  test("a fix left uncommitted in the run's worktree is committed to the branch and checked, not reset away (ct-99118)", async () => {
+    const { root } = branchWorld("bad\n");
+    const tree = path.join(root, ".codecast", "worktrees", "change-ct-9");
+    const s = server(() => {
+      fs.writeFileSync(path.join(tree, "a.txt"), "good\n");
+      fs.writeFileSync(path.join(tree, "new.txt"), "a test it added\n");
+    });
+    expect(await startOnBranch(root)).toBe("completed");
+    expect(s.sent()[0].body).toContain("error: a.txt says bad, expected good");
+    expect(git(root, "show", "feat:a.txt")).toBe("good");
+    expect(git(root, "show", "feat:new.txt")).toBe("a test it added");
+    // The run's setup wrote its log there before the brief: that is the run's own, neither committed nor removed.
+    expect(git(root, "diff", "--name-only", "feat~1", "feat")).toBe("a.txt\nnew.txt");
+    expect(git(tree, "status", "--porcelain", "--untracked-files=all")).toMatch(/^\?\? \.codecast\/logs\/setup-[^\n]+\.log$/);
   }, 60_000);
 
   // The check's own segment, shaped like the shipped check.cast: exit 2 is this machine's, not the change's.

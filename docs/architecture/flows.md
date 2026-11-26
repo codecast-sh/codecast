@@ -275,7 +275,12 @@ session: the runner sends its brief, which names what a stage found, as a
 message in the session's own thread, waits for the session to work and settle
 (the station wait every session node uses, `waitOnStation`), then freezes the session's
 change again on the same branch and resets the run's worktree to it
-(`refreezeSessionChange`). A session that pins blocked asks a person, for the
+(`refreezeSessionChange`). A finding names the run's worktree, so the session
+may fix it there and leave it uncommitted: before the reset, every file there
+changed after the brief (and every deleted one) is committed onto the branch,
+and a change frozen from a checkout carries those commits on top of each later
+freeze (`frozen_tip`). What a station wrote there before the brief is the
+run's own, and the reset puts it back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run
 waits for that person rather than stopping: the run's row says so
 (`waiting_on_session.blocked`, its note the pin), and the Ship bar reads

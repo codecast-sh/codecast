@@ -462,25 +462,69 @@ async function refreezeOwnChange(root: string, before: FrozenChange): Promise<Fr
 }
 
 /**
+ * Commit onto `branch` what the run's worktree `tree` holds uncommitted that the run's own stations did not write:
+ * each changed or new file touched once the brief went out (`since`; every one when no brief time is known), and each
+ * deleted one, which nothing dates. Returns the tree's HEAD after, or null when it has none. A tree off the branch
+ * holding such edits refuses: committed there they would miss the change, and the reset would lose them.
+ */
+async function carryTreeEdits(tree: string, branch: string, since?: number): Promise<string | null> {
+  // Raw, not trimmed: a status line can start with a space.
+  const status = spawnSync("git", ["-C", tree, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"], { encoding: "utf-8" });
+  const touched = (p: string) => { try { const st = fs.lstatSync(path.join(tree, p)); return Math.max(st.mtimeMs, st.ctimeMs); } catch { return Infinity; } };
+  const carried = String(status.stdout ?? "").split("\0").filter(Boolean).map((e) => e.slice(3)).filter((p) => since === undefined || touched(p) >= since);
+  if (carried.length) {
+    const head = await gitTry(tree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    if (head !== branch) throw new Error(`The run's worktree ${tree} is ${head ? `on ${head}` : "on no branch"}, not the change's branch ${branch}, and holds uncommitted edits (${carried.join(", ")}), so it is left as it is`);
+    await git(tree, ["--literal-pathspecs", "add", "--all", "--", ...carried]);
+    await git(tree, ["--literal-pathspecs", "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-m", "Edits left uncommitted in the run's worktree", "--", ...carried]);
+  }
+  return gitTry(tree, ["rev-parse", "HEAD"]);
+}
+
+/**
+ * A change frozen again from a checkout, with what the run's worktree holds over the last freeze (`head`, its HEAD
+ * once its edits were carried) replayed on top, so a fix made in the run's worktree stays in the change through every
+ * later refreeze. One that conflicts with the new freeze refuses, and the worktree keeps its files.
+ */
+async function carryOntoFreeze(root: string, before: FrozenChange, change: FrozenChange, head: string): Promise<FrozenChange> {
+  const base = before.frozen_tip ?? before.tip;
+  // A landed change comes back as it was, its tip already holding what was carried.
+  const fresh = change.tip === before.tip ? base : change.tip;
+  if (head === base || !(await isAncestor(root, base, head))) return change;
+  const replayed = await replayOnto(root, base, head, fresh);
+  if (!replayed.ok) throw new Error(`The edits made in the run's worktree conflict with the change frozen again from the checkout (${replayed.reason}): make them in the checkout instead`);
+  if (replayed.tip === fresh) return change;
+  await git(root, ["update-ref", `refs/heads/${change.branch}`, replayed.tip]);
+  const carried = (await git(root, ["diff", "--name-only", fresh, replayed.tip])).split("\n").filter(Boolean);
+  const { landed: _, ...rest } = change;
+  return { ...rest, tip: replayed.tip, frozen_tip: fresh, paths: [...new Set([...change.paths, ...carried])].sort() };
+}
+
+/**
  * Freeze a session's change again, after the session worked on what a stage
  * found (flows.md FL4): the same files cut the same way, on the same branch, so
  * the run's worktree follows the new tip and every later stage reads the change
  * as it stands now. A checkout's change is frozen again from the checkout as it
  * is now (refreezeCheckoutChange). Returns the new change and whether anything moved.
  */
-export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null, opts: { roster?: Roster; since?: number } = {}): Promise<{ change: FrozenChange; moved: boolean }> {
+export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null, opts: { roster?: Roster; since?: number; briefedAt?: number } = {}): Promise<{ change: FrozenChange; moved: boolean }> {
   const { readFrozenChange, writeFrozenChange } = await import("./flowChangeFile.js");
   const before = readFrozenChange(runDir);
   if (!before || (!before.session && before.source !== "checkout")) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
+  // A stage's finding names the run's worktree, so the subject may fix it there: its edits go onto the branch first.
+  const treeHead = worktreePath ? await carryTreeEdits(worktreePath, before.branch, opts.briefedAt) : null;
+  const rebuilt = before.source === "checkout" || (before.source === "session" && !before.pushed);
   // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
-  const change: FrozenChange = before.source === "checkout"
+  let change: FrozenChange = before.source === "checkout"
     ? await refreezeCheckoutChange(root, before, opts.roster, opts.since)
-    : before.source === "session" && !before.pushed
+    : rebuilt
     ? await refreezeOwnChange(root, before)
     : { ...before, ...(await branchTip(root, before)) };
+  if (rebuilt) change = await carryOntoFreeze(root, before, change, treeHead ?? before.tip);
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
   const moved = (await tree(before.tip)) !== (await tree(change.tip));
-  // The run's worktree holds no work of its own: it is the change, so it follows the new tip.
+  // The run's worktree holds no work of its own: it is the change, so it follows the new tip. What is left
+  // uncommitted there is what the run's own stations wrote before the brief.
   if (worktreePath) await git(worktreePath, ["reset", "--quiet", "--hard", change.tip]);
   writeFrozenChange(runDir, change);
   return { change, moved };

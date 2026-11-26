@@ -553,3 +553,45 @@ describe("a file two sessions changed", () => {
     expect(await subjectOtherWork(root, { conversationId: "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", shortId: "jx7aaaa" }, a.tip, "HEAD")).toBeNull();
   });
 });
+
+// A stage's finding names the run's worktree, so a subject may fix the change there and leave it uncommitted (ct-99118).
+describe("edits left in the run's worktree", () => {
+  test("are carried onto every refreeze of a session's change; what a station wrote there before the brief is not", async () => {
+    freshState();
+    const root = path.join(sandbox, "carry");
+    fs.mkdirSync(root);
+    git(root, "init", "-q", "-b", "main");
+    for (const f of ["a.txt", "b.txt", "c.txt"]) write(root, f, "base\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "base");
+    write(root, "a.txt", "a1\n");
+    transcript("sess-carry", "jx7carry".padEnd(32, "0"), [tool(root, "Edit", { file_path: path.join(root, "a.txt"), old_string: "base", new_string: "a1" }, 10_000)]);
+    const runDir = path.join(sandbox, "run-dir-carry");
+    writeFrozenChange(runDir, await freezeSessionChange(root, "jx7carr", { branch: "codecast/carry", worktree: "carry" }));
+    const tree = path.join(sandbox, "carry-wt");
+    git(root, "worktree", "add", "--quiet", tree, "codecast/carry");
+    const show = (rev: string, f: string) => git(root, "show", `${rev}:${f}`);
+
+    // A station changed c.txt before the brief went out; the subject then fixed b.txt and added a test there.
+    write(tree, "c.txt", "station\n");
+    await Bun.sleep(20);
+    const briefedAt = Date.now();
+    write(tree, "b.txt", "fixed in the worktree\n");
+    write(tree, "b.test.txt", "new\n");
+    const first = await refreezeSessionChange(root, runDir, tree, { briefedAt });
+    expect(first.moved).toBe(true);
+    expect(["a.txt", "b.txt", "b.test.txt", "c.txt"].map((f) => show(first.change.tip, f))).toEqual(["a1", "fixed in the worktree", "new", "base"]);
+    expect(first.change.paths).toEqual(["a.txt", "b.test.txt", "b.txt"]);
+    expect(git(tree, "rev-parse", "HEAD")).toBe(first.change.tip);
+    expect(git(tree, "status", "--porcelain")).toBe("");
+
+    // The next round's fix is in the checkout: the worktree's fix stays in the change, on top of the new freeze.
+    write(root, "a.txt", "a2\n");
+    const second = await refreezeSessionChange(root, runDir, tree, { briefedAt: Date.now() });
+    expect(["a.txt", "b.txt", "b.test.txt"].map((f) => show(second.change.tip, f))).toEqual(["a2", "fixed in the worktree", "new"]);
+    expect(readFrozenChange(runDir)?.tip).toBe(second.change.tip);
+    expect(git(root, "rev-parse", "codecast/carry")).toBe(second.change.tip);
+    // The shared checkout is the subject's own: nothing of the worktree's reaches it.
+    expect(git(root, "status", "--porcelain", "--untracked-files=no")).toBe(" M a.txt");
+  });
+});
