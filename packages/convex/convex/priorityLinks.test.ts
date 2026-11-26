@@ -158,6 +158,30 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
   });
 
+  test("a team PR linked only from a private session reaches its team milestone; closing the last open one unmerged finishes it", async () => {
+    const { t, ada } = await world();
+    const { p, open } = await t.run(async (ctx: any) => {
+      const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } });
+      await ctx.db.insert("team_memberships", { user_id: ada, team_id: acme, role: "member", joined_at: 1 });
+      const p = await ctx.db.insert("priorities", {
+        user_id: ada, workspace: `team:${acme}`, short_id: "pri-3", title: "Team PRs", summary: "", status: "active", rank: 1, rank_set_by: "pass",
+        steps: [step("s1", [{ kind: "pr", id: `${REPO}#7` }, { kind: "pr", id: `${REPO}#8` }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      });
+      const priv = await ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "sess-privpr", short_id: "jx7ppr1", title: "private",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, team_visibility: "private", status: "active",
+      });
+      const pr = (number: number, fields: Record<string, unknown>) => ctx.db.insert("pull_requests", {
+        team_id: acme, repository: REPO, number, github_pr_id: 2000 + number, title: `PR ${number}`, body: "", author_github_username: "ada",
+        linked_session_ids: [priv], created_at: NOW, updated_at: NOW, ...fields,
+      });
+      await pr(7, { state: "merged", merged_at: NOW - 3 * H });
+      return { p, open: await pr(8, { state: "open" }) };
+    });
+    await t.run((ctx: any) => patchPullRequest(ctx, open, { state: "closed", closed_at: NOW - H }));
+    expect(await stepOf(t, p, "s1")).toMatchObject({ done: true, done_at: NOW - H });
+  });
+
   test("a PR of another team's workspace counts toward no personal milestone", async () => {
     const { t, p1, foreignPr } = await world();
     await t.run((ctx: any) => patchPullRequest(ctx, foreignPr, { state: "merged", merged_at: NOW - H }));
