@@ -353,14 +353,14 @@ describe("what a pass may read, and how far", () => {
     expect(runs[2].error).toContain("stepped past");
   });
 
-  test("a plan that fails to land on a write conflict or a timeout is not a repeat: the cursor stays", async () => {
+  test("a plan that fails to land on a write conflict is not a repeat: the cursor stays", async () => {
     const w = await world();
     await w.send(w.ana, w.teamConv, w.now - H, "work");
     model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
     const real = (applyPlan as any)._handler;
     const errors = [
       'Documents read from or written to the "priorities" table changed while this mutation was being run and on every subsequent retry.',
-      "Function execution timed out (maximum duration: 1s)",
+      "OptimisticConcurrencyControlFailure",
       'Documents read from or written to the "conversations" table changed while this mutation was being run and on every subsequent retry.',
     ];
     let i = 0;
@@ -374,6 +374,23 @@ describe("what a pass may read, and how far", () => {
     expect(runs.map((r: any) => [r.status, !!r.repeats, r.cost_usd > 0])).toEqual([["error", false, true], ["error", false, true], ["error", false, true]]);
     expect(new Set(runs.map((r: any) => r.cursor_at)).size).toBe(1);
     expect(runs.some((r: any) => r.error.includes("stepped past"))).toBe(false);
+  });
+
+  test("a plan that times out as it lands is a repeat: the third steps past", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    const real = (applyPlan as any)._handler;
+    (applyPlan as any)._handler = async () => { throw new Error("Your request timed out performing too many system operations"); };
+    try {
+      for (let n = 0; n < 3; n++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    } finally {
+      (applyPlan as any)._handler = real;
+    }
+    const runs = await w.runs();
+    expect(runs.map((r: any) => r.repeats)).toEqual([true, true, true]);
+    expect(runs[2].cursor_at).toBeGreaterThan(runs[0].cursor_at);
+    expect(runs[2].error).toContain("stepped past");
   });
 
   test("a failure recorded against a run that landed leaves it ok", async () => {

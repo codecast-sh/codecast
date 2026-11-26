@@ -25,7 +25,7 @@ import { askRerun } from "./lib/priorityClassifierHook";
 import { recomputeStepDone, replayDonePin } from "./lib/priorityLinks";
 import { stepKeyMark } from "./lib/priorityGroup";
 import { priorityStep } from "./prioritiesSchema";
-import { PRIORITY_PASS_MODEL, stepKeyMax, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
+import { PRIORITY_PASS_MODEL, repeatsDropped, stepKeyMax, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
@@ -56,6 +56,10 @@ const RUNS_OF_DAY_READ = 500;
 // Codegen catches up on the next push.
 const self = (internal as any).priorityPassRun;
 type Step = Doc<"priorities">["steps"][number];
+const lastOf = <T,>(xs: readonly T[], p: (x: T) => boolean): T | undefined => {
+  for (let i = xs.length - 1; i >= 0; i--) if (p(xs[i])) return xs[i];
+  return undefined;
+};
 const inputs = (internal as any).priorityPassInputs;
 
 type Counts = { created: number; updated: number; merged: number; mapped_sessions: number };
@@ -283,7 +287,8 @@ async function liveSurvivor(ctx: { db: any }, into: Id<"priorities">, step_keys:
     const from = row;
     keys = Object.fromEntries(Object.entries(keys).flatMap(([k, key]) => {
       const title = from.steps.find((st) => st.key === key && !st.dropped)?.title;
-      const to = title ? next.steps.find((st) => !st.dropped && st.title === title) : undefined;
+      // The newest of that title: a merge adds the milestones it carries at the end.
+      const to = title ? lastOf(next.steps, (st) => !st.dropped && st.title === title) : undefined;
       return to ? [[k, to.key]] : [];
     }));
     row = next;
@@ -298,7 +303,9 @@ async function liveSurvivor(ctx: { db: any }, into: Id<"priorities">, step_keys:
  * part of `into` lets go. A session the person placed (or a link mapped) on
  * a live milestone of `from` the map does not take to a live one brings that
  * milestone to `into` under a new key, as the first page's newest sessions
- * do (applyPlan's merges), however old the session. `scope` keeps only
+ * do (applyPlan's merges), however old the session: onto `into`'s own of that
+ * title when it has one, and never where the person dropped it (the map's
+ * key, or a milestone its title repeats). `scope` keeps only
  * sessions of that person in that workspace (the pass's). Returns where the
  * next page starts (or null) and the map, with what this page carried.
  */
@@ -320,7 +327,11 @@ export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, t
     const key = conv.priority_step_key;
     if (intoRow && key && anchors(conv) && !(keys[key] && live.has(keys[key]))) {
       const st = fromRow?.steps.find((x) => x.key === key && !x.dropped);
-      if (st) {
+      // The person dropped where the map points, or a milestone it repeats: it never comes back, and the session's step is unknown.
+      const dropped = st && steps.some((x) => x.dropped && (x.key === keys[key] || repeatsDropped(x.title, st.title)));
+      const same = st && !dropped ? lastOf(steps, (x) => !x.dropped && x.title === st.title) : undefined;
+      if (same) keys[key] = same.key;
+      else if (st && !dropped) {
         mark ??= stepKeyMax(steps, await stepKeyMark(ctx, intoRow));
         keys[key] = `s${++mark}`;
         steps = [...steps, { ...st, key: keys[key] }];
@@ -336,32 +347,28 @@ export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, t
   return { next: page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null, into, step_keys: keys };
 }
 
-/**
- * One page of a priority's sessions on a key that is no live milestone of it
- * now: each keeps the priority, step unknown. A milestone the pass removed
- * (`removed`, as it was) that a session the person placed, or a link mapped,
- * sits on comes back instead, and its sessions keep it, however old the
- * session (applyPlan holds the ones its newest sessions anchor). A drop is the
- * person's and is never undone. Returns where the next page starts, or null.
- */
-export async function clearDeadKeysPage(ctx: { db: any }, priorityId: Id<"priorities">, after: number, removed: Step[] = []): Promise<number | null> {
+/** The milestones of `removed` a page of sessions anchors (a session the person placed, or a link mapped, sits on one), and where the next page starts. */
+async function anchoredPage(ctx: { db: any }, priorityId: Id<"priorities">, after: number, removed: Step[]): Promise<{ next: number | null; anchored: string[] }> {
+  const page = await sessionPage(ctx, priorityId, after);
+  const anchored = page.filter((c) => anchors(c) && removed.some((st) => st.key === c.priority_step_key)).map((c) => c.priority_step_key!);
+  return { next: page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null, anchored };
+}
+
+/** Puts back the removed milestones a session anchors, unless the key is on the row again (a drop is the person's) or a live milestone of that title is. */
+async function restoreAnchored(ctx: { db: any }, priorityId: Id<"priorities">, removed: Step[], anchored: ReadonlyArray<string>): Promise<void> {
+  const row: Doc<"priorities"> | null = await ctx.db.get(priorityId);
+  if (!row) return;
+  const back = removed.filter((st) => anchored.includes(st.key) && !row.steps.some((x) => x.key === st.key || (!x.dropped && x.title === st.title)));
+  if (back.length) await ctx.db.patch(row._id, { steps: [...row.steps, ...back], updated_at: Date.now() });
+}
+
+/** One page of a priority's sessions on a key that is no live milestone of it now: each keeps the priority, step unknown. Returns where the next page starts, or null. */
+export async function clearDeadKeysPage(ctx: { db: any }, priorityId: Id<"priorities">, after: number): Promise<number | null> {
   const row: Doc<"priorities"> | null = await ctx.db.get(priorityId);
   if (!row) return null;
   const live = new Set(row.steps.filter((st) => !st.dropped).map((st) => st.key));
   const page = await sessionPage(ctx, priorityId, after);
-  const restored: Step[] = [];
-  for (const conv of page) {
-    const key = conv.priority_step_key;
-    if (!key || live.has(key)) continue;
-    const back = anchors(conv) && !row.steps.some((st) => st.key === key) ? removed.find((st) => st.key === key) : undefined;
-    if (back) {
-      restored.push(back);
-      live.add(key);
-      continue;
-    }
-    await ctx.db.patch(conv._id, { priority_step_key: undefined });
-  }
-  if (restored.length) await ctx.db.patch(row._id, { steps: [...row.steps, ...restored], updated_at: Date.now() });
+  for (const conv of page) if (conv.priority_step_key && !live.has(conv.priority_step_key)) await ctx.db.patch(conv._id, { priority_step_key: undefined });
   return page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null;
 }
 
@@ -374,14 +381,32 @@ export const moveMergedSessions = internalMutation({
   },
 });
 
-/** The rest of a removed or dropped milestone's sessions past the first page, a page a run (clearDeadKeysPage): idempotent, it reads the milestones as they are then. */
+/**
+ * The rest of a removed or dropped milestone's sessions, a page a run. While
+ * `removed` is given it scans (anchoredPage), gathering `anchored`; past the
+ * last page it puts those milestones back and starts clearing from the first
+ * page (clearDeadKeysPage). Idempotent: each run reads the milestones as they are then.
+ */
 export const clearDeadStepKeys = internalMutation({
-  args: { priority_id: v.id("priorities"), after: v.number(), removed: v.optional(v.array(priorityStep)) },
+  args: { priority_id: v.id("priorities"), after: v.number(), removed: v.optional(v.array(priorityStep)), anchored: v.optional(v.array(v.string())) },
   handler: async (ctx, args): Promise<void> => {
-    const next = await clearDeadKeysPage(ctx, args.priority_id, args.after, args.removed);
-    if (next !== null) await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { ...args, after: next });
+    if (args.removed?.length) {
+      const scan = await anchoredPage(ctx, args.priority_id, args.after, args.removed);
+      const anchored = [...new Set([...(args.anchored ?? []), ...scan.anchored])];
+      if (scan.next !== null) return void (await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { ...args, after: scan.next, anchored }));
+      await restoreAnchored(ctx, args.priority_id, args.removed, anchored);
+      return clearDeadStepKeysFrom(ctx, args.priority_id);
+    }
+    const next = await clearDeadKeysPage(ctx, args.priority_id, args.after);
+    if (next !== null) await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { priority_id: args.priority_id, after: next });
   },
 });
+
+/** Clears a priority's dead keys: the first page now, the rest by scheduled runs. */
+async function clearDeadStepKeysFrom(ctx: { db: any; scheduler: any }, priorityId: Id<"priorities">): Promise<void> {
+  const next = await clearDeadKeysPage(ctx, priorityId, 0);
+  if (next !== null) await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { priority_id: priorityId, after: next });
+}
 
 /** A merge's sessions: the first page now, the rest by scheduled runs. */
 export async function moveMergedSessionsNow(ctx: { db: any; scheduler: any }, from: Id<"priorities">, into: Id<"priorities">, step_keys: Record<string, string>, scope?: { user_id: Id<"users">; workspace: string }): Promise<void> {
@@ -389,10 +414,21 @@ export async function moveMergedSessionsNow(ctx: { db: any; scheduler: any }, fr
   if (page.next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { from, into: page.into, step_keys: page.step_keys, after: page.next, ...(scope ? { scope } : {}) });
 }
 
-/** A priority's sessions on dead keys: the first page now, the rest by scheduled runs. `removed`: the milestones the pass took off, as they were. */
+/**
+ * A priority's sessions on dead keys, step unknown after. `removed`: the
+ * milestones the pass took off, as they were. One a session the person
+ * placed, or a link mapped, sits on comes back with every session on it, so
+ * every page is read for those before any key is cleared (in one transaction
+ * when the priority's sessions fit a page, else by scheduled runs). A drop
+ * (no `removed`) is the person's and is never undone: clearing starts now.
+ */
 export async function clearDeadStepKeysNow(ctx: { db: any; scheduler: any }, priorityId: Id<"priorities">, removed: Step[] = []): Promise<void> {
-  const next = await clearDeadKeysPage(ctx, priorityId, 0, removed);
-  if (next !== null) await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { priority_id: priorityId, after: next, ...(removed.length ? { removed } : {}) });
+  if (removed.length) {
+    const scan = await anchoredPage(ctx, priorityId, 0, removed);
+    if (scan.next !== null) return void (await ctx.scheduler.runAfter(0, self.clearDeadStepKeys, { priority_id: priorityId, after: scan.next, removed, anchored: scan.anchored }));
+    await restoreAnchored(ctx, priorityId, removed, scan.anchored);
+  }
+  await clearDeadStepKeysFrom(ctx, priorityId);
 }
 
 /**
@@ -717,8 +753,8 @@ type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chai
 /** Model-call failures that come back the same on the same input: a reply with no whole JSON, or a call the spec check refuses. */
 const REPEATING_CALL_ERRORS = /^the answer (held no JSON|ran past max_tokens)/;
 
-/** A plan that failed to land for a reason the next try need not share: a write conflict that outlasted Convex's retries, or a timeout. */
-const TRANSIENT_APPLY_ERRORS = /changed while this mutation was being run|OptimisticConcurrency|timed out|timeout/i;
+/** A plan that failed to land for a reason the next try need not share: a write conflict that outlasted Convex's retries. A timeout is not one: a plan too big for one transaction times out on every try. */
+const TRANSIENT_APPLY_ERRORS = /changed while this mutation was being run|OptimisticConcurrency/;
 
 async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const started_at = Date.now();

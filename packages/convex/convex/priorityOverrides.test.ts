@@ -308,7 +308,8 @@ describe("past 1,500 sessions on one priority", () => {
     const total = await on(w, p1._id);
     txs = [];
     await applyPlan(w, { updates: [{ short_id: "pri-1", patch: { steps: p1.steps.filter((s: any) => s.key !== "s2") } }] });
-    expect(await on(w, p1._id, "s2")).toBe(total - passRun.SESSION_PAGE);
+    // Past one page, every page is read for a placed session that would put the milestone back before any key is cleared.
+    expect(await on(w, p1._id, "s2")).toBe(MANY);
     await drain(w);
     expect([await on(w, p1._id, "s2"), await on(w, p1._id)]).toEqual([0, total]);
     bounded();
@@ -373,14 +374,14 @@ describe("past 1,500 sessions on one priority", () => {
   }, 180_000);
 
   /** One session the person placed, `older` sessions before it and 250 after: past the newest page the plan's own read of anchors sees. */
-  const placedAmong = async (w: World, priority: Id<"priorities">, step: string, older: number) => {
-    await make(w, priority, older);
+  const placedAmong = async (w: World, priority: Id<"priorities">, step: string, older: number, olderStep?: string) => {
+    await make(w, priority, older, olderStep);
     await make(w, priority, 1, step, { priority_set_by: "person", session_id: "jx7placed" });
     await make(w, priority, 250);
     return w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_priority", (q) => q.eq("priority_id", priority)).collect()).find((c) => c.session_id === "jx7placed")!._id);
   };
 
-  for (const [where, older] of [["the first page", 0], ["a scheduled page", 210]] as const) {
+  for (const [where, older] of [["the first page", 0], ["the first page, after older sessions", 50], ["a scheduled page", 210]] as const) {
     test(`a pass merge carries the milestone an old placed session sits on, in ${where}`, async () => {
       const w = await seeded();
       const p8 = await priority(w, "pri-8", { steps: [{ key: "s1", title: "Auth", tier: "critical", refs: [] }], step_key_max: 1 });
@@ -398,15 +399,16 @@ describe("past 1,500 sessions on one priority", () => {
     test(`a plan that removes the milestone an old placed session sits on puts it back, in ${where}`, async () => {
       const w = await seeded();
       const p1 = await byShort(w, "pri-1");
-      const placed = await placedAmong(w, p1._id, "s2", older);
+      // The pass's sessions on it, older than the placed one (earlier in its page, or in earlier pages), and newer.
+      const placed = await placedAmong(w, p1._id, "s2", older, "s2");
       await make(w, p1._id, 3, "s2");
       await applyPlan(w, { updates: [{ short_id: "pri-1", patch: { steps: p1.steps.filter((s: any) => s.key !== "s2") } }] });
       await drain(w);
       const after = await byShort(w, "pri-1");
       expect(after.steps.find((s: any) => s.key === "s2")).toMatchObject({ title: "Ship the grader" });
       expect((await w.conversation(placed))?.priority_step_key).toBe("s2");
-      // The milestone is back, so the pass's sessions on it keep it too.
-      expect(await on(w, p1._id, "s2")).toBe(4);
+      // The milestone is back, so the pass's sessions on it keep it too, whatever their place in the pages.
+      expect(await on(w, p1._id, "s2")).toBe(older + 4);
       bounded();
     }, 120_000);
   }
@@ -415,16 +417,52 @@ describe("past 1,500 sessions on one priority", () => {
     const w = await seeded();
     const p1 = await byShort(w, "pri-1");
     const p8 = await priority(w, "pri-8", { steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], step_key_max: 1, status: "merged", merged_into: p1._id });
-    const p2 = await priority(w, "pri-2", { steps: [{ key: "s1", title: "Other", tier: "critical", refs: [] }], step_key_max: 1 });
+    // pri-2 has a milestone of that title of its own: the pages follow the copy the merge carried, as pri-1's sessions do.
+    const p2 = await priority(w, "pri-2", { steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], step_key_max: 1 });
     // The pass merged pri-8 into pri-1; its first page ran, these 250 wait for the next.
     await make(w, p8, 250, "s1");
     await as(w, w.ana).mutation(pri.merge, { short_id: "pri-1", into: "pri-2" });
     await drain(w);
-    const carried = (await byShort(w, "pri-2")).steps.find((s: any) => s.title === "Grader faults under 10%").key;
+    const carried = (await byShort(w, "pri-2")).steps.findLast((s: any) => s.title === "Grader faults under 10%").key;
     expect(carried).toBe("s2");
     await w.t.mutation((internal as any).priorityPassRun.moveMergedSessions, { from: p8, into: p1._id, step_keys: { s1: "s1" }, after: 0 });
     await drain(w);
-    expect([await on(w, p8), await on(w, p1._id), await on(w, p2, carried) >= 250]).toEqual([0, 0, true]);
+    expect([await on(w, p8), await on(w, p1._id), await on(w, p2, carried) >= 250, await on(w, p2, "s1")]).toEqual([0, 0, true, 0]);
+  }, 120_000);
+
+  /** pri-8 merged into pri-1 by the pass, whose first page carried pri-8/s1 Auth as pri-1/s4; the person then drops s4. The next page holds a placed session on pri-8/s1. */
+  const droppedBetweenPages = async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const auth = { key: "s1", title: "Auth", tier: "critical", tier_set_by: "pass", refs: [], done: false };
+    const p8 = await priority(w, "pri-8", { steps: [auth], step_key_max: 1, status: "merged", merged_into: p1._id });
+    await w.t.run((ctx) => ctx.db.patch(p1._id, { steps: [...p1.steps, { ...auth, key: "s4" }], step_key_max: 4 } as any));
+    const placed = await placedAmong(w, p8, "s1", 0);
+    await as(w, w.ana).mutation(pri.dropStep, { short_id: "pri-1", step_key: "s4" });
+    await drain(w);
+    return { w, p1, p8, placed };
+  };
+  const liveAuth = (row: any) => row.steps.filter((s: any) => !s.dropped && s.title === "Auth");
+
+  test("a later merge page never brings back a milestone the person dropped since the first page carried it", async () => {
+    const { w, p1, p8, placed } = await droppedBetweenPages();
+    await w.t.mutation((internal as any).priorityPassRun.moveMergedSessions, { from: p8, into: p1._id, step_keys: { s1: "s4" }, after: 0 });
+    await drain(w);
+    expect(liveAuth(await byShort(w, "pri-1"))).toEqual([]);
+    const conv = await w.conversation(placed);
+    expect([conv?.priority_id, conv?.priority_step_key]).toEqual([p1._id, undefined]);
+  }, 120_000);
+
+  test("nor onto the survivor the person merged it into, which holds the drop", async () => {
+    const { w, p1, p8, placed } = await droppedBetweenPages();
+    const p2 = await priority(w, "pri-2", { steps: [], step_key_max: 0 });
+    await as(w, w.ana).mutation(pri.merge, { short_id: "pri-1", into: "pri-2" });
+    await drain(w);
+    await w.t.mutation((internal as any).priorityPassRun.moveMergedSessions, { from: p8, into: p1._id, step_keys: { s1: "s4" }, after: 0 });
+    await drain(w);
+    expect(liveAuth(await byShort(w, "pri-2"))).toEqual([]);
+    const conv = await w.conversation(placed);
+    expect([conv?.priority_id, conv?.priority_step_key]).toEqual([p2, undefined]);
   }, 120_000);
 
   test("a person's drop clears the milestone off a session they placed on it", async () => {
