@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { walkFiles, listFilesByMtime, walkDirs, walkDirsSync } from "./fsWalk.js";
+import { walkFiles, walkDirs, walkDirsSync } from "./fsWalk.js";
 import { setSlowSyncFsThresholdForTests, setSlowSyncSink } from "./slowSync.js";
 
 const cleanups: (() => void)[] = [];
@@ -118,18 +118,6 @@ describe("walkFiles", () => {
   test("a missing root reports nothing and does not throw", async () => {
     const out = await rels(path.join(os.tmpdir(), "fswalk-does-not-exist"), {});
     expect(out).toEqual([]);
-  });
-});
-
-describe("listFilesByMtime", () => {
-  test("newest first", async () => {
-    const root = scaffold();
-    const now = Date.now();
-    fs.utimesSync(path.join(root, "top.jsonl"), new Date(now - 30_000), new Date(now - 30_000));
-    fs.utimesSync(path.join(root, "a", "one.jsonl"), new Date(now), new Date(now));
-    const files = await listFilesByMtime(root, { maxDepth: 2, fileFilter: (r) => r.endsWith(".jsonl") });
-    expect(files[0].rel).toBe(path.join("a", "one.jsonl"));
-    expect(files[files.length - 1].rel).toBe("top.jsonl");
   });
 });
 

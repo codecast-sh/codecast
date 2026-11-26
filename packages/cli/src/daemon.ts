@@ -79,7 +79,7 @@ import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistr
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { claudeProjectsDirs } from "./claudeConfigDirs.js";
-import { walkFiles, walkEntryBatches, walkDirsSync, listFilesByMtime, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
+import { walkFiles, walkEntryBatches, walkDirsSync, type WalkEntry, type WalkFile, type WalkOptions } from "./fsWalk.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { reconcileClaudeSettingsModel } from "./claudeDefaultModel.js";
 import { formatHarnessChange, harnessCauseEnv, markHarnessChangesSent, removeHarnessFile, unsentHarnessChanges, withHarnessCause, writeHarnessFile, type HarnessChange } from "./harness.js";
@@ -33495,72 +33495,6 @@ async function main(): Promise<void> {
       await sweepStatusLineStamps(now - ttlMs);
     })().catch(() => {});
   }, 30 * 60 * 1000);
-
-  const CLAUDE_PLANS_DIR = path.join(process.env.HOME || "", ".claude", "plans");
-  const planFileSynced = new Map<string, number>();
-
-  // The newest transcript directly under a project dir; a plan file names no
-  // session, so the one written most recently is its owner.
-  async function findMostRecentSessionId(): Promise<string | null> {
-    const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-    const files = await listFilesByMtime(claudeProjectsDir, {
-      policy: { files: "plan" },
-      maxDepth: 2,
-      fileFilter: (rel) => rel.includes(path.sep) && rel.endsWith(".jsonl") && !rel.includes("sessions-index"),
-    });
-    return files[0] ? path.basename(files[0].path, ".jsonl") : null;
-  }
-
-  async function handlePlanFile(filePath: string): Promise<void> {
-    if (!filePath.endsWith(".md")) return;
-    try {
-      const stat = await fs.promises.stat(filePath);
-      const lastSynced = planFileSynced.get(filePath);
-      if (lastSynced && stat.mtimeMs <= lastSynced) return;
-      // Stamped before the awaits: chokidar fires add and change for one
-      // write 300ms apart, and both would pass the mtime gate and sync the
-      // same content twice. A failed read gives the stamp back.
-      planFileSynced.set(filePath, stat.mtimeMs);
-
-      let content: string;
-      try {
-        content = await fs.promises.readFile(filePath, "utf-8");
-      } catch (err) {
-        if (planFileSynced.get(filePath) === stat.mtimeMs) planFileSynced.delete(filePath);
-        throw err;
-      }
-      if (!content.trim()) return;
-
-      const sessionId = await findMostRecentSessionId();
-      if (!sessionId) return;
-
-      syncService.syncPlanFromPlanMode({
-        sessionId,
-        planContent: content,
-      }).then(planShortId => {
-        if (planShortId) {
-          planModePlanMap.set(sessionId, planShortId);
-          savePlanModeCache();
-          log(`Synced plan file ${path.basename(filePath)} -> ${planShortId} for session ${sessionId.slice(0, 8)}`);
-        }
-      }).catch(err => {
-        log(`Failed to sync plan file ${path.basename(filePath)}: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    } catch {}
-  }
-
-  if (fs.existsSync(CLAUDE_PLANS_DIR)) {
-    const planFileWatcher = new RecursiveWatcher({
-      path: CLAUDE_PLANS_DIR,
-      filter: () => true,
-      maxDepth: 1,
-      debounceMs: 300,
-      callback: (p, eventType) => { if (eventType !== "unlink") void handlePlanFile(p); },
-    });
-    planFileWatcher.on("error", () => {});
-    planFileWatcher.start();
-    log(`Plan file watcher started on ${CLAUDE_PLANS_DIR}`);
-  }
 
   // Sweep ~/.claude/projects for files whose synced position trails their size and
   // push the missing bytes directly via processSessionFile — independent of the file

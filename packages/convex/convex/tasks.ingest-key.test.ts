@@ -90,7 +90,8 @@ test('existing key cannot bypass conversation, project, plan, or parent validati
   f.tables.conversations.push({_id:'conversations_other',session_id:'native-other',user_id:'users_a',status:'active'});
   await expect(f.submit({...args,conversation_id:'native-other'})).rejects.toThrow('different context');
   await expect(f.submit({...args,project_id:'projects_missing'})).rejects.toThrow();
-  await expect(f.submit({...args,plan_id:'pl-missing'})).rejects.toThrow();
+  // A plan_mode TaskCreate's plan is a cached hint that files without a plan when gone (tasks.planModeHint.test.ts).
+  await expect(f.submit({...args,source:'cli',plan_id:'pl-missing'})).rejects.toThrow();
   await expect(f.submit({...args,parent_id:'ct-missing'})).rejects.toThrow();
   expect(f.tables.tasks).toHaveLength(1);
 });

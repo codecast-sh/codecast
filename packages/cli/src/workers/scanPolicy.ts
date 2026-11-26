@@ -51,7 +51,6 @@ export function scanPredicates(root: string, policy: ScanPolicy) {
       case 'cursor': case 'cursorStale': return isCursorTranscriptPath(rel);
       case 'cursorDb': return /state\.vscdb(-wal)?$/.test(rel);
       case 'reconciliation': return base.endsWith('.jsonl') && !base.startsWith('agent-');
-      case 'plan': return rel.includes(path.sep) && rel.endsWith('.jsonl') && !rel.includes('sessions-index');
       case 'vault': return vault(rel);
       default: return true;
     }
