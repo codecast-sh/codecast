@@ -6264,12 +6264,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // strip consumes each nonce at most once, so a stale request is inert.
   // Ephemeral.
   triggerStripRequest: TriggerStripRequest | null;
-  // One-shot composer seed from a `?prefill=` deep link, published by the
+  // One-shot composer seed from a `?prefill=` or `?compose=` deep link
+  // (lib/composerPrefill's ComposerSeed), published by the
   // /conversation/<id> page before it redirects to the inbox. It cannot ride the
   // URL: that redirect drops the query, and the inbox canonicalizes the address
   // again once the session resolves. Keyed by conversation so only that
   // session's composer takes it, and consumed there at most once. Ephemeral.
-  composerPrefill: { convId: string; text: string } | null;
+  composerPrefill: { convId: string; text: string; append: boolean } | null;
   viewingDismissedId: string | null;
   // The conversation the active inbox pane holds on screen in place of
   // currentSessionId: a link target not yet in `sessions` (loading, or a
@@ -6833,7 +6834,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) => void;
   setTriggerStripRequest: (req: TriggerStripRequest | null) => void;
-  setComposerPrefill: (req: { convId: string; text: string } | null) => void;
+  setComposerPrefill: (req: { convId: string; text: string; append: boolean } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -13543,7 +13544,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ triggerStripRequest: req }),
 
   // Raw set: one-shot composer seed (see the state field's comment).
-  setComposerPrefill: (req: { convId: string; text: string } | null) =>
+  setComposerPrefill: (req: { convId: string; text: string; append: boolean } | null) =>
     set({ composerPrefill: req }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
