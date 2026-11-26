@@ -32,6 +32,9 @@
 .sj-return[data-active] .sj-return-line { border-color: var(--sj-session); }
 .sj-return[data-active] .sj-return-words { color: var(--sj-session); font-weight: 600; }
 .sj-stage { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; text-align: center; }
+/* A card inside a reply sits in Tailwind typography, whose `.prose-sm :where(ol > li)` pads and spaces every list item:
+   the stage is the card's own row, so neither applies (the stacked rail lines up with its marks only at zero). */
+.sj .sj-stage { padding-inline: 0; margin-block: 0; }
 .sj-stage::after { content: ""; position: absolute; top: 10px; left: calc(50% + 14px); right: calc(-50% + 14px); height: 2px; border-radius: 2px; background: var(--sj-rule); }
 .sj-stage:last-child::after { display: none; }
 .sj-stage[data-past]::after { background: color-mix(in srgb, var(--sj-ok) 70%, transparent); }
