@@ -20,8 +20,8 @@ import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere, rollbackOffer } from "../../lib/deploys/press";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { ageShort } from "../../lib/lineFlow";
-import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, filterParams, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFilters, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
-import type { ChangeGroupId, ChangeViewer } from "../../lib/changes/rows";
+import { DEPLOY_LABELS, FOCUS_PARAMS, NO_FILTERS, commitMatches, deployMatches, filterParams, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFilters, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
+import type { ChangeViewer } from "../../lib/changes/rows";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { useDeployDetail, useSyncDeployDetail } from "../../hooks/useDeployDetail";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
@@ -103,8 +103,8 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   useEffect(() => {
     if (labels !== firstLabels.current) rewriteAddress({ show: labels.join(",") });
   }, [labels]);
-  // Both columns share one set of filters, kept in the address the same way.
-  const [filters, setFilters] = useState<DeployFilters>(initialFilters ?? { mine: false, group: null });
+  // Each column's own filters, kept in the address the same way.
+  const [filters, setFilters] = useState<DeployFilters>(initialFilters ?? NO_FILTERS);
   const firstFilters = useRef(filters);
   // eslint-disable-next-line no-restricted-syntax -- keeps the address bar in step with the chosen filters
   useEffect(() => {
@@ -235,8 +235,8 @@ function TargetPane({ target: t, production, deploys, now, onPress, onPause, onR
     keepFocusInView();
   }, [focus, focusOpen, focusWaiting, openDeploy]);
   // Mine keeps the commit a link points at, so the highlight is never filtered away.
-  const groups = filters.mine ? mineOnly(t.queue.groups, me, (c) => commitMatches(c, focus)) : t.queue.groups;
-  const pickGroup = (group: ChangeGroupId | null) => onFilters({ ...filters, group });
+  const mine = filters.waiting.mine;
+  const groups = mine ? mineOnly(t.queue.groups, me, (c) => commitMatches(c, focus)) : t.queue.groups;
   // A column no waiting commit fills takes no room (branches arrive only where a PR or session names one).
   const shownLabels = labels.filter((l) => l !== "branch" || t.queue.groups.some((g) => g.commits.some((c) => c.branch)));
   const back = rollbackTarget(n.history, n.live);
@@ -289,27 +289,27 @@ function TargetPane({ target: t, production, deploys, now, onPress, onPause, onR
 
       {pause ? <Paused p={pause} canLift={!!production?.can_lift} now={now} onLift={onLift} /> : null}
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
-      {focus ? <FocusChip focus={focus} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
-      {t.record_only ? null : (
-        <div className="dpp-filters" data-deploy-filters>
-          <button type="button" className="dpp-mine" aria-pressed={filters.mine} onClick={() => onFilters({ ...filters, mine: !filters.mine })} data-deploy-mine>Mine</button>
-          <LabelSwitch labels={labels} onToggle={onToggleLabel} />
-        </div>
-      )}
+      {focus ? <FocusChip focus={focus} repository={t.repository} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
 
       {/* Before main on the left, main and after on the right: two columns once the page is wide (deploys.css), each its own scroll. */}
       <div className="dpp-body">
-      {t.record_only ? null : <div className="dpp-col" data-deploy-col="before"><OnItsWay repository={t.repository} filters={filters} me={me} focus={focus} onPickGroup={pickGroup} /></div>}
+      {t.record_only ? null : <div className="dpp-col" data-deploy-col="before"><OnItsWay repository={t.repository} filters={filters.coming} onFilters={(coming) => onFilters({ ...filters, coming })} me={me} focus={focus} /></div>}
 
       <div className="dpp-col" data-deploy-col="after">
       {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
         <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} not for {t.name}</span> : null}</h3>
+        {t.queue.known && waiting ? (
+          <div className="dpp-filters" data-deploy-filters="waiting">
+            <button type="button" className="dpp-mine" aria-pressed={mine} onClick={() => onFilters({ ...filters, waiting: { mine: !mine } })} aria-label="Only my commits" data-deploy-mine="waiting">Mine</button>
+            <LabelSwitch labels={labels} onToggle={onToggleLabel} />
+          </div>
+        ) : null}
         {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>
         : waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p>
         : !groups.length ? <p className="dpp-none" data-deploy-none-mine>None of yours</p> : (
           <ul className="dpp-groups">
             {groups.map((g) => <SessionGroup key={g.key} g={g} now={now} repository={t.repository} me={me} labels={shownLabels} focus={focus} />)}
-            {!filters.mine && t.queue.commits > t.queue.shown ? <li className="dpp-more">{t.queue.commits - t.queue.shown} older commits</li> : null}
+            {!mine && t.queue.commits > t.queue.shown ? <li className="dpp-more">{t.queue.commits - t.queue.shown} older commits</li> : null}
           </ul>
         )}
       </section>}
@@ -558,16 +558,17 @@ function Failed({ d }: { d: TeamDeployRow }) {
 }
 
 /**
- * One of a waiting commit's IDs, in a fixed-width cell so every row's IDs line up; a commit without one leaves the cell
- * empty. Each is the pill a conversation draws, hover card and all, bare of the state the queue already says.
+ * One of a waiting commit's references, in a fixed-width cell so every row's columns line up; a commit without one leaves
+ * the cell empty. Each is the pill a conversation draws, hover card and all: a task or session by its title (cut at the
+ * cell's edge), a PR or commit by its ID, since the row's subject is already its title, bare of the state the queue says.
  */
 function CommitId({ kind, c, pr, repository }: { kind: DeployLabel; c: QueueGroup["commits"][number]; pr: number | null; repository: string }) {
   const t = kind === "task" ? c.tasks.find((x) => x.short_id) : null;
   const pill =
     kind === "pr" ? (pr ? <EntityIdPill type="pr" id={`${repository}#${pr}`} idLabel={`#${pr}`} certain compact bare /> : null)
     : kind === "sha" ? <EntityIdPill type="commit" id={`${repository}@${c.sha.slice(0, 10)}`} idLabel={short(c.sha)} certain compact bare />
-    : kind === "task" ? (t ? <EntityIdPill type="task" id={t.short_id!} idLabel={t.short_id!} compact /> : null)
-    : kind === "session" ? (c.session ? <EntityIdPill type="session" id={c.session.conversation_id} idLabel={c.session.short_id ?? c.session.conversation_id.slice(0, 7)} compact /> : null)
+    : kind === "task" ? (t ? <EntityIdPill type="task" id={t.short_id!} wide /> : null)
+    : kind === "session" ? (c.session ? <EntityIdPill type="session" id={c.session.conversation_id} wide /> : null)
     : c.branch ? <code title={c.branch}>{c.branch}</code> : null;
   return <span className="dpp-id" data-kind={kind} data-deploy-pr={kind === "pr" && pr ? pr : undefined}>{pill}</span>;
 }
@@ -582,7 +583,7 @@ function LabelSwitch({ labels, onToggle }: { labels: DeployLabel[]; onToggle: (l
 }
 
 /** The thing the link pointed at, and where it is on this target: waiting, live in a deploy, on its way out, or not here. */
-export function FocusChip({ focus, waiting, deploys, live, onClear }: { focus: DeployFocus; waiting: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
+export function FocusChip({ focus, repository, waiting, deploys, live, onClear }: { focus: DeployFocus; repository: string; waiting: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
   const d = deploys[0];
   const where = !d && !waiting ? "not on this target"
     : waiting ? "waiting"
@@ -590,10 +591,21 @@ export function FocusChip({ focus, waiting, deploys, live, onClear }: { focus: D
     : d._id === live?._id ? `live in ${d.short_id}` : d.status === "live" ? `went out in ${d.short_id}` : `${d.status} in ${d.short_id}`;
   return (
     <div className="dpp-focus" data-state={waiting ? "waiting" : d ? "deployed" : "missing"} data-deploy-focus={focusWord(focus)}>
-      {/* A session reads as its short id (a conversation id's first seven characters), the way the queue names it. */}
-      {focus.kind === "session" ? <EntityIdPill type="session" id={focus.id} idLabel={focus.id.slice(0, 7)} compact /> : <b>{focusWord(focus)}</b>}
+      {/* The thing reads as its pill does anywhere: a session, task, PR, commit or deploy by its title; a branch by its name. */}
+      <span className="dpp-focus-ref"><FocusRef focus={focus} repository={repository} /></span>
       <span>{where}</span>
       <button type="button" onClick={onClear} aria-label="Clear highlight" data-deploy-focus-clear><X className="w-3 h-3" aria-hidden /></button>
     </div>
   );
+}
+
+function FocusRef({ focus: f, repository }: { focus: DeployFocus; repository: string }) {
+  switch (f.kind) {
+    case "pr": return <EntityIdPill type="pr" id={`${repository}#${f.pr}`} label={focusWord(f)} certain wide />;
+    case "sha": return <EntityIdPill type="commit" id={`${repository}@${f.sha}`} label={focusWord(f)} certain wide />;
+    case "task": return <EntityIdPill type="task" id={f.id} wide />;
+    case "session": return <EntityIdPill type="session" id={f.id} wide />;
+    case "deploy": return <EntityIdPill type="deploy" id={f.id} wide />;
+    case "branch": return <b>{f.name}</b>;
+  }
 }

@@ -17,6 +17,23 @@ export function stationProgress(deps: Pick<FlowDeps, "cliPost">, run: string | u
   };
 }
 
+/** A station script's report to its run. One that fails is logged and the station goes on. */
+async function reportToRun(deps: Pick<FlowDeps, "cliPost">, what: string, route: string, body: { run_id?: string } & Record<string, unknown>): Promise<void> {
+  if (!body.run_id) return console.error(`${what} was not recorded on the run: no run ($run_id)`);
+  await deps.cliPost(route, body, { throwOnError: true })
+    .catch((err) => console.error(`${what} was not recorded on the run: ${err instanceof Error ? err.message : String(err)}`));
+}
+
+/**
+ * The run's pull request and the head pushed, on the server: the first one is what a Ship press approves
+ * (convex changeApprovals.ts), and a pull request no run reported reads as a bot's. A failed report costs the
+ * approval status a wait, never the station.
+ */
+export async function recordRunPr(deps: Pick<FlowDeps, "cliPost">, pr: { run_id?: string; repository?: string | null; number: number; head_sha: string }): Promise<void> {
+  if (!pr.repository) return console.error("the pull request was not recorded on the run: no repository");
+  await reportToRun(deps, "the pull request", "/cli/workflow-runs/pr", { run_id: pr.run_id, repository: pr.repository, number: pr.number, head_sha: pr.head_sha });
+}
+
 export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
   // Land's check that the change is on main (workflow/landed.ts): run by templates/line/ship.sh after the land command.
   flow
@@ -71,15 +88,34 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
         // 4: someone else moved origin's branch, so the run starts a new round at PR.
         process.exit(r.new_round ? 4 : 1);
       }
-      // The run's pull request and the head pushed, on the server: the first one is what a Ship press approves
-      // (convex changeApprovals.ts). A failed report costs the approval status a wait, never the station.
       const runId = opts.run ?? process.env.run_id;
       const repository = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(r.pr.url)?.[1];
-      if (runId && repository) {
-        await deps.cliPost("/cli/workflow-runs/pr", { run_id: runId, repository, number: r.pr.number, head_sha: r.pr.head_sha }, { throwOnError: true })
-          .catch((err) => console.error(`the pull request was not recorded on the run: ${err instanceof Error ? err.message : String(err)}`));
-      }
+      if (runId && repository) await recordRunPr(deps, { run_id: runId, repository, number: r.pr.number, head_sha: r.pr.head_sha });
       console.log(JSON.stringify(r.pr));
+    });
+
+  // The same report from a repository's own PR station script, one that opens its pull request without `cast flow pr`.
+  flow
+    .command("record-pr")
+    .description("From a PR station's script: record the pull request it opened or updated, and the head it pushed, on the run. A report that fails is printed and exits 0, so it never fails the station")
+    .requiredOption("--number <n>", "The pull request's number")
+    .requiredOption("--head <sha>", "The head the station pushed")
+    .option("--repository <owner/name>", "The pull request's repository (default: this checkout's origin)")
+    .option("--run <id>", "The run whose station this is (default: $run_id)")
+    .action(async (opts: { number: string; head: string; repository?: string; run?: string }) => {
+      const repository = opts.repository ?? (await import("./prCommand.js")).readLocalGitContext(deps.realCwd()).repository;
+      await recordRunPr(deps, { run_id: opts.run ?? process.env.run_id, repository, number: Number(opts.number), head_sha: opts.head });
+    });
+
+  // And its rebases: a review of the head before covers the head after only once the run holds the link (orgLineMerge.coveredHeads).
+  flow
+    .command("record-rebase")
+    .description("From a station's script: record that it rebased the pull request's head from one commit to another, before it pushes the rebase, so the review of the first covers the second. A report that fails is printed and exits 0, so it never fails the station")
+    .requiredOption("--from <sha>", "The head before the rebase")
+    .requiredOption("--to <sha>", "The rebased head it is about to push")
+    .option("--run <id>", "The run whose station this is (default: $run_id)")
+    .action(async (opts: { from: string; to: string; run?: string }) => {
+      await reportToRun(deps, "the rebase", "/cli/workflow-runs/rebase", { run_id: opts.run ?? process.env.run_id, from: opts.from, to: opts.to });
     });
 
   // The change flow's Wait for main station (workflow/waitMain.ts): run by a parked station.

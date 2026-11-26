@@ -4,6 +4,7 @@ import { LiveRunsCheck } from "../hooks/useLiveRunsCheck";
 import { useSyncMetricSeries, useSyncMetricWindows } from "../hooks/useMetricSeries";
 import { useSessionCardBuckets, useSyncSessionCardBucket } from "../hooks/useSyncTimeline";
 import { useSyncOpsSources } from "../hooks/useSyncOps";
+import { useSyncVisibleSessionOwners } from "../hooks/useSyncVisibleSessionOwners";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
 import { HuddleStartHost } from "./calls/HuddleStartHost";
 import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, Suspense } from "react";
@@ -579,11 +580,19 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
     {windowEffects ? <WindowOnlyEffects /> : null}
     <SessionCommandResultsFeeder />
     <LandedReachFeeder />
+    <VisibleOwnersFeeder />
     <InboxWarmLoop />
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}
   </>;
+}
+
+/** The owners of the inbox cards on screen (owners model), one batched read
+ *  per window: which cards are drawn is this window's own. */
+function VisibleOwnersFeeder() {
+  useSyncVisibleSessionOwners();
+  return null;
 }
 
 /** Settles this window's daemon commands (restart, move, switch, hibernate)

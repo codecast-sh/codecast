@@ -33,6 +33,8 @@ export interface MeteredCall {
   usage: ModelUsage | null;
   /** Why there is no reply, in the API's words when it gave any. */
   error?: string;
+  /** The request never got an answer: the network failed, it timed out, or the API answered 5xx. Another try may succeed. */
+  transient?: boolean;
 }
 
 /**
@@ -247,7 +249,7 @@ export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
         usage = usageOf(parsed);
         if (typeof parsed?.error?.message === "string") message = `${message}: ${parsed.error.message}`;
       } catch {}
-      return { reply: null, usage, error: message };
+      return { reply: null, usage, error: message, ...(response.status >= 500 ? { transient: true } : {}) };
     }
     const data = await response.json();
     const text = replyText(data);
@@ -259,7 +261,7 @@ export async function callModelMetered(args: CallArgs): Promise<MeteredCall> {
     return { reply: { text, usage, stop_reason: data.stop_reason ?? null }, usage };
   } catch (error) {
     console.error(`${args.label} failed:`, error);
-    return { reply: null, usage: null, error: abort.signal.aborted ? "the model call timed out" : "the model call failed" };
+    return { reply: null, usage: null, error: abort.signal.aborted ? "the model call timed out" : "the model call failed", transient: true };
   } finally {
     if (timer) clearTimeout(timer);
   }

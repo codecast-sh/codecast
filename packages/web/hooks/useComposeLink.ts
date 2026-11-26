@@ -27,8 +27,11 @@ export function useComposeLink(active: boolean): void {
   const pathname = usePathname();
   const router = useRouter();
   const key = searchParams.toString();
+  // On /conversation/<id>, `compose` is that session's draft (MessageInput's
+  // seed), never a new session's.
+  const onSession = pathname.startsWith("/conversation/");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const link = useMemo(() => parseComposeLink(searchParams), [key]);
+  const link = useMemo(() => (onSession ? null : parseComposeLink(searchParams)), [key, onSession]);
   const handled = useRef<string | null>(null);
   if (!link) handled.current = null;
 

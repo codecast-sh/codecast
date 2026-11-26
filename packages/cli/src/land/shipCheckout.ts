@@ -133,8 +133,13 @@ export function shipSpec(root: string): ShipSpec {
   return { ...spec, deploy: spec.deploy.map((s) => (targets.has(s.name) ? { ...s, target: targets.get(s.name)! } : s)) };
 }
 
-function credentialReason(rel: string, text: string | null): string | null {
+export function credentialReason(rel: string, text: string | null): string | null {
   if (isCredentialFilePath(rel)) return "named like a credential file";
+  return credentialContentReason(text);
+}
+
+/** Why a file's content is a credential (a private key, a live vendor token), or null. */
+export function credentialContentReason(text: string | null): string | null {
   if (!text) return null;
   if (PRIVATE_KEY_RE.test(text)) return "holds a private key";
   if (liveVendorToken(text)) return "holds an API token";
@@ -430,7 +435,7 @@ export function runShell(command: string, cwd: string, log: Log, env: Record<str
 }
 
 /** The Codecast-Session trailer for a group's commit, when its session is team visible; else nothing. */
-export function trailerFor(group: Pick<ShipGroup, "session">): string {
+export function trailerFor(group: { session: Pick<ShipSession, "conversation_id"> | null }): string {
   const conversationId = group.session?.conversation_id;
   if (!conversationId) return "";
   const links = readSessionLinkCache();

@@ -1,5 +1,7 @@
 import { Id } from "./_generated/dataModel";
 import { dropViewerTriage, mayBeTeamOwned, viewerTriageFor, viewerTriageMap } from "./lib/viewerTriage";
+import { ownersOf, parentLinkOf, type SessionOwnerFacts } from "@codecast/shared/contracts/sessionOwners";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 
 // ── Owner-set primitives (session_owners join table) ─────────────────────────
 // The join table is the canonical multi-owner store: the humans whose inboxes a
@@ -301,8 +303,46 @@ export async function syncPrimaryOwnerCache(
 ): Promise<Id<"users"> | undefined> {
   const owners = await listSessionOwnerIds(ctx, conversationId);
   const primary = (preferred && owners.find((id) => id.toString() === preferred.toString())) || owners[0];
-  await ctx.db.patch(conversationId, { owner_user_id: primary ?? undefined });
+  const stamp = await ownersModelOn(ctx, await ctx.db.get(conversationId)) ? { owners_changed_at: Date.now() } : {};
+  await ctx.db.patch(conversationId, { owner_user_id: primary ?? undefined, ...stamp });
   return primary;
+}
+
+// The session_owners team feature as shared contracts/sessionOwners
+// ownersModelOn reads it: the session's own team's flag, or for a personal
+// session any team of the account that runs it (workspaceHasFeature's
+// personal rule, the same one). Off is the owner model before it.
+export async function ownersModelOn(ctx: { db: any }, conversation: { team_id?: Id<"teams">; user_id?: Id<"users"> } | null | undefined): Promise<boolean> {
+  if (!conversation) return false;
+  return workspaceHasFeature(ctx, { team_id: conversation.team_id, user_id: conversation.user_id }, "session_owners");
+}
+
+// When a session's parent stopped owning it without anyone releasing it: the
+// parent was deleted (0) or killed (its kill time). A parent that cannot
+// answer is a released one, so the child falls back to its people or its
+// starter and is never left in nobody's inbox.
+export async function deadParentAt(ctx: { db: any }, conversation: any): Promise<number | null> {
+  const link = parentLinkOf(conversation);
+  if (!link) return null;
+  const parent = await ctx.db.get(link);
+  if (!parent) return 0;
+  return parent.inbox_killed_at ?? null;
+}
+
+// A session's facts as the shared owner rule reads them.
+export async function sessionOwnerFactsOf(ctx: { db: any }, conversation: any): Promise<SessionOwnerFacts> {
+  const rows = (await ownerRows(ctx, conversation._id)).map((r: any) => ({ user_id: String(r.user_id), added_at: r.added_at }));
+  const starter = await humanStarterUser(ctx, conversation);
+  return {
+    rows,
+    starter: starter ? String(starter._id) : null,
+    user_id: conversation.user_id,
+    org_role_id: conversation.org_role_id,
+    parent_conversation_id: conversation.parent_conversation_id,
+    spawned_by_conversation_id: conversation.spawned_by_conversation_id,
+    parent_released_at: conversation.parent_released_at ?? await deadParentAt(ctx, conversation),
+    role_started: conversation.role_started ?? null,
+  };
 }
 
 // A role's standing session is owned by whom the role reports to (org-staffing.md
@@ -425,9 +465,11 @@ export async function teamOwnerRowsForUser(
   ctx: { db: any },
   userId: Id<"users">,
   cap: number,
+  known?: any[],
 ): Promise<{ rows: any[]; truncated: boolean; truncatedTeamIds: string[] }> {
   const none = { rows: [], truncated: false, truncatedTeamIds: [] as string[] };
-  const memberships = await ctx.db
+  // `known`: the caller already read the memberships (the inbox scan's memo).
+  const memberships = known ?? await ctx.db
     .query("team_memberships")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
@@ -514,4 +556,17 @@ export async function ownerRowsForUser(
     if (!byConversation.has(key)) byConversation.set(key, row);
   }
   return { rows: [...byConversation.values()].sort((a, b) => b.added_at - a.added_at), truncated };
+}
+
+// A session moved to another account (a pull, a device claim) under the
+// session_owners feature: the person who started it still owns it implicitly,
+// but an inbox finds a session by the rows a person owns and the account that
+// runs it, so that ownership is written down as their own row.
+export async function writeStarterRowOnMove(ctx: { db: any }, conversationId: Id<"conversations">): Promise<void> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || !(await ownersModelOn(ctx, conversation))) return;
+  const starter = ownersOf(await sessionOwnerFactsOf(ctx, conversation)).implicitStarter;
+  if (!starter || starter === String(conversation.user_id)) return;
+  await addSessionOwnerRow(ctx, conversationId, starter as Id<"users">, starter as Id<"users">);
+  await syncPrimaryOwnerCache(ctx, conversationId);
 }

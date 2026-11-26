@@ -25,9 +25,9 @@ export function healthToken(s: SecretMeta, now: number = Date.now()): string {
   return h === "expired" ? fmt.error(word) : fmt.warning(word);
 }
 
-/** A ready row's flags after its binding: Ask first, and the earlier values restore can put back. */
+/** A ready row's flags after its binding: Ask first, Touch ID, and the earlier values restore can put back. */
 function markers(s: SecretMeta): string[] {
-  return [s.ask_first ? fmt.warning("ask-first") : "", s.version_count ? fmt.muted(`${s.version_count} earlier`) : ""];
+  return [s.ask_first ? fmt.warning("ask-first") : "", s.touch_id ? fmt.warning("touch-id") : "", s.version_count ? fmt.muted(`${s.version_count} earlier`) : ""];
 }
 
 const kindText = (s: SecretMeta) => `${s.kind}${s.has_otp ? "+2fa" : ""}`;
@@ -59,6 +59,7 @@ export function formatShow(s: SecretMeta, scope: string, events: SecretEvent[], 
     `${fmt.id(s.short_id)}  ${fmt.highlight(s.name)}  ${kindText(s)}  ${fmt.muted(scope)}${s.status === "requested" ? `  ${fmt.warning("requested")}` : ""}`,
     row("health", healthToken(s, now) || undefined),
     row("ask first", s.ask_first ? `on  ${fmt.muted("a person approves each session's first read")}` : undefined),
+    row("touch id", s.touch_id ? `on  ${fmt.muted("reveals and approvals take a fingerprint")}` : undefined),
     row("env", s.kind === "signin" ? undefined : `${envFor(s).map((b) => b.var).join(", ")}${s.env?.length ? "" : `  ${fmt.muted("from its name")}`}`),
     row("sites", s.sites?.join(", ")),
     row("expires", s.kind === "signin" ? signinExpiry(s.signin_expires_at, now) : undefined),

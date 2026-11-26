@@ -42,6 +42,8 @@ export const DATA_SCOPE = {
   // team_workspace / line_workspace and their readers filter on it.
   sessionDecisions: "viewer",
   sessionGoals: "entity",
+  sessionOwners: "entity",
+  sessionAgents: "entity",
   composerSuggestions: "entity",
   decisionStacks: "viewer",
   weeklyCards: "viewer",

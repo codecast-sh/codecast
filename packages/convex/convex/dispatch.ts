@@ -55,7 +55,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 } from "@codecast/shared/contracts";
 import { applyHideTransition, closeAdoptionHolds, GROUP_SCAN_COST, hideBudgetLeft, noteGestureRows, spendHideBudget } from "./cleanup";
 import { closeSetsAsideOnServer } from "./lib/closeAside";
-import { isClosePatch } from "@codecast/shared/contracts";
+import { closeHidesThroughWakes, isClosePatch } from "@codecast/shared/contracts";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
@@ -509,6 +509,9 @@ export async function applyPatches(
         if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now(), { forceKill: opts?.forceKill })) {
           (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_dismissed_at;
+          // A role's or a standing trigger's set-aside close is a hidden stash, so
+          // its next trigger does not bring it back (closeHidesThroughWakes).
+          if (closeHidesThroughWakes(doc as any)) (finalSafe as any).inbox_stash_hidden = true;
           // inbox_closed_at stays: with no dismissed stamp it is inert (not a close),
           // and it is the cell the close's undo finds to clear this stash with.
           if ((finalSafe as any).inbox_closed_at == null) (finalSafe as any).inbox_closed_at = (finalSafe as any).inbox_stashed_at;
@@ -666,6 +669,25 @@ export async function applyPatches(
   }
 }
 
+/** The fields of one owners change as the web store dispatches it
+ *  (store/sessionOwnersSlice), and of a restored owner row in it. Anything
+ *  else is refused, and every value is then checked by applyOwnersChange's own
+ *  argument validator. */
+const OWNERS_CHANGE_KEYS = new Set(["add", "remove", "restore", "role", "release_parent", "take_over"]);
+const RESTORE_ROW_KEYS = ["user_id", "added_by", "added_at", "seen_at", "note"] as const;
+
+function ownersChangeArgs(conversationId: string, change: unknown): Record<string, unknown> {
+  if (!change || typeof change !== "object" || Array.isArray(change)) throw new Error("An owners change must be an object");
+  const c = change as Record<string, unknown>;
+  const extra = Object.keys(c).filter((k) => !OWNERS_CHANGE_KEYS.has(k));
+  if (extra.length) throw new Error(`An owners change takes no ${extra.join(", ")}`);
+  // A restored row carries only its own typed fields: never a conversation of its own.
+  const restore = Array.isArray(c.restore)
+    ? c.restore.map((r) => (r && typeof r === "object" ? Object.fromEntries(RESTORE_ROW_KEYS.filter((k) => k in r).map((k) => [k, (r as Record<string, unknown>)[k]])) : r))
+    : c.restore;
+  return { ...c, ...(restore !== undefined ? { restore } : {}), session_id: conversationId };
+}
+
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Decisions (docs/architecture/decisions-as-documents.md D2 / D5). The web
   // patches sessionDecisions and decisionStacks on the draft first; these are
@@ -729,6 +751,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // the core through here. `target` carries the owner-set arithmetic
   // ({ owners, mode }) or a role; `note` rides the reparent into the line the
   // session and role are told.
+  // The owners menu's Save, take it over and Add me (the session_owners
+  // model): through the public applyOwnersChange, so its argument validator
+  // checks every field and its notifications fire, in this transaction.
+  // Acking a handoff: stamps the viewer's owner row seen. A no-op for a
+  // non-owner, or an id the server cannot resolve (an optimistic stub).
+  clearAssignedPing: async (ctx, _userId, [conversationId]: [string]) =>
+    ctx.runMutation!((api as any).sessionOwnership.ackSessionAssignment, { session_id: conversationId }),
+  applySessionOwners: async (ctx, _userId, [conversationId, change]: [string, unknown]) =>
+    ctx.runMutation!((api as any).sessionOwnership.applyOwnersChange, ownersChangeArgs(conversationId, change)),
   reparentOrgSession: async (ctx, _userId, [conversationId, target, opts]: [string, any, { note?: string; from_session?: string } | undefined]) => {
     return await ctx.runMutation!((api as any).orgRoles.reparentSession, {
       conversation_id: conversationId,
@@ -2217,6 +2248,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // `grant`: the Touch ID grant string turning it off spends.
   setSecretAskFirst: async (ctx, userId, [id, askFirst, grant]: [string, boolean, string?]) =>
     liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst, grant })),
+  // `grant`: the Touch ID grant string turning it off spends.
+  setSecretTouchId: async (ctx, userId, [id, touchId, grant]: [string, boolean, string?]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setTouchId, { ref: id, touch_id: touchId, grant })),
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,

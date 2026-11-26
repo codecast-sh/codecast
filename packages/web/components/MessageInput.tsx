@@ -13,6 +13,7 @@ import { armJointSend, disarmJointSend, jointSendReady, takeJointSend } from "..
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { createPortal } from "react-dom";
 import { compressImage } from "../lib/compressImage";
+import { seedComposer } from "../lib/composerPrefill";
 import { captureError } from "../lib/analytics";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
@@ -47,6 +48,7 @@ import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
+import { ComposerOwnerStrip, NotInInboxBar } from "./conversation/ComposerOwnerStrip";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, viewerCommandsSession, type OptimisticImage } from "../store/inboxStore";
 import { useChangedState } from "../hooks/useChangedState";
@@ -904,24 +906,30 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [onPopulateInput]);
 
-  // A `?prefill=` deep link (phone notification → back into this session) seeds
-  // the composer with the draft it asked about, already quoted, cursor on the
-  // line beneath it. Only into a genuinely empty composer: text the user typed,
-  // a persisted draft, or an attached image all outrank the link, which is then
-  // dropped rather than queued behind them. Consumed once either way.
+  // A deep link back into this session seeds the composer, cursor at the end:
+  // `?prefill=` (phone notification) with the draft it asked about, quoted, and
+  // `?compose=` (a day view, a bookmark) with text to continue. A quote fills
+  // only an empty composer; text to continue goes after a draft already there
+  // (seedComposer). Consumed once either way, and only once the disk's drafts
+  // are in: a cold link lands before them, and would replace a kept draft.
   const prefillReq = useInboxStore((s) => s.composerPrefill);
+  const draftsHydrated = useInboxStore((s) => s.draftsHydrated);
   useWatchEffect(() => {
-    if (!prefillReq || prefillReq.convId !== conversationId) return;
+    if (!prefillReq || prefillReq.convId !== conversationId || !draftsHydrated) return;
     const store = useInboxStore.getState();
     store.setComposerPrefill(null);
     const row = store.getDraft(conversationId);
-    if (messageRef.current.trim() || row?.draft_message?.trim() || row?.draft_image_storage_ids?.length) return;
-    setMessage(prefillReq.text);
+    // The kept draft, unless it is a copy of a message already sent, which the
+    // composer hides rather than shows.
+    const kept = typeof row?.draft_message === "string" && !isStaleSentDraft(conversationId, row.draft_message) ? row.draft_message : "";
+    const next = seedComposer(messageRef.current.trim() ? messageRef.current : kept, !!row?.draft_image_storage_ids?.length, prefillReq);
+    if (next === null) return;
+    setMessage(next);
     setTimeout(() => {
       const el = textareaRef.current;
       if (el) { el.focus(); const end = el.value.length; el.setSelectionRange(end, end); }
     }, 0);
-  }, [prefillReq, conversationId, setMessage]);
+  }, [prefillReq, conversationId, setMessage, draftsHydrated]);
 
   // Set when a dispatch/restart learned the server row no longer exists: the
   // cached copy renders fine but every conversation-scoped mutation will fail.
@@ -2674,6 +2682,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           )}
           {!bareComposer && lightboxImageIndex === null && agentStatus === "compacting" && (
             <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
+          )}
+          {!bareComposer && !hero && lightboxImageIndex === null && (
+            <>
+              <NotInInboxBar conversationId={conversationId} className={`mx-auto mb-1.5 ${inline ? "" : "px-4"} ${colWidth}`} />
+              <ComposerOwnerStrip conversationId={conversationId} active={isFocused || hasContent} className={`mx-auto mb-1.5 ${inline ? "" : "px-4"} ${colWidth}`} />
+            </>
           )}
           {caught && (
             <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>

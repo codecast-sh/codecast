@@ -19,10 +19,17 @@ const OTHER = "users_other";
 const MIN = 60 * 1000;
 const READ_BUDGET = 2048;
 const CHILDREN_PER_ROW = 3;
+// Pending blocking `cast decide` questions asked of the viewer: each costs the
+// CLI about one read. A busy owners-model account (the flag-on case) runs at
+// twice the default.
 const PENDING_DECISIONS = 50;
+const BUSY_PENDING_DECISIONS = 100;
 
 type Window = keyof typeof INBOX_WINDOW_CAPS;
-const WINDOWS = Object.keys(INBOX_WINDOW_CAPS) as Window[];
+// The nested and escalated windows exist only under the owners model (the flag-on case below).
+const WINDOWS = (Object.keys(INBOX_WINDOW_CAPS) as Window[]).filter((w) => w !== "nested" && w !== "escalated");
+const MODEL_WINDOWS = Object.keys(INBOX_WINDOW_CAPS) as Window[];
+const TEAM = "teams_union";
 
 // The web live subscription's call: include_liveness:false,
 // fast_fields_in_overlay:true, split:true.
@@ -32,21 +39,37 @@ const CLI = { includeLiveness: true, projection: true };
 
 // One db call is one get or one query execution (collect, take, first,
 // unique, a page or an iterator step). Convex counts its limits the same way.
+// Calls are also counted per queried table, so a test can pin one read path.
 function countingDb(db: any) {
   let calls = 0;
-  const count = (v: any) => { calls++; return v; };
-  const wrap = (q: any): any => new Proxy(q, {
+  const byTable = new Map<string, number>();
+  const getsById = new Map<string, number>();
+  const wrap = (q: any, table: string | null): any => new Proxy(q, {
     get(target, prop) {
       const value = target[prop];
       if (typeof value !== "function") return value;
       return (...args: any[]) => {
         const out = value.apply(target, args);
-        if (out && typeof out.then === "function") return out.then(count);
-        return out && typeof out === "object" ? wrap(out) : out;
+        const t = prop === "query" ? String(args[0]) : table;
+        if (prop === "get" && table === null) getsById.set(String(args[0]), (getsById.get(String(args[0])) ?? 0) + 1);
+        if (out && typeof out.then === "function") {
+          return out.then((v: any) => {
+            calls++;
+            if (t) byTable.set(t, (byTable.get(t) ?? 0) + 1);
+            return v;
+          });
+        }
+        return out && typeof out === "object" ? wrap(out, t) : out;
       };
     },
   });
-  return { db: wrap(db), calls: () => calls };
+  return {
+    db: wrap(db, null),
+    calls: () => calls,
+    queriesOf: (table: string) => byTable.get(table) ?? 0,
+    // Ids one execution got more than once: each duplicate is a read a shared memo saves.
+    regets: () => [...getsById].filter(([, n]) => n > 1).map(([id]) => id),
+  };
 }
 
 // An account with `perWindow(w)` rows in every window. Every top-level row
@@ -56,7 +79,8 @@ function countingDb(db: any) {
 // parked (dismissed or stashed), CHILDREN_PER_ROW subagent children. The
 // newest PENDING_DECISIONS rows each hold a pending blocking `cast decide`.
 // `windowOf` names the window that admits each top-level row.
-function account(perWindow: (w: Window) => number) {
+function account(perWindow: (w: Window) => number, world: { model?: boolean; decisions?: number } = {}) {
+  const pendingDecisions = world.decisions ?? PENDING_DECISIONS;
   const now = Date.now();
   const conversations: any[] = [];
   const session_owners: any[] = [];
@@ -81,6 +105,7 @@ function account(perWindow: (w: Window) => number) {
     const runner = extra.user_id ?? ME;
     const owner = opts.owner ?? { user: ME, by: ME, seen: true };
     const row = {
+      ...(world.model ? { team_id: TEAM } : {}),
       _id: id, user_id: runner, status: "active", is_subagent: false, session_id: `s${n}`,
       started_at: now - 60 * MIN - n, updated_at: now - n * 1000,
       message_count: 10, last_message_role: "assistant", title: `Session ${n}`,
@@ -102,13 +127,14 @@ function account(perWindow: (w: Window) => number) {
     if (!opts.parked) {
       for (let c = 0; c < CHILDREN_PER_ROW; c++) {
         conversations.push({
+          ...(world.model ? { team_id: TEAM } : {}),
           _id: `${id}_sub${c}`, user_id: runner, status: "active", is_subagent: true,
           parent_conversation_id: id, session_id: `s${n}_sub${c}`, started_at: now - n - c, updated_at: now - n * 1000 - c,
           message_count: 3, last_message_role: "assistant",
         });
       }
     }
-    if (session_decisions.length < PENDING_DECISIONS && !extra.is_subagent) {
+    if (session_decisions.length < pendingDecisions && !extra.is_subagent) {
       const d = session_decisions.length;
       session_decisions.push({
         _id: `session_decisions_${d}`, conversation_id: id, session_id: `s${n}`, user_id: runner,
@@ -134,23 +160,56 @@ function account(perWindow: (w: Window) => number) {
   for (let i = 0; i < perWindow("owned"); i++) {
     conv("owned", { user_id: OTHER, acting_user_id: OTHER }, { owner: { user: ME, by: OTHER, seen: i % 2 === 0 } });
   }
+  // Under the owners model: subagents released from their parent, mine through
+  // the implicit starter with no owner row, which only the nested window reads.
+  if (world.model) {
+    for (let i = 0; i < perWindow("nested"); i++) {
+      n++;
+      conversations.push({
+        team_id: TEAM, _id: `conversations_${n}`, user_id: ME, status: "active", is_subagent: true, session_id: `s${n}`,
+        parent_conversation_id: "conversations_1", parent_released_at: now - 1000, started_at: now - 60 * MIN - n, updated_at: now - n * 1000,
+        message_count: 4, last_message_role: "assistant", title: `Released ${n}`,
+      });
+      windowOf.set(`conversations_${n}`, "nested");
+    }
+    // Waits that escalated to me on a role's runs an agent account runs: no
+    // owner row, not mine to run, seated by the escalated window alone.
+    for (let i = 0; i < perWindow("escalated"); i++) {
+      n++;
+      conversations.push({
+        team_id: TEAM, _id: `conversations_${n}`, user_id: OTHER, status: "active", is_subagent: false, session_id: `s${n}`,
+        org_role_id: "org_roles_r", role_started: true, wait_up_at: now - i * MIN, wait_up_count: 6, wait_up_person: ME,
+        // Shared with the team in full, so the person it reached can open it.
+        is_private: false,
+        started_at: now - 60 * MIN - n, updated_at: now - n * 1000, message_count: 6, last_message_role: "assistant", title: `Escalated ${n}`,
+      });
+      windowOf.set(`conversations_${n}`, "escalated");
+    }
+  }
   // The owner window reads my newest owner rows first: make the assigned ones
   // the newest, so the window fills with exactly the rows it exists for.
   for (const r of session_owners) if (r.added_by === OTHER) r.added_at += 1e9;
   return {
-    data: { users, conversations, session_owners, managed_sessions, plans, tasks, session_decisions, decision_inbox, messages: [] },
+    data: {
+      users, conversations, session_owners, managed_sessions, plans, tasks, session_decisions, decision_inbox, messages: [],
+      ...(world.model ? {
+        teams: [{ _id: TEAM, name: "Union", features: { session_owners: true } }],
+        team_memberships: [ME, OTHER].map((u, i) => ({ _id: `team_memberships_${i}`, user_id: u, team_id: TEAM, role: "member", joined_at: 1, visibility: "full" })),
+      } : {}),
+    },
     windowOf,
   };
 }
 
 const full = () => account((w) => INBOX_WINDOW_CAPS[w] + 1);
+const fullModel = () => account((w) => INBOX_WINDOW_CAPS[w] + 1, { model: true, decisions: BUSY_PENDING_DECISIONS });
 const light = () => account(() => 20);
 
 async function run(fixture: ReturnType<typeof account>, opts: any) {
   _resetChildAuqProbeCacheForTests();
-  const { db, calls } = countingDb(makeFakeDb(fixture.data, { indexes: schemaIndexes(schema as any) }));
+  const { db, calls, queriesOf, regets } = countingDb(makeFakeDb(fixture.data, { indexes: schemaIndexes(schema as any) }));
   const result = await computeInboxSessions({ db } as any, ME as any, opts);
-  return { result, calls: calls() };
+  return { result, calls: calls(), queriesOf, regets: regets() };
 }
 
 // Every row a window would admit that the result leaves out must name its
@@ -194,6 +253,36 @@ describe("listInboxSessions read budget on a full account", () => {
     console.log(`cli listInboxSessions on a full account: ${calls} db calls, ${result.sessions.length} rows, truncated=${JSON.stringify(result.truncated)}`);
     for (const w of WINDOWS) expect(result.truncated).toContain(w as any);
     expect(calls).toBeLessThanOrEqual(READ_BUDGET);
+  });
+
+  // Under the owners model every row reads its owners (the starter's user
+  // doc, a released or dead parent), and the model's nested and escalated
+  // windows join the scan, on a busy account's pending decisions: the same
+  // budget holds, and each window lists its cap of members.
+  test("flag on: the owners model's reads and windows stay inside the same budget, every window named", async () => {
+    for (const opts of [WEB, CLI]) {
+      const fixture = fullModel();
+      const { result, calls, queriesOf, regets } = await run(fixture, opts);
+      console.log(`owners-model listInboxSessions on a full account: ${calls} db calls, ${result.sessions.length} rows, truncated=${JSON.stringify(result.truncated)}`);
+      for (const w of MODEL_WINDOWS) expect(result.truncated).toContain(w as any);
+      expect(result.sessions.every((r: any) => r.owners_model === true)).toBe(true);
+      const listed = new Set(result.sessions.map((r: any) => String(r._id)));
+      const listedIn = (w: Window) => [...fixture.windowOf].filter(([id, win]) => win === w && listed.has(id)).length;
+      expect(listedIn("nested")).toBe(INBOX_WINDOW_CAPS.nested);
+      // 201 standing escalations seeded: 200 listed, the window named in truncated.
+      expect([...fixture.windowOf.values()].filter((win) => win === "escalated").length).toBe(201);
+      expect(listedIn("escalated")).toBe(200);
+      // Team membership is read once per team, not once per escalated row
+      // (every escalation here lives in one team and runs on one account):
+      // the viewer's teams for the flag, then the window's access check, the
+      // viewer's membership and the runner's.
+      expect(queriesOf("team_memberships")).toBe(3);
+      // One execution reads a conversation once: the enrichment shares the
+      // owners read's memo (inboxMemoGet), so a parent the owners rule read
+      // for its child is not read again.
+      expect(regets.filter((id: string) => id.startsWith("conversations_"))).toEqual([]);
+      expect(calls).toBeLessThanOrEqual(READ_BUDGET);
+    }
   });
 
   test("no row a window admits goes missing without its window in truncated, and the rows match the pre-change code", async () => {

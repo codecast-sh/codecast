@@ -14,7 +14,15 @@ import {
   type RemoteTrack,
 } from "livekit-client";
 import { callParticipantKind, isRoomMachineryKind, type CallParticipantKind } from "@codecast/shared/contracts";
-import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
+import {
+  AUDIO_PUBLISH_DEFAULTS,
+  huddleRoomOptions,
+  MIC_PUBLISH_OPTIONS,
+  micConstraints,
+  SCREEN_SHARE_CAPTURE,
+  SCREEN_SHARE_PUBLISH,
+} from "./livekitMedia";
+import { syncRoomNoiseCancellation } from "./krispFilter";
 import { isMediaDenial, listDevices, mediaFailureReason, participantFlags, participantImage, participantTiles, type ParticipantTile } from "./callMedia";
 import { bindCallCursors } from "./callCursors";
 import { createMicMeter, type MicMeter } from "./micMeter";
@@ -493,7 +501,10 @@ export class GuestCall extends Emitter<CallSnapshot> {
     const tracks = this.handed;
     const lp = this.room.localParticipant;
     try {
-      if (tracks.audio) await lp.publishTrack(tracks.audio, { source: Track.Source.Microphone });
+      if (tracks.audio) {
+        await lp.publishTrack(tracks.audio, MIC_PUBLISH_OPTIONS);
+        void syncRoomNoiseCancellation(this.room, true);
+      }
     } catch (err) {
       tracks.audio?.stop();
       this.set({ error: await mediaFailureReason("microphone", err) });
@@ -528,7 +539,12 @@ export class GuestCall extends Emitter<CallSnapshot> {
   async setMic(on: boolean): Promise<void> {
     this.set({ wants: { ...this.snap.wants, mic: on } });
     try {
-      await this.room.localParticipant.setMicrophoneEnabled(on, micConstraints(this.snap.choice.micId));
+      await this.room.localParticipant.setMicrophoneEnabled(
+        on,
+        micConstraints(this.snap.choice.micId),
+        AUDIO_PUBLISH_DEFAULTS,
+      );
+      if (on) void syncRoomNoiseCancellation(this.room, true);
     } catch (err) {
       this.set({ error: await mediaFailureReason("microphone", err) });
     }
@@ -565,6 +581,7 @@ export class GuestCall extends Emitter<CallSnapshot> {
     const lkKind: MediaDeviceKind = kind === "mic" ? "audioinput" : kind === "camera" ? "videoinput" : "audiooutput";
     try {
       await this.room.switchActiveDevice(lkKind, deviceId);
+      if (kind === "mic") void syncRoomNoiseCancellation(this.room, true);
     } catch {
       this.set({ error: "Could not switch to that device" });
     }

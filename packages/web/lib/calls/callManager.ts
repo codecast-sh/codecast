@@ -1,6 +1,7 @@
 import { isMediaDenial, mediaFailureReason, participantTiles, type ParticipantTile } from "./callMedia";
 import { teamMembersOf } from "../activeTeam";
 export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile } from "./callMedia";
+export { getMicLevel, subscribeMicLevel } from "./localMicLevel";
 // The media plane's one owner. Exactly one LiveKit Room lives here (module
 // singleton, never in React state, never in the store); components render
 // from the store's ephemeral `call` slice and call these methods. Convex
@@ -20,7 +21,6 @@ import {
   Room,
   RoomEvent,
   Track,
-  createAudioAnalyser,
 } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -30,10 +30,19 @@ import { memberDisplayName } from "../liveEntities";
 import { RING_STUB, RING_STUB_MS, isRingStub, ringStubId, settleRingIn, unsettleRingIn, type RingStub } from "./ringStubs";
 import { getScribeStatus, startScribe, stopScribe } from "./transcription";
 import type { ScribeRoute } from "./scribeEngine";
-import { chosenDevice, readJoinPrefs, rememberCamera, rememberDevice, rememberMic } from "./joinPrefs";
+import { chosenDevice, readJoinPrefs, rememberCamera, rememberDevice, rememberMic, rememberNoiseCancellation } from "./joinPrefs";
 import { DEVICE_KINDS, knownDevices, onDevicesChanged, refreshDevices, trackOnDevice, type DeviceKind } from "./deviceRank";
 import { switchRecorderMic } from "./recorder";
-import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
+import {
+  AUDIO_PUBLISH_DEFAULTS,
+  huddleRoomOptions,
+  MIC_PUBLISH_OPTIONS,
+  micConstraints,
+  SCREEN_SHARE_CAPTURE,
+  SCREEN_SHARE_PUBLISH,
+} from "./livekitMedia";
+import { syncRoomNoiseCancellation } from "./krispFilter";
+import { getRoomAudioStats, type RoomAudioDiagnostics } from "./audioDiagnostics";
 import { bindPrewarmAudio, bindPrewarmConvex, releasePrewarm, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
 import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages, seatAnswersRing } from "@codecast/shared/contracts";
 import {
@@ -48,7 +57,7 @@ import { shouldRejoinAfterDisconnect, shouldYieldCallOnDisconnect } from "./call
 import { track as trackEvent } from "../analytics";
 import { bindCallCursors } from "./callCursors";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
-import { readMeterLevel } from "./walkieMeter";
+import { getMicLevel, startLevelMeter, stopLevelMeter } from "./localMicLevel";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import {
   soundCallJoin,
@@ -156,61 +165,6 @@ function rebuildTiles() {
   const next: ParticipantTile[] = room ? participantTiles(room) : [];
   tilesSnapshot = tilesOverride ?? next;
   for (const cb of tileSubscribers) cb();
-}
-
-// ── local mic level ───────────────────────────────────────────────────────
-// Own-mic level for the dock meter. Polled from an AnalyserNode on the local
-// mic track (livekit-client's createAudioAnalyser), fanned out through the
-// same subscribe/snapshot pattern as tiles — a level is a 20fps signal and
-// has no business in the store (every write would re-render every subscriber
-// of the call slice).
-let micLevel = 0;
-const levelSubscribers = new Set<() => void>();
-let levelTimer: ReturnType<typeof setInterval> | null = null;
-let levelCleanup: (() => void) | null = null;
-
-export function subscribeMicLevel(cb: () => void): () => void {
-  levelSubscribers.add(cb);
-  return () => levelSubscribers.delete(cb);
-}
-export function getMicLevel(): number {
-  return micLevel;
-}
-
-function stopLevelMeter() {
-  if (levelTimer) clearInterval(levelTimer);
-  levelTimer = null;
-  levelCleanup?.();
-  levelCleanup = null;
-  if (micLevel !== 0) {
-    micLevel = 0;
-    for (const cb of levelSubscribers) cb();
-  }
-}
-
-function startLevelMeter() {
-  stopLevelMeter();
-  const pub = room?.localParticipant.getTrackPublication(Track.Source.Microphone);
-  const track = pub?.track;
-  if (!track || track.kind !== Track.Kind.Audio) return;
-  try {
-    const { analyser, cleanup } = createAudioAnalyser(track as any, {
-      fftSize: 256,
-      smoothingTimeConstant: 0.6,
-    });
-    const bytes = new Uint8Array(analyser.fftSize);
-    levelCleanup = cleanup;
-    levelTimer = setInterval(() => {
-      // Muted → analyser reads silence anyway, but skip the work and pin 0 so
-      // the meter reads honestly the instant the user mutes.
-      const muted = useInboxStore.getState().call.muted;
-      const v = muted ? 0 : readMeterLevel(analyser, bytes);
-      if (Math.abs(v - micLevel) > 0.02 || (v === 0 && micLevel !== 0)) {
-        micLevel = v;
-        for (const cb of levelSubscribers) cb();
-      }
-    }, 50);
-  } catch {}
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -420,7 +374,9 @@ export type JoinOpts = {
  * own words instead.
  */
 export async function openMicForJoin(
-  participant: { setMicrophoneEnabled: (on: boolean) => Promise<unknown> },
+  participant: {
+    setMicrophoneEnabled: (on: boolean, captureOptions?: any, publishOptions?: any) => Promise<unknown>;
+  },
   opts: { intent?: JoinOpts["intent"] },
 ): Promise<void> {
   // A LISTEN PUBLISHES NOTHING. A walkie is one way: the person talking is
@@ -436,7 +392,7 @@ export async function openMicForJoin(
   }
   const muted = useInboxStore.getState().call.muted;
   try {
-    await participant.setMicrophoneEnabled(!muted);
+    await participant.setMicrophoneEnabled(!muted, undefined, AUDIO_PUBLISH_DEFAULTS);
     // THE CLAIM FOLLOWS THE PUBLICATION AND NEVER PRECEDES IT. Writing
     // `muted: false` before the join — which is what the walkie's auto-listen
     // used to do — made the store's mute an intention rather than a fact, and
@@ -646,7 +602,10 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     r.on(RoomEvent.TrackUnmuted, rebuildTiles);
     r.on(RoomEvent.LocalTrackPublished, (pub) => {
       rebuildTiles();
-      if (pub.source === Track.Source.Microphone) startLevelMeter();
+      if (pub.source === Track.Source.Microphone) {
+        startLevelMeter(room);
+        if (r === room) void syncRoomNoiseCancellation(r, readJoinPrefs().noiseCancellation);
+      }
     });
     r.on(RoomEvent.LocalTrackUnpublished, (pub) => {
       rebuildTiles();
@@ -765,7 +724,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       }
       await openMicForJoin(r.localParticipant, { intent: opts?.intent });
     } else if (given && given.readyState === "live") {
-      await r.localParticipant.publishTrack(given, { source: Track.Source.Microphone });
+      await r.localParticipant.publishTrack(given, MIC_PUBLISH_OPTIONS);
       if (superseded(r)) return;
       // The publication now answers to setMicrophoneEnabled like any other, so
       // the mute the user chose applies to it unchanged.
@@ -777,15 +736,16 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     }
     if (superseded(r)) return;
     // Whichever way the mic arrived (a warm room's, a burst's, a fresh open),
-    // it ends on the device the person chose.
+    // it ends on the device the person chose and carries their noise filter.
     void applyChosenDevices(r);
+    void syncRoomNoiseCancellation(r, prefs.noiseCancellation);
     // The bookkeeping catches up here, and a refusal is still this join's
     // failure — it falls to the catch below, which frees the row and tears the
     // media down exactly as it always did.
     await seated;
     if (seatError) throw seatError;
     if (superseded(r)) return;
-    startLevelMeter();
+    startLevelMeter(room);
     setCall({ phase: "connected", reconnecting: false });
     if (!rejoin) soundCallJoin();
     startHeartbeat(roomKey);
@@ -1039,7 +999,7 @@ async function setMutedHere(muted: boolean, opts?: { remember?: boolean }): Prom
   if (opts?.remember !== false) rememberMic(!muted);
   if (room) {
     try {
-      await room.localParticipant.setMicrophoneEnabled(!muted);
+      await room.localParticipant.setMicrophoneEnabled(!muted, undefined, AUDIO_PUBLISH_DEFAULTS);
     } catch (err: any) {
       // The same rule as a join's: a microphone that will not open leaves the
       // seat intact and says why. This is the path "Join live" takes into a
@@ -1056,6 +1016,7 @@ async function setMutedHere(muted: boolean, opts?: { remember?: boolean }): Prom
       setCall({ micDenied: false });
       const want = chosenDevice("audioinput");
       if (want) await applyDevice(room, "audioinput", want).catch(() => {});
+      void syncRoomNoiseCancellation(room, readJoinPrefs().noiseCancellation);
     }
   }
   pushFlags();
@@ -1220,12 +1181,34 @@ async function applyDevice(r: Room, kind: DeviceKind, want: string): Promise<voi
   }
   const mic = () => r.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
   const track = mic();
-  if (track && trackOnDevice(track.mediaStreamTrack, kind, want)) return;
+  const noiseCancellation = readJoinPrefs().noiseCancellation;
+  if (track && trackOnDevice(track.mediaStreamTrack, kind, want)) {
+    void syncRoomNoiseCancellation(r, noiseCancellation);
+    return;
+  }
   await r.switchActiveDevice(kind, want);
   const after = mic();
   if (after && !after.isMuted && !trackOnDevice(after.mediaStreamTrack, kind, want)) {
-    await after.restartTrack({ ...micConstraints(), deviceId: { exact: want } });
+    await after.restartTrack({
+      ...micConstraints(undefined, { noiseSuppression: !noiseCancellation }),
+      deviceId: { exact: want },
+    });
   }
+  await syncRoomNoiseCancellation(r, noiseCancellation);
+}
+
+/** Toggle enhanced (Krisp) noise cancellation for this call and every future
+ *  one. Writes the preference locally at once, and forwards to the desktop
+ *  voice-host window when the live room lives there. */
+export async function setNoiseCancellation(on: boolean): Promise<void> {
+  rememberNoiseCancellation(on);
+  if (voiceHostElsewhere() && !room && (await sendVoiceCommand("setNoiseCancellation", [on]))) return;
+  if (room) await syncRoomNoiseCancellation(room, on);
+}
+
+/** Live WebRTC capture, Krisp, encoder and NetEQ stats for the active huddle. */
+export function getAudioStats(): Promise<RoomAudioDiagnostics | null> {
+  return getRoomAudioStats(room);
 }
 
 /** Every device kind onto the person's current choice. Lists the devices first
@@ -1623,6 +1606,9 @@ export async function runCallCommand(cmd: string, args: unknown[]): Promise<void
       return setMutedHere(!!a[0], a[1] && typeof a[1] === "object" ? a[1] : undefined);
     case "setCamera":
       return setCameraHere(!!a[0], a[1] && typeof a[1] === "object" ? a[1] : undefined);
+    case "setNoiseCancellation":
+      if (room) await syncRoomNoiseCancellation(room, !!a[0]);
+      return;
     case "startHuddle":
       return a[0] && typeof a[0] === "object" ? startHuddleHere(a[0]) : undefined;
     case "acceptInvite":
@@ -1682,9 +1668,11 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
     stopTranscribing,
     setMuted,
     setCamera,
+    setNoiseCancellation,
     setScreenShare,
     startHuddle,
     ringInto,
+    audioStats: getAudioStats,
   };
 }
 

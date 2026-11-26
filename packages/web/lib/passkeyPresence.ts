@@ -13,7 +13,7 @@
 // /confirm page in the system browser and waits on the challenge instead.
 // An agent's tab may not set one up (lib/agentTabGuard).
 
-import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
+import { approveNeedsPresence } from "@codecast/shared/contracts/commandRun";
 import { useCallback, useMemo } from "react";
 import { useConvex } from "convex/react";
 import type { ConvexReactClient } from "convex/react";
@@ -225,17 +225,17 @@ export function usePresence(): (action: PresenceAction, target: string) => Promi
   return useCallback((action: PresenceAction, target: string) => confirmPresence(client, action, target), [client]);
 }
 
-type Answerable = { _id: string; category?: string; run?: unknown; options: readonly { label: string }[] };
+type Answerable = { _id: string; category?: string; run?: unknown; touch_id?: boolean; options: readonly { label: string }[] };
 
 /**
- * Answering a decision where its Approve opens an Ask first secret: that
- * option confirms with Touch ID before `send` dispatches it with the grant
+ * Answering a decision where its Approve opens a Touch ID secret (or runs a
+ * command): that option confirms with Touch ID before `send` dispatches it with the grant
  * string; every other option, Deny included, answers at once. `gated(i)`
  * marks the option that asks. The answer is `send`'s own, or NOT_CONFIRMED.
  */
 export function useApproveGate(decision: Answerable | undefined) {
   const confirm = usePresence();
-  const gated = useCallback((index: number) => !!decision && approvesPersonsAct(decision, index), [decision]);
+  const gated = useCallback((index: number) => !!decision && approveNeedsPresence(decision, index), [decision]);
   const answer = useCallback(
     <T,>(index: number, send: (presence?: PresenceGrant) => T): T | Promise<T | typeof NOT_CONFIRMED> =>
       decision && gated(index) ? withPresence(() => confirm("approve", decision._id), send, true) : send(),

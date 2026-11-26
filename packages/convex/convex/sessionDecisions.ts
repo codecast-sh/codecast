@@ -42,6 +42,8 @@ import { settleAreasCard } from "./decisionAreas";
 export { syncDecisionInbox };
 import { artifactUrl } from "./lib/artifactRules";
 import { humanStarterUser, listSessionOwnerIds, listSessionPartyIds } from "./sessionOwners";
+import { buildLadder, workspaceAdmins, type Hop } from "./lib/roleLadder";
+export { buildLadder, workspaceAdmins };
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
@@ -56,7 +58,7 @@ import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
-import { approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
+import { approvalCardRefusal, approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -190,7 +192,6 @@ export async function joinStack(
 // (a standing session; that field may not exist yet on every deployment).
 export { roleOfConversation } from "./lib/actor";
 
-type Hop = { role_id: Id<"org_roles">; recommendation?: number; note?: string; at: number; passed_at?: number };
 
 // A decision's options rewritten (a re-ask, cast decide edit): what names an
 // option by position follows it by its words. A role's recommendation moves to
@@ -256,36 +257,6 @@ async function carriedHops(ctx: Ctx, conversationId: Id<"conversations">, taskId
     const at = before ? moves[before.recommendation!] : undefined;
     return before && at !== undefined ? { ...h, recommendation: at, note: before.note, at: before.at } : h;
   });
-}
-
-// The ladder (D2): the roles from the asker up to the first person. A paused
-// or retired role is recorded as a skipped hop so the card can show the gap;
-// only active roles may recommend, and only the first is told (routeFor).
-export async function buildLadder(
-  ctx: Ctx,
-  startRole: Doc<"org_roles"> | null,
-  now: number,
-): Promise<{ hops: Hop[]; firstPersonId?: Id<"users">; activeRoles: Doc<"org_roles">[] }> {
-  const hops: Hop[] = [];
-  const activeRoles: Doc<"org_roles">[] = [];
-  const seen = new Set<string>();
-  let cur = startRole;
-  let firstPersonId: Id<"users"> | undefined;
-  while (cur && !seen.has(cur._id) && seen.size < 32) {
-    seen.add(cur._id);
-    if (cur.status === "active") {
-      hops.push({ role_id: cur._id, at: now });
-      activeRoles.push(cur);
-    } else {
-      hops.push({ role_id: cur._id, note: `skipped: ${cur.status}`, at: now });
-    }
-    if (cur.reports_to.kind === "user") {
-      firstPersonId = cur.reports_to.user_id;
-      break;
-    }
-    cur = await ctx.db.get(cur.reports_to.role_id);
-  }
-  return { hops, firstPersonId, activeRoles };
 }
 
 // The people a decision is visible to — whose question stack it sits on.
@@ -387,17 +358,6 @@ export async function routeToRole(ctx: Ctx, role: Doc<"org_roles">, now: number)
   return { ladder, people, hears: (await reachableRole(ctx, role._id)) ? role : null };
 }
 
-async function workspaceAdmins(ctx: Ctx, teamId: Id<"teams"> | undefined): Promise<Id<"users">[]> {
-  if (!teamId) return [];
-  const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
-  const admins: Id<"users">[] = [];
-  for (const m of members) {
-    if (m.role !== "admin") continue;
-    const u = await ctx.db.get(m.user_id);
-    if (u && !u.is_bot) admins.push(m.user_id);
-  }
-  return admins;
-}
 
 // Recompute people, inbox rows and holder for every open decision on this
 // session. Called after ownership changes so the question stack follows
@@ -428,6 +388,9 @@ export async function reroutePendingDecisionsForConversation(
 
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
 export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
+  // An approval card is its people's (changeApprovalCards), never its session's: moving it would ask people whose
+  // answer cannot count.
+  if ((row as any).approval_card) return;
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
@@ -768,7 +731,7 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
 // signed-in person's, whose Approve takes Touch ID (secretApprovalRefusal,
 // which reads the verdict for that). Returns why, or null.
 export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy, verdict?: Pick<Verdict, "status" | "answer_index">): Promise<string | null> {
-  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict));
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict)) ?? (await approvalCardRefusal(ctx, row as any, by, verdict));
 }
 
 // The one place a decision is resolved, for every path (web resolve, CLI
@@ -2067,6 +2030,9 @@ export async function answerCore(
   if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
+  // An approval card's refusal turns on the answer (an author's Approve): refused before anything closes it.
+  const cardRefusal = await approvalCardRefusal(ctx, row as any, by, verdict);
+  if (cardRefusal) return { error: cardRefusal };
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });
   return { id: row._id, short_id: row.short_id, ...result, answered_by: { kind: by.kind, id: by.id, ...(by.via ? { via: by.via } : {}) } };
 }
@@ -2344,6 +2310,7 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
     report_slug: row.report_slug,
     card: row.card,
     run: row.run,
+    touch_id: row.touch_id,
     doc_id: row.doc_id,
     blocking: row.blocking,
     default_option: row.default_option,

@@ -69,14 +69,15 @@ the writer sessions, and links to the pull request, run and deploys.
   branch on its own (at most eight names a conversation), and draws as a
   pushed branch when it has commits main lacks. A pull request or commit
   reference (`owner/repo#N`, `owner/repo@sha`, `#N`) keeps its pill and its
-  hover card. A pull request's pill is one color and says its state without
-  words (`prPillLook`): its glyph is open, draft, merged or closed; it dims
-  like an answered decision once it stops moving (live, landed with nothing
-  to deploy, or closed); and a red dot on the glyph marks one that broke or
-  was sent back (conflicts, failing checks, changes asked, a failed deploy or
-  a rollback). The lifecycle's word is its label and tooltip. A commit, after
-  its name, draws the same track and word the Branches page gives it
-  (`useRefLifecycle`), once its deploy reach is read.
+  hover card, and says its state without words. A pull request's glyph is
+  open, draft, merged or closed (`prPillLook`). After its name, a pull
+  request, and a commit once its deploy reach is read, draws the same track
+  the Branches page gives it, then the now's glyph in its tone
+  (`useRefLifecycle`, `ChangeSegment`). The lifecycle's word is the label,
+  the tooltip and the hover card's headline, never text on the line. The
+  same rule holds for every reference in prose: a branch's chip draws its
+  track and glyph, a deploy pill its state icon and, while it moves, its
+  elapsed time.
 - **Branches page**: the lifecycle grid (`ChangeBoard`): a row per change,
   the five stages as columns with one track across them, each cell's two
   words under its slice, grouped by who acts next: Needs attention (red, blue,
@@ -87,12 +88,16 @@ the writer sessions, and links to the pull request, run and deploys.
   never parked. Below the grid, every branch GitHub lists, each with its chip.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
   without Live and Closed, for every change of that repository not yet on
-  main. What has landed and waits to go out is "Waiting on main", below it.
-  One filter row sits over both: Mine keeps the viewer's own changes and
-  commits, and a group's name (Needs attention, Moving, Waiting) narrows the
-  grid to that group. Both ride the address (`mine=1`, `group=you`); a row a
-  link names (its pull request, a commit, its branch, or a session that wrote
-  it) is drawn whatever the filters say. With Mine on, Needs
+  main. What has landed and waits to go out is "Waiting on main", beside it.
+  Each column has its own filter row under its heading. On its way: Mine
+  keeps the viewer's own changes, and a group (Needs attention, Moving,
+  Waiting, each with its count, or the group's name in the grid) narrows the
+  grid to it. Waiting on main: Mine keeps the viewer's own commits, and the
+  ID switch picks which references each commit shows (a task or session by
+  its title, a PR or commit by its ID). All ride the address
+  (`mine=coming,waiting`, `group=you`, `show=`); a row a link names (its pull
+  request, a commit, its branch, or a session that wrote it) is drawn
+  whatever the filters say. With Mine on, Needs
   attention reads Needs you. A change's owner is the strongest fact it joins:
   its pull request's author, else the people whose sessions wrote it, else
   the devices its checkouts sit on, else its commit's author.

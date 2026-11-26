@@ -10,8 +10,9 @@ import { isMachineDeliveredMessage } from "./machineMessages";
 import type { LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
+import { closeHidesThroughWakes, isClosedSession, type ClosedFields } from "./closedSession";
 import type { WorkState } from "./workState";
-import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf } from "./inboxMembership";
+import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf, underOwnersModel, type OwnersModelRow, waitReachedPeople, agentAnswersRow } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
 export * from "./inboxFields";
 // Membership identity (subagents, rollups, stacked asks).
@@ -56,6 +57,8 @@ export const INBOX_TRUNCATION_KINDS = [
   "stashed",
   "owned",
   "adopted",
+  "nested",
+  "escalated",
   "members",
   "member_rows",
   "foreign_scan",
@@ -138,7 +141,14 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // is a verified wake, and a pinned dormant with no daemon status parks while
 // one stands, unless a turn opened after the pin; a fresh pin speaks over a
 // settled idle.
-export const INBOX_PROJECTION_VERSION = 29 as const;
+// v30: the owners model (team feature session_owners), on a row the server
+// stamps with owners_model (underOwnersModel). Such a row is a member of exactly
+// its owners' inboxes, a nested one included, and rides nothing: no role
+// riding, no child_live lift, no teammate ride, no child ask lifting its
+// parent. A wait its agent owner answers (agentAnswersRow: its role, or the
+// session that started it, until the wait reaches its people) files as
+// working, "With <owner>". A row without owners_model places exactly as v29.
+export const INBOX_PROJECTION_VERSION = 30 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -403,6 +413,8 @@ export interface InboxPlacementInput extends WorkStateInput {
   personTurn?: boolean;
   /** Own open ask or permission prompt, a pending `cast decide`, or a child's open ask. */
   asking: boolean;
+  /** An agent owner answers its waits (agentAnswersRow): a settled wait files as working ("With <owner>"). Its `asking` then counts only a question that reached the viewer. */
+  agentAnswers?: boolean;
 }
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
@@ -496,6 +508,10 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   else if (input.asking && !input.killed && !input.userRest) bucket = "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
+  // A wait an agent owner answers is the agent's, not the person's: it files
+  // as working, where the card says "With <owner>". The work state keeps
+  // saying what the session waits on. The person's own filing still wins.
+  else if (input.agentAnswers && work_state === "needs_input" && !input.userRest) bucket = "working";
   else bucket = work_state;
   return { bucket, work_state };
 }
@@ -782,7 +798,7 @@ export function settleRiders(
 // child's open ask lifts its parent into QUESTIONS, and a role's session
 // asking a question must not reach the person until the role says so.
 export function isUnderRole(row: RollupRow): boolean {
-  return !!row.org_role_id;
+  return !!row.org_role_id && !underOwnersModel(row);
 }
 
 // role id → the id of the row that is that role's standing session, over the
@@ -816,7 +832,7 @@ export function rideLeadPlacements<P extends { bucket: InboxBucket }>(
   // one. A workspace anchor (no role) stays in its own space.
   for (const [id, lead] of placements) {
     const row = rowOf(id);
-    if (lead.bucket !== "hidden" || !row?.child_live || !row.standing_role_id) continue;
+    if (lead.bucket !== "hidden" || !row?.child_live || !row.standing_role_id || underOwnersModel(row)) continue;
     const state = (lead as { work_state?: WorkState }).work_state;
     if (state && state !== "idle") lead.bucket = state;
   }
@@ -863,6 +879,29 @@ export function isStashHidden(
   row: { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
 ): boolean {
   return !!row.inbox_stashed_at && !!row.inbox_stash_hidden;
+}
+
+/** The hide fields a send into a session writes (pendingMessages
+ *  enqueuePendingMessage and its risk-resend twin in executionBindings). A
+ *  dismissal and a kill always clear. A plain stash clears; a hidden one
+ *  survives a machine wake (a trigger firing) or a quiet send. A close whose
+ *  session hides through wakes (closeHidesThroughWakes: a role, an anchor, a
+ *  standing trigger's home) becomes a hidden stash on such a wake: the agent
+ *  runs, out of sight, until it asks for the person. */
+export function wakeHideFields(
+  row: ClosedFields & Parameters<typeof closeHidesThroughWakes>[0] & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
+  wake: { machine: boolean; now: number },
+): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true } {
+  const out: ReturnType<typeof wakeHideFields> = {};
+  if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
+  if (row.inbox_killed_at) out.inbox_killed_at = undefined;
+  if (wake.machine && isClosedSession(row) && closeHidesThroughWakes(row)) {
+    out.inbox_stashed_at = wake.now;
+    out.inbox_stash_hidden = true;
+  } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
+    out.inbox_stashed_at = undefined;
+  }
+  return out;
 }
 
 // THE COMMAND RULE: who may send a session's daemon commands (its runner or
@@ -912,6 +951,32 @@ export function isAssignedAwayFromViewer(
   const owner = row.owner_user_id;
   if (owner == null || owner === "") return false;
   return isAssignedAwayFromOwnerSet([owner], viewerId);
+}
+
+// The state a person reads for a placed row: its work state, except a wait an
+// agent owner answers, which is the agent's work whatever section holds the
+// row (a pin keeps its place, and still reads working). The work state still
+// says what the session waits on, for the agents that watch it. A question
+// that reached the person, and the person's own filing, stay theirs. Every
+// person-facing surface reads this: the card, counts, plan groups, the
+// palette, the chime and the CLI's sections.
+export function personWorkState(
+  row: OwnersModelRow & { inbox_rest?: string | null; inbox_rest_at?: number | null; updated_at?: number },
+  placement: { bucket: InboxBucket; work_state: WorkState },
+): WorkState {
+  return personStateOf(row, placement.bucket, placement.work_state);
+}
+
+/** personWorkState with the placement's parts as arguments, for render code,
+ *  which never names a projection stamp field (inboxProjectionGuards). */
+export function personStateOf(
+  row: OwnersModelRow & { inbox_rest?: string | null; inbox_rest_at?: number | null; updated_at?: number },
+  bucket: InboxBucket,
+  state: WorkState,
+): WorkState {
+  if (state !== "needs_input" || bucket === "questions" || !agentAnswersRow(row)) return state;
+  const ownRest = row.user_rest ?? (row.inbox_rest ? userRestOf({ ...row, updated_at: row.updated_at ?? 0 }) : null);
+  return ownRest ? state : "working";
 }
 
 // `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until
@@ -986,6 +1051,13 @@ export const INBOX_WINDOW_CAPS = {
   snoozed: 200,
   owned: 200,
   adopted: 100,
+  // The owners model's two windows. Each reads only rows that are the
+  // viewer's (nestedSeat, escalatedSeat), so a cap counts members. A nested
+  // row pays the scan's full enrichment, and the flag-on CLI read sits
+  // closest to Convex's budget (conversations.inboxReadBudget.test.ts), so
+  // its window is small; an escalated row costs the scan no reads.
+  nested: 25,
+  escalated: 200,
 } as const;
 
 export type WorkingSetWindow = keyof typeof INBOX_WINDOW_CAPS;
@@ -1026,6 +1098,14 @@ export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
   has_pending_messages?: boolean | null;
   /** Membership in the viewer's session_owners set, stamped by the caller. */
   owned_by_me?: boolean | null;
+  /** The account that runs it. */
+  user_id?: string | { toString(): string } | null;
+  /** Under the owners model: when a person released it from its parent (the nested seat). */
+  parent_released_at?: number | null;
+  implicit_owner?: string | null;
+  wait_up_at?: number | null;
+  wait_up_count?: number | null;
+  wait_up_person?: string | null;
   /** Arrived from history (HISTORY_IMPORT_INBOX_MS). */
   history_import?: boolean | null;
 }
@@ -1043,7 +1123,9 @@ export function isFiled(row: Pick<WorkingSetRow, "inbox_pinned_at" | "inbox_dism
 
 // Window eligibility BEFORE caps ([] = nonmember). Top-level rows only, after
 // shouldShowInInbox — both checks live here so a caller cannot forget them.
-export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindow[] {
+// `viewer` is the person whose inbox this is: the owners model's two seats
+// are theirs alone (nestedSeat, escalatedSeat).
+export function inWorkingSet(row: WorkingSetRow, epoch: number, viewer?: ViewerRef): WorkingSetWindow[] {
   if (!shouldShowInInbox(row)) return [];
   const windows: WorkingSetWindow[] = [];
   const horizon = epoch - WORKING_SET_RECENCY_MS;
@@ -1053,13 +1135,23 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
   // stamps on filed rows would crowd the plain rows out of the recent cap.
   const recentEligible =
     !isFiled(row) && (row.status === "active" || row.status === "completed") && row.updated_at >= horizon && !isStaleHistoryImport(row, epoch);
-  if (recentEligible) windows.push("recent");
+  // Under the owners model a subagent takes no recent seat (the server's
+  // recent index reads top-level rows only, and a busy account's subagents
+  // must not crowd its sessions out of the recent cap). One the viewer
+  // released and owns takes the nested seat instead.
+  if (recentEligible) {
+    if (!(underOwnersModel(row) && row.is_subagent === true)) windows.push("recent");
+    else if (nestedSeat(row, viewer)) windows.push("nested");
+  }
   if (row.inbox_pinned_at) windows.push("pinned");
   if (row.inbox_adopted_at && row.inbox_adopted_at >= horizon) windows.push("adopted");
   // The server reads the hide windows over top-level rows only (is_subagent
   // pinned at the index), so an adopted child holds its seat through the
   // adopted window alone and files under its hide stamp by placement.
-  if (!row.inbox_killed_at && !isNestedIdentity(row)) {
+  // Under the owners model a nested row the viewer owns is a member like any
+  // other, and the server's hide windows read every row but a subagent.
+  const topLevel = underOwnersModel(row) ? row.is_subagent !== true : !isNestedIdentity(row);
+  if (!row.inbox_killed_at && topLevel) {
     if (row.inbox_dismissed_at && row.inbox_dismissed_at >= horizon) windows.push("dismissed");
     if (row.inbox_stashed_at && row.inbox_stashed_at >= horizon) windows.push("stashed");
     if (row.inbox_snoozed_until) windows.push("snoozed");
@@ -1068,6 +1160,9 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
   // session is in that person's inbox until they act on it, whatever state it
   // is in (the server scan admits owned rows on the same terms).
   if (row.owned_by_me) windows.push("owned");
+  // The escalated seat: a wait that reached the viewer holds its place while
+  // it stands, whoever runs the session, like an owner seat.
+  if (escalatedSeat(row, viewer, epoch)) windows.push("escalated");
   return windows;
 }
 
@@ -1078,6 +1173,10 @@ const WINDOW_SORT_KEY: Record<Exclude<WorkingSetWindow, "owned">, (row: WorkingS
   stashed: (r) => r.inbox_stashed_at ?? 0,
   snoozed: (r) => r.inbox_snoozed_until ?? 0,
   adopted: (r) => r.inbox_adopted_at ?? 0,
+  // The server's by_user_subagent_released index reads newest release first.
+  nested: (r) => r.parent_released_at ?? 0,
+  // The server's by_wait_up_person index reads newest escalation first.
+  escalated: (r) => r.wait_up_at ?? 0,
 };
 
 export type WorkingSetMember<Row extends WorkingSetRow = WorkingSetRow> = {
@@ -1094,10 +1193,11 @@ export type WorkingSetMember<Row extends WorkingSetRow = WorkingSetRow> = {
 export function selectWorkingSet<Row extends WorkingSetRow>(
   rows: Iterable<Row>,
   epoch: number,
+  viewer?: ViewerRef,
 ): { members: Map<string, WorkingSetMember<Row>>; truncated: InboxTruncation[] } {
   const eligible: Array<{ id: string; member: WorkingSetMember<Row> }> = [];
   for (const row of rows) {
-    const windows = inWorkingSet(row, epoch);
+    const windows = inWorkingSet(row, epoch, viewer);
     if (windows.length === 0) continue;
     eligible.push({ id: String(row._id), member: { row, windows } });
   }
@@ -1128,8 +1228,36 @@ export function selectWorkingSet<Row extends WorkingSetRow>(
 // (convex belowFoldFor); a parallel predicate keyed on window membership
 // instead of the stamp diverged exactly at the 30-day stamp horizon (found by
 // the generated-world property test, 2026-09-01).
-export function isFoldExempt(row: WorkingSetRow): boolean {
-  return isFiled(row) || !!row.owned_by_me;
+export function isFoldExempt(row: WorkingSetRow, viewer?: ViewerRef): boolean {
+  return isFiled(row) || !!row.owned_by_me || escalatedToViewer(row, viewer);
+}
+
+/** The person a selection is for: the viewer's user id, or null for none. */
+export type ViewerRef = string | { toString(): string } | null | undefined;
+
+/** The viewer is the person a standing wait reached whom no owner row names
+ *  (wait_up_person), and no message has followed. Read off the row, so the
+ *  next message or a hand-on ends it at once on every replica. */
+export function escalatedToViewer(row: Pick<WorkingSetRow, "owners_model" | "wait_up_person" | "wait_up_count" | "message_count">, viewer: ViewerRef): boolean {
+  return !!viewer && underOwnersModel(row) && String(row.wait_up_person ?? "") === viewer.toString() && waitReachedPeople(row);
+}
+
+/** The escalated window's seat: a wait that reached the viewer
+ *  (escalatedToViewer) inside the same 30 days the server's
+ *  by_wait_up_person range reads. */
+export function escalatedSeat(row: WorkingSetRow, viewer: ViewerRef, epoch: number): boolean {
+  return escalatedToViewer(row, viewer) && (row.wait_up_at ?? 0) >= epoch - WORKING_SET_RECENCY_MS;
+}
+
+/** The nested window's seat: a subagent the viewer runs, released from its
+ *  parent (parent_released_at, which only a person's release writes), that
+ *  they own as its implicit starter. The server's by_user_subagent_released
+ *  range reads exactly these. A child whose parent died has no seat: its
+ *  wait escalates to its person instead. */
+export function nestedSeat(row: WorkingSetRow, viewer: ViewerRef): boolean {
+  if (!viewer || !underOwnersModel(row) || row.is_subagent !== true || row.parent_released_at == null) return false;
+  const me = viewer.toString();
+  return String(row.user_id ?? "") === me && String(row.implicit_owner ?? "") === me;
 }
 
 // The per-row half of the fold, given the cut: exempt rows never fold, queued
@@ -1138,9 +1266,9 @@ export function isFoldExempt(row: WorkingSetRow): boolean {
 // activity on the old side of the gap. A cutoff of 0 means no fold. The
 // shared loop below and the server's per-row flag (convex belowFoldFor) both
 // call this, so the two cannot diverge.
-export function isBelowFoldAt(row: WorkingSetRow, cutoff: number): boolean {
+export function isBelowFoldAt(row: WorkingSetRow, cutoff: number, viewer?: ViewerRef): boolean {
   if (cutoff <= 0) return false;
-  if (isFoldExempt(row)) return false;
+  if (isFoldExempt(row, viewer)) return false;
   if (row.has_pending_messages) return false;
   return row.updated_at <= cutoff;
 }
@@ -1155,10 +1283,11 @@ export function isBelowFoldAt(row: WorkingSetRow, cutoff: number): boolean {
 // the tally and the default rendering.
 export function computeFold(
   members: ReadonlyMap<string, WorkingSetMember>,
+  viewer?: ViewerRef,
 ): { belowFold: Set<string>; cutoff: number } {
   const candidates: Array<{ id: string; row: WorkingSetRow }> = [];
   for (const [id, m] of members) {
-    if (isFoldExempt(m.row)) continue;
+    if (isFoldExempt(m.row, viewer)) continue;
     candidates.push({ id, row: m.row });
   }
   candidates.sort((a, b) => b.row.updated_at - a.row.updated_at);
@@ -1171,7 +1300,7 @@ export function computeFold(
   }
   const belowFold = new Set<string>();
   for (const c of candidates) {
-    if (isBelowFoldAt(c.row, cutoff)) belowFold.add(c.id);
+    if (isBelowFoldAt(c.row, cutoff, viewer)) belowFold.add(c.id);
   }
   // A candidate folds with its present lead (see settleRiders): a finished
   // teammate older than the cut stays visible under a lead above it, and one
@@ -1195,7 +1324,7 @@ export function computeFold(
 // Everything projectInbox needs on a row: the conversation's own semantic
 // fields plus the overlay-owned facts. All optional except updated_at — a
 // classifier must read an absent fact as unknown and fall back honestly.
-export interface ProjectableInboxRow extends WorkingSetRow {
+export interface ProjectableInboxRow extends WorkingSetRow, Omit<OwnersModelRow, "updated_at"> {
   inbox_rest?: string | null;
   inbox_rest_at?: number | null;
   /** Legacy dormant-only stamp; userRestOf still honors it. */

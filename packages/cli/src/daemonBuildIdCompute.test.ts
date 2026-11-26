@@ -36,7 +36,6 @@ beforeAll(() => {
   write("packages/cli/src/bare.ts", `export {};\n`);
   write("packages/cli/src/dyn.ts", `export const dyn = 1;\n`);
   write("packages/cli/src/unrelated.ts", `export const unrelated = 1;\n`);
-  write("packages/cli/src/daemonBuildId.ts", `export const DAEMON_BUILD_ID = "aaaaaaaaaaaa";\n`);
 });
 
 afterAll(() => {
@@ -111,16 +110,7 @@ describe("computeDaemonBuildId", () => {
     expect(computeDaemonBuildId(root).id).toBe(before);
   });
 
-  test("the stamp file itself is excluded, so stamping is not a fixed point chase", () => {
-    write("packages/cli/src/daemon.ts", `import "./a.js";\nimport "./daemonBuildId.js";\nexport {};\n`);
-    const before = computeDaemonBuildId(root).id;
-    expect(computeDaemonBuildId(root).files).not.toContain("packages/cli/src/daemonBuildId.ts");
-    write("packages/cli/src/daemonBuildId.ts", `export const DAEMON_BUILD_ID = "bbbbbbbbbbbb";\n`);
-    expect(computeDaemonBuildId(root).id).toBe(before);
-  });
-
   test("a dependency range moves the id, the version does not", () => {
-    write("packages/cli/src/daemon.ts", ENTRY_SRC); // the previous test rewrote it
     const before = computeDaemonBuildId(root).id;
     write("packages/cli/package.json", JSON.stringify({ version: "9.9.9", dependencies: { ws: "8.18.0" } }));
     expect(computeDaemonBuildId(root).id).toBe(before);

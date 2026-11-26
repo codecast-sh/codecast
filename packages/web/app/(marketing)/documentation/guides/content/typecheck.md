@@ -25,12 +25,14 @@ Nothing new to learn. Ask for a typecheck the way you would anyway ("typecheck t
 
 - **The first check is the slow one.** It builds the program, so it takes as long as an ordinary typecheck. Every check after that, from any session in the same checkout, takes seconds.
 - **Your machine stays usable.** With a dozen agents at work, memory holds one program per project instead of one per agent.
-- **It tidies up after itself.** A shared typecheck nobody has asked in 45 minutes closes on its own, as does one whose folder is deleted. Each project's typecheck is measured as it runs, and a new one starts only while the memory it needs fits in what the machine has free right now; under memory pressure, none starts beside the ones already running. First builds, the expensive part, run a few at a time, so a burst of agents asking at once waits its turn. When nothing fits, the one asked least recently makes room, and if every one is busy the new check waits its turn for a few minutes, then the agent is told to ask again.
+- **It tidies up after itself.** A shared typecheck nobody has asked in 45 minutes closes on its own, as does one whose folder is deleted. Each project's typecheck is measured as it runs, and a new one starts only while the memory it needs fits in what the machine has free right now; under memory pressure, none starts beside the ones already running. First builds, the expensive part, run a few at a time, so a burst of agents asking at once waits its turn. When nothing fits, typechecks nobody has asked in the last 15 minutes make room, as few as it takes. One asked more recently is left alone, since its agent is likely to ask again, so the new check waits in line for up to 3 minutes and the agent is then told to ask again. A check that has waited 90 seconds may close the least recently asked typecheck that was there before it.
 - **It tells a broken check from broken code.** When the typecheck itself fails (it ran out of memory, or stopped partway), the agent is told so, with the one thing to do next, instead of hunting for errors in code that has none.
 
 ## Repositories with several projects
 
-A repository with more than one TypeScript program (a web app, a server and a command line tool, say) can list them by name in a small file in the repo, `.codecast/check.toml`. Agents can then check one by name ("typecheck the server") or all of them at once. Without the list, an agent checks the configuration closest to the folder it's working in, which may not be the program its change reaches.
+A repository with more than one TypeScript program (a web app, a server and a command line tool, say) can list them by name in a small file in the repo, `.codecast/check.toml`. A plain check then covers only the projects the agent's changes can reach, so an edit to the server doesn't rebuild the web app. Agents can also check one by name ("typecheck the server") or every project with `cast check --all`. Without the list, an agent checks the configuration closest to the folder it's working in, which may not be the program its change reaches.
+
+The same file can switch a repository from the shared watcher to `bun check` (bun 1.4.4 or newer), which checks a whole program in seconds: each check then runs once and exits, checks of the same files share one run, and a few run at a time, queued like first builds.
 
 You don't need to write the file yourself. Ask an agent: "set up codecast typecheck for every TypeScript project in this repo". Point each entry at the configuration the project's own typecheck script uses, and keep the file in git so every copy of the repo has it.
 
@@ -50,4 +52,4 @@ Each separate copy of a repository (a worktree) gets its own shared typecheck, b
 
 ## For agents and scripts
 
-Agents ask the shared typecheck with `cast check` (all projects, or one by name) and restart a confused one with `cast check --fresh`. `cast guide check` covers `.codecast/check.toml`.
+Agents ask the shared typecheck with `cast check` (the projects their changes reach), `cast check --all` (every project) or `cast check <name>` (one), and restart a confused one with `cast check --fresh`. `cast guide check` covers `.codecast/check.toml`.

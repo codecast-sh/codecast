@@ -15,6 +15,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { Mic, Radio, Video, Volume2, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { rememberCamera, rememberMic, rememberDeviceCheck, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
+import { setNoiseCancellation } from "../../lib/calls/callManager";
 import { useWalkieDoor } from "../../hooks/useWalkie";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "../settings/ui";
@@ -29,6 +30,7 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
   const cameraOn = useInboxStore((s) => s.clientState?.ui?.call_camera_on !== false);
   const micOn = useInboxStore((s) => s.clientState?.ui?.call_mic_on !== false);
   const micAutoOpen = useInboxStore((s) => s.clientState?.ui?.call_mic_auto_open !== false);
+  const noiseCancellation = useInboxStore((s) => s.clientState?.ui?.call_noise_cancellation !== false);
   const deviceCheck = useInboxStore((s) => s.clientState?.ui?.call_device_check !== false);
   const soundsOn = useInboxStore((s) => s.clientState?.ui?.sounds_enabled !== false);
   const updateUI = useInboxStore((s) => s.updateClientUI);
@@ -55,8 +57,19 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
       <SettingsSection
         title="Microphone"
         icon={Mic}
-        description="When the app may hold your microphone open. Your system's recording light shows whenever it does."
+        description="Voice clarity and when the app may hold your microphone open."
       >
+        <SettingsRow
+          label="Noise cancellation"
+          description="Filters typing, fans and room noise with Krisp without muffling your voice."
+          className={pad}
+        >
+          <Switch
+            checked={noiseCancellation}
+            onCheckedChange={(v) => void setNoiseCancellation(v)}
+            aria-label="Noise cancellation"
+          />
+        </SettingsRow>
         <SettingsRow
           label="Open before I press"
           description={

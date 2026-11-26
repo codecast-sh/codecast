@@ -262,6 +262,8 @@ are top level:
 | dismissed | `inbox_dismissed_at` within 30 days, not killed | `inbox_dismissed_at` desc | 200 |
 | stashed | `inbox_stashed_at` within 30 days, not killed | `inbox_stashed_at` desc | 200 |
 | owned | `owned_by_me`: the owner row alone, no status or recency gate | server side only | 200 |
+| nested | owners model: a subagent the viewer runs, released from its parent (`parent_released_at`) and owns as its implicit starter (`nestedSeat`), otherwise as recent | `parent_released_at` desc | 25 |
+| escalated | owners model: a standing wait that reached the viewer (`wait_up_person`, `escalatedSeat`), `wait_up_at` within 30 days | `wait_up_at` desc | 200 |
 
 The caps and sort keys are shared constants; the server scan and the client selection
 must agree, pinned by a test that runs both over one fixture set. A filed row is never
@@ -289,6 +291,84 @@ that must not age out. The alert follows the row: notification delivery drops
 the runner by the same rule (`isAssignedAwayFromOwnerSet`), and the handoff
 itself clears the previous holder's dismiss, stash and snooze stamps, which live
 on the row rather than per viewer.
+
+**Under the owners model, owning decides.** A team with the feature
+`session_owners` on has every session of that team under the owners model
+(shared `contracts/sessionOwners`): its owners are people, one role, and the
+session that started it until released, with the starter owning it only while
+nothing else does. The server marks such a row `owners_model` (the marker
+every reader branches on, `underOwnersModel`, so a row without it places
+exactly as before; a row off the model carries none of the model's fields,
+`INBOX_MODEL_ONLY_ROW_FIELDS`, so its shape is the un-flagged one) and lays on it the implicit starter (`implicit_owner`) and
+the owning session (`owner_session_id`), with no owner read
+(`convex/lib/inboxOwners.ts`). A row carries no owner list: the viewer's own
+claim is `owned_by_me` (one point lookup of their owner row), a wait that
+escalated to them is read off the row itself (`wait_up_person`: the selection
+takes the viewer, so the seat has no copy to drift), and the faces on a card
+come from one batched owners read
+(`sessionOwnership.listOwnersFor`). A marked row is a member of exactly its
+owners' inboxes (`isInboxMember`): the scan drops a candidate the caller does
+not own whoever runs it, the replica's `isForeignRow` reads the same fields,
+and a nested
+row the caller owns stands alone. A subagent holds no recent seat (the
+server's recent index never reads one): one the caller released holds the
+nested seat, read by its own index (`by_user_subagent_released`), so the cap
+counts members. A dead parent (killed or deleted) is a released one, so its
+children fall back to their people and their implicit starter. The parent's
+death writes that release on each child under the model that still matters
+to a person, one whose process is running or whose wait stands
+(`releaseDeadParentChildren`, a scheduled, paged job that runs after the kill
+cascade; only the root kill or delete schedules it, or a cascaded child with
+children of its own), so the nested window lists such a subagent for its
+starter, past the cascade's reach or under a deleted parent, and server and
+replica agree. A finished or idle child is history, released by nobody and in
+nobody's inbox. The same pass re-runs the needs-input check for each child
+with a standing wait, so a wait standing "With <parent>" reaches its people.
+A child no window seats for its person escalates its waits instead
+(`unseatedChild`, `wait_up_person`, the escalated window): a dead parent's
+until the job runs, and a released subagent its runner did not start. A row only an escalation seats is a current wait (an ended one
+is no member), waiting on a person by definition, so it skips the children
+scan and the liveness read and costs the scan nothing; the wait's kind rides
+the row instead (`needs_input_notified_key`, "<count>:<kind>", which the push
+writes for the episode; model rows only), so a permission prompt or an open
+question files under questions (`escalatedAsks`). byIds admits the person an escalation
+reached, so a row that only fell past the cap keeps its claim.
+Nothing rides: no role riding, no `child_live`, no teammate ride, and no
+child's ask lifts its parent. A wait an agent owner answers
+(`agentAnswersRow`: the role, else the owning session) files under working,
+"With <owner>", keeping its raw work state for the agents that watch it; only
+a decision routed to the viewer asks them. The agent is told
+(`convex/lib/agentOwnerWaits.ts`: the role's route up, or a frame queued into
+the owning session) and nobody is rung. When it cannot be told (a closed,
+killed or away parent, a role with no listener), or passes the wait up (`cast
+own <s> --pass-up`, from the agent's own session or by a person owner), the
+wait escalates by one shared rule (`waitAudience` in `contracts/sessionOwners`):
+the person owners, else the implicit starter, else the human who started it,
+else where the role's line ends (a workspace admin failing that, then the
+person who runs it), never an agent account and never anyone who cannot open
+the session (`checkConversationAccess`): the escalation grants no access. The
+scan and byIds admit an escalated row through the same check, and a visibility
+change, a member's own visibility change (`applyMembershipVisibilityChange`,
+its one writer) or a leave that shuts its person out hands the wait on
+(`rerouteEscalatedWait`), as does the next needs-input check for any other
+loss of access. Under the model the episode key (`needs_input_notified_key`)
+means "this episode's people were covered": the daemon's own push stamps it
+only when it delivered to someone, so a push an agent owner answered leaves it
+unset, and the check stamps it once past the agent's stand-down, whatever the
+person's notification settings (escalatedAsks files by it). The key alone
+decides whether the check stands down (the daemon-permission stand-down stays for rows off the model). An
+escalation therefore rings its person once whichever way it came, and a
+reroute clears the key, since the person it named was rung and the new one
+was not. Off the model the key is stamped as it always was. The row is stamped with when, the message count it covers
+(`wait_up_count`: the next message hands the waits back to the agent, so no
+clock is compared) and the person no owner row names (`wait_up_person`, read
+by the scan through its own index). Until the next message that person is an
+inbox member, the row files under Needs You, and the push rings exactly that
+audience, whoever started the waiting turn, a pin and a
+schedule run included. The next message clears the stamps; so does the
+session dying. The escalation window lists a row only while the person still
+belongs to its team, and a person leaving the team hands their escalated
+waits on to the next person the rule names.
 
 Team scope membership depends on inputs the replica does not hold (member visibility
 settings, redaction). The team overlay still delivers facts and stamps for rendering

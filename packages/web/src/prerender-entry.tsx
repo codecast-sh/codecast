@@ -50,6 +50,7 @@ import BlogAgentsTogether from "@/app/(marketing)/blog/claude-code-cursor-codex/
 import BlogFromYourPhone from "@/app/(marketing)/blog/claude-code-from-your-phone/page";
 import BlogOwnChrome from "@/app/(marketing)/blog/agents-in-your-own-chrome/page";
 import BlogSoftwareFactory from "@/app/(marketing)/blog/the-software-factory/page";
+import BlogBoardOnEveryCall from "@/app/(marketing)/blog/a-board-on-every-call/page";
 import BlogHistoryOnDayOne from "@/app/(marketing)/blog/claude-code-history-on-day-one/page";
 import BlogChartReply from "@/app/(marketing)/blog/the-chart-in-the-reply/page";
 import BlogQuestions from "@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page";
@@ -123,6 +124,7 @@ export function render(path: string): string {
             <Route path="blog/claude-code-cursor-codex" element={<BlogAgentsTogether />} />
             <Route path="blog/agents-in-your-own-chrome" element={<BlogOwnChrome />} />
             <Route path="blog/the-software-factory" element={<BlogSoftwareFactory />} />
+            <Route path="blog/a-board-on-every-call" element={<BlogBoardOnEveryCall />} />
             <Route path="blog/claude-code-history-on-day-one" element={<BlogHistoryOnDayOne />} />
             <Route path="blog/claude-code-from-your-phone" element={<BlogFromYourPhone />} />
             <Route path="blog/the-chart-in-the-reply" element={<BlogChartReply />} />

@@ -79,7 +79,16 @@ export function deployAgo(at: number, now: number): string {
   return mins < 24 * 60 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / (24 * 60))}d ago`;
 }
 
-/** The words after a deploy's name in its pill. A deploy still waiting or deploying carries how long; the hover has the rest. */
+/**
+ * What follows a deploy's name on its pill: how long, while it still waits or goes out; nothing once settled. The
+ * glyph and tone carry the state, so the pill names no state in words.
+ */
+export function deployPillElapsed(d: DeployLike, now: number): string | null {
+  const state = deployPillState(d);
+  return state === "waiting" || state === "going_out" ? deployElapsed(now - (d.created_at ?? now)) : null;
+}
+
+/** A deploy's state in words, for its tooltip and screen readers. A deploy still waiting or deploying carries how long. */
 export function deployPillSuffix(d: DeployLike, now: number): string {
   const since = deployElapsed(now - (d.created_at ?? now));
   const back = isRollback(d);

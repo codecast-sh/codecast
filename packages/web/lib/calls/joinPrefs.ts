@@ -45,6 +45,9 @@ export type JoinPrefs = {
   /** Whether a start or an answer shows the camera and the microphone first
    *  (components/calls/HuddleStartDialog). On until turned off once. */
   deviceCheck: boolean;
+  /** Whether enhanced (Krisp) noise cancellation cleans the microphone in a
+   *  call. On until turned off once. */
+  noiseCancellation: boolean;
 };
 
 function ui(): any {
@@ -61,6 +64,7 @@ export function readJoinPrefs(): JoinPrefs {
     micOn: u.call_mic_on !== false,
     micAutoOpen: u.call_mic_auto_open !== false,
     deviceCheck: u.call_device_check !== false,
+    noiseCancellation: u.call_noise_cancellation !== false,
   };
 }
 
@@ -128,6 +132,12 @@ export function rememberMicAutoOpen(on: boolean): void {
 export function rememberDeviceCheck(on: boolean): void {
   if (readJoinPrefs().deviceCheck === on) return;
   useInboxStore.getState().updateClientUI({ call_device_check: on });
+}
+
+/** The person decided whether Krisp noise cancellation cleans their mic. */
+export function rememberNoiseCancellation(on: boolean): void {
+  if (readJoinPrefs().noiseCancellation === on) return;
+  useInboxStore.getState().updateClientUI({ call_noise_cancellation: on });
 }
 
 // The capture constraints live with the rest of the media options

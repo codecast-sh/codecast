@@ -29,7 +29,8 @@ const git = (cwd: string, args: string[]) => spawnSync('git', args, { cwd, encod
 /**
  * The call surfaces whose prod call is not on CALL_MODEL, each with the model prod asks:
  * the Changes prose on PROSE_MODEL (changes.test.ts holds the two to their builders), the
- * line's ground step on STRONG_MODEL (lineGround.ts), the two that replay a person's
+ * line's ground step and codecast's automatic review of a pull request on STRONG_MODEL
+ * (lineGround.ts, lib/automaticReview.ts; doctor.test.ts holds the second), the two that replay a person's
  * own Claude Code session (cast decide, the review station) on that person's default, and
  * the intent segment's read on the model its station names (intentRead.test.ts holds them).
  */
@@ -37,6 +38,7 @@ const PROD_CALL_MODEL: Record<string, string> = {
   'changes-story': PROSE_MODEL,
   'changes-edition': PROSE_MODEL,
   ground: STRONG_MODEL,
+  'automatic-review': STRONG_MODEL,
   decide: PROD_DEFAULT_MODEL,
   'review-note': PROD_DEFAULT_MODEL,
   'intent-read': INTENT_READ_MODEL,

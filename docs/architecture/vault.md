@@ -110,6 +110,7 @@ One row per secret in `secrets`:
 | `status` | `ready` or `requested` (a request with no value yet) |
 | `fingerprint` | first 4 and last 4 of a key, so a person can tell which one is stored without revealing it |
 | `ask_first` | an agent's read needs a person's approval, once per session (see Ask first) |
+| `touch_id` | revealing it, approving an Ask first read of it and turning either guard off take a passkey (see Touch ID); independent of `ask_first` |
 | `has_otp`, `version_count` | stored when the value is written, so metadata never decrypts: whether a login holds a 2FA seed, and how many previous values `secret_versions` keeps |
 | `value_updated_at` | when the value last changed (create, rotate, fill, refresh, restore): the version a sign-in's write-back names, always past the one it replaces, so two writes in one millisecond still differ. `updated_at` also moves on a metadata edit and is for display |
 | bookkeeping | `created_by`, `updated_by`, `updated_at`, `rotated_at`, `last_used_at`, `last_used_by_session`, `use_count`, `short_id` (`sec-N`); a request's first asker in `requested_by` and `requested_from_conversation`, every later asking session in `also_requested_from` |
@@ -243,9 +244,10 @@ item; no path reads `team_id` for access.
   `get`/`run`/`otp` render as a compact "used stripe-test" card that never
   shows a value.
 - **CLI.** `cast vault` (list), `add`, `rotate`, `fill`, `get`, `run`, `env`,
-  `otp`, `request`, `rm`, `show`, `save-signin`, `restore`, `ask-first`. JSON
-  with `--json` on every verb. `ls` and `show` print the health state, `+2fa`,
-  `ask-first` and how many earlier values are kept.
+  `otp`, `request`, `rm`, `show`, `save-signin`, `restore`, `ask-first`,
+  `touch-id`. JSON with `--json` on every verb. `ls` and `show` print the
+  health state, `+2fa`, `ask-first`, `touch-id` and how many earlier values
+  are kept.
 - **Browser.** `cast browser open` injects a matching saved sign-in into the
   Chrome the session drives (the human's own through the extension, or the
   agent browser) before navigating; `cast vault save-signin <site>` (and the
@@ -381,9 +383,11 @@ to anyone, since a request holds no value.
 
 An agent's read (`secrets.cliRead`, so `get`, `run`, `env`, `otp`, `cast dev`
 and the browser's sign-in alike) that includes an Ask first secret this
-conversation has no approval for returns no values. It files a decision
-through `askCore` on the asking conversation, "<asker> asks to use <name>"
-(the asking session's title, else its short id)
+conversation has no approval for returns no values. It files one decision
+for every such secret of the read together through `askCore` on the asking
+conversation, "<asker> asks to use <a>, <b> and <c>" (the asking session's
+title, else its short id), so one Approve, and at most one Touch ID, opens
+the whole set (a secret already waiting on an open decision stays on it)
 with Approve for this session / Deny, category `access` (a keyword may pin
 another category a person must answer), and returns `SecretNeedsApproval`: the
 decision ids and the dormant line. The CLI prints both on stderr and exits 3
@@ -400,7 +404,7 @@ borrow another session's approval.
 (`convex/lib/secretApprovals.ts`). The approver is the account that runs the
 session or one of its owners (a session a bot account runs is answered by the
 person who owns it); a teammate who only views it is refused. A signed-in
-person's Approve marks the row approved for the rest of that conversation; Deny or dismiss marks it denied
+person's Approve marks every row the decision covers approved for the rest of that conversation; Deny or dismiss marks it denied
 and the next read asks again. The asking session withdrawing its question
 (`cast decide cancel`) drops the approval row and records `withdrawn`, since
 no person denied anything. Only the web and phone answer one (the `resolve`
@@ -413,7 +417,8 @@ An approval holds while its conversation is active and for 12 hours at most
 (`SECRET_APPROVAL_TTL_MS`); a read naming an ended session is refused, since
 its id is visible to the user's other sessions. A new value (rotate, fill over
 a value, restore) ends the approvals given for the old one. Switching Ask
-first off or on ends them all and withdraws any decision still open, and
+first off or on ends them all and withdraws any decision still open that
+covers no other pending secret, and
 `remove` does the same, so the queue never keeps a decision that can do
 nothing. Those withdrawals delete the approval rows first, so they record no
 `withdrawn` event: the switch or the delete is the activity line. A request
@@ -425,11 +430,21 @@ notified or blamed by them.
 
 Signed in is not enough for the presses that open a guarded secret, because
 an agent can drive the person's own signed-in Chrome (`cast browser`) and the
-server cannot tell its clicks from theirs. Revealing an Ask first secret,
-approving an Ask first decision and switching Ask first off each take a
-passkey assertion (Touch ID, Face ID or a security key), which a script cannot
-produce; so do removing a passkey and adding a second one (decision sd-1359).
-Deny and dismiss stay one press, and switching Ask first on needs nothing.
+server cannot tell its clicks from theirs. A passkey assertion (Touch ID, Face
+ID or a security key) is what a script cannot produce, so a secret can carry
+Touch ID as its own switch (`touch_id`, `secrets.setTouchId`), separate from
+Ask first: Ask first says who must approve an agent's read, Touch ID says how
+a person's press proves it is theirs. With Touch ID on, revealing the value,
+approving an Ask first decision that covers it and switching either guard off
+each take an assertion; with it off, those are one press (an agent-driven tab
+still holds them, `lib/agentTabGuard`). Removing a passkey and adding a second
+one always take one (decision sd-1359). Deny and dismiss stay one press, and
+switching either guard on needs nothing (the panel's switch, or `cast vault
+touch-id <name> on`; off is refused from a token, as for Ask first). Secrets made before the split have
+Touch ID off. The decision an Ask first read files carries `touch_id` while
+one of its secrets has it on (`askFirstGate`, kept in step by `setTouchId`),
+which is how every client knows whether its Approve asks
+(`approveNeedsPresence` in `shared/contracts/commandRun.ts`).
 
 - `passkeys` (`convex/passkeysSchema.ts`): one WebAuthn credential per row,
   the person's own with no workspace: public key, signature counter,
@@ -461,10 +476,11 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   patch's gate and writes to no row). The string is in no query, no
   challenge and no `/confirm` URL, so an agent holding the person's session
   token can watch the challenge turn granted but cannot spend it.
-- The gates (`lib/presence.ts`): `secrets.reveal` of an Ask first secret
-  (`recordReads`, before the reveal is recorded), `setAskFirst` off (so the
-  web's dispatch side effect too), an Approve through `resolve` or the
-  dispatch rail (`secretApprovalRefusal` checks, `settleSecretApproval` uses
+- The gates (`lib/presence.ts`): `secrets.reveal` of a Touch ID secret
+  (`recordReads`, before the reveal is recorded), `setAskFirst` off on a
+  Touch ID secret and `setTouchId` off (so the web's dispatch side effects
+  too), an Approve of a decision covering a Touch ID secret through
+  `resolve` or the dispatch rail (`secretApprovalRefusal` checks, `settleSecretApproval` uses
   it up), `passkeys.remove`, and an enrollment when a passkey exists, which
   spends its add_passkey grant when it begins (`openChallenge`, recorded as
   the register row's `authorized_by`; a register row without one cannot

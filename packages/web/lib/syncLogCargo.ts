@@ -9,6 +9,7 @@
 import {
   INBOX_FACT_FIELDS,
   isInboxRowField,
+  INBOX_MODEL_ONLY_ROW_FIELDS,
   isSettleVerdictCurrent,
   userRestOf,
 } from "@codecast/shared/contracts";
@@ -44,8 +45,15 @@ export const ENRICH_TRIGGER_FIELDS: Record<CargoCollection, ReadonlySet<string>>
   docs: new Set(["plan_id", "doc_type"]),
   plans: new Set([]),
   projects: new Set([]),
-  sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id"]),
+  // owners_changed_at: every owner write under the owners model stamps it,
+  // and org_role_id or parent_released_at move the agent owner; implicit_owner,
+  // owner_session_id and owned_by_me are derived from facts the replica lacks.
+  sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id", "owners_changed_at", "org_role_id", "parent_released_at"]),
 };
+
+// The owners triggers refetch only a row under the owners model: off it, no
+// owners field is derived, so a role filing must cost no byIds read.
+const OWNERS_TRIGGER_FIELDS: ReadonlySet<string> = new Set(["owners_changed_at", "org_role_id", "parent_released_at"]);
 
 // Sessions rows rename three raw fields (enrichInboxSessionRow).
 const SESSION_RENAMES: Record<string, string> = {
@@ -67,7 +75,8 @@ export function planCargoApply(
 ): CargoPlan {
   const raw = cargo.patch ?? {};
   const unsetIn = cargo.unset ?? [];
-  const triggers = ENRICH_TRIGGER_FIELDS[coll];
+  const all = ENRICH_TRIGGER_FIELDS[coll];
+  const triggers = coll === "sessions" && !existing?.owners_model ? new Set([...all].filter((k) => !OWNERS_TRIGGER_FIELDS.has(k))) : all;
   let refetch = !!cargo.partial;
   // A trigger fires on a CHANGED value, never on presence: a coalesced or
   // full cargo re-ships every field it ever carried (plan_id on a task that
@@ -134,6 +143,8 @@ function planSessions(
   // list and byIds write, so landing it would flap on their next push.
   const fields: Record<string, any> = {};
   for (const [k, v] of Object.entries(changed)) if (isInboxRowField(k)) fields[k] = v;
+  // Model-only fields land on a model row only, as the list ships them.
+  if (!existing?.owners_model) for (const k of INBOX_MODEL_ONLY_ROW_FIELDS) delete fields[k];
   const unset: string[] = [];
   // Derived twins, recomputed from the merged row with the shared helpers.
   const merged = { ...(existing ?? {}), ...changed };

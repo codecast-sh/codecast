@@ -136,6 +136,15 @@ describe("the Modern session card", () => {
     expect(word(render({ _id: "c-z", inbox_snoozed_until: NOW + 60 * MIN }, { variant: "snoozed", onRestore: noop }))).toBe("Dormant");
   });
 
+  // Under the owners model a wait its agent owner answers files under Working
+  // and says who has it: the role by handle, the owning session by title.
+  test("an agent-answered wait says With <owner> in Working; off the model it says Working", () => {
+    const role = { _id: "r1", short_id: "r1", name: "Growth lead", handle: "growth", avatar: "", status: "active", tenure_kind: "standing" };
+    expect(word(render({ _id: "c-role", owners_model: true, owned_by_me: true, org_role_id: "r1", role } as never, { variant: "working" }))).toBe("With @growth");
+    expect(word(render({ _id: "c-child", owners_model: true, owner_session_id: "c-lead" } as never, { variant: "working" }))).toBe("With Webhook retry rewrite");
+    expect(word(render({ _id: "c-off", org_role_id: "r1", role } as never, { variant: "working" }))).toBe("Working");
+  });
+
   test("a failure in Needs You says Error and what failed", () => {
     const html = render({ _id: "c-limit", pending_api_error: true, pending_api_error_kind: "limit" }, { sectionStatus: "blocked" });
     expect(word(html)).toBe("Error");

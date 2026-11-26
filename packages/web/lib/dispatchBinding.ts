@@ -8,7 +8,7 @@ import type { DispatchFn } from "@platform/engine";
 import { stampDeliveryReceipts } from "./syncDeliveryReceipts";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
-import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
+import { isChatRoomRefusal, releaseHeldAnswer, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { offerRollbackToHost } from "../store/syncReplication";
@@ -60,7 +60,14 @@ export function makeDispatchBinding(
     if (dead) return Promise.reject(dead);
     const settle = recordWrite(action, args, patches);
     return send(action, args, patches, result, lockIds).then(
-      (res) => { settle({ ok: true }); return res; },
+      (res) => {
+        settle({ ok: true });
+        if (action === "answerDecision") releaseHeldAnswer(args?.[0], true);
+        // The server has an owners change: the locks it planted settle on
+        // whatever the server answers since (store settleOwnersAck).
+        if (action === "applySessionOwners" && lockIds?.size) useInboxStore.getState().settleOwnersAck([...lockIds]);
+        return res;
+      },
       (err) => { settle({ err }); throw err; },
     );
   };
@@ -173,6 +180,7 @@ export function toastWriteError(error: unknown, fallback: string): void {
 
 /** The handler `_setDispatchError` takes: a dispatch gave up after its retries. */
 export function applyDispatchFailure(action: string, error: unknown, args?: unknown): void {
+  if (action === "answerDecision" && Array.isArray(args) && isPermanentDispatchError(error)) releaseHeldAnswer(args[0], false);
   if (QUIET_ACTIONS.has(action)) {
     console.warn(`[sync] ${action} not recorded`, error);
     return;

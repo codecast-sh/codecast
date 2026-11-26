@@ -275,7 +275,42 @@ session: the runner sends its brief, which names what a stage found, as a
 message in the session's own thread, waits for the session to work and settle
 (the station wait every session node uses, `waitOnStation`), then freezes the session's
 change again on the same branch and resets the run's worktree to it
-(`refreezeSessionChange`). A session that pins blocked asks a person, for the
+(`refreezeSessionChange`). A finding names the run's worktree, so the session
+may fix it there and leave it uncommitted. The runner records that worktree as a
+git tree in the run's directory before the brief (`snapshotRunTree`; a restart
+keeps the first record, and writing `change.json` afresh drops it), and the
+refreeze commits every file that differs from it. A deletion is always carried.
+A credential written there (a template such as `.env.example`, `*.sample` or
+`*.template` by its content only), or a written lockfile or generated file that
+neither the change's files (a branch's: all it changes off the default branch)
+nor those edits make, is held out: moved into `$run_dir/held` and named in the
+run's output and the next brief (`carry_held`). For a change frozen from a
+checkout, a credential the session committed in the worktree refuses the
+refreeze, naming the file; a branch's commits are the session's own push. The
+refreeze pushes nothing (the PR station pushes the branch as it always has). On
+a branch, task or pull request run the worktree must be on the change's branch,
+and origin's tip is the change's, with the run's own unpushed work replayed onto
+it locally: what the branch here holds over the newest commit under it that
+origin is known to have held, and that origin's tip does not hold now. Origin
+held its tip at the last freeze (`remote_tip`), what the run's own stations
+pushed (`pr.json`'s heads and rebases, `rebase.json`'s chain), what this
+checkout fetched since that freeze (the remote-tracking branch's reflog after
+`change.json`'s `frozen_at`; none without one), and its tip now.
+Nothing origin held is replayed, so a commit a force-push or a rewind took off
+origin stays off, and a commit origin already has is not applied twice. A
+branch here that sits on none of those while origin moved (rebased onto newer
+work) refuses; with none recorded at all, all the branch here adds over its
+common commit with origin is the run's own. A
+change frozen from a checkout carries the edits on top of each later freeze
+(`frozen_tip`, its files in `carried`, apart from `paths`). The worktree is
+read once more before the reset; a write made while the refreeze ran is carried
+on a second pass, and a worktree still changing after that is left as it is.
+The branch moves only once the carry is on the new tip; a conflict moves
+nothing. A failed reset puts the branch and the held files back and leaves
+`change.json` as it was; it says the worktree may be partly reset and names the
+commit holding the session's edits. What differed
+already at the brief is the run's own stations' writing, and the reset puts it
+back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run
 waits for that person rather than stopping: the run's row says so
 (`waiting_on_session.blocked`, its note the pin), and the Ship bar reads
@@ -358,6 +393,14 @@ the last round's `ci.json`, `review.json`, `merge.json` and `rebase.json` from
 the run's directory, pushes the run's change branch and opens its pull
 request, or finds the open one the push just updated, and writes `pr.json` =
 {url, number, head_sha, branch, round}, where `round` is a fresh random nonce.
+It records the pull request and that head on the run, since an approval status
+reads a pull request no run reported as a bot's. A line whose own scripts open
+and rebase the pull request makes the same reports itself, or its pull requests
+wait on the approval status for good: `cast flow record-pr --number <n> --head
+<sha>` after opening or updating it, `cast flow record-rebase --from <sha> --to
+<sha>` before pushing each rebase, and its reviewer's `cast flow
+review-verdict ... --mechanism <true|false>`. A report that fails is printed and
+never fails the station.
 A branch goes up as a fast forward, or with `--force-with-lease` over exactly
 the head this run last pushed there (a branch frozen from a session's edits is
 the run's own, and a session's fix may rebase someone's branch); a head anyone

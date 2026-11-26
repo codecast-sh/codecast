@@ -73,10 +73,10 @@ describe("what a live watcher holds", () => {
     expect(holdBytes({}, 1 * GB, [clean(5.4), clean(5.4), clean(5.4)], ceiling, 4 * GB)).toBe(5.4 * GB);
     expect(holdBytes({}, 6 * GB, [], ceiling, 4 * GB)).toBe(6 * GB);
   });
-  test("a cold watcher that has finished a pass holds what it measures, or the peak it reached", () => {
+  test("a watcher that has finished a pass holds what it measures, or the peak it reached, idle or not", () => {
     expect(holdBytes({ firstFinishedAt: 5 }, 3 * GB, [clean(3)], ceiling)).toBe(3 * GB);
-    expect(holdBytes({ firstFinishedAt: 5, peakRssBytes: 5 * GB }, 2 * GB, [clean(3)], ceiling)).toBe(2 * GB);
-    // A pass in flight climbs back toward the peak it reached.
+    // Idle, macOS compresses it, and its next pass climbs back: it holds its peak (ct-100924).
+    expect(holdBytes({ firstFinishedAt: 5, peakRssBytes: 5 * GB }, 0.1 * GB, [clean(3)], ceiling)).toBe(5 * GB);
     expect(holdBytes({ firstFinishedAt: 5, inProgress: true, peakRssBytes: 5 * GB }, 2 * GB, [clean(3)], ceiling)).toBe(5 * GB);
   });
   test("a watcher from before firstFinishedAt existed counts a finished pass by finishedAt", () => {
@@ -85,7 +85,7 @@ describe("what a live watcher holds", () => {
   test("a watcher past its first pass holds its live use, not its project's p95 headroom", () => {
     const peaks = [clean(2), clean(2), clean(2)];
     expect(holdBytes({ firstFinishedAt: 5 }, 1 * GB, peaks, ceiling)).toBe(1 * GB);
-    expect(holdBytes({ firstFinishedAt: 5, peakRssBytes: 1.5 * GB }, 1 * GB, peaks, ceiling)).toBe(1 * GB);
+    expect(holdBytes({ firstFinishedAt: 5, peakRssBytes: 1.5 * GB }, 1 * GB, peaks, ceiling)).toBe(1.5 * GB);
     expect(holdBytes({ firstFinishedAt: 5 }, 4 * GB, peaks, ceiling)).toBe(4 * GB);
   });
   test("one more fits when holds plus its need stay in budget; a machine always runs one", () => {

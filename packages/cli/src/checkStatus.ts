@@ -6,7 +6,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { coldBuildCap, isColdBuild, listWatchers, machineCapacity } from "./check.js";
+import { bunRunCap, coldBuildCap, isBunRun, isColdBuild, listWatchers, machineCapacity } from "./check.js";
 import { machineCap } from "./machineCaps.js";
 import { fmtGb, learnedSizes, MIN_SAMPLES, procTable, reserveBytes, treeRssBytes, type LearnedSize, type MachineMemory } from "./watcherMemory.js";
 
@@ -27,7 +27,10 @@ export interface WatcherStatus {
   /** Watchers still on their first pass, and how many may run at once (checkCapacity.ts). */
   coldBuilds: number;
   coldCap: number;
-  watchers: Array<{ project: string; root: string; pid: number; checking: boolean; errors?: number; finishedAt?: number; rssBytes: number; holdBytes: number }>;
+  /** bun check runs in flight, and how many may run at once. */
+  bunRuns: number;
+  bunRunCap: number;
+  watchers: Array<{ project: string; root: string; pid: number; checking: boolean; errors?: number; finishedAt?: number; rssBytes: number; holdBytes: number; checker?: "bun" }>;
   learned: LearnedSize[];
 }
 
@@ -37,7 +40,7 @@ export function watcherStatus(): WatcherStatus {
   const cap = machineCapacity(process.cwd(), "", machineCap("check"), table);
   const watchers = live.map((w) => ({
     project: w.project, root: w.root, pid: w.pid, checking: w.inProgress, errors: w.errors, finishedAt: w.finishedAt,
-    rssBytes: treeRssBytes(w.pid, table), holdBytes: cap.holdOf!(w),
+    rssBytes: treeRssBytes(w.pid, table), holdBytes: cap.holdOf!(w), ...(w.checker ? { checker: w.checker } : {}),
   }));
   return {
     totalBytes: os.totalmem(),
@@ -52,6 +55,8 @@ export function watcherStatus(): WatcherStatus {
     heldBytes: watchers.reduce((a, w) => a + w.holdBytes, 0),
     coldBuilds: live.filter(isColdBuild).length,
     coldCap: coldBuildCap(),
+    bunRuns: live.filter(isBunRun).length,
+    bunRunCap: bunRunCap(),
     watchers,
     learned: learnedSizes(cap.ceilingBytes, cap.coldBytes),
   };
@@ -75,10 +80,11 @@ export function renderWatcherStatus(s: WatcherStatus, now = Date.now()): string 
     `Typecheck memory  ${fmtGb(s.heldBytes)} reserved of ${fmtGb(s.budgetBytes)}  (${fmtGb(s.totalBytes)} machine: ${measured}never above ${fmtGb(s.capBytes)}, ${fmtGb(s.reserveBytes)} kept for everything else; up to ${s.maxWatchers} watchers as memory allows)`,
     `Cold builds       ${s.coldBuilds}/${s.coldCap} running  (first passes; more wait in the queue, a project past 8 GB counts as two)`,
   ];
+  if (s.bunRuns) lines.push(`bun check runs    ${s.bunRuns}/${s.bunRunCap} running  (trees with checker = "bun"; more wait in the queue)`);
   if (s.watchers.length) {
     lines.push("", "Watchers");
     lines.push(...table(s.watchers.map((w) => [
-      w.project, w.root, `pid ${w.pid}`, fmtGb(w.rssBytes), `reserves ${fmtGb(w.holdBytes)}`,
+      w.checker ? `${w.project} (bun check)` : w.project, w.root, `pid ${w.pid}`, fmtGb(w.rssBytes), `reserves ${fmtGb(w.holdBytes)}`,
       w.checking ? "checking" : `${w.errors ?? "?"} errors, ${w.finishedAt ? ago(w.finishedAt, now) : "no pass yet"}`,
     ])));
   } else {

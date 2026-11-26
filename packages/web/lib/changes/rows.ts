@@ -129,6 +129,9 @@ export const groupLabel = (g: { id: ChangeGroupId; label: string }, mine: boolea
 /** The groups a reader can narrow the grid to, by clicking the group's name. */
 export const PICKABLE_GROUPS: ReadonlyArray<ChangeGroupId> = ["you", "moving", "waiting"];
 
+/** A group's name by its id, as its head in the grid reads. */
+export const groupName = (id: ChangeGroupId, mine: boolean) => groupLabel(GROUPS.find((g) => g.id === id)!, mine);
+
 /** The group a change falls in at `now` (groupChanges' rule for one row). */
 export function groupOf(r: ChangeRow, now: number): ChangeGroupId | null {
   if (isParked(r, now)) return "parked";

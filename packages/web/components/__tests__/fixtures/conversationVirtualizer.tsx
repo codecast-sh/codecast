@@ -226,3 +226,16 @@ test("fold mode draws the person's message and what the agent said, as bubbles, 
     expect(host.querySelectorAll("[data-cc-bubble]").length).toBe(2);
   } finally { useInboxStore.setState({ anchors } as any); await act(() => root.unmount()); host.remove(); }
 }, 30_000);
+
+test("a view without its header still has the past-messages navigator", async () => {
+  // The org drawer passes hideHeader and a role seat folds the header away at
+  // rest; the navigator must not live inside the header that goes.
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => { root.render(<ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={{ ...conversation, _id: "nav-fixture" as any }} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} /></MemoryRouter></ConvexProviderWithAuth>); });
+    const nav = host.querySelector("[data-cc-message-nav]");
+    expect(nav).not.toBeNull();
+    expect(nav!.closest("[data-sv-convhead]")).toBeNull();
+  } finally { await act(() => root.unmount()); host.remove(); }
+}, 30_000);

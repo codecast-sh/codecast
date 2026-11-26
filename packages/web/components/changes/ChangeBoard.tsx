@@ -80,7 +80,8 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
   hideGroups?: ReadonlyArray<string>;
   /** The rows are only the viewer's own: the failures and turns read "Needs you". */
   mine?: boolean;
-  /** A surface that narrows the grid to one group: each pickable group's name presses it, and again clears it. */
+  /** A surface that narrows the grid to one group: each pickable group's name presses it, and again clears it. A picked
+   *  group with nothing in it says `empty` under its name. */
   pick?: { group: ChangeGroupId | null; onPick: (g: ChangeGroupId | null) => void };
   /** The row a link points at, highlighted. */
   focused?: (r: ChangeRow) => boolean;
@@ -116,7 +117,8 @@ export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups
                   return next;
                 })} data-change-fold={g.id}>{head}<ChevronRight className="chb-chevron" aria-hidden /></button>
               ) : <div className="chb-group-head">{head}</div>}
-              {folded || !g.rows.length ? null : <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} focused={!!focused?.(r)} />)}</div>}
+              {folded ? null : g.rows.length ? <div className="chb-rows">{g.rows.map((r) => <Row key={r.key} row={r} at={now} focused={!!focused?.(r)} />)}</div>
+                : g.id === picked ? <div className="chb-rows"><div className="chb-empty">{empty}</div></div> : null}
             </section>
           );
         }) : <div className="chb-rows"><div className="chb-empty">{empty}</div></div>}

@@ -32,6 +32,25 @@ import {
 } from './DevicesSection';
 import { isPerson } from '@codecast/shared/team/memberKind';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
+import { useSessionOwners } from '@codecast/web/hooks/useSessionOwners';
+import { OwnerFaces, ownersSpoken } from '@/components/owners/OwnerFace';
+import { OwnersSheetBody } from '@/components/owners/OwnersSheetBody';
+import { ownersModelOnFor } from '@codecast/web/store/sessionOwnersSlice';
+
+/** The lobe's owners faces, read only for a session under the model. */
+function OwnersLobe({ conversationId }: { conversationId: string }) {
+  const view = useSessionOwners(conversationId);
+  return (
+    <View style={styles.lobe} testID="owners-lobe">
+      <OwnerFaces view={view} size={14} />
+    </View>
+  );
+}
+
+function OwnersSheet({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
+  const view = useSessionOwners(conversationId);
+  return <OwnersSheetBody conversationId={conversationId} view={view} onClose={onClose} />;
+}
 
 /**
  * The unified assignment control for a session — mobile twin of the web's
@@ -97,6 +116,13 @@ export function AssignmentChip({
     notify: (msg) => showToast(msg),
   }));
   const { ownerList, displayFor } = owners;
+  // Under the owners model (the session's team has session_owners) the lobe
+  // and the sheet draw the model's owners: people, its role, its session.
+  // Off it, one store selector and nothing more is read.
+  const ownersOn = useInboxStore((s) => !!conversationId && ownersModelOnFor(s as never, conversationId));
+  // The owners said aloud, from the same store read the lobe draws.
+  // While the owners read loads it says only "owners": it names no one it has not read.
+  const ownersSaid = useInboxStore((s) => (ownersOn ? ownersSpoken(s as never, conversationId!) : ''));
 
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
 
@@ -136,7 +162,7 @@ export function AssignmentChip({
         onPress={() => setSheetVisible(true)}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownerList.length ? `owned by ${ownerList.map((o) => displayFor(o).name).join(', ')}` : 'no owners'}`}
+        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownersOn ? ownersSaid.replace(/^Owners/, 'owners') : ownerList.length ? `owned by ${ownerList.map((o) => displayFor(o).name).join(', ')}` : 'no owners'}`}
       >
         <View style={styles.chipShell}>
           {loaded && (
@@ -148,6 +174,9 @@ export function AssignmentChip({
               <View style={[styles.dot, { backgroundColor: d?.online ? Theme.green : Theme.textMuted0 }]} />
             </View>
           )}
+          {ownersOn ? (
+            <OwnersLobe conversationId={conversationId!} />
+          ) : (
           <View style={[styles.lobe, ownerList.length ? { backgroundColor: Theme.cyan + '14' } : null]}>
             {ownerList.length ? (
               // Faces only: the names are in the sheet and the label, and the
@@ -171,6 +200,7 @@ export function AssignmentChip({
               </>
             )}
           </View>
+          )}
         </View>
       </Pressable>
 
@@ -231,12 +261,19 @@ export function AssignmentChip({
 
             <View style={styles.divider} />
 
+            {ownersOn ? (
+              <>
+                {activeTeamId !== undefined && <OrgRolesFeeder teamId={activeTeamId} />}
+                {sheetVisible && <OwnersSheet conversationId={conversationId!} onClose={() => setSheetVisible(false)} />}
+              </>
+            ) : (
             <OwnerSheetRows
               owners={owners}
               conversationId={conversationId}
               activeTeamId={activeTeamId}
               onDone={() => setSheetVisible(false)}
             />
+            )}
             </ScrollView>
           </Pressable>
         </Pressable>

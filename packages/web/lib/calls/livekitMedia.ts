@@ -17,7 +17,15 @@
 // A leaf: no store, no call manager. The guest page (app/meet) builds its
 // room from these same options without either.
 import type { JoinPrefs } from "./joinPrefs";
-import type { RoomOptions, ScreenShareCaptureOptions, TrackPublishOptions, VideoEncoding } from "livekit-client";
+import {
+  Track,
+  type AudioCaptureOptions,
+  type AudioPreset,
+  type RoomOptions,
+  type ScreenShareCaptureOptions,
+  type TrackPublishOptions,
+  type VideoEncoding,
+} from "livekit-client";
 
 export const SCREEN_SHARE_ENCODING: VideoEncoding = {
   maxBitrate: 6_000_000,
@@ -40,25 +48,62 @@ export const SCREEN_SHARE_PUBLISH: TrackPublishOptions = {
   simulcast: false,
 };
 
+// Full-band Opus headroom. LiveKit defaults to 48 kbps (`AudioPresets.music`)
+// with `red: true` and `dtx: true`: in libwebrtc `maxBitrate` caps the gross
+// RTP stream (payload + RED packet duplication + Opus in-band FEC), which
+// crushes the primary voice payload to ~20 kbps and forces Opus into narrowband
+// SILK with a steep high-frequency roll-off ("muffled" speech). 96 kbps keeps
+// Opus in full-band 20 kHz audio alongside RED+FEC at <2% of a share's budget,
+// and `dtx: false` avoids comfort-noise ramp-up clipping the start of turns.
+export const HUDDLE_AUDIO_PRESET: AudioPreset = {
+  maxBitrate: 96_000,
+  priority: "high",
+};
+
+export const AUDIO_PUBLISH_DEFAULTS = {
+  audioPreset: HUDDLE_AUDIO_PRESET,
+  dtx: false,
+  red: true,
+} as const;
+
+export const MIC_PUBLISH_OPTIONS: TrackPublishOptions = {
+  source: Track.Source.Microphone,
+  ...AUDIO_PUBLISH_DEFAULTS,
+};
+
 /**
  * The capture constraints every join hands to the media plane.
  *
  * `echoCancellation` is the one that is not a preference. The burst coming out
  * of a listener's speakers is arriving at their own microphone the moment they
  * step in — without cancellation that is a loop, and the sender hears
- * themselves a beat late. It is on by default in Chromium for `audio: true`,
- * and stating it is the difference between relying on a default and meaning it.
+ * themselves a beat late.
+ *
+ * `voiceIsolation` is explicitly off: `livekit-client` sets `voiceIsolation: true`
+ * in `audioDefaults`, which `new Room()` shallow-merges when omitted here —
+ * stacking OS CoreAudio isolation on top of WebRTC/Krisp noise suppression and
+ * muffling speech on macOS.
  */
-export function micConstraints(deviceId?: string): MediaTrackConstraints {
+export function micConstraints(
+  deviceId?: string,
+  opts?: { noiseSuppression?: boolean },
+): AudioCaptureOptions & MediaTrackConstraints {
   return {
     echoCancellation: true,
-    noiseSuppression: true,
+    noiseSuppression: opts?.noiseSuppression ?? true,
+    voiceIsolation: false,
     autoGainControl: true,
+    sampleRate: { ideal: 48_000 },
+    channelCount: { ideal: 1 },
     ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
   };
 }
 
 export function huddleRoomOptions(prefs: Pick<JoinPrefs, "micDeviceId" | "cameraDeviceId" | "speakerDeviceId">): RoomOptions {
+  // Omit "default" so LiveKit leaves <audio> elements on the system sink rather
+  // than calling setSinkId("default"), which can trip Chromium's macOS AEC tap.
+  const speakerDeviceId =
+    prefs.speakerDeviceId && prefs.speakerDeviceId !== "default" ? prefs.speakerDeviceId : undefined;
   return {
     adaptiveStream: { pixelDensity: "screen" },
     dynacast: true,
@@ -66,8 +111,9 @@ export function huddleRoomOptions(prefs: Pick<JoinPrefs, "micDeviceId" | "camera
     videoCaptureDefaults: prefs.cameraDeviceId
       ? { deviceId: { ideal: prefs.cameraDeviceId } }
       : {},
-    ...(prefs.speakerDeviceId ? { audioOutput: { deviceId: prefs.speakerDeviceId } } : {}),
+    ...(speakerDeviceId ? { audioOutput: { deviceId: speakerDeviceId } } : {}),
     publishDefaults: {
+      ...AUDIO_PUBLISH_DEFAULTS,
       screenShareEncoding: SCREEN_SHARE_PUBLISH.screenShareEncoding,
       degradationPreference: SCREEN_SHARE_PUBLISH.degradationPreference,
     },

@@ -177,7 +177,7 @@ export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
   row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
   verdict: { status: string; answer_index?: number },
-  by: { kind: string; user_id?: Id<"users"> },
+  by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
 ): Promise<void> {
   if (verdict.status === "withdrawn") return;
@@ -192,6 +192,7 @@ export async function settleCardApproval(
     // Only a card that showed a judged diff ({pr, judged_key, files}) approves, and only that diff: an unstamped card's
     // Ship approves nothing, and the status asks again. The run's card read the change whole, so its Ship also binds to
     // the whole diff it showed, which covers a mechanism until any code changes.
+    // A run's own card never clears a hold: only codecast's approval card for it does (settleApprovalCard).
     const a = row.approval;
     if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
       await ctx.db.insert("change_approvals", {
@@ -213,6 +214,83 @@ export async function settleCardApproval(
     for (const a of held) if (!a.revoked_at) await ctx.db.patch(a._id, { revoked_at: now });
   }
   await scheduleRunApprovalPost(ctx, run);
+}
+
+/** The codecast user who opened the pull request on GitHub, when codecast knows them (a bot account included). */
+export async function prAuthor(ctx: { db: any }, repository: string, prNumber: number): Promise<Id<"users"> | null> {
+  const pr: any = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", prNumber)).first();
+  if (!pr?.author_github_username) return null;
+  const u: any = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", pr.author_github_username)).first();
+  return u?._id ?? null;
+}
+
+/**
+ * Whether an answer may approve where the author must not: a person's own (no session answering for them, `via`), one
+ * the card asked, and not the pull request's author.
+ */
+async function mayClearHold(ctx: { db: any }, card: { asked?: Id<"users">[]; held?: boolean; repository: string; pr_number: number }, by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> }): Promise<boolean> {
+  if (by.kind !== "user" || !by.user_id || by.via) return false;
+  // Only a card posted while the pull request was held, showing the hold, releases it.
+  if (!card.held) return false;
+  // The people the card asked when codecast posted it: a pass or an escalation adds no one. A run's own card has none.
+  if (!(card.asked ?? []).some((id) => String(id) === String(by.user_id))) return false;
+  return String(await prAuthor(ctx, card.repository, card.pr_number)) !== String(by.user_id);
+}
+
+/**
+ * Why an answer to an approval card codecast posted (changeApprovals.ts) would not count, refused before it closes the
+ * card, or null when it counts. Only someone the card asked answers it, in person (an answer a session gives for its
+ * person, `via`, is no one's), whatever the answer: Approve merge, Revise, Drop or a dismissal. On a pull request no run
+ * is behind, or a card about its hold, the pull request's author never approves it. A withdrawal (codecast's own, or the
+ * asking session's) is no answer and is never refused.
+ */
+export async function approvalCardRefusal(
+  ctx: { db: any },
+  row: { approval_card?: boolean; status?: string; options: Array<{ label: string }>; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[] } },
+  by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
+  verdict?: { status: string; answer_index?: number },
+): Promise<string | null> {
+  if (!row.approval_card || !row.approval || verdict?.status === "withdrawn") return null;
+  if (row.status && row.status !== "pending") return `This approval card is already ${row.status}: it is answered once.`;
+  // Who the card asked when codecast posted it, never whom a pass or an escalation handed it to (a card from before the
+  // set was kept reads its asked people).
+  const asked = (row.approval.asked ?? row.asked_user_ids ?? []).map(String);
+  const names = (await Promise.all(asked.map(async (id) => {
+    const u: any = ctx.db.normalizeId?.("users", id) ? await ctx.db.get(id) : await ctx.db.get(id).catch(() => null);
+    return u?.name || u?.github_username || null;
+  }))).filter(Boolean);
+  const who = names.length ? names.join(" or ") : "the person it asks";
+  if (by.kind !== "user" || !by.user_id) return `Only ${who} answers this approval card, in person: a role or a policy does not.`;
+  if (by.via) return `Only ${who} answers this approval card, in person: an answer a session gives for its person does not count. Answer it on the web, or from a plain shell.`;
+  if (!asked.includes(String(by.user_id))) return `Only ${who} answers this approval card: it asks them, not you.`;
+  const approving = verdict?.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
+  const barred = !row.approval.run_id || row.approval.reason === "held";
+  if (approving && barred && String(await prAuthor(ctx, row.approval.repository, row.approval.pr_number)) === String(by.user_id)) {
+    const others = names.length > 1 ? `; ${who} can, besides you` : "";
+    return `You opened this pull request, so your approval of it does not count${others}.`;
+  }
+  return null;
+}
+
+/**
+ * Why a decision may not be passed or escalated: an approval card codecast posted never is, since only the people it
+ * asked when it was posted can answer it. Null for any other decision.
+ */
+export function approvalHandoffRefusal(row: { approval_card?: boolean; approval?: unknown }): string | null {
+  return row.approval_card && row.approval ? "An approval card is answered by the people it asks: it is not handed on." : null;
+}
+
+/**
+ * A person approved the pull request on a card (mayClearHold): the hold an automatic review's mechanism answer put on it
+ * is cleared (changeApprovals.settle). Nothing else clears it.
+ */
+async function clearHold(ctx: { db: any }, repository: string, prNumber: number): Promise<void> {
+  const rows: Doc<"pull_requests">[] = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", prNumber)).collect();
+  for (const row of rows) {
+    if (!row.approval?.held) continue;
+    const { held: _held, ...rest } = row.approval;
+    await ctx.db.patch(row._id, { approval: rest });
+  }
 }
 
 /** The Release Captain role (pl-1075 Words), by its handle or its title: whose revert merges on CI alone. */
@@ -270,17 +348,23 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
  * A person settled an approval card codecast posted for a pull request (changeApprovals.ts): Approve merge is the
  * approval of the judged diff the card showed; Revise, Drop or a dismissal revokes what approved that pull request's
  * run (or, with no run, that diff). Anyone else's answer changes nothing. The status is worked out again either way.
+ * An approval counts only from a person the card asked, in person: an answer a session gave for them (`via`) approves
+ * nothing, and on a pull request no run is behind, or a card about its hold, neither does its author's.
  */
 async function settleApprovalCard(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs"> } },
+  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; asked_user_ids?: Id<"users">[]; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[]; held?: boolean } },
   verdict: { status: string; answer_index?: number },
-  by: { kind: string; user_id?: Id<"users"> },
+  by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
 ): Promise<void> {
   if (by.kind !== "user" || !by.user_id) return;
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
+    const asked = (a.asked ?? row.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id));
+    const authorBarred = !a.run_id || a.reason === "held";
+    if (by.via || !asked || (authorBarred && String(await prAuthor(ctx, a.repository, a.pr_number)) === String(by.user_id))) return;
+    if (await mayClearHold(ctx, { asked: a.asked, held: a.held, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number);
     await ctx.db.insert("change_approvals", {
       repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
       conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),

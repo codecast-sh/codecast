@@ -22,6 +22,7 @@ import { cliAuthRequest } from "./cliAuthHttp";
 import { registerCliPreflight, registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
 import { registerPriorityRoutes } from "./lib/priorityRoutes";
 import { registerDeployPauseRoutes } from "./lib/deployPauseRoutes";
+import { registerSessionOwnerRoutes } from "./lib/sessionOwnerRoutes";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
@@ -4250,7 +4251,7 @@ cliRoute("/cli/vault/read", async (ctx, body) => ctx.runAction((api as any).secr
 cliRoute("/cli/vault/request", async (ctx, body) => ctx.runMutation((api as any).secrets.request, body));
 cliRoute("/cli/vault/fulfill", async (ctx, body) => ctx.runAction((api as any).secrets.fulfill, body));
 cliRoute("/cli/vault/rm", async (ctx, body) => ctx.runMutation((api as any).secrets.remove, body));
-cliRoute("/cli/vault/ask-first", async (ctx, body) => ctx.runMutation((api as any).secrets.setAskFirst, body));
+for (const [path, fn] of [["ask-first", "setAskFirst"], ["touch-id", "setTouchId"]]) cliRoute(`/cli/vault/${path}`, async (ctx, body) => ctx.runMutation((api as any).secrets[fn], body));
 cliRoute("/cli/vault/versions", async (ctx, body) => ctx.runQuery((api as any).secrets.versions, body));
 cliRoute("/cli/vault/restore", async (ctx, body) => ctx.runAction((api as any).secrets.restore, body));
 cliRoute("/cli/vault/redaction-values", async (ctx, body) => ctx.runAction((api as any).secrets.redactionValues, body));
@@ -4495,10 +4496,7 @@ cliRoute("/cli/changes/mark-deploy", async (ctx, body) => ctx.runMutation((api a
 // Which deploy put each name (a function, route, index or table) on a surface: who to ask before dropping it.
 cliRoute("/cli/deploys/added-by", async (ctx, body) => ctx.runQuery((api as any).changesDeploy.addedBy, body));
 
-cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
-cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
-cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
-cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
+registerSessionOwnerRoutes(http);
 
 // Cross-user device reparent (cast pull): pull a session you run or own — or a
 // team-visible one (see findPullableConversation) — onto the

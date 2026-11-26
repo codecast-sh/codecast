@@ -3,12 +3,13 @@
 // approval decision through it, and secrets.ts records every event with it,
 // so neither imports the other's module graph.
 
-import { APPROVE_FOR_SESSION } from "@codecast/shared/contracts/secrets";
+import { APPROVE_FOR_SESSION, SECRET_APPROVAL_TTL_MS, type SecretReadPurpose } from "@codecast/shared/contracts/secrets";
 import type { Doc, Id } from "../_generated/dataModel";
 import { consumePresence, presenceRefusal } from "./presence";
 import { isSessionOwner } from "../sessionOwners";
 
 type Ctx = { db: any };
+type SecretRow = Doc<"secrets">;
 
 // The redaction version is one counter per workspace, bumped on every change
 // to what the daemon's redaction feed holds (a value written or deleted, an
@@ -59,11 +60,19 @@ async function mayApprove(ctx: Ctx, approval: Doc<"secret_approvals">, userId: I
   return String(conversation.user_id) === String(userId) || (await isSessionOwner(ctx, conversation._id, userId));
 }
 
-/** The pending Ask first approval a decision was filed for, or null: the decision is the Vault's, not its asker's to reshape. */
-export const pendingApproval = async (ctx: Ctx, decisionId: Id<"session_decisions">): Promise<Doc<"secret_approvals"> | null> => {
-  const approval = await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).first();
-  return approval?.status === "pending" ? approval : null;
-};
+/** The pending Ask first approvals a decision was filed for, one per secret it covers (a read of several files one decision). */
+export const pendingApprovals = async (ctx: Ctx, decisionId: Id<"session_decisions">): Promise<Doc<"secret_approvals">[]> =>
+  (await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).collect()).filter((a: Doc<"secret_approvals">) => a.status === "pending");
+
+/** The first pending Ask first approval a decision was filed for, or null: the decision is the Vault's, not its asker's to reshape. */
+export const pendingApproval = async (ctx: Ctx, decisionId: Id<"session_decisions">): Promise<Doc<"secret_approvals"> | null> =>
+  (await pendingApprovals(ctx, decisionId))[0] ?? null;
+
+/** Whether approving these takes Touch ID: one of their secrets has it on. One grant covers the whole decision. */
+const needsTouchId = async (ctx: Ctx, approvals: Doc<"secret_approvals">[]) => (await Promise.all(approvals.map((a) => ctx.db.get(a.secret_id)))).some((s: any) => !!s?.touch_id);
+
+const mayApproveAll = async (ctx: Ctx, approvals: Doc<"secret_approvals">[], userId: Id<"users"> | undefined) =>
+  (await Promise.all(approvals.map((a) => mayApprove(ctx, a, userId)))).every(Boolean);
 
 type Verdict = { status: string; answer_index?: number };
 
@@ -76,10 +85,10 @@ const approves = (row: { options?: Array<{ label: string }> }, verdict: Verdict)
  * its dispatch rail): an answer through an api token may be the gated agent
  * answering its own question, from its own shell with no session named, and
  * a teammate viewing the session is not the person whose secret it opens.
- * Approving it also takes an approve grant for the decision (passkeys.ts),
- * since an agent may be driving the person's signed-in browser, spent with
- * the grant string the answer carries (`by.presence`); a Deny or a dismissal
- * stays one press. With no verdict the answer is taken to approve.
+ * Approving one that covers a secret with Touch ID on also takes an approve
+ * grant for the decision (passkeys.ts), since an agent may be driving the
+ * person's signed-in browser, spent with the grant string the answer carries
+ * (`by.presence`); a Deny or a dismissal stays one press. With no verdict the answer is taken to approve.
  * finalizeAnswer, answerCore and the dispatch rail check it the way they
  * check hostedAnswerRefusal; settleSecretApproval uses the grant up.
  */
@@ -89,11 +98,11 @@ export async function secretApprovalRefusal(
   by: { user_id?: Id<"users">; signed_in?: boolean; presence?: string },
   verdict?: Verdict,
 ): Promise<string | null> {
-  const approval = await pendingApproval(ctx, row._id);
-  if (!approval) return null;
+  const approvals = await pendingApprovals(ctx, row._id);
+  if (!approvals.length) return null;
   if (!by.signed_in) return "An Ask first decision is a person's: answer it on the web or the phone, where you are signed in";
-  if (!(await mayApprove(ctx, approval, by.user_id))) return "Only the person whose session asked can answer an Ask first decision";
-  if (!verdict || approves(row, verdict)) return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id), by.presence);
+  if (!(await mayApproveAll(ctx, approvals, by.user_id))) return "Only the person whose session asked can answer an Ask first decision";
+  if ((!verdict || approves(row, verdict)) && (await needsTouchId(ctx, approvals))) return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id), by.presence);
   return null;
 }
 
@@ -117,20 +126,84 @@ export async function settleSecretApproval(
   by: { kind: string; user_id?: Id<"users">; signed_in?: boolean; presence?: string },
   now: number,
 ): Promise<void> {
-  const approval = await pendingApproval(ctx, row._id);
-  if (!approval) return;
+  const approvals = await pendingApprovals(ctx, row._id);
+  if (!approvals.length) return;
   const approved = approves(row, verdict);
-  if (approved && (by.kind !== "user" || !by.signed_in || !(await mayApprove(ctx, approval, by.user_id)))) return;
-  if (approved && (await consumePresence(ctx, by.user_id!, "approve", String(row._id), by.presence))) return;
+  if (approved && (by.kind !== "user" || !by.signed_in || !(await mayApproveAll(ctx, approvals, by.user_id)))) return;
+  if (approved && (await needsTouchId(ctx, approvals)) && (await consumePresence(ctx, by.user_id!, "approve", String(row._id), by.presence))) return;
   const withdrawn = verdict.status === "withdrawn";
-  if (withdrawn) await ctx.db.delete(approval._id);
-  else await ctx.db.patch(approval._id, { status: approved ? "approved" : "denied", approved_by: approved ? by.user_id : undefined, at: now });
-  if (approved) await bumpRedaction(ctx, approval.workspace);
-  const secret = await ctx.db.get(approval.secret_id);
-  if (!secret) return;
-  await recordSecretEvent(ctx, secret, approved ? "approved" : withdrawn ? "withdrawn" : "denied", {
-    actor: by.user_id,
-    conversation_id: approval.conversation_id,
-    decision_id: row._id,
-  });
+  const bumped = new Set<string>();
+  for (const approval of approvals) {
+    if (withdrawn) await ctx.db.delete(approval._id);
+    else await ctx.db.patch(approval._id, { status: approved ? "approved" : "denied", approved_by: approved ? by.user_id : undefined, at: now });
+    if (approved && !bumped.has(approval.workspace)) {
+      bumped.add(approval.workspace);
+      await bumpRedaction(ctx, approval.workspace);
+    }
+    const secret = await ctx.db.get(approval.secret_id);
+    if (!secret) continue;
+    await recordSecretEvent(ctx, secret, approved ? "approved" : withdrawn ? "withdrawn" : "denied", {
+      actor: by.user_id,
+      conversation_id: approval.conversation_id,
+      decision_id: row._id,
+    });
+  }
+}
+
+// ── Ask first decisions ─────────────────────────────────────────────────────
+
+const PURPOSE_PHRASE: Record<SecretReadPurpose, string> = {
+  get: "read it",
+  run: "run a command with it",
+  env: "export it into a shell",
+  otp: "make a 2FA code",
+  signin: "sign in",
+};
+
+/** "a", "a and b", "a, b and c". */
+export const joinNames = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
+
+/** The secrets an Ask first decision still waits on: every pending approval filed on it. */
+export async function approvalSecrets(ctx: Ctx, decisionId: Id<"session_decisions">): Promise<SecretRow[]> {
+  const rows = await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).collect();
+  const pending = rows.filter((a: Doc<"secret_approvals">) => a.status === "pending");
+  return (await Promise.all(pending.map((a: Doc<"secret_approvals">) => ctx.db.get(a.secret_id)))).filter(Boolean);
+}
+
+export const ASKS_TO_USE = " asks to use ";
+
+/** What Approve grants, naming every secret the decision covers. */
+function approvalSubject(rows: SecretRow[]): string {
+  const named = joinNames(rows.map((r) => `${r.name} (${r.short_id})`));
+  const subject = rows.length > 1 ? `${named} are Ask first in the Vault. Approve lets this session read all of them` : `${named} is Ask first in the Vault. Approve lets this session read it`;
+  return `${subject} until the session ends, for ${SECRET_APPROVAL_TTL_MS / 3_600_000} hours at most, and a new value asks again.`;
+}
+
+/** An Ask first decision's context: the agent's why first (its own words), then what Approve grants. */
+export function approvalContext(rows: SecretRow[], purpose: SecretReadPurpose, why: string | undefined): string {
+  const site = purpose === "signin" ? rows.find((r) => r.sites?.[0])?.sites?.[0] : undefined;
+  const reason = why?.trim() ? `Why: ${why.trim()}` : `To ${site ? `sign in to ${site}` : PURPOSE_PHRASE[purpose]}.`;
+  return `${reason}\n\n${approvalSubject(rows)}`;
+}
+
+/**
+ * Rewrite an open Ask first decision to the secrets it still waits on: its
+ * question and context name only those, and it asks for Touch ID only while
+ * one of them has it on. False when none is left, so the caller withdraws it.
+ */
+export async function refreshApprovalDecision(ctx: Ctx, decisionId: Id<"session_decisions">): Promise<boolean> {
+  const rows = await approvalSecrets(ctx, decisionId);
+  if (!rows.length) return false;
+  const decision = await ctx.db.get(decisionId);
+  if (decision?.status !== "pending") return true;
+  const at = decision.question.indexOf(ASKS_TO_USE);
+  const question = at < 0 ? decision.question : decision.question.slice(0, at + ASKS_TO_USE.length) + joinNames(rows.map((r) => r.name));
+  const old = decision.context_md ?? "";
+  const cut = old.lastIndexOf("\n\n");
+  const context_md = `${cut < 0 ? old : old.slice(0, cut)}\n\n${approvalSubject(rows)}`;
+  const touch_id = rows.some((r) => r.touch_id) || undefined;
+  if (question !== decision.question || context_md !== decision.context_md || touch_id !== decision.touch_id) {
+    await ctx.db.patch(decisionId, { question, context_md, touch_id, updated_at: Date.now() });
+  }
+  return true;
 }

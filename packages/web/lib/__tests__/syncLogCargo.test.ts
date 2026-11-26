@@ -3,6 +3,31 @@ import { ENRICH_TRIGGER_FIELDS, planCargoApply } from "../syncLogCargo";
 
 // Pure adapter from raw log cargo to store row fields (sync-log-cargo E6/E7).
 
+describe("planCargoApply — session owners", () => {
+  test("an owner write (owners_changed_at), a role change or a parent's release refetches the row's derived owners", () => {
+    const existing = { _id: "s1", owners_model: true, owners_changed_at: 1, org_role_id: null, wait_up_at: null };
+    expect(planCargoApply("sessions", { patch: { owners_changed_at: 2 } }, existing).refetch).toBe(true);
+    expect(planCargoApply("sessions", { patch: { org_role_id: "r" } }, existing).refetch).toBe(true);
+    expect(planCargoApply("sessions", { patch: { parent_released_at: 3 } }, existing).refetch).toBe(true);
+    // A wait passed up is a raw field the row places by: it lands, no refetch.
+    const up = planCargoApply("sessions", { patch: { wait_up_at: 4 } }, existing);
+    expect([up.fields.wait_up_at, up.refetch]).toEqual([4, false]);
+  });
+
+  test("off the model a role filing or an owner stamp refetches nothing", () => {
+    const off = { _id: "s1", org_role_id: null };
+    expect(planCargoApply("sessions", { patch: { org_role_id: "r" } }, off).refetch).toBe(false);
+    expect(planCargoApply("sessions", { patch: { owners_changed_at: 2 } }, off).refetch).toBe(false);
+    expect(planCargoApply("sessions", { patch: { active_task_id: "t" } }, off).refetch).toBe(true);
+  });
+
+  test("the owners model's fields land on a model row only, as the list ships them", () => {
+    const patch = { needs_input_notified_key: "5:permission_blocked", wait_up_at: 4, wait_up_count: 5, role_started: true };
+    expect(planCargoApply("sessions", { patch }, { _id: "s1", owners_model: true }).fields).toEqual(patch);
+    expect(planCargoApply("sessions", { patch: { ...patch, title: "t" } }, { _id: "s1" }).fields).toEqual({ title: "t" });
+  });
+});
+
 describe("planCargoApply — tasks/docs/plans/projects", () => {
   test("raw fields land as-is; unset passes through", () => {
     const p = planCargoApply("tasks", { patch: { title: "t", status: "done" }, unset: ["closed_at"] }, { _id: "t1" });

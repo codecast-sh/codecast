@@ -5,7 +5,7 @@
 // report, and the answers right there, or the answer once it is settled.
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
-import { RUN_OPTION, SKIP_OPTION, approvesPersonsAct, fallbackLine } from '@codecast/shared/contracts/commandRun';
+import { RUN_OPTION, SKIP_OPTION, approveNeedsPresence, fallbackLine } from '@codecast/shared/contracts/commandRun';
 import { approvalButtonLabel } from '@codecast/shared/contracts/assistant';
 import { useCallback, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -42,15 +42,15 @@ function settledOf(row: SessionDecisionItem): string | null {
 
 
 /**
- * The answer press for one decision: approving an Ask first read takes Touch
- * ID first (lib/presence), one confirmation at a time; then the store's
+ * The answer press for one decision: approving a Touch ID secret's read or a
+ * run takes Touch ID first (lib/presence), one confirmation at a time; then the store's
  * answer (which adopts a row read by id from outside the viewer's queue).
  * `after` runs once the answer is in.
  */
-export function useDecisionAnswer(source: Parameters<typeof approvesPersonsAct>[0] | undefined, decisionId: string, after?: () => void) {
+export function useDecisionAnswer(source: Parameters<typeof approveNeedsPresence>[0] | undefined, decisionId: string, after?: () => void) {
   const confirming = useRef(false);
   return useCallback(async (input: DecisionAnswerInput) => {
-    if (source && 'index' in input && input.index !== undefined && approvesPersonsAct(source, input.index)) {
+    if (source && 'index' in input && input.index !== undefined && approveNeedsPresence(source, input.index)) {
       if (confirming.current) return;
       confirming.current = true;
       try {
@@ -149,7 +149,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
               onPress={() => answer({ index: i })}
               style={[styles.compact, i === (row.blocking ? -1 : row.default_option) && { borderColor: Theme.text }]}
             >
-              {approvesPersonsAct(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
+              {approveNeedsPresence(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
               <Text style={styles.compactText} numberOfLines={1}>{o.label}</Text>
             </Pressable>
           )) : (
@@ -204,7 +204,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
             onAnswer={answer}
             look={look}
             proceedingWith={row.blocking ? undefined : row.default_option}
-            guarded={(i) => approvesPersonsAct(row, i)}
+            guarded={(i) => approveNeedsPresence(row, i)}
           />
           {kind === 'single' && writing ? (
             <View style={{ gap: 8 }}>

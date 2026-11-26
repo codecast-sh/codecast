@@ -13,13 +13,6 @@ bash scripts/guard-no-src-shadow.sh
 
 bun test src/daemonPid.test.ts src/daemonPid.cli.test.ts
 
-# The daemon build id must match the source it is stamped from. Both release
-# paths (deploy.sh and cut-cli-release.yml) run this script, so one check line
-# covers both. It only verifies: the finalize workflow rejects a release whose
-# packages/cli tree differs from the commit it built, so the stamp has to be a
-# source edit a developer committed.
-bun scripts/stamp-daemon-build-id.ts --check
-
 # Resolve the signing identity BEFORE anything is signed, and export it. Two
 # things get signed in this script — the CLI binaries below and the cast computer
 # helper embedded in them — and macOS keys a TCC grant to the signing identity,

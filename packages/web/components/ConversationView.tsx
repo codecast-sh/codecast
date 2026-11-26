@@ -16,6 +16,7 @@ import { BranchCodeLink } from "./repo/RepositoryLinks";
 import { captureException } from "@sentry/react";
 import { RefreshCw as PaletteRestart, Copy as PaletteCopy, Search as PaletteSearch, MessageCircleQuestion as PaletteAsk, Eye as PaletteEye, Pin as PalettePin, GitBranch as PaletteBranch, Rows3 as PaletteRows } from "lucide-react";
 import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
+import { answerRoles } from "../lib/steering";
 import Link from "next/link";
 import { dragCarriesPane } from "../lib/stage";
 import { useRouter } from "next/navigation";
@@ -97,6 +98,10 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { LocalMirrorChip } from "./LocalMirror";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
+import { useSyncSessionOwners } from "../hooks/useSyncSessionOwners";
+import { NotInInboxBar } from "./conversation/ComposerOwnerStrip";
+import { SessionAgentsBand } from "./conversation/SessionAgentsBand";
+import { OwnersMenuItem, OwnersSheet } from "./OwnersMenu";
 import { ThreadSuggestions } from "./org/SuggestionSet";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
@@ -143,7 +148,7 @@ import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -660,32 +665,29 @@ const ConversationViewInner = (
 
   const { user: currentUser } = useCurrentUser();
   const effectiveIsOwner = isOwner;
-  // The session's own questions (AskUserQuestion, plan approval) are answered
-  // by the runner's daemon: their controls are live only for the people the
-  // server lets command it (commandsSession), never for a team viewer.
-  const canAnswerSession = viewerCommandsSession(conversation as any, currentUser?._id);
-  // A teammate's press on a question or a permission becomes a proposal the
-  // owner submits; the owner sees those proposals on the same cards
-  // (components/conversation/teamProposals, convex teamSuggestions.ts).
+  // The session's own questions (AskUserQuestion, plan approval) and its
+  // permission prompts are answered by the people the server lets command it
+  // (commandsSession) and by an admin of the session's team, who never
+  // proposes; a teammate's press becomes a proposal the owner submits, and
+  // the owner sees those proposals on the same cards
+  // (components/conversation/teamProposals, convex teamSuggestions.ts). Being
+  // an admin grants only that: no Allow all, no resume, no Needs You.
+  const myTeams = useInboxStore((s) => s.teams);
+  const meId = currentUser?._id ? String(currentUser._id) : null;
+  const roles = useMemo(() => answerRoles(conversation as any, meId, myTeams), [conversation, meId, myTeams]);
+  const canAnswerSession = roles.canAnswer;
   const proposalConvId = conversation?._id && isConvexId(String(conversation._id)) ? String(conversation._id) : null;
-  const proposalRole = !proposalConvId
-    ? null
-    : canAnswerSession
-    ? "owner" as const
-    : ((conversation as any)?.access_level === "team" && !["summary", "minimal", "private"].includes((conversation as any)?.team_visibility))
-      || (conversation as any)?.access_level === "owner"
-    ? "teammate" as const
-    : null;
+  const proposalRole = roles.proposalRole;
   const proposalOwnerName = (conversation as any)?.user?.name || (conversation as any)?.user?.email?.split("@")[0] || "the owner";
   const teamProposals = useMemo<TeamProposalRole>(
     () => (proposalConvId && proposalRole ? { conversationId: proposalConvId, role: proposalRole, ownerName: proposalOwnerName } : null),
     [proposalConvId, proposalRole, proposalOwnerName],
   );
-  // Permission prompts are the runner's alone to answer; anyone else who
-  // sees them (a teammate, the owner of a session another account runs)
-  // proposes, and keeps their composer.
+  // Permission prompts are answered by the runner and by an admin of the
+  // session's team; anyone else who sees them (a teammate, the owner of a
+  // session another account runs) proposes, and keeps their composer.
   const isRunner = !!currentUser?._id && String((conversation as any)?.user_id) === String(currentUser._id);
-  const permissionRole = !proposalConvId || !currentUser?._id ? null : isRunner ? "runner" as const : "proposer" as const;
+  const permissionRole = roles.permissionRole;
   useSyncPendingSuggestions(proposalConvId ?? "", proposalRole === "owner", currentUser?._id ? String(currentUser._id) : null);
   useSyncMyTeamSuggestions(proposalConvId ?? "", currentUser?._id ? String(currentUser._id) : null, !!proposalConvId && !isRunner);
   // Per-message sender attribution, through lib/messageSender so the bubbles,
@@ -1025,10 +1027,10 @@ const ConversationViewInner = (
   const pendingPermissionsRaw = usePendingPermissions(
     conversation?._id && isConvexId(conversation._id) ? conversation._id : null,
     deferredQueriesEnabled,
-    permissionRole === "proposer",
+    permissionRole === "proposer" || permissionRole === "admin",
   );
   const pendingPermissions = pendingPermissionsRaw?.filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name));
-  // A prompt takes the runner's composer's place until it is answered; a
+  // A prompt takes the answerer's composer's place until it is answered; a
   // teammate cannot answer it, so their composer stays (and they propose).
   const permissionsHoldComposer = !!(pendingPermissions && pendingPermissions.length > 0) && permissionRole !== "proposer";
   const hasAskUserQuestion = pendingPermissionsRaw?.some((p: any) => isAskTool(p.tool_name)) ?? false;
@@ -1228,6 +1230,10 @@ const ConversationViewInner = (
   // timeline.length. Every viewer sees every handoff; the assignee's own
   // "Got it" strip is the header banner.
   const ownersApi = useOwnersFromStore(pendingConvId);
+  // The owners model's read and agents band (session_owners): fed while open.
+  useSyncSessionOwners(pendingConvId);
+  // The owners menu as a sheet, from the session menu on a narrow header.
+  const [ownersSheetOpen, setOwnersSheetOpen] = useState(false);
   const handoffMeId = ownersApi.currentUser?._id?.toString?.();
   const handoffsByIndex = useMemo(() => {
     const byIndex = new Map<number, HandoffInfo[]>();
@@ -4385,6 +4391,26 @@ const ConversationViewInner = (
   // keeps a readout and takes the control back only when the composer is gone.
   // The new-session page picks these in its own foot (NewSessionView).
   const composerHostsControl = ownerComposerMounted && !(inRevealBand && !bandComposerOpen) && !newSessionPage && !isHostedConv;
+  // The past-messages navigator hangs over the top of the feed, never inside
+  // the header: a hidden header (hideHeader, a role seat folded at rest) must
+  // not take it along. The drop clears the sticky prompt card, so a feed
+  // without one keeps it near the top. z-20: over the sticky card (z-15),
+  // under the Ask panel (z-25) whose close button it would otherwise cover.
+  const messageNav = conversation ? (
+    <div data-cc-message-nav className={`absolute top-0 right-3 z-20 ${stickyDisabled ? "mt-3" : "mt-24"}`}>
+      <MessageNavButton
+        conversationId={conversation._id}
+        senders={senderContext}
+        currentMessageId={navigatorCurrentId ?? activeStickyMsg?.id ?? null}
+        loadedMessages={messages}
+        scrollProgress={navScrollProgress}
+        onScrollToMessage={(messageId) => {
+          setNavigatorCurrentId(messageId);
+          scrollToMessageById(messageId);
+        }}
+      />
+    </div>
+  ) : null;
   const threadStatePanel = conversation ? (
     <div data-cc-thread-state>
       <SessionGoalPill conversationId={conversation._id.toString()} sessionTitle={conversation.title || "This session"} canSteer={effectiveIsOwner} />
@@ -4754,6 +4780,9 @@ const ConversationViewInner = (
                     <MenuTarget ids={conversation?._id ? [String(conversation._id)] : []} foreign={!isOwner || guest} open={sessionMenuOpen} onDone={() => setSessionMenuOpen(false)} />
                     {/* The full command surface: what the header squeeze sheds
                         (globals.css, cq-sq*) stays reachable here. */}
+                    {/* Under the owners model, when the header is too narrow
+                        for the owners segment (a phone). */}
+                    {!guest && conversation?._id && <OwnersMenuItem conversationId={String(conversation._id)} onOpen={() => setOwnersSheetOpen(true)} />}
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={copyConversationLink}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -5044,21 +5073,6 @@ const ConversationViewInner = (
           {conversation?._id && !guest && isOwner && <PeerTransferStrip conversationId={conversation._id} onRetry={handleRestartSession} />}
         </>}
       >
-        {conversation && (
-          <div className="absolute top-full right-3 mt-24 z-30">
-            <MessageNavButton
-              conversationId={conversation._id}
-              senders={senderContext}
-              currentMessageId={navigatorCurrentId ?? activeStickyMsg?.id ?? null}
-              loadedMessages={messages}
-              scrollProgress={navScrollProgress}
-              onScrollToMessage={(messageId) => {
-                setNavigatorCurrentId(messageId);
-                scrollToMessageById(messageId);
-              }}
-            />
-          </div>
-        )}
         {/* Live tmux view (opened from the tmux pill), docked across the top,
             above the trigger/plan/workflow strips in subHeaderContent.
             INSIDE the header on purpose: headerHeight's ResizeObserver counts
@@ -5073,6 +5087,9 @@ const ConversationViewInner = (
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}
+        {ownersSheetOpen && conversation?._id && <OwnersSheet conversationId={String(conversation._id)} open onOpenChange={setOwnersSheetOpen} />}
+        {/* Under the owners model: the agents this session owns. */}
+        {conversation && !guest && <SessionAgentsBand conversationId={conversation._id.toString()} />}
         {/* What this session belongs to, on one row: the task it owns (the
             task page carries this session the same way, so each face holds
             the other), then the trigger, plan and workflow strips in
@@ -5216,6 +5233,7 @@ const ConversationViewInner = (
         </ErrorBoundary>
       )}
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
+      {messageNav}
       {(isJumpingToTarget || (targetMessageId && timeline.length === 0)) && (
         <div
           className="absolute inset-x-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none"
@@ -5532,6 +5550,9 @@ const ConversationViewInner = (
               than a floating overlay. treePopoverOpen is owner-only, so only the
               owner branch needs it; the no-composer case is the fixed fallback
               above. */}
+          {/* Under the owners model: a session you can see but do not own (the
+              owner composer draws its own, above its box). */}
+          {!guest && !onSendOverride && !effectiveIsOwner && <NotInInboxBar conversationId={conversation._id.toString()} className="mx-auto mb-1.5 px-4 conv-col" />}
           {!effectiveIsOwner ? (
             <NonOwnerMessageInput
               conversation={conversation}
@@ -5721,6 +5742,7 @@ const ConversationViewInner = (
               onAllowAll={
                 (conversation?.agent_type ?? "claude_code") === "claude_code" &&
                 effectiveIsOwner &&
+                roles.allowAll &&
                 conversation?.status === "active" &&
                 effectiveMode !== "bypassPermissions"
                   ? handleEnableBypass

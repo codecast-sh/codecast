@@ -8,7 +8,7 @@
 //        [--account <profile>] [--max-output-tokens N] [--claude-md <file>] [--seed <jsonl>] [--cwd <dir>] [--read-only [--allow-port N]...]
 //        [--fake <bin> [--fake-seed <json>]]
 //   bun packages/cli/scripts/prompt-dry-run.ts --run <dir> --prompt <file> --model <id> --call
-//        [--system <file>] [--max-output-tokens N]
+//        [--system <file>] [--json-schema <file>] [--max-output-tokens N]
 //
 // `--model` is required: an unpinned run takes the account default, and two
 // runs on different accounts are not comparable.
@@ -211,7 +211,7 @@ const runDir = path.resolve(arg("run") ?? "");
 const promptFile = path.resolve(arg("prompt") ?? "");
 
 if (!arg("run") || !arg("prompt") || !fs.existsSync(promptFile)) {
-  refuse("usage: prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--call [--system <file>]] [--max-output-tokens N] [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <file>]... [--claude-md <file>] [--seed <jsonl>]");
+  refuse("usage: prompt-dry-run.ts --run <dir> --prompt <file> --model <id> [--call [--system <file>] [--json-schema <file>]] [--max-output-tokens N] [--max-turns N] [--tools A,B] [--guard <dir>] [--serve <dir>] [--account <profile>] [--then <file>]... [--claude-md <file>] [--seed <jsonl>]");
 }
 const model = arg("model");
 if (!model || model.startsWith("--")) refuse("--model is required: an unpinned run takes the account default and cannot be compared");
@@ -221,6 +221,9 @@ if (call) {
 } else if (process.argv.includes("--system")) refuse("--system applies only to --call");
 const systemFile = arg("system") ? path.resolve(arg("system")!) : undefined;
 if (systemFile && !fs.existsSync(systemFile)) refuse(`--system: no such file ${systemFile}`);
+const jsonSchemaFile = arg("json-schema") ? path.resolve(arg("json-schema")!) : undefined;
+if (jsonSchemaFile && !call) refuse("--json-schema applies only to --call");
+if (jsonSchemaFile && !fs.existsSync(jsonSchemaFile)) refuse(`--json-schema: no such file ${jsonSchemaFile}`);
 const maxOutputTokens = arg("max-output-tokens");
 if (maxOutputTokens !== undefined && !/^[1-9]\d*$/.test(maxOutputTokens)) refuse(`--max-output-tokens wants a positive integer (got ${maxOutputTokens})`);
 const maxTurns = call ? "1" : arg("max-turns", "80")!;
@@ -494,7 +497,7 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
     // --strict-mcp-config in an agent run too: a .mcp.json in any parent of the run dir
     // (the home folder's, say) otherwise starts its servers inside every rep.
     const turn = call
-      ? callArgs({ model: model!, ...(systemFile ? { systemFile } : { systemText: NEUTRAL_SYSTEM }) })
+      ? callArgs({ model: model!, ...(systemFile ? { systemFile } : { systemText: NEUTRAL_SYSTEM }), ...(jsonSchemaFile ? { jsonSchema: fs.readFileSync(jsonSchemaFile, "utf8") } : {}) })
       : [
           "--setting-sources", claudeMdFile ? "user,project" : "project",
           ...(resume ? ["--resume", resume] : []), "-p", ...(promptText === undefined ? [] : [promptText]), "--allowedTools", ...tools, "--dangerously-skip-permissions", "--strict-mcp-config",

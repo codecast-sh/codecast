@@ -40,7 +40,7 @@ import { action, internalMutation, internalQuery, mutation, query } from "./func
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { consumePresence, grantChallengeId, grantString } from "./lib/presence";
-import { pendingApproval } from "./lib/secretApprovals";
+import { pendingApprovals } from "./lib/secretApprovals";
 import { runPresenceLabel } from "./lib/commandRuns";
 import { heldKeysFor } from "./lib/accessKeys";
 import { sha256Hex } from "./lib/hash";
@@ -183,7 +183,7 @@ export const challenge = query({
 async function presenceSubject(ctx: any, userId: Id<"users">, action: PresenceAction, target: string): Promise<{ label?: string } | { error: string }> {
   const missing = { error: "Nothing to confirm: it was removed, or it is not yours" };
   if (action === "add_passkey") return target === String(userId) ? {} : missing;
-  if (action === "reveal" || action === "ask_first_off") {
+  if (action === "reveal" || action === "ask_first_off" || action === "touch_id_off") {
     const id = ctx.db.normalizeId("secrets", target);
     const row = id ? await ctx.db.get(id) : null;
     return row && (await heldKeysFor(ctx, userId)).has(row.workspace) ? { label: row.name } : missing;
@@ -198,10 +198,11 @@ async function presenceSubject(ctx: any, userId: Id<"users">, action: PresenceAc
       return label ? { label } : missing;
     }
     if (String(row.user_id) !== String(userId)) return missing;
-    const approval = await pendingApproval(ctx, row._id);
-    if (!approval) return { error: "Only an Ask first read or a Run card takes Touch ID" };
-    const [secret, conversation] = await Promise.all([ctx.db.get(approval.secret_id), ctx.db.get(approval.conversation_id)]);
-    return secret && conversation ? { label: `${secret.name} for ${conversation.short_id ?? "a session"}` } : missing;
+    const approvals = await pendingApprovals(ctx, row._id);
+    if (!approvals.length) return { error: "Only an Ask first read or a Run card takes Touch ID" };
+    const [conversation, ...secrets] = await Promise.all([ctx.db.get(approvals[0].conversation_id), ...approvals.map((a) => ctx.db.get(a.secret_id))]);
+    const names = secrets.filter(Boolean).map((s: any) => s.name);
+    return names.length && conversation ? { label: `${names.join(", ")} for ${conversation.short_id ?? "a session"}` } : missing;
   }
   const id = ctx.db.normalizeId("passkeys", target);
   const row = id ? await ctx.db.get(id) : null;

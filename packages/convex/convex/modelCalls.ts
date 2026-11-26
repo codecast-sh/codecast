@@ -115,10 +115,10 @@ export async function runModelCall(ctx: { runQuery: any; runMutation: any; sched
   if (refusal) return { ok: false, reason: "failed", error: refusal, cost_usd: 0, model: spec.model };
   const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);
   const spent = await withinBudget(ctx, scope, purpose, held, async (charge): Promise<ModelCallResult> => {
-    const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
+    const { reply, usage, error, transient } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
     const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
     charge(cost);
-    if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model };
+    if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model, ...(transient ? { transient: true } : {}) };
     if (spec.output === "json") {
       const json = parseJsonBlock(reply.text);
       if (json === null) return { ok: false, reason: "failed", error: reply.stop_reason === "max_tokens" ? "the answer ran past max_tokens before its JSON closed" : "the answer held no JSON", cost_usd: cost, model: spec.model };

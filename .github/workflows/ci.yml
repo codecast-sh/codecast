@@ -303,9 +303,6 @@ jobs:
         working-directory: packages/cli
         # Exclude the e2e suite — it has its own step with --rerun-each for
         # resilience against tmux-resource flake under CI runner load.
-        # DAEMON_BUILD_ID_CHECK turns on the daemon build id stamp check, which
-        # walks the whole daemon import closure. Off locally so the normal test
-        # loop stays fast.
         # --parallel: a fresh global per file (--isolate), for the same reason
         # the web suite has it — `mock.module` substitutions are permanent in
         # one process and a test that passes alone then fails in the suite
@@ -316,8 +313,6 @@ jobs:
         # A suite whose output stands still for 4 minutes is hung (ct-71000): the
         # watchdog prints what each process is doing and stops it, rather than
         # the job spending the rest of its timeout with nothing said.
-        env:
-          DAEMON_BUILD_ID_CHECK: "1"
         run: bash ../../scripts/ci/quiet-watchdog.sh 240 -- bun test src/ --parallel --bail=5
 
       # The eval home (packages/evals). Its tests make no network or model

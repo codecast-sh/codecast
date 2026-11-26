@@ -102,12 +102,15 @@ describe("daemon restart gating", () => {
     }
   });
 
+  // `boot` is the hash a source daemon booted on; a compiled daemon has none.
   test.each([
-    { version: "1.1.125", build: "def456def456", restarts: 1 },
-    { version: "1.1.124", build: "def456def456", restarts: 0 },
-    { version: "1.1.125", build: "abc123abc123", restarts: 0 },
-    { version: "invalid", build: null, restarts: 0 },
-  ])("disk update poll uses the installed package version: %j", async ({ version, build, restarts }) => {
+    { version: "1.1.125", boot: "abc123abc123", build: "def456def456", restarts: 1 },
+    { version: "1.1.124", boot: "abc123abc123", build: "def456def456", restarts: 0 },
+    { version: "1.1.125", boot: "abc123abc123", build: "abc123abc123", restarts: 0 },
+    { version: "1.1.125", boot: "abc123abc123", build: null, restarts: 1 },
+    { version: "1.1.125", boot: null, build: "abc123abc123", restarts: 1 },
+    { version: "invalid", boot: "abc123abc123", build: null, restarts: 0 },
+  ])("disk update poll uses the installed package version: %j", async ({ version, boot, build, restarts }) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cast-disk-version-"));
     const moduleDir = path.join(root, "src");
     const restarted: string[] = [];
@@ -117,8 +120,8 @@ describe("daemon restart gating", () => {
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "@codecast/cli", version }));
       const deps = {
         fs, path, fixtureModuleDir: moduleDir, daemonVersion: "1.1.124",
-        daemonBuildUnchanged, DAEMON_BUILD_ID: "abc123abc123",
-        readDiskBuildId: async () => build, vetoedDiskVersion: null,
+        daemonBuildUnchanged, sourceRestartState: boot ? { bootId: boot } : null,
+        sourceBuildIdOnDisk: async () => build, vetoedDiskVersion: null,
         log: () => {}, logLifecycle: () => {}, flushRemoteLogs: async () => {},
         restartDaemonProcess: (reason: string) => restarted.push(reason),
       };
@@ -138,6 +141,15 @@ describe("daemon restart gating", () => {
     const buildCheck = body.indexOf("daemonBuildUnchanged(");
     expect(versionBranch).toBeGreaterThan(-1);
     expect(buildCheck).toBeGreaterThan(versionBranch);
+  });
+
+  // A source CLI has no id to compare, and bouncing would restart its daemon
+  // on every version bump; the daemon's own disk check carries the veto there.
+  test("a CLI run from source leaves the version bounce to its daemon", () => {
+    const body = functionBody(index, "ensureDaemonRunning");
+    const sourceReturn = body.indexOf("if (!DAEMON_BUILD_ID) return;");
+    expect(sourceReturn).toBeGreaterThan(body.indexOf("if (cliIsNewer)"));
+    expect(sourceReturn).toBeLessThan(body.indexOf("process.kill(pid"));
   });
 
   // One predicate, three gates. Inlining the rule again in any of them is how
@@ -340,7 +352,7 @@ describe("daemon restart gating", () => {
     const body = functionBody(src("daemon.ts"), "checkDiskVersionMismatch");
     // The only early return is the case where the ids match. A null id falls
     // through and still restarts.
-    expect(body).toContain("if (daemonBuildUnchanged(DAEMON_BUILD_ID, diskBuildId)) {");
+    expect(body).toContain("if (daemonBuildUnchanged(bootBuildId, diskBuildId)) {");
     expect(body).toContain("restartDaemonProcess(\"disk version mismatch\")");
   });
 

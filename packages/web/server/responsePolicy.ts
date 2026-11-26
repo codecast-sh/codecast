@@ -17,14 +17,14 @@ const AVATARS = "https://avatars.githubusercontent.com https://*.googleuserconte
 // Every source and why it is needed: plans/security-csp-draft.md.
 export const DOCUMENT_POLICY = [
   "default-src 'self'",
-  `script-src 'self' ${POSTHOG} ${GOOGLE_ADS}`,
+  `script-src 'self' 'wasm-unsafe-eval' ${POSTHOG} ${GOOGLE_ADS}`,
   `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   `media-src 'self' blob: ${CONVEX_HTTP} https://media.codecast.sh ${LOOPBACK}`,
-  `connect-src 'self' ${CONVEX_HTTP} ${CONVEX_WS} ${POSTHOG} https://*.ingest.us.sentry.io ${LOOPBACK} ${LOOPBACK_WS} wss://api.openai.com https://*.livekit.cloud wss://*.livekit.cloud ${AVATARS} ${GOOGLE_ADS}`,
+  `connect-src 'self' ${CONVEX_HTTP} ${CONVEX_WS} ${POSTHOG} https://*.ingest.us.sentry.io ${LOOPBACK} ${LOOPBACK_WS} wss://api.openai.com https://*.livekit.cloud wss://*.livekit.cloud https://*.livekit.io ${AVATARS} ${GOOGLE_ADS}`,
   `frame-src 'self' https: ${LOOPBACK}`,
-  "worker-src 'self'",
+  "worker-src 'self' blob:",
   `object-src ${CONVEX_HTTP}`,
   "base-uri 'self'",
   "form-action 'self'",

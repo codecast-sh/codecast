@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "inbox-load-owners", "inbox-heartbeat-owners", "inbox-owners-push", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -99,7 +99,7 @@ await test("inbox-load", "the inbox over 5,000 sessions draws a bounded list and
 await test("inbox-heartbeat", "a heartbeat on a drawn session re-renders nothing in a 5,000-session inbox", async () => {
   await setup("inbox-heartbeat");
   for (const r of await twice()) {
-    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered }).toEqual({ storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered, storeKeys: r.detail.storeKeys }).toEqual({ storeKeys: ["sessions", "sessionsProjection"], storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
   }
 });
 
@@ -131,7 +131,7 @@ await test("inbox-load-modern", "in the Modern style the inbox over 5,000 sessio
 await test("inbox-heartbeat-modern", "in the Modern style a heartbeat on a drawn session re-renders nothing", async () => {
   await setup("inbox-heartbeat-modern");
   for (const r of await twice()) {
-    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered }).toEqual({ storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered, storeKeys: r.detail.storeKeys }).toEqual({ storeKeys: ["sessions", "sessionsProjection"], storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
   }
 });
 
@@ -146,6 +146,33 @@ await test("inbox-heartbeat-modern", "in the Modern style a rename that arrives 
   await reset();
   expect(document.querySelector(`[data-session-id="${id}"] [data-sv-title]`)?.textContent).toBe("Renamed by the server");
   expect(document.querySelector(`[data-session-id="${id}"]`)?.getAttribute("data-mc")).toBe("card");
+});
+
+// The owners model: every session under it, each with an owners read the
+// cards' faces draw. The same bounded list and one query, a heartbeat still
+// re-renders nothing, and a push of the drawn cards' unchanged reads writes
+// nothing at all.
+await test("inbox-load-owners", "under the owners model the inbox over 5,000 sessions draws a bounded list with the same one query", async () => {
+  await setup("inbox-load-owners");
+  for (const r of await twice()) {
+    // Every row is the viewer's to own here, so the sections fill to the
+    // panel's whole GLOBAL_CARD_BUDGET (the plain inbox stops at 51).
+    expect(pick(r, ["cards", "convexQueries", "convexSubscribes", "convexMutations"])).toEqual({ cards: 100, convexQueries: 0, convexSubscribes: 1, convexMutations: 0 });
+  }
+});
+
+await test("inbox-heartbeat-owners", "under the owners model a heartbeat on a drawn session re-renders nothing", async () => {
+  await setup("inbox-heartbeat-owners");
+  for (const r of await twice()) {
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations", "layoutReads"]), rendered: r.detail.rendered }).toEqual({ storeWrites: 1, commits: 0, domMutations: 0, layoutReads: 0, rendered: [] });
+  }
+});
+
+await test("inbox-owners-push", "a push of the drawn cards' unchanged owners reads writes nothing and re-renders nothing", async () => {
+  await setup("inbox-owners-push");
+  for (const r of await twice()) {
+    expect({ ...pick(r, ["storeWrites", "commits", "domMutations"]), keys: r.detail.storeKeys }).toEqual({ storeWrites: 0, commits: 0, domMutations: 0, keys: [] });
+  }
 });
 
 await test("diff", "opening a long diff draws its first 150 rows in 2 commits and 18 DOM mutation records, with 32 layout reads and no store writes", async () => {

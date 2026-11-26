@@ -20,7 +20,7 @@ import { Button } from "../ui/button";
 import { SelectBox } from "../ui/select-box";
 import { memberDisplayName } from "../presence/memberPresence";
 import { firstName } from "./speakers";
-import { DeviceOptions } from "./DeviceRows";
+import { BluetoothMicHint, DeviceOptions } from "./DeviceRows";
 import { GuestInvite } from "./GuestDoor";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { teamMembersOf } from "../../lib/activeTeam";
@@ -253,6 +253,17 @@ export function PreviewBody({ preview, flush }: { preview: GuestPreview; flush?:
           );
         })}
       </div>
+      {! p.asking && (
+        <div className={`${flush ? "" : "mx-4 mb-3 -mt-1"}`}>
+          <BluetoothMicHint
+            mics={p.devices.mic}
+            speakers={p.devices.speaker}
+            chosenMicId={p.choice.micId}
+            chosenSpeakerId={p.choice.speakerId}
+            onUseMic={(id) => choose("mic", id)}
+          />
+        </div>
+      )}
     </>
   );
 }

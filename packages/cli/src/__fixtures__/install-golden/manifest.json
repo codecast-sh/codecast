@@ -100,7 +100,7 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "dcdc1ed7ad870295",
+      ".claude/hooks/thread-state.sh": "335a8f85e836a468",
       ".claude/settings.json": "6d57b0e7e2769331"
     }
   },
@@ -205,7 +205,7 @@
   "skills": {
     "config": {
       "skills_enabled": true,
-      "skills_version": "5"
+      "skills_version": "6"
     },
     "stdout": "* Skills — installed in ~/.claude/skills/cast-*/SKILL.md\n",
     "wroteClaudeMd": false,
@@ -217,7 +217,7 @@
       ".claude/skills/cast-deploy/SKILL.md": "990d10363a58fd8a",
       ".claude/skills/cast-eod/SKILL.md": "6af05f0d09b5b709",
       ".claude/skills/cast-from-call/SKILL.md": "c6a14a0dad51e599",
-      ".claude/skills/cast-handoff/SKILL.md": "88b146158c6bff9b",
+      ".claude/skills/cast-handoff/SKILL.md": "5a53e47b8052da05",
       ".claude/skills/cast-learn/SKILL.md": "fad1dd5e32cec40e",
       ".claude/skills/cast-lessons/SKILL.md": "6421f3b9fe6ac4b8",
       ".claude/skills/cast-loop/SKILL.md": "114f522e3c81dd5c",
@@ -225,7 +225,7 @@
       ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
       ".claude/skills/cast-motion/SKILL.md": "91c1c51a1439554f",
       ".claude/skills/cast-org/SKILL.md": "7b61ebffcc66bf51",
-      ".claude/skills/cast-pass/SKILL.md": "92740ffb8af09b37",
+      ".claude/skills/cast-pass/SKILL.md": "67f6bc01714f1951",
       ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
       ".claude/skills/cast-plan/SKILL.md": "76010f0efab8ed03",
       ".claude/skills/cast-research/SKILL.md": "d2e0b79a7994edb4",

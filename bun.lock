@@ -15,7 +15,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.239",
+      "version": "1.1.284",
       "bin": {
         "codecast": "./dist/main.js",
         "cast": "./dist/main.js",
@@ -80,7 +80,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.128",
+      "version": "1.1.132",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
       },
@@ -248,6 +248,7 @@
         "@convex-dev/prosemirror-sync": "^0.2.3",
         "@hono/node-server": "^1.19.11",
         "@lezer/highlight": "^1.2.3",
+        "@livekit/krisp-noise-filter": "^0.4.6",
         "@novnc/novnc": "1.7.0",
         "@observablehq/plot": "^0.6.17",
         "@pierre/diffs": "1.5.2",
@@ -1057,6 +1058,8 @@
     "@livekit/components-core": ["@livekit/components-core@0.12.15", "", { "dependencies": { "@floating-ui/dom": "1.7.6", "loglevel": "1.9.1", "rxjs": "7.8.2" }, "peerDependencies": { "livekit-client": "^2.20.1", "tslib": "^2.6.2" } }, "sha512-bDkK+jkPMgyT4a5lZmdcuc/hZ8fZUrXW+qQPNHVeSpXCBMzk5q9QWzx+HPtTsPJ8hnncWGfoT81RnXHBsy+Z8g=="],
 
     "@livekit/components-react": ["@livekit/components-react@2.9.24", "", { "dependencies": { "@livekit/components-core": "0.12.15", "clsx": "2.1.1", "events": "^3.3.0", "jose": "^6.0.12", "usehooks-ts": "3.1.1" }, "peerDependencies": { "@livekit/krisp-noise-filter": "^0.2.12 || ^0.3.0 || ^0.4.0", "livekit-client": "^2.20.1", "react": ">=18", "react-dom": ">=18", "tslib": "^2.6.2" }, "optionalPeers": ["@livekit/krisp-noise-filter"] }, "sha512-qw5Oy1EfPg1f/xrKYrFielSrmtxY8BZ9mDt6299G5aikotQIztmldBfTNosrVS7VSNit7qeYfOFSyKaML20W6Q=="],
+
+    "@livekit/krisp-noise-filter": ["@livekit/krisp-noise-filter@0.4.6", "", { "dependencies": { "@livekit/mutex": "^1.1.1", "@livekit/protocol": "^1.50.4" }, "peerDependencies": { "livekit-client": "^2.18.7" } }, "sha512-NbmbeUff7m8rfQUP/VKpzqV/X0bgC+So5u1NFiPVrjkAUTvq9fS8E/WJTdpk8m2LkKkqO7CkmkfvAmNY8nZxUw=="],
 
     "@livekit/mutex": ["@livekit/mutex@1.1.1", "", {}, "sha512-EsshAucklmpuUAfkABPxJNhzj9v2sG7JuzFDL4ML1oJQSV14sqrpTYnsaOudMAw9yOaW53NU3QQTlUQoRs4czw=="],
 

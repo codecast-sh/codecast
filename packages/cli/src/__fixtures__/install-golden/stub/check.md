@@ -4,7 +4,7 @@
 Typecheck TypeScript with `cast check`, never `tsc --noEmit`. One `tsc --watch` per tree and project rechecks only changed files, so answers take seconds and ten sessions asking cost the same as one; fresh `tsc` runs rebuild everything and push the machine into swap.
 
 ```bash
-cast check            # every project in .codecast/check.toml, else the tsconfig nearest this directory
+cast check            # the projects your changes reach (--all: every one in .codecast/check.toml)
 cast check web        # one project by name, or any directory or tsconfig path
 cast check --fresh    # restart a watcher that lost track, then ask
 ```

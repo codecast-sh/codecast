@@ -1,3 +1,4 @@
+import { automaticReviewValidator } from "./lib/automaticReviewValidator";
 import { permissionRemovalValidator } from "./lib/permissionRemoval";
 import { ruleRequestValidator } from "./lib/permissionRuleRequest";
 import { distributionValidator, updateStateValidator } from "./lib/deviceUpdate";
@@ -890,7 +891,8 @@ export default defineSchema({
     // (guestSuggestions.ts). Each one waits for the owner to send it.
     guest_suggestions: v.optional(v.boolean()),
     // Unread: kept only because older rows carry it. A teammate's message
-    // always waits as a suggestion while an owner is attending (teamSuggestions.ts).
+    // waits as a suggestion while an owner is attending, unless the teammate
+    // is an admin of the session's team (teamSuggestions.ts).
     team_suggestions: v.optional(v.boolean()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.id("conversations")),
@@ -1065,6 +1067,15 @@ export default defineSchema({
     // hand's role (org-roles-standing.md T3), or a spawned worker's parent
     // (workerSettle.ts), so one settle tells once, not once per check.
     hand_wake_notified_key: v.optional(v.string()),
+    // Under the session_owners team feature: when the session's current wait
+    // reached its people (server time), because its agent owner (its role, or
+    // the session that started it) could not be told or passed it up; the
+    // message count it covers, so the next message hands the session's waits
+    // back to the agent (shared waitReachedPeople); and who it reached when no
+    // person owns it (shared waitAudience), whose inbox lists it meanwhile.
+    wait_up_at: v.optional(v.number()),
+    wait_up_count: v.optional(v.number()),
+    wait_up_person: v.optional(v.id("users")),
     // When a spawned worker last `cast send`-ed its parent, cleared by any new
     // input to the worker. A worker that reported its own result does not also
     // get a settle wake sent on its behalf (workerSettle.ts).
@@ -1507,6 +1518,18 @@ export default defineSchema({
     // it. Absent on rows from before the stamp: read as filed, and
     // `migrations:releaseFolderHeldSessions` sorts them by the org log.
     org_role_hold: v.optional(v.union(v.literal("bound"), v.literal("filed"))),
+    // Under the session_owners team feature (shared contracts/sessionOwners):
+    // a role started it on its own (spawn.recordHandStart: a hand, a line
+    // run), so it has no implicit starter owner. Stamped on every team; read
+    // only where the feature is on. `ownerMigrations:backfillRoleStarted`
+    // stamps sessions from before the field.
+    role_started: v.optional(v.boolean()),
+    // When a person took it over from the session that started it: the parent
+    // (parent_conversation_id, else spawned_by_conversation_id) no longer owns it.
+    parent_released_at: v.optional(v.number()),
+    // Stamped on every owner write under the feature (people, role, parent
+    // release), so a client holding the owners refetches them.
+    owners_changed_at: v.optional(v.number()),
     // RETIRED (org-staffing.md S28): the escalation stamp `cast escalate` wrote.
     // Nothing reads or writes it. It stays in the schema only until
     // `migrations:clearEscalationStamps` has run in prod (rows still carry it,
@@ -1604,6 +1627,9 @@ export default defineSchema({
     // teammates (spawned_by + agent_team_name), which by_parent_conversation_id
     // can't see. See cascadeHideToNestedChildren (cleanup.ts).
     .index("by_spawned_by", ["spawned_by_conversation_id"])
+    // The waits that reached a person no owner row names (wait_up_person): the
+    // inbox scan's window for them.
+    .index("by_wait_up_person", ["wait_up_person", "wait_up_at"])
     .index("by_handed_off_from", ["handed_off_from_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     // The adopted window (scanInboxConversations): nested rows the person
@@ -1620,6 +1646,11 @@ export default defineSchema({
     // same index — a parked parent's children carry its stamp (the hide
     // cascade) and every caller discards them.
     .index("by_user_plain_updated", ["user_id", "is_subagent", "inbox_pinned_at", "inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "updated_at"])
+    // The owners model's nested window (scanInboxConversations): the subagents
+    // a person released from their parent, newest release first. Only the
+    // releaseParent write sets parent_released_at, so the range holds nothing
+    // else and each key is written once.
+    .index("by_user_subagent_released", ["user_id", "is_subagent", "parent_released_at"])
     .index("by_user_live_dismissed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_dismissed_at"])
     .index("by_user_live_stashed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
@@ -4015,6 +4046,12 @@ export default defineSchema({
       card_id: v.optional(v.id("session_decisions")),
       review_asked: v.optional(v.string()),
       engineer_told: v.optional(v.boolean()),
+      // With no codecast run behind it: what codecast's automatic review said about a head (lib/automaticReview.ts),
+      // kept so each head is read once.
+      automatic: v.optional(automaticReviewValidator),
+      // An automatic review called a head of this pull request a mechanism: every head is a person's to read
+      // until a person approves it on a card (changeApprovalRows clearHold). Set by any such answer, whatever its head.
+      held: v.optional(v.string()),
     })),
   })
     .index("by_team_id", ["team_id"])
@@ -5306,7 +5343,9 @@ export default defineSchema({
     // Session-state notifications (ready / needs permission / error) replace
     // per (recipient, conversation) instead of stacking — this is the lookup
     // for the row(s) being superseded.
-    .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"]),
+    .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"])
+    // One person's notices about one thing: an approval card's notice is not repeated while one is unread (changeApprovalCards).
+    .index("by_recipient_entity", ["recipient_user_id", "entity_id"]),
 
   // "A human is at a desktop surface" — one row per user, heartbeat-written by
   // the web/Electron client while visible (pushRouter.reportPresence). This is
@@ -5544,7 +5583,10 @@ export default defineSchema({
     // What a person's Ship on this card approves (changeApprovals.ts): the run's pull request, the judged diff's key
     // and its judged files as they stood when it was asked. Absent when the run had no pull request yet.
     // whole_key: the run's card also approves the whole diff it showed, which covers a mechanism.
-    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()) })),
+    // `asked`: the people an approval card asked when codecast posted it (changeApprovalCards.postApprovalCard), the only
+    // ones whose answer counts: a pass or an escalation rewrites asked_user_ids, never this. `held`: posted while the pull
+    // request was held, so its approval clears the hold (changeApprovalRows mayClearHold).
+    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()), asked: v.optional(v.array(v.id("users"))), held: v.optional(v.boolean()) })),
     // An approval card codecast itself posted for a pull request's status (changeApprovals.ts): silent, one person's,
     // and settled by settleCardApproval from `approval` above.
     approval_card: v.optional(v.boolean()),
@@ -5585,6 +5627,8 @@ export default defineSchema({
         items: v.array(v.object({ label: v.string(), lines: v.array(v.string()), note: v.optional(v.string()) })),
       })),
     })),
+    // An Ask first read of secrets one of which has Touch ID on (secrets.ts askFirstGate): its Approve confirms with a passkey.
+    touch_id: v.optional(v.boolean()),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
     // human's answer can override it later.
@@ -6854,6 +6898,8 @@ export default defineSchema({
     has_otp: v.optional(v.boolean()),
     // Ask first: an agent's read needs a person's approval per session (secret_approvals).
     ask_first: v.optional(v.boolean()),
+    // Touch ID: revealing it, approving an Ask first read of it and turning a guard off take a passkey.
+    touch_id: v.optional(v.boolean()),
     // How many previous values secret_versions holds for it, kept by every write that moves one.
     version_count: v.optional(v.number()),
   })

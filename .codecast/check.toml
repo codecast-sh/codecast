@@ -1,7 +1,8 @@
 # .codecast/check.toml: the TypeScript programs `cast check` verifies in this
 # tree, by the name a caller uses. Tracked, so every worktree inherits it. One
 # shared tsc watcher per project answers every session on the tree; never run
-# `tsc --noEmit` by hand. `cast check <name>` checks one, `cast check` all.
+# `tsc --noEmit` by hand. `cast check <name>` checks one, `cast check --all` all,
+# and a bare `cast check` the ones this tree's changes reach.
 [projects]
 # The CLI's own script widens rootDir here (tsconfig.json sets rootDir to src,
 # and the CLI imports the convex generated api, whose files sit outside it).

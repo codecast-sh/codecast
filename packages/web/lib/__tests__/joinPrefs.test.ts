@@ -8,7 +8,14 @@
 // never stamps the LWW bag.
 import { beforeEach, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
-import { readJoinPrefs, rememberCamera, rememberDevice, rememberMic, rememberMicAutoOpen } from "../calls/joinPrefs";
+import {
+  readJoinPrefs,
+  rememberCamera,
+  rememberDevice,
+  rememberMic,
+  rememberMicAutoOpen,
+  rememberNoiseCancellation,
+} from "../calls/joinPrefs";
 import { noteDevices } from "../calls/deviceRank";
 
 const mic = (deviceId: string, label: string) => ({ deviceId, label });
@@ -21,7 +28,19 @@ describe("join prefs", () => {
   beforeEach(() => setUI({}));
 
   test("camera and mic are ON when nothing has been chosen", () => {
-    expect(readJoinPrefs()).toMatchObject({ cameraOn: true, micOn: true, micAutoOpen: true });
+    expect(readJoinPrefs()).toMatchObject({
+      cameraOn: true,
+      micOn: true,
+      micAutoOpen: true,
+      noiseCancellation: true,
+    });
+  });
+
+  test("noise cancellation defaults ON and toggles cleanly", () => {
+    rememberNoiseCancellation(false);
+    expect(readJoinPrefs().noiseCancellation).toBe(false);
+    rememberNoiseCancellation(true);
+    expect(readJoinPrefs().noiseCancellation).toBe(true);
   });
 
   test("only an explicit false turns them off", () => {

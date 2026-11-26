@@ -12,7 +12,7 @@ import { machineCap } from "./machineCaps.js";
 import { thisMachineTooSmall } from "./repoNeed.js";
 import { CheckFailure } from "./checkOutcome.js";
 import { isPidAlive } from "./workspace/chrome.js";
-import { admissionBudget, coldReservationBytes, expectedBytes, learnedSizes, machineMemoryProbe, watcherCeilingBytes, budgetBytes, fitsBudget, fmtGb, holdBytes, percentile, procTable, readPeaks, reservationBytes, treeRssBytes, usablePeaks, type MachineMemory, type Peak, type ProcTable } from "./watcherMemory.js";
+import { admissionBudget, coldReservationBytes, expectedBytes, learnedSizes, machineMemoryProbe, memoryMarginBytes, underPressure, watcherCeilingBytes, budgetBytes, fitsBudget, fmtGb, holdBytes, percentile, procTable, readPeaks, reservationBytes, treeRssBytes, usablePeaks, type MachineMemory, type Peak, type ProcTable } from "./watcherMemory.js";
 import { checkHome, isWanted, launchdHolds, listWatchers, lockFor, logPath, logWatcherEvent, mainCheckoutOf, readWatchState, removeOwnState, sleep, watchDir, watcherDeath, watcherLabel, type CheckProject, type WatcherStarter, type WatchState } from "./check.js";
 
 /** The line an evicted watcher's log ends with, so an asker still on it is told to ask again (75) rather than of a death (70). */
@@ -86,8 +86,9 @@ export function capacityFor(input: {
   const admit = () => {
     if (admitted) return admitted;
     memory = input.memory?.() ?? null;
-    // What killing the live watchers would give back: their measured size (an unreadable one, its hold).
-    const watcherBytes = memory ? (input.watchers?.() ?? []).reduce((a, w) => a + (input.measure(w) ?? holdOf(w)), 0) : 0;
+    // What killing the live watchers would give back: their holds, the same figure makeRoom counts a victim as freeing,
+    // so the budget and the eviction that fits within it add up.
+    const watcherBytes = memory ? (input.watchers?.() ?? []).reduce((a, w) => a + holdOf(w), 0) : 0;
     return (admitted = admissionBudget({ totalBytes: input.totalBytes, capBytes: budget, watcherBytes, memory }));
   };
   return {
@@ -128,30 +129,62 @@ export function machineCapacity(root: string, project: string, maxWatchers = mac
 }
 
 /**
- * Stop the least recently asked watchers until one more fits: watchers
- * between passes first, then passes nobody waits on. Watchers in `protect`
- * (the programs the same `cast check` run already asked for) go last:
- * stopping one only to rebuild it on that run's next ask is pure waste.
- * Returns what was stopped, or null when it cannot fit without stopping a
- * wanted pass (nothing is stopped then). A watcher's state file goes with it,
- * so a later ask for that project starts a fresh one.
+ * A watcher asked within this long is never stopped to make room. On
+ * 2026-11-24 the median victim had been asked 7 minutes before, and 30% of
+ * all starts rebuilt a program evicted from the same tree a median 6 minutes
+ * earlier (ct-100924): the session using it simply asked again. An ask that
+ * cannot fit without one waits in the queue instead.
  */
-export function makeRoom(capacity: number | Capacity, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now(), protect: ReadonlySet<string> = new Set(), evict = true): Array<WatchState & { dir: string }> | null {
+export const RECENT_ASK_MS = 15 * 60_000;
+/**
+ * How long the first ask in line waits on that protection, counted from when
+ * it joined the queue (queued_at, kept across asks that gave up and asked
+ * again), not from when it reached the front. Past it, only
+ * watchers asked since it joined the queue are protected, so it stops the
+ * least recently asked watcher that predates it rather than wait out a
+ * machine of recently asked ones: an unbounded wait ended in exit 75, which
+ * fails a ship's check. Under QUEUE_WAIT_MS, so a single ask never times out on it.
+ */
+export const HEAD_PATIENCE_MS = 90_000;
+
+/**
+ * Stop watchers until one more fits, the fewest it takes: watchers between
+ * passes first, then passes nobody waits on, and within each the oldest one
+ * whose stopping alone makes room, else the one that frees the most. Watchers
+ * in `protect` (the programs the same `cast check` run already asked for) go
+ * last: stopping one only to rebuild it on that run's next ask is pure waste.
+ * A watcher asked within RECENT_ASK_MS is never stopped, unless the asker
+ * has been in line since `queuedAt` for HEAD_PATIENCE_MS and the watcher was
+ * last asked before that. Returns what was stopped, or null when it cannot
+ * fit without stopping a wanted pass or a protected watcher (nothing is
+ * stopped then). A watcher's state file goes with it, so a later ask for that
+ * project starts a fresh one.
+ */
+export function makeRoom(capacity: number | Capacity, kill: (pid: number) => void = (pid) => process.kill(pid, "SIGTERM"), now = Date.now(), protect: ReadonlySet<string> = new Set(), evict = true, queuedAt = now): Array<WatchState & { dir: string }> | null {
   const cap: Capacity = typeof capacity === "number" ? { maxWatchers: capacity } : capacity;
-  const byAsk = (a: WatchState, b: WatchState) => (a.askedAt ?? a.startedAt) - (b.askedAt ?? b.startedAt);
+  const askedAt = (w: WatchState) => w.askedAt ?? w.startedAt;
+  const byAsk = (a: WatchState, b: WatchState) => askedAt(a) - askedAt(b);
   const live = listWatchers();
   const holds = new Map(live.map((w) => [w.dir, cap.budgetBytes === undefined ? 0 : cap.holdOf?.(w) ?? 0]));
   const fits = (rest: Array<WatchState & { dir: string }>) =>
     rest.length < cap.maxWatchers && (cap.budgetBytes === undefined || (cap.strict
       ? rest.reduce((a, w) => a + holds.get(w.dir)!, 0) + (cap.needBytes ?? 0) <= cap.budgetBytes
       : fitsBudget(rest.map((w) => holds.get(w.dir)!), cap.needBytes ?? 0, cap.budgetBytes)));
-  const stoppable = (ws: Array<WatchState & { dir: string }>) => [...ws.filter((w) => !w.inProgress).sort(byAsk), ...ws.filter((w) => w.inProgress && !isWanted(w, now)).sort(byAsk)];
-  const eligible = [...stoppable(live.filter((w) => !protect.has(w.dir))), ...stoppable(live.filter((w) => protect.has(w.dir)))];
+  const patient = now - queuedAt >= HEAD_PATIENCE_MS;
+  const stale = live.filter((w) => now - askedAt(w) >= RECENT_ASK_MS || (patient && askedAt(w) < queuedAt));
+  // Tiers in the order they give way; each is oldest ask first.
+  const tiers = [
+    (w: WatchState & { dir: string }) => !protect.has(w.dir) && !w.inProgress,
+    (w: WatchState & { dir: string }) => !protect.has(w.dir) && w.inProgress && !isWanted(w, now),
+    (w: WatchState & { dir: string }) => protect.has(w.dir) && !w.inProgress,
+    (w: WatchState & { dir: string }) => protect.has(w.dir) && w.inProgress && !isWanted(w, now),
+  ].map((inTier) => stale.filter(inTier).sort(byAsk));
   const victims: Array<WatchState & { dir: string }> = [];
   let rest = live;
   while (!fits(rest)) {
-    const next = evict ? eligible[victims.length] : undefined;
-    if (!next) return null;
+    const pool = evict ? tiers.map((t) => t.filter((w) => !victims.includes(w))).find((t) => t.length) : undefined;
+    if (!pool) return null;
+    const next = pool.find((w) => fits(rest.filter((r) => r !== w))) ?? pool.reduce((a, w) => (holds.get(w.dir)! > holds.get(a.dir)! ? w : a));
     victims.push(next);
     rest = rest.filter((w) => w !== next);
   }
@@ -167,7 +200,9 @@ export function makeRoom(capacity: number | Capacity, kill: (pid: number) => voi
       kill(victim.pid);
     } catch {}
     removeOwnState(victim.dir, victim.pid);
-    logWatcherEvent("evict", victim, `asked ${Math.round((now - (victim.askedAt ?? victim.startedAt)) / 60_000)}m ago, ${live.length} live, ${why}${cap.budgetBytes === undefined ? "" : `, frees ${fmtGb(holds.get(victim.dir)!)}`}`);
+    // The bracketed tail is for the next audit: how fresh the victim was, and what stopping it freed, exactly.
+    const askedS = Math.round((now - askedAt(victim)) / 1000);
+    logWatcherEvent("evict", victim, `asked ${Math.round(askedS / 60)}m ago, ${live.length} live, ${why}${cap.budgetBytes === undefined ? "" : `, frees ${fmtGb(holds.get(victim.dir)!)}`} [asked_s=${askedS} frees_bytes=${holds.get(victim.dir)!}]`);
   }
   return victims;
 }
@@ -203,8 +238,36 @@ export function coldBuildsFit(running: Array<number | null>, need: number | null
   return running.length === 0 || running.reduce((a: number, p) => a + weight(p), 0) + weight(need) <= cap;
 }
 
-/** A watcher still on its first pass. finishedAt: watchers from before firstFinishedAt existed. */
-export const isColdBuild = (w: WatchState): boolean => !(w.firstFinishedAt ?? w.finishedAt);
+/** A watcher still on its first pass. finishedAt: watchers from before firstFinishedAt existed. A bun run is counted in its own pool. */
+export const isColdBuild = (w: WatchState): boolean => !w.checker && !(w.firstFinishedAt ?? w.finishedAt);
+
+/**
+ * bun check runs (checkBun.ts) have a pool of their own: each takes seconds,
+ * four threads and one to three gigabytes, so waiting behind tsc first passes
+ * that take minutes would cost more than the run. One per four cores, 1 to 4,
+ * unless CAST_CHECK_BUN_RUNS sets it; memory admits them as it does watchers.
+ */
+export const BUN_RUNS_ENV = "CAST_CHECK_BUN_RUNS";
+export const isBunRun = (w: WatchState): boolean => w.checker === "bun";
+
+/**
+ * Whether one more bun run fits: under the run cap, and, beside other runs,
+ * in the memory the machine has free now. A run never stops a watcher to make
+ * room: it frees its memory in seconds, and a stopped watcher rebuilds its
+ * whole program on its next ask. The first run always starts, as the first
+ * watcher does, or a loaded machine would never check.
+ */
+export function bunRunFits(runs: number, cap: number, needBytes: number, memory: MachineMemory | null, totalBytes = os.totalmem()): boolean {
+  if (runs >= cap) return false;
+  if (runs === 0 || !memory) return true;
+  return !underPressure(memory, totalBytes) && memory.availableBytes - memoryMarginBytes(totalBytes) >= needBytes;
+}
+
+export function bunRunCap(cores = os.availableParallelism?.() ?? os.cpus().length, env: NodeJS.ProcessEnv = process.env): number {
+  const set = parseInt(env[BUN_RUNS_ENV] ?? "", 10);
+  if (Number.isInteger(set) && set >= 1) return set;
+  return Math.max(1, Math.min(4, Math.floor(cores / 4)));
+}
 
 /** A project's learned p95, or null while none is known. */
 export function learnedP95(repo: string, project: string): number | null {
@@ -278,7 +341,15 @@ function queuePlace(dir: string, now = Date.now()): number {
 export async function startWhenSlotFrees(
   target: CheckProject,
   root: string,
-  opts: { start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number; protect?: ReadonlySet<string>; queueWaitMs?: number },
+  opts: {
+    start: WatcherStarter; note: (line: string) => void; kill: (pid: number) => void; maxWatchers?: number; deadline: number; protect?: ReadonlySet<string>; queueWaitMs?: number;
+    /** Whether what `start` started is up; by default, a live watcher in the state file. A bun run (checkBun.ts) can finish before an ask sees it live. */
+    isUp?: () => boolean;
+    /** The line noted on starting, in place of the watcher's. */
+    startNote?: string;
+    /** A bun check run: it waits for a bun-run slot instead of a cold-build one. */
+    bunRun?: boolean;
+  },
 ): Promise<boolean> {
   const project = target.name;
   const dir = watchDir(root, project);
@@ -294,8 +365,11 @@ export async function startWhenSlotFrees(
   fs.writeFileSync(file, JSON.stringify({ pid: process.pid, root, project, at }));
   let lastNote = "";
   let lastBehindCheck = 0;
-  const coldCap = coldBuildCap();
+  const coldCap = opts.bunRun ? bunRunCap() : coldBuildCap();
   const need = learnedP95(repoOf(root), project);
+  const slots = opts.bunRun ? "bun check run" : "cold build";
+  /** A bun run last waited for memory, not for a slot. */
+  let bunShort = false;
   /** Cold builds this ask last waited for; 0 when a slot was free or it waits only on the first in line. */
   let coldRunning = 0;
   const queuedSince = Date.now();
@@ -313,6 +387,14 @@ export async function startWhenSlotFrees(
         const queue = listQueue();
         const ahead = queue.findIndex((t) => t.file === file);
         // A first pass starts only with a cold-build slot free; one behind the first in line also leaves the first's.
+        // A bun run waits for a run slot and for memory as the machine has it now (bunRunFits), and stops nothing.
+        const bunRoom = (): boolean => {
+          const runs = listWatchers().filter(isBunRun).length;
+          coldRunning = runs >= coldCap ? runs : 0;
+          const fits = bunRunFits(runs, coldCap, opts.maxWatchers !== undefined ? 0 : machineCapacity(root, `${project}.bun-check`).needBytes ?? 0, opts.maxWatchers !== undefined ? null : machineMemoryProbe.read());
+          bunShort = !fits && !coldRunning;
+          return fits;
+        };
         const coldSlotFree = (): boolean => {
           const running = runningColdBuilds();
           const head = ahead > 0 ? [learnedP95(repoOf(queue[0]!.root), queue[0]!.project)] : [];
@@ -326,6 +408,7 @@ export async function startWhenSlotFrees(
         const fitsBehind = (): boolean => {
           if (Date.now() - lastBehindCheck < BEHIND_CHECK_MS) return false;
           lastBehindCheck = Date.now();
+          if (opts.bunRun) return bunRoom();
           const head = queue[0];
           if (!head || opts.maxWatchers !== undefined || !coldSlotFree()) return false;
           return makeRoom(withHeadNeed(capacity(), machineCapacity(head.root, head.project).needBytes ?? 0), () => {}, Date.now(), opts.protect, false) !== null;
@@ -336,23 +419,26 @@ export async function startWhenSlotFrees(
             cap = capacity();
             // Under the lock, so two asks cannot both take the last cold-build slot. A running first pass is never
             // stopped for another: the ask waits for one to finish.
-            const evicted = coldSlotFree() ? makeRoom(ahead === 0 ? cap : withHeadNeed(cap, machineCapacity(queue[0]!.root, queue[0]!.project).needBytes ?? 0), opts.kill, Date.now(), opts.protect, ahead === 0) : null;
+            const evicted = opts.bunRun ? (bunRoom() ? [] : null) : coldSlotFree() ? makeRoom(ahead === 0 ? cap : withHeadNeed(cap, machineCapacity(queue[0]!.root, queue[0]!.project).needBytes ?? 0), opts.kill, Date.now(), opts.protect, ahead === 0, at) : null;
             if (evicted) {
               const limit = cap.budgetBytes === undefined ? `under ${cap.maxWatchers} watchers` : `within the ${fmtGb(cap.budgetBytes)} typecheck watchers share`;
-              for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle longest"}) to stay ${limit} on this machine`);
+              for (const w of evicted) opts.note(`stopped the ${w.project} watcher for ${w.root} (${w.inProgress ? "a pass nobody waits on" : "idle"}, asked ${Math.round((Date.now() - (w.askedAt ?? w.startedAt)) / 60_000)}m ago) to stay ${limit} on this machine`);
               const small = thisMachineTooSmall(root);
               if (small) opts.note(small);
               const logFrom = (() => { try { return fs.statSync(logPath(dir)).size; } catch { return 0; } })();
               // A job still running under this label (a watcher just evicted, still on its way out) would make launchd
               // leave the start alone, and the ask would wait for a watcher that never comes.
               const label = watcherLabel(dir);
-              for (const settle = Date.now() + 5_000; Date.now() < settle && launchdHolds(label) === "running"; ) await sleep(250);
+              // A bun run unloads its job on the way out with a detached call that can land after the next run's start
+              // under the same label and kill it, so a run also waits for that unload (a job killed outright stays
+              // loaded; the start reloads it after the wait).
+              for (const settle = Date.now() + 5_000; Date.now() < settle && (opts.bunRun ? launchdHolds(label) !== "gone" : launchdHolds(label) === "running"); ) await sleep(250);
               opts.start(root, target);
               logWatcherEvent("start", { project, root });
               fs.rmSync(queuedAtPath(dir), { force: true });
-              opts.note(`starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
+              opts.note(opts.startNote ?? `starting the ${project} typecheck watcher for ${root} (first pass builds the whole program; later asks take seconds)`);
               const deadline = Date.now() + 30_000;
-              const live = () => { const s = readWatchState(dir); return !!s && isPidAlive(s.pid); };
+              const live = opts.isUp ?? (() => { const s = readWatchState(dir); return !!s && isPidAlive(s.pid); });
               while (Date.now() < deadline && !live()) await sleep(200);
               if (!live()) throw watcherDeath(project, dir, "did not start", logFrom);
               return true;
@@ -361,27 +447,29 @@ export async function startWhenSlotFrees(
             releaseCapacity();
           }
         }
-        if (`${ahead}:${coldRunning}` !== lastNote) {
-          lastNote = `${ahead}:${coldRunning}`;
+        if (`${ahead}:${coldRunning}:${bunShort}` !== lastNote) {
+          lastNote = `${ahead}:${coldRunning}:${bunShort}`;
           const live = listWatchers();
           const busy = live.map((w) => w.project).join(", ");
           if (ahead !== 0) cap = capacity();
           cap ??= capacity();
           // Name what actually blocks it: every slot taken, or memory.
           const room = cap.budgetBytes === undefined || live.length >= cap.maxWatchers ? `the ${cap.maxWatchers} typecheck slot${cap.maxWatchers === 1 ? "" : "s"}` : `typecheck memory (needs ${fmtGb(cap.needBytes ?? 0)} of ${fmtGb(cap.budgetBytes)})`;
-          const cold = `waiting for ${coldRunning} cold build${coldRunning === 1 ? "" : "s"} to finish (${coldCap} first pass${coldCap === 1 ? "" : "es"} at a time on this machine)`;
-          opts.note(coldRunning && ahead === 0
+          const cold = `waiting for ${coldRunning} ${slots}${coldRunning === 1 ? "" : "s"} to finish (${coldCap} ${opts.bunRun ? "" : `first pass${coldCap === 1 ? "" : "es"} `}at a time on this machine)`;
+          opts.note(bunShort
+            ? `queued: the machine has less memory free than the ${project} bun check needs beside the runs in flight; starting when it does (cast queue lists them)`
+            : coldRunning && ahead === 0
             ? `queued: ${cold}; starting when one does (cast queue lists them)`
             : coldRunning
             ? `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead, ${cold} (cast queue lists them)`
             : ahead === 0
-            ? `queued for ${room}: the live watchers hold passes someone is waiting on (${busy}); starting when one finishes (cast queue lists them)`
+            ? `queued for ${room}: the live watchers hold passes someone is waiting on or were asked in the last ${RECENT_ASK_MS / 60_000} min (${busy}); starting when one frees, or after ${QUEUE_WAIT_MS / 60_000} min exiting 75 to ask again (cast queue lists them)`
             : `queued: ${ahead} ask${ahead === 1 ? "" : "s"} ahead for ${room} (${busy ? `${busy}; ` : ""}cast queue lists them)`);
         }
       } finally {
         release();
       }
-      if (Date.now() > queueDeadline) throw new CheckFailure(`the ${project} typecheck is still queued after ${Math.round((Date.now() - queuedSince) / 1000)}s: ${coldRunning ? `${coldRunning} cold build${coldRunning === 1 ? " is" : "s are"} still running (${coldCap} at a time on this machine)` : "the live watchers hold passes someone is waiting on"}`, "busy");
+      if (Date.now() > queueDeadline) throw new CheckFailure(`the ${project} typecheck is still queued after ${Math.round((Date.now() - queuedSince) / 1000)}s: ${coldRunning ? `${coldRunning} ${slots}${coldRunning === 1 ? " is" : "s are"} still running (${coldCap} at a time on this machine)` : bunShort ? "the machine has not had the memory it needs free beside the bun check runs in flight" : `the live watchers hold passes someone is waiting on or were asked in the last ${RECENT_ASK_MS / 60_000} min`}`, "busy");
       await sleep(1_000);
     }
   } finally {

@@ -1,5 +1,5 @@
 // A change on the phone (docs/architecture/changes.md CH3-CH4), drawn as text so
-// it wraps with the line it sits in: the web chip's five bars and word, after a
+// it wraps with the line it sits in: the web chip's five bars and glyph, after a
 // pull request's or commit's pill name, and a branch named in a message as its
 // whole chip when a checkout, a pull request or a deploy queue knows it. The
 // rule and the words are the web's (lib/changes/lifecycle).
@@ -8,10 +8,9 @@ import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
 import { useTheme, type Palette } from '@/constants/Theme';
-import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 import { useMentionedChange } from '@codecast/web/hooks/useMentionedChange';
 import { useChangeReach, type RepoChange } from '@codecast/web/hooks/useRepoChanges';
-import { nowElapsed, vehicleName, type ChangeTone, type Lifecycle, type LifecycleStage } from '@codecast/web/lib/changes/lifecycle';
+import { vehicleName, type ChangeTone, type Lifecycle, type LifecycleStage, type StageState } from '@codecast/web/lib/changes/lifecycle';
 
 const FAILED_TINT = '33';
 
@@ -30,26 +29,35 @@ function Bar({ s, lifecycle, Theme }: { s: LifecycleStage; lifecycle: Lifecycle;
   return <RNText style={{ color, opacity: isNow || live || s.state === 'done' ? 1 : 0.4, letterSpacing: -1 }}>▬</RNText>;
 }
 
-/** A change's track and word: five bars, then the word, its elapsed time ticking while it moves, and its detail. */
+/** The now's state as a glyph, as the web chip draws it (components/changes/ChangeChip NODE). Idle has none. */
+const NOW_GLYPH: Record<StageState, React.ComponentProps<typeof Feather>['name'] | null> = {
+  done: 'check',
+  active: 'disc',
+  waiting: 'clock',
+  you: 'user',
+  back: 'corner-down-left',
+  failed: 'x',
+  skipped: 'minus',
+  stopped: 'slash',
+  idle: null,
+};
+
+/** A change's track and the now's glyph in its tone. The word is the change's to say on its screen, never a label in a line. */
 export function ChangeWords({ lifecycle }: { lifecycle: Lifecycle }) {
   const Theme = useTheme();
   const n = lifecycle.now;
-  const now = useNowWhen((t) => nowElapsed(n, t) ?? '', 15_000);
-  const time = nowElapsed(n, now);
   const tone = changeColor(Theme, n.tone);
+  const glyph = NOW_GLYPH[n.state];
   return (
-    <RNText style={{ color: tone }}>
+    <RNText style={{ color: tone }} accessibilityLabel={`${n.word}${n.detail ? `, ${n.detail}` : ''}`}>
       {' '}
       {lifecycle.stages.map((s) => <Bar key={s.id} s={s} lifecycle={lifecycle} Theme={Theme} />)}
-      {' '}
-      <RNText style={{ color: tone, ...(n.tone === 'red' ? { backgroundColor: Theme.red + FAILED_TINT } : null) }}>
-        {n.word}{time ? ` ${time}` : ''}{n.detail ? ` · ${n.detail}` : ''}
-      </RNText>
+      {glyph ? <>{' '}<Feather name={glyph} size={10} color={tone} style={n.tone === 'red' ? { backgroundColor: Theme.red + FAILED_TINT } : undefined} /></> : null}
     </RNText>
   );
 }
 
-/** A change named in a message, whole: its glyph and name, then its track and word. A pull request opens its screen. */
+/** A change named in a message, whole: its glyph and name, then its track and state glyph. A pull request opens its screen. */
 function ChangeLine({ lifecycle, label, pr, repository }: { lifecycle: Lifecycle; label: string; pr: number | null; repository: string | null }) {
   const Theme = useTheme();
   const router = useRouter();

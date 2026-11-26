@@ -20,9 +20,9 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -2339,6 +2339,7 @@ function SessionListPanelImpl({
   const flatView = viewMode === "time" || viewMode === "recent";
   // Manual drag-order overlay, only consulted in "time" mode (see comparator).
   const manualOrder = s.clientState.ui?.inbox_manual_order;
+  const oldestFirst = resolveInboxOldestFirst(s.clientState.ui);
   // The two flat views reuse the already-computed sortedSessions (every
   // non-dismissed session) and only swap the comparator: "recent" ranks by last
   // activity (updated_at, reshuffles as work happens), "time" by creation
@@ -2360,10 +2361,11 @@ function SessionListPanelImpl({
         focusedId: activeSessionId,
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
+        oldestFirst,
         chipMatches: (sess) =>
           chipMatchesSession(sess, chipFilterOpts(s, bucketByConv)),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, oldestFirst, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
@@ -2445,7 +2447,7 @@ function SessionListPanelImpl({
     let count = 0;
     for (const row of items) {
       for (const x of [row, ...(globalSubByParent.get(row._id) ?? [])]) {
-        const ws = sessionWorkState(x);
+        const ws = personSessionWorkState(x);
         states[ws] = (states[ws] ?? 0) + 1;
         count++;
       }
@@ -2550,24 +2552,9 @@ function SessionListPanelImpl({
     // one block, in their on-screen order.
     const moving = new Set(selectionIdsFor(draggedId));
     if (moving.has(targetId)) return;
-    const block = flatList.filter((sess) => moving.has(sess._id) && !nestedUnder(sess));
-    const targetRow = flatList.find((sess) => sess._id === targetId);
-    if (!targetRow) return;
-    const targetParent = nestedUnder(targetRow);
-    const rest = flatList.filter((sess) => !moving.has(sess._id) && !nestedUnder(sess));
-    const restKeys = rest.map((sess) => manualOrder?.[sess._id] ?? sess.started_at ?? sess.updated_at ?? 0);
-    const targetIdx = rest.findIndex((sess) => sess._id === (targetParent ?? targetId));
-    if (targetIdx < 0) return;
-    let insertIndex = (targetParent ? "after" : pos) === "before" ? targetIdx : targetIdx + 1;
-    // One write for the whole block, so the drag is one undo entry.
-    const keys: Record<string, number> = {};
-    for (const sess of block) {
-      const key = computeManualSortKey(restKeys, insertIndex);
-      keys[sess._id] = key;
-      restKeys.splice(insertIndex++, 0, key);
-    }
-    useInboxStore.getState().setSessionManualOrders(keys);
-  }, [flatList, manualOrder]);
+    const keys = manualOrderKeysForDrop(flatList, { moving, targetId, pos, manualOrder, nestedUnder, oldestFirst });
+    if (keys) useInboxStore.getState().setSessionManualOrders(keys);
+  }, [flatList, manualOrder, oldestFirst]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
@@ -2678,11 +2665,11 @@ function SessionListPanelImpl({
     killManyWithNotice(killAllIds(filteredStashed));
   }, [killAllArmed, filteredStashed, killManyWithNotice]);
 
-  // A new grouping is a new list: it opens at its first group, not at the
-  // scroll offset the old layout happened to have.
+  // A new grouping or direction is a new list: it opens at its first row, not
+  // at the scroll offset the old layout happened to have.
   useWatchEffect(() => {
     scrollContainerRef.current?.scrollTo({ top: 0 });
-  }, [viewMode]);
+  }, [viewMode, oldestFirst]);
 
   // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
   useWatchEffect(() => {
@@ -3207,7 +3194,7 @@ function SessionListPanelImpl({
             <X className="w-3 h-3 text-sol-text-dim group-hover:text-sol-text" />
           </button>
         )}
-        {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />}
+        {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} oldestFirst={oldestFirst} onOldestFirstChange={s.setInboxOldestFirst} />}
         {/* Modern focused: one Filter menu (labels, projects, the folders
             worked in most, every folder one step away); every other style
             keeps the chip row. */}

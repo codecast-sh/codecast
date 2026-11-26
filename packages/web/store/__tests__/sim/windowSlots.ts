@@ -50,6 +50,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:hydrationEpoch": "window",
   // A server-deleted session the prune skipped while it was open: per-store hide state.
   "store/inboxStore.ts:deferredDeletedSessions": "window",
+  // A Vault Approve's answer message, held until that window's own answerDecision dispatch lands.
+  "store/inboxStore.ts:heldAnswerDeliveries": "window",
   // The placement caches: each browser window keeps its own, and every key
   // checks that window's state refs, so they travel with the window and its
   // next turn may reuse them.
@@ -62,6 +64,9 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:_placedMemo": "window",
   // The retired field locks' acknowledgement times: each window acknowledges its own writes.
   "store/inboxStore.ts:retiredAckTs": "window",
+  "store/inboxStore.ts:earlySettles": "window",
+  "store/syncProtocol.ts:ackedHint": "window",
+  "store/syncProtocol.ts:ackedScans": "window",
   // The dev parity check's throttle: one per window, as each browser window keeps its own.
   "store/inboxStore.ts:_lastParityCheckAt": "window",
   "store/inboxStore.ts:_depChanges": { shared: "dev render census, read only from the console" },
@@ -86,6 +91,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // The docs shots mode's offline Convex client: set only by lib/docsShots/install, which the sim never runs.
   "lib/docsShots/flag.ts:client": { shared: "the docs shots mode's offline Convex client; the sim never installs it, so it stays null" },
   "hooks/inboxWarm.ts:renderedMemo": { shared: "keyed on the placements ref and the view inputs it was built from; another window's state has its own refs, so it misses and rebuilds" },
+  "store/sessionOwnersSlice.ts:factsMemo": { shared: "an entry is used only while its owners read and runner are the very objects it was built from; another window's state holds its own objects, so it misses and rebuilds" },
   "store/workProjects.ts:memo": { shared: "keyed on the sessions, tasks and plans refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
   "store/viewNav.ts:pendingSource": "window",
   "store/viewNav.ts:appliedNavCount": "window",
@@ -300,6 +306,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/sounds.ts:ctx": AUDIO,
   "lib/sounds.ts:soundedAt": { shared: "arrival sound de-dupe; affects only whether a sound plays" },
   "lib/syncLogCargo.ts:FACT_FIELDS": CONSTANT,
+  "lib/syncLogCargo.ts:OWNERS_TRIGGER_FIELDS": CONSTANT,
   "lib/tabRoutes.ts:NON_TAB_EXACT": CONSTANT,
   "lib/sessionCommands.ts:SESSION_COMMAND_ACTIONS": CONSTANT,
 };
@@ -325,7 +332,7 @@ type InboxSlots = ReturnType<InboxBindings["get"]>;
 // The inboxStore window bindings declared as const collections: set() refills
 // them in place, and the store's own setter reassigns the rest. A binding
 // missing here is never restored, which realm.selftest's round trip catches.
-const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "_visibleMemo", "retiredAckTs"] as const;
+const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "heldAnswerDeliveries", "_placedMemo", "_visibleMemo", "retiredAckTs", "earlySettles"] as const;
 
 // inboxStore exports its live window bindings; the copying lives here. A
 // snapshot copies the const collections and both levels of _heldOverlayFacts
@@ -354,6 +361,7 @@ function inboxStoreSeam(b: InboxBindings): SlotSeam {
       hydrationEpoch: 0,
       _lastParityCheckAt: 0,
       deferredDeletedSessions: new Set(),
+      heldAnswerDeliveries: new Map(),
       _membershipKey: null,
       _membershipVal: null,
       _visibleMemo: new Map(),
@@ -362,6 +370,7 @@ function inboxStoreSeam(b: InboxBindings): SlotSeam {
       _placementDeadlineMemo: null,
       _placedMemo: new Map(),
       retiredAckTs: new Map(),
+      earlySettles: new Map(),
     }),
     get: () => copy(b.get()),
     set: (snap: object) => {
@@ -384,6 +393,7 @@ const SEAMS: Record<string, () => SlotSeam> = {
   "store/inboxStore.ts": () => inboxStoreSeam(load<typeof import("../../inboxStore")>("../../inboxStore").__inboxStoreWindowBindings),
   "store/gestureBridge.ts": () => load<typeof import("../../gestureBridge")>("../../gestureBridge").__gestureBridgeSimSlots() as SlotSeam,
   "store/viewNav.ts": () => load<typeof import("../../viewNav")>("../../viewNav").__viewNavSimSlots() as SlotSeam,
+  "store/syncProtocol.ts": () => load<typeof import("../../syncProtocol")>("../../syncProtocol").__syncProtocolSimSlots() as SlotSeam,
   [`${ENGINE}undoStack.ts`]: () => load<typeof import("@platform/engine")>("@platform/engine").__undoStackWindowSlots(),
   // No seam of its own: the module's getters plus its existing test setter.
   "store/syncActivity.ts": () => {

@@ -235,15 +235,17 @@ export function reservationBytes(peaks: Peak[], ceiling = watcherCeilingBytes(),
 }
 
 /**
- * What a live watcher holds against the budget: its live use (what it
- * measures now; while a pass runs, no less than the peak it reached). Only a watcher
+ * What a live watcher holds against the budget, and what stopping it frees:
+ * what it measures now, but no less than the peak it reached. Only a watcher
  * still building its first pass, which has not reached its size yet, holds
  * what its project is expected to reach; headroom belongs to the reservation
  * a new watcher makes, not to the ones already running.
  */
 export function holdBytes(w: { inProgress?: boolean; firstFinishedAt?: number; finishedAt?: number; peakRssBytes?: number }, measured: number, peaks: Peak[], ceiling = watcherCeilingBytes(), cold = ceiling): number {
-  // Idle, it holds what it uses now. A pass in flight climbs back toward the peak it reached before, so it holds that.
-  const seen = w.inProgress ? Math.max(measured, w.peakRssBytes ?? 0) : measured;
+  // The peak it reached, idle too: macOS compresses an idle tsc to ~0.1 GB of RSS, its next pass climbs straight back,
+  // and a new watcher reserves by the same peaks. Held by RSS alone, 134 of 296 evictions on 2026-11-24 "freed" 0.2 GB
+  // or less, so each admission stopped watcher after watcher to fit one reservation (ct-100924).
+  const seen = Math.max(measured, w.peakRssBytes ?? 0);
   // finishedAt: watchers from before firstFinishedAt existed (2026-10-15) still say a pass finished.
   return w.firstFinishedAt ?? w.finishedAt ? seen : Math.max(seen, expectedBytes(peaks, ceiling, cold));
 }

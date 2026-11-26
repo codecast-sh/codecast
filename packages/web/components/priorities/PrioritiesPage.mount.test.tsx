@@ -203,6 +203,36 @@ test("the header says how far behind only past six hours, read off the list's an
   answers["priorities:list"] = listOf(ROWS);
 }, 60_000);
 
+test("rows share one strip width so titles get the room; a past row puts its title before its goal; a teammate's past says whose", async () => {
+  const long = "Constitution worked through end to end with every ruling checked";
+  const rows = [
+    { ...ROWS[0], title: long },
+    { ...ROWS[4], user_id: "teammate", owner: "Ashot", mine: false, serves: "in-12", title: "Increase top of funnel" },
+  ];
+  const page = await mount(<PrioritiesView rows={rows as any} history={HISTORY as any} openId={null} onToggleOpen={() => {}} writes={{} as any} />);
+  try {
+    // The strip column is one page-wide width (not a fixed maximum that eats a title's room).
+    const list = page.container.querySelector("[data-priorities]") as HTMLElement;
+    expect(list.style.getPropertyValue("--pri-strip")).toContain("100cqw");
+    expect(page.container.querySelector('[data-priority="pri-1"] button')!.textContent).toContain(long);
+    // The past row: title first, then the goal, which only takes what is left.
+    const past = page.container.querySelector('[data-priority="pri-5"]')!;
+    const title = past.querySelector("[data-past-title]")!;
+    const serves = past.querySelector("[data-past-serves]")!;
+    expect(title.textContent).toBe("Increase top of funnel");
+    expect(title.compareDocumentPosition(serves) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(serves.className).toContain("min-w-0");
+    expect(serves.className).toContain("overflow-hidden");
+    // The pill inside sets its own label to wrap; the slot forces one line so a squeezed goal clips, never grows the row.
+    expect(serves.className).toContain("[&_*]:!whitespace-nowrap");
+    expect(title.className).toContain("shrink-0");
+    // Whose finished priorities these are.
+    expect([...page.container.querySelectorAll("h3")].map((h) => h.textContent)).toContain("Finished and past · Ashot");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
 test("Move to ranks a priority from the row menu, without a drag", async () => {
   const calls: string[] = [];
   const writes = { rank: (id: string, n: number) => calls.push(`rank ${id} ${n}`), setStepTier: () => {}, setAside: () => {}, restore: () => {} };

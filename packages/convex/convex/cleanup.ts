@@ -10,6 +10,7 @@ import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
 import { cascadeTakesDown, finishedByRow, holdFactsOnServer, nestedGroupOf } from "./lib/closeAside";
 import { leadStillInClose, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
+import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -328,7 +329,7 @@ export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  opts?: { cascade?: boolean; forceKill?: boolean; close?: boolean; cause?: string },
+  opts?: { cascade?: boolean; forceKill?: boolean; close?: boolean; cause?: string; cascadeVictim?: boolean },
 ): Promise<{
   action: "reap" | "kill" | "none";
   canceledSchedules: number;
@@ -397,6 +398,10 @@ export async function applyHideTransition(
       if (!doc?.persistent) killPatch.status = "completed";
     }
     if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
+    // A killed parent owns no child any more: they are released to their people.
+    // The root kill does it; a child the cascade took down only when it has
+    // children of its own (a subagent's own subagents are not cascaded).
+    if (!opts?.close) await releaseDeadParentChildrenLater(ctx as any, doc, { onlyWithChildren: opts?.cascadeVictim });
     // A killed worker frees its fleet slot and keeps its worktree. A closed one
     // only frees its slot: it has not ended, so its lead hears nothing (a
     // settle note would revive the lead the person just closed).
@@ -560,7 +565,7 @@ async function hideNestedChildren(
     if (alreadyHidden && !opts?.forceKill) continue;
     const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, close: opts?.close, cause: `cascade<-${opts?.cause ?? "hide"}` });
+    await applyHideTransition(ctx, child, childPatch, { cascade: false, cascadeVictim: true, forceKill: opts?.forceKill, close: opts?.close, cause: `cascade<-${opts?.cause ?? "hide"}` });
   }
   let standNow = standingIds.slice(0, Math.max(0, budget - now.length));
   let standRest = standingIds.slice(standNow.length);
@@ -723,7 +728,10 @@ export async function deleteConversationBySessionIdCore(
   // Drop the conversation only once its messages are drained, so a caller
   // can loop until done without orphaning rows past the per-call batch.
   const done = msgs.length < 500;
-  if (done) await ctx.db.delete(conv._id);
+  if (done) {
+    await releaseDeadParentChildrenLater(ctx as any, conv);
+    await ctx.db.delete(conv._id);
+  }
   return { found: true, deleted: msgs.length, done };
 }
 

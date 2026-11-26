@@ -235,7 +235,8 @@ CONVEX_API_TOKEN=your-token bun packages/convex/test-pending-messages.ts
 ### Typecheck
 
 ```bash
-cast check                          # every program listed in .codecast/check.toml
+cast check                          # the programs in .codecast/check.toml this tree's changes reach
+cast check --all                    # every program listed there
 cast check web                      # one program
 ```
 

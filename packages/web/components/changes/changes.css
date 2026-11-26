@@ -54,6 +54,9 @@ a.chg:hover, .chg:focus-visible, [data-state="open"] > .chg {
 .chg[data-tone="blue"] .chg-glyph, .chg[data-tone="red"] .chg-glyph { color: var(--chg-ink); }
 .chg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .chg-name[data-mono] { font-family: var(--font-mono); font-size: 0.94em; letter-spacing: -0.015em; }
+/* The now's glyph after the track: the state a reference shows instead of a word. */
+.chg-now { width: 0.95em; height: 0.95em; flex: none; color: var(--chg-ink); }
+:is(.chg, .chg-seg)[data-tone="muted"] .chg-now { color: var(--sol-text-muted); }
 .chg-word { flex: none; font-weight: 600; color: var(--chg-ink); font-variant-numeric: tabular-nums; }
 :is(.chg, .chg-seg)[data-tone="muted"] .chg-word { color: var(--sol-text-muted); }
 .chg-time { margin-left: 0.3em; font-weight: 500; opacity: 0.85; }
@@ -66,9 +69,9 @@ a.chg:hover, .chg:focus-visible, [data-state="open"] > .chg {
   --chg-done: color-mix(in srgb, var(--sol-text-muted) 70%, transparent);
   --chg-idle: color-mix(in srgb, var(--sol-text-dim) 26%, transparent);
   --chg-ink: color-mix(in srgb, var(--chg) 76%, var(--sol-text));
-  display: inline-flex; align-items: center; gap: 0.35em; flex: none;
+  display: inline-flex; align-items: center; gap: 0.35em; flex: none; margin-left: 0.25em;
 }
-.chg-seg[data-tone="red"] .chg-word { padding: 0 0.25em; border-radius: 0.2em; background: color-mix(in srgb, var(--sol-red) 16%, transparent); }
+.chg-seg[data-tone="red"] .chg-now { padding: 0.08em; border-radius: 0.2em; background: color-mix(in srgb, var(--sol-red) 16%, transparent); }
 
 /* The track: five segments of one bar. Passed solid, the now in its tone, the rest faint. */
 .chg-track { display: inline-flex; align-items: center; gap: 1.5px; flex: none; }
