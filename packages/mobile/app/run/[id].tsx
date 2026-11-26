@@ -6,7 +6,7 @@
 // run (stop, resume, rebase and land), and the other runs on the same task.
 //
 // Store-fed like the web page: useWorkflowRun feeds and reads the run,
-// useWorkflow its graph, useSyncDecisionDetail its card, useSyncRuns the
+// useWorkflow its graph, useSyncDecisionDetail its card, useTaskRuns the
 // task's other runs. Every verb is a store action, so the run repaints on the press.
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
@@ -17,8 +17,8 @@ import { costParts, costUsd, isLineRun } from '@codecast/shared/contracts/change
 import { publicUrl } from '@codecast/shared/entities';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { useRunWorkflow, useWorkflowRun, useWorkflowRuns } from '@codecast/web/hooks/useSyncWorkflows';
-import { useSyncRuns } from '@codecast/web/hooks/useSyncRuns';
+import { useRunWorkflow, useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
+import { useTaskRuns } from '@codecast/web/hooks/useSyncRuns';
 import { useDecisionDetail, useSyncDecisionDetail } from '@codecast/web/hooks/useSyncDecisionDetail';
 import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 import { answererNameOf } from '@codecast/web/lib/decisionLinks';
@@ -116,10 +116,9 @@ export default function RunScreen() {
     return cid ? ((s.conversations as Record<string, { title?: string }>)[cid]?.title ?? (s.sessions as Record<string, { title?: string }>)[cid]?.title ?? null) : null;
   });
 
-  // Every run on the same task, newest first (the web's useCauseRuns).
-  useSyncRuns(run?.task_id ? { task_id: run.task_id, limit: 20 } : {}, !!run?.task_id);
-  const causeWhere = useMemo(() => (r: any) => !!run?.task_id && r.task_id === run.task_id && r._id !== run._id, [run?.task_id, run?._id]);
-  const others = useWorkflowRuns(causeWhere) as Run[];
+  // Every other run on the same task, newest first.
+  const taskRuns = useTaskRuns<Run>(run?.task_id);
+  const others = useMemo(() => taskRuns.filter((r) => r._id !== run?._id), [taskRuns, run?._id]);
   const [allOthers, setAllOthers] = useState(false);
 
   const answeredBy = detail?.decision?.status === 'answered' ? answererNameOf(detail, meId) : null;
