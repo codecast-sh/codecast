@@ -155,6 +155,21 @@ describe("changeVerdicts", () => {
     expect(changeVerdicts(dir({ "pr.json": elsewhere, "ci.json": GREEN }), SHIP).next).toBe("merge");
   });
 
+  test("only a brief that asks for a code change is a fix: CI failing on the change, or this head's reviewer asking for changes", () => {
+    const changes = pin({ verdict: "changes", findings: ["high a.ts:1 wrong"] });
+    expect(verdicts({ "ci.json": RED }).fix).toBe(true);
+    expect(verdicts({ "ci.json": GREEN }, changes).fix).toBe(true);
+    // A review that never came, CI not green with nothing failing, or the same review of a head left as it was.
+    expect(verdicts({ "ci.json": GREEN }, null)).toMatchObject({ next: "rerun_review", fix: false });
+    expect(changeVerdicts(dir({ "pr.json": { ...PR, review_reruns: 1 }, "ci.json": GREEN }), undefined)).toMatchObject({ next: "brief", fix: false });
+    expect(verdicts({ "ci.json": { ...GREEN, green: false } })).toMatchObject({ next: "brief", fix: false });
+    const reused = { ...PR, reviewed: { verdict: "changes", findings: ["high a.ts:1 wrong"], head_sha: "abc" } };
+    expect(changeVerdicts(dir({ "pr.json": reused, "ci.json": GREEN }), undefined)).toMatchObject({ next: "brief", fix: false, review_result: { reused: true } });
+    expect(changeVerdicts(dir({ "pr.json": reused, "ci.json": RED }), undefined)).toMatchObject({ next: "brief", fix: true });
+    // Never a fix where the run does not go to the session.
+    expect(verdicts({ "ci.json": GREEN }).fix).toBe(false);
+  });
+
   test("this round's rejection ends with the reviewer's reasons; an old round's does not", () => {
     expect(verdicts({ "ci.json": RED }, pin({ verdict: "rejected", findings: ["blocker x.ts:2 not wanted"] }))).toMatchObject({ next: "rejected", why: "blocker x.ts:2 not wanted" });
     expect(verdicts({ "ci.json": GREEN }, pin({ verdict: "rejected", round: "r1" })).next).toBe("rerun_review");

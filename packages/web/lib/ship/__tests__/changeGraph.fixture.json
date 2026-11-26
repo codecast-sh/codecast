@@ -472,7 +472,13 @@
     {
       "from": "verdicts",
       "to": "brief",
-      "label": "CI red, changes asked or no verdict",
+      "label": "CI red or changes asked",
+      "condition": "verdicts.json.next = brief and verdicts.json.fix = true"
+    },
+    {
+      "from": "verdicts",
+      "to": "brief",
+      "label": "no verdict, or the same review",
       "condition": "verdicts.json.next = brief"
     },
     {

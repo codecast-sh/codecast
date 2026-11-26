@@ -504,6 +504,23 @@ describe("the shipped change flow", () => {
     expect(s.sent().at(-1).body).toContain("sent the change back 3 times");
   }, 120_000);
 
+  test("a rerun on an unchanged head reuses the last review: no reviewer, only CI, and the round counter does not move", async () => {
+    // The session disagrees with the findings and changes nothing; the same review comes back, then it fixes them.
+    const w = world({ ci: [GREEN, GREEN, GREEN], review: [CHANGES, SHIP], merge: ["merged"], fixes: [false, true] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(s.spawned).toHaveLength(2);
+    expect(w.calls()).toEqual(["flow pr", "flow ci", "flow verdicts", "flow pr", "flow ci", "flow verdicts", "flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
+    const [first, again] = s.briefs();
+    expect(first).not.toContain('"reused"');
+    expect(again).toContain('"reused":true');
+    expect(again).toContain("high a.txt:1 says bad");
+    expect(s.briefRounds()).toEqual([1, 1]);
+    // The fix moved the head: that round was reviewed afresh, and its review is the one that merged.
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "review.json"), "utf-8"))).toMatchObject({ verdict: "ship", head_sha: git(w.root, "rev-parse", "feat") });
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "pr.json"), "utf-8")).reviewed).toBeUndefined();
+  }, 120_000);
+
   test("a session that leaves red CI's head as it was gets CI again under the same ship, which merges once green", async () => {
     const w = world({ ci: [RED, GREEN], review: [SHIP], merge: ["merged"], fixes: [false] });
     const s = server(w);
@@ -511,6 +528,15 @@ describe("the shipped change flow", () => {
     expect(s.spawned).toHaveLength(1);
     expect(count(w.calls(), "flow ci")).toBe(2);
     expect(s.briefRounds()).toEqual([1]);
+  }, 120_000);
+
+  test("only a brief asking for a code change spends a round: a review that never came does not", async () => {
+    // A round with no review, then three red CIs: four briefs, three of them rounds; a fourth round would stop the run.
+    const w = world({ ci: [GREEN, RED, RED, RED, GREEN], review: ["none", "none", SHIP, SHIP, SHIP, SHIP], merge: ["merged"] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(s.briefs()).toHaveLength(4);
+    expect(s.briefRounds()).toEqual([0, 1, 2, 3]);
   }, 120_000);
 
   test("with no session behind the run, the first finding stops it, saying what CI and the reviewer found", async () => {

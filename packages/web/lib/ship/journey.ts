@@ -656,7 +656,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // A fix for what no stage found (the round's own step: a conflict with main) is said by the route that sent it.
     const fromHead = !!view?.fixing?.from && !!plan.find((s) => s.id === backStage)?.head?.includes(view.fixing.from);
     const route = fromHead ? graph.edges.find((e) => e.from === view!.fixing!.from && e.to === view!.fixing!.station)?.label : null;
-    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null, blocked, ask: blocked ? ask : null, conversation: waitingOn?.conversation_id ?? null,
+    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits || null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null, blocked, ask: blocked ? ask : null, conversation: waitingOn?.conversation_id ?? null,
       ...(route ? { what: route.charAt(0).toUpperCase() + route.slice(1) } : {}) };
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.

@@ -174,6 +174,12 @@ describe("the fan-out and its verdicts", () => {
     const ciOnly = journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "CI red" }, node_statuses: [...ROUND, verdicts("brief", "red", "ship"), st("brief", "running", 20)] }));
     expect(ciOnly.stages[1].branches!.map((b) => b.state)).toEqual(["back", "done"]);
   });
+  test("the round the card shows is the one the cap counts: a brief that asks for no code change leaves it where it was", () => {
+    // The runner reports Fix findings' visits without the free ones (change.cast free_visit), as the cap counts them.
+    const at = (visits: number) => journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "no verdict" }, node_statuses: [...ROUND, verdicts("brief", "green", "missing"), st("brief", "running", 20, { visits })] })).now;
+    expect(at(0)).toMatchObject({ kind: "session", round: null, max: 3 });
+    expect(at(1)).toMatchObject({ kind: "session", round: 1, max: 3 });
+  });
   test("a CI held by main's red waits for main, and the run reads as its wait", () => {
     const j = journeyOf(change, run({ current_node_id: "wait_main", node_statuses: [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "running", 22, { visits: 1, result_preview: "Main CI is red at 9f8e7d6 (red since 1a2b3c4): test-web; looking again in 60s" })] }));
     expect(j.stages[1].branches!.map((b) => [b.label, b.state])).toEqual([["CI", "waiting"], ["Review", "done"]]);

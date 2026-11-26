@@ -33,9 +33,13 @@
 // goes back to the session the same way; one that main moved under, where the
 // two interact, runs CI again, at most three times. Each way back to the
 // session runs at most three times; the fourth ends the run, and the session
-// hears why. A task, branch or pull request named from inside a session has
-// that session as its subject; named from a plain shell it has none, and stops
-// at the first finding, saying what CI and the reviewer found.
+// hears why. Only a brief that asks for a code change (CI failing on the
+// change, or a reviewer of this head asking for changes) spends one of Fix
+// findings' three; a brief for a review that never came, or for the same
+// review of a head the session left alone, spends none, three such at most.
+// A task, branch or pull request named from inside a session has that session
+// as its subject; named from a plain shell it has none, and stops at the first
+// finding, saying what CI and the reviewer found.
 //
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
@@ -78,7 +82,7 @@ digraph change {
   deploy [flow="deploy"]
   exit [shape=Msquare, label="Live"]
 
-  brief [label="Fix findings", backend=subject, max_visits=3,
+  brief [label="Fix findings", backend=subject, max_visits=3, max_free_visits=3,
     prompt="@change/brief.md"]
   // GitHub runs no CI on a pull request that conflicts with its base: CI says so, and the session brings it up to date.
   ci_conflict [label="Resolve conflict", backend=subject, max_visits=3,
@@ -129,7 +133,8 @@ digraph change {
   verdicts -> nobody        [condition="verdicts.json.next = decide", label="it edits CI, no session"]
   verdicts -> found    [condition="(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", label="found work, no session"]
   verdicts -> ci_conflict [condition="verdicts.json.next = conflict", label="conflicts with main"]
-  verdicts -> brief    [condition="verdicts.json.next = brief", label="CI red, changes asked or no verdict"]
+  verdicts -> brief    [condition="verdicts.json.next = brief and verdicts.json.fix = true", label="CI red or changes asked"]
+  verdicts -> brief    [condition="verdicts.json.next = brief", label="no verdict, or the same review", free_visit="brief"]
   verdicts -> verdictless [label="no verdicts"]
   merge -> landed       [condition="outcome = success and merge.json.sha"]
   merge -> fix_conflict [condition="outcome = failure and merge.exit_code = 1 and (merge.output contains \" conflicts with \" or merge.output contains \"rebuild the change on\") and change_conversation", label="conflict"]

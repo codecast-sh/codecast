@@ -26,6 +26,12 @@ export type Verdicts = {
   ci_result: Record<string, any> | null;
   /** The review as accepted for this round, null when none was; `reused` when it is the last round's, on the same head. */
   review_result: Record<string, any> | null;
+  /**
+   * Whether a brief asks the session to change its code: CI fails on something the change causes, or a reviewer who
+   * read this round's head asked for changes. Only such a brief spends one of the session's rounds (change.cast); one
+   * for a review that never arrived, or for the same review of a head the session left as it was, does not.
+   */
+  fix: boolean;
 };
 
 const REVIEW_VERDICTS = ["ship", "changes", "rejected"];
@@ -82,7 +88,7 @@ function reviewProblem(pin: Record<string, any> | null, round: unknown, heads: S
 export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null): Verdicts {
   const prFile = path.join(dir, "pr.json");
   const pr = readJson(prFile);
-  const done = (v: Omit<Verdicts, "why"> & { why: string }): Verdicts => ({ ...v, why: v.why.slice(0, WHY_CAP) });
+  const done = (v: Omit<Verdicts, "why" | "fix"> & { why: string }): Verdicts => ({ ...v, why: v.why.slice(0, WHY_CAP), fix: v.next === "brief" && fix });
   const ci = readJson(path.join(dir, "ci.json"));
   const heads = reviewedHeads(ci?.head_sha, pr?.rebases);
   // The last round's review, carried by the PR station because this round pushed a head it read, stands for the
@@ -117,6 +123,7 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
     : station.length ? `the CI station could not judge: ${station.map(stationSaid).join("; ")}`
     : null;
   const passing = !!ci && !machine && !real.length && ci.green === true;
+  const fix = (!!real.length && ci?.head_sha === pr?.head_sha) || (review?.verdict === "changes" && !reused);
   const said = {
     ci: (machine && !conflict ? "timed_out" : passing ? "green" : ci?.blocked_by_main === true ? "blocked_by_main" : "red") as Verdicts["ci"],
     review: (review ? review.verdict : pin ? "stale" : "missing") as Verdicts["review"],
