@@ -436,22 +436,64 @@ jobs:
       # cut builds and signs while CI runs on the same commit, and nothing is
       # published until CI's verify job is green on it. A red or missing verdict
       # within 40 minutes fails the release before any public object is written.
+      # Pushes to main share one CI group in which a newer push replaces a waiting
+      # run (ci.yml's concurrency), so the source commit's own run can end
+      # cancelled with no jobs. Then the verdict is a later main run's, on a commit
+      # that holds the source commit: green on any of them passes, and red on the
+      # newest of them fails.
       - name: Wait for CI on the source commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # verify's "<status> <conclusion>" on one run, or "none" when the run has no verify job.
+          verdict_of() {
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$1/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "verify")][0] | if . == null then "none" else "\(.status) \(.conclusion)" end'
+          }
           for _ in $(seq 1 160); do
-            run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_COMMIT&event=push&per_page=5" \
-              --jq '.workflow_runs | sort_by(.created_at) | last | .id // empty')
-            if [[ -n "$run_id" ]]; then
-              verdict=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
-                --jq '[.jobs[] | select(.name == "verify")][0] | "\(.status) \(.conclusion)"')
-              case "$verdict" in
-                "completed success") echo "CI verify is green on $SOURCE_COMMIT (run $run_id)"; exit 0 ;;
-                completed*) echo "::error::CI verify ended ${verdict#completed } on $SOURCE_COMMIT (run $run_id)"; exit 1 ;;
-              esac
+            own=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_COMMIT&event=push&per_page=5" \
+              --jq '.workflow_runs | sort_by(.created_at) | last | select(. != null) | "\(.id) \(.status) \(.conclusion)"')
+            if [[ -n "$own" ]]; then
+              read -r run_id status conclusion <<<"$own"
+              if [[ "$conclusion" != "cancelled" ]]; then
+                verdict=$(verdict_of "$run_id")
+                case "$verdict" in
+                  "completed success") echo "CI verify is green on $SOURCE_COMMIT (run $run_id)"; exit 0 ;;
+                  completed*) echo "::error::CI verify ended ${verdict#completed } on $SOURCE_COMMIT (run $run_id)"; exit 1 ;;
+                esac
+                # Still going, or not started: its own verdict is coming. Finished with no verify job: read later runs.
+                if [[ "$status" != "completed" ]]; then sleep 15; continue; fi
+              fi
+            fi
+            # The source commit's run was replaced, finished without jobs, or is not listed: the newest main runs on
+            # commits that hold it decide (at most 5 read a pass; replaced runs are skipped).
+            git fetch -q origin main
+            newest=""
+            green=""
+            read_runs=0
+            while read -r run_id sha conclusion; do
+              [[ "$conclusion" == "cancelled" || "$sha" == "$SOURCE_COMMIT" ]] && continue
+              git merge-base --is-ancestor "$SOURCE_COMMIT" "$sha" 2>/dev/null || continue
+              verdict=$(verdict_of "$run_id")
+              [[ -z "$newest" ]] && newest="$run_id $sha $verdict"
+              if [[ "$verdict" == "completed success" ]]; then green="$run_id $sha"; break; fi
+              read_runs=$((read_runs + 1))
+              [[ "$read_runs" -ge 5 ]] && break
+            done < <(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=30" \
+              --jq '.workflow_runs | sort_by(.created_at) | reverse | .[] | "\(.id) \(.head_sha) \(.conclusion)"')
+            if [[ -n "$green" ]]; then
+              read -r run_id sha <<<"$green"
+              echo "CI verify is green on $sha, which holds $SOURCE_COMMIT (run $run_id; the source commit's own run was replaced or ran no jobs)"
+              exit 0
+            fi
+            if [[ -n "$newest" ]]; then
+              read -r run_id sha verdict <<<"$newest"
+              if [[ "$verdict" == completed* ]]; then
+                echo "::error::CI verify ended ${verdict#completed } on $sha, the newest main run holding $SOURCE_COMMIT (run $run_id)"
+                exit 1
+              fi
             fi
             sleep 15
           done
