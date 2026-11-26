@@ -321,6 +321,8 @@ import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
 import { tabSafePath, tabSafeTitle } from "../lib/tabSafePath";
+import { backEntry, recordTrail, trailOf } from "../lib/navTrail";
+import { placeSessionId } from "../lib/navPlace";
 import {
   countLeaves,
   findLeaf as findStageLeaf,
@@ -9713,6 +9715,7 @@ function hideSessionInDraft(
     }
     writes[sid] = wrote;
   }
+  returnToOpenerInDraft(draft, allIds);
   advanceSelection(draft, newSessionId);
   return { hidden, forgotten, writes, ts: now };
 }
@@ -9752,6 +9755,28 @@ function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
 // commitCurrentSession does for normal navigation; otherwise the tab path stays
 // on the removed session and the inbox's re-assert effect snaps the view back
 // onto it the next time it runs (e.g. when the tab is re-activated).
+// A session opened from another surface (a Priorities row, a task, a doc) is
+// shown through the inbox, so the tab's trail (lib/navTrail) holds that page
+// just below it. Hiding the session on screen goes back there, the way Back
+// would, instead of advancing to the next inbox session (ct-102190). A session
+// reached inside the inbox, or from another session, still advances: the
+// selection's own advance then moves the pointer, and leaves this tab's path
+// alone because it is no longer the inbox.
+function returnToOpenerInDraft(draft: any, hiddenIds: string[]) {
+  if (draft.showMySessions) return;
+  const tab = draft.activeTabId ? (draft.tabs as AppTab[]).find((t) => t.id === draft.activeTabId) : undefined;
+  // A pane of a split has no trail of its own (hooks/useNavTrail).
+  if (!tab?.path || (tab.layout && stageLeavesOf(tab.layout).length > 1)) return;
+  const shownId = placeSessionId(tab.path);
+  if (!shownId || !hiddenIds.includes(shownId)) return;
+  const dest = backEntry(trailOf(tab.id), tab.path);
+  if (!dest || dest.path.split("?")[0] === "/inbox" || placeSessionId(dest.path)) return;
+  // Pop the trail as the back control does, so the opener's own Back still
+  // leads where it led before the session was opened.
+  recordTrail(tab.id, dest.path, "back", undefined, (draft.tabs as AppTab[]).map((t) => t.id));
+  draft.tabs = draft.tabs.map((t: AppTab) => (t.id === tab.id ? withTabPath(t, dest.path) : t));
+}
+
 function advanceSelection(draft: any, newSessionId: string | null) {
   declareViewNav("gesture");
   draft.currentSessionId = newSessionId;
