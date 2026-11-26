@@ -82,6 +82,8 @@ import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow }
 import { SessionBrowserTabs } from "./inbox/SessionBrowserTabs";
 import { SessionCard } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
+import { ModernSectionHeader } from "./inbox/ModernSectionHeader";
+import { SessionStatusMark } from "./inbox/SessionStatusMark";
 import { hostedStopOf, hostedStopsSig, lastAskOf, lastNoticeKind, splitHostedStops } from "../lib/hostedNotice";
 import { actionFor } from "./conversation/HostedNotice";
 import { useThinkingAvailable } from "./simple/assistantPromise";
@@ -91,7 +93,7 @@ import { LabelChipsRow } from "./LabelChipsRow";
 import { DeviceIcon, deviceDisplayName, useRosterMachines } from "./DeviceBadge";
 import { machineIdOfChipKey } from "../store/workProjects";
 import { RailFilterMenu } from "./RailFilterMenu";
-import { useIsModernFocused } from "../hooks/useVisualStyle";
+import { useIsModernFocused, useIsModernStyle } from "../hooks/useVisualStyle";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -2059,6 +2061,7 @@ function SessionListPanelImpl({
   // Modern focused folds the workers an agent spawned under its card (nestsWorkers).
   const nestWorkers = nestsWorkers(s.clientState.ui);
   const modernFocused = useIsModernFocused();
+  const modern = useIsModernStyle();
   // In the flat views a nested worker is a hoisted row of its own, drawn as
   // the compact sub row.
   const nestedWorkerIds = useMemo(() => {
@@ -2865,7 +2868,28 @@ function SessionListPanelImpl({
       isBucketLive(sess) || (subMap.get(sess._id) ?? []).some(isBucketLive);
     if (variant !== "snoozed") topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
-      <div className="border-t border-sol-border/30">
+      <div className={modern ? undefined : "border-t border-sol-border/30"}>
+        {/* Modern draws these heads like every other section's (mark, label,
+            count, hairline), so the rail's marks and labels share one column. */}
+        {modern ? (
+          <ModernSectionHeader
+            label={label}
+            count={items.length}
+            color="text-sol-text-dim"
+            sectionKey={`hidden_${variant}`}
+            collapsed={!expanded}
+            onToggle={onToggle}
+            icon={<SessionStatusMark status={variant === "dismissed" ? "killed" : variant === "stashed" ? "stashed" : "dormant"} />}
+            facts={liveCount > 0 && (
+              <span className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-green">
+                <SessionStatusMark status="working" size={8} />
+                {liveCount} running
+              </span>
+            )}
+            action={headerAction}
+            hideCount={items.length === 0}
+          />
+        ) : (
         <div data-sv-hidden-head className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
           <button
             onClick={onToggle}
@@ -2891,6 +2915,7 @@ function SessionListPanelImpl({
             </svg>
           </button>
         </div>
+        )}
         {expanded && topLevel.length > 0 && (() => {
           // Cap the hidden bucket too — KILLED/STASHED can hold hundreds of rows
           // when expanded ("show killed/stashed" on). Same per-bucket cap + show-more
