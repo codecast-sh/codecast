@@ -1,8 +1,8 @@
 import { forwardRef } from "react";
-import { CalendarPlus, Check, ChevronDown, FolderKanban, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUp, ArrowUpNarrowWide, CalendarPlus, Check, ChevronDown, FolderKanban, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
 import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { modernButton } from "./ui/modernLook";
 
 type ViewOption = { key: InboxViewMode; label: string; icon: typeof List };
@@ -20,22 +20,32 @@ const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
   machine: { label: "Machine", icon: Laptop },
 };
 
-type PickerButtonProps = { option: ViewOption } & React.ComponentPropsWithoutRef<"button">;
+// The views whose whole order is one sort, so it can run either way.
+const SORTABLE_MODES: readonly InboxViewMode[] = ["recent", "time"];
 
-/** The picker's face: the current grouping's icon and name, and a caret. */
-const PickerButton = forwardRef<HTMLButtonElement, PickerButtonProps>(function PickerButton({ option, ...rest }, ref) {
+const SORT_OPTIONS = [
+  { label: "Newest first", icon: ArrowDownWideNarrow, oldestFirst: false },
+  { label: "Oldest first", icon: ArrowUpNarrowWide, oldestFirst: true },
+] as const;
+
+type PickerButtonProps = { option: ViewOption; oldestFirst?: boolean } & React.ComponentPropsWithoutRef<"button">;
+
+/** The picker's face: the current grouping's icon and name, an up arrow when
+ *  it runs oldest first, and a caret. */
+const PickerButton = forwardRef<HTMLButtonElement, PickerButtonProps>(function PickerButton({ option, oldestFirst = false, ...rest }, ref) {
   const Icon = option.icon;
   return (
     <button
       ref={ref}
       type="button"
       data-inbox-view-picker
-      aria-label={`Grouped by ${option.label.toLowerCase()}`}
+      aria-label={`Grouped by ${option.label.toLowerCase()}${oldestFirst ? ", oldest first" : ""}`}
       className={`flex flex-shrink-0 items-center gap-1 h-[22px] px-1.5 rounded-[5px] text-meta font-medium text-sol-text-secondary hover:text-sol-text hover:bg-sol-text/[0.06] data-[state=open]:bg-sol-text/[0.06] transition-colors ${modernButton({ variant: "ghost", size: "xs" }, "modern:text-sol-text modern:data-[state=open]:bg-sol-text/[0.06]")}`}
       {...rest}
     >
       <Icon className="w-3 h-3 shrink-0" />
       <span>{option.label}</span>
+      {oldestFirst && <ArrowUp className="w-3 h-3 shrink-0" />}
       <ChevronDown className="w-2.5 h-2.5 shrink-0 opacity-60" />
     </button>
   );
@@ -49,19 +59,22 @@ export function InboxViewPickerStill({ value }: { value: InboxViewMode }) {
 // The inbox's grouping as one control at the start of the rail header: it
 // names the current grouping and opens the list of the others. `modes` is the
 // panel's list, the same one Ctrl+, cycles through (setInboxViewModesShown).
-export function InboxViewPicker({ value, onChange, modes }: {
+export function InboxViewPicker({ value, onChange, modes, oldestFirst, onOldestFirstChange }: {
   value: InboxViewMode;
   onChange: (value: InboxViewMode) => void;
   modes: readonly InboxViewMode[];
+  oldestFirst: boolean;
+  onOldestFirstChange: (oldestFirst: boolean) => void;
 }) {
   const options = modes.map((key) => ({ key, ...VIEW_OPTIONS[key] }));
   const current = options.find((option) => option.key === value) ?? options[0];
   if (!current) return null;
+  const sortable = SORTABLE_MODES.includes(current.key);
   return (
     <DropdownMenu>
       <ShortcutTooltip label="Group by" action="inbox.toggleFlatView" hint="cycles" side="bottom">
         <DropdownMenuTrigger asChild>
-          <PickerButton option={current} />
+          <PickerButton option={current} oldestFirst={sortable && oldestFirst} />
         </DropdownMenuTrigger>
       </ShortcutTooltip>
       <DropdownMenuContent align="start" className="w-40">
@@ -77,6 +90,22 @@ export function InboxViewPicker({ value, onChange, modes }: {
             </DropdownMenuItem>
           );
         })}
+        {sortable && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Sort</DropdownMenuLabel>
+            {SORT_OPTIONS.map((option) => {
+              const OptionIcon = option.icon;
+              return (
+                <DropdownMenuItem key={option.label} data-sort-option={option.oldestFirst ? "oldest" : "newest"} onSelect={() => onOldestFirstChange(option.oldestFirst)} className="text-xs">
+                  <OptionIcon className="w-3 h-3 mr-1.5 shrink-0" />
+                  <span className="flex-1">{option.label}</span>
+                  {option.oldestFirst === oldestFirst && <Check className="w-3 h-3 text-sol-cyan" />}
+                </DropdownMenuItem>
+              );
+            })}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

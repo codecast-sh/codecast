@@ -12,7 +12,7 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type BucketItem,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowSubagents, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, resolveShowSubagents, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
@@ -165,6 +165,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // its wake rides a stringified key (ref may flip without content change).
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
   const showSubagents = useInboxStore((s) => resolveShowSubagents(s.clientState?.ui));
+  const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
 
@@ -485,6 +486,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         focusedId: currentSessionId,
         manualOrder: useInboxStore.getState().clientState?.ui?.inbox_manual_order,
         chipMatches,
+        oldestFirst,
       });
       return renderSection("All", flat, Theme.cyan, "all");
     }
@@ -526,7 +528,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Closed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
