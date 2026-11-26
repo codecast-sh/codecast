@@ -2,7 +2,8 @@
 // session, what is asked of a person, which stations can stop it. RunThroughFlow's Ship and the pipeline's Checkouts
 // both ask through it.
 import { flowAsks, flowDiagram, type DiagramStep } from "../../lib/line/flowDiagram";
-import { approvalOf, journeyStages, stagesHolding } from "../../lib/ship/journey";
+import { journeyStages, stagesHolding } from "../../lib/ship/journey";
+import { approvalOf } from "../../lib/ship/approval";
 import type { ShippedFlow } from "../../lib/line/flowPool";
 import { flowRunLedger } from "./ledgers";
 

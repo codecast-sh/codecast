@@ -15,6 +15,7 @@ import { JourneyView } from "../../ship/Journey";
 import { useNamedFlow, useRunFlow } from "../../../hooks/useFlowObject";
 import { useSessionFlowRuns } from "../../../hooks/useSyncWorkflows";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import { useInboxStore } from "../../../store/inboxStore";
 import { MessageIdentity } from "../../../lib/conversationBlockContexts";
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy } from "../../../lib/line/flowEditCard";
@@ -53,7 +54,8 @@ export const FlowEditCard = memo(function FlowEditCard({ edit, diff = null, conv
   const runs = useSessionFlowRuns(conversationId);
   const run = useMemo(() => (dryRun ? null : editRun(edit, runs ?? [], madeAt)), [edit, runs, madeAt, dryRun]);
   const { flow: runFlow } = useRunFlow(run);
-  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run) : null), [run, runFlow]);
+  const viewer = useJourneyViewer(run);
+  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run, [], viewer) : null), [run, runFlow, viewer]);
   const live = journey?.now.kind === "live";
   // An older fence carries no graph: it draws over the library's backbone.
   const { flow: base } = useNamedFlow(edit.graph ? null : edit.base);
@@ -61,7 +63,7 @@ export const FlowEditCard = memo(function FlowEditCard({ edit, diff = null, conv
   const lines = useMemo(() => editLines(edit), [edit]);
   const now = useCoarseNow(15_000);
   const [fileOpen, setFileOpen] = useState(false);
-  const ship = run ? runShip(run) : null;
+  const ship = run ? runShip(run, viewer.id, null, viewer.ask ?? null) : null;
   const dp = journey && "line" in journey.now ? liveDeploy(journey.now.line) : null;
   return (
     <div className="lw-widget lw-flow fe" data-flow-edit={edit.flow} data-fe-state={run ? (live ? "live" : "running") : "draft"}>

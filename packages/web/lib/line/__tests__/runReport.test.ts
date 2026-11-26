@@ -156,6 +156,12 @@ describe("runOutcome", () => {
     expect(runOutcome(ends(["prove", "dissolve"])).text).toBe("Closed without a change: the problem did not reproduce.");
     expect(runOutcome(ends(["park"]), { status: "open", readiness_note: "No goal named" }).text).toBe("Parked: the problem is not ready to build. No goal named.");
     expect(runOutcome({ ...shippedRun, status: "running", current_node_id: "implement" }).text).toBe("Working: at Implement.");
+    // Its session asks a person (ct-99051): the run waits for the answer, it never reads as working or stopped.
+    const asking = { ...shippedRun, status: "running", current_node_id: "implement", waiting_on_session: { blocked: true } } as ReportRun;
+    expect(runOutcome(asking)).toMatchObject({ tone: "waiting", text: "Waiting for an answer to the session's question." });
+    expect(runOutcome(asking, null, Date.now(), false, { mine: true, open: true }).text).toBe("Waiting for your answer to the session's question.");
+    // Its card answered: the session works on the answer, and so does the run.
+    expect(runOutcome(asking, null, Date.now(), false, { mine: true, open: false }).text).toBe("Working: at Implement.");
     expect(runOutcome({ ...shippedRun, status: "paused", gate_node_id: "decide" }).text).toBe("Waiting for your decision.");
     expect(runOutcome({ ...stopped, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: Prove ended without a report; start again or close the problem.");
     expect(runOutcome({ ...stopped, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)", node_statuses: [{ node_id: "prove", status: "failed", session: { _id: "s", state: "Reproduced the miss." } }] } as never).text).toBe("Stopped at Prove: Prove finished; review it or close the problem.");
@@ -383,6 +389,11 @@ describe("a station's words are what happened to it (ct-57659's runs, 2026-10-07
     expect(step(run('{"green": false, "why": "the reproduction still fails"}'), "green").result).toBe("The reproduction still fails");
     expect(step(run('{"card": {"cause": {"task": "ct-57659", "title": "When Prove fa'), "green").result).toBe("The test passes with the change");
     expect(runOutcome({ ...ct57659Run3, fail_reason: "implement_line is waiting on a person" }).text).toBe("Stopped at Build line: it asked a question and waits on a person's answer.");
+    // A killed session's blocked pin (ct-99051): the run ended, and nobody waits on that ask any more.
+    const killed = { ...ct57659Run3, fail_reason: "implement_line stopped: its session was killed while it waited on a person" };
+    expect(runOutcome(killed).text).toBe("Stopped at Build line: its session was killed while it waited on a person.");
+    expect(failCause(killed as ReportRun)).toMatchObject({ key: "asks-killed:implement_line", label: "Session killed while it waited on a person" });
+    expect(failCause({ ...ct57659Run3, fail_reason: "implement_line is waiting on a person" } as ReportRun)).toMatchObject({ key: "asks:implement_line" });
   });
 });
 

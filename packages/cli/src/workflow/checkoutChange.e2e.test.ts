@@ -610,7 +610,7 @@ describe("writers answer for themselves", () => {
     expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
     const waits = s.calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.waiting_on_session).map((c) => c.body.waiting_on_session);
     expect(waits.some((w) => w.blocked && w.conversation_id === A)).toBe(true);
-    expect(progressSaid(s)).toContain("fix_check is waiting on a person");
+    expect(progressSaid(s)).toContain("fix_check stopped: its session was killed while it waited on a person");
     expect(JSON.stringify(s.calls)).toContain(`jx7aaaa (writer of src/a.ts) asks: ${ask}`);
     expect(progressSaid(s)).not.toContain("killed after");
     // B hears the run no longer waits on it; A, who asked, is not told so.

@@ -10,13 +10,16 @@ import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
-import { WHO_WORDS, approvalWords, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { WHO_WORDS, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
 import { deploysFocusHref, deploysHref, runFocus, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployPress } from "../../hooks/useDeployPress";
+import { useJourneyViewer } from "../../hooks/useJourneyViewer";
+import type { SessionAsk } from "../../lib/ship/sessionAsk";
 import "./ship.css";
 
 /** `insideId`: the element an open segment's inside is drawn in, which its stage's toggle controls. */
@@ -217,11 +220,12 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
         </div>
       );
     case "session":
+      if (now.blocked) return <AskBar ask={now.ask} note={now.note} since={now.since} conversation={now.conversation} now_ms={now_ms}>{children}</AskBar>;
       return (
         <div className="sj-now" data-kind="session">
           <CornerDownLeft className="w-3.5 h-3.5" aria-hidden />
           <b>{sentBackWords(now)}</b>
-          <span className="sj-what">{now.blocked ? "this session asks; the run goes on when it next ends a turn" : `this session is fixing it${now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}`}</span>
+          <span className="sj-what">this session is fixing it{now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}</span>
           {since(now.since)}
           {children}
           {now.note ? <p className="sj-note" data-journey-note>{now.note}</p> : null}
@@ -297,6 +301,38 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
         </div>
       );
   }
+}
+
+/**
+ * The run waits on its session, which asks a person (it pinned blocked): whom it waits on and the question. The viewer's
+ * own card is answered right here, a card for someone else opens, and an ask in words only opens the session.
+ */
+function AskBar({ ask, note, since, conversation, now_ms, children }: { ask: SessionAsk | null; note: string; since: number | null; conversation: string | null; now_ms: number; children?: React.ReactNode }) {
+  const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
+  return (
+    <div className="sj-now" data-kind={ask?.mine ? "you" : "gate"} data-journey-ask={ask ? (ask.mine ? "mine" : "card") : "words"}>
+      <i className="sj-wait" aria-hidden />
+      <b>{sentBackWords({ stage: "", by: null, blocked: true, ask })}</b>
+      <span className="sj-what">{ask?.question ?? "this session asks; the run goes on when it next ends a turn"}</span>
+      {since ? <span className="sj-since">{ageShort(now_ms - since)}</span> : null}
+      {ask && !ask.mine ? <Link className="sj-act" href={`/decisions/${ask.short_id ?? ask.id}`} data-journey-open-card>Open card</Link>
+        : !ask && conversation && conversation !== here ? <Link className="sj-act" href={`/conversation/${conversation}`} data-journey-open-session>Open session</Link>
+        : null}
+      {children}
+      {/* The session's own words on what it waits for: a card can be about something else. */}
+      {note ? <p className="sj-note" data-journey-note>{note}</p> : null}
+      {ask?.mine ? <div className="sj-gate"><RunGate run={{ gate_decision_id: ask.id, gate_decision_short_id: ask.short_id ?? undefined }} className="w-full" /></div> : null}
+    </div>
+  );
+}
+
+/** A run page's word on a run whose session asks a person: the run card's bar, while the run waits on that answer. */
+export function RunSessionAsk({ run, now_ms }: { run: any; now_ms: number }) {
+  const viewer = useJourneyViewer(run);
+  const w = run?.waiting_on_session;
+  const live = run?.status === "running" || run?.status === "paused";
+  if (!live || !w?.blocked || viewer.ask?.open === false) return null;
+  return <div className="sj"><AskBar ask={viewer.ask ?? null} note={w.note ?? ""} since={w.since ?? null} conversation={w.conversation_id ?? null} now_ms={now_ms} /></div>;
 }
 
 /** `targets`, when the caller knows them from the landed commit's deploy reach, are where the change is: never guessed from the session's commits. */

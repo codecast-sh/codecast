@@ -313,8 +313,18 @@ already at the brief is the run's own stations' writing, and the reset puts it
 back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run
 waits for that person rather than stopping: the run's row says so
-(`waiting_on_session.blocked`, its note the pin), and the Ship bar reads
-"Waiting for a person". The station's clock stops meanwhile, the wait reads
+(`waiting_on_session.blocked`, its note the pin). The run's card, page, outcome
+line and the session's Ship chip name the session's open card (`cast decide`
+asked since the station's brief; web `lib/ship/sessionAsk.ts` finds it by the
+session's conversation, never a run's own gate card or a pointer card): "Waiting
+on you" with the card to answer in place when the viewer may answer it, else
+"Waiting for a person" with the card or the session a press away, the pin shown
+beside it. An answered card reads "Fixing" until the session's turn ends; a
+dismissed or withdrawn one ends nothing, so the wait and its pin stay. An ended
+run claims no wait: a killed session's blocked pin stops it with
+"<station> stopped: its session was killed while it waited on a person", which
+surfaces read in the past tense (older rows said "<station> is waiting on a
+person"). The station's clock stops meanwhile, the wait reads
 only the session's row and the run's status until its transcript moves, and
 the session's next turn that ends otherwise answers the station as any turn
 would. Only a cancel ends the wait (ct-101065: read as the station's stop,

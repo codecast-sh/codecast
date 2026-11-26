@@ -112,6 +112,7 @@ describe("a run in words", () => {
   });
   test("a run stopped at a station waiting on a person names the step, never its id", () => {
     expect(flowRunState({ status: "failed", current_node_id: "brief", fail_reason: "Stopped: brief is waiting on a person" }, change).why).toBe("Fix findings is waiting on a person");
+    expect(flowRunState({ status: "failed", current_node_id: "brief", fail_reason: "brief stopped: its session was killed while it waited on a person" }, change).why).toBe("Fix findings stopped: its session was killed while it waited on a person");
   });
 });
 

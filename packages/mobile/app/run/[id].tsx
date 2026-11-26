@@ -20,6 +20,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useRunWorkflow, useWorkflowRun, useWorkflowRuns } from '@codecast/web/hooks/useSyncWorkflows';
 import { useSyncRuns } from '@codecast/web/hooks/useSyncRuns';
 import { useDecisionDetail, useSyncDecisionDetail } from '@codecast/web/hooks/useSyncDecisionDetail';
+import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 import { answererNameOf } from '@codecast/web/lib/decisionLinks';
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from '@codecast/web/lib/workflowRun';
 import {
@@ -121,6 +122,8 @@ export default function RunScreen() {
 
   const [gateText, setGateText] = useState('');
   const respondToGate = useInboxStore((s) => s.respondToGate);
+  // The session the run waits on asks a person: its card, answered on the decision's own screen.
+  const ask = useJourneyViewer(run as any).ask ?? null;
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -128,7 +131,11 @@ export default function RunScreen() {
   const line = isLineRun(run as any);
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'pending';
   const ended = run.status === 'completed' || run.status === 'failed';
-  const outcome = runOutcome(run, task, now);
+  const outcome = runOutcome(run, task, now, false, ask);
+  // The session the run waits on asks a person: whom it waits on and what, as the run's card says it.
+  const asking = live && run.waiting_on_session?.blocked && ask?.open !== false
+    ? { head: ask?.mine ? 'Waiting on you' : 'Waiting for a person', body: [ask?.question, run.waiting_on_session.note].filter(Boolean).join('\n') }
+    : null;
   const st = statusVisual(run.status, Theme);
   const flow = flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name });
   const title = run.task_title ?? task?.title ?? flow;
@@ -187,6 +194,12 @@ export default function RunScreen() {
         </RNView>
 
         <RNText style={[styles.outcome, { color: outcomeColor(outcome.tone, Theme) }]} testID="run-outcome">{outcome.text}</RNText>
+        {asking ? (
+          <RNView style={[styles.gate, { borderColor: Theme.yellow + '55', backgroundColor: Theme.yellow + '10' }]} testID="run-session-asks">
+            <RNText style={[styles.gatePrompt, { fontWeight: '600' }]}>{asking.head}</RNText>
+            {asking.body ? <RNText style={styles.gatePrompt}>{asking.body}</RNText> : null}
+          </RNView>
+        ) : null}
 
 
         {run.status === 'paused' && run.gate_prompt && !run.gate_decision_id ? (
@@ -219,6 +232,7 @@ export default function RunScreen() {
         {live || behind ? (
           <RNView style={objectStyles.verbs}>
             {waitingOnCard ? <ActionButton icon="question-circle" label="Answer it" color={Theme.yellow} filled onPress={() => go(`/decisions/${run.gate_decision_short_id ?? run.gate_decision_id}`)} testID="run-answer" /> : null}
+            {ask?.open ? <ActionButton icon="question-circle" label={ask.mine ? 'Answer it' : 'Open card'} color={Theme.yellow} filled={ask.mine} onPress={() => go(`/decisions/${ask.id}`)} testID="run-session-ask" /> : null}
             {behind ? <ActionButton icon="code-fork" label={`Rebase and land on ${behind}`} color={Theme.green} filled onPress={land} testID="run-land" /> : null}
             {live ? <ActionButton icon="stop" label="Stop the run" color={Theme.red} onPress={stop} testID="run-stop" /> : null}
           </RNView>

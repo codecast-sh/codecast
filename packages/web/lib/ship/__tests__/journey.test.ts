@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { approvalOf, approvalWords, canAnswer, gateWaitWords, shipConfirms, whoWords, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { canAnswer, gateWaitWords, whoWords, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { approvalOf, approvalWords, shipConfirms } from "../approval";
 import { landedSha } from "../runRecord";
+import { sessionAskOf } from "../sessionAsk";
 import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW, UNION_CHANGE_FLOW, UNION_FLAT_RUN, UNION_FLAT_SHA } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
@@ -100,6 +102,42 @@ describe("journeyStages", () => {
     expect(asks.now).toMatchObject({ kind: "session", blocked: true, note: "CI cannot start: GitHub billing stopped the runners", since: 30 });
     expect(journeyWords(asks)).toEqual({ words: "Waiting for a person", tone: "wait" });
     expect(sentBackWords(asks.now as any)).toBe("Waiting for a person");
+  });
+  test("a session that asks a person with a card: the run waits on that card, the viewer's own reads Waiting on you (ct-99051)", () => {
+    const g = change;
+    const asking = (over: Record<string, unknown> = {}) => run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", conversation_id: "conv1", since: 30, note: "Waiting for Jason: keep the old flag?", blocked: true }, node_statuses: [...ROUND, verdicts("brief", "green", "changes"), st("brief", "running", 20, { visits: 1 })], ...over });
+    const ask = { id: "d1", short_id: "sd-7", question: "Keep the old flag?", mine: true, open: true };
+    // The viewer may answer it: "Waiting on you", the question, the card to answer; never a stop and never Ship again.
+    const mine = journeyOf(g, asking(), [], { id: ME, ask });
+    expect(mine.now).toMatchObject({ kind: "session", blocked: true, ask, conversation: "conv1" });
+    expect(journeyWords(mine)).toEqual({ words: "Waiting on you", tone: "you" });
+    expect(sentBackWords(mine.now as any)).toBe("Waiting on you");
+    // Somebody else answers it: the run waits for a person, the card still named.
+    const theirs = journeyOf(g, asking(), [], { id: "u2", ask: { ...ask, mine: false } });
+    expect(journeyWords(theirs)).toEqual({ words: "Waiting for a person", tone: "wait" });
+    expect((theirs.now as any).ask).toMatchObject({ id: "d1", mine: false });
+    // Answered: nobody waits on a person any more; the session goes on with the fix until its turn ends.
+    const answered = journeyOf(g, asking(), [], { id: ME, ask: { ...ask, open: false } });
+    expect(answered.now).toMatchObject({ kind: "session", blocked: false, ask: null });
+    expect(journeyWords(answered)).toEqual({ words: "Fixing", tone: "session" });
+    // The session is back at work (the runner clears `blocked`): an old answered card says nothing.
+    const working = journeyOf(g, asking({ waiting_on_session: { node_id: "brief", conversation_id: "conv1", since: 30, note: "x" } }), [], { id: ME, ask });
+    expect(working.now).toMatchObject({ kind: "session", blocked: false, ask: null });
+    // A dismissed card is no answer (sessionAsk reads none): the run still waits for a person, its pin the note.
+    const dismissed = journeyOf(g, asking(), [], { id: ME, ask: null });
+    expect(dismissed.now).toMatchObject({ kind: "session", blocked: true, ask: null, note: "Waiting for Jason: keep the old flag?" });
+    expect(journeyWords(dismissed)).toEqual({ words: "Waiting for a person", tone: "wait" });
+    // A killed session's blocked pin ends the run: said in the past tense, by no station id, as is an older row's.
+    const killed = journeyOf(g, asking({ status: "failed", fail_reason: "brief stopped: its session was killed while it waited on a person", waiting_on_session: null }));
+    expect(killed.now).toMatchObject({ kind: "failed", why: "Its session was killed while it waited on a person" });
+    const older = journeyOf(g, asking({ status: "failed", fail_reason: "fix_check is waiting on a person", waiting_on_session: null }));
+    expect((older.now as any).why).toBe("Its session asked a person, and the run stopped");
+    // Once the run ends, nothing claims an open wait, whatever the row still carries.
+    for (const status of ["completed", "failed"]) {
+      const ended = journeyOf(g, asking({ status, fail_reason: status === "failed" ? "Cancelled" : undefined }), [], { id: ME, ask });
+      expect(ended.now.kind).not.toBe("session");
+      expect(journeyWords(ended).words).not.toMatch(/Waiting/);
+    }
   });
   test("among the shipped flows only change goes back to the session, from the stages it always did", () => {
     const read = (f: (typeof SHIPPED_FLOWS)[number]) => journeyStages(f as any).map((x) => (x.loops.length ? `${x.label} ↺ ${x.loops.map((l) => l.id).join(",")}` : x.label));
@@ -365,6 +403,11 @@ test("the render gallery's run cards read as the states they stand for", () => {
     return { kind: j.now.kind, words: journeyWords(j).words, states: j.stages.map((s) => s.state), branches: j.stages.find((s) => s.branches)?.branches?.map((b) => b.state) };
   };
   expect(read(GALLERY_FLOW.shipBack)).toMatchObject({ kind: "session", words: "Fixing", branches: ["back", "back"] });
+  // The session asks the viewer with the gallery's open card in this conversation: the run waits on that answer.
+  const asks: any = records.workflowRuns.find((x: any) => x._id === GALLERY_FLOW.shipAsks)!;
+  const ask = sessionAskOf(records.sessionDecisions as any, asks.waiting_on_session, ME);
+  expect(ask).toMatchObject({ question: "Ship the mobile renderer behind a flag?", mine: true, open: true });
+  expect(journeyWords(journeyOf(pushedFlow(records.workflows.find((w: any) => w._id === asks.workflow_id) as any), asks, [], { id: ME, ask }))).toEqual({ words: "Waiting on you", tone: "you" });
   expect(read(GALLERY_FLOW.shipDecide, { user_id: "galleryuser0000000000002" })).toMatchObject({ kind: "gate", words: "Waiting for approval" });
   expect(read(GALLERY_FLOW.shipDeploy)).toMatchObject({ kind: "deploying", words: "Deploying" });
   expect(read(GALLERY_FLOW.shipHeld)).toMatchObject({ kind: "landed", words: "Waiting for green main" });

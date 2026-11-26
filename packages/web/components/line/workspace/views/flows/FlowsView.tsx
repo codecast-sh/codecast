@@ -7,6 +7,7 @@
 // (/flows/<owner>): that role's flow, drawn, with its facts and its counts.
 import { useContext, useMemo, useState, type ReactNode } from "react";
 import { journeyOf, journeyWords, readableWhy } from "../../../../../lib/ship/journey";
+import { blockedWaitOf, runAskOf, type AskRow } from "../../../../../lib/ship/sessionAsk";
 
 /** The run-state tone the pill styles know, for a journey's tone. */
 const JOURNEY_TONE: Record<string, string> = { idle: "running", working: "running", agent: "running", session: "waiting", you: "waiting", wait: "waiting", ok: "passed", bad: "stopped" };
@@ -362,6 +363,11 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
     return d ? [id, d.user_id ?? null, d.holder ?? null, d.passed_to ?? null, d.asked_user_ids ?? null] : null;
   }).filter(Boolean)));
   const decisions = useMemo(() => Object.fromEntries((JSON.parse(gateSig) as any[]).map(([id, user_id, holder, passed_to, asked_user_ids]) => [id, { user_id, holder, passed_to, asked_user_ids }])), [gateSig]);
+  // A run whose session asks a person names that card's state (sessionAsk.ts): read only while one waits so, and the
+  // scan runs only when the decision rows change.
+  const asking = pickedRuns.some((r) => blockedWaitOf(r as any));
+  const askRows = useInboxStore((s) => (asking ? (s.sessionDecisions as Record<string, AskRow>) : null));
+  const asks = useMemo(() => new Map(askRows ? pickedRuns.map((r) => [r._id, runAskOf(r as any, askRows, viewerId)] as const) : []), [askRows, pickedRuns, viewerId]);
   const pick = (slug: string) => select({ item: slug, run: null });
 
   return (
@@ -413,7 +419,7 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
               {pickedRuns.slice(0, 30).map((r) => {
                 const st = flowRunState(r, picked);
                 // A session's change reads as its journey: the words its Ship control shows, not the step's own name.
-                const jw = takesSessionChange(picked) && picked.kind === "line" ? journeyWords(journeyOf(picked, r as any, [], { id: viewerId, decision: (r as any).gate_decision_id ? decisions[(r as any).gate_decision_id] ?? null : null })) : null;
+                const jw = takesSessionChange(picked) && picked.kind === "line" ? journeyWords(journeyOf(picked, r as any, [], { id: viewerId, decision: (r as any).gate_decision_id ? decisions[(r as any).gate_decision_id] ?? null : null, ask: asks.get(r._id) ?? null })) : null;
                 return (
                   <li key={r._id}>
                     <button type="button" className="flv-run" aria-current={openRun?._id === r._id ? "true" : undefined} onClick={() => setOpenRunId(openRun?._id === r._id ? null : r._id)} data-flow-run-row={r._id}>

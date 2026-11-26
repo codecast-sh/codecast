@@ -12,6 +12,15 @@ describe("runShip", () => {
     expect(runShip(run("r", "c", { current_node_id: "brief", current_node_label: "Fix findings", waiting_on_session: { node_id: "brief" } }))).toMatchObject({ words: "Fixing", tone: "session" });
     // The session pinned blocked: the run waits for a person, never a stop.
     expect(runShip(run("r", "c", { current_node_id: "brief", current_node_label: "Fix findings", waiting_on_session: { node_id: "brief", blocked: true } }))).toMatchObject({ words: "Waiting for a person", tone: "wait" });
+    // The session asks the viewer with a card: the chip says so, and once it is answered the session is fixing again (ct-99051).
+    const asks = run("r", "c", { current_node_id: "brief", waiting_on_session: { node_id: "brief", conversation_id: "c", since: 100, blocked: true }, node_statuses: [{ node_id: "brief", status: "running", started_at: 50 }] });
+    const ask = { id: "d1", short_id: null, question: "Keep it?", mine: true, open: true };
+    expect(runShip(asks, "u1", null, ask)).toMatchObject({ words: "Waiting on you", tone: "you" });
+    expect(runShip(asks, "u1", null, { ...ask, open: false })).toMatchObject({ words: "Fixing", tone: "session" });
+    // The inbox map finds the card in the viewer's decisions itself.
+    const decisions = { d1: { _id: "d1", conversation_id: "c", question: "Keep it?", status: "pending", blocking: true, user_id: "u1", created_at: 60 } };
+    expect(sessionShips([asks], [], {}, "u1", decisions as any).get("c")).toMatchObject({ words: "Waiting on you", tone: "you" });
+    expect(sessionShips([asks], [], {}, "u1", { d1: { ...decisions.d1, status: "answered", resolved_at: 120 } } as any).get("c")).toMatchObject({ words: "Fixing" });
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", node_statuses: [{ node_id: "deploy__wait", status: "completed" }] }))).toMatchObject({ words: "Live", tone: "ok" });
     // A flow that ends at Land leaves its change on main: finishing it is not going live.
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] }))).toMatchObject({ words: "Merged", tone: "ok" });

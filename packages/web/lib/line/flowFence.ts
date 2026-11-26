@@ -55,8 +55,9 @@ export function flowRunState(run: RunLike, flow: Pick<ShippedFlow, "nodes">): { 
   const at = label(run.current_node_id);
   // A run that ended on one of the flow's ends is said by that end's own name ("Passed", "Checks failed").
   const end = flow.nodes.find((n) => n.id === run.current_node_id && (n.type === "exit" || !!n.segment_exit))?.label ?? null;
-  // The engine names a station by its id ("fix_check is waiting on a person"); say its step's name.
-  const stop = run.fail_reason?.replace(/^Stopped:\s*/, "").replace(/^(\S+)(?= is waiting on a person$)/, (id) => label(id) ?? id) ?? null;
+  // The engine names a station by its id ("fix_check is waiting on a person", "fix_check stopped: its session was
+  // killed while it waited on a person"); say its step's name.
+  const stop = run.fail_reason?.replace(/^Stopped:\s*/, "").replace(/^(\S+)(?= is waiting on a person$| stopped: its session was killed while it waited on a person$)/, (id) => label(id) ?? id) ?? null;
   switch (run.status) {
     case "completed": return { tone: "passed", words: end ?? (at ? `Done at ${at}` : "Done"), why: null };
     // A paused run waits on its card: "Waiting for approval", never "paused" (pl-1075 Words); the card's question is why.
