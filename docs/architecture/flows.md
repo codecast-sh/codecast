@@ -585,9 +585,11 @@ command that writes it) is Merge's own: it takes the default branch's side,
 runs their generators over the rebased tree and commits the result. That tree
 is generator output CI never ran, so it never merges from there: Merge records
 it as a rebase of the head and pushes it (exit 3), and Retest sends it to CI.
-A recorded rebase passes Merge's check when it differs from the plain merge
-only in files the default branch's list names, so the reviewer's verdict
-covers it and the next Merge merges it once CI is green. A generator that
+A recorded rebase whose plain merge conflicts only in files the default
+branch's list names, and that differs from it only in those conflicted files,
+passes Merge's check once their generators, run in a worktree of it, write
+exactly what it holds (it fails closed when they cannot run). The reviewer's
+verdict then covers it, and the next Merge merges it once CI is green. A generator that
 writes outside its listed files, or moves the tree's HEAD, refuses (exit 2);
 what the tree's own setup writes is not counted. Any other conflict exits 1,
 naming the files and the default branch's commits that touched them, and so

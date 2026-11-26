@@ -39,7 +39,7 @@ import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
-import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink } from "./rebaseRecord";
+import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
 export type MergeStationResult = { code: 0 | 1 | 2 | 3; line: string };
@@ -157,8 +157,13 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     if (fetch.status !== 0) return refuse(`git fetch origin ${into} ${branch} failed: ${tail(fetch.stderr)}`);
     const pushed = git(args.cwd, "rev-parse", `origin/${branch}`).stdout.trim();
     if (pushed !== head) return { code: 3, line: `origin/${branch} is at ${short(pushed) || "nothing"}, but CI tested ${short(head)}; test the new head` };
-    const unbound = verifyRebaseChain(exec, args.cwd, into, proof.rebases ?? [], reviewed, head);
+    const regenerated: RegeneratedRebase[] = [];
+    const unbound = verifyRebaseChain(exec, args.cwd, into, proof.rebases ?? [], reviewed, head, regenerated);
     if (unbound) return refuse(unbound);
+    for (const r of regenerated) {
+      const why = await proveRegenerated(args, exec, r);
+      if (why) return refuse(`the recorded rebase of ${short(r.link.from)} into ${short(r.link.to)} differs from the plain rebase in ${r.files.join(", ")}, but ${why}; it must be reviewed again`);
+    }
   } else if (reviewed !== head && !chainBetween(proof.rebases ?? [], reviewed, head)) {
     return refuse(`the reviewer read ${short(reviewed)}, not the head that merged (${short(head)})`);
   }
@@ -449,6 +454,35 @@ function rebaseOnto(exec: Exec, at: string, onto: string, generators: Generator[
     }
   }
   return { sha: git("rev-parse", "HEAD").stdout.trim(), taken: [...taken] };
+}
+
+/** Why a regenerated rebase's generated files are not what main's generators write at its head, or null when they
+ *  are: the generators run in a worktree of the head, set up as the station's own, and must write nothing new. A tree
+ *  that cannot be made, a generator that fails or one that moves the tree fails closed. */
+async function proveRegenerated(args: MergeStationArgs, exec: Exec, r: RegeneratedRebase): Promise<string | null> {
+  const log = args.log ?? (() => {});
+  const git = (cwd: string, ...a: string[]) => exec("git", a, cwd);
+  let tree: ScratchTree;
+  try { tree = await (args.scratch ?? acquiredTree)(mainCheckout(args.cwd), r.link.to); } catch (err) {
+    return `no worktree could be made to run their generators in (${message(err)})`;
+  }
+  try {
+    log(`checking that ${r.files.join(", ")} at ${short(r.link.to)} are what ${r.generators.map((g) => g.run).join(", ")} write`);
+    await tree.setup();
+    const before = uncommitted(exec, tree.path);
+    for (const g of r.generators) {
+      const run = await (args.runStep ?? runShell)(g.run, tree.path, log, {}, trackStep);
+      if (run.code !== 0) return `${g.run} failed there (exit ${run.code}): ${tail(run.output) || "no output"}`;
+    }
+    if (git(tree.path, "rev-parse", "HEAD").stdout.trim() !== r.link.to) return "a generator moved the tree off it";
+    const after = uncommitted(exec, tree.path);
+    const written = [...new Set([...before.keys(), ...after.keys()])].filter((f) => before.get(f) !== after.get(f));
+    return written.length ? `their generators write ${written.slice(0, 5).join(", ")} differently` : null;
+  } catch (err) {
+    return `their generators could not be run (${message(err)})`;
+  } finally {
+    await tree.release();
+  }
 }
 
 /** Every uncommitted path in the tree, staged, unstaged or untracked, with a hash of what it holds now (empty when

@@ -13,6 +13,10 @@
 # - packages/playground/convex/lib/sdk.generated.ts: scripts/build-sdk.ts
 #   bundles the installed Convex client into it, so its output follows
 #   node_modules as much as the tree; not checked to reproduce from a tree.
+# - packages/web/lib/renderGalleryPipeline.generated.ts: scripts/
+#   gen-gallery-pipeline.ts runs `cast flow pipeline`, which needs a signed-in
+#   cast and reads the signed-in team's published flows, so its output is not
+#   the tree's alone (and a CI runner cannot run it).
 
 [[generated]]
 paths = ["packages/web/lib/line/shippedFlows.generated.ts", "packages/web/lib/line/shippedFlowStations.generated.ts"]
@@ -29,8 +33,3 @@ run = "bun packages/cli/scripts/gen-change-graph-fixture.ts"
 [[generated]]
 paths = ["packages/web/lib/line/__tests__/pipelines.fixture.generated.ts"]
 run = "bun packages/web/scripts/gen-pipeline-fixtures.ts"
-
-# The render gallery's pipeline rows: what the real CLI prints for them.
-[[generated]]
-paths = ["packages/web/lib/renderGalleryPipeline.generated.ts"]
-run = "bun packages/web/scripts/gen-gallery-pipeline.ts"

@@ -98,6 +98,49 @@ describe("cast flow merge: generated files", () => {
     } finally { s.done(); }
   }, T);
 
+  /** Put `files` over `at` as one more commit, push it as the branch, and record it as the reviewed head's rebase. */
+  function forge(s: ReturnType<typeof generatedWorld>, head: string, at: string, files: Record<string, string>) {
+    s.git(s.work, "fetch", "-q", "origin");
+    s.git(s.work, "checkout", "-q", "--detach", at);
+    for (const [f, t] of Object.entries(files)) s.write(s.work, f, t);
+    s.git(s.work, "commit", "-q", "-am", "forged");
+    const forged = s.git(s.work, "rev-parse", "HEAD");
+    s.git(s.work, "push", "-q", "-f", "origin", `${forged}:refs/heads/${BRANCH}`);
+    s.git(s.work, "checkout", "-q", "main");
+    s.proof.rebases.splice(0, Infinity, { from: head, to: forged });
+    s.ci(forged, s.originMain(), {}, head);
+    return forged;
+  }
+
+  test("a recorded rebase whose conflicted generated file is not what its generator writes is refused, to be reviewed again", async () => {
+    const s = generatedWorld();
+    try {
+      const { head, tip } = await regenerated(s);
+      const forged = forge(s, head, tip, { "gen/out.txt": "not generated\n" });
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: `the recorded rebase of ${head.slice(0, 10)} into ${forged.slice(0, 10)} differs from the plain rebase in gen/out.txt, but their generators write gen/out.txt differently; it must be reviewed again` });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("a generated file that differs from a plain rebase that did not conflict in it is refused, even as generator output", async () => {
+    const s = generatedWorld();
+    try {
+      // Main moves only a source, so the plain rebase merges gen/out.txt cleanly; the "rebase" regenerates it anyway.
+      const head = s.change({ "src/b.txt": "b\n", "gen/out.txt": "a\nb\n" });
+      s.advanceMain("src/c.txt", "c\n");
+      s.git(s.work, "fetch", "-q", "origin");
+      s.git(s.work, "checkout", "-q", "--detach", "origin/main");
+      s.git(s.work, "cherry-pick", head);
+      const rebased = s.git(s.work, "rev-parse", "HEAD");
+      s.git(s.work, "checkout", "-q", "main");
+      const forged = forge(s, head, rebased, { "gen/out.txt": "a\nb\nc\n" });
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: `the recorded rebase of ${head.slice(0, 10)} into ${forged.slice(0, 10)} is not a rebase of it onto main; it must be reviewed again` });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
   test("what the tree's setup writes is not the generator's, and is not committed", async () => {
     const s = generatedWorld();
     try {
@@ -172,13 +215,13 @@ describe("this repository's generated files", () => {
     }
   });
 
-  test("covers the shipped flows, the change-graph fixture and the render gallery pipeline, and nothing hand-written", () => {
+  test("covers the shipped flows and the change-graph fixture, and nothing hand-written or read from a server", () => {
     expect(generatorsFor(generators, [
       "packages/web/lib/line/shippedFlows.generated.ts",
       "packages/web/lib/line/shippedFlowStations.generated.ts",
       "packages/web/lib/ship/__tests__/changeGraph.fixture.json",
-      "packages/web/lib/renderGalleryPipeline.generated.ts",
     ])).not.toBeNull();
+    expect(generatorsFor(generators, ["packages/web/lib/renderGalleryPipeline.generated.ts"])).toBeNull();
     expect(generatorsFor(generators, ["packages/web/lib/renderGallery.ts"])).toBeNull();
   });
 });
