@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { shipLedgerFor } from "../shipLedger";
 import { SHIPPED_FLOWS } from "../../../lib/line/shippedFlows.generated";
 import { appPool, pushedFlow } from "../../../lib/line/flowPool";
-import { approvalOf, approvalWords } from "../../../lib/ship/journey";
+import { approvalOf, approvalWords } from "../../../lib/ship/approval";
 
 const pool = appPool();
 const asked = (flow: (typeof pool)[number]) => {

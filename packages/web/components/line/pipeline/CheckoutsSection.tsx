@@ -20,7 +20,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { shipLedgerFor } from "../../consequential/shipLedger";
 import { PRESS_WAIT_MS, runThroughMessage } from "../../../lib/line/flowMessages";
-import { approvalOf, shipConfirms } from "../../../lib/ship/journey";
+import { approvalOf, shipConfirms } from "../../../lib/ship/approval";
 import { agoWords, drawnFlow, pipelineModel } from "../../../lib/line/pipelineModel";
 import { trackOf } from "../../../lib/line/pipelineView";
 import { checkoutsPage, checkoutsSummary, filesByFolder, type CheckoutSessionView, type CheckoutView } from "../../../lib/line/checkoutsModel";

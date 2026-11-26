@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { approvalOf, approvalWords, canAnswer, gateWaitWords, shipConfirms, whoWords, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { canAnswer, gateWaitWords, whoWords, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { approvalOf, approvalWords, shipConfirms } from "../approval";
 import { landedSha } from "../runRecord";
 import { sessionAskOf } from "../sessionAsk";
 import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW, UNION_CHANGE_FLOW, UNION_FLAT_RUN, UNION_FLAT_SHA } from "../journeyFixtures";
