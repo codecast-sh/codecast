@@ -48,6 +48,8 @@ beforeEach(() => {
   useInboxStore.setState({ sessions: {}, conversations: {}, pendingMessages: {}, drafts: {}, reviewComments: {}, currentSessionId: null, currentUser: { _id: "user_gate_test", name: "Tester" } as any } as any);
 });
 
+let lastGateImages: Array<{ storageId?: string; mime: string; uploading: boolean }> = [];
+
 async function submitGated(agentType?: string, gated = true): Promise<string[]> {
   const sent: string[] = [];
   const { MessageInput } = await import("../MessageInput");
@@ -57,7 +59,7 @@ async function submitGated(agentType?: string, gated = true): Promise<string[]> 
   await act(async () => {
     root.render(
       <ConvexProvider client={fakeConvex()}>
-        <MessageInput conversationId={CONV_ID} status="active" agentType={agentType} onGateSend={gated ? (content) => { sent.push(content); } : undefined} />
+        <MessageInput conversationId={CONV_ID} status="active" agentType={agentType} onGateSend={gated ? (content, images) => { sent.push(content); lastGateImages = images ?? []; } : undefined} />
       </ConvexProvider>,
     );
   });
@@ -104,6 +106,27 @@ test("for a local agent the same image rides the gate send", async () => {
   const image = { storageId: "st_img_2", name: "shot.png", type: "image/png", previewUrl: "blob:y" };
   useInboxStore.setState({ drafts: { [CONV_ID]: { draft_image_storage_ids: [image] } } } as any);
   expect(await submitGated("claude_code")).toEqual([""]);
+});
+
+// A note pinned on a picture attached in the composer names it by its place,
+// through the gate as on the main send, and the picture goes as its marked
+// copy (here the original: the test's blob cannot be read, which is the
+// fallback). Before this the gate sent "[image] at 50% from the left…".
+test("a note pinned on an attached picture rides the gate send as [Image N] at its marker", async () => {
+  const image = { storageId: "st_img_pin", name: "shot.png", type: "image/png", previewUrl: "blob:pin" };
+  useInboxStore.setState({ drafts: { [CONV_ID]: { draft_image_storage_ids: [image] } } } as any);
+  useInboxStore.getState().addReviewComment(CONV_ID, {
+    id: "pin1", messageId: "", blockIndex: 0, quote: "", body: "this is cut off", createdAt: 1,
+    image: { src: "blob:pin", storageId: "st_img_pin", point: { x: 0.5, y: 0.5 }, attached: true },
+  });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error("no blob here"); }) as unknown as typeof fetch;
+  try {
+    expect(await submitGated("claude_code")).toEqual(["> [Image 1] at marker 1\n\nthis is cut off"]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  expect(lastGateImages).toMatchObject([{ storageId: "st_img_pin", mime: "image/png", uploading: false }]);
 });
 
 // A composer with a length limit (team chat: the server refuses a message over

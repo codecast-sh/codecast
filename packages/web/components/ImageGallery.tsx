@@ -5,7 +5,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
 import { copyToClipboard } from "../lib/utils";
 import { useInboxStore } from "../store/inboxStore";
-import { addImagePin } from "../lib/reviewActions";
+import { addImagePin, composerPictureIndex, type ComposerPicture } from "../lib/reviewActions";
 import { pinNumbers, type PendingComment } from "../lib/quoteFormat";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { CommentEditor } from "./MessageReview";
@@ -272,25 +272,10 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
     onJumpToMessage?.(messageId);
   }, [close, onJumpToMessage]);
 
-  // A click on the picture pins a note at that point. The point is measured
-  // against the picture's on-screen box, which already includes any zoom, and
-  // kept as fractions so it maps onto the file the agent receives.
+  // A click on the picture pins a note at that point.
   const pinAt = useCallback((e: React.MouseEvent<HTMLImageElement>) => {
     if (!canPin || !current) return;
-    const img = e.currentTarget;
-    const rect = img.getBoundingClientRect();
-    const clamp = (v: number) => Math.min(1, Math.max(0, v));
-    // A click while a pin on this picture still has no note moves that pin:
-    // the first click missed, it was not a second remark.
-    const store = useInboxStore.getState();
-    const unwritten = (store.reviewComments[conversationId!] ?? [])
-      .find((c) => c.id === store.reviewEditingId && c.image?.src === current.src && !c.body.trim());
-    if (unwritten) store.removeReviewComment(conversationId!, unwritten.id);
-    addImagePin(
-      conversationId!,
-      { ...current, width: img.naturalWidth || undefined, height: img.naturalHeight || undefined },
-      { x: clamp((e.clientX - rect.left) / rect.width), y: clamp((e.clientY - rect.top) / rect.height) },
-    );
+    pinWhereClicked(conversationId!, current, e);
   }, [canPin, current, conversationId]);
 
   return (
@@ -469,6 +454,91 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   );
 }
 
+// Pin a note where a click landed on a picture. The point is measured against
+// the picture's on-screen box, which already includes any zoom, and kept as
+// fractions so it maps onto the file the agent receives.
+function pinWhereClicked(
+  conversationId: string,
+  picture: GalleryImage | { src: string; storageId?: string; attached: true },
+  e: React.MouseEvent<HTMLImageElement>,
+) {
+  const img = e.currentTarget;
+  const rect = img.getBoundingClientRect();
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  // A click while a pin on this picture still has no note moves that pin:
+  // the first click missed, it was not a second remark.
+  const store = useInboxStore.getState();
+  const unwritten = (store.reviewComments[conversationId] ?? [])
+    .find((c) => c.id === store.reviewEditingId && c.image?.src === picture.src && !c.body.trim());
+  if (unwritten) store.removeReviewComment(conversationId, unwritten.id);
+  addImagePin(
+    conversationId,
+    { ...picture, width: img.naturalWidth || undefined, height: img.naturalHeight || undefined },
+    { x: clamp((e.clientX - rect.left) / rect.width), y: clamp((e.clientY - rect.top) / rect.height) },
+  );
+}
+
+// A picture attached in the composer, opened large: a click pins a note at
+// that point, as on a picture in the transcript. The note joins the quote
+// batch, and the send names the picture by its [Image N] with the notes drawn
+// on it as numbered markers (lib/reviewActions composerMarkers).
+export function AttachedImage({ conversationId, picture, className, style, onNoteDone }: {
+  conversationId: string;
+  picture: ComposerPicture;
+  className?: string;
+  style?: React.CSSProperties;
+  /** A note was saved or cancelled from its keys: the composer takes focus back. */
+  onNoteDone?: () => void;
+}) {
+  const pinsSig = useInboxStore((s) => JSON.stringify((s.reviewComments[conversationId] ?? [])
+    .filter((c) => c.image?.point && composerPictureIndex([picture], c.image) === 0)
+    .map((c) => [c.id, c.image!.point, c.body])));
+  const { pins, numbers } = useMemo(() => {
+    const comments = useInboxStore.getState().reviewComments[conversationId] ?? [];
+    return {
+      pins: comments.filter((c) => c.image?.point && composerPictureIndex([picture], c.image) === 0),
+      numbers: pinNumbers(comments),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinsSig, conversationId]);
+  const editingId = useInboxStore((s) => s.reviewEditingId);
+  const { user: author } = useCurrentUser();
+  // A pin's note editor lives on the opened picture: closing the picture
+  // leaves no editor "open" behind.
+  const pinIds = useRef<string[]>([]);
+  pinIds.current = pins.map((c) => c.id);
+  useWatchEffect(() => () => {
+    const s = useInboxStore.getState();
+    if (s.reviewEditingId && pinIds.current.includes(s.reviewEditingId)) s.setReviewEditingId(null);
+  }, [picture.previewUrl]);
+  return (
+    <div className="relative">
+      <img
+        src={picture.previewUrl}
+        alt="Image preview"
+        draggable={false}
+        className={`block cursor-crosshair ${className ?? ""}`}
+        style={style}
+        onClick={(e) => pinWhereClicked(conversationId, { src: picture.previewUrl, storageId: picture.storageId, attached: true }, e)}
+      />
+      {pins.map((c) => (
+        <ImagePin
+          key={c.id}
+          conversationId={conversationId}
+          comment={c}
+          number={numbers.get(c.id) ?? 0}
+          scale={1}
+          editing={editingId === c.id}
+          author={author}
+          onDone={onNoteDone}
+        />
+      ))}
+    </div>
+  );
+}
+
+const noop = () => {};
+
 // A page's window in the lightbox: as tall as an image may be, less the page's
 // toolbar. Read at mount, like the image's viewport-relative cap.
 function pageHeight(withStrip: boolean): number {
@@ -510,13 +580,14 @@ function PageThumb({ slug, active, buttonRef, onClick }: {
 // editor beside it while it is being written. Clicking the dot reopens the
 // note; the editor's corner button takes the pin away. The editor opens
 // toward the middle of the picture so it stays on screen near any edge.
-function ImagePin({ conversationId, comment, number, scale, editing, author }: {
+function ImagePin({ conversationId, comment, number, scale, editing, author, onDone = noop }: {
   conversationId: string;
   comment: PendingComment;
   number: number;
   scale: number;
   editing: boolean;
   author: unknown;
+  onDone?: () => void;
 }) {
   const { x, y } = comment.image!.point!;
   const store = useInboxStore.getState;
@@ -562,7 +633,7 @@ function ImagePin({ conversationId, comment, number, scale, editing, author }: {
               <X className="h-3 w-3" />
             </button>
           </div>
-          <CommentEditor conversationId={conversationId} comment={comment} author={author} onDone={() => {}} />
+          <CommentEditor conversationId={conversationId} comment={comment} author={author} onDone={onDone} />
         </div>
       )}
     </div>
