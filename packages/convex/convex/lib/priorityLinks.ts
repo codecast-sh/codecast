@@ -264,8 +264,8 @@ export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, s
  * A session just mapped to a milestone: its newest pin, when that is a done
  * pin naming that milestone (`--serves pri-N/sK`, pinned before the link),
  * counts now, at the pin's own time, as it would have had the link been
- * there. A later pin that moved on (working again, or naming no milestone)
- * takes it back.
+ * there. Only while that pin is the session's pin now: a later one, or a
+ * cleared pin, takes it back.
  */
 export async function replayDonePin(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, stepKey: string | undefined): Promise<void> {
   if (!stepKey || !personDriven(conv)) return;
@@ -273,7 +273,9 @@ export async function replayDonePin(ctx: Ctx, conv: Conv, priorityId: Id<"priori
   if (!p) return;
   const serves = `${p.short_id}/${stepKey}`;
   const pin: Doc<"thread_state_events"> | null = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).order("desc").first();
-  if (pin?.status === "done" && pin.serves === serves) await recomputeStepDone(ctx, priorityId, stepKey, pin.at);
+  // The session's pin now must still be that done pin: cleared or rewritten since, it says nothing finished.
+  const current = conv.thread_state && conv.thread_state === pin?.text && conv.thread_state_status === "done";
+  if (current && pin?.status === "done" && pin.serves === serves) await recomputeStepDone(ctx, priorityId, stepKey, pin.at);
 }
 
 /**

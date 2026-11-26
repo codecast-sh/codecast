@@ -380,6 +380,27 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await done("jx7task", "pri-1/s1")).serves_decided_by).toBe("tasks");
   });
 
+  test("a link replays a done pin only while it is the session's pin now: cleared or rewritten in place, it replays nothing", async () => {
+    const { t, ada, p1, cFree } = await world();
+    const map = (session: string, step: string) => t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [], sessions: [{ session, priority: "pri-1", step_key: step }], unmap: [], notes: [], rewritten: [] },
+    });
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "" });
+    await map("jx7free", "s3");
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+    // Rewritten without a new pin event (the web's own edit): not that pin any more.
+    const other = await t.run((ctx: any) => ctx.db.insert("conversations", {
+      user_id: ada, agent_type: "claude_code", session_id: "sess-jx7edit", short_id: "jx7edit", title: "edit", started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
+    }));
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7edit", text: "Shipped", status: "done", serves: "pri-1/s4" });
+    await t.run((ctx: any) => ctx.db.patch(other, { thread_state: "Reopened: one more fix", thread_state_status: "working" }));
+    await map("jx7edit", "s4");
+    expect((await stepOf(t, p1, "s4")).done).toBe(false);
+    void cFree;
+  });
+
   test("a link replays a done pin only while it is the session's newest: a later working pin takes it back", async () => {
     const { t, ada, p1, cFree } = await world();
     await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
