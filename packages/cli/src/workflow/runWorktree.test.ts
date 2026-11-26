@@ -415,6 +415,23 @@ describe("a run that ends without landing", () => {
     await releaseWorkspace(repoRoot, "another-run");
   }, 60_000);
 
+  // The backfill: trees kept before their runs' ends freed their ports.
+  test("an exhausted acquire's sweep frees the ports of an ended run's kept tree, never a live or a young one's", async () => {
+    const { releaseEndedRunTreePorts } = await import("./runWorktree.js");
+    const { readState } = await import("../workspace/contract.js");
+    fs.mkdirSync(lineRunDir(repoRoot, FIX), { recursive: true });
+    const later = Date.now() + 10 * 60_000;
+    expect(await releaseEndedRunTreePorts(repoRoot, async () => null, later)).toEqual([]);
+    expect(await releaseEndedRunTreePorts(repoRoot, async () => new Set(), Date.now())).toEqual([]);
+    fs.mkdirSync(path.join(lineRunDir(repoRoot, FIX), "runs"), { recursive: true });
+    fs.writeFileSync(path.join(lineRunDir(repoRoot, FIX), "runs", "run-live.json"), JSON.stringify({ context: { worktree: FIX } }));
+    expect(await releaseEndedRunTreePorts(repoRoot, async () => new Set(["run-live"]), later)).toEqual([]);
+    expect(readState(repoRoot, FIX)?.ports.web).toBe(47391);
+    expect(await releaseEndedRunTreePorts(repoRoot, async () => new Set(), later)).toEqual([FIX]);
+    expect(readState(repoRoot, FIX)).toMatchObject({ noPorts: true, ports: {} });
+    expect(fs.existsSync(fixTree())).toBe(true);
+  }, 60_000);
+
   test("a change run's tree put back mid-run takes no port", async () => {
     const { readState } = await import("../workspace/contract.js");
     fs.rmSync(fixTree(), { recursive: true, force: true });

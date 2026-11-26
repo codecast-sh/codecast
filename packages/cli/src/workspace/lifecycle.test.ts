@@ -475,6 +475,32 @@ range = 100
     expect(fs.readFileSync(path.join(first.workspace.path, "kept.txt"), "utf8")).toBe("work in progress\n");
   });
 
+  test("when every slot is taken, the trees ended runs kept give theirs up and the acquire goes on", async () => {
+    manifest();
+    const { portExhaustion, releaseWorkspacePorts } = await import("./lifecycle.js");
+    for (let index = 0; index < 40; index++) holdIndex(repoRoot, `held-${index}`, index);
+    for (let index = 0; index < 40; index++) setState(repoRoot, `held-${index}`, "ready");
+    // Their trees and branches stand, so none is stale: only the sweep frees one.
+    for (let index = 0; index < 40; index++) {
+      fs.mkdirSync(path.join(repoRoot, ".codecast/worktrees", `held-${index}`), { recursive: true });
+      execSync(`git branch codecast/held-${index}`, { cwd: repoRoot });
+    }
+    const sweep = portExhaustion.sweep;
+    const swept: string[] = [];
+    portExhaustion.sweep = async (root) => { swept.push(root); return (await releaseWorkspacePorts(root, "held-7")) ? ["held-7"] : []; };
+    try {
+      const late = await acquireWorkspace(repoRoot, "late", opts);
+      expect(swept).toEqual([repoRoot]);
+      expect(late.workspace.resourceIndex).toBe(7);
+      expect(late.notices?.join("\n")).toContain("freed those of 1 tree(s) ended runs kept (held-7)");
+      portExhaustion.sweep = async () => [];
+      const failure = await acquireWorkspace(repoRoot, "later", opts).catch((error: Error) => error.message);
+      expect(failure).toContain("no free port for workspace 'later'");
+    } finally {
+      portExhaustion.sweep = sweep;
+    }
+  }, 30000);
+
   test("releaseWorkspacePorts frees a kept workspace's slot and leaves its tree", async () => {
     manifest();
     const { releaseWorkspacePorts } = await import("./lifecycle.js");
@@ -533,6 +559,9 @@ describe("cast ws acquire --no-ports (CLI)", () => {
     expect(await cast("status", "worker")).toContain("ports:   none (--no-ports)");
     expect(await cast("acquire", "server", "--skip-setup", "--skip-hooks", "--skip-pool"))
       .toContain("ports:   web=41500");
+    // A plain acquire of a portless workspace asks for ports again, and gets them.
+    expect(await cast("acquire", "worker", "--skip-setup", "--skip-hooks", "--skip-pool"))
+      .toContain("ports:   web=41600");
   }, 20000);
 });
 

@@ -121,6 +121,36 @@ export async function releaseEndedRunTree(cwd: string, context: Record<string, s
 }
 
 /**
+ * When an acquire finds every port slot taken (workspace/lifecycle.ts), the trees runs left behind give theirs up
+ * first, as releaseEndedRunTree has them do at a run's end: the backfill for trees kept before it did (about 25 kept
+ * change-ct-* trees held a laptop's slots on Nov 26, ct-101923). A run's tree is spared while its run is live, while it
+ * is a few minutes old (its run may not be listed yet), or while a process sits in it; when either read fails, none is
+ * touched. The names whose ports it freed.
+ */
+export async function releaseEndedRunTreePorts(repoRoot: string, liveRunIds?: () => Promise<ReadonlySet<string> | null>, now = Date.now()): Promise<string[]> {
+  const { listStates } = await import("../workspace/contract.js");
+  const { runTreeNames, runTreesOf } = await import("./runDirs.js");
+  const runs = runTreeNames(repoRoot);
+  const held = listStates(repoRoot).filter((s) => runs.has(s.name) && !s.noPorts && Object.keys(s.ports).length > 0 && fs.existsSync(s.path));
+  if (!held.length) return [];
+  const { liveRunIdsOf, readLiveRunsOnDevice } = await import("./liveRuns.js");
+  const ids = await (liveRunIds ? liveRunIds() : readLiveRunsOnDevice().then(liveRunIdsOf)).catch(() => null);
+  const { readProcessCwds } = await import("../land/scan.js");
+  const cwds = ids ? await readProcessCwds() : null;
+  if (!ids || !cwds) return [];
+  const live = runTreesOf(repoRoot, ids);
+  const { young } = await import("./runBranch.js");
+  const { releaseWorkspacePorts } = await import("../workspace/lifecycle.js");
+  const freed: string[] = [];
+  for (const s of held) {
+    const tree = fs.realpathSync(s.path);
+    if (live.has(s.name) || young(tree, now) || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) continue;
+    if (await releaseWorkspacePorts(repoRoot, s.name).catch(() => false)) freed.push(s.name);
+  }
+  return freed;
+}
+
+/**
  * Stop the run's workspace Chrome, if one runs. Called when each station ends
  * and when the run ends (runner.ts), so a browser a station started never
  * outlives it: a run parked at a gate, waiting on CI or at Go live, holds

@@ -106,7 +106,7 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
   const manifest = savedInputRoot ? previous!.manifest : resolveManifest(repoRoot, inputRoot);
   const cloudWorkspace = process.env.CODECAST_CLOUD_WORKSPACE === "1" || previous?.env.CODECAST_CLOUD_WORKSPACE === "1";
   if (cloudWorkspace) manifest.backend = "local";
-  const noPorts = opts.noPorts === true || previous?.noPorts === true;
+  const noPorts = opts.noPorts ?? previous?.noPorts === true;
   if (noPorts) manifest.ports = {};
 
   // Dispatch to non-local backend if the manifest selected one.
@@ -139,9 +139,10 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     ...(purpose ? { purpose } : {}),
   };
 
-  const prepared = await withPortReservations(repoRoot, async (reservations) => {
+  const prepare = () => withPortReservations(repoRoot, async (reservations) => {
     const existing = readState(repoRoot, name);
-    if (existing && existing.state === "ready") {
+    // One without ports asked for them is rebuilt below, taking them.
+    if (existing && existing.state === "ready" && (noPorts || !existing.noPorts)) {
       // Asked for no ports, a ready workspace that holds some gives them up as it stands: nothing in it is rebuilt.
       const kept = noPorts && !existing.noPorts ? withoutPorts(existing) : existing;
       const ws = stateToWorkspace(kept);
@@ -201,6 +202,16 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       ...(noPorts ? { noPorts: true } : {}),
     });
     return { existing, portAlloc, initialEnv, notices };
+  });
+  // Every slot taken: the trees ended runs kept give theirs up, read outside the reservation lock (it reads the
+  // server and every process's directory), and the allocation runs once more.
+  const prepared = await prepare().catch(async (err) => {
+    if (!(err instanceof PortAllocationError)) throw err;
+    const freed = await portExhaustion.sweep(repoRoot).catch(() => []);
+    if (!freed.length) throw err;
+    const again = await prepare();
+    if (!again.result) again.notices.push(`every port slot was taken: freed those of ${freed.length} tree(s) ended runs kept (${freed.join(", ")})`);
+    return again;
   });
   if (prepared.result) return prepared.result;
   const { existing, portAlloc, initialEnv, notices } = prepared;
@@ -479,6 +490,11 @@ export async function releaseWorkspacePorts(repoRoot: string, name: string): Pro
     return true;
   }));
 }
+
+/** What an acquire that finds every port slot taken frees first (workflow/runWorktree.ts releaseEndedRunTreePorts); a test replaces it. */
+export const portExhaustion = {
+  sweep: async (repoRoot: string): Promise<string[]> => (await import("../workflow/runWorktree.js")).releaseEndedRunTreePorts(repoRoot),
+};
 
 /** A record that holds no port, as `--no-ports` makes one: no port in its manifest, its ports or its env. */
 function withoutPorts(state: PersistedWorkspaceState): PersistedWorkspaceState {

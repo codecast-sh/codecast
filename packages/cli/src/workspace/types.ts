@@ -348,6 +348,7 @@ export interface WorkspacePurpose {
 
 /** Options accepted by acquire(). */
 export interface AcquireOptions {
+  /** True takes no port; false takes them, also for a record made without; unset keeps what the record chose. */
   noPorts?: boolean;
   inputRoot?: string;
   /** Override branch name (default: `codecast/<name>`). */
