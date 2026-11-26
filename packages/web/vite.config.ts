@@ -16,6 +16,7 @@ import { designTokensPlugin } from "./plugins/designTokens";
 import { colorThemeBootPlugin } from "./plugins/colorThemeBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
 import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
+import { devSignInPlugin } from "./plugins/devSignIn";
 import { tailwindInWorker } from "./plugins/tailwindWorker";
 import { stallWatchdogPlugin } from "./plugins/stallWatchdog";
 import { convexPreconnectPlugin } from "./plugins/convexPreconnect";
@@ -77,6 +78,8 @@ export default defineConfig(({ mode, command }) => ({
     depsCacheGuardPlugin(),
     // /cast-player.js: the published-page video player, same-origin for the landing page film.
     castPlayerScriptPlugin(),
+    // POST /__cast/dev-session: a signed-out dev origin's session for the local `cast` user.
+    devSignInPlugin(),
     // Inlines the browser → desktop hand-off gate into <head> so a page bound
     // for the desktop app never boots, and re-injects the boot chunk's
     // modulepreload hints on a normal load.

@@ -36,5 +36,7 @@ bootAfterHandoffGate(() => {
   startRouteModule(window.location.pathname);
   // Docs shots (dev only) sign in to the fixture world before the app loads.
   if (DOCS_SHOTS) void import("../lib/docsShots/install").then(() => import("./boot"));
+  // A signed-out dev origin signs in as the local `cast` user first (lib/devSignIn).
+  else if (import.meta.env.DEV) void import("../lib/devSignIn").then((m) => m.signInDevOrigin()).finally(() => import("./boot"));
   else void import("./boot");
 });
