@@ -159,8 +159,8 @@ export default function RunScreen() {
   const reach = useDeployReach(mergedSha && changeRepo ? `${changeRepo}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const journey = useMemo(() => (run && changeFlow ? journeyOf(changeFlow, run as any, targets, viewer) : null), [run, changeFlow, targets, viewer]);
-  const head = journey && run ? changeHeadline(journey, run as any) : null;
-  const links = journey && run ? changeLinks(run as any, targets) : [];
+  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow) : null;
+  const links = journey && run && changeFlow ? changeLinks(run as any, changeFlow, targets) : [];
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -229,9 +229,10 @@ export default function RunScreen() {
         </TouchableOpacity>
         <RNText style={objectStyles.title}>{title}</RNText>
         <RNView style={objectStyles.chips}>
-          <FactChip icon={st.icon} label={st.label} color={st.color} testID={`run-status-${run.status}`} />
+          {/* A change run says its state in its head below, as the web's run page does. */}
+          {head ? null : <FactChip icon={st.icon} label={st.label} color={st.color} testID={`run-status-${run.status}`} />}
           {taskRef ? <FactChip icon="circle-o" label={taskRef} color={Theme.violet} onPress={() => go(`/task/${taskRef}`)} link testID="run-task" /> : null}
-          {cardChip ? <FactChip icon="question-circle" label={cardChip} color={waitingOnCard ? Theme.yellow : answerColor(answer, Theme)} onPress={() => go(`/decisions/${run.gate_decision_short_id}`)} link testID="run-card" /> : null}
+          {cardChip && !(head && waitingOnCard) ? <FactChip icon="question-circle" label={cardChip} color={waitingOnCard ? Theme.yellow : answerColor(answer, Theme)} onPress={() => go(`/decisions/${run.gate_decision_short_id}`)} link testID="run-card" /> : null}
         </RNView>
 
         {head ? (
@@ -312,11 +313,12 @@ export default function RunScreen() {
           {run.goal_override && !run.task_title ? <FactRow label="Goal">{run.goal_override}</FactRow> : null}
         </Facts>
 
-        {landing || card ? (
+        {/* A change run's head links its PR and merged commit already: here only the card's facts. */}
+        {(landing && !head) || card ? (
           <RNView style={objectStyles.section}>
             <SectionLabel>{landing?.word ?? 'Merged'}</SectionLabel>
             <Facts testID="run-landed">
-              {landing ? (
+              {landing && !head ? (
                 <FactRow label={landing.word} icon="code-fork" tone={Theme.green}>
                   <RNView style={styles.shas}>
                     {pr ? (
@@ -329,7 +331,7 @@ export default function RunScreen() {
                 </FactRow>
               ) : null}
               {card ? <FactRow label="Change">{`+${card.diff.added} −${card.diff.removed} in ${card.diff.files} ${card.diff.files === 1 ? 'file' : 'files'}`}</FactRow> : null}
-              {pr ? <FactRow label="Pull request" icon="github" onPress={() => go(`/pr/${pr[1]}/${pr[2]}/${pr[3]}`)} testID="run-pr">{`${pr[2]}#${pr[3]}`}</FactRow> : null}
+              {pr && !head ? <FactRow label="Pull request" icon="github" onPress={() => go(`/pr/${pr[1]}/${pr[2]}/${pr[3]}`)} testID="run-pr">{`${pr[2]}#${pr[3]}`}</FactRow> : null}
               {card?.headline ? <FactRow label="Card" onPress={() => go(`/decisions/${run.gate_decision_short_id ?? run.gate_decision_id}`)}>{card.headline}</FactRow> : null}
             </Facts>
           </RNView>

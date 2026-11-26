@@ -12,6 +12,8 @@ import { useDeployReach } from "../../hooks/useDeployReach";
 import { useJourneyViewer } from "../../hooks/useJourneyViewer";
 import { ReportChip } from "../line/RunReport";
 import { JourneyView } from "./Journey";
+import { ShipAgainButton } from "../line/widgets/RunThroughFlow";
+import { useInboxStore } from "../../store/inboxStore";
 import type { AppFlow } from "../../lib/line/flowPool";
 import "./ship.css";
 
@@ -26,8 +28,12 @@ export function ChangeRunHead({ run, flow, now_ms, chips }: { run: any; flow: Ap
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const viewer = useJourneyViewer(run);
   const journey = useMemo(() => journeyOf(flow, run, targets, viewer), [flow, run, targets, viewer]);
-  const head = changeHeadline(journey, run);
-  const links = changeLinks(run, targets);
+  const head = changeHeadline(journey, run, flow);
+  const links = changeLinks(run, flow, targets);
+  // A stop the run card answers with Ship again (the session's change through the same flow) offers it here too.
+  const subject = run.spawner_conversation_id ? String(run.spawner_conversation_id) : null;
+  const subjectTitle = useInboxStore((s) => (subject ? ((s.conversations as Record<string, { title?: string }>)[subject]?.title ?? (s.sessions as Record<string, { title?: string }>)[subject]?.title ?? null) : null));
+  const again = subject ? (primary: boolean) => <ShipAgainButton flow={flow} conversationId={subject} sessionTitle={subjectTitle ?? run.task_title ?? "its session"} primary={primary} /> : undefined;
   return (
     <>
       <section data-run-report-head data-change-head={journey.now.kind}>
@@ -45,7 +51,7 @@ export function ChangeRunHead({ run, flow, now_ms, chips }: { run: any; flow: Ap
           {chips}
         </div>
       </section>
-      <div className="sj cr-journey"><JourneyView journey={journey} run={run} now_ms={now_ms} targets={reach ? targets : undefined} onRunPage /></div>
+      <div className="sj cr-journey"><JourneyView journey={journey} run={run} now_ms={now_ms} targets={reach ? targets : undefined} again={again} onRunPage /></div>
     </>
   );
 }

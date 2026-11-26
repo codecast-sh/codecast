@@ -224,8 +224,8 @@ function RunDetailContent({ runId }: { runId: string }) {
     <>
       {!line && hostHref && <ReportChip href={hostHref} title="The session that ran this workflow">Ran in {hostTitle ?? "its session"}</ReportChip>}
       {taskRef && <ReportChip href={`/tasks/${taskRef}`} title={run.task_title ?? task?.title}>{taskRef}{(run.task_title ?? task?.title) ? ` · ${run.task_title ?? task?.title}` : ""}</ReportChip>}
-      {/* One chip for the card: it scrolls to the card below, which links its decision. */}
-      {cardChip && (
+      {/* One chip for the card: it scrolls to the card below, which links its decision. A change run waiting on it says so in its head. */}
+      {cardChip && !(changeFlow && run.status === "paused") && (
         <ReportChip href={card ? "#run-card" : `/decisions/${run.gate_decision_short_id}`} tone={answer ? answerTone(answer) : "default"} title={card ? "The change and its proof, below" : "The decision this run asked"}>
           {cardChip}
         </ReportChip>
