@@ -25,12 +25,14 @@ A session's owners are:
 A session another one only spawned (`spawned_by_conversation_id` alone: a
 plain `cast spawn`, an agent-team teammate) is that session's peer. The
 spawner never owns it, and nothing draws it as a child: no Parent link, no row
-in the spawner's agents band. Its starter owns it like any session they start.
-One a bot-run session spawned has no human of its own, so it takes its
+in the spawner's agents band. Its starter owns it like any session they start,
+so one marker decides both nesting and ownership.
+
+A peer a bot-run session spawned has no human of its own, so it takes its
 spawner's owners (`ownPeerByItsSpawnersHuman`, at spawn and at an agent-team
 link): the spawner's people get owner rows, or, when a role alone owns the
 spawner, the peer is that role's start (same team only). A spawner that is
-itself a worker passes on its parent's owners, up the chain. So one marker decides both nesting and ownership.
+itself a worker passes on its parent's owners, up the chain.
 
 The agent owner is the role, else the parent session. Taking a session over
 removes every agent owner and makes the taker an owner.

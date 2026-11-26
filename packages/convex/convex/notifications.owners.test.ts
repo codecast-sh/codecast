@@ -44,9 +44,7 @@ describe("agent owners answer a session's waits", () => {
     return world;
   };
 
-  // A worker nested under the session "parent" (parent_conversation_id: a
-  // `cast spawn --subagent`, a workflow station, a role's hand), which owns it.
-  // A plain spawn (spawned_by_conversation_id alone) is its spawner's peer.
+  // A worker nested under "parent", which owns it; a plain spawn (spawned_by alone) is its peer.
   const nested: Rec = { parent_conversation_id: "parent" };
   const peer: Rec = { spawned_by_conversation_id: "parent", agent_name: "worker" };
   const parentWorld = (flag: boolean, parent: Rec = {}, link: Rec = nested) => {
@@ -93,21 +91,13 @@ describe("agent owners answer a session's waits", () => {
     expect(told(tables, "parent").length).toBe(1);
   });
 
-  test("off the flag a nested or spawned session stands down as today and its parent hears nothing", async () => {
-    for (const [link, reason] of [[nested, "subagent"], [peer, "agent_spawned"]] as const) {
-      const { ctx, tables } = parentWorld(false, {}, link);
-      const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
-      expect(res.reason).toBe(reason);
+  test("a plain spawn's wait rings its starter and never its spawner; off the flag nested and spawned stand down as today", async () => {
+    for (const [flag, link, reason] of [[true, peer, undefined], [false, nested, "subagent"], [false, peer, "agent_spawned"]] as const) {
+      const { ctx, tables } = parentWorld(flag, {}, link);
+      expect((await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" })).reason).toBe(reason);
       expect(told(tables, "parent")).toEqual([]);
+      expect((tables.notifications ?? []).map((n) => String(n.recipient_user_id))).toEqual(flag ? ["u1"] : []);
     }
-  });
-
-  test("a plain spawn is its spawner's peer: its wait rings its starter and the spawner is never told", async () => {
-    const { ctx, tables } = parentWorld(true, {}, peer);
-    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
-    expect([res.notified, res.reason]).toEqual([true, undefined]);
-    expect(told(tables, "parent")).toEqual([]);
-    expect(tables.notifications.map((n) => String(n.recipient_user_id))).toEqual(["u1"]);
   });
 
   test("a killed or deleted parent no longer owns it: the wait is its starter's, rung as their own", async () => {
