@@ -43,7 +43,7 @@ async function tip(session: InboxSession): Promise<string> {
 
 describe("SessionCloseTip", () => {
   test("a running session", async () => {
-    expect(await tip({ ...settled, agent_status: "working", updated_at: NOW - 1000 } as InboxSession)).toBe("Close: hides it, back when it reports done or needs you");
+    expect(await tip({ ...settled, agent_status: "working", updated_at: NOW - 1000 } as InboxSession)).toBe("Close: hides it, back when it's done or needs you");
   });
 
   async function withKids(kids: Record<string, Record<string, unknown>>, run: () => Promise<void>) {
@@ -55,7 +55,7 @@ describe("SessionCloseTip", () => {
 
   test("an idle lead whose subagent is mid-turn", async () => {
     await withKids({ "agent-a0a0a0737562": { agent_status: "working", updated_at: NOW - 1000 } }, async () => {
-      expect(await tip(settled)).toBe("Close: hides it, back when it reports done or needs you");
+      expect(await tip(settled)).toBe("Close: hides it, back when it's done or needs you");
     });
   });
 
@@ -77,7 +77,7 @@ describe("SessionCloseTip", () => {
 
   test("a session with armed triggers counts only its own", async () => {
     useInboxStore.setState({ agentTasks: { t1: armed("t1", "c1"), t2: armed("t2", "c1"), t3: armed("t3", "other") } } as any);
-    expect(await tip(settled)).toBe("Close: stops it, runs its 2 triggers out of sight, back when it reports done or needs you");
+    expect(await tip(settled)).toBe("Close: stops it, runs its 2 triggers out of sight, back when it's done or needs you");
   });
 
   test("a role's own session with none", async () => {
@@ -85,7 +85,7 @@ describe("SessionCloseTip", () => {
   });
 
   test("a session waiting on its workflow run", async () => {
-    expect(await tip({ ...settled, workflow_run_id: "w1", workflow_run_status: "running" } as InboxSession)).toBe("Close: stops it, its run goes on, back when it reports done or needs you");
+    expect(await tip({ ...settled, workflow_run_id: "w1", workflow_run_status: "running" } as InboxSession)).toBe("Close: stops it, its run goes on, back when it's done or needs you");
   });
 
   test("an ordinary finished session", async () => {

@@ -658,7 +658,7 @@ export async function enqueuePendingMessage(
     updated_at: Date.now(),
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
-    ...wakeHideFields(conversation, { machine: hideWake }),
+    ...wakeHideFields(conversation, { machine: hideWake, now: Date.now() }),
     ...(fields.origin !== "scheduler" && !fields.quiet && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? answeredThreadStateFields() : {}),
     // New input opens a new turn, which owes its own report (workerSettle.ts).

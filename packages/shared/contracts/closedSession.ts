@@ -39,13 +39,20 @@ export function closeReturnsOnDone(row: {
 type HideFields = ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null };
 
 /** What a machine wake writes over a closed session (or one person's close of
- *  a team session): the close becomes a hidden stash stamped with the close,
- *  so the agent runs out of sight (isClosedHidden). Null when it is no close. */
-export function closeWakeFields(row: HideFields): { inbox_dismissed_at: undefined; inbox_stashed_at: number; inbox_stash_hidden: true } | null {
+ *  a team session): the close becomes a hidden stash, re-stamped at the wake
+ *  (close and stash stamps equal: isClosedHidden), so the agent runs out of
+ *  sight and files under Stashed by when it woke. The close's adoptions move
+ *  to the new stamp with it (convex lib/adoptionRelease). Null when it is no close. */
+export function closeWakeFields(row: HideFields, now: number): { inbox_dismissed_at: undefined; inbox_closed_at: number; inbox_stashed_at: number; inbox_stash_hidden: true } | null {
   if (!isClosedSession(row)) return null;
-  // A person's own "Stash and hide" over the close wins: it keeps its stamp.
-  if (row.inbox_stash_hidden && row.inbox_stashed_at && row.inbox_stashed_at !== row.inbox_closed_at) return null;
-  return { inbox_dismissed_at: undefined, inbox_stashed_at: row.inbox_closed_at!, inbox_stash_hidden: true };
+  // A person's own stash over the close wins and follows the stash rules.
+  if (row.inbox_stashed_at && row.inbox_stashed_at !== row.inbox_closed_at) return null;
+  return { inbox_dismissed_at: undefined, inbox_closed_at: now, inbox_stashed_at: now, inbox_stash_hidden: true };
+}
+
+/** A patch that is closeWakeFields' re-stamp of a close. */
+export function isCloseWakePatch(fields: HideFields): boolean {
+  return fields.inbox_closed_at != null && fields.inbox_closed_at === fields.inbox_stashed_at && fields.inbox_stash_hidden === true && "inbox_dismissed_at" in fields && fields.inbox_dismissed_at === undefined;
 }
 
 /** What a pinned thread state writes over a hidden session (performSetThreadState,

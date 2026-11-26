@@ -10,7 +10,17 @@
 // The adoption stores the close's stamp rather than being derived when read:
 // deriving it would join every inbox read to its lead's close state.
 import { adoptedByClose } from "@codecast/shared/contracts/closeCascade";
+import { isCloseWakePatch } from "@codecast/shared/contracts";
 import { nestedGroupOf } from "./closeAside";
+
+/** Move the adoptions a close gave the lead's children to its new stamp: a
+ *  machine wake re-stamps the close as it hides it (closeWakeFields), and the
+ *  close goes on. */
+async function rekeyCloseAdoptions(db: any, leadId: any, from: number, to: number): Promise<void> {
+  for (const kid of await nestedGroupOf({ db }, { _id: leadId })) {
+    if (adoptedByClose(kid, from)) await db.patch(kid._id, { inbox_adopted_at: to });
+  }
+}
 
 /** Clear the adoptions the close stamped `stamp` gave the lead's children:
  *  the same group, the same window, the close's cascade adopted from
@@ -58,7 +68,8 @@ export function makeAdoptionReleaseDb(db: any, rawDb: any): any {
       const touches = !!fields && ("inbox_dismissed_at" in fields || "inbox_stashed_at" in fields || !!fields.inbox_killed_at) && !!rawDb.normalizeId("conversations", String(id));
       const before = touches ? await rawDb.get(id) : null;
       const res = await db.patch(id, fields);
-      if (before && endsClose(before, fields)) await releaseCloseAdoptions(db, before._id, before.inbox_closed_at);
+      if (before && before.inbox_closed_at != null && !before.inbox_killed_at && isCloseWakePatch(fields)) await rekeyCloseAdoptions(db, before._id, before.inbox_closed_at, fields.inbox_closed_at);
+      else if (before && endsClose(before, fields)) await releaseCloseAdoptions(db, before._id, before.inbox_closed_at);
       return res;
     },
   };

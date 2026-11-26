@@ -151,12 +151,15 @@ describe("a close takes down only what goes down with the lead", () => {
       const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
       await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" });
     });
-    expect((await s.row(s.ids.conv)).inbox_stash_hidden).toBe(true);
-    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(adopted);
+    const lead = await s.row(s.ids.conv);
+    expect(lead.inbox_stash_hidden).toBe(true);
+    // The wake re-stamps the close (closeWakeFields), and the adoption moves with it.
+    expect(lead.inbox_closed_at).toBeGreaterThanOrEqual(adopted);
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(lead.inbox_closed_at);
     // A person stashing the still-hidden lead anew keeps them too,
     const db = (ctx: any) => makeAdoptionReleaseDb(ctx.db, ctx.db);
     await s.t.run(async (ctx) => { await db(ctx).patch(s.ids.conv, { inbox_stashed_at: Date.now() + 5, inbox_stash_hidden: true }); });
-    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(adopted);
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(lead.inbox_closed_at);
     // and bringing it back from that stash releases them.
     await s.t.run(async (ctx) => { await db(ctx).patch(s.ids.conv, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined }); });
     expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();

@@ -16,7 +16,7 @@ describe("the line under the menu's Close", () => {
 
   test("counts the armed triggers from the store's roster", () => {
     const tasks = [trigger("Daily digest"), trigger("CI check"), trigger("Old one", "completed")];
-    expect(closeDetail(settled, { agentTasks: Object.fromEntries(tasks.map((t) => [t._id, t])) }, NOW)).toBe("Stops it, runs its 2 triggers out of sight, back when it reports done or needs you");
+    expect(closeDetail(settled, { agentTasks: Object.fromEntries(tasks.map((t) => [t._id, t])) }, NOW)).toBe("Stops it, runs its 2 triggers out of sight, back when it's done or needs you");
   });
 
   test("a role's own session closes without a retire question", () => {
@@ -24,7 +24,7 @@ describe("the line under the menu's Close", () => {
   });
 
   test("a send this phone has not seen land is a turn starting: it is set aside", () => {
-    expect(closeDetail(settled, { pendingMessages: { [ID]: [{ _id: "m1", content: "hi", timestamp: NOW - 1000 }] } }, NOW)).toBe("Hides it, back when it reports done or needs you");
+    expect(closeDetail(settled, { pendingMessages: { [ID]: [{ _id: "m1", content: "hi", timestamp: NOW - 1000 }] } }, NOW)).toBe("Hides it, back when it's done or needs you");
   });
 
   test("a session waiting on a permission prompt says it still waits on you", () => {
@@ -33,7 +33,7 @@ describe("the line under the menu's Close", () => {
 
   test("a lead whose subagent is mid-turn is set aside, as the gesture does", () => {
     const sub = { _id: "s".repeat(32), session_id: "agent-a0a0a0737562", message_count: 3, agent_status: "working", updated_at: NOW - 1000, last_heartbeat: NOW - 500, parent_conversation_id: ID };
-    expect(closeDetail(settled, { sessions: { [sub._id]: sub } }, NOW)).toBe("Hides it, back when it reports done or needs you");
+    expect(closeDetail(settled, { sessions: { [sub._id]: sub } }, NOW)).toBe("Hides it, back when it's done or needs you");
   });
 
   test("a lead with finished subagents names them; a spawned child stays up, uncounted", () => {

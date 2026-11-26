@@ -113,7 +113,7 @@ async function triageRowsOf(ctx: Db, conversation: any): Promise<any[]> {
  *  Close of it out of sight, as wakeHideFields does for the row. */
 export async function hideViewerClosesOnWake(ctx: Db, conversation: any): Promise<void> {
   for (const row of await triageRowsOf(ctx, conversation)) {
-    const fields = closeWakeFields(row);
+    const fields = closeWakeFields(row, Date.now());
     if (fields) await ctx.db.patch(row._id, { ...fields, updated_at: Date.now() });
   }
 }

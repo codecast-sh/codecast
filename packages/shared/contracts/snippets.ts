@@ -595,7 +595,7 @@ cast restore [session_id]      # back into the inbox (stashed or killed)
 cast kill <session_id>         # tear down, mark completed, cancel its triggers; transcript stays, restartable.
 \`\`\`
 
-A plain stash returns to the inbox when a trigger fires into it. \`--hide\` resurfaces it only for asks: a \`--status blocked\`, a run completing \`--needs-attention\`, or a stall (permission prompt, open question, dead process). Use it for a loop the human has reviewed and wants quiet.
+A plain stash returns to the inbox when a trigger fires into it or another session writes to it. \`--hide\` resurfaces it only for asks: a \`--status blocked\`, a run completing \`--needs-attention\`, or a stall (permission prompt, open question, dead process). Use it for a loop the human has reviewed and wants quiet.
 
 ### Plans with a shared log
 

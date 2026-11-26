@@ -1,5 +1,6 @@
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { isClosedHidden } from '@codecast/shared/contracts';
 import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import {
@@ -21,19 +22,22 @@ export function HiddenSessionRow({ session, variant, onPress, onRestore, onKill,
   const Theme = useTheme();
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
+  // A Close a machine woke files under Stashed but is still the person's Close.
+  const closed = variant === "closed" || isClosedHidden(session);
 
   return (
     <TouchableOpacity onPress={onPress} style={[styles.dismissedItem, held && styles.heldKill]} disabled={held} activeOpacity={0.6}>
       <RNView style={sessionStyles.conversationHeader}>
         <RNView style={sessionStyles.titleRow}>
           <FontAwesome
-            name={variant === "stashed" ? "archive" : "times-circle"}
+            name={closed ? "times-circle" : "archive"}
+            accessibilityLabel={closed ? "Closed" : "Stashed"}
             size={10}
             color={Theme.textMuted0}
             style={{ marginRight: 6 }}
           />
-          {variant === "stashed" && session.inbox_stashed_at && session.inbox_stash_hidden ? (
-            // Stash and hide (or a Close a machine woke): wakes don't bring it back (web's EyeOff mark).
+          {!closed && session.inbox_stashed_at && session.inbox_stash_hidden ? (
+            // Stash and hide: wakes don't bring it back (web's EyeOff mark).
             <FontAwesome name="eye-slash" size={10} color={Theme.textMuted0} style={{ marginRight: 6 }} />
           ) : null}
           <RNText style={styles.dismissedTitle} numberOfLines={1}>

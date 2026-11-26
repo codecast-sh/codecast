@@ -85,7 +85,7 @@ export const PARK_VERBS: TriageVerb[] = [
     label: "Close",
     done: "Closed",
     icon: X,
-    blurb: "Done with it. It comes back when it reports done or needs you.",
+    blurb: "Done with it. It comes back when it needs you.",
     hover: "hover:text-sol-text hover:bg-sol-bg-alt",
     text: "text-sol-text",
     bg: "bg-sol-bg-alt",

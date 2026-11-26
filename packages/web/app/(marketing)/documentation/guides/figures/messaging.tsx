@@ -44,7 +44,7 @@ export function InboxGesturesFigure() {
             {[
               { x: 135, color: SOL.cyan, lines: ["back on a wake, a message,", "or when it asks for you"] },
               { x: 380, color: SOL.violet, lines: ["back only when it needs you:", "blocked, flagged, or stalled"] },
-              { x: 625, color: SOL.base01, lines: ["back when it reports done or", "needs you, or on Restore"] },
+              { x: 625, color: SOL.base01, lines: ["back when it's done or", "needs you, or on Restore"] },
             ].map((c, i) => (
               <text key={i} x={c.x} y={226} textAnchor="middle" fontSize="10" fill={c.color} className="bj-fade" style={t(1.7 + i * 0.3)}>
                 <tspan x={c.x}>{c.lines[0]}</tspan>

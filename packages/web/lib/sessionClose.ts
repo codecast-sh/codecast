@@ -52,7 +52,7 @@ export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 // What brings a closed session back: its agent pinning done (an ordinary
 // session) or blocked (isClosedHidden, performSetThreadState), or a person
 // writing to it.
-const closedBack = (returnsOnDone: boolean) => (returnsOnDone ? "back when it reports done or needs you" : "back when it needs you");
+const closedBack = (returnsOnDone: boolean) => (returnsOnDone ? "back when it's done or needs you" : "back when it needs you");
 
 /** The words a closed session a machine woke shows for what brings it back. */
 export const closedBackWords = (row: Parameters<typeof closeReturnsOnDone>[0]) => closedBack(closeReturnsOnDone(row));

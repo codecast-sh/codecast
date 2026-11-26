@@ -1449,7 +1449,9 @@ describe("conversation-global ordered delivery", () => {
       const resent = await abandonAmbiguousAndResendInDb(ctx, USER, { ...fence(started), newClientId: "report-again", resolutionEvidence: "user accepted duplicate-effect risk", now: 23 });
       expect(((await db.get(resent.messageId)) as any).human).toBe(human || undefined);
       const conv = (await db.get(CONVERSATION)) as any;
-      expect(conv.inbox_stashed_at).toBe(human ? undefined : 40);
+      // A session message re-stamps the close as a hidden stash at the resend.
+      expect(conv.inbox_stashed_at).toBe(human ? undefined : 23);
+      if (!human) expect(conv.inbox_closed_at).toBe(23);
       expect(conv.inbox_dismissed_at).toBeUndefined();
     }
   });
