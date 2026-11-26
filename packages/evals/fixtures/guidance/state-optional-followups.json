@@ -1,0 +1,16 @@
+{
+  "asOf": "2026-11-26T12:00:00.000Z",
+  "notes": "Offering optional follow-up work is handing the person a choice: the pin is blocked, not done.",
+  "label": {
+    "want": [
+      "cast\\s+state\\b[^\\n]*--status[ =]blocked"
+    ],
+    "avoid": [
+      "cast\\s+state\\b[^\\n]*--status[ =]done"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-11-26T12:00:00.000Z",
+    "request": "Write me a JavaScript regex that matches a US ZIP code (five digits, optionally a dash and four more digits). Just the regex and one line on how it works. If related helpers would be worth writing, offer them."
+  }
+}

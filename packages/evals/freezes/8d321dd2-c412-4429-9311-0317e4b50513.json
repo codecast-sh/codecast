@@ -1,0 +1,26 @@
+{
+  "name": "guidance state-outside-step",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:state-outside-step"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:state-outside-step",
+    "title": "guidance state-outside-step"
+  },
+  "asOf": "2026-11-26T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/state-outside-step.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "8d321dd2-c412-4429-9311-0317e4b50513",
+  "createdAt": "2026-11-26T16:34:15.009Z"
+}
