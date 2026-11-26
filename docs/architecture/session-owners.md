@@ -24,9 +24,10 @@ A session's owners are:
 
 A session another one only spawned (`spawned_by_conversation_id` alone: a
 plain `cast spawn`, an agent-team teammate) is that session's peer. The
-spawner never owns it, and nothing draws it as a child: no Parent link, no row
-in the spawner's agents band. Its starter owns it like any session they start,
-so one marker decides both nesting and ownership.
+spawner never owns it, and nothing draws it as a child: no Parent link (off
+the model the link stays), no row in the spawner's agents band. Its starter
+owns it like any session they start, so one marker decides both nesting and
+ownership.
 
 A peer a bot-run session spawned has no human of its own, so it takes its
 spawner's owners (`ownPeerByItsSpawnersHuman`, at spawn and at an agent-team
@@ -64,7 +65,8 @@ Undo puts the session back under its previous parent when that parent was
 live, unreleased and one the dropper may hand work to; under a released or dead
 parent, or none, it detaches it. It restores the old role and the dropper's
 row, adding them back first when they do not run the session. When the old
-parent is someone else's, or it had both a role and a parent, no undo is offered.
+parent is someone else's, or it had both a role and a parent, no undo is
+offered.
 
 A role becomes an owner only by a deliberate filing (the owners menu, a drag
 onto the role on the org chart, a scope takeover) or by starting the session.
