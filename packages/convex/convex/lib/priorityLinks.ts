@@ -2,7 +2,7 @@
 // waiting for the pass (Priorities v2 design doc, Backend shape 2 and 3).
 //
 // Evidence: a task a milestone names closing or reopening, a pull request it
-// names merging, and a decision answered or a pin declared done on a session
+// names merging or closing, and a decision answered or a pin declared done on a session
 // mapped to it each recompute that milestone at once, with `done_at` the
 // evidence's own time (the close or drop, the merge, the answer, the pin
 // that made it true), never the time a later pass noticed. The records
@@ -174,11 +174,15 @@ export async function taskStatusChanged(ctx: Ctx, task: Pick<Doc<"tasks">, "_id"
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
 }
 
-/** A pull request merged (prShepherd patchPullRequest): every milestone naming it, among the priorities of the people whose sessions link it, in each session's workspace. */
-export async function pullRequestMerged(ctx: Ctx, pr: Doc<"pull_requests">): Promise<void> {
-  const vis = sessionVisibility(ctx);
-  const places: Place[] = [];
-  for (const c of await sessionsOf(ctx, [pr.shepherd_conversation_id, ...pr.linked_session_ids])) places.push({ user: c.user_id, workspace: await vis.workspaceOf(c) });
+/**
+ * A pull request merged or closed unmerged (prShepherd patchPullRequest): every
+ * milestone naming it, among the priorities of the people whose sessions link
+ * it, in the one workspace a PR counts in (prInWorkspace): its team's, or with
+ * no team each person's own, wherever the linking session is listed.
+ */
+export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Promise<void> {
+  const sessions = await sessionsOf(ctx, [pr.shepherd_conversation_id, ...pr.linked_session_ids]);
+  const places = sessions.map((c) => ({ user: c.user_id, workspace: pr.team_id ? `team:${pr.team_id}` : `user:${c.user_id}` }));
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 
@@ -193,10 +197,13 @@ export async function sessionEvidence(ctx: Ctx, conv: Pick<Conv, "priority_id" |
  * Map a session to its owner's priority (and milestone, when it still has
  * that one) in the session's own workspace, keeping both priorities' session
  * counts. Refused (false) for someone else's priority, a merged one, or
- * another workspace; a no-op when the session is already there.
+ * another workspace; a no-op when the session is already there. It reads the
+ * priority itself: callers find it in the per-mutation cache (ownPriorities),
+ * whose rows may be stale on anything but ids, refs and keys.
  */
-export async function linkSession(ctx: Ctx, conv: Conv, priority: Priority, step: string | undefined): Promise<boolean> {
-  if (priority.status === "merged" || String(priority.user_id) !== String(conv.user_id)) return false;
+export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined): Promise<boolean> {
+  const priority: Priority | null = await ctx.db.get(priorityId);
+  if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id)) return false;
   const stepKey = priority.steps.some((s) => s.key === step) ? step : undefined;
   if (String(conv.priority_id ?? "") === String(priority._id) && conv.priority_step_key === stepKey) return false;
   if ((await sessionVisibility(ctx).workspaceOf(conv)) !== priority.workspace) return false;
@@ -210,7 +217,7 @@ export async function linkFromStart(ctx: Ctx, starter: Id<"users">, convId: Id<"
   const p: Priority | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId.trim().toLowerCase())).first();
   if (!p || String(p.user_id) !== String(starter)) return false;
   const conv: Conv | null = await ctx.db.get(convId);
-  return !!conv && linkSession(ctx, conv, p, stepKey);
+  return !!conv && linkSession(ctx, conv, p._id, stepKey);
 }
 
 /** A session bound to a task (lib/taskOwner claimTaskOwnership, `cast task start`): the first milestone naming the task, active priorities first. */
@@ -218,7 +225,7 @@ export async function linkFromTask(ctx: Ctx, conv: Conv, task: Pick<Doc<"tasks">
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
     const step = p.steps.find((s) => s.refs.some((r) => r.kind === "task" && r.id === task.short_id));
-    if (step) return linkSession(ctx, conv, p, step.key);
+    if (step) return linkSession(ctx, conv, p._id, step.key);
   }
   return false;
 }
@@ -239,7 +246,7 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
   for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
     for (const s of p.steps) {
       const refs = s.refs.filter((r) => r.kind === "task");
-      if (refs.length && refs.filter((r) => inPlan.has(r.id)).length * 2 >= refs.length) return linkSession(ctx, conv, p, s.key);
+      if (refs.length && refs.filter((r) => inPlan.has(r.id)).length * 2 >= refs.length) return linkSession(ctx, conv, p._id, s.key);
     }
   }
   return false;
@@ -253,6 +260,6 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
 export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parentId: Id<"conversations"> | undefined): Promise<boolean> {
   const parent: Conv | null = parentId ? await ctx.db.get(parentId) : null;
   if (!parent?.priority_id) return false;
-  const [child, p]: [Conv | null, Priority | null] = [await ctx.db.get(childId), await ctx.db.get(parent.priority_id)];
-  return !!child && !!p && linkSession(ctx, child, p, parent.priority_step_key);
+  const child: Conv | null = await ctx.db.get(childId);
+  return !!child && linkSession(ctx, child, parent.priority_id, parent.priority_step_key);
 }
