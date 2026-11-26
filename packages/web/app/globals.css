@@ -7458,8 +7458,8 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   margin: 4px 0;
   padding-left: 2px;
 }
-.modern-style [data-sv-feed] [data-cc-prose] li > :is(ul, ol) { margin: 4px 0 0; }
-.modern-style [data-sv-feed] [data-cc-prose] li > p { margin: 0 0 4px; }
+.modern-style [data-sv-feed] [data-cc-prose] li > :is(ul, ol):where(:not(.sj *)) { margin: 4px 0 0; }
+.modern-style [data-sv-feed] [data-cc-prose] li > p:where(:not(.sj *)) { margin: 0 0 4px; }
 .modern-style [data-sv-feed] [data-cc-prose] li::marker { color: var(--sol-text-dim); }
 .modern-style [data-sv-feed] [data-cc-prose] strong { color: var(--sol-text); font-weight: 600; }
 .modern-style [data-sv-feed] [data-cc-prose] blockquote {
@@ -7470,8 +7470,8 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   font-style: normal;
 }
 .modern-style [data-sv-feed] [data-cc-prose] hr { margin: 20px 0; border-color: var(--sol-border); }
-.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, table, h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
-.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, table):last-child { margin-bottom: 0; }
+.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, table, h1, h2, h3, h4, h5, h6):first-child:where(:not(.sj *)) { margin-top: 0; }
+.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, table):last-child:where(:not(.sj *)) { margin-bottom: 0; }
 /* Inline code: mono, one step under its sentence, on a faint tint. */
 .modern-style [data-sv-feed] [data-cc-prose] :not(pre) > code {
   font-family: var(--font-mono), monospace;

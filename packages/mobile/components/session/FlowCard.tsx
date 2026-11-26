@@ -89,7 +89,7 @@ export function FlowRunCard({ runId, onOpen }: { runId: string; onOpen?: (route:
 /** The card's name: a press opens the run when the card draws one. */
 function CardName({ label, links }: { label: string; links?: RunLinks | null }) {
   const Theme = useTheme();
-  const text = <RNText style={[styles.name, { color: links ? Theme.violet : Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>;
+  const text = <RNText style={[styles.name, { color: links ? Theme.violet : Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>;
   if (!links) return text;
   return (
     <Pressable onPress={() => links.open(links.runHref)} hitSlop={8} style={({ pressed }) => [styles.namePress, pressed && { opacity: 0.6 }]} accessibilityRole="link" accessibilityLabel={`Open the ${label} run`} testID="flow-card-run">
