@@ -91,14 +91,15 @@ export function ownersReadOf(s: OwnersState, conversationId: string): SessionOwn
   return row && Array.isArray(row.people_ids) && row.people_info && typeof row.people_info === "object" ? row : null;
 }
 
-/** The session follows the owners model. An inbox row says so either way
- *  (owners_model true, or absent off the model), and outranks a cached owners
- *  read that the flag going off left behind; a session with no inbox row asks
- *  the read. */
+/** The session follows the owners model: its row says so, or its owners read
+ *  does. A row cached before the flag turned on, or fed by a list that leaves
+ *  the stamp off, lacks owners_model, so the read is asked too; a read off the
+ *  model drops the cached one (applySessionOwnersReads), so the flag going off
+ *  clears it the moment the session is read again. */
 export function ownersModelOnFor(s: OwnersState, conversationId: string): boolean {
+  if (ownersReadOf(s, conversationId)) return true;
   const inbox = s.sessions?.[conversationId];
-  if (inbox) return underOwnersModel(inbox);
-  return ownersHomeOf(s, conversationId)?.owners_model === true || !!ownersReadOf(s, conversationId);
+  return inbox ? underOwnersModel(inbox) : ownersHomeOf(s, conversationId)?.owners_model === true;
 }
 
 const sameIds = (a: unknown, b: readonly string[]) => Array.isArray(a) && a.length === b.length && a.every((id, i) => String(id) === b[i]);

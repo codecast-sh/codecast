@@ -97,17 +97,17 @@ export function OwnersSheetBody({ conversationId, view, onClose }: {
               accessibilityLabel="Add a role or teammate"
             />
           </View>
-          {m.shownRoles.length > 0 && <Text style={styles.sectionLabel}>{m.q || m.moreRoles ? 'Roles' : 'Suggested roles'}</Text>}
           {m.candidates.map((c, i) => {
             const isRole = c.kind === 'role';
             const name = isRole ? c.role.name : c.person.name;
             const reason = isRole ? (!m.q && !m.moreRoles ? m.reasonOf(c.role) : null) ?? charterLine(c.role.charter) : null;
-            const firstTeammate = !isRole && (i === 0 || m.candidates[i - 1].kind === 'role');
+            const firstTeammate = !isRole && i === 0;
+            const firstRole = isRole && (i === 0 || m.candidates[i - 1].kind === 'person');
             return (
               <View key={c.key}>
+                {firstRole && <Text style={styles.sectionLabel}>{m.q || m.moreRoles ? 'Roles' : 'Suggested roles'}</Text>}
                 {firstTeammate && (
                   <>
-                    {moreRoles}
                     <Text style={styles.sectionLabel}>Teammates</Text>
                     {!m.q && m.unselected.length > 1 && (
                       <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); m.selectAllTeammates(); }} accessibilityRole="button" accessibilityLabel={`Select all teammates, ${m.unselected.length}`} testID="owners-select-all">
@@ -138,7 +138,7 @@ export function OwnersSheetBody({ conversationId, view, onClose }: {
               </View>
             );
           })}
-          {!m.candidates.some((c) => c.kind === 'person') && moreRoles}
+          {moreRoles}
           {m.candidates.length === 0 && <Text style={styles.empty}>{m.q ? `Nobody called “${m.query.trim()}”` : 'Nobody else to add'}</Text>}
           <View style={styles.divider} />
           <View style={styles.foot}>
