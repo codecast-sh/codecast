@@ -45,7 +45,8 @@ function query(params: Record<string, string | number | boolean | string[] | und
 async function getOk(ep: VaultEndpoint, path: string, what: string, init?: RequestInit): Promise<Response> {
   const res = await loopbackFetch(ep, path, init);
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    // A daemon without the route may answer with no JSON object at all.
+    const body = ((await res.json().catch(() => null)) ?? {}) as { error?: string };
     throw new VaultRequestError(`${what}: ${res.status}${body.error ? ` ${body.error}` : ""}`, res.status);
   }
   return res;
