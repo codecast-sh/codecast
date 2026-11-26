@@ -10,16 +10,21 @@
  * - a run of the same task is live: it reads the branch again itself when its
  *   subject ends its turn, and a second freeze would move the branch and reset
  *   its tree under it;
- * - another worktree holding the branch is not a run's (a person's, an
- *   agent's), or is a live run's, or one too young to tell (its run may still be
- *   being created), or one whose liveness or processes cannot be read;
+ * - another worktree holding the branch is a live run's, or one too young to
+ *   tell (its run may still be being created), or one whose liveness or
+ *   processes cannot be read;
  * - that worktree holds uncommitted files: a process list is no proof nobody
  *   edits it, and an ended run's leftovers are not this change's to push;
+ * - it is no run's and an agent session other than the caller's is working in
+ *   it (its next commit would land on no branch), or it is the repository's main
+ *   checkout, which is everyone's;
  * - a freeze, which replaces the branch's commits, would replace commits no
  *   freeze of this run made that the checkout lacks.
  * Only then is a clean worktree an ended run left holding the branch released
  * (lineTrialBranch.ts freeBranch), so a rerun after a failed run needs no hand
- * cleanup.
+ * cleanup, and a clean one no run made (an agent's, a session's) is detached at
+ * the same commit, its files untouched, and the run says so: agents no longer
+ * `git switch --detach` by hand before shipping their branch (ct-102064).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -82,27 +87,29 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
   const { worktreeOf } = await import("../lineTrialBranch.js");
   const holder = worktreeOf(repo, branch);
   let release: string | null = null;
+  let detach: string | null = null;
   if (holder && real(holder) !== ownTree) {
     const name = path.dirname(real(holder)) === worktrees ? path.basename(holder) : null;
     if (!name || !runTreeNames(repo).has(name)) {
-      throw new Error(`${branch} is checked out in ${holder}, which no run made: switch that worktree off it, or run this change on another branch`);
+      await refuseUnlessDetachable(repo, holder, branch, opts.hands);
+      detach = holder;
+    } else {
+      const trees = await opts.live.trees().catch(() => null);
+      if (!trees) throw new Error(`${branch} is checked out by worktree ${name}, and whether the run there is still live cannot be told (the server did not answer): run this again, or release it with cast ws destroy ${name}`);
+      const state = trees.get(name) ?? (young(holder, now) ? "just made" : null);
+      if (state) throw new Error(`${branch} is checked out by worktree ${name}, where a run is live (${state}): wait for that run to end, or stop it, then run this change again`);
+      const { readProcessCwds } = await import("../land/scan.js");
+      const cwds = await readProcessCwds();
+      const tree = real(holder);
+      if (!cwds || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) {
+        throw new Error(`${branch} is checked out by worktree ${name}, ${cwds ? "and a process still works in it" : "and which processes work in it cannot be read"}: stop it, or release the worktree with cast ws destroy ${name}, then run this again`);
+      }
+      const shown = uncommitted(holder);
+      if (shown) {
+        throw new Error(`${branch} is checked out by worktree ${name}, which an ended run left with uncommitted files (${shown}): commit what belongs on ${branch} there and remove the rest, or release it with cast ws destroy ${name}, then run this again`);
+      }
+      release = name;
     }
-    const trees = await opts.live.trees().catch(() => null);
-    if (!trees) throw new Error(`${branch} is checked out by worktree ${name}, and whether the run there is still live cannot be told (the server did not answer): run this again, or release it with cast ws destroy ${name}`);
-    const state = trees.get(name) ?? (young(holder, now) ? "just made" : null);
-    if (state) throw new Error(`${branch} is checked out by worktree ${name}, where a run is live (${state}): wait for that run to end, or stop it, then run this change again`);
-    const { readProcessCwds } = await import("../land/scan.js");
-    const cwds = await readProcessCwds();
-    const tree = real(holder);
-    if (!cwds || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) {
-      throw new Error(`${branch} is checked out by worktree ${name}, ${cwds ? "and a process still works in it" : "and which processes work in it cannot be read"}: stop it, or release the worktree with cast ws destroy ${name}, then run this again`);
-    }
-    const dirty = (git(holder, ["status", "--porcelain", "--untracked-files=all"]) ?? "?").split("\n").filter(Boolean).map((l) => l.slice(3));
-    if (dirty.length) {
-      const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? `, and ${dirty.length - 5} more` : "");
-      throw new Error(`${branch} is checked out by worktree ${name}, which an ended run left with uncommitted files (${shown}): commit what belongs on ${branch} there and remove the rest, or release it with cast ws destroy ${name}, then run this again`);
-    }
-    release = name;
   }
   if (opts.rewrites) {
     const tip = git(repo, ["rev-parse", `refs/heads/${branch}`])!;
@@ -110,11 +117,46 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
       throw new Error(`${branch} holds commits no run of ${opts.task ?? "this change"} froze (its tip ${tip.slice(0, 10)}), and freezing this change onto it would replace them: run that branch itself (cast flow run --branch ${branch}), or move it aside (git branch -m ${branch} <new name>) and run this again`);
     }
   }
+  if (detach) {
+    if (git(detach, ["switch", "-q", "--detach"]) === null) throw new Error(`${branch} is checked out in ${detach}, and switching that worktree off it failed: run git switch --detach there, then run this again`);
+    return `Detached ${detach} from ${branch} at the same commit (it had nothing uncommitted) so the run can check the branch out: a commit made there now is on no branch, so push one with git push origin HEAD:refs/heads/${branch}`;
+  }
   if (!release) return null;
   // Clean, so nothing is committed on the way: freeBranch only takes the tree away, its branch left as it was.
   const { freeBranch } = await import("../lineTrialBranch.js");
   await freeBranch(repo, release, branch, `the run in ${release}`, opts.hands);
   return `Released worktree ${release}, which an ended run left holding ${branch}`;
+}
+
+/**
+ * Throw why worktree `holder`, which no run made, may not be switched off `branch`: it is the main checkout, holds
+ * uncommitted files (they may be meant for the branch, and the run would ship it without them), or a session other
+ * than the caller's is working in it. Switching a clean tree to a detached HEAD at the same commit moves no file, so a
+ * settled session, a dev server or a shell there loses nothing.
+ */
+async function refuseUnlessDetachable(repo: string, holder: string, branch: string, hands?: RunHands): Promise<void> {
+  const main = git(repo, ["worktree", "list", "--porcelain"])?.split("\n")[0]?.replace(/^worktree /, "");
+  if (main && real(main) === real(holder)) {
+    throw new Error(`${branch} is checked out in the main checkout ${holder}: switch it off the branch there, or run this change on another branch`);
+  }
+  const shown = uncommitted(holder);
+  if (shown) {
+    throw new Error(`${branch} is checked out in ${holder}, which no run made, with uncommitted files (${shown}): commit what belongs on ${branch} there and switch it off the branch (git switch --detach), then run this again`);
+  }
+  const { processesIn, ownersOf } = await import("../lineTrialBranch.js");
+  let busy: Array<{ pid: number }>;
+  try { busy = processesIn(real(holder)); } catch {
+    throw new Error(`${branch} is checked out in ${holder}, which no run made, and which processes work in it cannot be read: switch it off the branch there (git switch --detach), then run this again`);
+  }
+  if (!busy.length || !hands) return;
+  const owners = ownersOf([process.pid, ...busy.map((p) => p.pid)]);
+  const caller = owners.get(process.pid)?.session;
+  const others = [...new Set(busy.map((p) => owners.get(p.pid)?.session).filter((s): s is string => !!s && s !== caller))];
+  const working = (await hands.live(others).catch(() => null))?.filter((h) => h.working);
+  if (!working) throw new Error(`${branch} is checked out in ${holder}, which no run made, and whether the sessions in it are working cannot be told: run this again, or switch it off the branch there (git switch --detach)`);
+  if (working.length) {
+    throw new Error(`${branch} is checked out in ${holder}, where session ${working.map((h) => h.id.slice(0, 7)).join(", ")} is still working: let it finish, or switch that worktree off the branch (git switch --detach), then run this again`);
+  }
 }
 
 type Post = (route: string, body: Record<string, any>) => Promise<any>;
@@ -150,6 +192,14 @@ export function earlierRunTree(earlierPath: string, resets: string | null): stri
     throw new Error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`);
   }
   return earlier;
+}
+
+/** The files `tree` holds uncommitted, the first five named, or null when it holds none. */
+function uncommitted(tree: string): string | null {
+  // Untrimmed: a porcelain line starts with a space when only the worktree side changed (" M a.txt").
+  const r = spawnSync("git", ["-C", tree, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+  const dirty = r.status === 0 ? (r.stdout ?? "").split("\n").filter(Boolean).map((l) => l.slice(3)) : ["(its status cannot be read)"];
+  return dirty.length ? dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? `, and ${dirty.length - 5} more` : "") : null;
 }
 
 /** When git added worktree `tree`: its `.git` file is written once, then; 0 when there is none. */
