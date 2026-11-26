@@ -2085,6 +2085,8 @@ const SHIPPING_READ = 150;
 const SHIPPING_SCAN = 300;
 /** How far back a run's last update, or its merge, may be. */
 const SHIPPING_WINDOW_MS = 30 * 86_400_000;
+/** A task's runs newer than its Ship run read for a later change run; past this, the Ship run stands. */
+const TASK_RUNS_SCAN = 50;
 /** Merged change runs read for who pressed Ship, the most recently merged first. */
 const SHIPPERS_MERGED_READ = 200;
 
@@ -2127,10 +2129,15 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
     if (!had || r.created_at > had.created_at) newestPerTask.set(String(r.task_id), r);
   }
   for (const r of newestPerTask.values()) {
-    // The task's newest run of any status: a later round, merged or not, replaces this one. runSuperseded asks the
-    // same of a live run; a failed run it never judges.
-    const latest = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", r.task_id)).order("desc").first();
-    if (!latest || String(latest._id) === String(r._id)) kept.push(r);
+    // The task's newest change run of any status: a later round, merged or not, replaces this one (runSuperseded
+    // never judges a failed run). Another flow's later run on the task (a build, an eval) replaces nothing.
+    let latest: Doc<"workflow_runs"> | null = null;
+    let scanned = 0;
+    for await (const x of ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", r.task_id)).order("desc")) {
+      if (String(x._id) === String(r._id) || ++scanned > TASK_RUNS_SCAN) break;
+      if (await takesChange(x)) { latest = x; break; }
+    }
+    if (!latest) kept.push(r);
   }
 
   // The session that pressed Ship, as the viewer may read it: its title and owner, else nothing.
@@ -2147,7 +2154,8 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
   const runs: ShippingRun[] = [];
   for (const run of kept) {
     const e = await enrichRun(ctx, run, reads);
-    if (e.superseded) continue;
+    // A later run on the task was judged above among change runs only; the other ways a run goes stale stand.
+    if (e.superseded && e.superseded.why !== "newer_run") continue;
     if (run.task_id) {
       const task = await ctx.db.get(run.task_id);
       if (task && isTerminalTaskStatus(task.status)) continue;

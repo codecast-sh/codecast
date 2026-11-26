@@ -79,6 +79,17 @@ describe("workflow_runs.shippingRuns", () => {
     expect(rows.find((r: any) => r._id === newest)).toMatchObject({ task_short_id: "ct-1", task_title: "Task 1", workflow_slug: "change", workflow_label: "Change", current_node_label: "Review" });
   });
 
+  test("another flow's later run on the task (a build, an eval) keeps the Ship card", async () => {
+    const { run, task, read, ids } = await setup();
+    const a = await task(5);
+    const ship = await run({ task: a, status: "running", at: NOW - 5000 });
+    await run({ task: a, flow: ids.build, status: "running", at: NOW - 1000 });
+    const b = await task(6);
+    const failed = await run({ task: b, status: "failed", at: NOW - 5000 });
+    await run({ task: b, flow: ids.build, status: "completed", at: NOW - 1000 });
+    expect((await read(ids.ana)).map((r: any) => r._id).sort()).toEqual([ship, failed].sort());
+  });
+
   test("a superseded live run is dropped: here it stands at a station its flow no longer has", async () => {
     const { run, read, ids } = await setup();
     const current = await run();
