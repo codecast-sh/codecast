@@ -54,7 +54,7 @@ Evidence: 3 corrections across 3 sessions: codecast/6d66a45e, codecast/1adfe699,
 
 ### CC-ship-1 The backend ships before the client that calls it
 
-Convex ships only when `packages/convex/deploy.sh` runs, and web ships on every push, so a commit that adds a function and the code calling it deploys convex first, from a tree that contains origin/main, and merges after: Ship's Merge does this for every change, deploying from the change rebased onto origin/main before it merges. Never deploy from a tree behind origin/main, by any other route, because a deploy is a whole-tree snapshot that deletes what it lacks. A query that only enriches a surface tolerates a missing function, and code that reaches mobile works on binaries built before a native module it uses was added.
+Convex ships only when `packages/convex/deploy.sh` runs, and web ships on every push, so a commit that adds a function and the code calling it deploys convex first, from a tree that contains origin/main, and merges after. Ship's Merge does this for every change it lands, deploying from the change rebased onto origin/main; a change that reaches main another way (a hand push, a pull request merged outside the flow) runs deploy.sh first by hand. Never deploy from a tree behind origin/main, by any other route, because a deploy is a whole-tree snapshot that deletes what it lacks. A query that only enriches a surface tolerates a missing function, and code that reaches mobile works on binaries built before a native module it uses was added.
 
 Why: every gap between the two clocks took a live surface down: deploys from stale trees deleted production functions three times in one day, and a client asking for a function prod lacked took out the whole conversation header.
 
