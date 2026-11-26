@@ -80,9 +80,13 @@ export const DEFAULT_DROPS: Record<string, Record<string, string>> = {
 export const CAST_CHECK_REPLACES = ["Typecheck"];
 /** The programs CI's typecheck matrix checks, which --full asks cast check for by name. */
 export const TYPECHECK_PROJECTS: string[] = (WORKFLOW.jobs.typecheck.strategy?.matrix?.include ?? []).flatMap((entry: any) => String(entry.programs).split(/\s+/));
-/** `cast check` exits with no verdict: a watcher that died or answered stale (restart with --fresh), or a pass that outlived the wait (ask again). */
-const CHECK_RESTART = new Set([70, 75]);
-const CHECK_STILL_RUNNING = 124;
+/**
+ * `cast check` exits with no verdict. A stale answer (75) restarts the watcher with --fresh. A tool failure (70:
+ * a watcher that died or did not start) or a pass that outlived the wait (124) is asked again as it was: --fresh
+ * would throw away every program's warm pass and rebuild them all cold.
+ */
+const CHECK_STALE = 75;
+const CHECK_ASK_AGAIN = new Set([70, 124]);
 /**
  * Shards that run at once. A suite CI shards over runners (a matrix) gets as many shards as CI runs it on; a
  * one-process suite is cut into up to this many, since one process uses one core.
@@ -572,12 +576,12 @@ async function judgeStep(job: string, step: Step, log: string): Promise<Verdict>
   let r = await runStep(step, log);
   if (r.stopped) return { failing: [], unjudged: [unjudged(job, step.name, r.stopped, r.output)] };
   if (!step.typecheck) return { failing: r.code === 0 ? [] : stepFailures(job, step, r.output, r.code), unjudged: [] };
-  for (let ask = 0; r.code === CHECK_STILL_RUNNING && ask < 2; ask++) {
-    console.log(`  ${job}: the pass outlived cast check's wait, asking again`);
+  for (let ask = 0; CHECK_ASK_AGAIN.has(r.code) && ask < 2; ask++) {
+    console.log(`  ${job}: no verdict (exit ${r.code}), asking again`);
     r = await runStep(step, log);
   }
-  if (CHECK_RESTART.has(r.code)) {
-    console.log(`  ${job}: no verdict (exit ${r.code}), asking again with --fresh`);
+  if (r.code === CHECK_STALE) {
+    console.log(`  ${job}: a stale answer (exit ${r.code}), asking again with --fresh`);
     r = await runStep({ ...step, argv: [...step.argv, "--fresh"] }, log);
   }
   let results: any[] = [];
