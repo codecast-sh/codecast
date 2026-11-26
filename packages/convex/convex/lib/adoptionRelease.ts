@@ -38,6 +38,8 @@ function endsClose(before: any, fields: any): boolean {
   if ("inbox_stashed_at" in fields && fields.inbox_stashed_at == null && before.inbox_stashed_at != null) return true;
   if (before.inbox_dismissed_at !== closedAt && before.inbox_stashed_at !== closedAt) return false;
   if (!!fields.inbox_killed_at && !before.inbox_killed_at) return true;
+  // A new close over it (Close pressed again once a wake ran it) replaces it.
+  if ("inbox_closed_at" in fields && fields.inbox_closed_at !== closedAt) return true;
   const stashAfter = "inbox_stashed_at" in fields ? fields.inbox_stashed_at : before.inbox_stashed_at;
   if (stashAfter === closedAt) return false;
   return "inbox_dismissed_at" in fields && fields.inbox_dismissed_at !== before.inbox_dismissed_at;

@@ -143,6 +143,21 @@ describe("a close takes down only what goes down with the lead", () => {
     expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();
   });
 
+  test("closing the woken lead again replaces its close: the first close's adoptions end", async () => {
+    const s = await withKids();
+    await s.send("closeSession", [String(s.ids.conv)]);
+    const first = (await s.row(s.kids.spawned)).inbox_adopted_at;
+    expect(first).toBeGreaterThan(0);
+    await s.t.run(async (ctx) => {
+      const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
+      await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" });
+      // The woken turn is running; the person presses Close again, which sets it aside under a new stamp.
+      const t2 = first + 1000;
+      await db.patch(s.ids.conv, { inbox_stashed_at: t2, inbox_stash_hidden: true, inbox_closed_at: t2 });
+    });
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();
+  });
+
   test("a trigger waking it keeps them: the lead is still out of sight (closeWakeFields)", async () => {
     const s = await withKids();
     await s.send("closeSession", [String(s.ids.conv)]);

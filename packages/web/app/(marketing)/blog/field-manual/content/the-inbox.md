@@ -87,7 +87,7 @@ Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of
 | Stash and hide | Triage bar "more", right-click | `Ctrl+Alt+Backspace` | | Stays out until an ask |
 | Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept; back when it's done or needs you (a role or repeating trigger: needs you only) |
 | Kill | Right-click, command palette, selection bar; the stop button on a stashed or closed card | | Long-press | Agent stopped, schedules cancelled (asks first when there are some), filed under Closed |
-| Restore | Right-click on a stashed or closed card | | | Back in the inbox (a closed or killed agent stays stopped) |
+| Restore | Right-click on a stashed or closed card | | | Back in the inbox (Restore starts no agent; a stopped one runs again on its next message) |
 | Pin | Triage bar "more", right-click | `Ctrl+Shift+P`; jump to pinned with `Ctrl+P` (Mac) | Long-press | Top of the list, state kept underneath |
 | Label | Triage bar "more", right-click | `Ctrl+L` | Long-press, "Label…" | Files under a personal label |
 | Mark unread | Right-click | `Ctrl+Shift+U` | Long-press | Card keeps its dot until you next open it |
