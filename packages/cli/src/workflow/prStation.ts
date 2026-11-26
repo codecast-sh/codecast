@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { defaultExec, type Exec } from "../lineMerge.js";
 import { reviewedHeads } from "./changeVerdicts.js";
-import { recordRebase } from "./rebaseRecord.js";
+import { chainBetween, recordRebase, type RebaseLink } from "./rebaseRecord.js";
 import { readFrozenChange } from "./flowChangeFile.js";
 
 /**
@@ -17,7 +17,7 @@ import { readFrozenChange } from "./flowChangeFile.js";
  * carries it. `local_sha` is the local branch tip a push came from, when the pushed commits had to be put onto
  * origin's branch first. Verdicts counts the round's reruns here, so a new round starts with none. `rebases` are the
  * round's heads the run's own stations made from the reviewed one, so its review still speaks for them. `reviewed` is
- * the last round's accepted review when this round pushed a head it read: the round asks no reviewer again.
+ * the reviewer's ship the server holds for this attempt when this round pushed the head it read: no reviewer is asked.
  */
 export type PrRecord = {
   url: string; number: number; head_sha: string; branch: string; round: string;
@@ -25,8 +25,11 @@ export type PrRecord = {
   reviewed?: StandingReview;
 };
 
-/** A review that read a head and said ship or changes: what a round on that same head reuses. */
-export type StandingReview = { verdict: "ship" | "changes"; findings: unknown[]; head_sha: string };
+/** The reviewer's ship on a head, as the server recorded it for the run's attempt: what a round on that head reuses. */
+export type StandingReview = { verdict: "ship"; head_sha: string };
+
+/** What the server holds for the run's current attempt (`/cli/workflow-runs/merge-proof`): the review Merge clears on. */
+export type MergeProof = { review: { verdict: string; head_sha: string } | null; rebases?: RebaseLink[] };
 
 /** `new_round`: origin's branch moved by someone other than the run's stations, so the round's review no longer stands. */
 export type PrStationResult = { ok: true; pr: PrRecord } | { ok: false; reason: string; new_round?: true };
@@ -47,7 +50,7 @@ export function readPr(dir: string): PrRecord | null {
   }
 }
 
-function writePr(dir: string, pr: PrRecord): PrRecord {
+export function writePr(dir: string, pr: PrRecord): PrRecord {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "pr.json"), JSON.stringify(pr, null, 2) + "\n");
   return pr;
@@ -73,31 +76,24 @@ function replay(exec: Exec, cwd: string, onto: string, from: string, local: stri
 }
 
 /**
- * The last round's accepted review (its review.json, as Verdicts wrote it), when the head this round pushes is one it
- * read: that head, or one the run's own stations rebased from it (the last round's `rebases`, carried on). A review
- * binds to the head it read, so a round on that head reuses it rather than spending a reviewer on the same commit.
- * Merge still clears only on the review the server recorded for the head. Null for any other head, or a rejection.
+ * The review that stands for the head this round pushes: the reviewer's ship the server recorded in this attempt (the
+ * one Merge clears on, never a file in the run's directory), when the head is the one it read or one the run's own
+ * recorded station rebases made from it, whose links come along. A review binds to the head it read, so a round on
+ * that head asks no reviewer again. Null for any other head, a changes verdict (a fresh reviewer reads the head
+ * again), no proof, or a review from an earlier attempt, which the server no longer counts.
  */
-export function standingReview(review: Record<string, any> | null, head: string, last: PrRecord | null): { reviewed: StandingReview; rebases?: PrRecord["rebases"] } | null {
-  if (!review || (review.verdict !== "ship" && review.verdict !== "changes") || typeof review.head_sha !== "string" || !review.head_sha) return null;
-  const rebases = last?.rebases?.length ? last.rebases : undefined;
-  if (!reviewedHeads(head, rebases).has(review.head_sha)) return null;
-  return { reviewed: { verdict: review.verdict, findings: Array.isArray(review.findings) ? review.findings : [], head_sha: review.head_sha }, ...(rebases && review.head_sha !== head ? { rebases } : {}) };
+export function standingReview(proof: MergeProof | null | undefined, head: string): { reviewed: StandingReview; rebases?: RebaseLink[] } | null {
+  const review = proof?.review;
+  if (review?.verdict !== "ship" || typeof review.head_sha !== "string" || !review.head_sha) return null;
+  const chain = chainBetween(proof?.rebases ?? [], review.head_sha, head);
+  if (!chain) return null;
+  return { reviewed: { verdict: "ship", head_sha: review.head_sha }, ...(chain.length ? { rebases: chain } : {}) };
 }
 
-function readReview(dir: string): Record<string, any> | null {
-  try {
-    const v = JSON.parse(fs.readFileSync(path.join(dir, "review.json"), "utf-8"));
-    return v && typeof v === "object" ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-export function prStation(args: { cwd: string; dir: string; branch: string; base: string; title?: string; body?: string; exec?: Exec }): PrStationResult {
+/** `proof`: what the server holds for the run's attempt, read before the round starts; without it every round is reviewed. */
+export function prStation(args: { cwd: string; dir: string; branch: string; base: string; title?: string; body?: string; exec?: Exec; proof?: MergeProof | null }): PrStationResult {
   const exec = args.exec ?? defaultExec;
   const { cwd, dir, branch, base } = args;
-  const lastReview = readReview(dir);
   for (const f of ROUND_FILES) fs.rmSync(path.join(dir, f), { force: true });
   const tip = exec("git", ["rev-parse", "--verify", "-q", `refs/heads/${branch}^{commit}`], cwd);
   if (tip.status !== 0) return { ok: false, reason: `There is no branch ${branch} here to push.` };
@@ -159,7 +155,7 @@ export function prStation(args: { cwd: string; dir: string; branch: string; base
     number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
     if (!number) return { ok: false, reason: `gh pr create named no pull request: ${url || "it printed nothing"}` };
   }
-  const stands = standingReview(lastReview, head, last);
+  const stands = standingReview(args.proof, head);
   return { ok: true, pr: writePr(dir, { url, number, head_sha: head, branch, round: randomUUID(), ...(local ? { local_sha: local } : {}), ...(stands ?? {}) }) };
 }
 

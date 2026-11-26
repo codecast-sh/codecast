@@ -478,7 +478,7 @@
     {
       "from": "verdicts",
       "to": "brief",
-      "label": "no verdict, or the same review",
+      "label": "no verdict",
       "condition": "verdicts.json.next = brief"
     },
     {

@@ -4,6 +4,7 @@
 import type { Command } from "commander";
 import { spawnSync } from "./proc.js";
 import type { FlowDeps } from "./flowCommand.js";
+import type { MergeProof } from "./workflow/prStation.js";
 
 /**
  * A waiting station's lines on its card. A post that fails is logged and the wait goes on: without throwOnError the
@@ -35,6 +36,12 @@ export async function recordRunPr(deps: Pick<FlowDeps, "cliPost">, pr: { run_id?
 }
 
 export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
+  // What the server holds for the run's attempt (orgLineMerge.mergeProofCore), or null without a run or an answer:
+  // then nothing is carried, and the round is reviewed.
+  const mergeProof = async (runId: string | undefined): Promise<MergeProof | null> => {
+    if (!runId) return null;
+    try { return await deps.cliPost("/cli/workflow-runs/merge-proof", { run_id: runId }, { throwOnError: true }); } catch { return null; }
+  };
   // Land's check that the change is on main (workflow/landed.ts): run by templates/line/ship.sh after the land command.
   flow
     .command("landed")
@@ -76,9 +83,18 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
     .requiredOption("--dir <path>", "The run's directory, where ci.json is written")
     .option("--deadline <duration>", "How long to wait for the checks (90s, 60m, 2h, 1h30m)", "60m")
     .option("--head <sha>", "Judge only this head: wait until the pull request's head is it")
+    .option("--pushed", "Judge only the head pr.json in --dir holds now (the PR station's push, or a retest's rebase)")
     .option("--run <id>", "The run whose station this is: each new line goes on the station while it waits, and the verdict to the run (default: $run_id)")
     .option("--node <id>", "That station's id in the run (default: $station_id)")
-    .action(async (opts: { pr: string; dir: string; deadline: string; head?: string; run?: string; node?: string }) => (await import("./workflow/ciStation.js")).ciCommand(opts, deps.cliPost));
+    .action(async (opts: { pr: string; dir: string; deadline: string; head?: string; pushed?: boolean; run?: string; node?: string }) => {
+      if (opts.pushed && !opts.head) {
+        const head = (await import("./workflow/prStation.js")).readPr(opts.dir)?.head_sha;
+        // No head to judge: no ci.json, which Verdicts reads as CI that never reported.
+        if (!head) return console.error(`--pushed: no pr.json with a head_sha in ${opts.dir}`);
+        opts.head = head;
+      }
+      await (await import("./workflow/ciStation.js")).ciCommand(opts, deps.cliPost);
+    });
 
   // The change flow's PR station (workflow/prStation.ts, flows.md FL4).
   flow
@@ -96,13 +112,15 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
       const { prStation, rebasePr, refreshPr } = await import("./workflow/prStation.js");
       if (!opts.refresh && !opts.rebase && !opts.branch) throw new Error("--branch is required unless --refresh or --rebase");
       const cwd = deps.realCwd();
-      const r = opts.refresh ? refreshPr({ cwd, dir: opts.dir }) : opts.rebase ? await rebasePr({ cwd, dir: opts.dir, base: opts.base, runId: opts.run ?? "", post: (route, body) => deps.cliPost(route, body, { throwOnError: true }) }) : prStation({ cwd, ...opts, branch: opts.branch! });
+      const runId = opts.run ?? process.env.run_id;
+      // A new round on a head the reviewer said ship on keeps that ship, as the server holds it for the run's attempt.
+      const proof = !opts.refresh && !opts.rebase ? await mergeProof(runId) : null;
+      const r = opts.refresh ? refreshPr({ cwd, dir: opts.dir }) : opts.rebase ? await rebasePr({ cwd, dir: opts.dir, base: opts.base, runId: opts.run ?? "", post: (route, body) => deps.cliPost(route, body, { throwOnError: true }) }) : prStation({ cwd, ...opts, branch: opts.branch!, proof });
       if (!r.ok) {
         console.log(r.reason);
         // 4: someone else moved origin's branch, so the run starts a new round at PR.
         process.exit(r.new_round ? 4 : 1);
       }
-      const runId = opts.run ?? process.env.run_id;
       const repository = /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(r.pr.url)?.[1];
       if (runId && repository) await recordRunPr(deps, { run_id: runId, repository, number: r.pr.number, head_sha: r.pr.head_sha });
       console.log(JSON.stringify(r.pr));
@@ -154,13 +172,15 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
     .description("Read this round's pr.json and ci.json in --dir and the reviewer's pinned verdict, and print where the change flow goes: {next: merge|brief|rejected|rerun_ci|rerun_review|no_ci|wait_main|decide, why, ci, review}; writes review.json only for a verdict it accepts")
     .requiredOption("--dir <path>", "The run's directory")
     .option("--review <json>", "The reviewer's pinned verdict, {verdict, findings, round}; it counts only with this round's nonce from pr.json")
-    .action(async (opts: { dir: string; review?: string }) => {
+    .option("--run <id>", "The run whose station this is (default: $run_id): a ship carried in pr.json counts only as the server holds it")
+    .action(async (opts: { dir: string; review?: string; run?: string }) => {
       const [{ changeVerdicts }, { readPr }] = await Promise.all([import("./workflow/changeVerdicts.js"), import("./workflow/prStation.js")]);
       // Where origin's branch stands now: a push since this round's would make every verdict about another head.
       const branch = readPr(opts.dir)?.branch;
       const ls = branch ? spawnSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: deps.realCwd(), encoding: "utf-8" }) : null;
       const originHead = ls?.status === 0 ? String(ls.stdout).trim().split(/\s/)[0] || null : null;
-      console.log(JSON.stringify(changeVerdicts(opts.dir, opts.review, originHead)));
+      const proof = readPr(opts.dir)?.reviewed ? await mergeProof(opts.run ?? process.env.run_id) : null;
+      console.log(JSON.stringify(changeVerdicts(opts.dir, opts.review, originHead, proof)));
     });
 
   flow

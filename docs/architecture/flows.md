@@ -456,8 +456,16 @@ PR (`cast flow pr`, `workflow/prStation.ts`) starts each round: it deletes
 the last round's `ci.json`, `review.json`, `merge.json` and `rebase.json` from
 the run's directory, pushes the run's change branch and opens its pull
 request, or finds the open one the push just updated, and writes `pr.json` =
-{url, number, head_sha, branch, round}, where `round` is a fresh random nonce.
-It records the pull request and that head on the run, since an approval status
+{url, number, head_sha, branch, round}, where `round` is a fresh random nonce,
+plus `reviewed` = {verdict: "ship", head_sha} when the head it pushed is one
+the reviewer already said ship on. That ship is read from the server
+(`/cli/workflow-runs/merge-proof`: the reviewer verdict recorded in the run's
+current attempt, and its recorded station rebases), never from a file, and it
+stands for the pushed head when that is the head it read or one those rebases
+made from it (whose links go into `pr.json`'s `rebases`). A changes verdict is
+never carried, and a resume that starts a new attempt holds no review the
+server counts, so both get a fresh reviewer. It records the pull request and
+that head on the run, since an approval status
 reads a pull request no run reported as a bot's. A line whose own scripts open
 and rebase the pull request makes the same reports itself, or its pull requests
 wait on the approval status for good: `cast flow record-pr --number <n> --head
@@ -470,9 +478,12 @@ the head this run last pushed there (a branch frozen from a session's edits is
 the run's own, and a session's fix may rebase someone's branch); a head anyone
 else pushed is never overwritten, and a pull request from a fork stops the run
 (the station pushes only to origin). CI and Review then run at
-once in a fan-out (FL3's `shape=component`). CI (`cast flow ci --head <pr.json's
-head>`) always exits 0 with `ci.json`: the head it judged, green or not, and
-each failure with its job, test, assertion, file, line and excerpt. The
+once in a fan-out (FL3's `shape=component`), Review only when `pr.json` carries
+no ship: a fan-out edge with a condition runs its branch only when it holds,
+and a branch passed over keeps what it last said. CI (`cast flow ci --pushed`,
+which judges the head `pr.json` on disk holds, so a retest's rebase moves it)
+always exits 0 with `ci.json`: the head it judged, green or not, and each
+failure with its job, test, assertion, file, line and excerpt. The
 reviewer is an independent session reading the line's review prompt plus
 `templates/change/review.md`: it reviews commit `pr.json.head_sha`, not the
 branch as it stands, records its verdict with `cast flow review-verdict`, and
@@ -483,7 +494,11 @@ once more on its own; a second death stops the run at Review never finished.
 Verdicts (`cast flow verdicts`, `workflow/changeVerdicts.ts`) is given that
 pin and reads `pr.json` and `ci.json`. A file is never a verdict: anything on
 the machine could write one, the change's own author included, and a reviewer
-moved to another machine could not. The pin counts only with this round's
+moved to another machine could not. A pin of this round comes first; without
+one, a ship carried in `pr.json` counts only when the server still records
+that ship on that head in this attempt and CI judged a head it speaks for
+(Verdicts asks merge-proof again), and `review.json` then says `reused`. The
+pin counts only with this round's
 nonce and the head CI judged, or a head the run's own stations rebased from
 it this round (`pr.json`'s `rebases`), so neither a pin left from an earlier
 round (a fan-out keeps a branch's last output when the new one holds none)
@@ -542,6 +557,13 @@ branch that lags such a rebase, PR replays the new commits onto origin's
 branch before it pushes. Every way back to the session returns to PR, so what
 merges is exactly the commit CI and the reviewer passed, never the session's
 live edits. Each way back has `max_visits=3`; the fourth visit ends the run.
+For Fix findings a visit is a brief that asks for a code change, as Verdicts'
+`fix` says: CI judged the pushed head red with anything other than failures
+main also has (a red naming no failure counts too), or this round's reviewer
+asked for changes. A brief only for a review that never came enters along a
+`free_visit` edge (`max_free_visits=3`) and spends nothing; past three such,
+each spends a visit like any other. The run card's round counter is Fix
+findings' visits as the runner reports them, the same count.
 
 The session hears how the run ended (done, or stopped where and why)
 in its own turn. A run on a task, a branch or a pull request started from inside a

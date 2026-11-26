@@ -114,3 +114,31 @@ describe("a waiting station's progress", () => {
     ]);
   });
 });
+
+describe("cast flow verdicts and a carried ship", () => {
+  test("a ship carried in pr.json counts only as the server's merge-proof for the run holds it", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-flow-verdicts-"));
+    const head = "a".repeat(40);
+    // No branch: Verdicts asks origin nothing.
+    fs.writeFileSync(path.join(dir, "pr.json"), JSON.stringify({ url: "u", number: 7, head_sha: head, round: "r2", reviewed: { verdict: "ship", head_sha: head } }, null, 2));
+    fs.writeFileSync(path.join(dir, "ci.json"), JSON.stringify({ green: true, head_sha: head, failing: [], preexisting: [], pending: [], timed_out: false }));
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (l: string) => { said.push(l); };
+    try {
+      for (const held of [{ verdict: "ship", head_sha: head }, { verdict: "changes", head_sha: head }]) {
+        const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
+        const { program } = cast({}, async (p, body) => { posts.push({ path: p, body }); return { review: held, rebases: [] }; });
+        await program.parseAsync(["node", "cast", "flow", "verdicts", "--dir", dir, "--run", "run_3"]);
+        expect(posts).toEqual([{ path: "/cli/workflow-runs/merge-proof", body: { run_id: "run_3" } }]);
+      }
+    } finally {
+      console.log = log;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    expect(said.map((l) => JSON.parse(l).next)).toEqual(["merge", "rerun_review"]);
+  });
+});

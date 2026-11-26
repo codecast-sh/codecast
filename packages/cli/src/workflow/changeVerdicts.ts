@@ -5,15 +5,16 @@
 // it carries this round's nonce from pr.json and names the head CI judged, or
 // one the run's own stations rebased into it: a file any process could write,
 // the change's own author included, never counts, and neither does a pin from
-// an earlier round or on a head pushed since. A round whose head the last
-// accepted review already read runs no reviewer: the PR station carries that
-// review into pr.json (`reviewed`), and it stands for the round (Merge still
-// asks the server for the review it recorded on that head). Only green CI on
-// the pushed head and an accepted `ship` merge; what only the machine can fix
-// runs again once in the round; the rest goes back to the session, never on
-// to Merge.
+// an earlier round or on a head pushed since. A round that pushed the head a
+// reviewer already said ship on asks no reviewer: the PR station carries that
+// ship into pr.json (`reviewed`) from what the server recorded in this attempt,
+// and it stands for the round only while the server still holds it, as Merge
+// requires. Only green CI on the pushed head and an accepted `ship` merge;
+// what only the machine can fix runs again once in the round; the rest goes
+// back to the session, never on to Merge.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { MergeProof } from "./prStation.js";
 
 export type Verdicts = {
   /** CI and the review as the run card shows them. */
@@ -24,12 +25,12 @@ export type Verdicts = {
   why: string;
   /** ci.json with only the failures the change causes, the first of them cut short (the whole report is ci.json). */
   ci_result: Record<string, any> | null;
-  /** The review as accepted for this round, null when none was; `reused` when it is the last round's, on the same head. */
+  /** The review as accepted for this round, null when none was; `reused` when it is the reviewer's ship from an earlier round on this head. */
   review_result: Record<string, any> | null;
   /**
-   * Whether a brief asks the session to change its code: CI fails on something the change causes, or a reviewer who
-   * read this round's head asked for changes. Only such a brief spends one of the session's rounds (change.cast); one
-   * for a review that never arrived, or for the same review of a head the session left as it was, does not.
+   * Whether a brief asks the session to change its code: CI judged the pushed head red with anything not every failure
+   * main also has (failures it names nobody, too), or this round's reviewer asked for changes. Only such a brief spends
+   * one of the session's rounds (change.cast); one only for a review that never arrived does not.
    */
   fix: boolean;
 };
@@ -83,21 +84,25 @@ function reviewProblem(pin: Record<string, any> | null, round: unknown, heads: S
 
 /**
  * Decide, and leave the run's directory saying so: pr.json counts the round's reruns, and review.json holds the
- * accepted review (the one Merge reads), or nothing when no review was accepted.
+ * accepted review (the one Merge reads), or nothing when no review was accepted. `proof` is what the server holds for
+ * the run's attempt: a carried review counts only when it is the reviewer's ship the server recorded on that head.
  */
-export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null): Verdicts {
+export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null, proof?: MergeProof | null): Verdicts {
   const prFile = path.join(dir, "pr.json");
   const pr = readJson(prFile);
   const done = (v: Omit<Verdicts, "why" | "fix"> & { why: string }): Verdicts => ({ ...v, why: v.why.slice(0, WHY_CAP), fix: v.next === "brief" && fix });
   const ci = readJson(path.join(dir, "ci.json"));
   const heads = reviewedHeads(ci?.head_sha, pr?.rebases);
-  // The last round's review, carried by the PR station because this round pushed a head it read, stands for the
-  // round while it speaks for the head CI judged; else a reviewer asked again pins this round's.
-  const carried = pr?.reviewed && typeof pr.reviewed === "object" ? { ...pr.reviewed, round: pr.round } : null;
-  const reused = carried && !reviewProblem(carried, pr?.round, heads) ? carried : null;
-  const pin = reused ?? parse(reviewPin);
-  const problem = reviewProblem(pin, pr?.round, heads);
-  const review = problem ? null : { verdict: pin!.verdict, findings: Array.isArray(pin!.findings) ? pin!.findings : [], round: pin!.round, head_sha: pin!.head_sha, ...(reused ? { reused: true } : {}) };
+  // A reviewer's pin with this round's nonce comes first. Without one, the ship the PR station carried stands, only
+  // while the server still records that ship on that head in this attempt and CI judged a head it speaks for.
+  const pin = parse(reviewPin);
+  const pinProblem = reviewProblem(pin, pr?.round, heads);
+  const carried = pr?.reviewed?.verdict === "ship" && typeof pr.reviewed.head_sha === "string" ? pr.reviewed.head_sha as string : null;
+  const reused = pinProblem && carried && heads.has(carried) && proof?.review?.verdict === "ship" && proof.review.head_sha === carried;
+  const review = !pinProblem
+    ? { verdict: pin!.verdict, findings: Array.isArray(pin!.findings) ? pin!.findings : [], round: pin!.round, head_sha: pin!.head_sha }
+    : reused ? { verdict: "ship", findings: [], head_sha: carried, reused: true } : null;
+  const problem = review ? null : carried ? `the ship carried for ${carried.slice(0, 10)} is not one the server holds on the head CI judged in this attempt, and ${pinProblem}` : pinProblem;
   const reviewFile = path.join(dir, "review.json");
   if (review) fs.writeFileSync(reviewFile, JSON.stringify(review, null, 2) + "\n");
   else fs.rmSync(reviewFile, { force: true });
@@ -123,10 +128,12 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
     : station.length ? `the CI station could not judge: ${station.map(stationSaid).join("; ")}`
     : null;
   const passing = !!ci && !machine && !real.length && ci.green === true;
-  const fix = (!!real.length && ci?.head_sha === pr?.head_sha) || (review?.verdict === "changes" && !reused);
+  // CI that judged the pushed head red asks for a fix unless every failure is main's; one naming no failure counts too.
+  const ciAsks = !!ci && ci.head_sha === pr?.head_sha && !passing && (!machine || real.length > 0) && !(ci.blocked_by_main === true && !real.length);
+  const fix = ciAsks || review?.verdict === "changes";
   const said = {
     ci: (machine && !conflict ? "timed_out" : passing ? "green" : ci?.blocked_by_main === true ? "blocked_by_main" : "red") as Verdicts["ci"],
-    review: (review ? review.verdict : pin ? "stale" : "missing") as Verdicts["review"],
+    review: (review ? review.verdict : pin || carried ? "stale" : "missing") as Verdicts["review"],
     ci_result: ci ? briefed(ci, real) : null,
     review_result: review,
   };

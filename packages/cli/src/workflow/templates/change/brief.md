@@ -4,8 +4,8 @@ What CI found, as JSON. Each entry under `failing` is a failure on this change, 
 
 $verdicts.json.ci_result
 
-What the reviewer found, as JSON (verdict `ship` with no findings means the review passed; `reused` means it is the last round's review of this same commit; null means the reviewer left no verdict, and the next round asks a fresh reviewer):
+What the reviewer found, as JSON (verdict `ship` with no findings means the review passed; `reused` means the reviewer said ship on this same commit in an earlier round; null means the reviewer left no verdict, and the next round asks a fresh reviewer):
 
 $verdicts.json.review_result
 
-Fix each failure and each finding here, in this session's checkout: fix what is right, and where you disagree with a finding, say why in your reply. When there is nothing of yours to fix, end your turn without changing anything. $change_return, pushes the change to the pull request again and runs CI on it, with a fresh review if you changed it (a commit left as it was keeps its review). The run is waiting on you: do not start it again. If a person must act before you can go on, pin `cast state --status blocked "<why>"`: the run waits, and goes on when you next end your turn.
+Fix each failure and each finding here, in this session's checkout: fix what is right, and where you disagree with a finding, say why in your reply. When there is nothing of yours to fix, end your turn without changing anything. $change_return, pushes the change to the pull request again and runs CI on it, and a fresh review unless the reviewer already said ship on the commit as it stands. The run is waiting on you: do not start it again. If a person must act before you can go on, pin `cast state --status blocked "<why>"`: the run waits, and goes on when you next end your turn.

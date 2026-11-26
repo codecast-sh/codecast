@@ -176,6 +176,9 @@ export const holderOf = (d: GateDecision | null | undefined): "person" | "role" 
 export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "gate_prompt" | "gate_decision_status">) =>
   run.status === "paused" && !!(run.gate_decision_id || run.gate_prompt) && (run.gate_decision_status ?? "pending") === "pending";
 
+/** A step's report that carries the reviewer's ship into its round (the change flow's PR station, prStation.ts). */
+const KEPT_SHIP = /"reviewed"\s*:\s*\{[^{}]*"verdict"\s*:\s*"ship"/;
+
 /** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
 export const LANDING_STEP = /(^|__)(shipped|landed)$/;
 
@@ -574,6 +577,9 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     if (said === "blocked_by_main") return live ? "waiting" : "routed";
     if (said === "rejected") return failed ? "stopped" : "back";
     if (said === "missing") return "routed";
+    // A round on a head the reviewer already said ship on asks no reviewer (the change flow's pr.json `reviewed`):
+    // until Verdicts speaks, its Review reads as that ship, not as a reviewer yet to start.
+    if (br.who === "agent" && statuses.some((n) => KEPT_SHIP.test(n.result_preview ?? "") && (n.started_at ?? 0) > (last?.started_at ?? 0))) return "done";
     return passed && last ? "done" : passed ? "skipped" : "idle";
   };
   // A segment's inside on the run (segmentInside.ts insideOnRun). A stage after where the run stands holds nothing of this round.
