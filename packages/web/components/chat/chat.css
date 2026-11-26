@@ -2025,6 +2025,13 @@ div.ch-reaction-tip {
   box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-text) 20%, transparent);
 }
 
+/* Set by placeToolsPopover when the scroller would cut the popover off below. */
+.ch-emoji-picker[data-up],
+.ch-menu[data-up] {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
 .ch-emoji-picker {
   display: flex;
   gap: 1px;

@@ -55,6 +55,28 @@ function clockTime(ts: number): string {
   return HOVER_TIME.format(new Date(ts));
 }
 
+/** Ref callback for a toolbar popover (the menu, the emoji picker). They open
+ *  below the toolbar, and the list's scroller clips them: on the last message
+ *  the menu ran under the composer. When the bottom is cut and there is more
+ *  room above, open it upward instead. Runs at commit, before paint. */
+function placeToolsPopover(el: HTMLElement | null) {
+  const toolbar = el?.parentElement;
+  if (!el || !toolbar) return;
+  let top = 0;
+  let bottom = window.innerHeight;
+  for (let p = toolbar.parentElement; p; p = p.parentElement) {
+    if (getComputedStyle(p).overflowY === "visible") continue;
+    const box = p.getBoundingClientRect();
+    top = Math.max(top, box.top);
+    bottom = Math.min(bottom, box.bottom);
+    break;
+  }
+  const bar = toolbar.getBoundingClientRect();
+  if (el.getBoundingClientRect().bottom > bottom && bar.top - top > bottom - bar.bottom) {
+    el.dataset.up = "";
+  }
+}
+
 /** "3:04 PM" for today, "Tue 3:04 PM" for older — the header timestamp carries a
  *  weekday once the message is no longer from today, so a scrolled-back reader
  *  is never guessing. */
@@ -616,7 +638,7 @@ export const ChatMessage = memo(function ChatMessage({
           )}
 
           {pickerOpen && (
-            <div className="ch-emoji-picker" role="menu" aria-label="React">
+            <div ref={placeToolsPopover} className="ch-emoji-picker" role="menu" aria-label="React">
               {QUICK_REACTIONS.map((emoji) => (
                 <button
                   key={emoji}
@@ -632,7 +654,7 @@ export const ChatMessage = memo(function ChatMessage({
           )}
 
           {menuOpen && (
-            <div className="ch-menu" role="menu" aria-label="Message actions">
+            <div ref={placeToolsPopover} className="ch-menu" role="menu" aria-label="Message actions">
               {canHand && (
                 <button
                   type="button"
