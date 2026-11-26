@@ -17,7 +17,8 @@ import { useConversationMessages } from "../../../hooks/useConversationMessages"
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore, isConvexId } from "../../../store/inboxStore";
 import { isForeignSession } from "../../../lib/liveEntities";
-import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
+import { PREFILL_PARAM, type ComposerSeed } from "../../../lib/composerPrefill";
+import { conversationLinkDraft } from "../../../lib/composeLink";
 import { getShareTokenScope, setShareTokenScope } from "../../../lib/shareTokenScope";
 import { GuestSuggestComposer } from "../../../components/GuestSuggestComposer";
 import { useLocalAuth } from "../../../lib/localAuth";
