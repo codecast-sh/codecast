@@ -89,6 +89,17 @@ describe("tool card Open in editor", () => {
     await unmount();
   });
 
+  test("a MultiEdit whose result has no line numbers asks the editor to find its new text", async () => {
+    opened.length = 0;
+    const input = JSON.stringify({ file_path: "/Users/ada/src/app/lib/x.ts", edits: [{ old_string: "a", new_string: "const b = 2;" }, { old_string: "c", new_string: "  " }, { old_string: "d", new_string: "const e = 5;" }] });
+    const { host, unmount } = await mount({ id: "t6", name: "MultiEdit", input }, { tool_use_id: "t6", content: "Applied 3 edits to /Users/ada/src/app/lib/x.ts" });
+    await press(host);
+    expect(opened).toHaveLength(1);
+    expect(opened[0].target).toMatchObject({ path: "/Users/ada/src/app/lib/x.ts", find: ["const b = 2;", "const e = 5;"] });
+    expect(opened[0].target.line).toBeUndefined();
+    await unmount();
+  });
+
   test("a Read opens at its offset, without a flash", async () => {
     opened.length = 0;
     const input = JSON.stringify({ file_path: "lib/y.ts", offset: 120, limit: 40 });
