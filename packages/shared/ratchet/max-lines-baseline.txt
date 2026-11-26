@@ -30,7 +30,6 @@ packages/cli/src/cloudAgents/codex.test.ts 950
 packages/cli/src/cloudAgents/codex.ts 950
 packages/cli/src/cloudAgents/watcher.ts 850
 packages/cli/src/codexAppServer.ts 1400
-packages/cli/src/commandGroups.ts 850
 packages/cli/src/daemon.interactive-prompt-parse.test.ts 900
 packages/cli/src/daemon.machine-prompt-safety.test.ts 1500
 packages/cli/src/daemon.tmux-classify.test.ts 1500
@@ -113,8 +112,6 @@ packages/convex/convex/lineTrial.test.ts 900
 packages/convex/convex/lineTrial.ts 2150
 packages/convex/convex/managedSessions.ts 1300
 packages/convex/convex/messages.ts 2800
-packages/convex/convex/metrics.ts 850
-packages/convex/convex/migrations.ts 850
 packages/convex/convex/notifications.needsInput.test.ts 900
 packages/convex/convex/notifications.ts 1350
 packages/convex/convex/oauthConnectors.test.ts 850
@@ -182,7 +179,6 @@ packages/web/app/(marketing)/heroFly/timeline.ts 1000
 packages/web/app/admin/daemon-logs/page.tsx 900
 packages/web/app/calls/page.tsx 1350
 packages/web/app/chat/page.tsx 900
-packages/web/app/files/page.tsx 850
 packages/web/app/inbox/QueuePageClient.tsx 900
 packages/web/app/meet/[token]/page.tsx 900
 packages/web/app/sessions/page.tsx 950
@@ -207,7 +203,7 @@ packages/web/components/MessageReview.tsx 1050
 packages/web/components/PlanDetailPanel.tsx 1250
 packages/web/components/PublishedPageEmbed.tsx 950
 packages/web/components/TriggerContextPanel.tsx 900
-packages/web/components/calls/CallStage.tsx 1250
+packages/web/components/calls/CallStage.tsx 1050
 packages/web/components/calls/RoomThread.tsx 1050
 packages/web/components/castCommand.test.ts 1100
 packages/web/components/castCommand.ts 1000
@@ -228,10 +224,8 @@ packages/web/components/org/orgLayout.ts 850
 packages/web/hooks/useConversationMessages.ts 1100
 packages/web/hooks/useWalkie.ts 1000
 packages/web/lib/__tests__/walkieOrder.test.ts 1600
-packages/web/lib/calls/asrPipe.ts 850
 packages/web/lib/calls/callManager.ts 1700
 packages/web/lib/calls/walkie.ts 1900
-packages/web/lib/code/git/gutter.ts 900
 packages/web/lib/desktop.test.ts 1250
 packages/web/lib/desktop.ts 1900
 packages/web/lib/faces/faceRow.ts 1050
@@ -254,4 +248,4 @@ packages/web/store/inboxStore.ts 17900
 packages/web/store/orgSlice.ts 1700
 packages/web/store/strandedStub.test.ts 950
 packages/web/store/undo/policies/work.ts 1000
-packages/web/store/vaultStore.ts 1650
+packages/web/store/vaultStore.ts 1450
