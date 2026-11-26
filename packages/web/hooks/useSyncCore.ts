@@ -12,6 +12,8 @@ import { useSyncMentionDocs } from "./useSyncDocs";
 import { useSyncMentionPlans } from "./useSyncPlans";
 import { useSyncTeamShipFeeds } from "./useSessionShipState";
 
+const WAKE_COALESCE_MS = 1000;
+
 export type SyncCoreProfile = "web" | "mobile";
 
 // THE feeder mount set (sync-convergence C5, "feeder parity"). Every client
@@ -63,10 +65,21 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useEffect(() => {
     if (profile !== "web") return;
     if (typeof document === "undefined" || typeof window === "undefined") return;
-    const onVisible = () => {
-      if (document.visibilityState === "visible") emitSyncWake();
+    // One return to the window fires `visibilitychange` (visible) and then
+    // `focus`: wake once for the pair, not once each — every wake consumer
+    // (the sync-log catch-up among them) would otherwise run twice per return
+    // (ct-102136).
+    let lastWakeAt = -Infinity;
+    const wake = () => {
+      const now = Date.now();
+      if (now - lastWakeAt < WAKE_COALESCE_MS) return;
+      lastWakeAt = now;
+      emitSyncWake();
     };
-    const onFocus = () => emitSyncWake();
+    const onVisible = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    const onFocus = () => wake();
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onFocus);
     return () => {

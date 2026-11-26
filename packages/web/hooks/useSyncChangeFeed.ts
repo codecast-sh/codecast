@@ -748,16 +748,11 @@ export function useSyncChangeFeed(): void {
     run();
     const id = setInterval(run, TICK_MS);
     // Wake events — a backgrounded/frozen client catches up the moment the
-    // user returns. `document` is web-only; the syncWake bus below is the
-    // platform-neutral source (AppState "active" on mobile, wired by
-    // StoreSyncBridge), so an iOS resume replays the cursors too.
-    const doc = typeof document !== "undefined" ? document : undefined;
+    // user returns. The syncWake bus is the one source for that (useSyncCore
+    // wires visibility/focus on web, StoreSyncBridge wires AppState on
+    // mobile); listening for focus here as well ran a second catch-up on
+    // every return to the window (ct-102136). `online` is not a wake.
     const win = typeof window !== "undefined" ? window : undefined;
-    const onVisible = () => {
-      if (doc?.visibilityState === "visible") run();
-    };
-    doc?.addEventListener?.("visibilitychange", onVisible);
-    win?.addEventListener?.("focus", run);
     win?.addEventListener?.("online", run);
     const offWake = onSyncWake(run);
     return () => {
@@ -767,8 +762,6 @@ export function useSyncChangeFeed(): void {
         debounceRef.current = null;
       }
       offWake();
-      doc?.removeEventListener?.("visibilitychange", onVisible);
-      win?.removeEventListener?.("focus", run);
       win?.removeEventListener?.("online", run);
     };
   }, [hydrated, run]);
