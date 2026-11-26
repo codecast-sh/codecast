@@ -8,6 +8,9 @@ import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, useTheme } from '@/constants/Theme';
 import { useResumeAt } from '@codecast/web/hooks/useResumeAt';
 import { resumeWords, type ResumeAt } from '@codecast/web/lib/ship/resumeAt';
+import { resumeAtLedger } from '@codecast/web/components/consequential/resumeLedger';
+import { ledgerLines } from '@codecast/web/components/consequential/roleOnline';
+import { appAlert } from '@/lib/popups';
 
 export function ResumeAtAction({ runId, resume }: { runId: string; resume: ResumeAt }) {
   const Theme = useTheme();
@@ -16,7 +19,11 @@ export function ResumeAtAction({ runId, resume }: { runId: string; resume: Resum
   return (
     <RNView style={styles.wrap}>
       <Pressable
-        onPress={() => void press()}
+        onPress={() => {
+          // It may push to main and deploy: the same review as the web's, as an alert (AGENTS.md, consequential presses).
+          const l = resumeAtLedger(resume);
+          appAlert(l.name, ledgerLines(l).join('\n'), [{ text: l.keep ?? 'Not now', style: 'cancel' }, { text: l.confirm, onPress: () => void press() }]);
+        }}
         disabled={pending}
         hitSlop={8}
         accessibilityRole="button"

@@ -309,4 +309,21 @@ describe("a level that moves the branch last (--ref-last, the personal Ship's La
     // Nothing staged or unstaged against the person's commit but their own staged file: no revert of it anywhere.
     expect(execFileSync("git", ["-C", shared, "status", "--porcelain"], { encoding: "utf-8", env: ENV })).toBe("A  w.txt\n");
   });
+  test("an edit merged in during the write survives a lost swap: what is put back is the file as its write found it", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n", "b.txt": "one\ntwo\nthree\n" });
+    upstream({ "a.txt": "A\n", "b.txt": "ONE\ntwo\nthree\n" });
+    let committed = "";
+    const r = await levelCheckout(shared, "origin/main", { refLast: true, onWrite: (rel) => {
+      // After a.txt is written and before b.txt is, the person edits b.txt's last line, so the loop merges it.
+      if (rel === "a.txt") { write(shared, "b.txt", "one\ntwo\nthree mine\n"); return; }
+      // Then a commit of another file wins the swap.
+      write(shared, "z.txt", "z\n");
+      execFileSync("git", ["-C", shared, "add", "z.txt"], { env: ENV });
+      execFileSync("git", ["-C", shared, "commit", "-qm", "mine", "--", "z.txt"], { env: ENV });
+      committed = sh(shared, "rev-parse", "HEAD");
+    } });
+    expect(r.ok).toBe(false);
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(committed);
+    expect([read(shared, "a.txt"), read(shared, "b.txt")]).toEqual(["a\n", "one\ntwo\nthree mine\n"]);
+  });
 });

@@ -6,7 +6,9 @@
 // from, which commits its fix to the branch when a brief reaches it. A fake `gh` records any call: nothing in this
 // flow may open a pull request. Each test file calls usePersonalSandbox() once.
 import { afterAll, beforeAll, expect, test as bunTest } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync } from "../proc.js";
+import { defaultConfigDir } from "../config/configDir.js";
+import { pointCodecastDir } from "../test-helpers/codecastDir.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -126,7 +128,7 @@ export function world(answers: { find: object; review?: object[]; deploy?: objec
   const root = path.join(base, "repo");
   const state = path.join(base, "state");
   fs.mkdirSync(state, { recursive: true });
-  process.env.CODECAST_DIR = path.join(base, ".codecast");
+  pointCodecastDir(path.join(base, ".codecast"));
   process.env.FAKE_STATE = state;
   fs.writeFileSync(path.join(state, "calls.log"), "");
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
@@ -152,9 +154,9 @@ export function world(answers: { find: object; review?: object[]; deploy?: objec
     fs.mkdirSync(tdir, { recursive: true });
     const tfile = path.join(tdir, `${sessionId}.jsonl`);
     fs.writeFileSync(tfile, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-    const ledgerFile = path.join(process.env.CODECAST_DIR!, "sync-ledger.json");
-    fs.mkdirSync(process.env.CODECAST_DIR!, { recursive: true });
-    fs.writeFileSync(path.join(process.env.CODECAST_DIR!, "session-links.json"), JSON.stringify({ [sessionId]: { conversation_id: CONV, team_visible: true, checked_at: Date.now() } }));
+    const ledgerFile = path.join(defaultConfigDir(), "sync-ledger.json");
+    fs.mkdirSync(defaultConfigDir(), { recursive: true });
+    fs.writeFileSync(path.join(defaultConfigDir(), "session-links.json"), JSON.stringify({ [sessionId]: { conversation_id: CONV, team_visible: true, checked_at: Date.now() } }));
     fs.writeFileSync(ledgerFile, JSON.stringify({ [tfile]: { lastSyncedAt: Date.now(), lastSyncedPosition: 0, messageCount: lines.length, conversationId: CONV, sourceGeneration: { client: "claude", sessionId, dev: 0, ino: 0, birthtimeMs: 0, unit: "bytes", watermark: 0, prefixProven: true } } }));
   };
   const branch = answers.own ? "codecast/change-ct-9" : "feat";

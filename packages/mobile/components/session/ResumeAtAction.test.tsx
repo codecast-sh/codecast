@@ -13,6 +13,11 @@ mock.module('react-native', () => ({
 mock.module('@/components/Themed', () => ({ Text: host('Text') }));
 mock.module('@/constants/Theme', () => ({ CHROME_FONT_CAP: 1.3, useTheme: () => ({ blue: '#00f', red: '#f00' }) }));
 
+// The press asks first (an alert of the review's lines); `alerts` keeps each, and `yes()` presses its confirm.
+const alerts: { title: string; body: string; buttons: { text: string; style?: string; onPress?: () => void }[] }[] = [];
+mock.module('@/lib/popups', () => ({ appAlert: (title: string, body: string, buttons: any[]) => { alerts.push({ title, body, buttons }); } }));
+const yes = () => TestRenderer.act(async () => { alerts.at(-1)!.buttons.find((b) => b.style !== 'cancel')!.onPress!(); await new Promise((x) => setTimeout(x, 0)); });
+
 const calls: { name: string; args: any }[] = [];
 let answer: () => Promise<unknown> = async () => ({});
 const realConvex = await import('convex/react');
@@ -29,7 +34,7 @@ beforeAll(async () => {
   TestRenderer = await import('react-test-renderer');
   ({ ResumeAtAction } = await import('./ResumeAtAction'));
 });
-beforeEach(() => { calls.length = 0; });
+beforeEach(() => { calls.length = 0; alerts.length = 0; });
 
 async function mount() {
   let r!: import('react-test-renderer').ReactTestRenderer;
@@ -46,9 +51,14 @@ test('Resume at Land resumes the run at Land and reads Resuming… while the ser
   const m = await mount();
   expect(m.words()).toBe('Resume at Land');
   await m.tap();
+  // A tap only asks: what resuming may do, with a way out; nothing is resumed until its confirm.
+  expect(calls).toEqual([]);
+  expect([alerts[0].title, alerts[0].body.includes('Pushes it to main, then deploys'), alerts[0].buttons.map((b) => b.text)]).toEqual(['Resume at Land', true, ['Not now', 'Resume at Land']]);
+  await yes();
   expect(calls).toEqual([{ name: 'failedRunResume:resume', args: { run_id: 'run_1', at: 'land' } }]);
   expect([m.words(), m.press().props.disabled]).toEqual(['Resuming…', true]);
   await m.tap();
+  await yes();
   expect(calls.length).toBe(1);
 });
 
@@ -56,6 +66,7 @@ test("a refusal says the server's own words under the press, which can be tried 
   answer = async () => { throw new ConvexError("Only the run's owner resumes it"); };
   const m = await mount();
   await m.tap();
+  await yes();
   expect(m.refused()).toEqual(["Could not resume: Only the run's owner resumes it"]);
   expect([m.words(), m.press().props.disabled]).toEqual(['Resume at Land', false]);
 });

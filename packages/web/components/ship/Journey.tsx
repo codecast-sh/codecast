@@ -17,6 +17,8 @@ import { ageShort } from "../../lib/lineFlow";
 import { leftWords } from "../../lib/ship/stationResult";
 import { resumeWords, type ResumeAt } from "../../lib/ship/resumeAt";
 import { useResumeAt } from "../../hooks/useResumeAt";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { resumeAtLedger } from "../consequential/resumeLedger";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
@@ -335,14 +337,16 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
   }
 }
 
-/** Resume a stopped run at the station its reason names (lib/ship/resumeAt.ts): pending while the server takes it, then
+/** Resume a stopped run at the station its reason names (lib/ship/resumeAt.ts), after its review (resumeLedger): pending while the server takes it, then
  *  the run moves on and this bar with it; a refusal says the server's own words. */
 function ResumeAtPress({ runId, resume }: { runId: string; resume: ResumeAt }) {
   const { state, press } = useResumeAt(runId, resume.at);
+  const [reviewing, setReviewing] = useState(false);
   const pending = state.kind === "pending";
   return (
     <>
-      <button type="button" className="sj-act" data-primary disabled={pending} aria-busy={pending || undefined} onClick={() => void press()} data-journey-resume={resume.at}>{pending ? "Resuming…" : resumeWords(resume)}</button>
+      <button type="button" className="sj-act" data-primary disabled={pending} aria-busy={pending || undefined} onClick={() => setReviewing(true)} data-journey-resume={resume.at}>{pending ? "Resuming…" : resumeWords(resume)}</button>
+      {reviewing ? <SwitchReview ledger={resumeAtLedger(resume)} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void press(); }} /> : null}
       {state.kind === "refused" ? <p className="sj-note" role="alert" data-journey-resume-refused>Could not resume: {state.why}</p> : null}
     </>
   );

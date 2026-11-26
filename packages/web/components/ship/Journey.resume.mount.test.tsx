@@ -14,7 +14,7 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://codecast.sh/conversation/c1" });
 const restoreGlobals = replaceGlobals({
   window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement,
-  Element: dom.window.Element, Node: dom.window.Node, Event: dom.window.Event, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage,
+  Element: dom.window.Element, Node: dom.window.Node, Event: dom.window.Event, MutationObserver: dom.window.MutationObserver, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), DocumentFragment: dom.window.DocumentFragment, KeyboardEvent: dom.window.KeyboardEvent, CustomEvent: dom.window.CustomEvent, NodeFilter: dom.window.NodeFilter, requestAnimationFrame: (f: any) => setTimeout(f, 0), cancelAnimationFrame: clearTimeout, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 
@@ -47,6 +47,8 @@ async function mount(scenario: string) {
   return { container, press: () => container.querySelector("[data-journey-resume]") as HTMLButtonElement | null, unmount: () => act(() => root.unmount()) };
 }
 const click = (el: Element | null) => act(async () => { (el as HTMLElement).click(); await new Promise((r) => setTimeout(r, 0)); });
+// The press opens its review (resumeLedger); only the review's confirm resumes the run.
+const confirm = () => click(document.body.querySelector("[data-switch-confirm]"));
 
 describe("Resume at Land on the Ship bar", () => {
   test("each stop that says to resume leads with Resume at Land, which resumes the run at Land and reads Resuming…", async () => {
@@ -59,6 +61,10 @@ describe("Resume at Land on the Ship bar", () => {
       // Opening the run follows it, no longer the lead.
       expect(m.container.querySelector("[data-journey-open-run]")!.hasAttribute("data-primary")).toBe(false);
       await click(press);
+      // One press only opens the review, which says what resuming may do: nothing is resumed yet.
+      expect(calls).toEqual([]);
+      expect(document.body.querySelector("[data-switch-review]")!.textContent).toContain("Pushes it to main, then deploys");
+      await confirm();
       expect(calls).toEqual([{ name: "failedRunResume:resume", args: { run_id: "run_1", at: "land" } }]);
       expect([m.press()!.textContent, m.press()!.disabled]).toEqual(["Resuming…", true]);
       // A second press while it is pending sends nothing more.
@@ -72,8 +78,18 @@ describe("Resume at Land on the Ship bar", () => {
     answer = async () => { throw new ConvexError("Only the run's owner resumes it"); };
     const m = await mount(UNKNOWN);
     await click(m.press());
+    await confirm();
     expect(m.container.querySelector("[data-journey-resume-refused]")!.textContent).toBe("Could not resume: Only the run's owner resumes it");
     expect([m.press()!.textContent, m.press()!.disabled]).toEqual(["Resume at Land", false]);
+    await m.unmount();
+  });
+
+  test("backing out of the review resumes nothing", async () => {
+    const m = await mount(UNKNOWN);
+    await click(m.press());
+    await click(document.body.querySelector("[data-switch-cancel]"));
+    expect(calls).toEqual([]);
+    expect(document.body.querySelector("[data-switch-review]")).toBeNull();
     await m.unmount();
   });
 

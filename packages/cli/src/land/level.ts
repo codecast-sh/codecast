@@ -231,7 +231,7 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   if (!opts.refLast && !(await moveRef())) {
     return { ...empty, ok: false, reason: "HEAD moved while levelling; run again" };
   }
-  const before = opts.refLast ? await priorState(root, actions, entries) : null;
+  const before = opts.refLast ? await priorState(root, entries) : null;
 
   // Files next. Each is re-hashed right before its write; one edited since
   // the plan is decided again from what is on disk now, so a keystroke that
@@ -249,6 +249,8 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
       a = again;
       if (a.kind === "absorb" || a.kind === "keep") break;
     }
+    // The bytes a lost swap puts back are the file's as this write found it, so an edit merged in during the loop survives.
+    if (before && (a.kind === "merge" || a.kind === "write")) before.files.set(a.entry.path, fileState(file));
     if (a.kind === "merge") writeAtomic(file, a.content, a.entry.dstMode);
     else if (a.kind === "write") {
       if (a.entry.dst) writeAtomic(file, await blobContent(root, a.entry.dst), a.entry.dstMode);
@@ -277,18 +279,17 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
 /** A blob's object id, as git names the bytes (what `worktreeBlobs` reads back from disk). */
 const blobSha = (bytes: Buffer) => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 
-/** What a `refLast` level is about to change, so a lost swap puts it back: each written file's bytes and the index entries. */
+/** What a `refLast` level changed, so a lost swap puts it back: each written file's bytes as its write found them, and the index entries. */
 type Prior = { files: Map<string, { link: string } | { bytes: Buffer; mode: number } | null>; index: string; paths: string[]; wrote: Map<string, string | null> };
 
-async function priorState(root: string, actions: Action[], entries: DiffEntry[]): Promise<Prior> {
+function fileState(file: string): { link: string } | { bytes: Buffer; mode: number } | null {
+  let st: fs.Stats | null = null;
+  try { st = fs.lstatSync(file); } catch {}
+  return !st ? null : st.isSymbolicLink() ? { link: fs.readlinkSync(file) } : { bytes: fs.readFileSync(file), mode: st.mode & 0o777 };
+}
+
+async function priorState(root: string, entries: DiffEntry[]): Promise<Prior> {
   const files: Prior["files"] = new Map();
-  for (const a of actions) {
-    if (a.kind !== "write" && a.kind !== "merge") continue;
-    const file = path.join(root, a.entry.path);
-    let st: fs.Stats | null = null;
-    try { st = fs.lstatSync(file); } catch {}
-    files.set(a.entry.path, !st ? null : st.isSymbolicLink() ? { link: fs.readlinkSync(file) } : { bytes: fs.readFileSync(file), mode: st.mode & 0o777 });
-  }
   const paths = entries.map((e) => e.path);
   const index = paths.length ? (await execFileAsync("git", ["-C", root, "ls-files", "-s", "-z", "--", ...paths.map((p) => `:(literal)${p}`)], { encoding: "utf-8", maxBuffer: BLOB_MAX_BUFFER })).stdout : "";
   return { files, index, paths, wrote: new Map() };
