@@ -157,7 +157,7 @@ export const ciForCommits = query({
     const repository = repositoryArg(args.repository);
     const out = [];
     for (const sha of args.shas.slice(0, 100)) {
-      const ci = await ciOf(ctx, repository, sha);
+      const ci = await ciOf(ctx, teamKey(args.team_id), repository, sha);
       out.push({ sha, state: ci.state, url: ci.url, runs: ci.runs });
     }
     return out;

@@ -105,7 +105,7 @@ export async function queueReaderFor(ctx: any, viewer: Id<"users">, teamId: Id<"
  * One commit waiting on a target. With a viewer (`reader`), a session they may not read is named by id alone; with none
  * (the auto-deploy sweep) the session is read whole, as the sweep only counts and compares.
  */
-export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>, reader?: QueueReader): Promise<QueueCommit> {
+export async function queueCommitOf(ctx: any, workspace: string, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>, reader?: QueueReader): Promise<QueueCommit> {
   let session: QueueCommit["session"] = null;
   let readable: Doc<"conversations"> | null = null;
   const owner = await commitSession(ctx, c, taskCache);
@@ -130,7 +130,7 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     const t = taskCache.get(key);
     tasks.push({ task_id: key, short_id: t?.short_id ?? null, title: t?.title ?? null });
   }
-  const ci = await ciOf(ctx, c.repository!, c.sha);
+  const ci = await ciOf(ctx, workspace, c.repository!, c.sha);
   const facts = await commitFacts(ctx, c, readable);
   return {
     sha: c.sha,
@@ -331,13 +331,13 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
   const touching = after.commits.filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)));
   const skipped = after.commits.length - touching.length;
   const head = after.commits[after.commits.length - 1] ?? null;
-  const headCi = head ? await ciOf(ctx, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.repository, live.sha) : null;
+  const headCi = head ? await ciOf(ctx, t.workspace, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.workspace, t.repository, live.sha) : null;
   // The newest commits are shown whole, with their session, tasks and CI; the rest are counted.
   const shown: QueueCommit[] = [];
   // What the viewer may see of each session: its title, owner, priority and branch only when they may read it.
   const ws = parseWorkspaceKey(t.workspace);
   const reader = viewer ? await queueReaderFor(ctx, viewer, ws?.type === "team" ? ws.teamId : null) : undefined;
-  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, c, convCache, taskCache, reader));
+  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, t.workspace, c, convCache, taskCache, reader));
   return {
     name: t.name,
     repository: t.repository,

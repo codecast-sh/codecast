@@ -45,7 +45,8 @@ export async function recordCommitCi(ctx: any, row: CommitCiInput, teamId?: Id<"
   const sha = row.sha.toLowerCase();
   const now = Date.now();
   const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha)).take(50);
-  const same = rows.find((r) => r.name === row.name && r.kind === row.kind);
+  // One team's rows never touch another's: a row is matched only in the team it is written for.
+  const same = rows.find((r) => r.workspace === teamKey(team) && r.name === row.name && r.kind === row.kind);
   const fields = {
     ...(row.run_id ? { run_id: row.run_id } : {}),
     ...(row.path ? { path: row.path } : {}),
@@ -121,15 +122,19 @@ export function checkSuiteCi(payload: any): CommitCiInput | null {
   };
 }
 
-/** A commit's CI rows that speak in deploy, rollback and red-main decisions (`ciRowDecides`). */
-export async function deployCiRows(ctx: any, repository: string, sha: string): Promise<Doc<"commit_ci">[]> {
+/**
+ * A commit's CI rows that speak in a workspace's deploy, rollback and red-main decisions (`ciRowDecides`). A runner
+ * row speaks only in the team that recorded it. GitHub's rows are written only by its webhook and backfill, always
+ * in the repository's routed team, so they speak for the repository wherever its targets are published.
+ */
+export async function deployCiRows(ctx: any, workspace: string, repository: string, sha: string): Promise<Doc<"commit_ci">[]> {
   const rows: Doc<"commit_ci">[] = await ctx.db.query("commit_ci").withIndex("by_repository_sha", (q: any) => q.eq("repository", repository).eq("sha", sha.toLowerCase())).take(50);
-  return rows.filter(ciRowDecides);
+  return rows.filter((r) => ciRowDecides(r) && (r.kind !== "runner" || r.workspace === workspace));
 }
 
-/** Each commit's CI, read from its rows. */
-export async function ciOf(ctx: any, repository: string, sha: string): Promise<{ state: CommitCiState; url: string | null; runs: CommitCiRun[] }> {
-  const rows = await deployCiRows(ctx, repository, sha);
+/** Each commit's CI in a workspace, read from its rows. */
+export async function ciOf(ctx: any, workspace: string, repository: string, sha: string): Promise<{ state: CommitCiState; url: string | null; runs: CommitCiRun[] }> {
+  const rows = await deployCiRows(ctx, workspace, repository, sha);
   const runs = rows.map((r) => ({ name: r.name, status: r.status, conclusion: r.conclusion ?? null, url: r.url ?? null, at: r.started_at }));
   const state = commitCiState(runs);
   const red = runs.find((r) => r.status === "completed" && r.conclusion && !["success", "neutral", "skipped", "cancelled", "stale"].includes(r.conclusion));

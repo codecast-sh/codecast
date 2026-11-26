@@ -116,9 +116,9 @@ export async function rollbackFor(ctx: any, userId: Id<"users">, args: { team_id
 // ── what ends a rollback ─────────────────────────────────────────────────────
 
 /** Whether a commit's CI passed on main: the target's CI workflow when it names one (ci.yml), else all of it. */
-async function greenOnMain(ctx: any, repository: string, sha: string, ciWorkflow?: string): Promise<boolean> {
-  if (!ciWorkflow) return (await ciOf(ctx, repository, sha)).state === "passed";
-  const rows = await deployCiRows(ctx, repository, sha);
+async function greenOnMain(ctx: any, workspace: string, repository: string, sha: string, ciWorkflow?: string): Promise<boolean> {
+  if (!ciWorkflow) return (await ciOf(ctx, workspace, repository, sha)).state === "passed";
+  const rows = await deployCiRows(ctx, workspace, repository, sha);
   const newest = rows.filter((r) => r.kind === "workflow" && r.path?.split("/").pop() === ciWorkflow).sort((a, b) => b.started_at - a.started_at)[0];
   return newest?.status === "completed" && newest.conclusion === "success";
 }
@@ -141,7 +141,7 @@ export async function endingOf(ctx: any, p: Doc<"deploy_pauses">): Promise<{ gre
   const at = after.commits.findIndex((c) => (c.task_ids ?? []).some((id) => String(id) === String(p.until!.task_id)));
   if (at < 0) return after.truncated ? "unreadable" : "waiting";
   const ciWorkflow = (await targetRows(ctx, p.workspace, p.repository)).find((t) => t.ci_workflow)?.ci_workflow;
-  for (const c of after.commits.slice(at).reverse()) if (await greenOnMain(ctx, p.repository, c.sha, ciWorkflow)) return { green: c.sha };
+  for (const c of after.commits.slice(at).reverse()) if (await greenOnMain(ctx, p.workspace, p.repository, c.sha, ciWorkflow)) return { green: c.sha };
   return "waiting";
 }
 

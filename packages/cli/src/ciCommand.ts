@@ -5,12 +5,14 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { Command } from "commander";
-import { apiPost, type PublishDeps } from "./castApi.js";
+import { apiPost, apiUpload, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { checkoutRepository } from "./checkoutWords.js";
 import { logTail, parseRunnerVerdict, type RunnerVerdict } from "@codecast/shared/contracts/ciVerdict";
 
-const UPLOAD_TIMEOUT_MS = 120_000;
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** `cast ci record` exit when the stored run stands over the one sent: nothing was written. */
+export const NOT_RECORDED_EXIT = 3;
 
 function repositoryOf(opt: string | undefined): string {
   const repo = opt ?? checkoutRepository(process.env.CODECAST_CWD || process.cwd());
@@ -18,16 +20,12 @@ function repositoryOf(opt: string | undefined): string {
   return repo;
 }
 
-/** A job's log, its tail gzipped, uploaded to file storage: the storage id. */
+/** A job's log, its tail gzipped, uploaded as this caller's own (record claims it): the storage id. */
 async function uploadLog(deps: PublishDeps, file: string): Promise<string> {
   const body = zlib.gzipSync(logTail(fs.readFileSync(file)));
-  const url = await apiPost(deps, "/cli/images/upload-url", {}, { exitOnError: false });
-  if (typeof url !== "string") throw new Error("upload-url response malformed");
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/gzip" }, body: new Uint8Array(body), signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`log upload failed: HTTP ${res.status}`);
-  const { storageId } = (await res.json()) as { storageId?: string };
-  if (!storageId) throw new Error("log upload returned no storage id");
-  return storageId;
+  const r = await apiUpload(deps, "/cli/artifacts/upload", new Blob([new Uint8Array(body)], { type: "application/gzip" }), { exitOnError: false });
+  if (typeof r?.upload_id !== "string") throw new Error("log upload returned no id");
+  return r.upload_id;
 }
 
 /** Read verdict.json, upload each job's log beside it, and store the verdict. */
@@ -76,14 +74,15 @@ export function registerCiCommand(program: Command, deps: PublishDeps): void {
   const fail = (err: unknown) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); };
 
   ci.command("record")
-    .description("Store a runner's verdict.json and upload the job logs beside it")
+    .description("Store a runner's verdict.json and upload the job logs beside it (exit 0 written, 3 the stored run stands, 1 refused)")
     .requiredOption("--file <path>", "The run's verdict.json (logs are read relative to it)")
     .option("--json", "Machine-readable output")
     .action(async (opts) => {
       try {
         const r = await recordVerdict(deps, opts.file, opts.json ? () => {} : console.log);
-        if (opts.json) return console.log(JSON.stringify(r));
-        console.log(r.written ? `Recorded ${r.sha.slice(0, 12)}: ${r.status === "completed" ? r.conclusion : r.status}` : `Not recorded: the stored run ${r.run_id} on ${r.sha.slice(0, 12)} (${r.status === "completed" ? r.conclusion : r.status}) stands, since this one is older or the same run still in progress`);
+        if (opts.json) console.log(JSON.stringify(r));
+        else console.log(r.written ? `Recorded ${r.sha.slice(0, 12)}: ${r.status === "completed" ? r.conclusion : r.status}` : `Not recorded: the stored run ${r.run_id} on ${r.sha.slice(0, 12)} (${r.status === "completed" ? r.conclusion : r.status}) stands, since this one is older or the same run still in progress`);
+        if (!r.written) process.exit(NOT_RECORDED_EXIT);
       } catch (err) { fail(err); }
     });
 
@@ -108,7 +107,7 @@ export function registerCiCommand(program: Command, deps: PublishDeps): void {
       try {
         const r = await apiPost(deps, "/cli/ci/log", { repository: repositoryOf(opts.repo), sha, job }, { read: true, exitOnError: false });
         if (!r.url) throw new Error(`The runner recorded no log for ${job} on ${r.sha.slice(0, 12)}.`);
-        const res = await fetch(r.url, { signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS) });
+        const res = await fetch(r.url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
         if (!res.ok) throw new Error(`log download failed: HTTP ${res.status}`);
         process.stdout.write(zlib.gunzipSync(Buffer.from(await res.arrayBuffer())));
       } catch (err) { fail(err); }
