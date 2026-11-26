@@ -1,8 +1,9 @@
 // When the per-session classifier runs (priorityClassifier.ts has the call):
-// once when a session first gets a title or pin, and again over the pair's
-// sessions it left unassigned once a pass creates a priority or milestone,
-// so an early "new" is not permanent. Only behind the priority_classifier
-// feature, which needs priorities on as well.
+// once when a session first gets a title or pin; once more on its first pin
+// after an answer of "new" (a pin says more than an opening title); and again
+// over the pair's sessions it left unassigned once a pass creates a priority
+// or milestone, so an early "new" is not permanent. Only behind the
+// priority_classifier feature, which needs priorities on as well.
 //
 // Every ask writes a pending priority_classifications row holding the call's
 // worst case; a pair's rows of the last day, settled at their cost and
@@ -71,30 +72,46 @@ export async function spentToday(ctx: { db: any }, userId: Id<"users">, workspac
 /** What the pair may still hold today, read once per mutation. */
 const roomToday = async (ctx: { db: any }, userId: Id<"users">, workspace: string) => ({ left: CLASSIFIER_DAILY_USD - (await spentToday(ctx, userId, workspace, Date.now())) });
 
+/** What asked: the session's title, its pin, or a re-run after a new priority or milestone. */
+export type ClassifyTrigger = "title" | "pin" | "rerun";
+
 /** Asks about one session `delayMs` from now, when the pair's day has room for its hold. Returns whether it asked. */
-async function enqueue(ctx: { db: any; scheduler: any }, conv: Doc<"conversations">, workspace: string, delayMs: number, room: { left: number }): Promise<boolean> {
+async function enqueue(ctx: { db: any; scheduler: any }, conv: Doc<"conversations">, workspace: string, trigger: ClassifyTrigger, delayMs: number, room: { left: number }): Promise<boolean> {
   const at = Date.now();
   if (room.left < CLASSIFY_HOLD_USD) return false;
   room.left -= CLASSIFY_HOLD_USD;
   const classification_id = await ctx.db.insert("priority_classifications", {
-    user_id: conv.user_id, workspace, conversation_id: conv._id, at, status: "pending", model: PRIORITY_CLASSIFIER_MODEL, held_usd: CLASSIFY_HOLD_USD,
+    user_id: conv.user_id, workspace, conversation_id: conv._id, at, trigger, status: "pending", model: PRIORITY_CLASSIFIER_MODEL, held_usd: CLASSIFY_HOLD_USD,
   });
   await ctx.scheduler.runAfter(delayMs, fns().classify, { classification_id });
   return true;
 }
 
+/** The most of one session's asks read to decide whether to ask again. */
+const ASKS_READ = 20;
+
 /**
- * A session got a title or a pin: the first time, and while it is mapped
- * nowhere, the classifier places it (classifierReads). A context with no
+ * Whether a title or pin asks: the session's first ask, or its first pin
+ * after the last ask answered "new" (a pin asks at most once).
+ */
+export function asksNow(asks: Array<Pick<Doc<"priority_classifications">, "status" | "trigger" | "at">>, trigger: "title" | "pin"): boolean {
+  if (!asks.length) return true;
+  const last = asks.reduce((a, b) => (b.at > a.at ? b : a));
+  return trigger === "pin" && last.status === "new" && !asks.some((a) => a.trigger === "pin");
+}
+
+/**
+ * A session got a title or a pin: while it is mapped nowhere and asksNow
+ * says so, the classifier places it (classifierReads). A context with no
  * scheduler asks for nothing.
  */
-export async function askClassifier(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">): Promise<boolean> {
+export async function askClassifier(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">, trigger: "title" | "pin"): Promise<boolean> {
   if (!ctx.scheduler || conv.priority_id || !classifierReads(conv)) return false;
-  const asked = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).first();
-  if (asked) return false;
+  const asks = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).take(ASKS_READ);
+  if (!asksNow(asks, trigger)) return false;
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   if (!(await classifierOn(ctx, conv.user_id, workspace))) return false;
-  return enqueue({ db: ctx.db, scheduler: ctx.scheduler }, conv, workspace, 0, await roomToday(ctx, conv.user_id, workspace));
+  return enqueue({ db: ctx.db, scheduler: ctx.scheduler }, conv, workspace, trigger, 0, await roomToday(ctx, conv.user_id, workspace));
 }
 
 /** A pass created a priority or milestone in the pair: after RERUN_DELAY_MS, the classifier asks again about what it left unassigned. */
@@ -128,7 +145,7 @@ export async function rerunUnassigned(ctx: { db: any; scheduler: any }, userId: 
     if (r.at >= since) continue;
     const conv: Doc<"conversations"> | null = await ctx.db.get(r.conversation_id);
     if (!conv || conv.priority_id || !classifierReads(conv) || (await vis.workspaceOf(conv)) !== workspace) continue;
-    if (!(await enqueue(ctx, conv, workspace, asked * RERUN_STAGGER_MS, room))) break;
+    if (!(await enqueue(ctx, conv, workspace, "rerun", asked * RERUN_STAGGER_MS, room))) break;
     if (++asked >= RERUN_MAX) break;
   }
   return asked;

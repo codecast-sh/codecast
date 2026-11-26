@@ -86,7 +86,7 @@ export const setTitleAndSubtitle = internalMutation({
     if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.conversation_id, patch);
     // A first title places the session under a milestone (lib/priorityClassifierHook).
-    if (patch.title) await askClassifier(ctx, { ...conv, ...patch });
+    if (patch.title) await askClassifier(ctx, { ...conv, ...patch }, "title");
     // A project named after this session (started with the new project
     // switch) takes the session's title until a person renames it.
     if (patch.title && conv.project_id) {

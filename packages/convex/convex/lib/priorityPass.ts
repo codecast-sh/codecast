@@ -82,8 +82,8 @@ export type PassSession = {
   pin_events: Array<{ at: number; text: string }>;
   /** What the person typed in it, oldest first. */
   typed: Array<{ at: number; text: string }>;
-  /** The person put it on this priority (and step): it stays there. */
-  placed?: { priority: string; step_key: string | null };
+  /** The person put it on this priority (and step), or a known link or the classifier did (`by`): it stays there. */
+  placed?: { priority: string; step_key: string | null; by?: "link" | "classifier" };
   /** Priorities the person said it is not part of. */
   not_for?: string[];
   /** What its agent last said it serves (`cast state --serves`, "pri-N" or "pri-N/sK"): a hint, never a link. */
@@ -104,8 +104,8 @@ export type PassPriority = {
   serves: string | null;
   steps: PriorityStep[];
   last_active_at: number;
-  /** Sessions mapped to it now, with the step each serves and when it last moved; `by_person` when the person put it there. */
-  sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number; by_person?: boolean }>;
+  /** Sessions mapped to it now, with the step each serves and when it last moved; `by_person` when the person put it there, `linked_by` when a known link or the classifier did (it stays, too). */
+  sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number; by_person?: boolean; linked_by?: "link" | "classifier" }>;
   /** It lost a session that left the workspace or was deleted: the reply must write its title and summary again from what is shown. */
   needs_rewrite?: boolean;
 };
@@ -163,7 +163,7 @@ The person's own settings are fixed facts; anything you return that changes one 
 - A step whose title, tier or done state is marked "set by the person" keeps it: return it as shown.
 - A step the person dropped is gone for good: never propose it again, under its own name or a similar one.
 - A priority marked done by the person stays done, and is never merged.
-- A session placed by the person stays where they put it. A session "not part of" a priority never goes to that priority.
+- A session placed by the person stays where they put it, and so does a session linked by what started it or by the classifier. A session "not part of" a priority never goes to that priority.
 - Corrections are the person telling you what the list gets wrong, in their words. Follow every one, even when the sessions seem to say otherwise.
 
 Writing:
@@ -251,6 +251,10 @@ function newestWithin<T extends { text: string }>(items: T[], each: number, tota
   return kept;
 }
 
+/** Who fixed a session where it is, as the prompt says it. */
+const placedBy = (by: "link" | "classifier" | undefined) =>
+  by === "link" ? "Linked by what started it" : by === "classifier" ? "Placed by the classifier" : "Placed by the person";
+
 function sessionBlock(s: PassSession): string {
   const c = PRIORITY_PASS_CAPS;
   const kind = s.kind === "role" ? " · role" : s.kind === "worker" ? ` · worker${s.parent ? ` of ${s.parent}` : ""}` : "";
@@ -260,7 +264,7 @@ function sessionBlock(s: PassSession): string {
   if (s.idle_summary?.trim()) lines.push(`Summary when it went idle: ${clip(s.idle_summary, c.idle_summary_chars)}`);
   if (s.tasks.length) lines.push(`Tasks: ${s.tasks.map((t) => `${t.short_id} "${clip(t.title, 160)}" (${t.status})`).join("; ")}`);
   if (s.prs.length) lines.push(`Pull requests: ${s.prs.map((p) => `${p.ref} (${p.merged ? "merged" : "open"})`).join("; ")}`);
-  if (s.placed) lines.push(`Placed by the person on ${s.placed.priority}${s.placed.step_key ? `/${s.placed.step_key}` : ""}: it stays there.`);
+  if (s.placed) lines.push(`${placedBy(s.placed.by)} on ${s.placed.priority}${s.placed.step_key ? `/${s.placed.step_key}` : ""}: it stays there.`);
   if (s.not_for?.length) lines.push(`Not part of ${s.not_for.join(", ")} (the person said).`);
   if (s.serves) lines.push(`Its agent says it serves ${s.serves}: a hint to weigh against the rest, not a placement.`);
   const pins = s.pin_events.slice(-c.pin_events);
@@ -286,7 +290,7 @@ function priorityBlock(p: PassPriority, position: number | undefined, taskStatus
   if (dropped.length && !hide) lines.push(`  Dropped by the person (never propose again, under any name): ${dropped.map((s) => `${p.short_id}/${s.key} "${s.title}"`).join("; ")}`);
   const newest = [...p.sessions].sort((a, b) => b.last_active - a.last_active).slice(0, PRIORITY_PASS_CAPS.sessions_per_priority);
   const more = p.sessions.length - newest.length;
-  if (newest.length) lines.push(`  Sessions: ${newest.map((s) => `${s.id} "${clip(s.title, 120)}"${s.step_key ? ` (${p.short_id}/${s.step_key})` : ""}${s.by_person ? " placed by the person" : ""}`).join("; ")}${more ? `; and ${more} older` : ""}`);
+  if (newest.length) lines.push(`  Sessions: ${newest.map((s) => `${s.id} "${clip(s.title, 120)}"${s.step_key ? ` (${p.short_id}/${s.step_key})` : ""}${s.by_person ? " placed by the person" : s.linked_by ? ` ${placedBy(s.linked_by).toLowerCase()}` : ""}`).join("; ")}${more ? `; and ${more} older` : ""}`);
   return lines.join("\n");
 }
 
@@ -841,14 +845,14 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
   }
 
   // Sessions: every explicit list first, then sessions named in step refs, then the reply's unassigned, then sessions carried over from merges.
-  // A session the person placed stays put; one they said is not part of a priority never goes there.
+  // A session the person placed (or a known link or the classifier did) stays put; one they said is not part of a priority never goes there.
   const placed = new Set<string>();
   const notFor = new Map<string, Set<string>>();
   for (const s of input.sessions) {
     if (s.placed) placed.add(s.id);
     if (s.not_for?.length) notFor.set(s.id, new Set(s.not_for));
   }
-  for (const p of input.priorities) for (const s of p.sessions) if (s.by_person) placed.add(s.id);
+  for (const p of input.priorities) for (const s of p.sessions) if (s.by_person || s.linked_by) placed.add(s.id);
   const sessionMap = new Map<string, { priority: PriorityTarget; step_key: string | null }>();
   const claim = (session: string, priority: PriorityTarget, step_key: string | null) => {
     if (placed.has(session) || notFor.get(session)?.has(priority)) return;

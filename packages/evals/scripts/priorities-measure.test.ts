@@ -7,7 +7,7 @@
 // of an open golden step.
 import { describe, expect, test } from 'bun:test';
 
-import { score, seedState, seededJudge, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
+import { SEED_BASE, classifierSeed, heldOut, score, scoreClassifier, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
 
 const golden: Golden = {
   person: 'Ana',
@@ -178,15 +178,15 @@ describe('score', () => {
 });
 
 describe('seedState', () => {
-  test('holds every golden priority with its critical steps open, their tasks linked, and no sessions, numbering on from them', () => {
+  test('holds every golden priority with its critical steps open, their tasks linked, and no sessions, numbered clear of real pri-N and on from them', () => {
     const state = seedState(golden, 1000);
     expect(state.cursor_at).toBe(1000);
-    expect(state.next_id).toBe(4);
+    expect(state.next_id).toBe(SEED_BASE + 4);
     expect(state.priorities.map((p) => [p.short_id, p.title, p.status, p.sessions.length])).toEqual([
-      ['pri-1', 'Trusted evals', 'active', 0],
-      ['pri-2', 'Simple deploys', 'active', 0],
-      ['pri-3', 'Laptop stops crashing', 'active', 0],
-      ['pri-4', 'Broker changes', 'done', 0],
+      ['pri-100001', 'Trusted evals', 'active', 0],
+      ['pri-100002', 'Simple deploys', 'active', 0],
+      ['pri-100003', 'Laptop stops crashing', 'active', 0],
+      ['pri-100004', 'Broker changes', 'done', 0],
     ]);
     expect(state.priorities[0]!.steps.map((s) => [s.key, s.title, s.done])).toEqual([['s1', 'Cases', false], ['s2', 'Grader faults', false]]);
     const withTask = seedState({ ...golden, priorities: [{ ...golden.priorities[0]!, critical: [{ title: 'Cases', done: true, task: 'ct-7' }] }] }, 0);
@@ -194,16 +194,26 @@ describe('seedState', () => {
   });
 });
 
-describe('seededJudge', () => {
-  test('the seeded pri-N in each workspace is golden priority N, with no model and no steps aligned; session mapping scores placement', async () => {
+describe('the classifier replay', () => {
+  test('holds out every Nth golden priority and seeds the rest open, done ones included, keeping their numbers', () => {
+    expect([...heldOut(golden, 2)]).toEqual(['g2', 'g4']);
+    expect([...heldOut(golden, 0)]).toEqual([]);
+    expect(classifierSeed(golden, 0, heldOut(golden, 2)).map((p) => [p.short_id, p.status])).toEqual([['pri-100001', 'active'], ['pri-100003', 'active']]);
+    expect(classifierSeed(golden, 0, new Set()).map((p) => p.status)).toEqual(['active', 'active', 'active', 'active']);
+  });
+
+  test('scores placement into seeded goals, new detection on held-out ones, and standing apart; the verdict is the two together', () => {
     const seeded = (key: string, sessions: string[]): Produced => ({ key, workspace: key.split(':')[0]!, title: '', summary: '', status: 'active', steps: [], sessions });
-    const placed = [seeded('acme:pri-1', ['s1', 's2']), seeded('acme:pri-2', ['s9']), seeded('acme:pri-3', ['s3']), seeded('personal:pri-3', ['s4'])];
-    const { judge, spent } = seededJudge(golden);
-    const s = await score(golden, placed, read, judge, tasksNow());
-    expect(s.matches.map((m) => [m.produced, m.golden])).toEqual([['acme:pri-1', 'g1'], ['acme:pri-2', 'g2'], ['acme:pri-3', 'g3'], ['personal:pri-3', 'g3']]);
-    // s1, s2 and s4 placed right, s3 under the wrong one, s5 never placed, the standing st1 and st2 left alone (s9 was not read).
-    expect(s.metrics.sessions).toBe(5 / 7);
-    expect(s.steps.pairs).toEqual([]);
-    expect(spent).toEqual({ usd: 0, calls: 0 });
+    // g2 and g4 held out. s1 right; s2 left out; s3 (g2, held out) wrongly placed; s4 right; s5 (g4, held out) rightly left out.
+    const placed = [seeded('acme:pri-100001', ['s1', 's3']), seeded('personal:pri-100003', ['s4'])];
+    const s = scoreClassifier(golden, placed, read, heldOut(golden, 2));
+    expect(s.metrics.placement).toEqual({ correct: 2, of: 3, score: 2 / 3 });
+    expect(s.metrics.new).toEqual({ correct: 1, of: 2, score: 1 / 2 });
+    expect(s.metrics.combined).toEqual({ correct: 3, of: 5, score: 3 / 5 });
+    expect(s.metrics.standing).toEqual({ correct: 2, of: 2, score: 1 });
+    expect(s.metrics.as_pass).toEqual({ correct: 4, of: 5, score: 4 / 5 });
+    expect(s.not_read).toEqual(['s9']);
+    expect(s.pass).toBe(false);
+    expect(s.results.filter((r) => !r.correct).map((r) => [r.session, r.kind])).toEqual([['s2', 'placement'], ['s3', 'new']]);
   });
 });

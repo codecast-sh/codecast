@@ -74,20 +74,35 @@ async function candidatesFor(ctx: { db: any }, userId: Id<"users">, workspace: s
   return classifierPriorities(withSessions, tasks);
 }
 
-/** The session as the classifier reads it: title, pin, opening prompt, the newest typed messages, its tasks and its agent's `serves` hint. */
-async function sessionFor(ctx: { db: any }, conv: Doc<"conversations">, workspace: string): Promise<ClassifierSession> {
+/**
+ * The session as the classifier reads it: title, pin, opening prompt, the
+ * newest typed messages, its tasks and its agent's `serves` hint. `asOf`
+ * replays the moment of an earlier ask (priorityClassifierEval): its first
+ * generated title (the oldest one kept), the typed messages and task links
+ * made by then, the pin only for a pin's ask, and no `serves`, whose pri-N
+ * names priorities the replay does not hold.
+ */
+export async function sessionFor(ctx: { db: any }, conv: Doc<"conversations">, workspace: string, asOf?: { at: number; pin: boolean }): Promise<ClassifierSession> {
   const prompts: Doc<"messages">[] = await ctx.db
     .query("messages")
-    .withIndex("by_conversation_nav_prompt", (q: any) => q.eq("conversation_id", conv._id).eq("nav_prompt", true))
+    .withIndex("by_conversation_nav_prompt", (q: any) => (asOf ? q.eq("conversation_id", conv._id).eq("nav_prompt", true).lte("timestamp", asOf.at) : q.eq("conversation_id", conv._id).eq("nav_prompt", true)))
     .order("desc")
     .take(TYPED_READ);
+  const typed = prompts.reverse().flatMap((m) => (m.content?.trim() ? [m.content] : []));
+  const tasks = await sessionTasks(ctx, conv, workspace, asOf?.at);
+  if (asOf) {
+    const pin: Doc<"thread_state_events"> | null = asOf.pin
+      ? await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id).lte("at", asOf.at)).order("desc").first()
+      : null;
+    return { title: conv.earlier_titles?.[0] ?? conv.title ?? "", first_prompt: conv.first_prompt ?? "", pin: pin?.text ? { text: pin.text, status: pin.status } : null, typed, tasks };
+  }
   const pin: Doc<"thread_state_events"> | null = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).order("desc").first();
   return {
     title: conv.title ?? "",
     first_prompt: conv.first_prompt ?? "",
     pin: conv.thread_state ? { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) } : null,
-    typed: prompts.reverse().flatMap((m) => (m.content?.trim() ? [m.content] : [])),
-    tasks: await sessionTasks(ctx, conv, workspace),
+    typed,
+    tasks,
     ...(pin?.serves ? { serves: pin.serves } : {}),
   };
 }

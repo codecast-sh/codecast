@@ -12493,8 +12493,8 @@ export async function performSetThreadState(
   if (changed || newServes) {
     await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status, ...(serves ? { serves } : {}) });
     if (pinsAskForPass(conv)) await sessionActivity(ctx, conv);
-    // A first pin places the session under a milestone (lib/priorityClassifierHook).
-    await askClassifier(ctx, conv);
+    // A first pin places the session under a milestone, or asks again after a "new" (lib/priorityClassifierHook).
+    await askClassifier(ctx, conv, "pin");
   }
   // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
   if (status === "done") await sessionEvidence(ctx, conv, at);

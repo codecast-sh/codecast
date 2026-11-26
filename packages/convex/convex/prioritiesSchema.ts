@@ -135,6 +135,8 @@ export const priorityTables = {
     workspace: v.string(),
     conversation_id: v.id("conversations"),
     at: v.number(),
+    /** What asked: its title, its pin (once more after a "new"), or a re-run after a new priority or milestone. */
+    trigger: v.union(v.literal("title"), v.literal("pin"), v.literal("rerun")),
     status: v.union(v.literal("pending"), v.literal("placed"), v.literal("new"), v.literal("skipped"), v.literal("error")),
     model: v.string(),
     held_usd: v.number(),

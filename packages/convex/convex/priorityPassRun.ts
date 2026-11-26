@@ -439,6 +439,17 @@ export const applyPlan = internalMutation({
       }
     }
 
+    // A session a known link or the classifier put on a milestone this plan removed keeps the priority, step unknown.
+    for (const [short_id, live] of liveSteps) {
+      const row = await mine(short_id);
+      if (!row) continue;
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).take(SESSION_COUNT_CAP)) {
+        if ((conv.priority_set_by === "link" || conv.priority_set_by === "classifier") && conv.priority_step_key && !live.has(conv.priority_step_key)) {
+          await ctx.db.patch(conv._id, { priority_step_key: undefined });
+        }
+      }
+    }
+
     await recount(args.user_id);
     // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
     if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);

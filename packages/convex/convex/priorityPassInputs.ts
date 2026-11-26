@@ -124,14 +124,19 @@ export async function activitySince(ctx: { db: any }, userId: Id<"users">, since
   return { sends, pins, more: horizon !== Infinity, read_to: horizon !== Infinity ? horizon - 1 : until };
 }
 
-/** The tasks a session links (the association rail, the tasks it filed, its active task), in this workspace. */
-export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string): Promise<PassTask[]> {
+/**
+ * The tasks a session links (the association rail, the tasks it filed, its
+ * active task), in this workspace. `asOf` keeps only the links and filings
+ * made by then, and leaves out the active task, whose binding time is not kept.
+ */
+export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string, asOf?: number): Promise<PassTask[]> {
+  const by = (row: { _creationTime: number }) => asOf === undefined || row._creationTime <= asOf;
   const ids = new Set<string>();
   const rail = await ctx.db.query("entity_conversations").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).take(50);
-  for (const row of rail) if (row.entity_type === "task") ids.add(String(row.entity_id));
+  for (const row of rail) if (row.entity_type === "task" && by(row)) ids.add(String(row.entity_id));
   const filed = await ctx.db.query("tasks").withIndex("by_created_from_conversation", (q: any) => q.eq("created_from_conversation", conv._id)).take(TASKS_PER_SESSION);
-  for (const t of filed) ids.add(String(t._id));
-  if (conv.active_task_id) ids.add(String(conv.active_task_id));
+  for (const t of filed) if (by(t)) ids.add(String(t._id));
+  if (conv.active_task_id && asOf === undefined) ids.add(String(conv.active_task_id));
   const out: PassTask[] = [];
   for (const raw of ids) {
     if (out.length >= TASKS_PER_SESSION) break;
@@ -179,11 +184,12 @@ function shortIds(ctx: { db: any }) {
   };
 }
 
-/** Where the person put a session and which priorities they said it is not part of, as the pass shows them. */
+/** Where the person (or a known link or the classifier) put a session and which priorities they said it is not part of, as the pass shows them. */
 async function personLinks(conv: Doc<"conversations">, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<Pick<PassSession, "placed" | "not_for">> {
   const out: Pick<PassSession, "placed" | "not_for"> = {};
-  const placedOn = conv.priority_set_by === "person" && conv.priority_id ? await shortId(conv.priority_id) : null;
-  if (placedOn) out.placed = { priority: placedOn, step_key: conv.priority_step_key ?? null };
+  const by = conv.priority_set_by;
+  const placedOn = by && by !== "pass" && conv.priority_id ? await shortId(conv.priority_id) : null;
+  if (placedOn) out.placed = { priority: placedOn, step_key: conv.priority_step_key ?? null, ...(by === "link" || by === "classifier" ? { by } : {}) };
   const not: string[] = [];
   for (const id of conv.priority_not ?? []) {
     const short = await shortId(id);
@@ -437,7 +443,7 @@ export const passInputs = internalQuery({
         last_active_at: p.last_active_at,
         sessions: readable.map((c) => ({
           id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
-          ...(c.priority_set_by === "person" ? { by_person: true } : {}),
+          ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
         })),
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),

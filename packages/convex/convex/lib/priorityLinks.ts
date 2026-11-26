@@ -202,31 +202,39 @@ export async function sessionEvidence(ctx: Ctx, conv: Pick<Conv, "priority_id" |
 
 // ── Links ───────────────────────────────────────────────────────────────────
 
+/** Who linked a session, weakest first: the pass (unmarked), the classifier, a known link, the person. */
+const STRENGTH = { pass: 0, classifier: 1, link: 2, person: 3 } as const;
+type LinkedBy = "link" | "classifier" | "pass";
+const strengthOf = (by: Conv["priority_set_by"]) => STRENGTH[by ?? "pass"];
+
 /**
  * Map a session to its owner's priority (and milestone, when it still has
  * that one) in the session's own workspace, keeping both priorities' session
- * counts, and mark who linked it: a known link ("link") or the classifier
- * (priorityClassifier.ts). Precedence: the person > a known link > the
- * classifier > the pass, so the classifier maps only a session mapped
- * nowhere, and the pass moves neither (priorityPassRun applyPlan). Refused
- * (false) for a session the person placed, someone else's priority, a merged
- * one, one the person said the session is not part of, a milestone they
- * dropped, or another workspace; a no-op when the session is already there,
- * linked the same way. It reads the
+ * counts, and mark who linked it: a known link ("link"), the classifier
+ * (priorityClassifier.ts), or the pass's strength (unmarked, for a fork of a
+ * session the pass placed). Precedence: the person > a known link > the
+ * classifier > the pass, so a link never overwrites a stronger one, the
+ * classifier maps only a session mapped nowhere, and the pass moves neither a
+ * link nor the classifier's (priorityPassRun applyPlan). Refused (false) for
+ * a session the person placed, someone else's priority, a merged one, one the
+ * person said the session is not part of, a milestone they dropped, or
+ * another workspace; a no-op when the session is already there, linked the
+ * same way. It reads the
  * priority itself: callers find it in the per-mutation cache (ownPriorities),
  * whose rows may be stale on anything but ids, refs and keys.
  */
-export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined, by: "link" | "classifier" = "link"): Promise<boolean> {
-  if (conv.priority_set_by === "person" || (by === "classifier" && conv.priority_id)) return false;
+export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined, by: LinkedBy = "link"): Promise<boolean> {
+  if (strengthOf(conv.priority_set_by) > STRENGTH[by] || (by === "classifier" && conv.priority_id)) return false;
   if ((conv.priority_not ?? []).some((id) => String(id) === String(priorityId))) return false;
   const priority: Priority | null = await ctx.db.get(priorityId);
   if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id)) return false;
   const target = priority.steps.find((s) => s.key === step);
   if (target?.dropped) return false;
   const stepKey = target ? step : undefined;
-  if (String(conv.priority_id ?? "") === String(priority._id) && conv.priority_step_key === stepKey && conv.priority_set_by === by) return false;
+  const set_by = by === "pass" ? undefined : by;
+  if (String(conv.priority_id ?? "") === String(priority._id) && conv.priority_step_key === stepKey && (conv.priority_set_by ?? "pass") === by) return false;
   if ((await sessionVisibility(ctx).workspaceOf(conv)) !== priority.workspace) return false;
-  await ctx.db.patch(conv._id, { priority_id: priority._id, priority_step_key: stepKey, priority_set_by: by });
+  await ctx.db.patch(conv._id, { priority_id: priority._id, priority_step_key: stepKey, priority_set_by: set_by });
   await moveSessionCount(ctx, conv.priority_id, priority._id);
   return true;
 }
@@ -310,12 +318,16 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
 
 /**
  * A fork, a `cast spawn` worker or a handoff of `parentId` starts under the
- * parent's priority and milestone. A Task-tool subagent the daemon syncs does
- * not: it rolls up under its parent and is never counted on its own.
+ * parent's priority and milestone, as strongly as the parent holds it: the
+ * person's placement or a known link becomes a known link, the classifier's
+ * stays the classifier's, and the pass's stays the pass's to move. A
+ * Task-tool subagent the daemon syncs does not: it rolls up under its parent
+ * and is never counted on its own.
  */
 export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parentId: Id<"conversations"> | undefined): Promise<boolean> {
   const parent: Conv | null = parentId ? await ctx.db.get(parentId) : null;
   if (!parent?.priority_id) return false;
   const child: Conv | null = await ctx.db.get(childId);
-  return !!child && linkSession(ctx, child, parent.priority_id, parent.priority_step_key);
+  const by: LinkedBy = parent.priority_set_by === "person" || parent.priority_set_by === "link" ? "link" : parent.priority_set_by === "classifier" ? "classifier" : "pass";
+  return !!child && linkSession(ctx, child, parent.priority_id, parent.priority_step_key, by);
 }
