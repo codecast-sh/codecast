@@ -28,7 +28,7 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Visual Canvas
 
-When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a `cast-canvas` block of self-contained HTML/CSS/SVG the centerpiece of the reply, or of a `cast decide` context. Codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose, and let the prose around a visual add only what the picture does not say.
+When structure or magnitude carries the meaning (comparisons, flows, timelines, metrics, dashboards), make a `cast-canvas` block of self-contained HTML/CSS/SVG the centerpiece of the reply, or of a `cast decide` card when the picture shows the choices of a question you are asking. Codecast renders it inline, themed, expandable to fullscreen. Keep markdown for ordinary prose, and let the prose around a visual add only what the picture does not say.
 
 ```cast-canvas
 <div data-canvas-title="Shown in the header"> … </div>
