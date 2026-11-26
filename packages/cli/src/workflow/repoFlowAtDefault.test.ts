@@ -1,5 +1,5 @@
 // `cast flow run <name>` runs the repo's flow as the default branch has it (flows.md FL2). The case that made this:
-// Union's `.codecast/flows/change.cast` is a one-line `extends` of outreach/line/change.cast, identical in every
+// A repo's `.codecast/flows/change.cast` is a one-line `extends` of server/line/change.cast, identical in every
 // checkout, while the base, its segment and its prompts moved on main. A session's worktree cut before that ran the
 // old graph against the new scripts, and the run could never land its change (ct-98334).
 import { afterEach, describe, expect, test } from "bun:test";

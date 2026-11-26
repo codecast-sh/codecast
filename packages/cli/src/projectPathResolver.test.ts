@@ -68,21 +68,21 @@ describe("resolveLocalProjectPath", () => {
     // A role seat pulled from a cloud host once landed in another session's
     // worktree (912 commits behind, with its uncommitted edits) because that
     // worktree was the most recent git_root recorded for the remote.
-    const worktree = "/Users/ashot/src/union-mobile-ct91614/.codecast/worktrees/union-mobile";
-    const primary = "/Users/ashot/src/union-mobile";
+    const worktree = "/Users/dev/src/acme-app-ct91614/.codecast/worktrees/acme-app";
+    const primary = "/Users/dev/src/acme-app";
     const result = await resolveLocalProjectPath({
-      projectPath: "/home/ubuntu/work/union-mobile",
-      gitRoot: "/home/ubuntu/work/union-mobile",
+      projectPath: "/home/ubuntu/work/acme-app",
+      gitRoot: "/home/ubuntu/work/acme-app",
       gitRemoteUrl: remote,
-      findCandidates: async () => [worktree, "/Users/ashot/src/um-linked", primary],
-      exists: (p) => p === worktree || p === primary || p === "/Users/ashot/src/um-linked",
+      findCandidates: async () => [worktree, "/Users/dev/src/um-linked", primary],
+      exists: (p) => p === worktree || p === primary || p === "/Users/dev/src/um-linked",
       isWorktree: (p) => p !== primary,
     });
     expect(result?.path).toBe(primary);
   });
 
   test("uses a worktree when it is the only checkout", async () => {
-    const worktree = "/Users/ashot/src/repo/.codecast/worktrees/x";
+    const worktree = "/Users/dev/src/repo/.codecast/worktrees/x";
     const result = await resolveLocalProjectPath({
       projectPath: "/home/ubuntu/work/repo",
       gitRoot: "/home/ubuntu/work/repo",

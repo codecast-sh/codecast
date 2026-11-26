@@ -92,7 +92,7 @@ describe("levelCheckout", () => {
     expect(read(shared, "y.ts")).toBe("y\n");
   });
 
-  // union-mobile sat 354 commits behind for 3 days partly on files holding an older upstream version (Nov 26).
+  // acme-app sat 354 commits behind for 3 days partly on files holding an older upstream version (Nov 26).
   test("a copy of a version upstream passed through is replaced by target's, not held as a conflict", async () => {
     const { shared, upstream } = setup({ "j.json": "[1]\n" });
     upstream({ "j.json": "[1,\n2]\n" }, "first");

@@ -345,8 +345,8 @@ describe("command groups stay off the boot graph", () => {
     // 374 (2026-11-23): contracts/closedSession.ts, the shared Close verdict
     // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
     // 375 (2026-11-24): fsAtomic.ts (node imports only), so machineKey.ts and
-    // device.ts replace their files whole and concurrent readers agree on a key. 376 (11-25): contracts/replyStream.ts. 377: ccMintIdentity.ts (ct-101517).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(377);
+    // device.ts replace their files whole and concurrent readers agree on a key. 376 (11-25): contracts/replyStream.ts. 377: ccMintIdentity.ts (ct-101517). 383 (11-26): seven barrel contracts, all leaves (asrEndpointer, browserTabs, codeProtocol, mcpLogin, personProfile, speakerTurns, speakers).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(383);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -537,8 +537,8 @@ describe("command groups stay off the boot graph", () => {
     // `done -m` and `drop -m` (+1).
     // 4857 (2026-11-25): the messaging-only onboarding gate and `cast relay --stop` in index.ts (#149) (+1).
     // 4863 the same day: live replies, contracts/replyStream.ts (+4) and SyncService.pushReplyStream with its config mirror (+2).
-    // 4864 the same day: checker = "bun" for `cast check`, its `check-watch` flags and the guide paragraph (+1); the bodies load on demand. 4866: ccMintIdentity.ts (+2). 4868: contracts closeHidesThroughWakes and wakeHideFields (+2). 4885: the owners model's shared placement rules (contracts/inboxProjection.ts, inboxMembership.ts, inboxFields.ts, +14) and own/disown/owners help in index.ts (+2); ownersView.ts loads on demand. 4889: contracts isClosedHidden, isMachineWake, closeWakeFields and pinHideFields, Close hiding every session (+4). 4891: `cast task stranded`, `cast advise-close`, close_advice and the loop state (+2). 4892 (2026-11-26): Priorities v2 shared contract data (priority entity, pri- refs, priority_classifier flag, inbox priority fields) (+1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4892);
+    // 4864 the same day: checker = "bun" for `cast check`, its `check-watch` flags and the guide paragraph (+1); the bodies load on demand. 4866: ccMintIdentity.ts (+2). 4868: contracts closeHidesThroughWakes and wakeHideFields (+2). 4885: the owners model's shared placement rules (contracts/inboxProjection.ts, inboxMembership.ts, inboxFields.ts, +14) and own/disown/owners help in index.ts (+2); ownersView.ts loads on demand. 4889: contracts isClosedHidden, isMachineWake, closeWakeFields and pinHideFields, Close hiding every session (+4). 4891: `cast task stranded`, `cast advise-close`, close_advice and the loop state (+2). 4892 (2026-11-26): Priorities v2 shared contract data (priority entity, pri- refs, priority_classifier flag, inbox priority fields) (+1). 4985 (2026-11-26): the Nov 25 working-tree landing, mostly barrel contracts: speaker attribution (+23), the code editor (+20), personProfile (+6), mcpLogin (+3); vaultFs.ts (+5), index.ts (+6), syncService.ts (+3).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4985);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -769,8 +769,8 @@ describe("command groups stay off the boot graph", () => {
     // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
     // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
     // 626 (2026-11-24): pidFileLock.ts, the pid-file lock moved out of daemon.ts
-    // so cast relay can take one without loading the daemon (#102). 628 (11-25): contracts/replyStream.ts and replyStream.ts. 630: ccMintIdentity.ts, ccStoreProbe.ts.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(630);
+    // so cast relay can take one without loading the daemon (#102). 628 (11-25): contracts/replyStream.ts and replyStream.ts. 630: ccMintIdentity.ts, ccStoreProbe.ts. 638 (11-26): those seven contracts and code/codeGit.ts (vaultServer.ts drops a stale git status); the code editor and LSP servers load at server start (daemon.ts codeRoutes).
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(638);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

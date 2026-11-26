@@ -412,8 +412,10 @@ import { handleMemoryHttp } from "./memory/memoryServer.js";
 import { handleEvalsHttp, stopEvalsBridge } from "./evals/evalsServer.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
-import { attachLspServer, handleLspHttp } from "./code/lsp/lspServer.js";
-import { handleCodeHttp } from "./code/codeServer.js";
+// The code editor's file and language-server routes load once the loopback
+// server starts, off the boot graph (bench/bootGraph.guard.test.ts); until
+// then their requests fall through to 404 and the editor retries.
+let codeRoutes: { handleCodeHttp: typeof import("./code/codeServer.js").handleCodeHttp; handleLspHttp: typeof import("./code/lsp/lspServer.js").handleLspHttp } | null = null;
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, prepareLaunchStableContext, recordStableContext, refreshStableCache, warmStableCaches, STABLE_WARM_EVERY_MS, type BuildStableContextOptions, type BuiltStableContext } from "./stableContext.js";
@@ -3292,8 +3294,8 @@ function startHookServer(): http.Server {
 
     if (handleTerminalHttp(req, res, terminalServerOptions())) return;
     if (handleVaultHttp(req, res, vaultServerOptions())) return;
-    if (handleCodeHttp(req, res, { ...vaultServerOptions(), blameAuth: () => activeConfig || readConfig() })) return;
-    if (handleLspHttp(req, res, vaultServerOptions())) return;
+    if (codeRoutes?.handleCodeHttp(req, res, { ...vaultServerOptions(), blameAuth: () => activeConfig || readConfig() })) return;
+    if (codeRoutes?.handleLspHttp(req, res, vaultServerOptions())) return;
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
     if (handleNotificationHttp(req, res, terminalServerOptions())) return;
     if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
@@ -3306,7 +3308,12 @@ function startHookServer(): http.Server {
 
   terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
   vaultServerHandle = attachVaultServer(server, vaultServerOptions());
-  attachLspServer(server, vaultServerOptions());
+  void Promise.all([import("./code/codeServer.js"), import("./code/lsp/lspServer.js")])
+    .then(([code, lsp]) => {
+      lsp.attachLspServer(server, vaultServerOptions());
+      codeRoutes = { handleCodeHttp: code.handleCodeHttp, handleLspHttp: lsp.handleLspHttp };
+    })
+    .catch((err) => logWarn(`Code editor routes failed to load: ${err instanceof Error ? err.message : String(err)}`));
   // Browser watch rides the same server, token and origin rules — a viewer
   // that can reach the terminal can watch the managed browser's tabs.
   watchServerHandle = attachWatchServer(server, terminalServerOptions());
