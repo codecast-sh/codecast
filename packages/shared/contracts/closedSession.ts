@@ -18,8 +18,9 @@ export function isClosedSession(row: ClosedFields): boolean {
  *  session, a standing anchor, or one a standing trigger wakes. Its own
  *  machine wakes (a trigger firing, a quiet send) run it out of sight as a
  *  hidden stash instead of bringing it back; it returns when it pins blocked,
- *  a trigger run completes --needs-attention, or a person writes to it. A
- *  close of any other session comes back on its next wake. */
+ *  a trigger run completes --needs-attention, or any other message reaches it
+ *  (a person's, another session's). A close of any other session comes back
+ *  on its next wake. */
 export function closeHidesThroughWakes(row: {
   persistent?: boolean | null;
   standing_role_id?: unknown;

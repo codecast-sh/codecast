@@ -85,6 +85,13 @@ describe("a closed role stays out through its own wakes", () => {
     inInbox((await s.read()).conv);
   });
 
+  test("another session's message brings it back", async () => {
+    const s = await closed({ role: true });
+    await s.wake({ origin: "scheduler" });
+    await s.wake({});
+    inInbox((await s.read()).conv);
+  });
+
   test("a person writing after a hidden wake brings it back", async () => {
     const s = await closed({ role: true });
     await s.wake({ origin: "scheduler" });

@@ -20,7 +20,7 @@ describe("the line under the menu's Close", () => {
   });
 
   test("a role's own session closes without a retire question", () => {
-    expect(closeDetail({ ...settled, standing_role_id: "r1" }, {}, NOW)).toBe("Stops it, back when it needs you");
+    expect(closeDetail({ ...settled, standing_role_id: "r1" }, {}, NOW)).toBe("Stops it, comes back on its next message");
   });
 
   test("a send this phone has not seen land is a turn starting: it is set aside", () => {

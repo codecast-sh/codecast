@@ -41,7 +41,7 @@ You find these controls in a session's right-click menu. Hovering an inbox card 
 
 | Control | Keys | What it does |
 |---------|------|--------------|
-| **Close** | `Ctrl` `Shift` `Backspace` | You're done looking at it. A finished session stops and leaves the inbox; one still working keeps running out of view. Its triggers and queued messages stay, so a trigger firing or a new message brings it back. A role's session, or one a repeating trigger wakes, works through its triggers out of sight instead, and comes back only when it needs you or you write to it |
+| **Close** | `Ctrl` `Shift` `Backspace` | You're done looking at it. A finished session stops and leaves the inbox; one still working keeps running out of view. Its triggers and queued messages stay, so a trigger firing or a new message brings it back. A role's session, or one a repeating trigger wakes, works through its triggers out of sight instead: they no longer bring it back, while a message or its asking for you still does |
 | **Stash** | `Ctrl` `Backspace` | Takes the session out of the inbox. The agent keeps running, and the session comes back when it needs you or a scheduled wake fires |
 | **Stash and hide** | `Ctrl` `Alt` `Backspace` | Like Stash, but a scheduled wake doesn't bring it back. Only a real need for you does |
 | **Kill session** | | Not on the card toolbar: it is in the right-click menu, the command palette and the selection bar, and is the square stop button on a card already in Stashed or Closed. The agent stops and its schedules and queued messages are cancelled; it asks first when that would cancel something. The transcript stays |

@@ -36,13 +36,13 @@ describe("what Close does to a session", () => {
   test("a role's own session or one with armed triggers stops and keeps them", () => {
     expect(closeTooltip(facts({ triggers: 3 }))).toBe("Close: stops it, keeps its 3 triggers, comes back when one fires");
     expect(closeTooltip(facts({ triggers: 1 }))).toBe("Close: stops it, keeps its trigger, comes back when it fires");
-    expect(closeTooltip(facts({ role: true }))).toBe("Close: stops it, back when it needs you");
+    expect(closeTooltip(facts({ role: true }))).toBe("Close: stops it, comes back on its next message");
     expect(closeSetsAside(facts({ role: true, triggers: 2 }))).toBe(false);
   });
 
   test("a role, or a session a standing trigger wakes, stays out through its own wakes", () => {
-    expect(closeTooltip(facts({ role: true, triggers: 4 }))).toBe("Close: stops it, keeps its 4 triggers, back when it needs you");
-    expect(closeTooltip(facts({ hidesThroughWakes: true, triggers: 1 }))).toBe("Close: stops it, keeps its trigger, back when it needs you");
+    expect(closeTooltip(facts({ role: true, triggers: 4 }))).toBe("Close: stops it, runs its 4 triggers out of sight, back on its next message");
+    expect(closeTooltip(facts({ hidesThroughWakes: true, triggers: 1 }))).toBe("Close: stops it, runs its trigger out of sight, back on its next message");
     const settled = { message_count: 12, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000 };
     expect(closeFactsOf({ ...settled, armed_trigger_kind: "standing" } as any, 1, NOW).hidesThroughWakes).toBe(true);
     expect(closeFactsOf({ ...settled, standing_role_id: "r1" } as any, 0, NOW).hidesThroughWakes).toBe(true);
@@ -66,7 +66,7 @@ describe("what Close does to a session", () => {
     expect(closeTooltip(facts({ takesDown: 4 }))).toBe("Close: stops it and the 4 agents under it, clears them from the list");
     expect(closeTooltip(facts({ takesDown: 1 }))).toBe("Close: stops it and the agent under it, clears them from the list");
     expect(closeTooltip(facts({ takesDown: 2, triggers: 3 }))).toBe("Close: stops it and the 2 agents under it, keeps its 3 triggers, comes back when one fires");
-    expect(closeTooltip(facts({ takesDown: 2, role: true }))).toBe("Close: stops it and the 2 agents under it, back when it needs you");
+    expect(closeTooltip(facts({ takesDown: 2, role: true }))).toBe("Close: stops it and the 2 agents under it, comes back on its next message");
     expect(closeTooltip(facts({ takesDown: 2, waitingOnRun: true }))).toBe("Close: stops it and the 2 agents under it, comes back when its run reports");
     // A close set aside stops nothing, so it names nothing.
     expect(closeTooltip(facts({ takesDown: 2, inFlight: "live" }))).toBe("Close: hides it, lets it finish");

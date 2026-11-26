@@ -81,7 +81,7 @@ describe("SessionCloseTip", () => {
   });
 
   test("a role's own session with none", async () => {
-    expect(await tip({ ...settled, standing_role_id: "r1" } as InboxSession)).toBe("Close: stops it, back when it needs you");
+    expect(await tip({ ...settled, standing_role_id: "r1" } as InboxSession)).toBe("Close: stops it, comes back on its next message");
   });
 
   test("a session waiting on its workflow run", async () => {

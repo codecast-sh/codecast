@@ -57,7 +57,8 @@ export function closeTooltip(f: CloseFacts): string {
     case "keeps_loop": return "Close: hides it, keeps its loop running";
     case "keeps_limit": return "Close: hides it, picks up when its limit resets";
     case "keeps_triggers":
-      if (f.hidesThroughWakes) return `Close: stops ${them}, ${f.triggers === 0 ? "" : `keeps its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`}, `}back when it needs you`;
+      // Its own triggers run it out of sight; any other message still brings it back.
+      if (f.hidesThroughWakes && f.triggers > 0) return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, back on its next message`;
       if (f.triggers === 0) return `Close: stops ${them}, comes back on its next message`;
       return `Close: stops ${them}, keeps its ${f.triggers === 1 ? "trigger, comes back when it fires" : `${f.triggers} triggers, comes back when one fires`}`;
     case "waits_on_run": return `Close: stops ${them}, comes back when its run reports`;
