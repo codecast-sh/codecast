@@ -18,7 +18,6 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
-import { useCoarsePointer } from "../../hooks/useIsPhone";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
 import type { SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
@@ -37,15 +36,16 @@ function useOwnActive(row: PriorityRow): PriorityRow[] {
 }
 
 /**
- * A ⋯ button. `touch`: 44px, the phone's size (unset, a coarse pointer
- * decides). `reveal`: on a mouse it shows while its line is hovered (the
+ * A ⋯ button. `touch`: 44px, the phone layout's size. Otherwise it looks
+ * 24px, and a coarse pointer (Daylight's desktop grid) presses a 44px area
+ * around it. `reveal`: on a mouse it shows while its line is hovered (the
  * class names that group); on a touch screen and while its menu is open it
  * always shows.
  */
 function menuButtonClass(touch?: boolean, reveal?: string) {
   return cn(
     "flex shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text focus-visible:opacity-100 data-[state=open]:opacity-100",
-    touch ? "size-11" : "size-6",
+    touch ? "size-11" : "relative size-6 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-2.5 [@media(pointer:coarse)]:after:content-['']",
     !touch && reveal && cn("opacity-0 [@media(hover:none)]:opacity-100", reveal),
   );
 }
@@ -128,7 +128,6 @@ function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "title">, session
 /** The priority's ⋯: who placed it, then the owner's moves, done, set aside or restore, merge, Correct…, and Copy link for anyone. */
 export function PriorityMenu({ row, touch, label, className }: { row: PriorityRow; touch?: boolean; label?: string; className?: string }) {
   const writes = usePriorityWrites();
-  const coarse = useCoarsePointer();
   const [correcting, setCorrecting] = useState(false);
   const [merging, setMerging] = useState<PriorityRow | null>(null);
   const why = row.status === "active" && row.rank != null ? rankProvenance(row) : null;
@@ -138,7 +137,7 @@ export function PriorityMenu({ row, touch, label, className }: { row: PriorityRo
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch ?? coarse)}>
+              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -218,7 +217,6 @@ export function MilestoneMenu({ row, step, sessions, onRename, touch, reveal, cl
   className?: string;
 }) {
   const writes = usePriorityWrites();
-  const coarse = useCoarsePointer();
   const [correcting, setCorrecting] = useState(false);
   const [dropping, setDropping] = useState(false);
   const polish = step.tier === "polish";
@@ -228,7 +226,7 @@ export function MilestoneMenu({ row, step, sessions, onRename, touch, reveal, cl
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-milestone-menu={step.key} aria-label={`More for ${step.title}`} onClick={stop} className={menuButtonClass(touch ?? coarse, reveal)}>
+              <button type="button" data-milestone-menu={step.key} aria-label={`More for ${step.title}`} onClick={stop} className={menuButtonClass(touch, reveal)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -257,12 +255,11 @@ export function MilestoneMenu({ row, step, sessions, onRename, touch, reveal, cl
 /** A session's ⋯ under a milestone, for the owner of both: off this milestone, off this priority, or to another milestone. */
 export function SessionMenu({ row, s, stepKey, touch }: { row: PriorityRow; s: Pick<SessionLine, "short_id" | "title">; stepKey: string | null; touch?: boolean }) {
   const writes = usePriorityWrites();
-  const coarse = useCoarsePointer();
   return (
     <span className="inline-flex" onClick={stop} onKeyDown={stop}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" data-session-menu={s.short_id} aria-label={`Fix the link to ${s.title || "this session"}`} onClick={stop} className={menuButtonClass(touch ?? coarse, "group-hover/session:opacity-100")}>
+          <button type="button" data-session-menu={s.short_id} aria-label={`Fix the link to ${s.title || "this session"}`} onClick={stop} className={menuButtonClass(touch, "group-hover/session:opacity-100")}>
             <MoreHorizontal className="size-3.5" />
           </button>
         </DropdownMenuTrigger>

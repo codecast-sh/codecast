@@ -1803,8 +1803,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   movePrioritySession: async (ctx, _userId, [session, _from, shortId, stepKey]: [string, string, string, string | null]) =>
     ctx.runMutation!((api as any).priorities.moveSession, { session, short_id: shortId, ...(stepKey ? { step_key: stepKey } : {}) }),
   prioritySessionNotThis: async (ctx, _userId, [session]: [string, string]) => ctx.runMutation!((api as any).priorities.sessionNotThis, { session }),
-  correctPriority: async (ctx, _userId, [shortId, text, stepKey]: [string, string, string | null]) =>
-    ctx.runMutation!((api as any).priorities.correct, { short_id: shortId, text, ...(stepKey ? { step_key: stepKey } : {}) }),
+  // Must-deliver on the web (its outbox re-drives it until acknowledged): the client key stores it once.
+  correctPriority: async (ctx, _userId, [shortId, text, stepKey, clientKey]: [string, string, string | null, string | undefined]) =>
+    ctx.runMutation!((api as any).priorities.correct, { short_id: shortId, text, ...(stepKey ? { step_key: stepKey } : {}), ...(clientKey ? { client_key: clientKey } : {}) }),
   deletePriorityCorrection: async (ctx, _userId, [correctionId]: [string]) => ctx.runMutation!((api as any).priorities.deleteCorrection, { correction_id: correctionId }),
   runPriorities: async (ctx, _userId, [workspace]: [string]) => ctx.runMutation!((api as any).priorities.run, { workspace }),
 

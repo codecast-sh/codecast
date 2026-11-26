@@ -93,9 +93,17 @@ describe("priority controls ride dispatch", () => {
     await dispatch(t, ada, "prioritySessionNotThis", ["jx7own1", "pri-1"]);
     c = await t.run(async (ctx: any) => ctx.db.get(conv));
     expect([c.priority_id ?? null, (c.priority_not ?? []).map(String)]).toEqual([null, [String(p1)]]);
-    await dispatch(t, ada, "correctPriority", ["pri-1", "Calibration belongs here", "s1"]);
-    const [row] = await t.run(async (ctx: any) => ctx.db.query("priority_corrections").collect());
-    expect([row.text, row.step_key, row.status]).toEqual(["Calibration belongs here", "s1", "pending"]);
+    // Must-deliver: the outbox re-drives the same write until it is acknowledged, and its client key stores it once.
+    await dispatch(t, ada, "correctPriority", ["pri-1", "Calibration belongs here", "s1", "ck-1"]);
+    await dispatch(t, ada, "correctPriority", ["pri-1", "Calibration belongs here", "s1", "ck-1"]);
+    const rows = await t.run(async (ctx: any) => ctx.db.query("priority_corrections").collect());
+    expect(rows).toHaveLength(1);
+    const [row] = rows;
+    expect([row.text, row.step_key, row.status, row.client_key]).toEqual(["Calibration belongs here", "s1", "pending", "ck-1"]);
+    // A new key is a new correction.
+    await dispatch(t, ada, "correctPriority", ["pri-1", "A second one", null, "ck-2"]);
+    expect(await t.run(async (ctx: any) => (await ctx.db.query("priority_corrections").collect()).length)).toBe(2);
+    await t.run(async (ctx: any) => { for (const c of await ctx.db.query("priority_corrections").collect()) if (c.client_key === "ck-2") await ctx.db.delete(c._id); });
     await dispatch(t, ada, "deletePriorityCorrection", [String(row._id)]);
     expect(await t.run(async (ctx: any) => ctx.db.query("priority_corrections").collect())).toEqual([]);
     await t.run(async (ctx: any) => { for (const j of await ctx.db.system.query("_scheduled_functions").collect()) await ctx.scheduler.cancel(j._id); });

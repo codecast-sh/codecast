@@ -10,7 +10,7 @@
 // Correct… and correction delete. Rank provenance reads once per surface. A
 // teammate's priority shows no write control anywhere.
 // Run: cd packages/web && bun test --isolate components/priorities/PriorityControls.mount.test.tsx
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID, VIEWER_ID } from "../../test-helpers/missingBackend";
 
 const { mountSurface } = installDom("https://app.test/priorities");
@@ -18,6 +18,13 @@ const { mountSurface } = installDom("https://app.test/priorities");
 const answers: Record<string, unknown> = {};
 await installMissingBackend({ answers });
 await seedViewer();
+
+// What a refusal tells the person (the writes report it as a toast).
+const toasts: string[] = [];
+const realSonner = { ...(await import("sonner")) };
+const fakeToast = Object.assign((m: unknown) => { toasts.push(String(m)); }, realSonner.toast, { error: (m: unknown) => { toasts.push(String(m)); } });
+mock.module("sonner", () => ({ ...realSonner, toast: fakeToast }));
+afterAll(() => mock.module("sonner", () => realSonner));
 
 const React = await import("react");
 const { act } = React as any;
@@ -208,7 +215,7 @@ test("Correct… on a row saves the text, marks it correction pending, and rides
     await press(document.querySelector("[data-correct-save]")!);
     await tick();
     expect(block("pri-2").querySelector("[data-correction-pending]")).not.toBeNull();
-    expect(await dispatched("correctPriority")).toEqual([["pri-2", "The ship flow is two priorities, not one", null]]);
+    expect(await dispatched("correctPriority")).toEqual([["pri-2", "The ship flow is two priorities, not one", null, expect.any(String)]]);
   } finally {
     await page.unmount();
   }
@@ -242,7 +249,7 @@ test("a milestone's ⋯: Done, Rename in place, Move to polish and Correct… pa
     await press(document.querySelector("[data-correct-save]")!);
     await tick();
     expect(line("pri-1", "s2").querySelector("[data-correction-pending]")).not.toBeNull();
-    expect(await dispatched("correctPriority")).toEqual([["pri-1", "This is the flow design, not the requests", "s2"]]);
+    expect(await dispatched("correctPriority")).toEqual([["pri-1", "This is the flow design, not the requests", "s2", expect.any(String)]]);
   } finally {
     await page.unmount();
   }
@@ -370,7 +377,7 @@ test("the page: Correct… beside Share writes a correction that lists at once; 
     await tick();
     const listed = () => [...page.container.querySelectorAll("[data-correction]")].map((n) => n.textContent);
     expect(listed()[0]).toContain("Notes belong to the deploy milestone");
-    expect(await dispatched("correctPriority")).toEqual([["pri-2", "Notes belong to the deploy milestone", null]]);
+    expect(await dispatched("correctPriority")).toEqual([["pri-2", "Notes belong to the deploy milestone", null, expect.any(String)]]);
     // The one still on its way has no delete yet; the stored one does.
     expect(page.container.querySelectorAll("[data-delete-correction]")).toHaveLength(1);
     await press(page.container.querySelector(`[data-delete-correction="${fixtureId("corr1")}"]`)!);
@@ -427,5 +434,63 @@ test("the card: provenance once, and the owner marks its Next milestone done fro
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
   } finally {
     await card.unmount();
+  }
+}, 60_000);
+
+test("on a phone the row's correction pending sits on the meta line, so the title keeps its width", async () => {
+  useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-2"), correction_pending: true }] as any, { isDelta: true });
+  const phone = await mount(<Live layout="phone" />);
+  try {
+    const mark = block("pri-2").querySelector("[data-correction-pending]")!;
+    expect(mark.closest("[data-meta]")).not.toBeNull();
+  } finally {
+    await phone.unmount();
+  }
+  const wide = await mount(<Live />);
+  try {
+    expect(block("pri-2").querySelector("[data-correction-pending]")!.closest("[data-meta]")).toBeNull();
+  } finally {
+    await wide.unmount();
+  }
+}, 60_000);
+
+test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer presses 44px; lines and the Done toggle make room for it", async () => {
+  const page = await mount(<Live />);
+  try {
+    for (const b of [priorityMenu("pri-1"), line("pri-1", "s1").querySelector('[data-milestone-menu="s1"]')!]) {
+      expect(b.className).toContain("size-6");
+      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-2.5");
+    }
+    expect(line("pri-1", "s1").querySelector('[role="button"]')!.className).toContain("[@media(pointer:coarse)]:min-h-11");
+    expect(line("pri-1", "s1").querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:h-11");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a refused write takes back only what it painted, keeps a server push that landed meanwhile, and says why", async () => {
+  let refuse: (e: Error) => void = () => {};
+  (useInboxStore.getState() as any)._setDispatch((action: string, args: unknown[]) => {
+    calls.push([action, args]);
+    return new Promise((_, reject) => { refuse = reject; });
+  });
+  toasts.length = 0;
+  const page = await mount(<Live />);
+  try {
+    await press(line("pri-3", "s1").querySelector('[data-milestone-toggle="s1"]')!);
+    expect(stored("pri-3").steps[0].done).toBe(true);
+    await dispatched("setPriorityStepDone");
+    // A push from the server (a pass, another window) lands on another row before the refusal.
+    useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-2"), title: "One ship flow, renamed by the pass" }] as any, { isDelta: true });
+    await tick();
+    await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 is Sam's priority; only they can change it")); });
+    await page.waitFor(() => stored("pri-3").steps[0].done === false && block("pri-3").querySelector("[data-progress]")?.textContent === "0/1" && toasts.length > 0);
+    expect(stored("pri-3").steps[0].done).toBe(false);
+    expect(block("pri-3").querySelector("[data-progress]")?.textContent).toBe("0/1");
+    expect(stored("pri-2").title).toBe("One ship flow, renamed by the pass");
+    expect(block("pri-2").textContent).toContain("One ship flow, renamed by the pass");
+    expect(toasts).toEqual(["pri-3 is Sam's priority; only they can change it"]);
+  } finally {
+    await page.unmount();
   }
 }, 60_000);

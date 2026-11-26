@@ -28,7 +28,8 @@ export type PrioritiesSliceActions = {
   /** `from` is the priority the session shows on, for the paint; the server reads the session's own. */
   movePrioritySession: (session: string, from: string, to: string, stepKey: string | null) => Promise<unknown>;
   prioritySessionNotThis: (session: string, from: string) => Promise<unknown>;
-  correctPriority: (shortId: string, text: string, stepKey: string | null) => Promise<unknown>;
+  /** Must-deliver (store/mutativeMiddleware): `clientKey` lets the server store a retried write once. */
+  correctPriority: (shortId: string, text: string, stepKey: string | null, clientKey: string) => Promise<unknown>;
   deletePriorityCorrection: (correctionId: string) => Promise<unknown>;
   /** One pass now in a workspace (priorities.run). Paints nothing: the pass writes its rows in a minute. */
   runPriorities: (workspace: string) => Promise<unknown>;
@@ -86,11 +87,10 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
       const row = paintedRow(this, from);
       if (row) paintSessionNotThis(this, session, row);
     }) as PrioritiesSliceActions["prioritySessionNotThis"],
-    correctPriority: asyncAction(function (this: PaintState, shortId: string, text: string, stepKey: string | null) {
+    correctPriority: asyncAction(function (this: PaintState, shortId: string, text: string, stepKey: string | null, clientKey: string) {
       const row = paintedRow(this, shortId);
-      const now = Date.now();
       // A local id until the server's own list of corrections arrives with the detail's next push.
-      if (row && text.trim()) paintCorrection(this, row, { _id: `local-correction-${now}`, step_key: stepKey, text: text.trim(), status: "pending", created_at: now });
+      if (row && text.trim()) paintCorrection(this, row, { _id: `local-correction-${clientKey}`, step_key: stepKey, text: text.trim(), status: "pending", created_at: Date.now() });
     }) as PrioritiesSliceActions["correctPriority"],
     deletePriorityCorrection: asyncAction(function (this: PaintState, correctionId: string) {
       paintCorrectionDelete(this, correctionId);

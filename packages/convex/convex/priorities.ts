@@ -822,8 +822,22 @@ async function doSessionNotThis(ctx: Ctx, viewer: Id<"users">, sessionRef: strin
 
 const MAX_CORRECTION = 2_000;
 
-/** The person tells the pass what it got wrong about a priority (or one of its milestones); every later pass reads it until deleted, and the next one is asked for now. */
-async function doCorrect(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, text: string, stepKey: string | undefined): Promise<Result<PriorityCorrection>> {
+/**
+ * The person tells the pass what it got wrong about a priority (or one of its
+ * milestones); every later pass reads it until deleted, and the next one is
+ * asked for now. `clientKey`: the writer's own key, so a retried write (the
+ * web outbox re-drives it until acknowledged) answers with the correction it
+ * already stored.
+ */
+async function doCorrect(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, text: string, stepKey: string | undefined, clientKey?: string): Promise<Result<PriorityCorrection>> {
+  const client_key = clientKey?.trim().slice(0, 100) || undefined;
+  if (client_key) {
+    const stored: Doc<"priority_corrections"> | null = await ctx.db
+      .query("priority_corrections")
+      .withIndex("by_user_client_key", (q: any) => q.eq("user_id", viewer).eq("client_key", client_key))
+      .first();
+    if (stored) return correctionOut(stored);
+  }
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const body = text.trim();
@@ -838,6 +852,7 @@ async function doCorrect(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, sho
     user_id: viewer, workspace: p.workspace, priority_id: p._id, ...(step_key ? { step_key } : {}), text: body, status: "pending" as const, created_at: Date.now(),
     // Frozen as the person saw it: with the text, the eval case (exportCases).
     snapshot: { short_id: p.short_id, title: p.title, summary: p.summary, status: p.status, steps: p.steps },
+    ...(client_key ? { client_key } : {}),
   };
   const id = await ctx.db.insert("priority_corrections", row);
   await passActivity(ctx, viewer, p.workspace);
@@ -988,8 +1003,8 @@ export const sessionNotThis = mutation({
 });
 
 export const correct = mutation({
-  args: { short_id: v.string(), text: v.string(), step_key: v.optional(v.string()) },
-  handler: async (ctx, args) => orThrow(await doCorrect(ctx, await authed(ctx), args.short_id, args.text, args.step_key)),
+  args: { short_id: v.string(), text: v.string(), step_key: v.optional(v.string()), client_key: v.optional(v.string()) },
+  handler: async (ctx, args) => orThrow(await doCorrect(ctx, await authed(ctx), args.short_id, args.text, args.step_key, args.client_key)),
 });
 
 export const deleteCorrection = mutation({

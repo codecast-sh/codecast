@@ -143,7 +143,10 @@ export const priorityTables = {
     applied_at: v.optional(v.number()),
     applied_window: v.optional(v.object({ from: v.number(), to: v.number() })),
     snapshot: v.object({ short_id: v.string(), title: v.string(), summary: v.string(), status: v.string(), steps: v.array(priorityStep) }),
+    /** The writer's own key for this correction: a retried write (the web outbox re-drives it until acknowledged) stores it once. */
+    client_key: v.optional(v.string()),
   })
+    .index("by_user_client_key", ["user_id", "client_key"])
     .index("by_user_workspace_created", ["user_id", "workspace", "created_at"])
     .index("by_priority_created", ["priority_id", "created_at"])
     .index("by_priority_status", ["priority_id", "status"])

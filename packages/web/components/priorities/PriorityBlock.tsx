@@ -12,7 +12,7 @@
 // milestone's ⋯ and its box as a Done toggle across the line's left gutter,
 // each session's ⋯ in an open milestone, and on a desktop list the rank as a
 // drag handle (arrow keys step it).
-import { useState, type DragEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { asksPerson, bestSession, isClosedSession } from "@codecast/shared/contracts/priorityDerive";
@@ -186,6 +186,13 @@ function Momentum({ model, todayIndex, peak, layout }: { model: PriorityModel; t
  */
 function Rank({ row, drag }: { row: PriorityRow; drag?: RankDrag }) {
   const writes = usePriorityWrites();
+  // A step down moves this row's <li> in the DOM, and Chrome drops the focus of an element moved that way: put it back once the move paints.
+  const stepped = useRef(false);
+  useLayoutEffect(() => {
+    if (!stepped.current) return;
+    stepped.current = false;
+    document.querySelector<HTMLElement>(`[data-rank-handle="${row.short_id}"]`)?.focus();
+  }, [row.rank, row.short_id]);
   const why = rankProvenance(row);
   const said = row.rank == null ? undefined : `#${row.rank}${why ? ` · ${why}` : ""}`;
   if (!drag || row.rank == null) return <span className={C_RANK} title={said} data-rank-source={row.rank == null ? undefined : row.rank_source}>{row.rank ?? ""}</span>;
@@ -202,7 +209,10 @@ function Rank({ row, drag }: { row: PriorityRow; drag?: RankDrag }) {
       onKeyDown={(e) => {
         if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
         e.preventDefault();
+        stepped.current = true;
         writes.move(row.short_id, e.key === "ArrowUp" ? "up" : "down");
+        // At either end nothing moves: the flag must not linger for some later change of rank.
+        requestAnimationFrame(() => { stepped.current = false; });
       }}
       className={cn(C_RANK, "-mx-1 cursor-grab rounded px-1 hover:bg-sol-bg-alt hover:text-sol-text active:cursor-grabbing")}
     >
@@ -226,6 +236,8 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
   const wide = layout === "wide";
   // A top-three priority nothing was typed into today reads a little quieter: it is not getting today's attention.
   const untouched = row.status === "active" && (row.rank ?? 99) <= 3 && model.today === 0;
+  // The row's own correction, when no milestone line carries it.
+  const pending = row.correction_pending && !model.milestones.some((m) => m.correctionPending);
   const plan = filters.show.plans && !compact ? model.plan : null;
   return (
     <div data-priority-head className={cn(LIST_GRID[layout], "gap-y-0.5")}>
@@ -237,7 +249,8 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         {!wide && model.today > 0 && <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
         {/* Where the momentum column has no room for words (a narrow list, a phone), Stalled sits by the title. */}
         {model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
-        {row.correction_pending && !model.milestones.some((m) => m.correctionPending) && <PendingMark />}
+        {/* On a phone the title keeps the row's width; the mark goes on the meta line below. */}
+        {wide && pending && <PendingMark />}
         {compact && model.action && <span data-compact-action className="ml-auto flex shrink-0"><ActionButton row={row} action={model.action} showSession={false} /></span>}
       </span>
       {/* One width on every wide row, so the compact view's actions line up. */}
@@ -254,7 +267,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         <>
           <span data-today className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text">{model.today > 0 ? model.today : ""}</span>
           <span className="col-start-5 row-start-1 justify-self-start"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
-          <span className={C_MENU}><PriorityMenu row={row} touch={false} /></span>
+          <span className={cn(C_MENU, "[@media(pointer:coarse)]:flex [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:items-center")}><PriorityMenu row={row} /></span>
         </>
       ) : (
         <>
@@ -262,12 +275,15 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           <span className={C_MENU_PHONE}><PriorityMenu row={row} touch /></span>
         </>
       )}
-      {!wide && polish && !compact && (
-        <div data-meta className={cn(C_META, "flex items-center")}>
-          <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className="-ml-2 inline-flex h-11 items-center gap-0.5 whitespace-nowrap rounded px-2 text-meta text-sol-text-dim hover:bg-sol-bg-alt">
-            Polish <span className="tabular-nums">{polish.done}/{polish.total}</span>
-            <ChevronRight className={cn("size-3 transition-transform", polish.open && "rotate-90")} />
-          </button>
+      {!wide && ((polish && !compact) || pending) && (
+        <div data-meta className={cn(C_META, "flex min-h-6 items-center gap-3")}>
+          {polish && !compact && (
+            <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className="-ml-2 inline-flex h-11 items-center gap-0.5 whitespace-nowrap rounded px-2 text-meta text-sol-text-dim hover:bg-sol-bg-alt">
+              Polish <span className="tabular-nums">{polish.done}/{polish.total}</span>
+              <ChevronRight className={cn("size-3 transition-transform", polish.open && "rotate-90")} />
+            </button>
+          )}
+          {pending && <PendingMark />}
         </div>
       )}
       {plan && wide && (
@@ -346,7 +362,7 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
   const title = (
     <span className="flex min-w-0 items-center gap-2">
       {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. */}
-      {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px]" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneBox done={step.done} />}
+      {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:h-11" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneBox done={step.done} />}
       {renaming ? (
         <MilestoneTitleInput title={step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, step.key, next); }} />
       ) : (
@@ -367,7 +383,7 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
         aria-expanded={open}
         onClick={onToggle}
         onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
-        className={cn(LIST_GRID[layout], "group/line -mx-1.5 cursor-pointer rounded-control px-1.5 hover:bg-sol-bg-alt/60", wide ? "min-h-8" : "min-h-11", open && "bg-sol-bg-alt/60")}
+        className={cn(LIST_GRID[layout], "group/line -mx-1.5 cursor-pointer rounded-control px-1.5 hover:bg-sol-bg-alt/60", wide ? "min-h-8 [@media(pointer:coarse)]:min-h-11" : "min-h-11", open && "bg-sol-bg-alt/60")}
       >
         {wide ? (
           <>
@@ -379,7 +395,7 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
               </span>
             </div>
             <span className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text-muted">{m.today > 0 ? m.today : ""}</span>
-            {row.mine && <MilestoneMenu row={row} step={step} sessions={m.sessions.length + m.more} onRename={() => setRenaming(true)} touch={false} reveal="group-hover/line:opacity-100" className={C_MENU} />}
+            {row.mine && <MilestoneMenu row={row} step={step} sessions={m.sessions.length + m.more} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" className={C_MENU} />}
           </>
         ) : (
           <>
@@ -410,7 +426,7 @@ function phoneTrail(model: PriorityModel, m: MilestoneModel): ReactNode {
 export function SessionRow({ s, now, menu }: { s: SessionLine; now: number; menu?: ReactNode }) {
   const asks = asksPerson(s);
   return (
-    <li data-session-row={s.conversation_id} className="group/session flex min-w-0 items-center gap-2 py-0.5">
+    <li data-session-row={s.conversation_id} className="group/session flex min-w-0 items-center gap-2 py-0.5 [@media(pointer:coarse)]:min-h-11">
       {asks ? <AnswerSecondary s={s} /> : <SessionChip s={s} className="max-w-[22rem]" />}
       <span className="shrink-0 whitespace-nowrap text-meta text-sol-text-dim">
         {/* A closed session's chip already says so. */}
