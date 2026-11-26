@@ -1,10 +1,10 @@
 ---
 name: cast-deploy
-description: Ship everything in this checkout and deploy it everywhere the repository deploys. Pulls in work from every worktree, cloud host and parked branch, commits it all to the default branch by the session that wrote it, pushes, then sends every deploy target the repository declares and waits until each is live. Use when asked to deploy, ship everything, release, or push it all out.
+description: Ship everything in this checkout and deploy it everywhere the repository deploys. Pulls in work from every worktree, cloud host and parked branch, commits it all by the session that wrote it and lands it on the default branch (pushed directly, or through the flow the repository's [ship] names: pull request, CI and review, merge), then sends every deploy target the repository declares and waits until each is live. Use when asked to deploy, ship everything, release, or push it all out.
 argument-hint: "[targets to send by name]"
 ---
 
-Ship the main checkout as it stands: every uncommitted change in it is committed to the default branch, pushed, and deployed everywhere the repository deploys. Everything goes, whoever wrote it and whatever state their session is in. A session that is mid-turn or waiting on input still has its current edits shipped; this is the person's call, not yours. Do not hold, park, stash or revert anyone's work, and do not ask which changes to include.
+Ship the main checkout as it stands: every uncommitted change in it is committed, landed on the default branch (pushed directly, or through the flow `[ship] flow` names), and deployed everywhere the repository deploys. Everything goes, whoever wrote it and whatever state their session is in. A session that is mid-turn or waiting on input still has its current edits shipped; this is the person's call, not yours. Do not hold, park, stash or revert anyone's work, and do not ask which changes to include.
 
 Bias to getting the code out. Unfinished, unreviewed or unapproved is not a reason to hold anything; your job is to make shipping it safe, not to judge whether it is ready. Safe means: nothing newer on the default branch is undone, no data is lost without a way back, the checks and gates run, and production can be rolled back in one command.
 
