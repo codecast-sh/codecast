@@ -237,6 +237,11 @@ export default defineSchema({
     // (devices.last_input_at), so pushes hold until you leave the computer.
     // Read in pushRouter.readPresence.
     machine_wide_presence: v.optional(v.boolean()),
+    // Opt-in: this person's own sessions may read every direct message the
+    // person is in (Slack-mirrored DMs included), as the person would. Off, a
+    // session reads only the DMs it was brought into (chatAccess). Never
+    // extends to an anchor or role session, which answer other people.
+    sessions_read_dms: v.optional(v.boolean()),
     // Codecast-owned default model per agent client (client id → shared-contract
     // option key, e.g. { claude: "fable" }). enqueueStartSession applies it when
     // a launch carries no explicit per-session model, so every managed session
@@ -8454,6 +8459,31 @@ export default defineSchema({
     pending_input: v.optional(v.string()),
     updated_at: v.number(),
   }).index("by_user_device_key", ["user_id", "device_id", "key"]),
+
+  // The browser tabs each session has open right now, as its machine's daemon
+  // sees them (convex/browserTabs.ts): `cast browser` tabs read from the
+  // browser itself, Claude in Chrome tabs from the transcript. One row per
+  // (user, device, session) that has a tab; the daemon's report is that
+  // device's whole set, so a session that closed its last tab loses its row.
+  session_browser_tabs: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    session_id: v.string(),
+    conversation_id: v.optional(v.id("conversations")),
+    tabs: v.array(v.object({
+      id: v.string(),
+      title: v.string(),
+      url: v.string(),
+      // "chrome": a cast tab in the person's own Chrome; "agent": the agent
+      // Chrome cast manages; "pane": the desktop app's pane; "claude": a
+      // Claude in Chrome tab.
+      where: v.string(),
+    })),
+    last_used_at: v.number(),
+    // When the daemon last vouched for the row. A row whose daemon stopped
+    // reporting reads as gone after BROWSER_TABS_STALE_MS.
+    reported_at: v.number(),
+  }).index("by_user", ["user_id"]).index("by_user_device", ["user_id", "device_id"]),
 
   // Remote mirror of a local markdown vault: one row per registered vault the
   // user turned mirroring on for (`cast vault mirror <dir> --on`). The daemon on

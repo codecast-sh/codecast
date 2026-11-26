@@ -564,4 +564,46 @@ describe("a session reading its person's DMs", () => {
     expect(refused.status).toBe(403);
     expect(text(refused)).not.toContain("something private");
   });
+
+  test("a person who lets their sessions read their DMs opens every DM to their own plain sessions, and to nothing that answers others", async () => {
+    const { t, team, ashot, tokens } = await setup();
+    const room = await dm(t, tokens.ashot, team, ["jordan"]);
+    await send(t, tokens.jordan, room, "between us: I am thinking of leaving");
+    const s = await session(t, ashot, team);
+    const stamp = asSession(s);
+    expect((await read(t, tokens.ashot, room, stamp)).status).toBe(403);
+
+    await t.run((ctx: any) => ctx.db.patch(ashot, { sessions_read_dms: true }));
+
+    const channelRead = await read(t, tokens.ashot, room, stamp);
+    expect(channelRead.status).toBe(200);
+    expect(text(channelRead)).toContain("leaving");
+    const since = await post(t, "/cli/chat/lines-since", { api_token: tokens.ashot, channel_ids: [room], since: 0, ...stamp });
+    expect(text(since)).toContain("leaving");
+    const listed = await post(t, "/cli/chat/channels", { api_token: tokens.ashot, team_id: team, ...stamp });
+    expect(listed.body.channels.map((c: any) => String(c._id))).toContain(room);
+
+    // `cast chat read --channel @jordan` reaches the person's room, and leaves
+    // their unread mark where it was; a send (no `read`) keeps the session's own room.
+    await unreadAll(t, ashot);
+    const opened = await post(t, "/cli/chat/open-dm", { api_token: tokens.ashot, team_id: team, handles: ["jordan"], read: true, ...stamp });
+    expect(opened.body).toMatchObject({ channel_id: room, room_of: "person" });
+    const mark = await t.run(async (ctx: any) => (await ctx.db.query("chat_reads").collect()).find((r: any) => String(r.channel_id) === room && String(r.user_id) === String(ashot)));
+    expect(mark?.last_read_at ?? 0).toBe(0);
+    const forSend = await post(t, "/cli/chat/open-dm", { api_token: tokens.ashot, team_id: team, handles: ["jordan"], ...stamp });
+    expect(forSend.body.room_of).toBe("session");
+    expect(forSend.body.channel_id).not.toBe(room);
+
+    // The workspace agent's session answers teammates: it stays out.
+    const { anchor } = await anchorFor(t, ashot, team);
+    const anchorSession = await session(t, ashot, team, { anchor_id: anchor });
+    await t.run((ctx: any) => ctx.db.patch(anchor, { conversation_id: anchorSession._id }));
+    const anchorRead = await read(t, tokens.ashot, room, asSession(anchorSession));
+    expect(anchorRead.status).toBe(403);
+    expect(text(anchorRead)).not.toContain("leaving");
+
+    // Turning it off closes the room again.
+    await t.run((ctx: any) => ctx.db.patch(ashot, { sessions_read_dms: false }));
+    expect((await read(t, tokens.ashot, room, stamp)).status).toBe(403);
+  });
 });

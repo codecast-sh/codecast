@@ -15,6 +15,7 @@ import { BACKFILL_WINDOWS, type BackfillWindow } from "@codecast/convex/convex/l
 import { SlackLogo } from "../SlackLogo";
 import { useSlackConnect } from "../../hooks/useSlackConnect";
 import { Switch } from "../ui/switch";
+import { SessionDmAccessSwitch } from "../settings/SessionDmAccess";
 import "./chat.css";
 
 export function SlackDmSwitch({ teamId, workspaceId, compact }: { teamId: string; workspaceId?: string | null; compact?: boolean }) {
@@ -91,6 +92,12 @@ export function SlackDmSwitch({ teamId, workspaceId, compact }: { teamId: string
               </button>
             ))}
           </div>
+        </div>
+      )}
+      {enabled && (
+        <div className="ch-slack-dms-row">
+          <div className="min-w-0 flex-1 pl-[22px] ch-slack-fine">Your sessions can read them</div>
+          <SessionDmAccessSwitch />
         </div>
       )}
       {(err || slackConnect.error) && <div className="ch-slack-err"><AlertTriangle className="w-3.5 h-3.5 shrink-0" />{err || slackConnect.error}</div>}

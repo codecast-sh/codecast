@@ -278,6 +278,23 @@ export function agentFullAccessLedger(r: { agent: string; label: string; from: s
   };
 }
 
+/** The person's own sessions reading every direct message they are in. */
+export function sessionDmAccessLedger(): SwitchLedger {
+  return {
+    name: "Sessions read your DMs",
+    subject: "Your sessions",
+    figures: [{ value: "All", label: "your DMs", tone: "warn" }],
+    rows: [
+      { k: "Reads", v: "Codecast and Slack DMs", tone: "warn" },
+      { k: "Lands in", v: "Each reading session's transcript", tone: "warn" },
+      { k: "Applies to", v: "Your own sessions, every machine" },
+      { k: "Never", v: "Workspace agent · role sessions", tone: "ok" },
+    ],
+    stop: "Turn off here",
+    confirm: "Let them read",
+  };
+}
+
 /** Every off agent feature in a group, turned on at once on one machine. */
 export function featuresAllLedger(r: { group: string; machine: string; names: string[]; appliesTo?: string }): SwitchLedger {
   return {

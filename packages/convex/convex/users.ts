@@ -1321,6 +1321,7 @@ export const updateNotificationPreferences = mutation({
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
+    sessions_read_dms: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1333,6 +1334,9 @@ export const updateNotificationPreferences = mutation({
     }
     if (args.machine_wide_presence !== undefined) {
       updateData.machine_wide_presence = args.machine_wide_presence;
+    }
+    if (args.sessions_read_dms !== undefined) {
+      updateData.sessions_read_dms = args.sessions_read_dms;
     }
     if (args.notification_preferences !== undefined) {
       // MERGE, don't replace. A client that saves one toggle sends the object it

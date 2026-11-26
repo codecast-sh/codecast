@@ -241,6 +241,11 @@ async function hostsAnchorIn(
 //   not the history. A line or a mention a session posted itself opens
 //   nothing.
 //
+// - its person said yes once for all their sessions (users.sessions_read_dms):
+//   their own plain session then reads every DM they are in, as they would.
+//   Never an anchor's or a role's session: those answer other people, and a
+//   teammate's question must not reach the person's DMs through them.
+//
 // This is a guardrail against reading by accident, not a boundary against a
 // hostile process: the stamp is the caller's own word, as on sends, and a
 // process holding the token can leave it off. Public, agents and private
@@ -273,7 +278,8 @@ const SCOPE_ROOM_SCAN = 300;
 const SCOPE_LIST_CAP = 500;
 const SCOPE_LIST_AGENT_ROWS = 500;
 
-/** Who is asking, or null when the read is not a session's. Cheap: the
+/** Who is asking, or null when the read is not a session's or the person
+ *  opened their DMs to it (users.sessions_read_dms). Cheap: the
  *  rooms are looked up per room (sessionMayReadChannel), never up front. */
 export async function sessionChatScope(
   ctx: ReadCtx,
@@ -303,6 +309,11 @@ export async function sessionChatScope(
     if (seatOnly && anchor.conversation_id && String(anchor.conversation_id) !== String(conversation!._id)) continue;
     botIds.push(String(anchor.bot_user_id));
   }
+  // The person let their sessions read their DMs: this read is theirs (null,
+  // as for a read typed at a terminal), when the session is their own and
+  // speaks for no one else.
+  if (conversation && !role && botIds.length === 0 && String(conversation.user_id) === String(userId)
+    && (await ctx.db.get(userId))?.sessions_read_dms) return null;
   return {
     label: conversation ? conversation.short_id ?? String(conversation._id).slice(0, 7) : "",
     conversation,
@@ -464,7 +475,7 @@ export function sessionDmRefusal(
   const people = opts.withNames.length ? opts.withNames.map(quotedName).join(", ") : "someone";
   const room = opts.personInRoom ? `your person's direct message with ${people}` : `a direct message with ${people}`;
   const ask = `cast decide "<why you need it>. Let this session read ${opts.personInRoom ? "your" : "the"} direct message with ${people}? The lines go into its transcript." --run "${opts.readCommand}"`;
-  const how = `To read it, ask: ${ask} (Yes runs that one read as your person and its output comes back to you).`;
+  const how = `To read it, ask: ${ask} (Yes runs that one read as your person and its output comes back to you). Your person can also let all their own sessions read their direct messages: "Sessions read your DMs" in Settings, Agents.`;
   if (!scope.conversation) {
     return `That is ${room}. A session reads only the direct messages it is part of, and codecast cannot match this session to one of yours. ${how}`;
   }

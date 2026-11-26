@@ -15384,9 +15384,10 @@ chat
     const teamId = workspaceArgs(await readWorkspace(options.team)).team_id;
     if (options.channel.startsWith("@")) {
       // From inside a session, @person opens the session's own room with them,
-      // not the person's DM: say so, or an empty room reads as "no messages".
-      const room = await openChatDm(options.channel, teamId);
-      if (room.room_of === "session" && !options.json) console.log(`${c.dim}this session's own conversation with ${room.with.join(", ")}, not your person's direct message${c.reset}`);
+      // unless its person let their sessions read their DMs (Settings, Agents):
+      // say which, or an empty room reads as "no messages".
+      const room = await openChatDm(options.channel, teamId, { read: true });
+      if (room.room_of === "session" && !options.json) console.log(`${c.dim}this session's own conversation with ${room.with.join(", ")}, not your person's direct message (your person can let sessions read their DMs: Settings, Agents)${c.reset}`);
       options.channel = String(room.channel_id);
     } else {
       options.channel = await resolveChatChannelId(options.channel, teamId);
@@ -17252,9 +17253,20 @@ async function listChatChannels(teamId?: string): Promise<any[]> {
 
 // The direct message room with these people ("@a,@b" or "a,b"), found or
 // opened. Returns the room id and the names of the others in it.
-async function openChatDm(people: string, teamId?: string): Promise<{ channel_id: string; with: string[]; room_of?: "session" | "role" | "person" }> {
+// `read`: opened to read, so a session its person let read their DMs gets the
+// person's room (a server without the field answers with the session's room).
+async function openChatDm(people: string, teamId?: string, opts: { read?: boolean } = {}): Promise<{ channel_id: string; with: string[]; room_of?: "session" | "role" | "person" }> {
   const handles = people.split(",").map((h) => h.trim().replace(/^@/, "")).filter(Boolean);
-  return await cliPost("/cli/chat/open-dm", { team_id: teamId, handles, ...chatSendOrigin() });
+  const body = { team_id: teamId, handles, ...chatSendOrigin() };
+  if (!opts.read || !body.origin) return await cliPost("/cli/chat/open-dm", body);
+  try {
+    return await cliPost("/cli/chat/open-dm", { ...body, read: true }, { throwOnError: true });
+  } catch (err) {
+    const message = (err as Error).message;
+    if (/(extra field|Unexpected field) `read/.test(message)) return await cliPost("/cli/chat/open-dm", body);
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  }
 }
 
 // A channel by id, by #name, or a direct message by @person[,@person] (found

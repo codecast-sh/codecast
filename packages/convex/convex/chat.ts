@@ -1301,11 +1301,16 @@ export const openDm = mutation({
     // The session asking (chatSendOrigin), the same stamp sendMessage takes.
     origin: v.optional(v.literal("agent")),
     origin_session_id: v.optional(v.string()),
+    // Opened to read (`cast chat read --channel @person`). A session its
+    // person let read their DMs (sessionChatScope null) reads the person's
+    // own room with these people, not its own.
+    read: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
     const { teamId } = await requireTeamForWrite(ctx, userId, args.team_id);
-    const { speaker, session } = args.origin === "agent"
+    const readsAsPerson = args.origin === "agent" && !!args.read && !(await sessionChatScope(ctx, userId, args));
+    const { speaker, session } = args.origin === "agent" && !readsAsPerson
       ? await sessionSpeaker(ctx, userId, args.origin_session_id)
       : { speaker: userId, session: null };
     const { room, others, sessionRoom } = await openPeopleRoom(ctx, {
@@ -1314,7 +1319,8 @@ export const openDm = mutation({
     // Re-opening is joining: the caller may have left the read row behind. No
     // chat_added here: an empty DM room is not an event. The first MESSAGE
     // notifies (chat_dm), which is the moment something was actually said.
-    if (speaker === userId) await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
+    // A session reading as its person leaves the person's unread marks alone.
+    if (speaker === userId && !readsAsPerson) await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
     const names = await Promise.all(others.map(async (id) => displayName(await ctx.db.get(id))));
     // Whose room this is: the session's own, a role's (its bot speaks), or the person's.
     const room_of = sessionRoom ? "session" : speaker !== userId ? "role" : "person";
