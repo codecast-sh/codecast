@@ -53,6 +53,19 @@ export function blockedInboxSessions(sessions: Record<string, InboxSession>, rev
   );
 }
 
+/** A section's rows up to its cap of `cards`. A row drawn under its card
+ *  (`underParent`: the flat views' nested subagents) rides that card's slot,
+ *  so only the others count toward `cards`; `rows` still bounds every row
+ *  mounted, for the panel's global card budget. */
+export function sectionWindow<T extends { _id: string }>(items: readonly T[], cards: number, rows: number, underParent: ReadonlySet<string> | null): readonly T[] {
+  let n = 0;
+  for (let top = 0; n < items.length && n < Math.max(cards, rows); n++) {
+    if (underParent?.has(items[n]._id)) continue;
+    if (top++ === cards) break;
+  }
+  return n === items.length ? items : items.slice(0, n);
+}
+
 export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeSessionId, onOpen }: {
   ui: ClientUI | undefined;
   decisions: Record<string, SessionDecisionItem> | undefined;

@@ -6326,6 +6326,16 @@ export function drawnUnderParentIds(list: readonly InboxSession[], subsByParent:
   return out;
 }
 
+/** The flat "All" header's number on web and the phone: the rows the list
+ *  draws, less the children their sessions own drawn under that card
+ *  (`underParent`, drawnUnderParentIds), which add to no count, as the
+ *  grouped headers leave them out (placeInboxRows ownedNested). */
+export function flatHeaderCount(list: readonly InboxSession[], underParent: ReadonlySet<string>): number {
+  let n = 0;
+  for (const s of list) if (!(underParent.has(s._id) && isOwnedChildRow(s))) n++;
+  return n;
+}
+
 // A child its session owns (owners model) is in nobody's inbox, so the list
 // holds at most the open one, at its own slot; placeInboxRows nests every one
 // under its owner's card (subsByParent). Each one `keep` passes goes directly

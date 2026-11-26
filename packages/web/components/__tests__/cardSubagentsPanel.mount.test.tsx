@@ -13,6 +13,10 @@
 //   scroll     opening a subagent in Compact rows scrolls to its row
 //   reveal     opening a subagent its session owns opens the collapsed
 //              section that holds its session's card
+//   nested     a finished subagent reads Done under a Working parent in A
+//              card each, grouped and in Recent (the panel passes underParent)
+//   all count  Recent's All header leaves out the children their session owns
+//   cap        Recent's 50-card cap counts cards, not the subagents under them
 //
 // Run: bun test components/__tests__/cardSubagentsPanel.mount.test.tsx
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -80,6 +84,8 @@ const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;
 
 const { useInboxStore, __resetInboxPlacementCacheForTests } = await import("../../store/inboxStore");
 const { SessionListPanel } = await import("../GlobalSessionPanel");
+const { ThemeContext } = await import("../ThemeProvider");
+const MODERN = { theme: "light", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} } as any;
 
 const NOW = Date.now();
 const id = (tag: string) => tag.padEnd(32, "0");
@@ -130,11 +136,12 @@ function seed(rows: Record<string, unknown>[], ui: Record<string, unknown>) {
   } as any);
 }
 
-async function mountInbox(activeSessionId: string | null = null) {
+async function mountInbox(activeSessionId: string | null = null, opts: { modern?: boolean } = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  await act(async () => root.render(<MemoryRouter initialEntries={["/inbox"]}><SessionListPanel activeSessionId={activeSessionId} /></MemoryRouter>));
+  const panel = <MemoryRouter initialEntries={["/inbox"]}><SessionListPanel activeSessionId={activeSessionId} /></MemoryRouter>;
+  await act(async () => root.render(opts.modern ? <ThemeContext.Provider value={MODERN}>{panel}</ThemeContext.Provider> : panel));
   return {
     host,
     unmount: async () => {
@@ -275,5 +282,47 @@ test("opening a subagent its session owns opens the collapsed section that holds
   const m = await mountInbox(OWNED);
   expect(useInboxStore.getState().collapsedSections.working).toBeFalsy();
   expect(cardOf(m.host, PARENT)).not.toBeNull();
+  await m.unmount();
+});
+
+// The card's nested state rule applies only where the panel says the card is
+// drawn under its parent: dropped, the finished subagent reads its parent's
+// section (Working) in the grouped view and its own placement in Recent.
+test("a finished subagent reads Done under its Working parent in A card each, grouped and in Recent", async () => {
+  const wordOf = (host: HTMLElement, sessionId: string) => cardOf(host, sessionId)?.querySelector("[data-status-word]")?.textContent ?? null;
+  for (const view of ["grouped", "recent"]) {
+    seed([parent(), busy(), finished()], { inbox_view_mode: view, subagent_rows: "full", subagent_filter: "all" });
+    const m = await mountInbox(null, { modern: true });
+    expect(wordOf(m.host, PARENT)).toBe("Working");
+    expect(wordOf(m.host, FINISHED)).toBe("Done");
+    await m.unmount();
+  }
+});
+
+test("Recent's All header leaves out the children their session owns", async () => {
+  const OWNED = id("owned");
+  seed([
+    row(PARENT, { title: "Parent session", owners_model: true, agent_status: "working", is_idle: false, updated_at: NOW - 5_000 }),
+    busy(),
+    row(OWNED, { title: "Owned subagent", owners_model: true, owned_by_me: false, owner_session_id: PARENT, is_subagent: true, parent_conversation_id: PARENT, agent_status: "working", is_idle: false, updated_at: NOW - 4_000 }),
+  ], { inbox_view_mode: "recent", subagent_rows: "full", subagent_filter: "all" });
+  const m = await mountInbox();
+  expect(cardOf(m.host, OWNED)).not.toBeNull();
+  expect(cardOf(m.host, BUSY)).not.toBeNull();
+  expect(headerCount(m.host, "all")).toBe("2");
+  await m.unmount();
+});
+
+test("Recent's 50-card cap counts cards: the subagents under a card ride its slot", async () => {
+  const subs = Array.from({ length: 10 }, (_, i) =>
+    row(id(`sub${i}`), { title: `Subagent ${i}`, is_subagent: true, parent_conversation_id: PARENT, agent_status: "working", is_idle: false, updated_at: NOW - 4_000 - i }));
+  const others = Array.from({ length: 54 }, (_, i) => row(id(`other${String(i).padStart(2, "0")}`), { title: `Other ${i}`, updated_at: NOW - 10_000 - i * 1_000 }));
+  seed([parent(), ...subs, ...others], { inbox_view_mode: "recent", subagent_rows: "full", subagent_filter: "all" });
+  const m = await mountInbox();
+  for (const sub of subs) expect(cardOf(m.host, sub._id as string)).not.toBeNull();
+  // The parent and the first 49 others are the 50 cards; the last 5 wait.
+  expect(cardOf(m.host, others[48]._id as string)).not.toBeNull();
+  expect(cardOf(m.host, others[49]._id as string)).toBeNull();
+  expect(m.host.querySelector("[data-sv-show-more]")?.textContent).toBe("Show 5 more · 5 hidden");
   await m.unmount();
 });

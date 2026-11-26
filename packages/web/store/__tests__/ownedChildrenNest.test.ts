@@ -1,6 +1,6 @@
 import { describe, expect, it, setSystemTime } from "bun:test";
 import { SUBAGENT_PRODUCING_GRACE_MS } from "@codecast/shared/contracts";
-import { __resetInboxPlacementCacheForTests, computeVisualOrder, drawnUnderParentIds, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
+import { __resetInboxPlacementCacheForTests, computeVisualOrder, drawnUnderParentIds, flatHeaderCount, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
 import { coarseNowOf, INBOX_CLOCK_MS, subscribeCoarseTick, tickCoarseClocks } from "../../hooks/useCoarseNow";
 import { placeSections } from "./placeTestHarness";
 
@@ -141,6 +141,17 @@ describe("flat views list owned children under their card", () => {
     const list = flatViewSessions(p.sorted, p.subsByParent, { mode: "recent", showSubagents: true, keepSub: () => true });
     expect([...drawnUnderParentIds(list, p.subsByParent)].sort()).toEqual([CHILD, ORPHAN].sort());
     expect(drawnUnderParentIds(list.filter((s) => s._id !== PARENT), p.subsByParent).size).toBe(0);
+  });
+
+  // The All header counts as the grouped ones do: an owned child under its
+  // card adds nothing; standing alone (its card off the list) it is a card.
+  it("the All header leaves out the owned children drawn under their card", () => {
+    const p = place([lead(), row(OTHER, { updated_at: T0 - 1000 }), busy(CHILD, PARENT), finished(ORPHAN, PARENT)]);
+    const list = flatViewSessions(p.sorted, p.subsByParent, { mode: "recent", showSubagents: true, keepSub: () => true });
+    expect(list).toHaveLength(4);
+    expect(flatHeaderCount(list, drawnUnderParentIds(list, p.subsByParent))).toBe(2);
+    const alone = list.filter((s) => s._id !== PARENT);
+    expect(flatHeaderCount(alone, drawnUnderParentIds(alone, p.subsByParent))).toBe(3);
   });
 
   it("the other modes list only the open one, under its card", () => {

@@ -24,7 +24,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, flatHeaderCount, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { INBOX_CLOCK_MS, useCoarseNow } from "../hooks/useCoarseNow";
@@ -76,7 +76,7 @@ import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { railRowSelector } from "../lib/subagentRows";
-import { blockedInboxSessions, staleInboxSessions, useCardSubagents } from "../hooks/useCardSubagents";
+import { blockedInboxSessions, sectionWindow, staleInboxSessions, useCardSubagents } from "../hooks/useCardSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "../store/browserTabsView";
@@ -2989,6 +2989,9 @@ function SessionListPanelImpl({
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
     const isDragOverSection = dragOverSectionKey === key;
+    // The flat views draw a nested row under its card (underParent): it rides
+    // that card's slot, and one its session owns adds to no count.
+    const flatUnderParent = flat ? drawnUnderParentIds(items, globalSubByParent) : null;
     const dropProps = isDropTarget
       ? {
           onDragOver: (e: React.DragEvent) => {
@@ -3023,7 +3026,7 @@ function SessionListPanelImpl({
       >
         <SectionHeader
           label={label}
-          count={opts?.count ?? items.length}
+          count={opts?.count ?? (flatUnderParent ? flatHeaderCount(items, flatUnderParent) : items.length)}
           color={color}
           sectionKey={key}
           collapsed={collapsed}
@@ -3044,7 +3047,7 @@ function SessionListPanelImpl({
           // even when the budget is spent.
           const globalRemaining = Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards);
           const limit = Math.max(Math.min(sectionCap, globalRemaining), opts?.floor ? Math.min(items.length, SECTION_CARD_FLOOR) : 0);
-          let visibleItems = items.length > limit ? items.slice(0, limit) : items;
+          let visibleItems = sectionWindow(items, limit, Math.max(limit, globalRemaining), flatUnderParent);
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
           // session being viewed never vanishes from the list.
@@ -3061,7 +3064,6 @@ function SessionListPanelImpl({
           // row of its own (hoistNestedUnderParent), so it takes the small row
           // there too; with the role's card absent it stays a full card.
           const flatNestParentOf = flat ? inboxNestParentOf(items, nestWorkers) : null;
-          const flatUnderParent = flat ? drawnUnderParentIds(items, globalSubByParent) : null;
           return (<>
           {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level

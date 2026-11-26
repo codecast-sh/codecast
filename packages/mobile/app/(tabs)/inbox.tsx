@@ -14,7 +14,7 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type BucketItem,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, subagentKeepOf, flatViewSessions, drawnUnderParentIds, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, subagentKeepOf, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
@@ -44,6 +44,7 @@ import { LivePulse } from '@/components/calls/LiveRooms';
 import { HiddenSessionRow } from '@/components/inbox/HiddenSessionRow';
 import { useInboxPriorityView, usePrioritySections } from '@/hooks/useInboxPriorityView';
 import { useSubagentLines } from '@/hooks/useSubagentLines';
+import { flatAllItems, sectionItems, type InboxListItem } from '@/lib/inboxListItems';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
 // multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
@@ -75,14 +76,6 @@ export default function InboxScreen() {
 
 // Rows that fill a phone screen with some to spare, mounted with the list.
 const FIRST_PAINT_ROWS = 14;
-
-/** One line of the inbox list: a section's heading, a session row, or a whole
- *  state (the skeleton, an empty inbox). The list is virtualized, so only the
- *  lines near the screen are mounted, whatever the account holds. */
-type InboxListItem =
-  | { kind: 'header'; key: string; section: string; label: string; color?: string; count: number; collapsed: boolean }
-  | { kind: 'row'; key: string; session: InboxSession; underParent?: boolean }
-  | { kind: 'node'; key: string; node: ReactNode };
 
 const inboxItemKey = (item: InboxListItem) => item.key;
 
@@ -395,13 +388,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number, underParent?: ReadonlySet<string>): InboxListItem[] => {
-    if (items.length === 0) return [];
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number): InboxListItem[] => {
     const key = collapseKey ?? label;
-    const collapsed = !!collapsedSections?.[key];
-    const out: InboxListItem[] = [{ kind: 'header', key: `h:${key}`, section: key, label, color, count: count ?? items.length, collapsed }];
-    if (!collapsed) for (const session of items) out.push({ kind: 'row', key: `${key}:${session._id}`, session, underParent: underParent?.has(session._id) });
-    return out;
+    return sectionItems(label, items, { key, collapsed: !!collapsedSections?.[key], color, count });
   }, [collapsedSections]);
 
   // One heading for every lens: sentence case in the interface face, muted
@@ -512,8 +501,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         // Full rows: the nested ones the filter keeps, as the rail lists them.
         keepSub: showSubagents ? subagentKeepOf(subagentFilter, coarseNow, currentSessionId) : undefined,
       });
-      // A subagent hoisted under its card reads as drawn there (rowWithOwner).
-      return renderSection("All", flat, Theme.cyan, "all", undefined, drawnUnderParentIds(flat, subsByParent));
+      return flatAllItems(flat, subsByParent, { collapsed: !!collapsedSections?.all, color: Theme.cyan });
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled
