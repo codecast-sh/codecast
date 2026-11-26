@@ -3,6 +3,7 @@ import { JSDOM } from "jsdom";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { messageRowKey } from "../../lib/messageRowKey";
 
 // The reply being written, in the real conversation view (InboxConversation →
 // ConversationDiffLayout → ConversationView, as the inbox mounts it): its own
@@ -358,14 +359,14 @@ for (const [kind, fields] of Object.entries(INSERTED)) test(`${kind} arriving mi
   await tick(30);
   expect(v.row(STREAM_KEY)).toBe(streamRow);
   expect(streamRow.querySelector('[data-cc-message="assistant"]')?.textContent).toContain("I will report when the review lands.");
-  expect(v.rowKeys()).toContain(id(7));
+  expect(v.rowKeys()).toContain(messageRowKey({ _id: id(7), ...fields }));
   await push(2, "The workflow is running; I will report when the review lands.\n\nStill going.");
   expect(v.row(STREAM_KEY)!.textContent).toContain("Still going.");
   await land("The workflow is running; I will report when the review lands.\n\nStill going.\n\nDone.");
   expect(v.row(STREAM_KEY)).toBe(streamRow);
   expect(streamRow.textContent).toContain("Done.");
   expect(v.row(id(9))).toBeNull();
-  expect(v.rowKeys()).toContain(id(7));
+  expect(v.rowKeys()).toContain(messageRowKey({ _id: id(7), ...fields }));
   await v.unmount();
 });
 

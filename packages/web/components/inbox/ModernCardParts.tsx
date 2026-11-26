@@ -73,12 +73,12 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   );
 }
 
-/** The flow an adopted station works for; opens its run. */
-export function ModernFlowChip({ session, className = "" }: { session: InboxSession; className?: string }) {
-  if (!session.flow_run_id) return null;
-  const name = session.flow_name || "Flow";
+/** The flow a session works for; opens its run. */
+export function ModernFlowChip({ runId, name, className = "" }: { runId: string | null | undefined; name?: string | null; className?: string }) {
+  if (!runId) return null;
+  name ||= "Flow";
   return (
-    <Link href={runHref(session.flow_run_id)} data-mc-chip="flow" data-flow-chip title={name} onClick={stop} className={`${CHIP_ACCENT} ${PRESS} ${className}`}>
+    <Link href={runHref(runId)} data-mc-chip="flow" data-flow-chip title={name} onClick={stop} className={`${CHIP_ACCENT} ${PRESS} ${className}`}>
       <Workflow aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{name}</span>
     </Link>
   );
