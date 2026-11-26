@@ -107,8 +107,10 @@ export const priorityTables = {
   // What the person told the pass about one of their priorities (or one of
   // its milestones), in their words. Every later pass in its workspace reads
   // it until the person deletes it; the first that succeeds after reading it
-  // marks it applied. `snapshot` freezes the priority as the person saw it
-  // when they wrote it: with the text, an eval case (exportCases).
+  // marks it applied, with the window that run read (`applied_window`, so a
+  // scorer can replay it through evalPass). `snapshot` freezes the priority
+  // as the person saw it when they wrote it: with the text, an eval case
+  // (priorities exportCases).
   priority_corrections: defineTable({
     user_id: v.id("users"),
     workspace: v.string(),
@@ -118,12 +120,15 @@ export const priorityTables = {
     status: v.union(v.literal("pending"), v.literal("applied")),
     created_at: v.number(),
     applied_at: v.optional(v.number()),
+    applied_window: v.optional(v.object({ from: v.number(), to: v.number() })),
     snapshot: v.object({ short_id: v.string(), title: v.string(), summary: v.string(), status: v.string(), steps: v.array(priorityStep) }),
   })
     .index("by_user_workspace_created", ["user_id", "workspace", "created_at"])
     .index("by_priority_created", ["priority_id", "created_at"])
+    .index("by_priority_status", ["priority_id", "status"])
     .index("by_workspace", ["workspace"])
-    .index("by_created", ["created_at"]),
+    .index("by_user_workspace_status", ["user_id", "workspace", "status"])
+    .index("by_applied", ["applied_at"]),
 
   // Every `cast state` write (conversations.performSetThreadState), kept
   // because the conversation's own pin holds only the latest. Pruned after 30

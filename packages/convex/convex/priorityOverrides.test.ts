@@ -81,6 +81,9 @@ describe("milestone overrides survive the next pass", () => {
     expect(shown.steps.map((x: any) => x.key)).toEqual(["s1", "s2"]);
     expect(shown.counts).toEqual({ critical_done: 1, critical_total: 1 });
     await expect(me.mutation(pri.renameStep, { short_id: "pri-1", step_key: "s3", title: "Back" })).rejects.toThrow("pri-1 has no milestone s3; its milestones: s1, s2");
+    // A session on the dropped milestone shows the priority's line, not the tombstone's title.
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { priority_step_key: "s3" }));
+    expect(await me.query(pri.pinLine, { conversation_id: w.teamConv })).not.toHaveProperty("step_title");
   });
 
   test("not done, set by the person, holds even when the step's task closes", async () => {
@@ -139,6 +142,31 @@ describe("priority overrides survive the next pass", () => {
     expect(counts).toMatchObject({ updated: 0, mapped_sessions: 0 });
     expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged", title: "Second" });
     expect((await w.conversation(w.oldConv))?.priority_id).toBe(into._id);
+  });
+});
+
+describe("a person's merge while a pass reads", () => {
+  test("the stale plan keeps the milestones the merge carried in, and its own new step takes the next key", async () => {
+    const w = await seeded();
+    await w.send(w.ana, w.oldConv, late(), "other work");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Second", steps: [{ title: "Judge rollout", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "Judge rollout" }] })], unassigned: [] });
+    await run(w);
+    // The pass reads pri-1 as s1..s3; meanwhile the person merges pri-2 into it, which carries its step in as s4.
+    const before = await byShort(w, "pri-1");
+    await as(w, w.ana).mutation(pri.merge, { short_id: "pri-2", into: "pri-1" });
+    const passStep = (key: string, title: string) => ({ key, title, tier: "critical", tier_set_by: "pass", refs: [], done: false });
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: {
+        creates: [],
+        updates: [{ short_id: "pri-1", seen_steps: before.steps.map((s: any) => s.key), patch: { steps: [...before.steps, passStep("s4", "Fresh work")] } }],
+        merges: [], sessions: [{ session: "jx7team", priority: "pri-1", step_key: "s4" }], unmap: [], notes: [], rewritten: [],
+      },
+    });
+    const after = await byShort(w, "pri-1");
+    expect(after.steps.map((s: any) => [s.key, s.title])).toEqual([["s1", "Grader faults under 10%"], ["s2", "Ship the grader"], ["s3", "Docs"], ["s5", "Fresh work"], ["s4", "Judge rollout"]]);
+    expect(await w.conversation(w.teamConv)).toMatchObject({ priority_step_key: "s5" });
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: after._id, priority_step_key: "s4" });
   });
 });
 
@@ -256,15 +284,55 @@ describe("corrections", () => {
     expect(model.prompts.at(-1)).not.toContain("this is about the judge");
   });
 
-  test("a correction is frozen with the priority as the person saw it, and exported as an eval case", async () => {
+  test("a correction is frozen with the priority as the person saw it, and exported as an eval case once a pass applied it, with that pass's window", async () => {
     const w = await seeded();
+    const exportCases = (internal as any).priorities.exportCases;
     const c = await as(w, w.ana).mutation(pri.correct, { short_id: "pri-1", text: "Two priorities in one" });
-    await as(w, w.ana).mutation(pri.renameStep, { short_id: "pri-1", step_key: "s1", title: "Judge window" });
-    const { cases } = await w.t.query((internal as any).priorities.exportCases, {});
+    expect((await w.t.query(exportCases, {})).cases).toEqual([]);
+    const cursor = (await w.latestRun())!.cursor_at;
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", title: "Grader evals", steps })], unassigned: [] });
+    await run(w);
+    const { cases } = await w.t.query(exportCases, {});
     expect(cases).toHaveLength(1);
-    expect(cases[0]).toMatchObject({ id: c._id, text: "Two priorities in one", status: "pending", before: { short_id: "pri-1", title: "Trusted evals" } });
-    expect(cases[0].before.steps[0].title).toBe("Grader faults under 10%");
-    expect(cases[0].after.steps[0].title).toBe("Judge window");
+    expect(cases[0]).toMatchObject({ id: c._id, text: "Two priorities in one", window: { from: cursor }, before: { short_id: "pri-1", title: "Trusted evals" }, after: { title: "Grader evals" } });
+    expect(cases[0].window.to).toBeGreaterThanOrEqual(cursor);
+    expect((await w.t.query(exportCases, { since: cases[0].applied_at })).cases).toEqual([]);
+  });
+
+  test("a pending correction alone puts the pair in the sweep", async () => {
+    const w = await seeded();
+    expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });
+    await as(w, w.ana).mutation(pri.correct, { short_id: "pri-1", text: "x" });
+    expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).toContainEqual({ user_id: w.ana, workspace: w.team });
+  });
+
+  test("a merge by the pass takes the absorbed priority's corrections to the survivor, onto the step their step became", async () => {
+    const w = await seeded();
+    await w.send(w.ana, w.oldConv, late(), "other work");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Second", steps: [{ title: "Judge rollout", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "Judge rollout" }] })], unassigned: [] });
+    await run(w);
+    const me = as(w, w.ana);
+    await me.mutation(pri.correct, { short_id: "pri-2", step_key: "s1", text: "Rollout waits on the grader" });
+    await me.mutation(pri.correct, { short_id: "pri-2", text: "Same thing as the grader work" });
+
+    await w.send(w.ana, w.oldConv, late(), "one priority after all");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", merges: ["pri-2"], steps: [...steps, { key: "pri-2/s1", title: "Judge rollout", tier: "critical", refs: [] }] })], unassigned: [] });
+    await run(w);
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged" });
+    const shown = await me.query(pri.show, { short_id: "pri-1" });
+    expect(shown.steps.map((s: any) => [s.key, s.title])).toContainEqual(["s4", "Judge rollout"]);
+    expect(shown.corrections.map((c: any) => [c.step_key, c.text]).sort()).toEqual([[null, "Same thing as the grader work"], ["s4", "Rollout waits on the grader"]]);
+  });
+
+  test("calibration never reads the person's corrections or placements", async () => {
+    const w = await seeded();
+    await as(w, w.ana).mutation(pri.correct, { short_id: "pri-1", text: "a real correction" });
+    await as(w, w.ana).mutation(pri.moveSession, { session: "jx7team", short_id: "pri-1", step_key: "s2" });
+    model.prompts.length = 0;
+    await w.t.action(pass.evalPass, { user_id: w.ana, workspace: w.team, window_start: w.now - 4 * H, window_end: w.now });
+    expect(model.prompts).toHaveLength(1);
+    expect(model.prompts[0]).not.toContain("a real correction");
+    expect(model.prompts[0]).not.toContain("Placed by the person");
   });
 
   test("only the owner corrects their priority or deletes a correction", async () => {

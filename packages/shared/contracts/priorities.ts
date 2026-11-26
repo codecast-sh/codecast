@@ -42,8 +42,9 @@ export type PriorityStep = {
   done_set_by?: PrioritySetBy;
   /**
    * The person dropped it: a tombstone kept in the row so the pass neither
-   * proposes it again nor recreates it under a near-identical name. Reads
-   * never return a dropped milestone.
+   * proposes it again nor adds a new one repeating its title (the same words,
+   * lib/priorityPass repeatsDropped; a paraphrase is left to the prompt).
+   * Reads never return a dropped milestone.
    */
   dropped?: boolean;
 };

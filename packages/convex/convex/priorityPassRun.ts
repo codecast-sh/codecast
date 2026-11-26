@@ -41,6 +41,9 @@ export const PRIORITY_PASS_FIRST_USD = 5;
 const CATCH_UP_RUNS_READ = 200;
 /** `cast priorities run` runs at most once in this long per (person, workspace). */
 export const RUN_NOW_EVERY_MS = 10 * MINUTE;
+/** The most of one absorbed priority's corrections a merge moves to the survivor. */
+const CORRECTIONS_MOVED = 200;
+const stepNumber = (key: string) => Number(/^s(\d+)$/.exec(key)?.[1] ?? 0);
 /** A priority's sessions are counted from the index up to this many; past it the stored count goes on by the moves and is flagged. */
 export const SESSION_COUNT_CAP = 500;
 /** How long the model may take: a full prompt and a long reply run minutes. */
@@ -295,8 +298,11 @@ export const releaseStrays = internalMutation({
  * holds too). The pass's output is rejected wherever it would change one: a
  * rank; a step's tier, title, done state or drop (holdPersonSteps); a
  * set-aside, done or merged status; a session the person placed, or one
- * mapped to a priority they said it is not part of. The pending corrections
- * the run read turn applied. A run that another ok run finished under since
+ * mapped to a priority they said it is not part of. A step added to a
+ * priority since the input was read (a person's merge) is kept, and a new
+ * step of the plan's that took its key gets the next one. A merge moves the
+ * absorbed priority's corrections to the survivor. The pending corrections
+ * the run read turn applied, with the window it read. A run that another ok run finished under since
  * it started writes nothing (null) and records the cursor it started from:
  * its plan was made from what that run has since changed.
  */
@@ -336,6 +342,9 @@ export const applyPlan = internalMutation({
       counts.created++;
     }
 
+    // Per priority this plan rewrote: its live step keys after the write, and the plan's new keys that moved.
+    const liveSteps = new Map<string, Set<string>>();
+    const rekeyed = new Map<string, Map<string, string>>();
     for (const u of plan.updates) {
       const row = await mine(u.short_id);
       if (!row || row.status === "merged") continue;
@@ -346,7 +355,20 @@ export const applyPlan = internalMutation({
         delete patch.done_at;
         if (row.status !== "active") { delete patch.rank; delete patch.rank_set_by; }
       }
-      if (patch.steps) patch.steps = holdPersonSteps(row.steps, patch.steps);
+      if (patch.steps) {
+        const seen = new Set(u.seen_steps ?? row.steps.map((st) => st.key));
+        const unseen = row.steps.filter((st) => !seen.has(st.key));
+        let next = Math.max(0, ...[...row.steps, ...patch.steps].map((st) => stepNumber(st.key)));
+        const moved = new Map<string, string>();
+        const steps = patch.steps.map((st) => {
+          if (!unseen.some((x) => x.key === st.key)) return st;
+          moved.set(st.key, `s${++next}`);
+          return { ...st, key: moved.get(st.key)! };
+        });
+        patch.steps = holdPersonSteps(row.steps, [...steps, ...unseen]);
+        liveSteps.set(row.short_id, new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key)));
+        if (moved.size) rekeyed.set(row.short_id, moved);
+      }
       // A rewrite the priority needed is done: its title and summary are this pass's.
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
       await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, updated_at: now });
@@ -362,6 +384,11 @@ export const applyPlan = internalMutation({
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, rank: undefined, updated_at: now });
       mergedInto.set(row._id, into);
       counts.merged++;
+      // Its corrections follow it, onto the step their step became (step-less when that is unknown).
+      for (const c of await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", row._id)).take(CORRECTIONS_MOVED)) {
+        const to = c.step_key ? m.step_keys?.[c.step_key] : undefined;
+        await ctx.db.patch(c._id, { priority_id: into, step_key: to && liveSteps.get(intoRow.short_id)?.has(to) !== false ? to : undefined });
+      }
     }
 
     const { move, recount } = sessionMover(ctx);
@@ -382,7 +409,11 @@ export const applyPlan = internalMutation({
       if (!conv || !priority || refused(conv, priority)) continue;
       const target: Doc<"priorities"> | null = await ctx.db.get(priority);
       if (!target || target.status === "merged") continue;
-      await move(conv, priority, s.step_key ?? undefined);
+      // A step key this write moved or left out: the moved key, or no step.
+      let step_key = s.step_key ?? undefined;
+      if (step_key) step_key = rekeyed.get(s.priority)?.get(step_key) ?? step_key;
+      if (step_key && liveSteps.has(s.priority) && !liveSteps.get(s.priority)!.has(step_key)) step_key = undefined;
+      await move(conv, priority, step_key);
       counts.mapped_sessions++;
     }
     for (const ref of plan.unmap) {
@@ -407,7 +438,9 @@ export const applyPlan = internalMutation({
 
     for (const id of corrections ?? []) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
-      if (c?.status === "pending" && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) await ctx.db.patch(id, { status: "applied", applied_at: now });
+      if (c?.status === "pending" && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
+        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at } });
+      }
     }
 
     await settleRun(ctx, { ...run, status: "ok", counts });

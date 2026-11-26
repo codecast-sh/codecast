@@ -4,10 +4,12 @@ import {
   PRIORITY_PASS_CAPS,
   PRIORITY_PASS_SCHEMA,
   buildPriorityPassPrompt,
+  holdPersonSteps,
   matchSteps,
   mergePriorities,
   orderPriorities,
   parsePriorityPassOutput,
+  repeatsDropped,
   type PassPriority,
   type PassSession,
   type PriorityPassInput,
@@ -346,7 +348,7 @@ describe("merging a pass into the list", () => {
       ],
     });
     const plan = mergePriorities(inp, out([proposal({ short_id: "pri-1", merges: ["pri-2"], steps: [{ key: "s1", title: "One", tier: "critical", refs: [] }], sessions: [{ session: "a", step: "s1" }, { session: "b", step: "s1" }] })]));
-    expect(plan.merges).toEqual([{ short_id: "pri-2", merged_into: "pri-1" }]);
+    expect(plan.merges).toEqual([{ short_id: "pri-2", merged_into: "pri-1", step_keys: {} }]);
     expect(plan.sessions).toEqual([
       { session: "b", priority: "pri-1", step_key: "s1" },
       { session: "c", priority: "pri-1", step_key: null },
@@ -356,7 +358,7 @@ describe("merging a pass into the list", () => {
 
   test("a new priority can absorb an existing one", () => {
     const plan = mergePriorities(input({ priorities: [priority("pri-1", { sessions: [{ id: "c", title: "c", step_key: null, last_active: NOW - 48 * H }] })] }), out([proposal({ merges: ["pri-1"] })]));
-    expect(plan.merges).toEqual([{ short_id: "pri-1", merged_into: "new-1" }]);
+    expect(plan.merges).toEqual([{ short_id: "pri-1", merged_into: "new-1", step_keys: {} }]);
     expect(plan.sessions).toEqual([{ session: "c", priority: "new-1", step_key: null }]);
   });
 
@@ -622,5 +624,44 @@ describe("orderPriorities", () => {
       row("pri-5", null, { status: "done" }),
     ];
     expect(order(rows)).toEqual(["1:pri-2", "2:pri-1", "3:pri-3"]);
+  });
+});
+
+describe("dropped steps", () => {
+  test("a new title repeats a dropped one only when it is the same title, or holds all of its words and shares at least half", () => {
+    expect(repeatsDropped("Docs", "Update docs")).toBe(true);
+    expect(repeatsDropped("Ship the grader", "ship the grader!")).toBe(true);
+    expect(repeatsDropped("Write the docs", "Write the tests")).toBe(false);
+    expect(repeatsDropped("Eval harness: grader", "Eval harness: judge")).toBe(false);
+    expect(repeatsDropped("Ship the grader", "Ship the judge")).toBe(false);
+    expect(repeatsDropped("Docs", "Docs for the API v2 launch")).toBe(false);
+  });
+
+  test("a drop never takes a live sibling that shares its words, and never blocks an unrelated new step", () => {
+    const current = [step("s1", { title: "Eval harness: judge", refs: [{ kind: "task", id: "ct-1" }], done: true }), step("s2", { title: "Eval harness: grader", dropped: true }), step("s3", { title: "Write the docs", dropped: true })];
+    const notes: string[] = [];
+    const kept = holdPersonSteps(current, [current[0], step("s4", { title: "Write the tests" }), step("s5", { title: "Eval harness: judge" }), step("s6", { title: "Write docs" })], notes, "pri-1");
+    expect(kept.map((s) => [s.key, s.title])).toEqual([
+      ["s1", "Eval harness: judge"], ["s4", "Write the tests"], ["s5", "Eval harness: judge"], ["s2", "Eval harness: grader"], ["s3", "Write the docs"],
+    ]);
+    expect(kept[0]).toEqual(current[0]);
+    expect(notes).toEqual(['pri-1: left out new step "Write docs", it repeats "Write the docs", which the person dropped']);
+  });
+
+  test("the merge leaves out every step repeating a dropped one, matched or new, as applyPlan would, and their sessions keep no step", () => {
+    const prior = priority("pri-1", { steps: [step("s1", { title: "Grader live" }), step("s2", { title: "Docs", dropped: true })], sessions: [held("a", "s1")] });
+    const plan = mergePriorities(input({ priorities: [prior], sessions: [session("b")] }), out([proposal({
+      short_id: "pri-1",
+      steps: [{ key: "s1", title: "Grader live", tier: "critical", refs: [] }, { title: "Ship the judge", tier: "critical", refs: [] }, { title: "Update docs", tier: "polish", refs: [] }, { title: "docs", tier: "polish", refs: [] }],
+      sessions: [{ session: "a", step: "s1" }, { session: "b", step: "docs" }],
+    })]));
+    const steps = plan.updates[0].patch.steps!;
+    expect(steps.map((s) => [s.key, s.title, !!s.dropped])).toEqual([["s1", "Grader live", false], ["s3", "Ship the judge", false], ["s2", "Docs", true]]);
+    expect(plan.notes).toContain('pri-1: left out "Update docs", the person dropped that step');
+    // applyPlan judges the same steps the same way: nothing more to take out.
+    expect(holdPersonSteps(prior.steps, steps)).toEqual(steps);
+    expect(plan.sessions).toContainEqual({ session: "b", priority: "pri-1", step_key: null });
+    expect(plan.notes).toContain('pri-1: left out new step "docs", it repeats "Docs", which the person dropped');
+    expect(plan.updates[0].seen_steps).toEqual(["s1", "s2"]);
   });
 });
