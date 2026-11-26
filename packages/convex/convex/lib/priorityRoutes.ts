@@ -5,7 +5,20 @@ import { api } from "../_generated/api";
 import { registerCliRoute } from "./cliRoute";
 
 const QUERIES = { list: "cliList", show: "cliShow", history: "cliHistory" } as const;
-const MUTATIONS = { rank: "cliRank", step: "cliSetStepTier", "set-aside": "cliSetAside", restore: "cliRestore", run: "cliRun" } as const;
+const MUTATIONS = {
+  rank: "cliRank",
+  step: "cliSetStepTier",
+  milestone: "cliMilestone",
+  "set-aside": "cliSetAside",
+  restore: "cliRestore",
+  done: "cliDone",
+  merge: "cliMerge",
+  "session-move": "cliMoveSession",
+  "session-not-this": "cliSessionNotThis",
+  correct: "cliCorrect",
+  "correction-delete": "cliDeleteCorrection",
+  run: "cliRun",
+} as const;
 
 export function registerPriorityRoutes(http: HttpRouter): void {
   // Codegen catches up on the next push.

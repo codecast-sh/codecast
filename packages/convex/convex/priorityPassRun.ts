@@ -21,7 +21,7 @@ import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { isTeamMember } from "./privacy";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
-import { PRIORITY_PASS_MODEL, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
+import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next sweep. */
@@ -229,14 +229,15 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
  * Moves sessions between priorities and then counts again, from the index,
  * every priority a session moved to or from, so a count that drifted heals:
  * the person's own in any workspace (a session made private leaves a team
- * priority from the personal pass).
+ * priority from the personal pass). A move is the pass's unless `set_by`
+ * says the person made it.
  */
-function sessionMover(ctx: { db: any }) {
+export function sessionMover(ctx: { db: any }) {
   const moved = new Map<Id<"priorities">, number>();
-  const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined) => {
+  const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined, set_by?: "person") => {
     if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
     if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
-    await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key });
+    await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key, priority_set_by: to ? set_by : undefined });
   };
   const recount = async (userId: Id<"users">) => {
     for (const [id, delta] of moved) {
@@ -289,16 +290,20 @@ export const releaseStrays = internalMutation({
 /**
  * Writes one pass's plan, atomically, with its run row at `cursor_at`. Re-checks
  * what the plan cannot know: a priority belongs to this person and workspace,
- * a session is theirs and in this workspace, and anything the person set while
- * the model was reading (a rank, a step's tier, a set-aside) still stands. A
- * run that another ok run finished under since it started writes nothing
- * (null) and records the cursor it started from: its plan was made from what
- * that run has since changed.
+ * a session is theirs and in this workspace, and everything the person set
+ * stands, as the rows are now (so a setting made while the model was reading
+ * holds too). The pass's output is rejected wherever it would change one: a
+ * rank; a step's tier, title, done state or drop (holdPersonSteps); a
+ * set-aside, done or merged status; a session the person placed, or one
+ * mapped to a priority they said it is not part of. The pending corrections
+ * the run read turn applied. A run that another ok run finished under since
+ * it started writes nothing (null) and records the cursor it started from:
+ * its plan was made from what that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))) },
+  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))) },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, strays, ...run } = args;
+    const { plan: raw, from_cursor, strays, corrections, ...run } = args;
     const vis = sessionVisibility(ctx);
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
@@ -333,18 +338,15 @@ export const applyPlan = internalMutation({
 
     for (const u of plan.updates) {
       const row = await mine(u.short_id);
-      if (!row) continue;
+      if (!row || row.status === "merged") continue;
       const patch: Partial<PriorityWrite> = { ...u.patch };
       if (row.rank_set_by === "person") { delete patch.rank; delete patch.rank_set_by; }
-      if (row.status === "set_aside") { delete patch.status; delete patch.done_at; }
-      if (patch.steps) {
-        const steps = patch.steps;
-        for (const held of row.steps.filter((s) => s.tier_set_by === "person")) {
-          const i = steps.findIndex((s) => s.key === held.key);
-          if (i >= 0) steps[i] = { ...steps[i], tier: held.tier, tier_set_by: "person" };
-          else steps.push(held);
-        }
+      if (row.status === "set_aside" || row.status_set_by === "person") {
+        delete patch.status;
+        delete patch.done_at;
+        if (row.status !== "active") { delete patch.rank; delete patch.rank_set_by; }
       }
+      if (patch.steps) patch.steps = holdPersonSteps(row.steps, patch.steps);
       // A rewrite the priority needed is done: its title and summary are this pass's.
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
       await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, updated_at: now });
@@ -355,7 +357,8 @@ export const applyPlan = internalMutation({
     for (const m of plan.merges) {
       const row = await mine(m.short_id);
       const into = await resolve(m.merged_into);
-      if (!row || !into || row.status === "set_aside") continue;
+      const intoRow: Doc<"priorities"> | null = into ? await ctx.db.get(into) : null;
+      if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || intoRow.status === "merged") continue;
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, rank: undefined, updated_at: now });
       mergedInto.set(row._id, into);
       counts.merged++;
@@ -370,27 +373,42 @@ export const applyPlan = internalMutation({
         : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
       return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
     };
+    // The person's placement stands, and a priority they said a session is not part of never gets it.
+    const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
+      conv.priority_set_by === "person" || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
     for (const s of plan.sessions) {
       const conv = await conversationOf(s.session);
       const priority = await resolve(s.priority);
-      if (!conv || !priority) continue;
+      if (!conv || !priority || refused(conv, priority)) continue;
+      const target: Doc<"priorities"> | null = await ctx.db.get(priority);
+      if (!target || target.status === "merged") continue;
       await move(conv, priority, s.step_key ?? undefined);
       counts.mapped_sessions++;
     }
     for (const ref of plan.unmap) {
       const conv = await conversationOf(ref);
       const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
-      if (!conv || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
+      if (!conv || refused(conv) || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
       await move(conv, undefined, undefined);
     }
     await letGoStrays(ctx, vis, move, args, strays ?? [], new Set(plan.rewritten));
-    // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
+    // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown;
+    // one the person placed stays theirs there, and one they said is not part of the survivor lets go.
     for (const [from, into] of mergedInto) {
       const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
-      for (const conv of left) if (await inWorkspace(vis, conv, args.user_id, args.workspace)) await move(conv, into, undefined);
+      for (const conv of left) {
+        if (!(await inWorkspace(vis, conv, args.user_id, args.workspace))) continue;
+        const not = (conv.priority_not ?? []).some((id) => String(id) === String(into));
+        await move(conv, not ? undefined : into, undefined, conv.priority_set_by === "person" ? "person" : undefined);
+      }
     }
 
     await recount(args.user_id);
+
+    for (const id of corrections ?? []) {
+      const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
+      if (c?.status === "pending" && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) await ctx.db.patch(id, { status: "applied", applied_at: now });
+    }
 
     await settleRun(ctx, { ...run, status: "ok", counts });
     return counts;
@@ -466,8 +484,8 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "error", reason: error };
   }
   const { cursor_at } = read;
-  // A priority that needs a rewrite (it held a session since gone from here) is work too.
-  if (!read.input.sessions.length && !read.input.calls.length && !args.force && !read.input.priorities.some((p) => p.needs_rewrite)) {
+  // A priority that needs a rewrite (it held a session since gone from here) is work too, and so is a correction no pass has read.
+  if (!read.input.sessions.length && !read.input.calls.length && !args.force && !read.input.priorities.some((p) => p.needs_rewrite) && !read.corrections.length) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
     const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
@@ -498,7 +516,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
   const plan = mergePriorities(input, output);
-  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays });
+  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections });
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;

@@ -3,9 +3,12 @@
 // priorities. This module is pure: it builds the request, reads the reply and
 // plans the writes; the Convex side gathers the input and applies the plan.
 //
-// The model proposes; the person's own settings win. Ranks, step tiers and a
-// set-aside status the person chose are never overwritten, step keys stay
-// stable across passes, and a step's done state comes from its tasks.
+// The model proposes; the person's own settings win. Ranks, a step's tier,
+// title, done state and drop, a priority's set-aside or done status, and a
+// session's placement the person chose are never overwritten (holdPersonSteps
+// here, and again in priorityPassRun applyPlan against the rows as they are
+// when it writes); step keys stay stable across passes, and a step's done
+// state otherwise comes from its tasks.
 
 import type {
   PriorityPassOutput,
@@ -44,6 +47,9 @@ export const PRIORITY_PASS_CAPS = {
   call_summary_chars: 1_200,
   call_action_items: 8,
   call_action_item_chars: 200,
+  /** The person's newest corrections the prompt holds, and how much of each. */
+  corrections: 40,
+  correction_chars: 1_000,
   /** The share of prompt_chars the sessions always get, however long the priorities block runs. */
   session_share_floor: 0.25,
   /** The most a model call may ask for (runModelCall refuses more). */
@@ -75,6 +81,10 @@ export type PassSession = {
   pin_events: Array<{ at: number; text: string }>;
   /** What the person typed in it, oldest first. */
   typed: Array<{ at: number; text: string }>;
+  /** The person put it on this priority (and step): it stays there. */
+  placed?: { priority: string; step_key: string | null };
+  /** Priorities the person said it is not part of. */
+  not_for?: string[];
 };
 
 export type PassPriority = {
@@ -85,11 +95,13 @@ export type PassPriority = {
   status: Exclude<PriorityStatus, "merged">;
   rank: number | null;
   rank_set_by: PrioritySetBy;
+  /** "person": they marked it done; its status stands. */
+  status_set_by?: PrioritySetBy;
   serves: string | null;
   steps: PriorityStep[];
   last_active_at: number;
-  /** Sessions mapped to it now, with the step each serves and when it last moved. */
-  sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number }>;
+  /** Sessions mapped to it now, with the step each serves and when it last moved; `by_person` when the person put it there. */
+  sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number; by_person?: boolean }>;
   /** It lost a session that left the workspace or was deleted: the reply must write its title and summary again from what is shown. */
   needs_rewrite?: boolean;
 };
@@ -107,7 +119,11 @@ export type PriorityPassInput = {
   sessions: PassSession[];
   /** Calls the person was in during the window, oldest first: what they said and committed to there. */
   calls: PassCall[];
+  /** What the person told the pass it got wrong, oldest first: read by every pass until they delete it. */
+  corrections?: PassCorrection[];
 };
+
+export type PassCorrection = { priority: string; step_key: string | null; text: string; at: number };
 
 export type PassCall = { id: string; title: string; at: number; summary: string; action_items: string[] };
 
@@ -138,6 +154,13 @@ Steps:
 - When a step's tasks are finished but work remains, add that work as a new step.
 
 Sessions: list each session that belongs to a priority under that priority's sessions, with the step it serves (the step's key, or its title for a new step). A session belongs to at most one priority.
+
+The person's own settings are fixed facts; anything you return that changes one is thrown away:
+- A step whose title, tier or done state is marked "set by the person" keeps it: return it as shown.
+- A step the person dropped is gone for good: never propose it again, under its own name or a similar one.
+- A priority marked done by the person stays done, and is never merged.
+- A session placed by the person stays where they put it. A session "not part of" a priority never goes to that priority.
+- Corrections are the person telling you what the list gets wrong, in their words. Follow every one, even when the sessions seem to say otherwise.
 
 Writing:
 - Titles are short and in the person's own words, at most 6 words.
@@ -233,6 +256,8 @@ function sessionBlock(s: PassSession): string {
   if (s.idle_summary?.trim()) lines.push(`Summary when it went idle: ${clip(s.idle_summary, c.idle_summary_chars)}`);
   if (s.tasks.length) lines.push(`Tasks: ${s.tasks.map((t) => `${t.short_id} "${clip(t.title, 160)}" (${t.status})`).join("; ")}`);
   if (s.prs.length) lines.push(`Pull requests: ${s.prs.map((p) => `${p.ref} (${p.merged ? "merged" : "open"})`).join("; ")}`);
+  if (s.placed) lines.push(`Placed by the person on ${s.placed.priority}${s.placed.step_key ? `/${s.placed.step_key}` : ""}: it stays there.`);
+  if (s.not_for?.length) lines.push(`Not part of ${s.not_for.join(", ")} (the person said).`);
   const pins = s.pin_events.slice(-c.pin_events);
   if (pins.length) lines.push(`Pinned states since the last pass:\n${pins.map((p) => `- ${when(p.at)} · ${clip(p.text, c.pin_chars)}`).join("\n")}`);
   const typed = newestWithin(s.typed, c.typed_message_chars, c.typed_session_chars);
@@ -243,15 +268,20 @@ function sessionBlock(s: PassSession): string {
 function priorityBlock(p: PassPriority, taskStatus: Map<string, string>): string {
   const rank = p.rank == null ? "unranked" : `rank ${p.rank}${p.rank_set_by === "person" ? " (set by the person)" : ""}`;
   const hide = !!p.needs_rewrite; // its words may tell of sessions gone from view: withheld, so a rewrite cannot copy them back
-  const head = `${p.short_id} · ${hide ? "(title withheld: write it again)" : `"${p.title}"`} · ${p.status === "set_aside" ? "set aside by the person" : p.status} · ${rank}${p.serves ? ` · serves ${p.serves}` : ""} · last active ${day(p.last_active_at)}`;
+  const status = p.status === "set_aside" ? "set aside by the person" : p.status_set_by === "person" ? `${p.status} (set by the person)` : p.status;
+  const head = `${p.short_id} · ${hide ? "(title withheld: write it again)" : `"${p.title}"`} · ${status} · ${rank}${p.serves ? ` · serves ${p.serves}` : ""} · last active ${day(p.last_active_at)}`;
   const lines = [`${head}${hide ? " · rewrite" : ""}`, `  Where it stands: ${hide ? "(withheld: write it again from what is shown)" : p.summary}`];
-  for (const s of p.steps) {
+  for (const s of p.steps.filter((s) => !s.dropped)) {
     const refs = s.refs.map((r) => (r.kind === "task" ? `task ${r.id} (${taskStatus.get(r.id) ?? "unknown"})` : `${r.kind} ${r.id}`));
-    lines.push(`  - ${p.short_id}/${s.key} [${s.tier}${s.tier_set_by === "person" ? ", set by the person" : ""}] ${hide ? "(title withheld)" : s.title}${s.done ? " · done" : ""}${refs.length ? ` · ${refs.join(", ")}` : ""}`);
+    const title = hide ? "(title withheld)" : `${s.title}${s.title_set_by === "person" ? " (title set by the person)" : ""}`;
+    const done = s.done_set_by === "person" ? ` · ${s.done ? "done" : "not done"} (set by the person)` : s.done ? " · done" : "";
+    lines.push(`  - ${p.short_id}/${s.key} [${s.tier}${s.tier_set_by === "person" ? ", set by the person" : ""}] ${title}${done}${refs.length ? ` · ${refs.join(", ")}` : ""}`);
   }
+  const dropped = p.steps.filter((s) => s.dropped);
+  if (dropped.length && !hide) lines.push(`  Dropped by the person (never propose again, under any name): ${dropped.map((s) => `${p.short_id}/${s.key} "${s.title}"`).join("; ")}`);
   const newest = [...p.sessions].sort((a, b) => b.last_active - a.last_active).slice(0, PRIORITY_PASS_CAPS.sessions_per_priority);
   const more = p.sessions.length - newest.length;
-  if (newest.length) lines.push(`  Sessions: ${newest.map((s) => `${s.id} "${clip(s.title, 120)}"${s.step_key ? ` (${p.short_id}/${s.step_key})` : ""}`).join("; ")}${more ? `; and ${more} older` : ""}`);
+  if (newest.length) lines.push(`  Sessions: ${newest.map((s) => `${s.id} "${clip(s.title, 120)}"${s.step_key ? ` (${p.short_id}/${s.step_key})` : ""}${s.by_person ? " placed by the person" : ""}`).join("; ")}${more ? `; and ${more} older` : ""}`);
   return lines.join("\n");
 }
 
@@ -289,12 +319,15 @@ export function buildPriorityPassPrompt(input: PriorityPassInput): { system: str
   const priorities = (shown.length ? shown.map((p) => priorityBlock(p, taskStatus)).join("\n\n") : "(none yet)") +
     (hidden ? `\n\n(${hidden} more done or quiet for over ${PRIORITY_PASS_CAPS.finished_days} days, not shown.)` : "");
   const calls = input.calls.slice(-PRIORITY_PASS_CAPS.calls).map(callBlock).join("\n\n");
-  const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
+  const corrections = (input.corrections ?? []).slice(-PRIORITY_PASS_CAPS.corrections)
+    .map((c) => `- ${when(c.at)} · on ${c.priority}${c.step_key ? `/${c.step_key}` : ""}: ${clip(c.text, PRIORITY_PASS_CAPS.correction_chars)}`).join("\n");
+  const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length - corrections.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
   const { kept, omitted } = fitSessions(input.sessions, budget);
   const prompt = [
     `Person: ${input.person}. Workspace: ${input.workspace || "this workspace"}. Now: ${when(input.now)} UTC. The sessions below were active since ${when(input.window_start)} UTC.`,
     `# Company goals a priority may serve\n${goals}`,
     `# Their priorities so far\n${priorities}`,
+    ...(corrections ? [`# Corrections the person wrote (follow every one)\n${corrections}`] : []),
     `# Sessions they worked in since the last pass\n${kept.length ? kept.map(sessionBlock).join("\n\n") : "(none)"}`,
     ...(calls ? [`# Calls they were in since the last pass\n${calls}`] : []),
   ].join("\n\n");
@@ -359,6 +392,7 @@ export function parsePriorityPassOutput(raw: unknown, input: PriorityPassInput):
   if (!obj || typeof obj !== "object" || !Array.isArray((obj as any).priorities)) return { output: null, dropped: ["reply: not a pass output"] };
   const existing = new Set(input.priorities.map((p) => p.short_id));
   const setAside = new Set(input.priorities.filter((p) => p.status === "set_aside").map((p) => p.short_id));
+  const personDone = new Set(input.priorities.filter((p) => p.status_set_by === "person").map((p) => p.short_id));
   const initiatives = new Set(input.initiatives.map((i) => i.short_id));
   const sessions = new Set([...input.sessions.map((s) => s.id), ...input.priorities.flatMap((p) => p.sessions.map((s) => s.id))]);
   const refs = knownRefs(input);
@@ -384,6 +418,7 @@ export function parsePriorityPassOutput(raw: unknown, input: PriorityPassInput):
       const id = str(m);
       if (!id || !existing.has(id) || id === short_id || claimed.has(id)) { dropped.push(`${at}: merge of ${String(m)} (unknown, itself or already claimed)`); continue; }
       if (setAside.has(id)) { dropped.push(`${at}: merge of ${id}, which the person set aside`); continue; }
+      if (personDone.has(id)) { dropped.push(`${at}: merge of ${id}, which the person marked done`); continue; }
       claimed.add(id);
       merges.push(id);
     }
@@ -545,17 +580,56 @@ export function stepDone(refs: PriorityRef[], judged: boolean | undefined, taskS
   return tasks.every((s) => s === "done" || s === "dropped") && tasks.some((s) => s === "done");
 }
 
-/** The step with its done state recomputed; a step that stays done keeps its first done time. */
+/** The step with its done state recomputed; a step that stays done keeps its first done time. The person's done state, and a dropped step, stand. */
 function withDone(step: PriorityStep, judged: boolean | undefined, was: PriorityStep | null, taskStatus: Map<string, string>, now: number): PriorityStep {
+  if (step.done_set_by === "person" || step.dropped) return step;
   const { done_at: _, ...rest } = step;
   const done = stepDone(step.refs, judged, taskStatus);
   return done ? { ...rest, done, done_at: was?.done ? was.done_at ?? now : now } : { ...rest, done };
 }
 
 const criticalDone = (steps: PriorityStep[]) => {
-  const critical = steps.filter((s) => s.tier === "critical");
+  const critical = steps.filter((s) => s.tier === "critical" && !s.dropped);
   return critical.length > 0 && critical.every((s) => s.done);
 };
+
+/** A step carrying something the person set: its tier, title or done state, or its drop. */
+export const isPersonHeld = (s: PriorityStep): boolean =>
+  s.tier_set_by === "person" || s.title_set_by === "person" || s.done_set_by === "person" || !!s.dropped;
+
+/** A step the pass wrote, with what the person set on `was` laid over it. A dropped `was` stays the tombstone it is. */
+export function withPersonFields(step: PriorityStep, was: PriorityStep): PriorityStep {
+  if (was.dropped) return was;
+  let out: PriorityStep = { ...step };
+  if (was.tier_set_by === "person") out = { ...out, tier: was.tier, tier_set_by: "person" };
+  if (was.title_set_by === "person") out = { ...out, title: was.title, title_set_by: "person" };
+  if (was.done_set_by === "person") {
+    const { done_at: _, ...rest } = out;
+    out = { ...rest, done: was.done, ...(was.done_at !== undefined ? { done_at: was.done_at } : {}), done_set_by: "person" };
+  }
+  return out;
+}
+
+/**
+ * The steps a write may leave on a priority whose steps are `current` now:
+ * `proposed`, with every person-set field of the step holding the same key
+ * laid back over it, none that recreates a dropped step under a near-identical
+ * title (STEP_TITLE_MATCH), and every step the person set something on that
+ * `proposed` lost, kept. applyPlan runs it against the row as it stands when
+ * it writes, so a setting made while the model was reading holds too.
+ */
+export function holdPersonSteps(current: PriorityStep[], proposed: PriorityStep[]): PriorityStep[] {
+  const held = current.filter(isPersonHeld);
+  const dropped = held.filter((s) => s.dropped);
+  const out: PriorityStep[] = [];
+  for (const s of proposed) {
+    const was = held.find((h) => h.key === s.key);
+    if (!was && dropped.some((d) => similarity(d.title, s.title) >= STEP_TITLE_MATCH)) continue;
+    out.push(was ? withPersonFields(s, was) : s);
+  }
+  for (const h of held) if (!out.some((s) => s.key === h.key)) out.push(h);
+  return out;
+}
 
 const keyNumber = (key: string | null | undefined) => {
   const m = key ? /^s(\d+)$/.exec(key) : null;
@@ -567,8 +641,10 @@ const keyNumber = (key: string | null | undefined) => {
  * priority it absorbs. The survivor's steps keep their keys; a step carried
  * from an absorbed priority gets a new key, recorded in `remap`
  * ("pri-2/s1" -> "s5") so that priority's sessions keep their step. New keys
- * come after every key the survivor's steps and sessions still hold. Every
- * step whose tier the person set is kept, matched or not.
+ * come after every key the survivor's steps and sessions still hold. What the
+ * person set on a matched step (tier, title, done) stands; a proposed step
+ * that matches one they dropped is left out; every step they set anything on
+ * is kept, matched or not.
  */
 function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed: PassPriority[], proposed: PriorityProposal["steps"], taskStatus: Map<string, string>, now: number, notes: string[]): { steps: PriorityStep[]; remap: Map<string, string> } {
   const own = prior?.steps ?? [];
@@ -586,18 +662,24 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
     if (was) remap.set(`${owner}/${was.key}`, key);
     return key;
   };
-  const steps = proposed.map((s, i) => {
+  const steps: PriorityStep[] = [];
+  for (const [i, s] of proposed.entries()) {
     const was = matched[i];
-    const person = was?.tier_set_by === "person";
-    const step: PriorityStep = { key: keyOf(was), title: s.title, tier: person ? was!.tier : s.tier, tier_set_by: person ? "person" : "pass", refs: s.refs, done: false };
-    return withDone(step, s.done_judged ?? was?.done, was, taskStatus, now);
-  });
+    if (was?.dropped) {
+      notes.push(`${target}: left out "${s.title}", the person dropped that step`);
+      continue;
+    }
+    const step: PriorityStep = { key: keyOf(was), title: s.title, tier: s.tier, tier_set_by: "pass", refs: s.refs, done: false };
+    steps.push(was ? withPersonFields(withDone(step, s.done_judged ?? was.done, was, taskStatus, now), was) : withDone(step, s.done_judged, null, taskStatus, now));
+  }
   for (const s of pool) {
-    if (s.tier_set_by !== "person" || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
+    if (!isPersonHeld(s) || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
     const from = ownerOf.get(s);
     steps.push(withDone({ ...s, key: keyOf(s) }, s.done, s, taskStatus, now));
-    notes.push(`${target}: kept step ${from ? `${from} ${s.key}` : s.key}, its tier set by the person`);
+    if (!s.dropped) notes.push(`${target}: kept step ${from ? `${from} ${s.key}` : s.key}, the person set it`);
   }
+  // A matched dropped step stays a tombstone, under its own key.
+  for (const s of pool) if (s.dropped && matched.includes(s) && !needsRewrite.has(ownerOf.get(s) ?? target)) steps.push({ ...s, key: keyOf(s) });
   return { steps, remap };
 }
 
@@ -633,6 +715,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       const gone = byId.get(m);
       if (!gone) continue;
       if (gone.status === "set_aside") { plan.notes.push(`${m}: not merged into ${target}, the person set it aside`); continue; }
+      if (gone.status_set_by === "person") { plan.notes.push(`${m}: not merged into ${target}, the person marked it done`); continue; }
       absorbed.push(gone);
       mergedAway.add(m);
       plan.merges.push({ short_id: m, merged_into: target });
@@ -648,9 +731,10 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       return steps.find((s) => s.key === bare)?.key ?? remap.get(ref) ?? null;
     };
 
-    // Status: the person's set-aside stands; "done" needs a finished critical path.
+    // Status: the person's set-aside or done stands; "done" needs a finished critical path.
     let status: PriorityWrite["status"] = prop.status;
     if (prior?.status === "set_aside") status = "set_aside";
+    else if (prior?.status_set_by === "person") status = prior.status;
     else if (status === "done" && !criticalDone(steps)) {
       status = "active";
       plan.notes.push(`${target}: kept active, its critical path is not done`);
@@ -675,7 +759,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     if (proposed.has(p.short_id) || mergedAway.has(p.short_id)) continue;
     const steps = p.steps.map((s) => withDone(s, s.done, s, taskStatus, now));
     let status = p.status;
-    if (status === "done" && !criticalDone(steps)) {
+    if (status === "done" && p.status_set_by !== "person" && !criticalDone(steps)) {
       status = "active";
       plan.notes.push(`${p.short_id}: active again, a task on its critical path reopened`);
     }
@@ -686,14 +770,23 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
   }
 
   // Sessions: every explicit list first, then sessions named in step refs, then the reply's unassigned, then sessions carried over from merges.
+  // A session the person placed stays put; one they said is not part of a priority never goes there.
+  const placed = new Set<string>();
+  const notFor = new Map<string, Set<string>>();
+  for (const s of input.sessions) {
+    if (s.placed) placed.add(s.id);
+    if (s.not_for?.length) notFor.set(s.id, new Set(s.not_for));
+  }
+  for (const p of input.priorities) for (const s of p.sessions) if (s.by_person) placed.add(s.id);
   const sessionMap = new Map<string, { priority: PriorityTarget; step_key: string | null }>();
   const claim = (session: string, priority: PriorityTarget, step_key: string | null) => {
+    if (placed.has(session) || notFor.get(session)?.has(priority)) return;
     if (!sessionMap.has(session)) sessionMap.set(session, { priority, step_key });
   };
   for (const r of rows) for (const s of r.proposal?.sessions ?? []) claim(s.session, r.target, r.stepKeyFor(s.step));
   for (const r of rows) if (r.proposal) for (const st of r.write.steps) for (const ref of st.refs) if (ref.kind === "session") claim(ref.id, r.target, st.key);
   const unassigned = new Set(output.unassigned.map((u) => u.session).filter((id) => !sessionMap.has(id)));
-  for (const id of unassigned) if (current.has(id)) plan.unmap.push(id);
+  for (const id of unassigned) if (current.has(id) && !placed.has(id)) plan.unmap.push(id);
   for (const r of rows) for (const a of r.absorbed) for (const s of a.sessions) if (!unassigned.has(s.id)) claim(s.id, r.target, (s.step_key && r.remap.get(`${a.short_id}/${s.step_key}`)) || null);
 
   // Last active: the newest session each priority holds once the pass is applied.

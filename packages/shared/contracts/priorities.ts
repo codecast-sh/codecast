@@ -2,9 +2,12 @@
 // driving at for a day to a month, inferred from their own sessions by a pass
 // that follows their work. A priority is a lens over existing work, not work
 // itself: it points up to at most one company goal (`serves`, an initiative)
-// and down, through its steps, at tasks, sessions, PRs and commits. One level
-// only, and never across workspaces. The person's own settings (rank, a step's
-// tier, set aside) always win over the pass.
+// and down, through its milestones (stored as `steps`), at tasks, sessions,
+// PRs and commits. One level only, and never across workspaces. The person's
+// own settings always win over the pass, enforced where the pass writes
+// (priorityPassRun applyPlan): rank; a milestone's tier, title, done state and
+// drop; a priority's set aside, done and merge; a session's move and "not
+// this". The person's corrections are read by every later pass.
 
 export type PriorityStatus = "active" | "done" | "quiet" | "set_aside" | "merged";
 export const PRIORITY_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside", "merged"];
@@ -22,16 +25,27 @@ export type PriorityRefKind = "task" | "session" | "pr" | "commit";
  */
 export type PriorityRef = { kind: PriorityRefKind; id: string };
 
+/** A milestone (stored as a step). */
 export type PriorityStep = {
   /** Stable within its priority across passes ("s1", "s2", …). */
   key: string;
   title: string;
+  /** "person" once the person renamed it. */
+  title_set_by?: PrioritySetBy;
   tier: PriorityStepTier;
   tier_set_by: PrioritySetBy;
   refs: PriorityRef[];
-  /** Computed: every referenced task done; with no task, judged by the pass from its sessions and PRs. */
+  /** Computed: every referenced task done; with no task, judged by the pass from its sessions and PRs. The person's call, once made, stands. */
   done: boolean;
   done_at?: number;
+  /** "person" once the person marked it done or not done. */
+  done_set_by?: PrioritySetBy;
+  /**
+   * The person dropped it: a tombstone kept in the row so the pass neither
+   * proposes it again nor recreates it under a near-identical name. Reads
+   * never return a dropped milestone.
+   */
+  dropped?: boolean;
 };
 
 /** The shape a pass may propose for one priority. Ids it did not mint are existing priorities' short ids. */
@@ -72,7 +86,14 @@ export type PriorityPinLine = {
 // ── What the priorities API returns (convex/priorities.ts) ──
 
 /** A session mapped to a priority, as the reader may open it. */
-export type PrioritySession = { short_id: string; title: string; step_key: string | null; updated_at: number };
+export type PrioritySession = {
+  short_id: string;
+  title: string;
+  step_key: string | null;
+  updated_at: number;
+  /** The person moved it here: the pass never moves it. */
+  set_by_person?: boolean;
+};
 
 /** One priority as a list, a write's echo and `cast priorities --json` return it. */
 export type PriorityRow = {
@@ -84,6 +105,8 @@ export type PriorityRow = {
   /** Its position among the owner's active priorities in its workspace (null unless active). */
   rank: number | null;
   rank_set_by: PrioritySetBy;
+  /** "person" when the person marked it done or merged it: the pass leaves its status alone. */
+  status_set_by: PrioritySetBy;
   serves: string | null;
   steps: PriorityStep[];
   counts: { critical_done: number; critical_total: number };
@@ -100,6 +123,19 @@ export type PriorityRow = {
   session_count_more: boolean;
   /** The newest of them: three in a list, every one read in `show`. */
   sessions: PrioritySession[];
+  /** The owner wrote a correction no pass has read yet (always false for a teammate). */
+  correction_pending: boolean;
+};
+
+/** A correction the person wrote on a priority or one of its milestones: every later pass reads it until it is deleted. */
+export type PriorityCorrection = {
+  _id: string;
+  /** The milestone it is about, if any. */
+  step_key: string | null;
+  text: string;
+  /** "applied" once a pass that read it succeeded. */
+  status: "pending" | "applied";
+  created_at: number;
 };
 
 /** A list answer: the rows, what it left out, and when the viewer's pass in the listed workspace runs. */
@@ -120,6 +156,8 @@ export type PriorityDetail = Omit<PriorityRow, "steps"> & {
   steps: Array<PriorityStep & { sessions: PrioritySession[] }>;
   /** Mapped sessions whose step is unknown or gone. */
   other_sessions: PrioritySession[];
+  /** The owner's corrections, newest first (empty for a teammate). */
+  corrections: PriorityCorrection[];
 };
 
 /** Typed messages per local day: one lane per priority, and "unassigned" for sessions no priority holds. */
