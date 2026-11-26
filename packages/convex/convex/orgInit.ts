@@ -75,6 +75,8 @@ import { insertTask } from "./agentTasks";
 import { charterPatch } from "./lib/orgCharter";
 import { handTask, recalcPlanProgress, resolveStatusWrite } from "./tasks";
 import { afterStatusEdges } from "./taskLinks";
+import { closesOrReopens } from "./lib/taskWrite";
+import { taskStatusChanged } from "./lib/priorityLinks";
 import { mintProjectShortId } from "./lib/projectShortId";
 
 // Org init and update (docs/architecture/org-init.md O1, O2): the evidence an
@@ -1414,6 +1416,7 @@ export async function setTaskStatus(
   if (next === "done" && task.started_at) patch.actual_minutes = Math.round((now - task.started_at) / 60000);
   const before = { ...task };
   await ctx.db.patch(task._id, patch);
+  if (closesOrReopens(task, patch)) await taskStatusChanged(ctx, task);
   await afterStatusEdges(ctx as any, before, next, release);
   if (closing) {
     for (const convId of task.conversation_ids ?? []) {

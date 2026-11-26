@@ -11,6 +11,9 @@ import { hashToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { patchPullRequest } from "./prShepherd";
 import { spawnSessionCore } from "./spawn";
+import { setTaskStatus } from "./orgInit";
+import { linkFromStart } from "./lib/priorityLinks";
+import { TASK, SOURCE, ADA, apply, engineCtx, sameIssue } from "./issueSync.testkit";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -41,7 +44,10 @@ async function world() {
     const ws = `user:${ada}`;
     const p1 = await ctx.db.insert("priorities", {
       user_id: ada, workspace: ws, short_id: "pri-1", title: "Ship it", summary: "", status: "active", rank: 1, rank_set_by: "pass",
-      steps: [step("s1", [{ kind: "task", id: "ct-1" }]), step("s2", [{ kind: "pr", id: `${REPO}#5` }]), step("s3"), step("s4"), step("s5", [{ kind: "task", id: "ct-3" }, { kind: "task", id: "ct-4" }])],
+      steps: [
+        step("s1", [{ kind: "task", id: "ct-1" }]), step("s2", [{ kind: "pr", id: `${REPO}#5` }]), step("s3"), step("s4"),
+        step("s5", [{ kind: "task", id: "ct-3" }, { kind: "task", id: "ct-4" }]), step("s6", [{ kind: "task", id: "ct-5" }]), step("s7", [{ kind: "pr", id: `${REPO}#6` }]),
+      ],
       first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW, session_count: 2,
     } as any);
     const p9 = await ctx.db.insert("priorities", {
@@ -63,13 +69,19 @@ async function world() {
       created_at: NOW, updated_at: NOW, ...fields,
     } as any);
     const ct1 = await task("ct-1", { conversation_ids: [cTask] });
-    await task("ct-3", { plan_id: plan });
-    await task("ct-4");
-    const pr = await ctx.db.insert("pull_requests", {
-      repository: REPO, number: 5, github_pr_id: 1005, title: "PR 5", body: "", state: "open", author_github_username: "ada",
-      linked_session_ids: [cPr], created_at: NOW, updated_at: NOW,
+    const ct3 = await task("ct-3", { plan_id: plan });
+    const ct4 = await task("ct-4");
+    // No session links ct-5: its owner's priorities are where it is found.
+    const ct5 = await task("ct-5");
+    const pullRequest = (number: number, fields: Record<string, unknown> = {}) => ctx.db.insert("pull_requests", {
+      repository: REPO, number, github_pr_id: 1000 + number, title: `PR ${number}`, body: "", state: "open", author_github_username: "ada",
+      linked_session_ids: [cPr], created_at: NOW, updated_at: NOW, ...fields,
     } as any);
-    return { ada, bea, p1, p9, cTask, cPr, cPin, cDec, cFree, ct1, pr };
+    const pr = await pullRequest(5);
+    // A pull request of another team's repository counts toward none of Ada's personal priorities.
+    const elsewhere = await ctx.db.insert("teams", { name: "Elsewhere", created_at: NOW } as any);
+    const foreignPr = await pullRequest(6, { team_id: elsewhere });
+    return { ada, bea, p1, p9, cTask, cPr, cPin, cDec, cFree, ct1, ct3, ct4, ct5, pr, foreignPr };
   });
   return { t, ...ids };
 }
@@ -97,11 +109,59 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: task.closed_at });
   });
 
+  test("done_at is when the done condition became true: the last open task dropped after another finished", async () => {
+    const { t, p1, ct3, ct4 } = await world();
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct3), { status: "done", closed_at: NOW - 3 * H }));
+    expect((await stepOf(t, p1, "s5")).done).toBe(false);
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct4), { status: "dropped", closed_at: NOW - H }));
+    expect(await stepOf(t, p1, "s5")).toMatchObject({ done: true, done_at: NOW - H });
+  });
+
+  test("a task no session links is found through its owner", async () => {
+    const { t, p1, ct5 } = await world();
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct5), { status: "done", closed_at: NOW - H }));
+    expect(await stepOf(t, p1, "s6")).toMatchObject({ done: true, done_at: NOW - H });
+  });
+
+  test("an org proposal's close (orgInit setTaskStatus) lands the same way", async () => {
+    const { t, p1, ct1 } = await world();
+    const at = NOW - 2 * H;
+    await t.run(async (ctx: any) => setTaskStatus(ctx, {}, await ctx.db.get(ct1), "done", at));
+    expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: at });
+    await t.run(async (ctx: any) => setTaskStatus(ctx, {}, await ctx.db.get(ct1), "open", NOW));
+    expect((await stepOf(t, p1, "s1")).done).toBe(false);
+  });
+
+  test("a cascade closing many tasks reads the owner's priorities once", async () => {
+    const { t, p1, ct1, ct3, ct4, ct5 } = await world();
+    const reads = await t.run(async (ctx: any) => {
+      let n = 0;
+      const db = new Proxy(ctx.db, {
+        get(target: any, prop: string) {
+          if (prop === "query") return (table: string) => { if (table === "priorities") n++; return target.query(table); };
+          const v = target[prop];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+      const counted = { ...ctx, db };
+      for (const id of [ct1, ct3, ct4, ct5]) await patchTask(counted, await ctx.db.get(id), { status: "done", closed_at: NOW - H });
+      return n;
+    });
+    expect(reads).toBe(1);
+    for (const key of ["s1", "s5", "s6"]) expect((await stepOf(t, p1, key)).done).toBe(true);
+  });
+
   test("a linked PR merging: done_at is the merge", async () => {
     const { t, p1, pr } = await world();
     const mergedAt = NOW - 2 * H;
     await t.run((ctx: any) => patchPullRequest(ctx, pr, { state: "merged", merged_at: mergedAt }));
     expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
+  });
+
+  test("a PR of another team's workspace counts toward no personal milestone", async () => {
+    const { t, p1, foreignPr } = await world();
+    await t.run((ctx: any) => patchPullRequest(ctx, foreignPr, { state: "merged", merged_at: NOW - H }));
+    expect((await stepOf(t, p1, "s7")).done).toBe(false);
   });
 
   test("a decision answered on a mapped session: done_at is the answer", async () => {
@@ -126,7 +186,7 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s3")).done_at).toBe(pinnedAt);
   });
 
-  test("in a team workspace, through a session listed to the team", async () => {
+  test("a team task linked only from a private session lands on its team milestone", async () => {
     const { t, ada } = await world();
     const { p, task } = await t.run(async (ctx: any) => {
       const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } });
@@ -137,8 +197,8 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
         steps: [step("s1", [{ kind: "task", id: "ct-20" }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
       });
       const c = await ctx.db.insert("conversations", {
-        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "sess-team", short_id: "jx7team", title: "team",
-        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "sess-team", short_id: "jx7team", title: "private",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, team_visibility: "private", status: "active",
       });
       const task = await ctx.db.insert("tasks", {
         user_id: ada, team_id: acme, workspace: ws, short_id: "ct-20", title: "t", status: "open", task_type: "task", priority: "medium", source: "human",
@@ -191,13 +251,43 @@ describe("a known link maps a session at creation, with no pass", () => {
     expect((await convOf(t, cPin)).priority_step_key).toBe("s3");
   });
 
-  test("a subagent the daemon syncs inherits its parent's milestone", async () => {
+  test("a Task-tool subagent the daemon syncs rolls up under its parent: no link, no count", async () => {
     const { t, ada, p1, cPin } = await world();
     const child = await t.mutation(api.conversations.createConversation, {
       api_token: TOKEN, user_id: ada, agent_type: "claude_code", session_id: "sub-1", project_path: "/tmp/x", parent_conversation_id: String(cPin),
     } as any);
-    const conv = await convOf(t, child);
-    expect([String(conv.priority_id), conv.priority_step_key]).toEqual([String(p1), "s3"]);
+    expect((await convOf(t, child)).priority_id).toBeUndefined();
+    expect((await t.run((ctx: any) => ctx.db.get(p1))).session_count).toBe(2);
+  });
+
+  test("a handoff inherits its source's milestone", async () => {
+    const { t, ada, p1, cDec } = await world();
+    const { conversationId } = await t.run(async (ctx: any) => spawnSessionCore(ctx, ada, { handoffFrom: await ctx.db.get(cDec), projectPath: "/tmp/x" }));
+    const conv = await convOf(t, conversationId);
+    expect([String(conv.priority_id), conv.priority_step_key]).toEqual([String(p1), "s4"]);
+  });
+
+  test("a fork another person makes of a shared session is not mapped to the owner's priority", async () => {
+    const { t, bea, cDec } = await world();
+    await t.run((ctx: any) => ctx.db.patch(cDec, { share_token: "share-dec" }));
+    const forkId = await t.withIdentity({ subject: `${bea}|session` }).mutation(api.conversations.forkConversation, { share_token: "share-dec" });
+    const conv = await convOf(t, forkId);
+    expect(String(conv.user_id)).toBe(String(bea));
+    expect(conv.priority_id).toBeUndefined();
+  });
+
+  test("Start from a session listed to a team never maps it to a personal priority", async () => {
+    const { t, ada } = await world();
+    const conv = await t.run(async (ctx: any) => {
+      const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW });
+      await ctx.db.insert("team_memberships", { user_id: ada, team_id: acme, role: "member", joined_at: 1 });
+      return ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "sess-listed", short_id: "jx7list", title: "listed",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+      });
+    });
+    expect(await t.run((ctx: any) => linkFromStart(ctx, ada, conv, "pri-1", "s2"))).toBe(false);
+    expect((await convOf(t, conv)).priority_id).toBeUndefined();
   });
 
   test("a `cast spawn --subagent` worker inherits its parent's milestone", async () => {
@@ -213,5 +303,24 @@ describe("a known link maps a session at creation, with no pass", () => {
     const forkId = res?.conversation_id ?? res;
     const conv = await convOf(t, forkId);
     expect([String(conv.priority_id), conv.priority_step_key]).toEqual([String(p1), "s4"]);
+  });
+});
+
+describe("an inbound issue sync closing or reopening a task", () => {
+  test("recomputes the milestone naming it, at the close's time", async () => {
+    const { ctx, tables } = engineCtx({
+      tasks: [{ ...structuredClone(TASK), workspace: "team:team_cc" }], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+      conversations: [], entity_conversations: [],
+      priorities: [{
+        _id: "pri_1", user_id: "user_owner", workspace: "team:team_cc", short_id: "pri-1", title: "Sync", summary: "", status: "active",
+        rank_set_by: "pass", steps: [step("s1", [{ kind: "task", id: "ct-1" }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      }],
+    });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ state: { id: "s_done", name: "Done", type: "completed" } }) });
+    const closedAt = tables.tasks[0].closed_at;
+    expect(tables.priorities[0].steps[0]).toMatchObject({ done: true, done_at: closedAt });
+    await apply(ctx, { source_id: "src_1", issue: sameIssue({ state: { id: "s_doing", name: "In Progress", type: "started" }, updatedAt: "2026-09-01T12:00:00.000Z" }) });
+    expect(tables.tasks[0].status).toBe("in_progress");
+    expect(tables.priorities[0].steps[0].done).toBe(false);
   });
 });
