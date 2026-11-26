@@ -560,35 +560,47 @@ function pushedHeads(runDir: string, branch: string): string[] {
 /**
  * Where a named branch stands now: the branch here (`head`) with what the run's worktree added since the last freeze
  * on it (`top`: the session's commits there and its carried edits). The session may also fix it from another
- * machine, its commit reaching this checkout only through origin. When origin moved since the last freeze, origin's
- * new tip is the change's, with the run's own unpushed work replayed onto it here: what the branch here holds over
- * the newest commit origin is known to have held, whether it held it at the last freeze (`remote_tip`) or got it from
- * the run's own stations' pushes (pushedHeads). Nothing origin held is replayed, so a commit a force-push took off
- * origin stays off, and a carry the PR station already pushed is not applied twice. Origin grown on the change's last
- * tip takes only what the worktree added since. A branch here that sits on none of those heads (rebased onto newer
- * work) cannot tell its own commits from origin's, and refuses; with none recorded at all, origin held nothing of the
- * branch, and all the branch here adds over their common commit is the run's own. Nothing is pushed: the PR station
- * pushes the branch. A worktree rewritten off the last freeze is the change as it stands. A conflict refuses, and
- * nothing moves.
+ * machine, its commit reaching this checkout only through origin. Origin's tip is the change's, with the run's own
+ * unpushed work replayed onto it here: what the branch here holds over the newest commit under it that origin is
+ * known to have held (`from`), and that origin's tip does not hold now. Origin held: its tip at the last freeze
+ * (`remote_tip`), what the run's own stations pushed (pushedHeads), what this checkout fetched since (the
+ * remote-tracking branch's reflog), and its tip now. Nothing origin held is replayed, so a commit a force-push or a
+ * rewind took off origin stays off, and a commit origin already has is not applied twice. A branch here that sits on
+ * none of those, while origin moved off its tip at the last freeze, was rebased: the run cannot tell its own commits
+ * from origin's, and refuses. With nothing recorded at all, origin held nothing of the branch, and all the branch here
+ * adds over their common commit is the run's own. Nothing is pushed: the PR station pushes the branch. A worktree
+ * rewritten off the last freeze is the change as it stands. A conflict refuses, and nothing moves.
  */
 async function branchCarry(root: string, runDir: string, before: FrozenChange, head: string, top: string): Promise<{ tip: string; remote_tip?: string }> {
   const remote = await originTip(root, before.branch);
-  const seen = remote ? { remote_tip: remote } : {};
-  const moved = !!remote && remote !== (before.remote_tip ?? "") && remote !== before.tip;
-  if (!moved || (await isAncestor(root, remote, top)) || !(await isAncestor(root, before.tip, head))) return { tip: top, ...seen };
-  const held = [...new Set([...(before.remote_tip ? [before.remote_tip] : []), ...pushedHeads(runDir, before.branch)])];
-  let from: string | null = null;
-  if (await isAncestor(root, before.tip, remote)) from = before.tip;
-  else if (!held.length) from = (await gitTry(root, ["merge-base", remote, before.tip])) ?? before.tip;
-  else {
-    let nearest = Infinity;
-    for (const h of held) {
-      if (!(await isAncestor(root, h, before.tip))) continue;
-      const ahead = Number(await git(root, ["rev-list", "--count", `${h}..${before.tip}`]));
-      if (ahead < nearest) [from, nearest] = [h, ahead];
-    }
+  if (!remote) return { tip: top };
+  const seen = { remote_tip: remote };
+  if (!(await isAncestor(root, before.tip, head))) return { tip: top, ...seen };
+  const recorded = [...new Set([...(before.remote_tip ? [before.remote_tip] : []), ...pushedHeads(runDir, before.branch)])];
+  // A fetch since the last freeze counts once it builds on what was recorded: an older entry is no news.
+  const fetched = ((await gitTry(root, ["reflog", "show", "-n", "50", "--format=%H", `refs/remotes/origin/${before.branch}`])) ?? "").split("\n").filter(Boolean);
+  const news: string[] = [];
+  for (const f of new Set(fetched)) {
+    let builds = !recorded.length;
+    for (const r of recorded) if (!builds && (await isAncestor(root, r, f))) builds = true;
+    if (builds) news.push(f);
   }
-  if (!from) throw new Error(`Origin's ${before.branch} moved to ${remote.slice(0, 10)} since the last freeze, and the branch here sits on nothing origin is known to have held (${held.map((h) => h.slice(0, 10)).join(", ")}): it was rebased, so the run cannot tell its own commits from origin's. Nothing moved: bring the two together (push the branch from here, or rebase it onto origin's), then end the turn again`);
+  const candidates = [...new Set([remote, ...recorded, ...news, ...((await isAncestor(root, before.tip, remote)) ? [before.tip] : [])])];
+  let from: string | null = null;
+  let nearest = Infinity;
+  for (const h of candidates) {
+    if (!(await isAncestor(root, h, head))) continue;
+    const ahead = Number(await git(root, ["rev-list", "--count", `${h}..${head}`]));
+    if (ahead < nearest) [from, nearest] = [h, ahead];
+  }
+  if (!from && !recorded.length) from = (await gitTry(root, ["merge-base", remote, before.tip])) ?? before.tip;
+  if (!from) {
+    if (remote === before.remote_tip) return { tip: top, ...seen };
+    throw new Error(`Origin's ${before.branch} moved to ${remote.slice(0, 10)} since the last freeze, and the branch here sits on nothing origin is known to have held (${recorded.map((h) => h.slice(0, 10)).join(", ")}): it was rebased, so the run cannot tell its own commits from origin's. Nothing moved: bring the two together (push the branch from here, or rebase it onto origin's), then end the turn again`);
+  }
+  // What origin's tip already holds is not replayed: from rises to where the two last met, when that is above it.
+  const met = await gitTry(root, ["merge-base", remote, top]);
+  if (met && met !== from && (await isAncestor(root, from, met))) from = met;
   return { tip: from === top ? remote : await replayCarry(root, from, top, remote, `origin's ${before.branch} at ${remote.slice(0, 10)}`), ...seen };
 }
 

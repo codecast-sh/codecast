@@ -289,16 +289,17 @@ checkout, a credential the session committed in the worktree refuses the
 refreeze, naming the file; a branch's commits are the session's own push. The
 refreeze pushes nothing (the PR station pushes the branch as it always has). On
 a branch, task or pull request run the worktree must be on the change's branch,
-and when origin moved since the last freeze, its new tip is the change's, with
-the run's own unpushed work replayed onto it locally: what the branch here holds
-over the newest commit origin is known to have held, at the last freeze
-(`remote_tip`) or from the run's own stations' pushes (`pr.json`'s heads and
-rebases, `rebase.json`'s chain). Origin grown on the change's last tip takes
-only what the worktree added since. Nothing origin held is replayed, so a commit
-a force-push took off origin stays off and a carry the PR station already
-pushed is not applied twice. A branch here that sits on none of those heads
-(rebased onto newer work) refuses; with none recorded at all, all the branch
-here adds over its common commit with origin is the run's own. A
+and origin's tip is the change's, with the run's own unpushed work replayed onto
+it locally: what the branch here holds over the newest commit under it that
+origin is known to have held, and that origin's tip does not hold now. Origin
+held its tip at the last freeze (`remote_tip`), what the run's own stations
+pushed (`pr.json`'s heads and rebases, `rebase.json`'s chain), what this
+checkout fetched since (the remote-tracking branch's reflog), and its tip now.
+Nothing origin held is replayed, so a commit a force-push or a rewind took off
+origin stays off, and a commit origin already has is not applied twice. A
+branch here that sits on none of those while origin moved (rebased onto newer
+work) refuses; with none recorded at all, all the branch here adds over its
+common commit with origin is the run's own. A
 change frozen from a checkout carries the edits on top of each later freeze
 (`frozen_tip`, its files in `carried`, apart from `paths`). The worktree is
 read once more before the reset; a write made while the refreeze ran is carried

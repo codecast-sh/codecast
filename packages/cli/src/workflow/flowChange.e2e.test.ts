@@ -484,6 +484,68 @@ describe("a named branch's fix comes back to the run", () => {
     expect(prPush(here, runDir).head).toBe(second.tip);
   }, 180_000);
 
+  test("a carry the PR station pushed, rewound off origin elsewhere, stays off, and the next PR push does not send it again (ct-99118)", async () => {
+    const { origin, here, there, worktree, runDir, start } = originWorld("pr-rewind");
+    start();
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "debug.txt", "debug\n");
+    const first = (await refreezeSessionChange(here, runDir, worktree)).change;
+    prPush(here, runDir);
+    expect(git(origin, "rev-parse", "feat")).toBe(first.tip);
+    // Elsewhere: reset --hard HEAD~1 and force-push.
+    git(there, "fetch", "--quiet", "origin");
+    git(there, "reset", "--quiet", "--hard", "origin/feat~1");
+    git(there, "push", "--quiet", "--force", "origin", "feat");
+    const rewound = git(origin, "rev-parse", "feat");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "z.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "rev-parse", `${change.tip}^`)).toBe(rewound);
+    expect(git(here, "ls-tree", "--name-only", change.tip, "--", "debug.txt")).toBe("");
+    expect(git(here, "show", `${change.tip}:z.txt`)).toBe("left here");
+    prPush(here, runDir);
+    expect(git(origin, "ls-tree", "--name-only", "feat", "--", "debug.txt")).toBe("");
+  }, 180_000);
+
+  test("commits origin already holds are not replayed: a fix pulled into the worktree and redone on top gives no false conflict (ct-99118)", async () => {
+    const { here, worktree, runDir, start, push } = originWorld("held-twice");
+    start();
+    prPush(here, runDir);
+    const f1 = push("a.txt", "v1\n", "f1 there");
+    // The session pulls F1 into the worktree and redoes the next fix there, which elsewhere is pushed as G.
+    git(worktree, "pull", "--quiet", "--ff-only", "origin", "feat");
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(f1);
+    const g = push("a.txt", "v2\n", "g there");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "a.txt", "v2\n");
+    git(worktree, "commit", "--quiet", "-am", "f2 here");
+    write(worktree, "b.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "merge-base", "--is-ancestor", g, change.tip)).toBe("");
+    expect([git(here, "show", `${change.tip}:a.txt`), git(here, "show", `${change.tip}:b.txt`)]).toEqual(["v2", "left here"]);
+  }, 180_000);
+
+  test("a commit pulled into the worktree, then force-pushed off origin, stays off (ct-99118)", async () => {
+    const { here, there, worktree, runDir, start, push } = originWorld("pulled-away");
+    const r0 = start();
+    prPush(here, runDir);
+    push("debug.txt", "debug\n", "debug there");
+    git(worktree, "pull", "--quiet", "--ff-only", "origin", "feat");
+    // Elsewhere the debug commit is dropped and force-pushed.
+    git(there, "reset", "--quiet", "--hard", r0);
+    write(there, "clean.txt", "clean\n");
+    git(there, "add", "clean.txt");
+    git(there, "commit", "--quiet", "-m", "clean");
+    git(there, "push", "--quiet", "--force", "origin", "feat");
+    const clean = git(there, "rev-parse", "HEAD");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "z.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "rev-parse", `${change.tip}^`)).toBe(clean);
+    expect(git(here, "ls-tree", "--name-only", change.tip, "--", "debug.txt")).toBe("");
+    expect(git(here, "show", `${change.tip}:z.txt`)).toBe("left here");
+  }, 180_000);
+
   test("a commit unpushed at the run's start that the PR station pushed, then force-pushed away elsewhere, stays away (ct-99118)", async () => {
     const { here, there, worktree, runDir, start } = originWorld("pr-unpushed");
     const r0 = git(here, "rev-parse", "feat");
