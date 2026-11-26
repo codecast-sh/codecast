@@ -210,7 +210,6 @@ describe("the Modern session card", () => {
       git_remote_url: "https://github.com/codecast-sh/codecast",
       active_task: { _id: "t1", title: "Dashboard retry UI", short_id: "ct-4102" },
       spawned_by_conversation_id: "c-lead",
-      handed_off_from_conversation_id: "c-lead",
       open_comment_threads: 2,
       last_comment_author_id: "u-ann",
       last_comment_author: "Ann Lee",
@@ -222,9 +221,10 @@ describe("the Modern session card", () => {
     expect(html).toContain("data-session-task");
     expect(html).toContain("Webhook retry rewrite");
     expect(html).toContain("fix/auth-race");
-    // A session another one only spawned is its peer: no parent link.
-    const peer = render({ _id: "c-peer", spawned_by_conversation_id: "c-lead" } as never);
-    expect(peer).not.toContain('data-mc-chip="parent"');
+    // Under the owners model a session another one only spawned is its peer:
+    // no parent link, unless it continues that session (a handoff).
+    expect(render({ _id: "c-peer", spawned_by_conversation_id: "c-lead", owners_model: true } as never)).not.toContain('data-mc-chip="parent"');
+    expect(render({ _id: "c-handoff", spawned_by_conversation_id: "c-lead", handed_off_from_conversation_id: "c-lead", owners_model: true } as never)).toContain('data-mc-chip="parent"');
     // A row with nothing for the line still renders the empty line, which the
     // stylesheet collapses (:empty).
     const bare = render({ _id: "c-bare", project_path: undefined, git_root: undefined });

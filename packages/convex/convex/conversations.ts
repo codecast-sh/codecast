@@ -3333,9 +3333,11 @@ export const listConversations = query({
 
         const fullTitle = c.title || firstUserMessage || "New Session";
 
-        // Only a nested worker has a parent: a session another one only
-        // spawned (spawned_by) is its peer.
-        let parentConversationId: string | null = c.parent_conversation_id || null;
+        // spawned_by (visible child → its lead) joins the same parent
+        // resolution so the "sub of"/"spawned by" row and title come free;
+        // under the owners model it makes a peer, not a child.
+        let parentConversationId: string | null =
+          c.parent_conversation_id || (c.spawned_by_conversation_id && !(await ownersModelOnMemo(ctx, c)) ? c.spawned_by_conversation_id : null) || null;
         let parentTitle: string | null = null;
         if (!parentConversationId && c.parent_message_uuid) {
           const parentMsg = await ctx.db

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket, Lock, Users } from "lucide-react";
-import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden, underOwnersModel } from "@codecast/shared/contracts";
 import { shipHref } from "../../lib/ship/sessionShip";
 import { closedBackWords } from "../../lib/sessionClose";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -246,10 +246,11 @@ export function ModernSessionCardView({
   } else if (session.active_plan) {
     chips.push(<ModernFactChip key="plan" kind="plan" title={session.active_plan.title} className="shrink-[10] min-w-[3rem]"><span className="truncate">{session.active_plan.title}</span></ModernFactChip>);
   }
-  // A spawner is a peer, never a parent: link back only to the session this
-  // one continues (a handoff). A nested row sits under it; the link would point up one row.
-  if (spawnedById && !nested && isHandoffFrom(session, spawnedById)) {
-    chips.push(<ModernLinkChip key="parent" kind="parent" label={spawnedByTitle || "parent session"} title="Handed off from this session; open it" onOpen={() => onOpenParent?.(spawnedById)} className="shrink-[10] min-w-[3rem]" />);
+  // A nested row sits under the session that spawned it; the link would point up one row.
+  // Under the owners model a spawner is a peer, never a parent: link back only to a handoff's source.
+  const handoff = !!spawnedById && isHandoffFrom(session, spawnedById);
+  if (spawnedById && !nested && (handoff || !underOwnersModel(session))) {
+    chips.push(<ModernLinkChip key="parent" kind="parent" label={spawnedByTitle || "parent session"} title={handoff ? "Handed off from this session; open it" : "Spawned by this session; open it"} onOpen={() => onOpenParent?.(spawnedById)} className="shrink-[10] min-w-[3rem]" />);
   }
   if (session.implementation_session) {
     const impl = session.implementation_session;
