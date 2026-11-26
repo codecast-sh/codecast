@@ -12,13 +12,18 @@ import { SectionHeader } from "../inbox/SectionHeader";
 import { askedOfViewer, isStackedAsk, type QueueItem } from "../../lib/decisionQueue";
 import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { ACTIVE_CARD_CLASS } from "../inbox/sessionCardTypes";
+import { PriorityRankChip } from "../inbox/PriorityRankChip";
+import { rankLabelOf, sortByPriority, type PriorityRankLabel, type PriorityStanding } from "../../store/priorityOrder";
 
 // The inbox panel's Decisions section IS the decision queue: one row per
 // decision waiting on the viewer, numbered in the order the stepper walks
 // them, grouped under the session that asked. Its count, the sidebar's and
 // the stepper's "2 of 32" are the same number (useDecisionQueue().length),
 // and the row the stepper is on is lit. Advisory asks (the agent already
-// went ahead on a default) are not in the queue; they fold into one row.
+// went ahead on a default) are not in the queue; they fold into one row. In
+// the inbox's Priorities view each asking session leads with the rank of the
+// viewer's priority it serves, and the groups sort by it as every other
+// section does (store/priorityOrder); each ask keeps its place number.
 
 const advisoryWhere = (d: SessionDecisionItem) => d.status === "pending" && !d.trial && !isStackedAsk(d);
 const advisorySig = (d: SessionDecisionItem) => `${d.status}:${d.blocking ? 1 : 0}:${d.stack_id ?? ""}:${d.in_queue === false ? 0 : 1}:${(d.asked_user_ids ?? []).join(",")}`;
@@ -39,6 +44,7 @@ export function InboxDecisionQueue({
   extraSessions,
   onSelectSession,
   matches,
+  priorityPlaceOf,
 }: {
   collapsed: boolean;
   onToggle: () => void;
@@ -50,8 +56,16 @@ export function InboxDecisionQueue({
    *  lists only the decisions of sessions that pass it. Each keeps its place
    *  number in the whole queue, the one the stepper walks. */
   matches?: (conversationId: string) => boolean;
+  /** The Priorities view: where a session stands in the viewer's priority order. */
+  priorityPlaceOf?: (s: InboxSession) => PriorityStanding;
 }) {
   const fullQueue = useDecisionQueue();
+  // A queue item carries the session row it was built from; a priority link
+  // is read off the store's current row, which the panel's reader is keyed on.
+  const placeOfConv = (id: string, row?: InboxSession) => {
+    const live = (useInboxStore.getState().sessions as Record<string, InboxSession | undefined>)[id] ?? row;
+    return live && priorityPlaceOf ? priorityPlaceOf(live) : null;
+  };
   const numbered = useMemo(() => fullQueue.map((item, i) => ({ item, n: i + 1 })).filter(({ item }) => !matches || matches(item.conversationId)), [fullQueue, matches]);
   const queue = useMemo(() => numbered.map(({ item }) => item), [numbered]);
   const cursor = useDecisionQueueCursor();
@@ -76,8 +90,10 @@ export function InboxDecisionQueue({
       }
       g.asks.push({ item, n });
     });
-    return [...byConv.values()];
-  }, [numbered]);
+    const all = [...byConv.values()];
+    return priorityPlaceOf ? sortByPriority(all, (g) => placeOfConv(g.conversationId, g.session)) : all;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- placeOfConv reads the store; priorityPlaceOf changes with every link it reads
+  }, [numbered, priorityPlaceOf]);
   // The first groups up to SHOWN_ASKS decisions, plus the lit one wherever it sits.
   const isLit = (g: Group) => (cursor ? g.asks.some((a) => a.item.key === cursor) : g.conversationId === activeSessionId);
   const shown: Group[] = [];
@@ -88,7 +104,9 @@ export function InboxDecisionQueue({
   }
   const hidden = queue.length - shown.reduce((n, g) => n + g.asks.length, 0);
   const covered = useMemo(() => new Set(queue.map((i) => i.conversationId)), [queue]);
-  const extras = extraSessions.filter((s) => !covered.has(s._id));
+  const asking = extraSessions.filter((s) => !covered.has(s._id));
+  const extras = priorityPlaceOf ? sortByPriority(asking, priorityPlaceOf) : asking;
+  const rankOf = (id: string, row?: InboxSession) => (priorityPlaceOf ? rankLabelOf(placeOfConv(id, row)) : undefined);
 
   if (queue.length === 0 && extras.length === 0 && advisory === 0) return null;
   return (
@@ -98,7 +116,7 @@ export function InboxDecisionQueue({
       {shown.map((g) => {
         const lit = isLit(g);
         return (
-          <QueueCard key={g.conversationId} id={g.conversationId} lit={lit} row={g.session} title={g.title} project={g.project} href={stepHref(g.conversationId)} showAgent={showAgent}>
+          <QueueCard key={g.conversationId} id={g.conversationId} lit={lit} row={g.session} title={g.title} project={g.project} href={stepHref(g.conversationId)} showAgent={showAgent} rank={rankOf(g.conversationId, g.session)}>
             {g.asks.map(({ item, n }) => {
               const here = cursor ? item.key === cursor : lit && n === g.asks[0].n;
               return (
@@ -138,6 +156,7 @@ export function InboxDecisionQueue({
           project={session.project_path ? getProjectName(session.project_path) : undefined}
           onSelect={(e) => onSelectSession(session, e)}
           showAgent={showAgent}
+          rank={rankOf(session._id, session)}
         />
       ))}
       {advisory > 0 && (
@@ -159,7 +178,7 @@ export function InboxDecisionQueue({
 // frame and ground (data-session-id under the rail, data-mc for Modern), the
 // workspace tile leading the title, and the open card's treatment when it is
 // the session on screen or holds the decision the stepper is on.
-function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, children }: {
+function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, rank, children }: {
   id: string;
   lit: boolean;
   row?: InboxSession;
@@ -168,6 +187,8 @@ function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, ch
   href?: string;
   onSelect?: (e: React.MouseEvent) => void;
   showAgent: boolean;
+  /** The Priorities view only: the card's rank label (PriorityRankChip). */
+  rank?: PriorityRankLabel;
   children?: React.ReactNode;
 }) {
   const head = (
@@ -175,6 +196,7 @@ function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, ch
       <span className="flex h-5 w-5 shrink-0 items-center justify-center"><WorkspaceTile row={row ?? {}} size={20} showAgent={showAgent} /></span>
       <span className="min-w-0 truncate text-body font-medium text-sol-text">{title}</span>
       {project && <span className="shrink-0 text-meta text-sol-text-dim">{project}</span>}
+      {rank !== undefined && <PriorityRankChip rank={rank} />}
     </>
   );
   const headClass = "flex w-full min-w-0 items-center gap-2 text-left no-underline";

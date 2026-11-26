@@ -28,7 +28,7 @@ import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
 import {
-  LIST_DAYS, LIST_GRID, SHOW_KINDS, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, localDayKey, readFilters, todayOf, waitingOf,
+  LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, localDayKey, readFilters, todayOf, waitingOf,
   type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
 } from "../../lib/priorityList";
 import { useInboxStore, type ClientUI } from "../../store/inboxStore";
@@ -70,7 +70,8 @@ export default function PrioritiesPage() {
 
   const behindChip = behind ? <BehindChip label={behind} /> : undefined;
   const legacy = <h1 className="flex items-center gap-2 px-4 pt-6 text-title font-semibold text-sol-text">Priorities{behindChip}</h1>;
-  const active = rows.filter((r) => r.status === "active").length;
+  // The count beside the title is what the list below it draws.
+  const listed = useMemo(() => listedRows(rows, filters).length, [rows, filters]);
 
   let body: ReactNode;
   if (rows.length === 0 && feed.error) {
@@ -92,7 +93,7 @@ export default function PrioritiesPage() {
 
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? active : null} status={behindChip} />}
+      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? listed : null} status={behindChip} />}
       legacyColumn="mx-auto w-full max-w-[1080px]"
       column="mx-auto w-full max-w-[1080px] px-3 pb-16 pt-3 sm:px-4"
     >
@@ -181,7 +182,7 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
   onCompact: (on: boolean) => void;
 }) {
   const scoped = useMemo(() => rows.filter((r) => r.status !== "merged" && (!filters.mine || r.mine)), [rows, filters.mine]);
-  const visible = useMemo(() => scoped.filter((r) => !filters.hideDone || r.status === "active"), [scoped, filters.hideDone]);
+  const visible = useMemo(() => listedRows(rows, filters), [rows, filters]);
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
   const ids = useMemo(() => linkedSessionIds(visible), [visible]);
@@ -228,7 +229,7 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
       {filters.mine && <WaitingOnYou items={waiting} now={now} layout={layout} />}
       {layout === "wide" && (
         <div aria-hidden className={cn(LIST_GRID.wide, "border-b border-sol-border/50 pb-1 text-mark font-medium uppercase tracking-wide text-sol-text-dim")}>
-          <span className="col-start-3 justify-self-end">Critical</span>
+          <span className="col-start-3 flex w-full justify-end gap-2"><span className="px-1">Critical</span><span className={POLISH_SLOT} /></span>
           <span className="col-start-4 justify-self-center">Today</span>
           <span className="col-start-5">10 days</span>
         </div>
@@ -253,7 +254,7 @@ function Segment({ on, onClick, children, tall, ...rest }: { on: boolean; onClic
       aria-pressed={on}
       onClick={onClick}
       {...rest}
-      className={cn("inline-flex items-center gap-1 rounded-[5px] px-2.5 text-meta transition-colors", tall ? "h-10" : "h-7", on ? "bg-sol-card font-medium text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text")}
+      className={cn("inline-flex items-center gap-1 rounded-[5px] px-2.5 text-meta transition-colors", tall ? "h-11" : cn("h-7", TOUCH_AREA), on ? "bg-sol-card font-medium text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text")}
     >
       {on && <Check className="size-3" strokeWidth={2.5} />}
       {children}
@@ -266,7 +267,8 @@ function FilterBar({ filters, onChange, compact, onCompact, layout }: { filters:
   const shown = SHOW_KINDS.filter((k) => filters.show[k]).length;
   const wide = layout === "wide";
   return (
-    <div data-filters className="mb-2 flex items-center gap-3">
+    // Wraps rather than clips: on a narrow list (Daylight beside the inbox) Compact goes to a second line.
+    <div data-filters className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
       <div className="inline-flex shrink-0 gap-0.5 rounded-[7px] bg-sol-text/[0.06] p-0.5">
         <Segment data-filter="mine" on={filters.mine} onClick={() => onChange({ ...filters, mine: !filters.mine })} tall={!wide}>Mine</Segment>
         <Segment data-filter="done" on={filters.hideDone} onClick={() => onChange({ ...filters, hideDone: !filters.hideDone })} tall={!wide}>Hide done</Segment>
@@ -281,7 +283,7 @@ function FilterBar({ filters, onChange, compact, onCompact, layout }: { filters:
               data-show={k}
               aria-pressed={filters.show[k]}
               onClick={() => toggleShow(k)}
-              className={cn("inline-flex h-6 items-center gap-1 rounded-full border px-2 text-meta transition-colors", filters.show[k] ? "border-sol-text-muted/60 text-sol-text" : "border-transparent text-sol-text-dim hover:border-sol-border")}
+              className={cn("inline-flex h-6 items-center gap-1 rounded-full border px-2 text-meta transition-colors", TOUCH_AREA, filters.show[k] ? "border-sol-text-muted/60 text-sol-text" : "border-transparent text-sol-text-dim hover:border-sol-border")}
             >
               {filters.show[k] && <Check className="size-3" strokeWidth={2.5} />}
               {SHOW_LABELS[k]}
@@ -309,7 +311,7 @@ function FilterBar({ filters, onChange, compact, onCompact, layout }: { filters:
         aria-label="Compact"
         title={compact ? "One line per milestone" : "One line per priority"}
         onClick={() => onCompact(!compact)}
-        className={cn("inline-flex shrink-0 items-center gap-1 rounded-control px-2 text-meta", wide ? "ml-auto h-7" : "size-11 justify-center", compact ? "bg-sol-text/[0.08] text-sol-text" : "text-sol-text-dim hover:text-sol-text")}
+        className={cn("inline-flex shrink-0 items-center gap-1 rounded-control px-2 text-meta", wide ? cn("ml-auto h-7", TOUCH_AREA) : "size-11 justify-center", compact ? "bg-sol-text/[0.08] text-sol-text" : "text-sol-text-dim hover:text-sol-text")}
       >
         <Rows3 className="size-3.5" />{wide && " Compact"}
       </button>

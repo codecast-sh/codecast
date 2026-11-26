@@ -9,7 +9,7 @@ import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import type { PriorityLooseSession } from "@codecast/shared/contracts/priorities";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
-import { ago, type Landed, type ListLayout, type TodaySegment, type TodayShare } from "../../lib/priorityList";
+import { TOUCH_AREA, ago, type Landed, type ListLayout, type TodaySegment, type TodayShare } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 
 const MAX_MARKS = 8;
@@ -70,7 +70,7 @@ export function StatsLine({ days, landed, todayIndex, today, loose, now, layout 
             )}
           </>
         )}
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={open ? "Fewer details" : "More details"} className={cn("ml-auto flex shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt", wide ? "size-8" : "size-11")}>
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label={open ? "Fewer details" : "More details"} className={cn("ml-auto flex shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt", wide ? "size-8 [@media(pointer:coarse)]:size-11" : "size-11")}>
           <ChevronDown className={cn("size-4 transition-transform", open && "rotate-180")} />
         </button>
       </div>
@@ -93,7 +93,7 @@ export function StatsLine({ days, landed, todayIndex, today, loose, now, layout 
               })}
             </div>
             <div className="mt-1 grid gap-1.5 border-t border-sol-border/60 pt-1 text-center text-mark tabular-nums text-sol-text-dim" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
-              {days.map((d, i) => <span key={d} className={cn(i === todayIndex && "font-semibold text-sol-text")}>{i === todayIndex ? "Today" : Number(d.slice(8))}</span>)}
+              {days.map((d, i) => <span key={d} className={cn("whitespace-nowrap", i === todayIndex && "font-semibold text-sol-text")}>{i === todayIndex ? "Today" : Number(d.slice(8))}</span>)}
             </div>
             <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-mark text-sol-text-dim">
               <span className="inline-flex items-center gap-1"><i className="block h-[5px] w-3 rounded-[1.5px] bg-sol-green" />Top 3</span>
@@ -132,7 +132,7 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
               aria-label={s.tone === "none" ? "Today's sessions outside every priority" : undefined}
               onClick={s.tone === "none" ? () => setNoneOpen(true) : undefined}
               title={`${s.title} · ${s.count} messages`}
-              className={cn("block h-full first:rounded-l-[2px] last:rounded-r-[2px]", s.tone === "none" && "cursor-pointer border border-sol-text-dim/50")}
+              className={cn("block h-full first:rounded-l-[2px] last:rounded-r-[2px]", s.tone === "none" && cn("cursor-pointer border border-sol-text-dim/50", TOUCH_AREA))}
               style={{ flexGrow: s.count, flexBasis: 0, minWidth: 4, background: FILL[s.tone] }}
             />
           ))}
@@ -142,7 +142,7 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
         <div data-no-priority className="px-1.5 pb-1 pt-0.5 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">No priority · {none?.pct ?? 0}% of today</div>
         {loose.length === 0 && <div className="px-1.5 py-1 text-meta text-sol-text-dim">No sessions to list</div>}
         {loose.map((x) => (
-          <Link key={x.conversation_id} href={`/conversation/${x.conversation_id}`} onClick={() => setNoneOpen(false)} className="flex h-7 min-w-0 items-center gap-2 rounded-control px-1.5 text-meta hover:bg-sol-bg-alt">
+          <Link key={x.conversation_id} href={`/conversation/${x.conversation_id}`} onClick={() => setNoneOpen(false)} className="flex h-7 min-w-0 items-center gap-2 rounded-control px-1.5 text-meta hover:bg-sol-bg-alt [@media(pointer:coarse)]:h-11">
             <span className="min-w-0 flex-1 truncate text-sol-text">{x.title || "Untitled session"}</span>
             <span className="shrink-0 tabular-nums text-sol-text-dim">{ago(x.last_active_at, now)}</span>
           </Link>

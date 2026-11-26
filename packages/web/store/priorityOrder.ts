@@ -59,6 +59,12 @@ export function rankLabelOf(standing: PriorityStanding): PriorityRankLabel {
   return standing === PRIORITY_ELSEWHERE ? standing : standing?.rank ?? null;
 }
 
+/** A rank label in words, as both apps' rows draw it: the text and its tooltip. */
+export function rankLabelWords(rank: PriorityRankLabel): { text: string; title: string } {
+  if (typeof rank === "number") return { text: `#${rank}`, title: `Your priority #${rank}` };
+  return rank === PRIORITY_ELSEWHERE ? { text: "—", title: "In another workspace" } : { text: "None", title: "Serves none of your priorities" };
+}
+
 /** The standing reader the Priorities view sorts and labels by, over one state's priorities and viewer. */
 export function priorityPlaceReader(
   priorities: Record<string, RankedRow> | undefined,

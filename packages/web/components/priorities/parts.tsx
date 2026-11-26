@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { useEntityResolution } from "../../lib/entityDisplay";
 import { lookup } from "../../lib/liveEntities";
 import { milestoneStartHref } from "../../lib/priorities";
-import { STATE_WORD, ago, type MilestoneModel, type SessionLine } from "../../lib/priorityList";
+import { STATE_WORD, TOUCH_AREA, ago, type MilestoneModel, type SessionLine } from "../../lib/priorityList";
 import type { SessionStatus } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { useTrackedStore } from "../../store/inboxStore";
@@ -56,7 +56,7 @@ function useSessionLabel(s: Pick<SessionLine, "title">): string {
   return `${m[1]}: ${named || m[3] || "work"}`;
 }
 
-/** A session: a quiet pill, its state mark (closed in words) and its title. */
+/** A session: a quiet pill, its state mark and its title (a closed one says so in a word after it). */
 export function SessionChip({ s, className }: { s: SessionLine; className?: string }) {
   const label = useSessionLabel(s);
   const closed = s.state === "done" || s.state === "killed";
@@ -66,11 +66,12 @@ export function SessionChip({ s, className }: { s: SessionLine; className?: stri
       onClick={stop}
       data-chip="session"
       title={`${label} · ${STATE_WORD[s.state]}`}
-      className={cn("inline-flex h-6 min-w-0 max-w-[17rem] shrink items-center gap-1.5 rounded-full border border-sol-border/60 px-2 text-meta text-sol-text-muted hover:border-sol-text-dim/60 hover:text-sol-text", className)}
+      className={cn("inline-flex h-6 min-w-0 max-w-[17rem] shrink items-center gap-1.5 rounded-full border border-sol-border/60 px-2 text-meta text-sol-text-muted hover:border-sol-text-dim/60 hover:text-sol-text", TOUCH_AREA, className)}
     >
-      {closed ? <span className="shrink-0 text-sol-text-dim">closed</span> : <SessionStatusMark status={MARK[s.state]} size={12} />}
+      {!closed && <SessionStatusMark status={MARK[s.state]} size={12} />}
       {s.workflow && <Workflow className="size-3 shrink-0 text-sol-text-dim" aria-hidden />}
       <span className="min-w-0 truncate">{label}</span>
+      {closed && <span className="shrink-0 text-sol-text-dim">closed</span>}
     </Link>
   );
 }
@@ -85,7 +86,7 @@ export function AnswerSecondary({ s, showName = true, tall }: { s: SessionLine; 
         onClick={stop}
         data-answer="secondary"
         title={label}
-        className={cn("inline-flex shrink-0 items-center gap-1 rounded-control border border-sol-text/70 font-semibold text-sol-text hover:bg-sol-text/[0.06]", tall ? "h-11 px-3 text-ui" : "h-6 px-2 text-meta")}
+        className={cn("inline-flex shrink-0 items-center gap-1 rounded-control border border-sol-text/70 font-semibold text-sol-text hover:bg-sol-text/[0.06]", tall ? "h-11 px-3 text-ui" : cn("h-6 px-2 text-meta", TOUCH_AREA))}
       >
         <Reply className="size-3" aria-hidden /> Answer
       </Link>
@@ -112,7 +113,7 @@ export function ActionButton({ row, action, tall, showSession = true }: { row: P
   const taskIds = action.kind === "start" ? action.milestone.tasks : NO_TASKS;
   const s = useTrackedStore([(st) => taskIds.map((id) => { const t = lookup(st.tasks, id); return t ? stableRefId(t) : 0; }).join(",")]);
   const href = action.kind === "start" ? milestoneStartHref(row, action.milestone, (id) => lookup(s.tasks, id)) : action.session!.href;
-  const tallSize = tall && "h-11 px-4 text-ui";
+  const size = tall ? "h-11 px-4 text-ui" : TOUCH_AREA;
   return (
     <span className="inline-flex min-w-0 items-center gap-2">
       {action.kind === "answer" ? (
@@ -120,12 +121,12 @@ export function ActionButton({ row, action, tall, showSession = true }: { row: P
           href={href}
           onClick={stop}
           data-action="answer"
-          className={cn("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control bg-sol-text px-2.5 text-meta font-semibold text-sol-bg hover:opacity-90", tallSize)}
+          className={cn("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control bg-sol-text px-2.5 text-meta font-semibold text-sol-bg hover:opacity-90", size)}
         >
           <Reply className="size-3.5" aria-hidden /> Answer
         </Link>
       ) : (
-        <Button asChild variant="primary" size="xs" className={cn("shrink-0", tallSize)}>
+        <Button asChild variant="primary" size="xs" className={cn("shrink-0", size)}>
           <Link href={href} onClick={stop} data-action={action.kind}>{VERB[action.kind]}</Link>
         </Button>
       )}
@@ -148,7 +149,7 @@ export function PlanChip({ plan, prefix, className }: { plan: PriorityPlanRef; p
       onClick={stop}
       data-chip="plan"
       title={`${plan.title} · ${plan.done}/${plan.total} done${plan.size > plan.total ? ` · ${plan.size} tasks` : ""}`}
-      className={cn("inline-flex h-6 min-w-[6rem] max-w-[15rem] shrink items-center gap-1.5 rounded-[3px] border border-sol-border px-1.5 text-meta text-sol-text hover:border-sol-text-dim/60", className)}
+      className={cn("inline-flex h-6 min-w-[6rem] max-w-[15rem] shrink items-center gap-1.5 rounded-[3px] border border-sol-border px-1.5 text-meta text-sol-text hover:border-sol-text-dim/60", TOUCH_AREA, className)}
     >
       <Target className="size-3 shrink-0 text-sol-text-dim" aria-hidden />
       {prefix && <span className="shrink-0 text-sol-text-dim">{prefix}</span>}
@@ -168,7 +169,7 @@ export function TaskChip({ id, className }: { id: string; className?: string }) 
   const done = task?.status === "done";
   const Box = done ? SquareCheck : Square;
   return (
-    <Link href={`/tasks/${id}`} onClick={stop} data-chip="task" title={task?.title ?? "Task"} className={cn("inline-flex h-6 min-w-[5rem] max-w-[14rem] shrink items-center gap-1 px-0.5 text-meta text-sol-text hover:underline decoration-sol-text-dim/50", done && "text-sol-text-muted", className)}>
+    <Link href={`/tasks/${id}`} onClick={stop} data-chip="task" title={task?.title ?? "Task"} className={cn("inline-flex h-6 min-w-[5rem] max-w-[14rem] shrink items-center gap-1 px-0.5 text-meta text-sol-text hover:underline decoration-sol-text-dim/50", TOUCH_AREA, done && "text-sol-text-muted", className)}>
       <Box className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden />
       <span className="min-w-0 truncate">{task?.title || "Task"}</span>
     </Link>
@@ -184,7 +185,7 @@ export function PrChip({ pr, state }: { pr: string; state?: string }) {
   const Icon = PR_ICON[st];
   return (
     <a href={`https://github.com/${repo}/pull/${number}`} target="_blank" rel="noreferrer" onClick={stop} data-chip="pr" title={pr}
-      className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] border-[1.5px] border-sol-border bg-sol-bg px-1.5 text-meta tabular-nums text-sol-text">
+      className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] border-[1.5px] border-sol-border bg-sol-bg px-1.5 text-meta tabular-nums text-sol-text", TOUCH_AREA)}>
       <Icon className="size-3 text-sol-text-muted" aria-hidden /><span className="font-mono">#{number}</span>{state && <span className="text-sol-text-dim">{st}</span>}
     </a>
   );
@@ -205,7 +206,7 @@ export type DeployInfo = { id: string; target: string; status: string; at: numbe
 /** A deploy: a filled pill, a rocket, where it went and how long ago. */
 export function DeployChip({ d, now }: { d: DeployInfo; now: number }) {
   return (
-    <Link href="/deploys" onClick={stop} data-chip="deploy" title={`${d.target} · ${d.status}`} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-sol-text/[0.07] px-2 text-meta text-sol-text hover:bg-sol-text/[0.12]">
+    <Link href="/deploys" onClick={stop} data-chip="deploy" title={`${d.target} · ${d.status}`} className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-sol-text/[0.07] px-2 text-meta text-sol-text hover:bg-sol-text/[0.12]", TOUCH_AREA)}>
       <Rocket className={cn("size-3", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-muted")} aria-hidden />
       <span>{d.target}</span>
       {/* Not live: the state in words, so it reads in grayscale. */}

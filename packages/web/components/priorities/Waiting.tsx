@@ -19,7 +19,7 @@ export function WaitingRow({ item, now, full, tall }: { item: WaitingItem; now: 
       href={item.session.href}
       data-waiting-item={item.session.conversation_id}
       title={`${item.milestone} · ${item.session.title}`}
-      className={cn("flex min-w-0 items-center gap-1.5 rounded-control px-1.5 text-meta hover:bg-sol-yellow/15", tall ? "h-11 w-full text-ui" : "h-7", full && "w-full")}
+      className={cn("flex min-w-0 items-center gap-1.5 rounded-control px-1.5 text-meta hover:bg-sol-yellow/15", tall ? "h-11 w-full text-ui" : "h-7 [@media(pointer:coarse)]:h-11", full && "w-full")}
     >
       <i aria-hidden className="block size-[7px] shrink-0 rounded-full bg-sol-yellow" />
       {item.rank != null && <span className="shrink-0 font-semibold tabular-nums text-sol-text">#{item.rank}</span>}
@@ -50,7 +50,7 @@ export function WaitingOnYou({ items, now, layout }: { items: WaitingItem[]; now
       <section data-waiting="wide" className="mb-3 flex flex-wrap items-center gap-x-1 rounded-lg border border-sol-yellow/45 bg-sol-yellow/[0.06] py-0.5 pl-2.5 pr-1">
         <span className="mr-1 shrink-0 text-mark font-semibold uppercase tracking-wide text-sol-text-muted">Waiting on you</span>
         {items.slice(0, WIDE_SHOWN).map((it) => <WaitingRow key={it.key} item={it} now={now} />)}
-        {items.length > WIDE_SHOWN && <More items={items} now={now} label={`+${items.length - WIDE_SHOWN} more`} className="h-7" />}
+        {items.length > WIDE_SHOWN && <More items={items} now={now} label={`+${items.length - WIDE_SHOWN} more`} className="h-7 [@media(pointer:coarse)]:h-11" />}
       </section>
     );
   }

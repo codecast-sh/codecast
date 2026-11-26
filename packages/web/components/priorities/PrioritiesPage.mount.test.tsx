@@ -510,6 +510,116 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
   }
 }, 60_000);
 
+// A priority with one of every kind of link: its milestone names a task and a
+// pull request, its sessions sit on a branch, a deploy shipped its task, and
+// its line carries a plan.
+const KINDS = row(9, "Every kind of link", 1, [
+  step("s1", "Wire every link", "critical", false, { refs: [{ kind: "task", id: "ct-8001" }, { kind: "pr", id: "codecast-sh/codecast#4580" }] }),
+  step("s2", "Second milestone", "critical"),
+], {
+  links: [links("s1", [sess("kinds1", "Kinds driver", "dormant", 2), sess("kinds2", "Kinds helper", "dormant", 3)], { plan: PL_1075 }), links("s2", [sess("kinds3", "Second milestone work", "working", 0)])],
+});
+function seedKinds() {
+  useInboxStore.setState({ tasks: { tk8001: { _id: "tk8001", short_id: "ct-8001", title: "Write the wiring", status: "open" } } } as any);
+  useInboxStore.getState().syncTable("sessions", [{ _id: fixtureId("kinds2"), title: "Kinds helper", worktree_branch: "feat/every-link", updated_at: NOW - 3 * HOUR }] as any, { isDelta: true });
+  useInboxStore.getState().syncTable("teamDeploys", [{ _id: "dep8001", workspace: `team:${TEAM_ID}`, target: "web", status: "live", live_at: NOW - HOUR, created_at: NOW - 2 * HOUR, sessions: [], tasks: [{ short_id: "ct-8001" }] }] as any, { isDelta: true });
+}
+const ALL_KINDS = readFilters(new URLSearchParams("show=sessions,plans,tasks,prs,branches,deploys"));
+const CHIP_KINDS = ["session", "plan", "task", "pr", "branch", "deploy"];
+
+test("with every kind shown, each link is a chip of its own shape, labelled by its title and never a short id", async () => {
+  seedKinds();
+  const page = await mount(view({ rows: [KINDS], filters: ALL_KINDS }));
+  try {
+    expect(describeFailures(page)).toBe("");
+    const b = block(page.container, "pri-9");
+    for (const kind of CHIP_KINDS) expect(b.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
+    expect(b.querySelector('[data-chip="task"]')!.textContent).toBe("Write the wiring");
+    expect(b.querySelector('[data-chip="branch"]')!.textContent).toBe("feat/every-link");
+    expect(page.text()).not.toMatch(/jx7|ct-|pl-/);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("an open milestone shows every kind of link whatever Show says, and its whole title", async () => {
+  seedKinds();
+  const long = { ...KINDS, steps: [{ ...KINDS.steps[0], title: "Wire every link a milestone can have, so the open line shows the whole of this long title" }, KINDS.steps[1]] };
+  const page = await mount(view({ rows: [long], filters: readFilters(new URLSearchParams("show=none")) }));
+  const { act } = React as any;
+  try {
+    const b = block(page.container, "pri-9");
+    // Show off: a closed line has no chips.
+    expect(b.querySelector('[data-milestone="s1"] [data-chip]')).toBeNull();
+    const title = () => b.querySelector('[data-milestone="s1"] [data-milestone-title]')!;
+    expect(title().className).toContain("truncate");
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
+    const detail = b.querySelector("[data-milestone-detail]")!;
+    expect([...detail.querySelectorAll("[data-type-row]")].map((r) => r.getAttribute("data-type-row"))).toEqual(["Plan", "Tasks", "PRs", "Branches", "Deploys"]);
+    for (const kind of CHIP_KINDS) expect(detail.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
+    expect(title().className).not.toContain("truncate");
+    expect(title().className).toContain("whitespace-normal");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("the progress button shows the done critical milestones, and hides them again", async () => {
+  const page = await mount(view());
+  const { act } = React as any;
+  try {
+    const b = block(page.container, "pri-5");
+    expect(b.querySelector('[data-milestone="s2"]')).toBeNull();
+    await act(async () => { (b.querySelector("[data-progress-toggle]") as HTMLElement).click(); });
+    expect(b.querySelector('[data-milestone="s2"]')!.textContent).toContain("Re-measure grader faults");
+    await act(async () => { (b.querySelector("[data-progress-toggle]") as HTMLElement).click(); });
+    expect(b.querySelector('[data-milestone="s2"]')).toBeNull();
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("every priority says how many landed and how long since, on every layout; a phone's compact line drops today and the strip", async () => {
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(view({ layout }));
+    try {
+      expect(block(page.container, "pri-5").querySelector("[data-momentum-words]")!.textContent).toBe("1 landed · last 2d");
+      for (const id of ["pri-1", "pri-2", "pri-3", "pri-4"]) expect(block(page.container, id).querySelector("[data-momentum-words]")!.textContent).toBe("0 landed · none yet");
+    } finally {
+      await page.unmount();
+    }
+  }
+  const compact = await mount(view({ layout: "phone", compact: true }));
+  try {
+    const head = block(compact.container, "pri-1").querySelector("[data-priority-head]")!;
+    expect(head.textContent).not.toContain("today");
+    expect(head.querySelector("[data-day-strip]")).toBeNull();
+    expect(head.querySelector("[data-action]")).not.toBeNull();
+  } finally {
+    await compact.unmount();
+  }
+}, 60_000);
+
+test("under a coarse pointer every control on the list is a 44px target, at every layout", async () => {
+  seedKinds();
+  // A size of 44px (h-11, size-11, min-h-11) at every pointer, or one a coarse pointer gets: its own, or a 44px ::after press area.
+  const sized = /(?:^|\s)(?:size-11|h-11|min-h-11)(?:\s|$)|\[@media\(pointer:coarse\)\]:(?:h-11|h-12|min-h-11|size-11|after:)/;
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(view({ rows: [...ROWS, KINDS], layout, filters: ALL_KINDS }));
+    const { act } = React as any;
+    try {
+      // Open a milestone, so its sessions, runs and links are in the count.
+      await act(async () => { (block(page.container, "pri-2").querySelector('[data-milestone="s2"] [role=button]') as HTMLElement).click(); });
+      const controls = [...page.container.querySelectorAll("a[href], button, [role=button]")];
+      expect(controls.length).toBeGreaterThan(40);
+      const small = controls.filter((el) => !sized.test(el.className)).map((el) => el.outerHTML.slice(0, 120));
+      expect(small).toEqual([]);
+    } finally {
+      await page.unmount();
+    }
+  }
+}, 60_000);
+
 test("the route shows the feature-off landing while the workspace has Priorities off", async () => {
   useInboxStore.getState().syncTable("teams", [{ _id: TEAM_ID, name: "Degrade Co", role: "admin", features: { priorities: false } }] as any);
   const page = await mount(<PrioritiesRoute />);

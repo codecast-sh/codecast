@@ -154,6 +154,18 @@ describe("computeVisualOrder in the Priorities view", () => {
     expect(order.indexOf("stopped")).toBe(order.indexOf("wka") - 1);
   });
 
+  it("Decisions sorts by rank as every other section does; Pinned keeps the person's order", () => {
+    const asking = (id: string, extra: Partial<InboxSession> = {}) => session(id, { awaiting_input: true, ...extra } as Partial<InboxSession>);
+    const s = state("priorities");
+    const at = (minutes: number) => ({ updated_at: Date.now() - minutes * 60_000, agent_status_updated_at: Date.now() - minutes * 60_000 });
+    const qs = [asking("qnone", at(3)), asking("qb", { ...link("pB", "s1"), ...at(2) }), asking("qa", { ...link("pA", "s1"), ...at(1) })];
+    s.sessions = { ...s.sessions, ...Object.fromEntries(qs.map((q) => [q._id, q])) };
+    // The Status view files them by its own order, not by rank.
+    const status = computeVisualOrder({ ...s, clientState: { ui: { inbox_view_mode: "grouped" } } }).map(tag);
+    expect(status.slice(0, 3)).not.toEqual(["qa", "qb", "qnone"]);
+    expect(computeVisualOrder(s).map(tag).slice(0, 3)).toEqual(["qa", "qb", "qnone"]);
+  });
+
   it("a collapsed section is skipped, as in the Status view", () => {
     const s = { ...state("priorities"), collapsedSections: { needs_input: true } };
     expect(computeVisualOrder(s).map(tag)).toEqual(["wka", "wkb", "wknone"]);

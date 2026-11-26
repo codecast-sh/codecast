@@ -4958,8 +4958,9 @@ export function visualOrderSessions(
     walk?: InboxWalk;
     // Which project each session works in, for project chips (store/workProjects).
     projectOf?: (sessionId: string) => string | null;
-    // The Priorities view: each status section sorted by the viewer's priority
-    // a session serves (store/priorityOrder). Pinned keeps the person's order.
+    // The Priorities view: each status section, Decisions included, sorted by
+    // the viewer's priority a session serves (store/priorityOrder). Pinned
+    // keeps the person's order.
     priorityPlaceOf?: (s: InboxSession) => PriorityStanding;
     // A conversation's loaded transcript, for the hosted stop rule's fallback
     // (lib/hostedNotice hostedStopOf).
@@ -4992,7 +4993,7 @@ export function visualOrderSessions(
   const result: InboxSession[] = [];
   for (const [rows, key] of sections) {
     if (collapsed?.[key]) continue;
-    result.push(...(placeOf && key !== "pinned" && key !== "questions" ? sortByPriority(rows, placeOf) : rows));
+    result.push(...(placeOf && key !== "pinned" ? sortByPriority(rows, placeOf) : rows));
   }
   if (!opts.walk) return result;
   const walked = result.filter(walkFilterOf(placed, opts.walk));

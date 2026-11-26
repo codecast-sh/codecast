@@ -2018,7 +2018,8 @@ function SessionListPanelImpl({
     sectionHeaderCount(shown, full, n, showSubagents);
   // The Priorities view keeps the status sections and sorts each by the
   // viewer's priority a session serves, as the keyboard walk does
-  // (visualOrderSessions); Pinned keeps the person's own order.
+  // (visualOrderSessions); Pinned keeps the person's own order. Decisions
+  // sorts its own groups (InboxDecisionQueue).
   const priorityKey = resolveInboxViewMode(s.clientState.ui) === "priorities"
     ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ""}`
     : "";
@@ -3593,6 +3594,7 @@ function SessionListPanelImpl({
           extraSessions={statusQuestions}
           onSelectSession={handleQuestionSelect}
           matches={chipMatchesId}
+          priorityPlaceOf={priorityPlaceOf ?? undefined}
         />
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}

@@ -494,3 +494,50 @@ test("a refused write takes back only what it painted, keeps a server push that 
     await page.unmount();
   }
 }, 60_000);
+
+test("Looks done? is the owner's button: it marks the milestone done through setPriorityStepDone, and a refusal puts it back", async () => {
+  useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-3"), links: [links("s1", [], { looks_done: true })] }] as any, { isDelta: true });
+  let refuse: (e: Error) => void = () => {};
+  (useInboxStore.getState() as any)._setDispatch((action: string, args: unknown[]) => {
+    calls.push([action, args]);
+    return new Promise((_, reject) => { refuse = reject; });
+  });
+  toasts.length = 0;
+  const page = await mount(<Live />);
+  try {
+    const looks = line("pri-3", "s1").querySelector("[data-looks-done]") as HTMLElement;
+    expect(looks.tagName).toBe("BUTTON");
+    await press(looks);
+    expect(stored("pri-3").steps[0].done).toBe(true);
+    // The press marks it done; it never opens the line.
+    expect(line("pri-3", "s1").querySelector("[data-milestone-detail]")).toBeNull();
+    expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
+    await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 changed under you")); });
+    await page.waitFor(() => stored("pri-3").steps[0].done === false && toasts.length > 0);
+    expect(toasts).toEqual(["pri-3 changed under you"]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("Drop and Merge count linked sessions the same way, from the links; Drop says the sessions stay on the priority", async () => {
+  // pri-1: the feed session on s1 with two more s1 counts but does not carry, and the same session again on s2.
+  useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-1"), session_count: 9, links: [links("s1", [FEED], { sessions_more: 2 }), links("s2", [FEED])] }] as any, { isDelta: true });
+  const page = await mount(<Live />);
+  try {
+    await choose(line("pri-1", "s1").querySelector('[data-milestone-menu="s1"]')!, '[data-act="drop"]');
+    await page.waitFor(() => !!document.querySelector('[data-switch-review="Drop milestone"]'));
+    const drop = document.querySelector('[data-switch-review="Drop milestone"]')!.textContent!;
+    expect(drop).toContain("3linked sessions");
+    expect(drop).toContain("Stay on the priority, without that milestone");
+    await press([...document.querySelectorAll("[data-switch-review] button")].find((b) => b.textContent?.trim().startsWith("Cancel")) as HTMLElement);
+    await page.waitFor(() => !document.querySelector("[data-switch-review]"));
+    await openSub(priorityMenu("pri-1"), '[data-act="merge"]');
+    await press(item('[data-merge-into="pri-2"]'));
+    await page.waitFor(() => !!document.querySelector('[data-switch-review="Merge priority"]'));
+    // The feed session once across both milestones, plus the two s1 does not carry; never the server's session_count.
+    expect(document.querySelector('[data-switch-review="Merge priority"]')!.textContent).toContain("3sessions move");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);

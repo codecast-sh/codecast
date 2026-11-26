@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
-import type { SessionLine } from "../../lib/priorityList";
+import { TOUCH_AREA, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { MilestoneBox } from "./parts";
 
@@ -87,16 +87,28 @@ const copyLink = (shortId: string) => {
   toast("Link copied");
 };
 
+/**
+ * The sessions linked to a priority's milestones (or to one of them), each
+ * once, plus the ones each link counts but does not carry: what the rows
+ * draw, so a merge and a drop count the same way.
+ */
+function linkedSessionCount(row: Pick<PriorityRow, "links">, stepKey?: string): number {
+  const links = (row.links ?? []).filter((l) => stepKey == null || l.key === stepKey);
+  const ids = new Set(links.flatMap((l) => l.sessions.map((s) => s.conversation_id)));
+  return ids.size + links.reduce((n, l) => n + l.sessions_more, 0);
+}
+
 /** A merge: what moves and what ends, before it happens (there is no unmerge). */
 function mergeLedger(from: PriorityRow, into: PriorityRow): SwitchLedger {
   const n = from.steps.length;
+  const sessions = linkedSessionCount(from);
   return {
     name: "Merge priority",
     subject: `${from.title} into ${into.title}`,
     shift: null,
     figures: [
       { value: String(n), label: n === 1 ? "milestone moves" : "milestones move" },
-      { value: `${from.session_count}${from.session_count_more ? "+" : ""}`, label: from.session_count === 1 ? "session moves" : "sessions move" },
+      { value: String(sessions), label: sessions === 1 ? "session moves" : "sessions move" },
     ],
     rows: [
       { k: "Keeps", v: into.title },
@@ -108,8 +120,9 @@ function mergeLedger(from: PriorityRow, into: PriorityRow): SwitchLedger {
   };
 }
 
-/** A drop: the milestone leaves the priority, and the pass never proposes it again. */
-function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "title">, sessions: number): SwitchLedger {
+/** A drop: the milestone leaves the priority, and the pass never proposes it again. Its sessions stay on the priority. */
+function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "key" | "title">): SwitchLedger {
+  const sessions = linkedSessionCount(row, step.key);
   return {
     name: "Drop milestone",
     subject: step.title,
@@ -117,6 +130,7 @@ function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "title">, session
     figures: [{ value: String(sessions), label: sessions === 1 ? "linked session" : "linked sessions" }],
     rows: [
       { k: "Priority", v: row.title },
+      { k: "Sessions", v: "Stay on the priority, without that milestone" },
       { k: "The pass", v: "Never proposes it again" },
       { k: "Undo", v: "None", tone: "warn" },
     ],
@@ -206,11 +220,9 @@ function OwnerPriorityItems({ row, onCorrect, onMerge }: { row: PriorityRow; onC
 }
 
 /** A milestone's ⋯, for the owner: Done or Undone, Rename, its tier, Drop, Correct…. */
-export function MilestoneMenu({ row, step, sessions, onRename, touch, reveal, className }: {
+export function MilestoneMenu({ row, step, onRename, touch, reveal, className }: {
   row: PriorityRow;
   step: PriorityStep;
-  /** Linked sessions, for the drop's review. */
-  sessions: number;
   onRename: () => void;
   touch?: boolean;
   reveal?: string;
@@ -243,7 +255,7 @@ export function MilestoneMenu({ row, step, sessions, onRename, touch, reveal, cl
       </CorrectPopover>
       {dropping && (
         <SwitchReview
-          ledger={dropLedger(row, step, sessions)}
+          ledger={dropLedger(row, step)}
           onClose={() => setDropping(false)}
           onConfirm={() => { writes.dropStep(row.short_id, step.key); setDropping(false); }}
         />
@@ -306,6 +318,29 @@ function MoveTargets({ row, session, stepKey }: { row: PriorityRow; session: str
       ))}
       {here.length === 0 && others.length === 0 && <DropdownMenuLabel className="text-meta font-normal text-sol-text-dim">No other milestone</DropdownMenuLabel>}
     </>
+  );
+}
+
+/**
+ * "Looks done?": the milestone is open, yet every task it names is done. For
+ * the owner it is a button that marks it done, the same store action as its
+ * box (a refusal puts the paint back); for anyone else, the words alone.
+ */
+export function LooksDone({ row, step }: { row: PriorityRow; step: Pick<PriorityStep, "key"> }) {
+  const writes = usePriorityWrites();
+  const look = "inline-flex shrink-0 items-center whitespace-nowrap rounded-full border border-sol-border px-1.5 text-mark leading-[18px] text-sol-text-muted";
+  if (!row.mine) return <span data-looks-done title="Every task it names is done" className={look}>Looks done?</span>;
+  return (
+    <button
+      type="button"
+      data-looks-done
+      title="Every task it names is done: mark it done"
+      onClick={(e) => { e.stopPropagation(); writes.setStepDone(row.short_id, step.key, true); }}
+      onKeyDown={stop}
+      className={cn(look, TOUCH_AREA, "hover:border-sol-text-dim hover:text-sol-text")}
+    >
+      Looks done?
+    </button>
   );
 }
 

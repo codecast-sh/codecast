@@ -48,7 +48,8 @@ import { detailRowOf } from "./priorityDetail";
 import type { PriorityDetail } from "@codecast/shared/contracts/priorities";
 
 // A priority (pri-N): its pill in a sentence (critical meter, card on hover,
-// sheet on a tap) and its card alone on a line. The loader seeds it into
+// sheet on a tap), and alone on a line still the pill: a transcript promotes
+// no priority to a card (messageMarkdown ASSISTANT_CARDS). The loader seeds it into
 // priorityDetails as a `show` answer lands for a priority the list does not
 // hold (lib/priorityDetail detailRowOf). Its asking session is a fixture id no
 // inbox holds, so no live state overrides it and the card shows Next with its
@@ -507,7 +508,7 @@ export function renderGalleryMessages(now: number): Row[] {
   user("> Replays your commits on top of main\n\nCan we rebase instead of merging here?");
   asst(REFS);
   asst(`A proposal and a decision alone on their lines draw with their answers, and one change of a proposal is its pill.\n\n${GALLERY_ORG.proposalShort}\n\n${GALLERY_ORG.decisionShort}\n\nThe role in ${GALLERY_ORG.proposalShort}#1 is new.\n\n${GALLERY_ORG.proposalShort}#2`);
-  asst(`A priority in a sentence is its pill, with its critical meter: can you pick up ${GALLERY_PRIORITY.short} next? Alone on its line it is the card its pill opens:\n\n${GALLERY_PRIORITY.short}`);
+  asst(`A priority in a sentence is its pill, with its critical meter: can you pick up ${GALLERY_PRIORITY.short} next? Alone on its line in a transcript it is still the pill (team chat draws its card):\n\n${GALLERY_PRIORITY.short}`);
   asst(`A message naming two open decisions gets one review under it: ${GALLERY_ORG.decisionShort} first, then ${GALLERY_ORG.decision2Short}.`);
   asst(FENCES);
   asst(`<div style="padding:8px"><h3>A whole-HTML reply</h3><p>An agent wrote raw HTML without a fence.</p></div>`);

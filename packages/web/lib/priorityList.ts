@@ -302,6 +302,11 @@ export type ShowKind = (typeof SHOW_KINDS)[number];
 export type ListFilters = { mine: boolean; hideDone: boolean; show: Record<ShowKind, boolean> };
 const DEFAULT_SHOW = "sessions,plans";
 
+/** The rows the list draws under `f`: never a merged one; Mine keeps the viewer's, Hide done keeps the active. The page's count is their number. */
+export function listedRows<T extends Pick<PriorityRow, "status" | "mine">>(rows: readonly T[], f: Pick<ListFilters, "mine" | "hideDone">): T[] {
+  return rows.filter((r) => r.status !== "merged" && (!f.mine || r.mine) && (!f.hideDone || r.status === "active"));
+}
+
 /** The filters a page address carries; each default is left out of it. */
 export function readFilters(params: URLSearchParams | null | undefined): ListFilters {
   const kinds = new Set((params?.get("show") ?? DEFAULT_SHOW).split(","));
@@ -327,14 +332,26 @@ export function filtersHref(f: ListFilters, params: URLSearchParams | null | und
 export type ListLayout = "phone" | "wide";
 
 /**
+ * Under a coarse pointer (a phone, Daylight), a press area at least 44px each
+ * way centred on a small control, drawn as its ::after: the look is the same
+ * at every pointer. The control is the area's containing block, and nothing
+ * between it and its line may clip it.
+ */
+export const TOUCH_AREA = "relative [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:top-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:bottom-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:left-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:right-[min(0px,calc(50%-22px))] [@media(pointer:coarse)]:after:content-['']";
+
+/** The polish link's slot in a wide row's progress column: one width on every row and on the column head, so the pips line up. */
+export const POLISH_SLOT = "flex w-[5.25rem] shrink-0 justify-start";
+
+/**
  * The one grid every priority row and the column heads share, so each column
  * sits at one x down the list (every class spelled whole: Tailwind generates
  * only what it reads). Wide: rank | title | progress | today | momentum |
  * menu, the momentum column its strip alone until the list (a container) is
- * 44rem wide. Phone: rank | title | progress | strip | menu.
+ * 44rem wide. Each row is a grid of its own, so the progress column has one
+ * width rather than its content's. Phone: rank | title | progress | strip | menu.
  */
 export const LIST_GRID: Record<ListLayout, string> = {
-  wide: "grid grid-cols-[20px_minmax(0,1fr)_auto_28px_64px_24px] items-center gap-x-2 [@container(min-width:44rem)]:grid-cols-[20px_minmax(0,1fr)_auto_28px_150px_24px] [@container(min-width:44rem)]:gap-x-3",
+  wide: "grid grid-cols-[20px_minmax(0,1fr)_11.5rem_28px_64px_24px] items-center gap-x-2 [@container(min-width:44rem)]:grid-cols-[20px_minmax(0,1fr)_12.5rem_28px_150px_24px] [@container(min-width:44rem)]:gap-x-3",
   phone: "grid grid-cols-[18px_minmax(0,1fr)_auto_auto_44px] items-center gap-x-2",
 };
 

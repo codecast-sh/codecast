@@ -18,6 +18,7 @@ import { usePriorityModel } from "../../hooks/usePriorityModels";
 import { publicUrl } from "@codecast/shared/entities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
 import { cn } from "../../lib/utils";
+import { TOUCH_AREA } from "../../lib/priorityList";
 import { ActionButton, MilestoneBox } from "./parts";
 import { MilestoneToggle } from "./controls";
 
@@ -42,7 +43,9 @@ export function PriorityCard({ row, onOpen, tall }: { row: PriorityRow; onOpen?:
   const model = usePriorityModel(row);
   const { action } = model;
   const why = rankProvenance(row);
-  const meta = [row.short_id, row.mine ? "You" : row.owner, row.rank != null ? `#${row.rank}${why ? ` ${why}` : ""}` : null].filter(Boolean);
+  // "#1 Sarah Chen placed it" already names a teammate who placed it.
+  const owner = !row.mine && row.rank != null && row.rank_source === "person" ? null : row.mine ? "You" : row.owner;
+  const meta = [row.short_id, owner, row.rank != null ? `#${row.rank}${why ? ` ${why}` : ""}` : null].filter(Boolean);
   return (
     <div data-priority-card={row.short_id} className="bg-sol-bg p-3">
       <div className="flex items-start gap-2">
@@ -62,7 +65,7 @@ export function PriorityCard({ row, onOpen, tall }: { row: PriorityRow; onOpen?:
           <div className="text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Next</div>
           <div className="mt-1 flex min-w-0 items-center gap-2">
             {/* The owner marks it done from here; the next one takes its place. */}
-            {row.mine ? <MilestoneToggle row={row} step={action.milestone.step} className={tall ? "-my-3 -ml-2.5 h-11 pl-2.5 pr-1" : undefined} /> : <MilestoneBox done={false} />}
+            {row.mine ? <MilestoneToggle row={row} step={action.milestone.step} className={cn(tall && "-my-3 -ml-2.5 h-11 pl-2.5 pr-1", TOUCH_AREA)} /> : <MilestoneBox done={false} />}
             <span className="min-w-0 flex-1 truncate text-ui font-medium text-sol-text" title={action.milestone.step.title}>{action.milestone.step.title}</span>
           </div>
           <div className="mt-2 flex min-w-0 pl-[22px]"><ActionButton row={row} action={action} tall={tall} /></div>

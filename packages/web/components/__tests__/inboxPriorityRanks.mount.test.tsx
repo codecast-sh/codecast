@@ -170,3 +170,31 @@ test("the Status view shows no rank on any card", async () => {
   expect(m.host.querySelector("[data-priority-rank]")).toBeNull();
   await m.unmount();
 });
+
+test("Decisions rows carry their rank or None too, sorted by it", async () => {
+  seed("priorities");
+  const ASK_NONE = id("asknone");
+  const ASK_SECOND = id("asksecond");
+  const ASK_FIRST = id("askfirst");
+  // Asking sessions file under Decisions; the newest-first order there is not the rank order.
+  const asks = [
+    row(ASK_FIRST, "Asks for the first priority", { awaiting_input: true, priority_id: "p1", priority_step_key: "s1", updated_at: NOW - 30 * 60_000 }),
+    row(ASK_SECOND, "Asks for the second", { awaiting_input: true, priority_id: "p2", priority_step_key: "s1", updated_at: NOW - 20 * 60_000 }),
+    row(ASK_NONE, "Asks for nothing ranked", { awaiting_input: true, updated_at: NOW - 10 * 60_000 }),
+  ];
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, ...Object.fromEntries(asks.map((r) => [r._id, r])) } }));
+  const m = await mountInbox();
+  const queue = m.host.querySelector("[data-inbox-decision-queue]")!;
+  expect(queue).not.toBeNull();
+  const order = [...queue.querySelectorAll("[data-session-id]")].map((el) => el.getAttribute("data-session-id"));
+  expect(order).toEqual([ASK_FIRST, ASK_SECOND, ASK_NONE]);
+  const rankIn = (sid: string) => queue.querySelector(`[data-session-id="${sid}"] [data-priority-rank]`)?.textContent ?? null;
+  expect([rankIn(ASK_FIRST), rankIn(ASK_SECOND), rankIn(ASK_NONE)]).toEqual(["#1", "#7", "None"]);
+  await m.unmount();
+  // Outside the Priorities view the Decisions rows carry no rank.
+  seed("grouped");
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, ...Object.fromEntries(asks.map((r) => [r._id, r])) } }));
+  const g = await mountInbox();
+  expect(g.host.querySelector("[data-inbox-decision-queue] [data-priority-rank]")).toBeNull();
+  await g.unmount();
+});
