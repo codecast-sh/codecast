@@ -1,6 +1,6 @@
 // The owners UI under the session_owners model, mounted per state with the
 // flag on and off: the header's owners segment and menu, the composer strip,
-// the "Not in your inbox" bar, the agents band and the inbox card faces.
+// the agents band and the inbox card faces.
 // Flag off, every piece draws what main draws (nothing new).
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -36,7 +36,7 @@ const { withTeamRoster } = await import("../../test-helpers/teamRoster");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { OwnersSegment, OwnersMenuItem, OwnersSheet } = await import("../OwnersMenu");
 const { DropdownMenu, DropdownMenuContent } = await import("../ui/dropdown-menu");
-const { ComposerOwnerStrip, NotInInboxBar } = await import("../conversation/ComposerOwnerStrip");
+const { ComposerOwnerStrip } = await import("../conversation/ComposerOwnerStrip");
 const { SessionAgentsBand } = await import("../conversation/SessionAgentsBand");
 const { CoOwnerFaces } = await import("../inbox/CoOwnerFaces");
 const { coOwnersOf } = await import("../../lib/coOwners");
@@ -96,10 +96,9 @@ const ownersSent = () => sent.filter((x) => x.action === "applySessionOwners").m
 
 describe("flag off: nothing new draws", () => {
   beforeEach(() => seed(false));
-  test("no owners segment state, no strip, no bar, no band, no card faces", async () => {
+  test("no owners segment state, no strip, no band, no card faces", async () => {
     await render(<>
       <ComposerOwnerStrip conversationId={S} active />
-      <NotInInboxBar conversationId={S} />
       <SessionAgentsBand conversationId={S} />
       <CoOwnerFaces owners={coOwnersOf(useInboxStore.getState() as any, S, "me", [me, ashot])} />
     </>);
@@ -138,7 +137,6 @@ describe("flag off: nothing new draws", () => {
     try {
       await render(<>
         <ComposerOwnerStrip conversationId={S} active />
-        <NotInInboxBar conversationId={S} />
         <DropdownMenu open><DropdownMenuContent><OwnersMenuItem conversationId={S} onOpen={() => {}} /></DropdownMenuContent></DropdownMenu>
       </>);
     } finally {
@@ -279,7 +277,7 @@ describe("a narrow header: Owners in the session menu opens the owners sheet", (
   });
 });
 
-describe("flag on: the composer strip and the inbox bar", () => {
+describe("flag on: the composer strip", () => {
   test("an agent owner: the strip shows only while the composer is active, and Take it over sends take_over", async () => {
     seed(true, { people: [{ user_id: "me", name: me.name, email: null, added_by: "me", added_at: 1 }], role: { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" } });
     await render(<ComposerOwnerStrip conversationId={S} active={false} />);
@@ -297,17 +295,6 @@ describe("flag on: the composer strip and the inbox bar", () => {
     seed(true);
     await render(<ComposerOwnerStrip conversationId={S} active />);
     expect(container.innerHTML).toBe("");
-  });
-
-  test("not an owner: Not in your inbox, and Add me paints you in", async () => {
-    seed(true, { people: [{ user_id: "ashot", name: ashot.name, email: null, added_by: "ashot", added_at: 1 }], can_edit: false });
-    useInboxStore.setState((s: any) => ({ sessions: { [S]: { ...s.sessions[S], owned_by_me: false } } }));
-    await render(<NotInInboxBar conversationId={S} />);
-    expect($("[data-cc-not-in-inbox]")!.textContent).toContain("Not in your inbox");
-    await click($("[data-cc-not-in-inbox] [data-owners-add-me]"));
-    await settle();
-    expect(ownersSent()).toEqual([{ add: ["me"] }]);
-    expect($("[data-cc-not-in-inbox]")).toBeNull();
   });
 });
 

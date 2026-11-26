@@ -1,6 +1,6 @@
 // The owners model on the phone, driven by presses: every owners change shows
-// the undo bar with an Undo that puts it back; Add me in the "Not in your
-// inbox" bar and in the agents list puts the session in your inbox at once;
+// the undo bar with an Undo that puts it back; Add me in the agents list puts
+// the session in your inbox at once;
 // "With <owner>" shows only while the row reads working; and a row off the
 // model reads nothing of the owners.
 import { beforeAll, beforeEach, expect, mock, test } from 'bun:test';
@@ -94,17 +94,6 @@ beforeEach(() => {
   undo.useUndoBar.setState({ item: null, heldKillId: null });
   store.useInboxStore.setState({ currentUser: { _id: ME, name: 'Alex Rivera' }, pending: {}, sessionOwners: {}, sessionAgents: {}, sessions: { [S]: row(S) }, conversations: {} } as any);
   st()._setDispatch(async () => null, { owner });
-});
-
-test('Add me in the bar puts the session in your inbox at once, and Undo takes it back out', () => {
-  read.applySessionOwnersRead(S, ownersRead(S, [person(ASHOT, 1)], { can_edit: false }));
-  const tree = render(<lines.NotInInboxBar conversationId={S} />);
-  expect(inMyInbox(S)).toBe(false);
-  press(tree, 'not-in-inbox-add-me');
-  expect(inMyInbox(S)).toBe(true);
-  expect(bar()?.title).toBe('In your inbox');
-  TestRenderer.act(() => { bar()!.onUndo!(); });
-  expect(inMyInbox(S)).toBe(false);
 });
 
 test('Take it over removes the role at once, shows Undo, and Undo brings the role back', () => {

@@ -1,25 +1,22 @@
 "use client";
 
 /**
- * The lines above a session's composer under the session_owners model:
- *  - ComposerOwnerStrip: an agent owner (its role, else the session that
- *    started it) answers this session. While the composer is focused or holds
- *    text: "<agent> answers here too", with Take it over, which removes every
- *    agent owner and makes you an owner. Sending never takes anything over.
- *  - NotInInboxBar: you can see the session but do not own it, so it is not
- *    in your inbox: the owners' faces and Add me.
- * Neither draws anything for a session off the model, nor reads anything
- * past one store selector there: flag off, the composer costs what it did.
+ * The line above a session's composer under the session_owners model: an
+ * agent owner (its role, else the session that started it) answers this
+ * session. While the composer is focused or holds text: "<agent> answers here
+ * too", with Take it over, which removes every agent owner and makes you an
+ * owner. Sending never takes anything over. It draws nothing for a session
+ * off the model, nor reads anything past one store selector there: flag off,
+ * the composer costs what it did.
  */
 
 import { memo } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { ownersModelOnFor } from "../../store/sessionOwnersSlice";
-import { Plus } from "lucide-react";
 import { useSessionOwners } from "../../hooks/useSessionOwners";
 import { takeOverChange } from "../../lib/ownersDraft";
-import { OwnerFace, OwnerFaces, ParentSessionFace } from "../OwnersMenu";
-import { applyOwnersWithToast, ownersTitle } from "../../lib/ownersGestures";
+import { OwnerFace, ParentSessionFace } from "../OwnersMenu";
+import { applyOwnersWithToast } from "../../lib/ownersGestures";
 import { Button } from "../ui/button";
 
 const STRIP = "flex items-center gap-2 rounded-lg border border-sol-border/60 bg-sol-bg-alt px-3 py-1.5 text-ui text-sol-text-muted";
@@ -52,28 +49,6 @@ function OwnerStrip({ conversationId, className }: { conversationId: string; cla
           // Keeps the composer's focus: the strip shows only while it is focused.
           <Button type="button" variant="outline" size="xs" onMouseDown={(e) => e.preventDefault()} onClick={takeOver} data-owner-take-over>Take it over</Button>
         )}
-      </div>
-    </div>
-  );
-}
-
-export function NotInInboxBar({ conversationId, className = "" }: { conversationId: string; className?: string }) {
-  const on = useInboxStore((s) => ownersModelOnFor(s as never, conversationId));
-  return on ? <InboxBar conversationId={conversationId} className={className} /> : null;
-}
-
-function InboxBar({ conversationId, className }: { conversationId: string; className: string }) {
-  const view = useSessionOwners(conversationId);
-  if (!view.on || view.mine || !view.meId) return null;
-  const me = view.meId;
-  return (
-    <div className={className}>
-      <div data-cc-not-in-inbox className={STRIP}>
-        <span title={ownersTitle(view)} className="inline-flex"><OwnerFaces view={view} /></span>
-        <span className="min-w-0 flex-1 truncate">Not in your inbox</span>
-        <Button type="button" variant="outline" size="xs" onClick={() => applyOwnersWithToast(conversationId, { add: [me] }, { remove: [me] }, "In your inbox")} data-owners-add-me>
-          <Plus className="w-3.5 h-3.5" />Add me
-        </Button>
       </div>
     </div>
   );
