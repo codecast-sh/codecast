@@ -1,0 +1,26 @@
+{
+  "name": "settle audit-recommends-follow-ups",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:audit-recommends-follow-ups"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:audit-recommends-follow-ups",
+    "title": "settle audit-recommends-follow-ups"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/audit-recommends-follow-ups.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "5e395d0c-66ab-4170-b0fc-fd165e1187a0",
+  "createdAt": "2026-11-26T08:58:19.215Z"
+}

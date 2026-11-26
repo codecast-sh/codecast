@@ -76,6 +76,11 @@ describe("buildSettlePrompt / parseSettleReply", () => {
     expect(p).not.toMatch(/\bdormant\b/);
   });
 
+  test("an audit is done when its report lands only when it offers no further work", () => {
+    const p = buildSettlePrompt(shapeSettleTail([{ role: "assistant", content: "ok" }]));
+    expect(p).toContain("An audit asked for as an audit is finished when the report lands (done), unless it recommends or offers further work (above).");
+  });
+
   test("parses the two-line reply and ignores anything but the two verdicts", () => {
     expect(parseSettleReply("VERDICT: done\nSUMMARY: Shipped the fix")).toEqual({ verdict: "done", summary: "Shipped the fix" });
     expect(parseSettleReply("VERDICT: needs input\nSUMMARY: Choose an option")).toEqual({ verdict: "needs_input", summary: "Choose an option" });

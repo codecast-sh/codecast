@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "delivered a fix, then lists suggested follow-ups with no question: named optional work for the human to pick up",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Fixed: the export button now streams the CSV instead of building it in memory, so the 50k-row workspace downloads in 4s instead of timing out. Tests green, verified in the browser on the large fixture.\n\nSuggested follow-ups:\n- PDF export builds in memory the same way\n- the import path never closes its file handle"
+      },
+      {
+        "role": "user",
+        "content": "the CSV export times out on big workspaces, fix it"
+      }
+    ]
+  }
+}

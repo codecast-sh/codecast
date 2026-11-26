@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "delivered with a bare courtesy that names no work",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Done: the settings page now groups notifications by channel, with one toggle per group. Unit tests added and passing, checked in the browser in light and dark. Shout if you want changes."
+      },
+      {
+        "role": "user",
+        "content": "group the notification settings by channel"
+      }
+    ]
+  }
+}
