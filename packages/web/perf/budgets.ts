@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff", "inbox-first-paint"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -170,6 +170,18 @@ await test("diff", "opening a long diff draws its first 150 rows in 2 commits an
       layoutReads: 32,
       reads: ["getBoundingClientRect x23", "scrollHeight x4", "getComputedStyle x3", "offsetHeight x2"],
     });
+  }
+});
+
+// ct-101552: the inbox's first paint froze a page for 1,208 ms, 302 ms of it
+// layout forced inside React's own task (MessagePort.onmessage). Mounting the
+// session list beside its open conversation may read layout only where the
+// browser has laid the page out already (a later task, a frame, a
+// ResizeObserver), never right after the commit's own writes.
+await test("inbox-first-paint", "the inbox's first paint, list beside its conversation, forces no layout", async () => {
+  await setup("inbox-first-paint");
+  for (const r of await twice()) {
+    expect({ forcedLayouts: r.counts.forcedLayoutReads, forcedBy: r.detail.forcedLayoutReads }).toEqual({ forcedLayouts: 0, forcedBy: [] });
   }
 });
 
