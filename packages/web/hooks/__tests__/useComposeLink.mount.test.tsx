@@ -97,7 +97,10 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 10)
 const open = async (url: string, active = true) => {
   await act(async () => root.render(
     <MemoryRouter key={++mounts} initialEntries={[url]}>
-      <Routes><Route path="/inbox" element={<Probe active={active} />} /></Routes>
+      <Routes>
+        <Route path="/inbox" element={<Probe active={active} />} />
+        <Route path="/conversation/:id" element={<Probe active={active} />} />
+      </Routes>
     </MemoryRouter>,
   ));
   await flush();
@@ -276,4 +279,11 @@ test("no link, no composer", async () => {
   await open("/inbox?s=abc");
   expect(opened).toEqual([]);
   expect(replaced).toEqual([]);
+});
+
+test("a session link's compose is that session's draft, never a new session", async () => {
+  await open("/conversation/abc?compose=About%20in-22%3A%20&task=ct-7");
+  expect(opened).toEqual([]);
+  expect(replaced).toEqual([]);
+  expect(toasts).toEqual([]);
 });
