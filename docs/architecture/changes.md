@@ -88,12 +88,16 @@ the writer sessions, and links to the pull request, run and deploys.
   never parked. Below the grid, every branch GitHub lists, each with its chip.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
   without Live and Closed, for every change of that repository not yet on
-  main. What has landed and waits to go out is "Waiting on main", below it.
-  One filter row sits over both: Mine keeps the viewer's own changes and
-  commits, and a group's name (Needs attention, Moving, Waiting) narrows the
-  grid to that group. Both ride the address (`mine=1`, `group=you`); a row a
-  link names (its pull request, a commit, its branch, or a session that wrote
-  it) is drawn whatever the filters say. With Mine on, Needs
+  main. What has landed and waits to go out is "Waiting on main", beside it.
+  Each column has its own filter row under its heading. On its way: Mine
+  keeps the viewer's own changes, and a group (Needs attention, Moving,
+  Waiting, each with its count, or the group's name in the grid) narrows the
+  grid to it. Waiting on main: Mine keeps the viewer's own commits, and the
+  ID switch picks which references each commit shows (a task or session by
+  its title, a PR or commit by its ID). All ride the address
+  (`mine=coming,waiting`, `group=you`, `show=`); a row a link names (its pull
+  request, a commit, its branch, or a session that wrote it) is drawn
+  whatever the filters say. With Mine on, Needs
   attention reads Needs you. A change's owner is the strongest fact it joins:
   its pull request's author, else the people whose sessions wrote it, else
   the devices its checkouts sit on, else its commit's author.

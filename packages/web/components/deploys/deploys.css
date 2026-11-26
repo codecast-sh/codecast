@@ -111,8 +111,9 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-id > * { min-width: 0; max-width: 100%; }
 .dpp-id[data-kind="pr"] { width: 56px; }
 .dpp-id[data-kind="sha"] { width: 72px; }
-.dpp-id[data-kind="task"] { width: 84px; }
-.dpp-id[data-kind="session"] { width: 92px; }
+/* A task or session reads by its title, cut at the cell's edge; the hover card and tooltip hold the rest. */
+.dpp-id[data-kind="task"] { width: 144px; }
+.dpp-id[data-kind="session"] { width: 136px; }
 .dpp-id[data-kind="branch"] { width: 160px; }
 .dpp-id[data-kind="branch"] code { overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); color: var(--sol-text-muted); }
 .dpp-commits .dpp-commit[data-focus], .dpp-dp-item[data-focus] > .dpp-dp-row { background: color-mix(in srgb, var(--sol-yellow) 30%, transparent); box-shadow: inset 0 0 0 1.5px var(--sol-yellow), inset 4px 0 0 var(--sol-yellow); }
@@ -120,12 +121,14 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-labels button { font: inherit; font-size: 12px; font-weight: 500; color: var(--sol-text-dim); background: none; border: 0; padding: 2px 9px; cursor: pointer; }
 .dpp-labels button + button { border-left: 1px solid var(--dp-rule); }
 .dpp-labels button[aria-pressed="true"] { color: var(--sol-text); font-weight: 600; background: color-mix(in srgb, var(--sol-text) 12%, transparent); }
-/* One filter row over both columns: Mine narrows both, the IDs are which ones the waiting commits show. */
-.dpp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+/* Each column's own filter row, under its heading: On its way's Mine and groups, Waiting on main's Mine and IDs. */
+.dpp-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.dpp-pick-n { margin-left: 5px; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); font-weight: 500; }
 .dpp-filters > .dpp-mine, .dpp-filters > .dpp-labels { margin-left: 0; }
 .dpp-focus { display: flex; align-items: center; gap: 8px; margin: 8px 16px 0; padding: 4px 6px 4px 10px; border-radius: 6px; font-size: var(--fs-meta); background: color-mix(in srgb, var(--sol-yellow) 14%, transparent); border: 1px solid color-mix(in srgb, var(--sol-yellow) 45%, transparent); }
 .dpp-focus b { font-family: var(--font-mono); font-weight: 600; }
-.dpp-focus > span { color: var(--sol-text-muted); }
+.dpp-focus-ref { display: inline-flex; min-width: 0; max-width: 70%; }
+.dpp-focus > span:not(.dpp-focus-ref) { flex: none; color: var(--sol-text-muted); }
 .dpp-focus[data-state="missing"] { background: none; border-style: dashed; }
 .dpp-focus > button { margin-left: auto; display: inline-flex; padding: 3px; color: var(--sol-text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer; }
 .dpp-focus > button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 9%, transparent); }
@@ -223,6 +226,9 @@ a.dpp-headci:hover span { text-decoration: underline; }
   .dpp-main > * { flex: none; }
   .dpp-body { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; }
   .dpp-col { flex: 1 1 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 40px; }
+  /* A column keeps each waiting commit on one line: past its width the last ID column is cut, never the subject wrapped. */
+  .dpp-commit { flex-wrap: nowrap; }
+  .dpp-commit > .dpp-ids { min-width: 0; }
 }
 /* On its way in a column: one chip carries the five stages (ChangeBoard's own narrow form), so the title gets the row. */
 @container (max-width: 760px) {
