@@ -420,10 +420,11 @@ describe("a merge no role is behind", () => {
     expect(await say(linked)).toMatchObject({ run_id: "workflow_runs_1", node_id: "review__review" });
     expect(runOf(linked).review_verdict).toMatchObject({ verdict: "ship", head_sha: HEAD });
 
-    // The session launched a newer run since, so it names that one; the run the station reports names its run itself.
+    // The session launched a newer run since, so its pointer names that one: the session's running runs, read by their
+    // primary, still hold the reviewer's; and the run the station reports names its run itself.
     const relaunched = crowded({ parkedNewer: true, parentRun: "workflow_runs_parked200" });
-    await expect(say(relaunched)).rejects.toThrow("no running run's reviewer station");
-    expect(await say(relaunched, { run_id: "workflow_runs_1" })).toMatchObject({ run_id: "workflow_runs_1", node_id: "review__review" });
+    expect(await say(relaunched)).toMatchObject({ run_id: "workflow_runs_1", node_id: "review__review" });
+    expect(await say(crowded({ parkedNewer: true, parentRun: "workflow_runs_parked200" }), { run_id: "workflow_runs_1" })).toMatchObject({ run_id: "workflow_runs_1", node_id: "review__review" });
     // A named run is still held to the same rules: the caller must be its reviewer station in this attempt.
     await expect(say(crowded({ parkedNewer: true }), { run_id: "workflow_runs_parked0" })).rejects.toThrow("no running run's reviewer station");
 

@@ -9217,6 +9217,9 @@ export default defineSchema({
     .index("by_plan", ["plan_id"])
     // LE6: a role's line runs still in flight hold its card slots.
     .index("by_spawner_status", ["spawner_conversation_id", "status"])
+    // A session's own runs by status: a session that launched several holds a pointer to its newest alone, and the
+    // stations of each live one are nested under it (sessionMigrations.movabilityFacts, orgLineMerge's reviewer).
+    .index("by_primary_status", ["primary_conversation_id", "status"])
     .index("by_org_role_status", ["org_role_id", "status"])
     // Sparse in effect: only runs whose fix merged carry merge.at. The deploy
     // stage's waiting set and a marker's carries read a workspace's merges

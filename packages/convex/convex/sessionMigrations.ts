@@ -129,9 +129,11 @@ export async function reissueWaitingMigrations(ctx: { db: any }, userId: Id<"use
  * process) moves with its parent. A workflow step stays: its runner watches it
  * through a handle on the machine it started on, and a moved step reads as a
  * dead station. The runs are read by key from the conversations judged: a
- * step is spawned nested under its run's own session, which names the run, and
- * a step the runner reported by its session id names it itself. An account
- * holds thousands of live runs (parked at a queue for weeks), too many to scan.
+ * step is spawned nested under its run's own session, so the parent's live runs
+ * (every one, by_primary_status: a person's session that launched several points
+ * at its newest alone) and its pointer name the run, and a step the runner
+ * reported by its session id names it itself. An account holds thousands of
+ * live runs (parked at a queue for weeks), too many to scan.
  */
 export type MovabilityFacts = { live: Set<string>; stepRefs: Set<string>; runParents: Set<string> };
 
@@ -139,19 +141,22 @@ export async function movabilityFacts(ctx: { db: any }, userId: Id<"users">, con
   const live = new Set(
     (await listLiveManagedSessions(ctx, userId)).filter((s) => s.conversation_id && isDaemonManagedRow(s)).map((s) => String(s.conversation_id)),
   );
-  const parents = new Map<string, any>();
-  const runIds = new Set<string>();
+  const runs = new Map<string, any>();
+  const byId = async (id: string | undefined) => { if (id && !runs.has(String(id))) runs.set(String(id), await ctx.db.get(id)); };
+  const parentsRead = new Set<string>();
   for (const c of convs) {
-    if (c.workflow_run_id) runIds.add(String(c.workflow_run_id));
+    await byId(c.workflow_run_id);
     const parentId = c.parent_conversation_id ? String(c.parent_conversation_id) : null;
-    if (parentId && !parents.has(parentId)) parents.set(parentId, await ctx.db.get(parentId));
-    const parentRun = parentId ? parents.get(parentId)?.workflow_run_id : undefined;
-    if (parentRun) runIds.add(String(parentRun));
+    if (!parentId || parentsRead.has(parentId)) continue;
+    parentsRead.add(parentId);
+    await byId((await ctx.db.get(parentId))?.workflow_run_id);
+    for (const status of ["running", "paused"] as const) {
+      for (const r of await ctx.db.query("workflow_runs").withIndex("by_primary_status", (q: any) => q.eq("primary_conversation_id", parentId).eq("status", status)).collect()) runs.set(String(r._id), r);
+    }
   }
   const stepRefs = new Set<string>();
   const runParents = new Set<string>();
-  for (const id of runIds) {
-    const run = await ctx.db.get(id);
+  for (const run of runs.values()) {
     if (!run || String(run.user_id) !== String(userId) || (run.status !== "running" && run.status !== "paused")) continue;
     if (run.primary_conversation_id) runParents.add(String(run.primary_conversation_id));
     for (const n of run.node_statuses ?? []) if (n.status === "running" && n.session_id) stepRefs.add(n.session_id);

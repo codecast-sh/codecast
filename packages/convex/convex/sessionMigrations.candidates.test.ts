@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { collectMigrationCandidates, heldReason, movabilityFacts } from "./sessionMigrations";
-import { makeFakeDb } from "./testDb";
+import { makeFakeDb, schemaIndexes } from "./testDb";
+import schema from "./schema";
 
 const USER = "users_me" as any;
 const LAPTOP = "laptop";
@@ -88,5 +89,22 @@ describe("collectMigrationCandidates", () => {
     const after = await movabilityFacts(ctx, USER, conversations);
     expect(heldReason(conversations[0] as any, after) ?? "").not.toContain("workflow step");
     expect(heldReason(conversations[2] as any, after)).toBeNull();
+  });
+
+  // A person's session launches run A, then run B: its pointer names B. B ends while A's station still runs.
+  test("a step of an older run launched from a person's session stays after the session's newer run ends", async () => {
+    const now = Date.now();
+    const conversations = [
+      { _id: "jx7aaaabjtf69k6dyr4kk9ayk58geqyz", _creationTime: 1, user_id: USER, owner_device_id: LAPTOP, status: "active", is_subagent: true, parent_conversation_id: "conversations_person" },
+    ];
+    const person = { _id: "conversations_person", _creationTime: 0, user_id: USER, status: "active", workflow_run_id: "workflow_runs_b" };
+    const managed_sessions = [{ _id: "managed_sessions_0", user_id: USER, conversation_id: conversations[0]._id, last_heartbeat: now - 1000 }];
+    const workflow_runs = [
+      { _id: "workflow_runs_a", _creationTime: 1, user_id: USER, status: "running", primary_conversation_id: "conversations_person", node_statuses: [{ node_id: "implement", status: "running", session_id: "jx7aaaa" }] },
+      { _id: "workflow_runs_b", _creationTime: 2, user_id: USER, status: "completed", primary_conversation_id: "conversations_person", node_statuses: [] },
+    ];
+    const ctx = { db: makeFakeDb({ conversations: [...conversations, person], managed_sessions, workflow_runs }, { indexes: schemaIndexes(schema as any) }) } as any;
+    const facts = await movabilityFacts(ctx, USER, conversations);
+    expect(heldReason(conversations[0] as any, facts)).toContain("workflow step");
   });
 });

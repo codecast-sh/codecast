@@ -280,7 +280,8 @@ const SHA = /^[0-9a-f]{40}$/;
 /** The canonical ids of the calling session: the conversation its agent session id names (or that id itself, when
  *  it is a conversation's), as its full id and as the short id the runner reports on the stations it spawns. With
  *  them, the runs those conversations name: a station is spawned nested under its run's own session, which carries
- *  the run's id, and a station the runner found by its session id carries it itself (workflow_runs.reportProgress). */
+ *  the run's id and is the primary of its running runs, and a station the runner found by its session id carries it
+ *  itself (workflow_runs.reportProgress). */
 async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Promise<{ ids: Set<string>; runIds: Set<string> }> {
   const ids = new Set<string>();
   const runIds = new Set<string>();
@@ -294,6 +295,8 @@ async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Pro
     ids.add(c.short_id ?? String(c._id).slice(0, 7));
     const parent = c.parent_conversation_id ? await ctx.db.get(c.parent_conversation_id) : null;
     for (const runId of [c.workflow_run_id, parent?.workflow_run_id]) if (runId) runIds.add(String(runId));
+    // A session that launched several runs points at its newest alone: each running one is read by its primary.
+    if (parent) for (const r of await ctx.db.query("workflow_runs").withIndex("by_primary_status", (q: any) => q.eq("primary_conversation_id", parent._id).eq("status", "running")).collect()) runIds.add(String(r._id));
   }
   return { ids, runIds };
 }
