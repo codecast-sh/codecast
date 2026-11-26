@@ -315,8 +315,15 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
         </StatusPanelSection>
       )}
       {stalled && !connection && (
-        <StatusPanelSection className="text-meta leading-snug text-sol-yellow">
-          Still waiting on the server. Recent data can be incomplete until this settles.
+        <StatusPanelSection className="flex items-center gap-2 text-meta leading-snug text-sol-yellow">
+          <span className="min-w-0 flex-1">Still waiting on the server. Recent data can be incomplete until this settles.</span>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="shrink-0 rounded border border-sol-border px-2 py-0.5 text-xs text-sol-text hover:bg-sol-bg-alt"
+          >
+            Reload
+          </button>
         </StatusPanelSection>
       )}
     </div>
