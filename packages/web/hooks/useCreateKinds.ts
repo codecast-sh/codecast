@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Clock, FileText, Hash, Headphones, ListTodo, Map as MapIcon, MessageSquare, PanelBottom, type LucideIcon } from "lucide-react";
+import { Bot, Clock, FileText, Hash, Headphones, ListTodo, Map as MapIcon, MessageSquare, PanelBottom, type LucideIcon } from "lucide-react";
 import { useInboxStore, type CreateModalKind } from "../store/inboxStore";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { createLiveArtifact } from "../lib/createLiveArtifact";
@@ -92,6 +92,9 @@ export function useCreateKinds(): CreateKind[] {
       { id: "plan", label: "New plan", noun: "Plan", keywords: "create project", icon: MapIcon, tone: "text-sol-yellow", key: "p", run: (env) => env.openModal("plan") },
       chatOn && { id: "channel", label: "New channel", noun: "Channel", keywords: "create chat room", icon: Hash, tone: "text-sol-cyan", key: "c", run: (env) => env.openModal("chat") },
       callsOn && { id: "huddle", label: "Start huddle", noun: "Huddle", keywords: "new call ring people group voice", icon: Headphones, tone: "text-sol-violet", key: "h", run: (env) => env.openModal("huddle") },
+      // A Recall bot to a Zoom, Meet, Teams, Webex or GoTo meeting: the Calls
+      // page with its meeting link field focused (components/calls/MeetingBotField).
+      callsOn && { id: "meeting-bot", label: "Send a bot to a meeting", noun: "Meeting bot", keywords: "zoom google meet teams webex goto notetaker note taker record transcribe transcript external meeting bot join recall", icon: Bot, tone: "text-sol-violet", key: "m", run: (env) => env.navigate("/calls?bot=1") },
       { id: "trigger", label: "New trigger", noun: "Trigger", keywords: "create trigger routine schedule cron automation reminder recurring", icon: Clock, tone: "text-sol-violet", key: "r", run: (env) => env.navigate("/triggers?new=1") },
     ];
     return kinds.filter((k): k is CreateKind => !!k);

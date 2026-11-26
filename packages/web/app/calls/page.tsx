@@ -63,8 +63,7 @@ import {
 } from "../../lib/calls/callVideo";
 import { deleteRecordingRun, toVideoFile, useCallRecordings, useRoomRecordingOn } from "../../hooks/useRoomRecording";
 import { LiveNowSection, RecordMeetingButton, SeatedHuddleRecord } from "../../components/calls/CallsPageAside";
-import { MeetingBotField } from "../../components/calls/MeetingBotField";
-import { MeetingCalendarList } from "../../components/calls/MeetingCalendarList";
+import { MeetingBotsSection } from "../../components/calls/MeetingBotField";
 import {
   CallVideoNoticeLine,
   CallVideoPlaceholder,
@@ -1147,7 +1146,7 @@ export default function CallsPage() {
   const hideList = selectedId ? () => setListOpen(false) : undefined;
   // What a voice note is and who sees it is on the button's title and the
   // row's privacy chip, not in a paragraph here.
-  const records = <><SeatedHuddleRecord /><RecordMeetingButton />{callsOn && <><MeetingBotField /><MeetingCalendarList /></>}</>;
+  const records = <><SeatedHuddleRecord /><RecordMeetingButton />{callsOn && <MeetingBotsSection />}</>;
   // Huddles off: a state with its way to act, Settings › Team.
   const huddlesOff = !callsOn && (
     <button
