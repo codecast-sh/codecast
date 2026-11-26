@@ -3919,9 +3919,7 @@ cliRoute("/cli/calls/bots/list", async (ctx, body) => {
 cliRoute("/cli/calls/bots/cancel", async (ctx, body) => {
   return await ctx.runMutation(api.meetingBots.cliCancel, body);
 });
-cliRoute("/cli/work/list", async (ctx, body) => {
-  return await ctx.runQuery(api.tasks.list, body);
-});
+cliRoute("/cli/work/list", async (ctx, body) => ctx.runQuery(api.tasks.list, body));
 cliRoute("/cli/work/stranded", async (ctx, body) => ctx.runQuery(api.strandedHandoffs.list, body));
 cliRoute("/cli/work/page", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.listPage, body);
