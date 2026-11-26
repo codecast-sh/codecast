@@ -460,7 +460,7 @@ describe("the approval card", () => {
   const memberships = users.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id }));
   // Each person's own session too: a card no run is behind is asked only there.
   const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" },
-    ...["u_jason", "u_ashot", "u_cam"].map((u) => ({ _id: `c_own_${u}`, session_id: `own-${u}`, user_id: u, title: "Own", updated_at: 1 }))];
+    ...["u_jason", "u_ashot", "u_cam"].map((u) => ({ _id: `c_own_${u}`, session_id: `own-${u}`, user_id: u, title: "Own", updated_at: 1, team_id: "team1" }))];
   const world = (tables: Record<string, any[]> = {}) => {
     // Every world gets its own copies: the fake db patches rows in place.
     const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], users, team_memberships: memberships, conversations, anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [{ _id: "tc1", task_id: "t1", comment_type: "review", text: "Verdict: ship. It edits land.cast.", created_at: 5 }], pending_messages: [], workflow_runs: [run()], ...tables }));
@@ -562,18 +562,24 @@ describe("the approval card", () => {
     expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_own_u_ashot", approval: { reason: "review" } });
   });
 
-  test("with no session and no team agent, the card is asked from its person's own; with none at all they are told (second review, finding 2)", async () => {
-    const own = world({ workflow_runs: [], anchors: [], conversations: [{ _id: "c_mine", session_id: "mine", user_id: "u_ashot", title: "Mine", updated_at: 5 }] });
+  test("with no session of theirs in the repository's team, they are told and no card key is kept; the card is posted once they have one (round 4, findings 2 and 3)", async () => {
+    const own = world({ workflow_runs: [], anchors: [], conversations: [{ _id: "c_mine", session_id: "mine", user_id: "u_ashot", title: "Mine", updated_at: 5, team_id: "team1" }] });
     await (settle as any)._handler(own.ctx, noAnswer);
     expect(cards(own.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_mine" });
-    const none = world({ workflow_runs: [], anchors: [], conversations: [], notifications: [] });
-    await (settle as any)._handler(none.ctx, noAnswer);
-    expect(cards(none.db)).toEqual([]);
-    expect(none.db._tables.notifications).toEqual([expect.objectContaining({ recipient_user_id: "u_ashot", type: "card_waiting" })]);
-    // Told once per question: the card key stands, so a re-evaluation tells nobody again.
-    expect(none.db._tables.pull_requests[0].approval.card_key).toBeDefined();
-    await (settle as any)._handler(none.ctx, noAnswer);
-    expect(none.db._tables.notifications).toHaveLength(1);
+    // Ashot's newest session is another workspace's: never used. He is told, and nothing remembers a card.
+    const elsewhere = world({ workflow_runs: [], anchors: [], notifications: [], conversations: [{ _id: "c_other_team", session_id: "other", user_id: "u_ashot", title: "Elsewhere", updated_at: 9, team_id: "team2" }] });
+    await (settle as any)._handler(elsewhere.ctx, noAnswer);
+    expect(cards(elsewhere.db)).toEqual([]);
+    expect(elsewhere.db._tables.notifications).toEqual([expect.objectContaining({ recipient_user_id: "u_ashot", type: "card_waiting" })]);
+    expect(elsewhere.db._tables.pull_requests[0].approval.card_key).toBeUndefined();
+    // The next evaluation tries again, telling him nothing new while the notice is unread.
+    await (settle as any)._handler(elsewhere.ctx, noAnswer);
+    expect(elsewhere.db._tables.notifications).toHaveLength(1);
+    // He starts a session in the team: the next evaluation posts the card there.
+    elsewhere.db._tables.conversations.push({ _id: "c_team_now", session_id: "now", user_id: "u_ashot", title: "Now", updated_at: 10, team_id: "team1" });
+    await (settle as any)._handler(elsewhere.ctx, noAnswer);
+    expect(cards(elsewhere.db)).toEqual([expect.objectContaining({ asked_user_ids: ["u_ashot"], conversation_id: "c_team_now" })]);
+    expect(elsewhere.db._tables.pull_requests[0].approval.card_key).toBeDefined();
   });
 
   // The answer path marks the card answered, then settles it.
@@ -757,7 +763,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     github_app_installations: [installation], pull_requests: [{ ...prRow, approval: undefined }], workflow_runs: [], change_approvals: [], users: people,
     // Ashot is the workspace's admin; Jason a member.
     team_memberships: people.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id, role: i === 0 ? "admin" : "member", joined_at: i })),
-    team_budgets: [budget()], conversations: [{ _id: "c_anchor", session_id: "anchor", user_id: "u_jason", title: "Agent" }, { _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1 }],
+    team_budgets: [budget()], conversations: [{ _id: "c_anchor", session_id: "anchor", user_id: "u_jason", title: "Agent" }, { _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1, team_id: "team1" }],
     anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [], ...tables,
   }));
   const evaluateNow = (db: any, ctx = actionCtx(db).ctx) => (evaluate as any)._handler(ctx, { repository: REPO, pr_number: 7, post: true });
@@ -897,43 +903,59 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
   // Jason opened the pull request (jason-gh); Ashot owns its area. A held pull request's card is Ashot's to answer.
   const heldWorld = (tables: Record<string, any[]> = {}) => world({
     pull_requests: [{ ...prRow, author_github_username: "jason-gh", approval: { head_sha: HEAD, state: "pending", description: "x", held: "the automatic review of bbbbbbbbbb called it a mechanism", automatic: { head_sha: HEAD, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: 1 } } }],
-    conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1 }, { _id: "c_jason", session_id: "jason", user_id: "u_jason", title: "Jason's own", updated_at: 2 }],
+    conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1, team_id: "team1" }, { _id: "c_jason", session_id: "jason", user_id: "u_jason", title: "Jason's own", updated_at: 2, team_id: "team1" }],
+    decision_inbox: [],
     ...tables,
   });
   const heldArgs = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", whole_key: "w1", people: { title: "Bump", author_login: "jason-gh", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [] } };
   const approvals = (db: any) => db._tables.change_approvals.filter((a: any) => !a.revoked_at);
 
-  test("the author cannot approve their own held pull request, in their own session or on the web; the card is never in a session they read (round 3, finding 1)", async () => {
-    const db = heldWorld();
+  test("an answer that would not count is refused before it closes the card, saying who answers; the card stays open (round 3, findings 1 and 2; round 4, finding 1)", async () => {
+    const db = heldWorld({ conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 2, team_id: "team1" }, { _id: "c_ashot_other", session_id: "ashot-other", user_id: "u_ashot", title: "Another", updated_at: 1, team_id: "team1" }, { _id: "c_jason", session_id: "jason", user_id: "u_jason", title: "Jason's own", updated_at: 2, team_id: "team1" }] });
     expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
     const [card] = cards(db);
     expect(card.conversation_id).toBe("c_ashot");
-    // From the author's own session, for their human: no person's answer, and nothing approved.
-    await answerAs(db, card, "u_jason", { session_id: "jason", for_human: true });
-    // On the web: the author is not asked and cannot read Ashot's session.
-    await answerAs(db, card, "u_jason");
-    expect(approvals(db)).toEqual([]);
-    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
-    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending" });
-    // Even an answer the author could give, as one of the people asked, is not counted.
-    const both = heldWorld();
-    await (settle as any)._handler(ctxOf(both), heldArgs);
-    const [shared] = cards(both);
-    both._tables.session_decisions.find((d: any) => d._id === shared._id).asked_user_ids = ["u_ashot", "u_jason"];
-    expect(await answerAs(both, { ...shared }, "u_jason")).not.toHaveProperty("error");
-    expect(approvals(both)).toEqual([]);
-    expect(both._tables.pull_requests[0].approval.held).toBeDefined();
+    const stillOpen = () => {
+      expect(db._tables.session_decisions.find((d: any) => d._id === card._id).status).toBe("pending");
+      expect(db._tables.decision_inbox.filter((r: any) => String(r.decision_id) === String(card._id) && r.done_at)).toEqual([]);
+      expect(approvals(db)).toEqual([]);
+      expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+    };
+    // The author, from their own session for their human, and on the web: they cannot even read Ashot's session.
+    expect(await answerAs(db, card, "u_jason", { session_id: "jason", for_human: true })).toEqual({ error: "Unauthorized: not your human's decision" });
+    expect(await answerAs(db, card, "u_jason")).toEqual({ error: "Unauthorized: not your decision" });
+    stillOpen();
+    // Ashot's other session answering for him (`via`), Approve or Revise: refused.
+    for (const answer_index of [0, 1]) {
+      expect(await answerAs(db, card, "u_ashot", { session_id: "ashot-other", for_human: true, answer_index })).toEqual({ error: expect.stringContaining("an answer a session gives for its person does not count") });
+    }
+    stillOpen();
+    // The author asked beside Ashot: their Approve is refused, saying Ashot can; Revise from them is theirs to give.
+    db._tables.session_decisions.find((d: any) => d._id === card._id).asked_user_ids = ["u_ashot", "u_jason"];
+    expect(await answerAs(db, { ...card }, "u_jason")).toEqual({ error: "You opened this pull request, so your approval of it does not count; Ashot or Jason can, besides you." });
+    stillOpen();
+    // A dismissal by someone the card did not ask, through the one resolve path every surface takes: refused.
+    const { finalizeAnswer } = await import("./sessionDecisions");
+    await expect(finalizeAnswer(ctxOf(db) as any, db._tables.session_decisions.find((d: any) => d._id === card._id), { status: "dismissed" } as any, { kind: "user", id: "u_cam", user_id: "u_cam" as any }, { deliver: false })).rejects.toThrow("Only Ashot or Jason answers this approval card");
+    stillOpen();
+    // Ashot himself, on the web: the hold clears and the card closes.
+    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "success" });
   });
 
-  test("an answer a session gives for its person clears no hold and approves nothing (round 3, finding 2)", async () => {
-    // Another of Ashot's sessions answers for him (`cast decide answer --for-human`): the card is in his newest one.
-    const db = heldWorld({ conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 2 }, { _id: "c_ashot_other", session_id: "ashot-other", user_id: "u_ashot", title: "Another", updated_at: 1 }] });
-    await (settle as any)._handler(ctxOf(db), heldArgs);
+  test("a run-backed card answered by someone it did not ask is refused and stays open, rather than closing with nothing approved (round 4, finding 1)", async () => {
+    const run = { _id: "run1", user_id: "host", team_id: "team1", status: "completed", created_at: 1, primary_conversation_id: "c_log", node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, mechanism: false, at: 3, attempt: 1 }, pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
+    const db = world({ workflow_runs: [run], users: [...people, { _id: "host", name: "Host" }], conversations: [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }] });
+    expect(await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: ["outreach/line/change/land.cast"], key: "k1", people: { title: "Edit land", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [] } })).toMatchObject({ description: "needs Ashot: edits outreach/line/change/land.cast" });
     const [card] = cards(db);
-    expect(await answerAs(db, card, "u_ashot", { session_id: "ashot-other", for_human: true })).not.toHaveProperty("error");
-    expect(db._tables.session_decisions[0].answered_by).toMatchObject({ kind: "user", via: "c_ashot_other" });
+    expect(card.conversation_id).toBe("c_log");
+    // The run's host reads the card (it is in their run's log) but is not asked.
+    expect(await answerAs(db, card, "host")).toEqual({ error: expect.stringContaining("Only Ashot answers this approval card") });
+    expect(db._tables.session_decisions[0].status).toBe("pending");
     expect(approvals(db)).toEqual([]);
-    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    expect(approvals(db)).toEqual([expect.objectContaining({ user_id: "u_ashot", judged_key: "k1" })]);
   });
 
   test("a mechanism that settles second holds the pull request, after a ship or after a stale claim's failure (round 3, finding 3)", async () => {

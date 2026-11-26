@@ -56,7 +56,7 @@ import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
-import { approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
+import { approvalCardRefusal, approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -768,7 +768,7 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
 // signed-in person's, whose Approve takes Touch ID (secretApprovalRefusal,
 // which reads the verdict for that). Returns why, or null.
 export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy, verdict?: Pick<Verdict, "status" | "answer_index">): Promise<string | null> {
-  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict));
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict)) ?? (await approvalCardRefusal(ctx, row as any, by, verdict));
 }
 
 // The one place a decision is resolved, for every path (web resolve, CLI
@@ -2063,10 +2063,11 @@ export async function answerCore(
   const now = Date.now();
   const by = await answererFor(ctx, auth, row, args.session_id, now, !!args.for_human);
   if ("error" in by) return by;
-  const refusal = await answerRefusal(ctx, row, by);
-  if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
+  // Refused before anything closes: the card stays open for whoever may answer it.
+  const refusal = await answerRefusal(ctx, row, by, verdict);
+  if (refusal) return { error: refusal };
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });
   return { id: row._id, short_id: row.short_id, ...result, answered_by: { kind: by.kind, id: by.id, ...(by.via ? { via: by.via } : {}) } };
 }

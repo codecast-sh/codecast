@@ -236,6 +236,38 @@ async function mayClearHold(ctx: { db: any }, card: { asked_user_ids?: Id<"users
 }
 
 /**
+ * Why an answer to an approval card codecast posted (changeApprovals.ts) would not count, refused before it closes the
+ * card, or null when it counts. Only someone the card asked answers it, in person (an answer a session gives for its
+ * person, `via`, is no one's), whatever the answer: Approve merge, Revise, Drop or a dismissal. On a pull request no run
+ * is behind, or a card about its hold, the pull request's author never approves it. A withdrawal (codecast's own, or the
+ * asking session's) is no answer and is never refused.
+ */
+export async function approvalCardRefusal(
+  ctx: { db: any },
+  row: { approval_card?: boolean; options: Array<{ label: string }>; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; run_id?: Id<"workflow_runs">; reason?: string } },
+  by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
+  verdict?: { status: string; answer_index?: number },
+): Promise<string | null> {
+  if (!row.approval_card || !row.approval || verdict?.status === "withdrawn") return null;
+  const asked = (row.asked_user_ids ?? []).map(String);
+  const names = (await Promise.all(asked.map(async (id) => {
+    const u: any = ctx.db.normalizeId?.("users", id) ? await ctx.db.get(id) : await ctx.db.get(id).catch(() => null);
+    return u?.name || u?.github_username || null;
+  }))).filter(Boolean);
+  const who = names.length ? names.join(" or ") : "the person it asks";
+  if (by.kind !== "user" || !by.user_id) return `Only ${who} answers this approval card, in person: a role or a policy does not.`;
+  if (by.via) return `Only ${who} answers this approval card, in person: an answer a session gives for its person does not count. Answer it on the web, or from a plain shell.`;
+  if (!asked.includes(String(by.user_id))) return `Only ${who} answers this approval card: it asks them, not you.`;
+  const approving = verdict?.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
+  const barred = !row.approval.run_id || row.approval.reason === "objection";
+  if (approving && barred && String(await prAuthor(ctx, row.approval.repository, row.approval.pr_number)) === String(by.user_id)) {
+    const others = names.length > 1 ? `; ${who} can, besides you` : "";
+    return `You opened this pull request, so your approval of it does not count${others}.`;
+  }
+  return null;
+}
+
+/**
  * A person approved the pull request on a card (mayClearHold): the hold an automatic review's mechanism or objection put
  * on it is cleared (changeApprovals.settle). Nothing else clears it.
  */

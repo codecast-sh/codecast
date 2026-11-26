@@ -137,22 +137,33 @@ async function reviewWords(ctx: { db: any }, run: any | null): Promise<string | 
   return review ? String(review.text).slice(0, 1500) : null;
 }
 
+/** How many of a person's newest sessions are read for one in the repository's team. */
+const OWN_SESSION_SCAN = 50;
+
 /**
  * Where the card is asked from: the run's own log, else the pull request's session, else the team's agent's session;
  * else its person's own agent, else their newest session. A card the author must not answer (`own`: a pull request no
  * run is behind, or its hold) is asked only from its person's own, never a session the author can read.
  */
-async function askingConversation(ctx: { db: any }, run: any | null, pr: any | null, holder: Id<"users">, own: boolean): Promise<any | null> {
+async function askingConversation(ctx: { db: any }, run: any | null, pr: any | null, holder: Id<"users">, own: boolean, teamId: Id<"teams"> | undefined): Promise<any | null> {
   if (own) {
+    // Their own session in the repository's workspace (its team's, or a personal install's own), never one of another:
+    // else nothing, and they are told.
+    const inTeam = (c: any) => !!c && String(c.team_id ?? "") === String(teamId ?? "");
     const anchor: any = await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", holder)).first();
     const mine = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
-    return mine ?? (await ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", holder)).order("desc").first());
+    if (inTeam(mine)) return mine;
+    let scanned = 0;
+    for await (const c of ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", holder)).order("desc")) {
+      if (inTeam(c)) return c;
+      if (++scanned >= OWN_SESSION_SCAN) break;
+    }
+    return null;
   }
   for (const id of [run?.primary_conversation_id, pr?.shepherd_conversation_id, ...(pr?.linked_session_ids ?? [])]) {
     const c = id ? await ctx.db.get(id) : null;
     if (c) return c;
   }
-  const teamId = pr?.team_id ?? run?.team_id;
   for (const anchor of [
     teamId ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).first() : null,
     await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", holder)).first(),
@@ -197,8 +208,8 @@ export async function withdrawApprovalCard(ctx: { db: any; scheduler: any }, car
 
 /**
  * Posts the one approval card a pending status owes `to`, unless one was already posted for this judged diff and
- * question (`card_key`). Returns the key and card (no card when its people were notified instead, having no session
- * to ask from), or null when nothing was posted (no such person, or already asked).
+ * question (`card_key`). Returns the key and card, or null when no card was posted (no such person, already asked, or
+ * no session of theirs in the repository's team to ask from, when they are notified and the next evaluation asks again).
  */
 export async function postApprovalCard(ctx: { db: any }, a: {
   repository: string; pr_number: number; head_sha: string; /** The diff its yes approves (changeApprovals.settle). */ key: string; judged: string[];
@@ -207,7 +218,9 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   words?: string;
   /** What holds the pull request for a person (changeApprovals.settle), shown first. */
   held?: string;
-}): Promise<{ card_key: string; card_id?: Id<"session_decisions"> } | null> {
+  /** The repository's team, when no pull request row names it (the installation's). */
+  teamId?: Id<"teams">;
+}): Promise<{ card_key: string; card_id: Id<"session_decisions"> } | null> {
   const card_key = cardKeyOf(a.key, a.reason);
   if (!a.to.user_id || a.before_key === card_key) return null;
   // With no pull request row to remember the card on, the open card it would repeat is found among its person's own.
@@ -216,15 +229,20 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     if (open.some((d) => d.approval_card && d.approval?.repository === a.repository && d.approval?.pr_number === a.pr_number && cardKeyOf(d.approval.judged_key, d.approval.reason) === card_key)) return null;
   }
   const asked = [a.to.user_id, ...(a.to.also ?? [])];
-  const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id, !a.run || a.reason === "objection");
+  const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id, !a.run || a.reason === "objection", a.pr?.team_id ?? a.run?.team_id ?? a.teamId);
   if (!conversation) {
     // Nowhere to ask from (its person has no session at all): they are told, once per question, so it still lands.
+    // No card_key is kept for a notification: the next evaluation posts the card once they have a session. They are
+    // told again only once they have read the last notice.
+    const unread: any[] = await ctx.db.query("notifications").withIndex("by_recipient_read", (q: any) => q.eq("recipient_user_id", a.to.user_id).eq("read", false)).take(200);
+    const entity = `${a.repository}#${a.pr_number}`;
+    if (unread.some((n) => n.type === "card_waiting" && n.entity_id === entity)) return null;
     await emitNotification(ctx as any, {
       event_type: "card_waiting", actor_name: "Codecast", entity_type: "code", entity_id: `${a.repository}#${a.pr_number}`,
       message: `${a.repository}#${a.pr_number} waits for your approval: ${WHY[a.reason]}`,
       link: `https://github.com/${a.repository}/pull/${a.pr_number}`, recipient_ids: asked,
     });
-    return { card_key };
+    return null;
   }
   const review = a.words ?? await reviewWords(ctx, a.run);
   const files = a.judged.length ? a.judged.map((f) => `- \`${f}\``).join("\n") : "_(no judged files)_";
