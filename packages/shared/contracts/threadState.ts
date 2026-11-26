@@ -58,7 +58,7 @@ export const THREAD_STATE_STATUS_LABEL: Record<ThreadStateStatus, string> = {
   working: "In progress",
   blocked: "Needs you",
   done: "Complete",
-  dormant: "Dormant",
+  dormant: "Sleeping",
 };
 
 /** Map loose spellings (CLI flag input, older rows) onto the enum. Returns null
@@ -166,6 +166,10 @@ export function threadStateRows(text: string): ThreadStateRow[] {
   });
 }
 
+export function threadStateAskRow(rows: ThreadStateRow[]): ThreadStateRow | undefined {
+  return rows.find((r) => r.label === "You" || r.label === "Blocked");
+}
+
 /**
  * The one line a card shows for the whole state: the ask when the state holds
  * one (`You:`, or an older note's `Blocked:`), else the headline. A `Status:`
@@ -173,7 +177,7 @@ export function threadStateRows(text: string): ThreadStateRow[] {
  * what already happened, and on a blocked card it used to push the ask out.
  */
 export function threadStateCardLine(text: string, rows: ThreadStateRow[] = threadStateRows(text)): string {
-  const ask = rows.find((r) => r.label === "You" || r.label === "Blocked");
+  const ask = threadStateAskRow(rows);
   if (ask) {
     const { prose, command } = threadStateAskParts(ask.text);
     return (prose || command || "").replace(/`/g, "");

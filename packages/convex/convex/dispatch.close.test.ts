@@ -7,7 +7,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { api, internal } from "./_generated/api";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
-import { closeSetsAsideOnServer, nestedGroupOf } from "./lib/closeAside";
+import { closeInFlightOnServer, closeSetsAsideOnServer, nestedGroupOf } from "./lib/closeAside";
 import { isClosedSession } from "@codecast/shared/contracts";
 import { cascadeTakesDownRow } from "@codecast/shared/contracts/closeCascade";
 import { countingDb, expectAside, expectClosed, setup as baseSetup, type Setup } from "./dispatch.close.testkit";
@@ -278,10 +278,10 @@ describe("the aside check is cheap on a big finished group", () => {
     });
     const counted = await s.t.run(async (ctx) => {
       const { db, counter } = countingDb(ctx.db);
-      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), now, { forceKill: true });
+      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), now);
       return { verdict, reads: counter.reads };
     });
-    expect(counted.verdict).toBe("nested");
+    expect(counted.verdict).toBe(true);
     // 150 finished children are scanned before the busy one, and none costs a
     // read: the lead's own facts, the group's two index reads, the busy child's.
     // (Reading every member's full facts took 606 reads here.)
@@ -289,6 +289,50 @@ describe("the aside check is cheap on a big finished group", () => {
     expect(counted.reads).toBeLessThan(20);
     await s.send("closeSession", [String(s.ids.conv)]);
     expectAside(await s.read());
+  });
+
+  test("a busy lead with 60 quiet live subagents: the gesture reads none of them, advice reads them all", async () => {
+    const s = await setup({ agent: "working", conv: { updated_at: Date.now() } });
+    const now = Date.now();
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 60; i++) {
+        const kid = await ctx.db.insert("conversations", {
+          user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: now - 3_600_000, status: "active", session_id: `agent-a0a0a071${i.toString(16).padStart(2, "0")}`,
+          message_count: 9, is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant",
+        } as any);
+        await ctx.db.insert("managed_sessions", { session_id: `agent-a0a0a071${i.toString(16).padStart(2, "0")}`, conversation_id: kid, user_id: s.ids.user, pid: 7, started_at: 1, last_heartbeat: now, agent_status: "idle", agent_status_updated_at: now - 3_600_000 } as any);
+      }
+    });
+    const read = (fn: (db: any, conv: any) => Promise<unknown>) => s.t.run(async (ctx) => {
+      const { db, counter } = countingDb(ctx.db);
+      const verdict = await fn(db, await ctx.db.get(s.ids.conv));
+      return { verdict, reads: counter.reads };
+    });
+    const gesture = await read((db, conv) => closeSetsAsideOnServer({ db }, conv, now));
+    expect(gesture.verdict).toBe(true);
+    // Its own facts only: the busy lead answers the gesture before its group is listed.
+    expect(gesture.reads).toBeLessThan(6);
+    const advice = await read(async (db, conv) => (await closeInFlightOnServer({ db }, conv, now)).inFlight);
+    expect(advice.verdict).toBe("live");
+    expect(advice.reads).toBeGreaterThan(60);
+  });
+
+  test("a member dismissed but not closed, still working: the gesture and advice agree it holds the lead", async () => {
+    const s = await setup({ agent: "idle" });
+    const now = Date.now();
+    await s.t.run(async (ctx) => {
+      const kid = await ctx.db.insert("conversations", {
+        user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now - 1000, status: "active", session_id: "agent-a0a0a06469736d",
+        message_count: 9, is_subagent: true, parent_conversation_id: s.ids.conv, inbox_dismissed_at: now - 60_000,
+      } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a06469736d", conversation_id: kid, user_id: s.ids.user, pid: 7, started_at: 1, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now - 1000 } as any);
+    });
+    const [gesture, advice] = await s.t.run(async (ctx) => {
+      const lead = await ctx.db.get(s.ids.conv);
+      return [await closeSetsAsideOnServer(ctx, lead, now), (await closeInFlightOnServer(ctx, lead, now)).inFlight];
+    });
+    expect(gesture).toBe(true);
+    expect(advice).toBe("nested");
   });
 
   test("a lead with 100 finished and 100 already-closed subagents reads under 2 per child, and a second close tears none down again", async () => {
@@ -308,10 +352,10 @@ describe("the aside check is cheap on a big finished group", () => {
     });
     const counted = await s.t.run(async (ctx) => {
       const { db, counter } = countingDb(ctx.db);
-      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), Date.now(), { forceKill: true });
+      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), Date.now());
       return { verdict, reads: counter.reads };
     });
-    expect(counted.verdict).toBeNull();
+    expect(counted.verdict).toBe(false);
     expect(counted.reads).toBeLessThan(2 * 200);
     expect(counted.reads).toBeLessThan(20);
     await s.send("closeSession", [String(s.ids.conv)], await clientClosePatches(s));
@@ -335,10 +379,10 @@ describe("the aside check is cheap on a big finished group", () => {
     });
     const counted = await s.t.run(async (ctx) => {
       const { db, counter } = countingDb(ctx.db);
-      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), Date.now(), { forceKill: true });
+      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), Date.now());
       return { verdict, reads: counter.reads };
     });
-    expect(counted.verdict).toBeNull();
+    expect(counted.verdict).toBe(false);
     expect(counted.reads).toBeLessThan(10);
     const patches = await clientClosePatches(s);
     expect(Object.keys(patches)).toEqual([String(s.ids.conv)]);
@@ -354,6 +398,46 @@ describe("a close is a close by its fields, on any rail", () => {
     const t = Date.now();
     await s.as.mutation(api.dispatch.dispatch, { action: "flushResolvedSessionFields", args: [String(s.ids.conv), { inbox_dismissed_at: t, inbox_closed_at: t }] });
     expectClosed(await s.read());
+  });
+
+  test("a flush's close counts a member dismissed but not closed, as the web's close does: set aside", async () => {
+    const s = await setup({ agent: "idle" });
+    const t = Date.now();
+    await s.t.run(async (ctx) => {
+      const kid = await ctx.db.insert("conversations", {
+        user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t - 1000, status: "active", session_id: "agent-a0a0a0646b",
+        message_count: 9, is_subagent: true, parent_conversation_id: s.ids.conv, inbox_dismissed_at: t - 60_000,
+      } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a0646b", conversation_id: kid, user_id: s.ids.user, pid: 7, started_at: 1, last_heartbeat: t, agent_status: "working", agent_status_updated_at: t - 1000 } as any);
+    });
+    await s.as.mutation(api.dispatch.dispatch, { action: "flushResolvedSessionFields", args: [String(s.ids.conv), { inbox_dismissed_at: t, inbox_closed_at: t }] });
+    expectAside(await s.read());
+  });
+
+  test("a flush's close stops a dismissed member the aside scan counted, as the gesture's close does", async () => {
+    const run = async (via: "gesture" | "flush") => {
+      const s = await setup({ agent: "idle" });
+      const t = Date.now();
+      const kid = await s.t.run(async (ctx) => {
+        const k = await ctx.db.insert("conversations", {
+          user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t - 3_600_000, status: "active", session_id: "agent-a0a0a06471",
+          message_count: 9, is_subagent: true, parent_conversation_id: s.ids.conv, inbox_dismissed_at: t - 60_000, last_message_role: "assistant",
+        } as any);
+        await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a06471", conversation_id: k, user_id: s.ids.user, pid: 7, started_at: 1, last_heartbeat: t, agent_status: "idle", agent_status_updated_at: t - 3_600_000 } as any);
+        return k;
+      });
+      // Quiet: the aside check counts it and finds nothing in flight, so the lead closes.
+      expect(await s.t.run(async (ctx) => closeSetsAsideOnServer(ctx, await ctx.db.get(s.ids.conv), t))).toBe(false);
+      if (via === "gesture") await s.send("closeSession", [String(s.ids.conv)], { [String(s.ids.conv)]: { inbox_dismissed_at: t, inbox_closed_at: t } });
+      else await s.as.mutation(api.dispatch.dispatch, { action: "flushResolvedSessionFields", args: [String(s.ids.conv), { inbox_dismissed_at: t, inbox_closed_at: t }] });
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 30));
+        await s.t.finishInProgressScheduledFunctions();
+      }
+      return (await s.kills()).map((c: any) => JSON.parse(c.args).conversation_id).includes(String(kid));
+    };
+    expect(await run("gesture")).toBe(true);
+    expect(await run("flush")).toBe(true);
   });
 
   test("the same flush with only the dismissed stamp is a plain dismissal: it retires", async () => {

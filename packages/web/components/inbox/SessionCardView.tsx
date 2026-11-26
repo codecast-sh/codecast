@@ -794,7 +794,7 @@ function MetaSep() {
 
 // What the card says under a user-filed row: the next activity re-files it.
 const USER_REST_CARD_LINE: Record<UserRest, string> = {
-  dormant: "Parked — returns on the next wake",
+  dormant: "Sleeping — returns on the next wake",
   done: "Filed as done — until the next wake",
   needs_input: "Filed under Needs You — until the next wake",
 };

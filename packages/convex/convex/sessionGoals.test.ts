@@ -394,3 +394,66 @@ describe("the CLI", () => {
     expect((await t.withIdentity({ subject: (await t.run((ctx) => ctx.db.get(conversation)))!.user_id }).query(api.sessionGoals.forConversation, { conversation_id: conversation }))[0].status).toBe("cleared");
   });
 });
+
+describe("a workspace with a model budget pays for its judges", () => {
+  /** A goal whose turn just ended, its session's workspace keeping a budget of `cap`. */
+  async function budgetedTurn(cap: number, conv: Record<string, unknown> = {}) {
+    const s = await setup();
+    const workspace = await s.t.run(async (ctx) => {
+      if (conv.team) {
+        const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1 } as any);
+        await ctx.db.insert("team_memberships", { team_id: team, user_id: s.user, role: "member", joined_at: 1 } as any);
+        await ctx.db.patch(s.conversation, { team_id: team, is_private: true, auto_shared: true } as any);
+      }
+      const c: any = await ctx.db.get(s.conversation);
+      const ws = c.team_id ? `team:${c.team_id}` : `user:${s.user}`;
+      await ctx.db.insert("team_budgets", { workspace: ws, ...(c.team_id ? { team_id: c.team_id } : {}), cap_usd: cap, month: new Date().toISOString().slice(0, 7), spent_usd: 0, held_usd: 0, by_purpose: { judge: 0, grouping: 0, call: 0 }, refused: 0, history: [], updated_at: 1 } as any);
+      return ws;
+    });
+    await s.t.run((ctx) => performSetGoal(ctx as any, s.user, s.conversation, "Make bun test pass", "ck-1"));
+    await turn(s.t, s.conversation);
+    await endTurn(s.t, s.conversation, "idle", 2_000);
+    const [args] = await judges(s.t);
+    const judge = async () => {
+      const out = await s.t.action(internal.sessionGoals.judgeTurn, args);
+      const spend = await s.t.run(async (ctx) => (await ctx.db.query("model_spend_hours").collect()).map((r: any) => ({ workspace: r.workspace, calls: r.calls, judge: r.by_purpose.judge })));
+      return { out, spend, goal: await goalOf(s.t, s.conversation) };
+    };
+    return { ...s, workspace, judge };
+  }
+
+  test("a verdict in fenced JSON after prose is read, and the one call is charged to the judge purpose", async () => {
+    const s = await budgetedTurn(100);
+    reply = 'Looking at the results.\n```json\n{"verdict":"done","reason":"3 pass, 0 fail"}\n```';
+    const { out, spend } = await s.judge();
+    expect(out).toEqual({ verdict: "done" });
+    expect(calls).toBe(1);
+    expect(spend).toEqual([{ workspace: s.workspace, calls: 1, judge: expect.any(Number) }]);
+    expect(spend[0].judge).toBeGreaterThan(0);
+  });
+
+  test("a reply without JSON is no usable verdict, after one retry", async () => {
+    const s = await budgetedTurn(100);
+    reply = "The tests pass.";
+    const { goal } = await s.judge();
+    expect(calls).toBe(2);
+    expect(goal).toMatchObject({ status: "paused", reason: "The goal review gave no usable verdict" });
+  });
+
+  test("a budget with no room makes no call and says so", async () => {
+    const s = await budgetedTurn(0.000001);
+    reply = '{"verdict":"done","reason":"x"}';
+    const { goal } = await s.judge();
+    expect(calls).toBe(0);
+    expect(goal).toMatchObject({ status: "paused", reason: "The team's model budget has no room for the goal review" });
+  });
+
+  test("a private session its team can see pays from the team's budget: the workspace that holds it", async () => {
+    const s = await budgetedTurn(100, { team: true });
+    reply = '{"verdict":"done","reason":"3 pass, 0 fail"}';
+    expect(s.workspace).toMatch(/^team:/);
+    const { out, spend } = await s.judge();
+    expect(out).toEqual({ verdict: "done" });
+    expect(spend.map((r) => r.workspace)).toEqual([s.workspace]);
+  });
+});

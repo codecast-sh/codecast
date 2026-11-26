@@ -13,7 +13,7 @@ import { v } from "convex/values";
 import { internalAction, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { runModelCallOrOwn } from "./modelCalls";
+import { runModelCall } from "./modelCalls";
 import { mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PassPriority, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 import { LATE_MARGIN_MS, MINUTE, type PassInputs } from "./priorityPassInputs";
 import { PASS_TIMEOUT_MS, callScope, fittingPrefix, runShare } from "./priorityPassRun";
@@ -119,15 +119,14 @@ export const evalPass = internalAction({
       for (const s of input.sessions) readIds.set(s.id, s.title);
       const { req, omitted: cut } = priorityPassRequest(input);
       omitted.push(...cut);
-      const reply = await runModelCallOrOwn(
+      const reply = await runModelCall(
         ctx,
         callScope(args.workspace),
-        false,
         "grouping",
         { model: req.model, max_tokens: req.max_tokens, system: args.system ?? req.system, prompt: req.prompt, output: "json", output_schema: req.output_schema },
         "Priority pass calibration",
-        { ctx, scope: { workspace: args.workspace } },
         PASS_TIMEOUT_MS,
+        { budgeted: false },
       );
       cost_usd += reply.cost_usd;
       if (!reply.ok) throw new Error(`calibration chunk ${outputs.length + 1} failed: ${reply.error}`);

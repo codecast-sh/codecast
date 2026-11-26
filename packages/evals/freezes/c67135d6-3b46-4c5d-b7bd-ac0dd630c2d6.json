@@ -1,0 +1,26 @@
+{
+  "name": "settle delivered-suggests-follow-ups",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-suggests-follow-ups"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:delivered-suggests-follow-ups",
+    "title": "settle delivered-suggests-follow-ups"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/delivered-suggests-follow-ups.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "c67135d6-3b46-4c5d-b7bd-ac0dd630c2d6",
+  "createdAt": "2026-11-26T08:51:55.727Z"
+}

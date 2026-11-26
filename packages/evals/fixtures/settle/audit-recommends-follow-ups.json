@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "audit asked for as an audit, delivered, ending with two recommended follow-ups: named optional work for the human to pick up",
+  "label": {
+    "verdict": "needs_input"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "Audit done, written to docs/billing-audit.md.\n\n**Findings:** 9 endpoints checked. Two read the plan tier from the client instead of the server, and the invoice job retries without an idempotency key, so a slow Stripe response can bill twice. Everything else matches the spec.\n\n**Recommended follow-ups:**\n1. Move the tier check server-side in both endpoints.\n2. Add an idempotency key to the invoice job's Stripe calls."
+      },
+      {
+        "role": "user",
+        "content": "audit the billing endpoints against the spec"
+      }
+    ]
+  }
+}

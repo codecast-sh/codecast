@@ -1,0 +1,26 @@
+{
+  "name": "settle delivered-bare-shout-if-changes",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-bare-shout-if-changes"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:delivered-bare-shout-if-changes",
+    "title": "settle delivered-bare-shout-if-changes"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/delivered-bare-shout-if-changes.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "95cf7a05-b4d1-40b7-ada9-fa1c81bc53e3",
+  "createdAt": "2026-11-26T08:46:51.912Z"
+}

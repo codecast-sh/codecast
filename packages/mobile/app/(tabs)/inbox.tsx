@@ -30,7 +30,7 @@ import { useQuery } from 'convex/react';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
+import { closeWithAdvice, holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
 import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
 import { closeDetail, reviewedKill } from '@/lib/sessionVerbs';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
@@ -150,7 +150,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const catchingUp = useInboxStore((s) => s.livenessHeldAt != null);
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const stashSession = useInboxStore((s) => s.stashSession);
-  const closeSession = useInboxStore((s) => s.closeSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   // Store actions, not the raw convex mutation: the hide data-transition is
@@ -219,10 +218,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
 
   // Close: done looking at it, the web card's one remove (store closeSession).
   // A turn in progress is set aside and finishes; anything else stops and
-  // files under Closed, keeping its triggers and queued messages.
+  // files under Closed, keeping its triggers and queued messages. Close
+  // advice is asked beside it (lib/undoBar closeWithAdvice).
   const handleClose = useCallback((conversationId: string) => {
-    closeSession(conversationId);
-  }, [closeSession]);
+    closeWithAdvice(conversationId);
+  }, []);
 
   const handleRestore = useCallback((conversationId: string) => {
     restoreSession(conversationId);
@@ -533,11 +533,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
     sections.push(renderSection('New', filteredNew, Theme.blue, "New", countOf(filteredNew, newSessions, placed.counts.newSessions)));
     // Top-down "who acts next": you (Needs You, Done to review), the agent
-    // (Working), a machine (Dormant) — same order as the web panel.
+    // (Working), a machine (Sleeping) — same order as the web panel.
     sections.push(renderSection('Needs You', statusNeedsInput, Theme.accent, "Needs You", countOf(statusNeedsInput, needsInput, placed.counts.needsInput)));
     sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
     sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
-    sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
+    sections.push(renderSection('Sleeping', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
   }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);

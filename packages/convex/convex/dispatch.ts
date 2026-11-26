@@ -246,7 +246,7 @@ export const dispatch = mutation({
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
       const close = EXPLICIT_CLOSE_ACTIONS.has(action);
-      await applyPatches(ctx, userId, patches, { forceKill: close || EXPLICIT_KILL_ACTIONS.has(action), close, cause: `web:${action}`, presence: answerPresence(action, actionArgs) });
+      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action), close, cause: `web:${action}`, presence: answerPresence(action, actionArgs) });
     }
 
     const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
@@ -506,7 +506,7 @@ export async function applyPatches(
         // nested group, by the shared closeInFlightReason) is set aside
         // instead: a stash, so nothing is stopped. The client's paint was the
         // guess; this write's echo corrects it.
-        if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now(), { forceKill: opts?.forceKill })) {
+        if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now())) {
           (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_dismissed_at;
           // A set-aside close is a hidden stash, so its machine wakes leave it
@@ -581,7 +581,9 @@ export async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill, close, cause: opts?.cause });
+          // A close is a forced close on every rail (the gesture, a stub's re-key flush,
+          // an undo replay): its cascade stops the members the aside check scanned.
+          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill || close, close, cause: opts?.cause });
         }
         // The un-kill mirror: a patch CLEARING either hide stamp on a row that
         // had it is the restore/undo gesture (web restoreSession, the /sessions

@@ -142,7 +142,7 @@ const CLOSED = new Set(["done", "dropped"]);
 const OWNED_ORDER: [string, string][] = [["in_progress", "in progress"], ["in_review", "in review"], ["open", "open"], ["backlog", "backlog"], ["done", "done"]];
 
 /** Who acts next, in a person's words rather than the state's name. */
-const SESSION_WORDS: Partial<Record<WorkState, string>> = { needs_input: "waiting on a person", working: "working", done: "finished", dormant: "parked", idle: "idle" };
+const SESSION_WORDS: Partial<Record<WorkState, string>> = { needs_input: "waiting on a person", working: "working", done: "finished", dormant: "sleeping", idle: "idle" };
 
 /** Counts by state as the groups a person reads, in the inbox's order. */
 function groupWords(counts: Map<WorkState, number> | undefined): ScopeSessionGroup[] {

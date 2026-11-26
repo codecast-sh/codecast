@@ -7,11 +7,14 @@ import { askRetireInstead } from "../lib/seatKill";
 import { soundDormant } from "../lib/sounds";
 import { isFavoriteInStore, useInboxStore, type InboxSession } from "./inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
+import { withCloseAdvice, type PendingCloseAdvice } from "../lib/closeAdviceBar";
+import { lastMessageId, restoreAsked, startCloseAdvice } from "./closeAdvice";
 import { registerUndoRevert } from "./undo/onRevert";
 import { USER_REST_LABEL } from "./undo/policies/sessions";
 import { counted, undoAsOne } from "./undo/labels";
 import { toast } from "sonner";
-import { deferUndoGesture, gestureToast } from "./undoStack";
+import { killCanceledTasksFor, taskDisplayTitle, type TaskRow } from "../components/triggerTasks";
+import { deferUndoGesture, gestureToast, UNDO_RECEIPT_MS } from "./undoStack";
 
 export { USER_REST_LABEL, undoAsOne };
 
@@ -120,6 +123,39 @@ function afterSessionExits(ids: string[], commit: (leaving: Map<string, Element 
 // refused on every retry and never reached the server, so it is sent in slices.
 const KILL_DISPATCH_ROWS = 500;
 
+/** Bring killed sessions back with `restore`, saying which triggers their
+ *  kill canceled come back with them. The re-arm itself happens server side on
+ *  the un-hide; this only makes it visible (a once-trigger whose time has
+ *  passed re-arms a minute out, and reviving it silently would surprise). */
+export function restoreWithTriggerNotice(ids: string[], restore: () => void): void {
+  const tasks = Object.values((useInboxStore.getState() as any).agentTasks ?? {}) as TaskRow[];
+  const revived = ids.flatMap((id) => killCanceledTasksFor(tasks, id));
+  restore();
+  if (revived.length) {
+    toast.success(
+      revived.length === 1
+        ? `Re-armed trigger "${taskDisplayTitle(revived[0]!)}" — its kill canceled it`
+        : `Re-armed ${revived.length} triggers the kill canceled`,
+    );
+  }
+}
+
+/** Close advice's second answer: bring back only `ids` as one undo, and for
+ *  Open, open it at its last message. */
+function keepAsked(ids: string[], open: boolean): void {
+  restoreWithTriggerNotice(ids, () => restoreAsked(ids, !open));
+  if (!open) return;
+  const last = lastMessageId(ids[0]!);
+  useInboxStore.getState().requestNavigate(ids[0]!, last ? { scrollToMessageId: last } : undefined);
+}
+
+/** Kill one session straight through the store, with the gesture's close
+ *  advice: for a surface with no card to collapse (the agent dock), which
+ *  kills a seat too rather than asking to retire it. */
+export function killWithCloseAdvice(id: string): void {
+  withCloseAdvice(startCloseAdvice([id], "Killed", { receiptMs: UNDO_RECEIPT_MS, keep: keepAsked }), () => useInboxStore.getState().killSession(id));
+}
+
 /** Animate a session card sliding out, then stash or kill it. */
 export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
   void animatedHideSessions([id], mode, opts);
@@ -127,11 +163,13 @@ export function animatedHideSession(id: string, mode: HideSessionMode, opts?: Hi
 
 /** Stash or kill a selection as one gesture: every card collapses out, then
  *  all of them are hidden together as one undo. A seat asks to be retired
- *  instead of killed and is left out. Resolves to the ids it hid. */
-export async function animatedHideSessions(ids: string[], mode: HideSessionMode, opts?: HideSessionOpts): Promise<string[]> {
+ *  instead of killed and is left out. Resolves to the ids it hid, and a
+ *  Kill's close advice (the gesture's own, for its triggers line). */
+export async function animatedHideSessions(ids: string[], mode: HideSessionMode, opts?: HideSessionOpts): Promise<{ ids: string[]; advice: PendingCloseAdvice | null }> {
   const list = mode === "kill" ? ids.filter((id) => !askRetireInstead(id)) : ids;
-  if (list.length === 0) return list;
-  await afterSessionExits(list, () => {
+  if (list.length === 0) return { ids: list, advice: null };
+  const advice = mode === "kill" ? startCloseAdvice(list, "Killed", { receiptMs: UNDO_RECEIPT_MS, keep: keepAsked }) : null;
+  await afterSessionExits(list, () => withCloseAdvice(advice, () => {
     const store = useInboxStore.getState();
     if (mode === "kill") {
       if (list.length === 1) store.killSession(list[0]!);
@@ -147,8 +185,8 @@ export async function animatedHideSessions(ids: string[], mode: HideSessionMode,
         for (const id of list) store.stashSession(id, opts);
       });
     }
-  });
-  return list;
+  }));
+  return { ids: list, advice };
 }
 
 /** Close a selection as one gesture: every card collapses out, then each is
@@ -156,7 +194,8 @@ export async function animatedHideSessions(ids: string[], mode: HideSessionMode,
  *  own session closes like any other; nothing asks to retire it. */
 export async function animatedCloseSessions(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  await afterSessionExits(ids, () => {
+  const advice = startCloseAdvice(ids, "Closed", { receiptMs: UNDO_RECEIPT_MS, keep: keepAsked });
+  await afterSessionExits(ids, () => withCloseAdvice(advice, () => {
     const store = useInboxStore.getState();
     if (ids.length === 1) store.closeSession(ids[0]!);
     else if (ids.length <= KILL_DISPATCH_ROWS) store.closeSessions(ids);
@@ -165,7 +204,7 @@ export async function animatedCloseSessions(ids: string[]): Promise<void> {
         for (let i = 0; i < ids.length; i += KILL_DISPATCH_ROWS) store.closeSessions(ids.slice(i, i + KILL_DISPATCH_ROWS));
       });
     }
-  });
+  }));
 }
 
 /** File sessions under a rest verdict the way stash moves them: each card

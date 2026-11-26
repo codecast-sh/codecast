@@ -1,0 +1,26 @@
+{
+  "name": "guidance state-courtesy-done",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:state-courtesy-done"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:state-courtesy-done",
+    "title": "guidance state-courtesy-done"
+  },
+  "asOf": "2026-11-26T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/state-courtesy-done.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "9620ff96-630c-4985-9664-cf151ae069a9",
+  "createdAt": "2026-11-26T16:23:08.084Z"
+}

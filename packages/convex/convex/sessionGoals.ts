@@ -21,7 +21,8 @@ import { getAuthenticatedUserId, canSendProductMessage, cancelPendingMessageForU
 import { checkConversationAccess } from "./privacy";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { performSetThreadState } from "./conversations";
-import { runModelCallOrOwn, type CallScope } from "./modelCalls";
+import { runModelCall, sessionCallBudget, type SessionCallBudget } from "./modelCalls";
+import { parseJsonBlock } from "./lib/anthropic";
 import { ACTIVE_AGENT_STATUSES, clearedThreadStateFields } from "@codecast/shared/contracts";
 import {
   GOAL_IDLE_LIMIT_MS,
@@ -201,25 +202,26 @@ export const judgeInputs = internalQuery({
     const last = rows[rows.length - 1];
     const synced = !!last && !(last.role === "user" && isGoalMessage(last.content));
     const messages = rows.map((m: any) => ({ role: m.role, content: m.content, tool_calls: m.tool_calls, tool_results: m.tool_results, timestamp: m.timestamp }));
-    const scope: CallScope = conv.team_id && !conv.is_private ? { workspace: `team:${conv.team_id}`, team_id: conv.team_id } : { workspace: `user:${conv.user_id}` };
-    const budgeted = ((await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", scope.workspace)).first())?.cap_usd ?? 0) > 0;
+    const { scope, budgeted } = await sessionCallBudget(ctx, conv);
     return { ok: true as const, objective: goal.objective, messages, synced, scope, budgeted, conversation_id: goal.conversation_id };
   },
 });
 
 type JudgeInputs =
   | { ok: false; why: string }
-  | { ok: true; objective: string; messages: any[]; synced: boolean; scope: CallScope; budgeted: boolean; conversation_id: Id<"conversations"> };
+  | ({ ok: true; objective: string; messages: any[]; synced: boolean; conversation_id: Id<"conversations"> } & SessionCallBudget);
 
 type Judged = { verdict: GoalVerdict } | { error: string };
 
-async function askJudge(ctx: any, input: { objective: string; messages: any[]; scope: CallScope; budgeted: boolean; conversation_id: Id<"conversations"> }): Promise<Judged> {
+async function askJudge(ctx: any, input: { objective: string; messages: any[]; conversation_id: Id<"conversations"> } & SessionCallBudget): Promise<Judged> {
   const prompt = buildGoalJudgePrompt(input.objective, renderGoalEvidence(input.messages));
-  const spec = { model: GOAL_JUDGE_MODEL, max_tokens: 1_000, prompt, output: "json" as const };
-  // A workspace with a model budget pays for its judges out of it; with none, the call is codecast's own.
-  const r = await runModelCallOrOwn(ctx, input.scope, input.budgeted, "judge", spec, "Goal judge", { ctx, scope: { conversationId: input.conversation_id } });
+  // The reply's JSON is read here, not by the call, so a reply without any is "no usable verdict" whoever pays.
+  const spec = { model: GOAL_JUDGE_MODEL, max_tokens: 1_000, prompt, output: "text" as const };
+  // A workspace with a model budget pays for its judges out of it; with none, the call is codecast's own, like the idle summary's.
+  const r = await runModelCall(ctx, input.scope, "judge", spec, "Goal judge", 60_000, { budgeted: input.budgeted, content: { conversationId: input.conversation_id } });
   if (!r.ok) return { error: r.reason === "budget" ? "The team's model budget has no room for the goal review" : `The goal review failed: ${r.error}` };
-  const verdict = parseGoalVerdict(r.json);
+  const json = parseJsonBlock(r.text);
+  const verdict = parseGoalVerdict(json);
   return verdict ? { verdict } : { error: "The goal review gave no usable verdict" };
 }
 

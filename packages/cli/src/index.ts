@@ -18059,6 +18059,23 @@ work
     await warnIfThreadStateStale();
   });
 
+// The rule: shared/contracts/strandedHandoff.ts.
+work
+  .command("stranded")
+  .description("Finished handoffs in review that never landed: no default-branch commit, run merge or merged PR")
+  .option("--team <name|id|personal>", "Workspace to read (default: the directory's mapping, else the active team)")
+  .option("--days <n>", "Handed off at least this many days ago (default: the standard wait)", countOption)
+  .option("--json", "Output as JSON")
+  .action(async (options: any) => {
+    const { STRANDED_AFTER_DAYS, strandedLines } = await import("./strandedCommand.js");
+    const days = options.days ?? STRANDED_AFTER_DAYS;
+    const body: Record<string, any> = { days, project_path: getRealCwd() };
+    if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
+    const list = await cliPost("/cli/work/stranded", body);
+    if (options.json) return printJson(list);
+    for (const line of strandedLines(list, days, Date.now())) console.log(line);
+  });
+
 // Structured handoff (docs/architecture/the-line.md L2): a hand ends its turn
 // by moving the task to in_review with what it did and how it checked it. The
 // role reads handoffs, not transcripts.

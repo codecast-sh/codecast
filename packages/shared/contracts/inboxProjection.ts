@@ -148,7 +148,8 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // parent. A wait its agent owner answers (agentAnswersRow: its role, or the
 // session that started it, until the wait reaches its people) files as
 // working, "With <owner>". A row without owners_model places exactly as v29.
-export const INBOX_PROJECTION_VERSION = 30 as const;
+// v31: a pinned block holds through hibernation (declaredBlockHolds).
+export const INBOX_PROJECTION_VERSION = 31 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -257,7 +258,7 @@ export interface WorkStateInput {
 // needs_input. A declared BLOCK (the pin's `--status blocked`) sits with the
 // hard blocks, above every structural park: a standing trigger or loop into
 // the session keeps firing, but the agent said a human must act, and the card
-// must say so where the human looks (isDeclaredBlocked).
+// must say so where the human looks (declaredBlockHolds).
 export function classifyWorkState(input: WorkStateInput): WorkState {
   const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount, killed } = input;
   const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
@@ -330,7 +331,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
     // soft verdict nor a structural park (a standing trigger or loop that
     // keeps injecting into the session) overrides it. Cleared by the agent's
     // own next declaration, never by a model.
-    if (isDeclaredBlocked(input)) return "needs_input";
+    if (declaredBlockHolds(input)) return "needs_input";
     if (declaredDormant || input.armedTriggerHome || input.armedLoopHome || input.childProducing) return "dormant";
     if (declaredDone) return doneRest();
     // The classifier only ever files DONE: dormancy needs a wake the system
@@ -419,13 +420,13 @@ export interface InboxPlacementInput extends WorkStateInput {
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
 
-// The agent's own `cast state --status blocked`, read off the row, while the
-// daemon reports the turn settled (idle) or reports nothing at all (the managed
-// row aged out, the machine is gone). A live status that is NOT idle is a
-// fresher signal than the pin: working means the agent moved on, and
-// dormant / done / waiting are the daemon carrying a newer declaration.
-export function isDeclaredBlocked(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus">): boolean {
-  return input.declaredStatus === "blocked" && (input.agentStatus === "idle" || !input.agentStatus);
+// A pinned `blocked` holds the row in needs_input over every wake unless a
+// newer word speaks (working, dormant, done, waiting): idle, hibernated (says
+// nothing of who acts), absent or dead hold it. Read raw. Close advice calls it.
+export function declaredBlockHolds(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus">): boolean {
+  if (input.declaredStatus !== "blocked") return false;
+  const s = input.agentStatus;
+  return !s || s === "idle" || s === "hibernated" || DEAD_AGENT_STATUSES.has(s);
 }
 
 // The process exited AFTER the agent declared the work delivered, with nothing
@@ -461,7 +462,7 @@ export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" 
     !!input.agentStatus &&
     DEAD_AGENT_STATUSES.has(input.agentStatus) &&
     !!(input.armedTriggerHome || input.armedLoopHome || pinnedPark) &&
-    input.declaredStatus !== "blocked" &&
+    !declaredBlockHolds(input) &&
     !input.hasPending &&
     !input.isUnresponsive
   );
@@ -478,7 +479,7 @@ export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pen
   if (input.pendingApiError && hasMsgs) return true;
   if (input.agentStatus === "permission_blocked") return true;
   if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input) && !isExitBeforeArmedWake(input)) return true;
-  if (isDeclaredBlocked(input) && hasMsgs) return true;
+  if (declaredBlockHolds(input) && hasMsgs) return true;
   return input.isUnresponsive;
 }
 

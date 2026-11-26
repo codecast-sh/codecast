@@ -17,6 +17,8 @@ import {
   normalizeThreadState,
   threadStateProseCut,
   threadStateResult,
+  threadStateRows,
+  threadStateAskRow,
   threadStateFreshness,
   parseThreadStateStatus,
   THREAD_STATE_MAX_CHARS,
@@ -30,6 +32,20 @@ import { commandGroup } from "./commandGroups.js";
  * Deliberately excludes "done": an agent wrapping up is as likely to mean it as
  * the state text, and silently clearing on it would be a surprise. */
 const CLEAR_WORDS = new Set(["clear", "rm", "unset", "none"]);
+
+/** What `cast state --status done` prints when the text carries an ask line. */
+export function doneWithAskRefusal(label: string): string {
+  return `A ${label}: line means the person acts. Use --status blocked.`;
+}
+
+/** The label of the ask a Done pin would bury, or null. An ask is the line the
+ * card shows as one (`You:`, or an older note's `Blocked:`), read with the
+ * card's own parser so the two cannot disagree; the "." line stands in for a
+ * headline so the first line is read as a row too. */
+export function doneAskLabel(status: ThreadStateStatus | null, text: string): string | null {
+  if (status !== "done") return null;
+  return threadStateAskRow(threadStateRows(`.\n${text}`))?.label ?? null;
+}
 
 export type StateInvocation =
   | { mode: "show"; session?: string }
@@ -160,7 +176,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
     .description(commandGroup("state").description)
     .option(
       "--status <status>",
-      "Who acts next: working (default) | blocked | done | dormant; files the session under Needs You / Done / Dormant when the turn ends",
+      "Who acts next: working (default) | blocked | done | dormant; files the session under Needs You / Done / Sleeping when the turn ends",
     )
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--json", "Machine-readable output")
@@ -177,6 +193,11 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       }
       if (intent.mode !== "set" && options.status !== undefined) {
         console.error(`--status goes with a state to pin: cast state --status ${options.status} "<text>"`);
+        process.exit(1);
+      }
+      const askLabel = intent.mode === "set" ? doneAskLabel(status, intent.text) : null;
+      if (askLabel) {
+        console.error(doneWithAskRefusal(askLabel));
         process.exit(1);
       }
       const session = intent.session || deps.detectCurrentSessionId();

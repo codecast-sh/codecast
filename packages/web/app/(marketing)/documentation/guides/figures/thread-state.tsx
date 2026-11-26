@@ -77,7 +77,7 @@ const ROUTES: { flag: string; to: string; ink: Ink; note?: string[] }[] = [
   { flag: "In progress", to: "Working", ink: "green" },
   { flag: "Needs you", to: "Needs You", ink: "yellow" },
   { flag: "Complete", to: "Done", ink: "cyan", note: ["this turn only:", "the next one says again"] },
-  { flag: "Dormant", to: "Dormant", ink: "blue", note: ["names what wakes it:", "a schedule, a task, a reply"] },
+  { flag: "Sleeping", to: "Sleeping", ink: "blue", note: ["names what wakes it:", "a schedule, a task, a reply"] },
   { flag: "nothing said", to: "Needs You", ink: "base1" },
 ];
 

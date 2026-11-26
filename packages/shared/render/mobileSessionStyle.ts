@@ -94,8 +94,8 @@ export const MOBILE_COMPOSER_STATUS: Record<string, { color: string; label: stri
   // Both settle verdicts that park the session on a machine wake read as one
   // word, matching the inbox's Dormant section: "waiting" is the daemon's
   // inference from open background work, "dormant" the agent's declaration.
-  waiting: { color: "#268bd2", label: "Dormant" },
-  dormant: { color: "#268bd2", label: "Dormant" },
+  waiting: { color: "#268bd2", label: "Sleeping" },
+  dormant: { color: "#268bd2", label: "Sleeping" },
   permission_blocked: { color: "#cb4b16", label: "Needs You" },
   connected: { color: "#2aa198", label: "Connected" },
 };

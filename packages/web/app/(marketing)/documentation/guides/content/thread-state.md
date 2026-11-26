@@ -18,12 +18,12 @@ You don't need to ask for it once it is on, but you can steer it:
 
 **In the conversation**, the note sits in a panel just above the composer:
 
-- The header is the answer: a status chip (**In progress**, **Needs you**, **Complete** or **Dormant**) and the headline, one line on where the work stands. A note without a status shows **Pinned**.
+- The header is the answer: a status chip (**In progress**, **Needs you**, **Complete** or **Sleeping**) and the headline, one line on where the work stands. A note without a status shows **Pinned**.
 - On the right, how old it is, such as *4m*. Once the thread has run well past the note, it turns yellow, and when messages are why, it counts them: *4h · 64 new messages*.
 - Under the header, each detail line sits beside its label. **You** is what the agent needs from you, on amber, with a **Copy** button when it is a command. **Done** is a checklist of what is finished, and **Next** says what happens next and when. A long note folds to **Show all**.
 - Click the header to collapse the panel to the headline. The **×** that appears on hover clears the note; a toast reads *Pinned state cleared* with **Undo**.
 
-**On the inbox card**, the note replaces the generated summary with one line: what the agent needs from you when there is something, otherwise the headline. A small pin marks it, colored by status, and a chip names a blocked, done or dormant session so you can scan the inbox without opening anything. The phone's inbox shows the same line.
+**On the inbox card**, the note replaces the generated summary with one line: what the agent needs from you when there is something, otherwise the headline. A small pin marks it, colored by status, and a chip names a blocked, done or sleeping session so you can scan the inbox without opening anything. The phone's inbox shows the same line.
 
 ![Inbox cards with pinned lines: one under Needs You asking for a staging API key, one under Working on webhook retry backoff](/documentation/thread-state/inbox-card.webp "The pinned line on inbox cards, colored by status.")
 
@@ -37,7 +37,7 @@ The status the agent pins decides the inbox section. A turn that says nothing fi
 ```
 
 - **Needs you** is the status that asks for you. It brings a stashed session back to the inbox, so agents use it only when they truly can't continue without you. **Complete** brings back one you closed too, unless it is a role's or a repeating trigger's. A question that can wait goes to your [decision queue](/documentation/decisions) instead.
-- **Complete** and **Dormant** cover only the turn that set them. A dormant note says what will wake the session: a schedule, a background job, a reply from another session.
+- **Complete** and **Sleeping** cover only the turn that set them. A sleeping note says what will wake the session: a schedule, a background job, a reply from another session.
 - When you send the session a message, the note comes down, because you have answered it. The agent pins a fresh one when its turn ends. A message from another session or a scheduled wake leaves the note standing.
 
 ## A note that has gone stale says so

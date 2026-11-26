@@ -17,7 +17,7 @@ import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
-import type { OpenTaskReport, AgentStatus, ReplyStreamPushResult, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, LoopState, ReplyStreamPushResult, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem, withoutDeliveryId } from "@codecast/shared/contracts";
 import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
@@ -264,6 +264,8 @@ export interface ConversationLifecycle {
   hasPendingMessages?: boolean;
   /** Declared agent on the conversation row. Missing on the status fallback. */
   agentType?: string | null;
+  /** Its /loop state; undefined on the status fallback or from an older server. */
+  loopState?: LoopState | null;
   /** True only when the hide fields were actually fetched (source === "lifecycle"). */
   hideStateKnown: boolean;
   source: "lifecycle" | "status-fallback";
@@ -1946,6 +1948,7 @@ export class SyncService {
             closed: res.closed === true,
             hasPendingMessages: res.has_pending_messages ?? undefined,
             agentType: res.agent_type ?? null,
+            loopState: res.loop_state,
             hideStateKnown: true,
             source: "lifecycle",
           };

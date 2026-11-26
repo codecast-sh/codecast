@@ -16,7 +16,7 @@ describe("standingLineOf", () => {
   test("with nothing declared the observed work state stands in", () => {
     const line = standingLineOf({ state: "dormant", state_line: null, state_status: null })!;
     expect(line.color).toBe("var(--sol-blue)");
-    expect(line.label).toBe("dormant");
+    expect(line.label).toBe("sleeping");
     expect(line.text).toBeNull();
   });
 
@@ -64,10 +64,10 @@ describe("changeLine and chipLine", () => {
 describe("stateWords", () => {
   test("needs input leads, then working, then one more state up to the cap; nothing for an empty card", () => {
     expect(stateWords({ needs_input: 4, working: 2, done: 9 })).toEqual(["4 need you", "2 working"]);
-    expect(stateWords({ needs_input: 1, dormant: 3 })).toEqual(["1 needs you", "3 dormant"]);
+    expect(stateWords({ needs_input: 1, dormant: 3 })).toEqual(["1 needs you", "3 sleeping"]);
     expect(stateWords({ done: 2, idle: 5 })).toEqual(["2 done", "5 idle"]);
     expect(stateWords({ needs_input: 4, working: 2 }, 1)).toEqual(["4 need you"]);
-    expect(stateWords({ working: 3, dormant: 1, done: 2 }, 3)).toEqual(["3 working", "1 dormant", "2 done"]);
+    expect(stateWords({ working: 3, dormant: 1, done: 2 }, 3)).toEqual(["3 working", "1 sleeping", "2 done"]);
     expect(stateWords({})).toEqual([]);
   });
 });

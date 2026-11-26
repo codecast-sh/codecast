@@ -66,7 +66,7 @@ function recordingSyncService(writes: StatusWrite[]): SyncService {
       _presumed?: boolean,
       hibernatedAt?: number | null,
     ) => { writes.push({ conversationId, status, hibernatedAt }); return true; },
-    getConversationLifecycle: async () => ({ status: "active", source: "lifecycle", hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false }),
+    getConversationLifecycle: async () => ({ status: "active", source: "lifecycle", hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false, loopState: null }),
   } as unknown as SyncService;
 }
 

@@ -25,6 +25,8 @@ import { resolveMobileLook } from '@/lib/mobileLook';
 import { ensureModernFaces } from '@/lib/modernFaces';
 import { followServerUiKey, useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex } from '@/lib/convex';
+import { api } from '@codecast/convex/convex/_generated/api';
+import { bindCloseAdviceCall } from '@codecast/web/lib/closeAdviceBar';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { TextSizeProvider } from '@/hooks/useTextSize';
 import { convexAuthStorageKey } from '@/lib/cachePrincipal';
@@ -94,6 +96,15 @@ if (__DEV__) {
     return "ok";
   };
 }
+
+// Close advice on the undo bar (web lib/closeAdviceBar): the one server call.
+// In dev, `global.__closeAdviceOverride = (sessions) => ({ results })` answers
+// in its place, for a simulator check that must not ask prod about real rows.
+bindCloseAdviceCall((sessions, gesture) => {
+  const override = __DEV__ ? (global as any).__closeAdviceOverride : undefined;
+  if (typeof override === 'function') return Promise.resolve(override(sessions, gesture));
+  return convex.action(api.closeAdvice.adviseAfterClose, { sessions, gesture });
+});
 
 export {
   ErrorBoundary,

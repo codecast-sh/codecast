@@ -3595,7 +3595,7 @@ function SessionListPanelImpl({
             setting) plus the line saying what wakes it and when. */}
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Dormant", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Sleeping", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>

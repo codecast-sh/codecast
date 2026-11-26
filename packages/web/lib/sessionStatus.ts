@@ -61,7 +61,7 @@ export const SESSION_STATUS: Record<SessionStatus, SessionStatusMeta> = {
   error: { word: "Error", text: "text-sol-red", color: "var(--sol-class-red)", mark: "alert", meaning: "It stopped on a failure you have to clear" },
   starting: { word: "Starting", text: "text-sol-green", color: "var(--sol-class-green)", mark: "dashed", meaning: "The agent is starting up" },
   done: { word: "Done", text: "text-sol-cyan", color: "var(--sol-class-cyan)", mark: "check", meaning: "Finished, waiting for you to review" },
-  dormant: { word: "Dormant", text: "text-[color:color-mix(in_srgb,var(--sol-class-blue)_55%,var(--sol-text-dim))]", color: DORMANT_COLOR, mark: "moon", meaning: "Parked until something wakes it" },
+  dormant: { word: "Sleeping", text: "text-[color:color-mix(in_srgb,var(--sol-class-blue)_55%,var(--sol-text-dim))]", color: DORMANT_COLOR, mark: "moon", meaning: "Asleep until something wakes it" },
   idle: { word: "Idle", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "ring", meaning: "Nothing running, nothing asked" },
   stashed: { word: "Stashed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "aside", meaning: "Set aside; the agent may still run" },
   killed: { word: "Closed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "cross", meaning: "Stopped and filed away" },

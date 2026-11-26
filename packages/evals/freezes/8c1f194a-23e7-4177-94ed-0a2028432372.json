@@ -1,0 +1,26 @@
+{
+  "name": "close-advice delivered-fix-no-ask",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-fix-no-ask"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "close-advice:delivered-fix-no-ask",
+    "title": "close-advice delivered-fix-no-ask"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "close-advice"
+  },
+  "meta": {
+    "surface": "close-advice",
+    "visibility": "public",
+    "snapshot": "fixtures/close-advice/delivered-fix-no-ask.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "8c1f194a-23e7-4177-94ed-0a2028432372",
+  "createdAt": "2026-11-24T02:34:13.941Z"
+}

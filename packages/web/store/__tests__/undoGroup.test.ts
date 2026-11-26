@@ -47,7 +47,7 @@ describe("fileSessionsAsRest", () => {
 
   test("one row keeps the action's own label", async () => {
     await fileSessionsAsRest([IDS[0]!], "dormant");
-    expect(getUndoHistory().items[0]!.label).toBe("Filed “Row 0” as Dormant");
+    expect(getUndoHistory().items[0]!.label).toBe("Filed “Row 0” as Sleeping");
   });
 
   test("killed rows are skipped and record nothing", async () => {
@@ -74,7 +74,7 @@ describe("animatedHideSessions", () => {
   });
 
   test("killing a three-row selection is one entry", async () => {
-    expect(await animatedHideSessions(IDS, "kill")).toEqual(IDS);
+    expect((await animatedHideSessions(IDS, "kill")).ids).toEqual(IDS);
     const items = getUndoHistory().items;
     expect(items).toHaveLength(1);
     expect(items[0]!.label).toStartWith("Killed 3 sessions");

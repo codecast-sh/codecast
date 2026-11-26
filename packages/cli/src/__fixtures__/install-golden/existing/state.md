@@ -42,10 +42,10 @@ block by "everything to end of file" destroys this paragraph.
 
 Pin a short state on this session saying where the work stands. The human sees it above the composer and on the inbox card, so they learn the situation without reading back.
 
-**End every turn by declaring who acts next** with `--status`. It decides where the session files in the human's inbox, and it is how you keep from becoming noise:
+**End every turn by declaring who acts next** with `--status`. It decides where the session files in the human's inbox:
 
-- `blocked`: a human must act first (answer, grant, decide). Files under **Needs You** and claims their eyes, so declare it only when true.
-- `done`: delivered, nothing stalled; read at leisure.
+- `blocked`: a human must act first, or you offer them named work, even optional (a choice, a follow-up, a step outside the session). Files under **Needs You**.
+- `done`: delivered, no work for them ("shout if you want changes" is fine); read at leisure.
 - `dormant`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time, or a wait you set on another task while holding yours). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
 - `working` (the default): still moving.
 

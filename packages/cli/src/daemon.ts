@@ -17,7 +17,7 @@ import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, rec
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, canonicalSlashCommand, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
-import { isClosedSession, materializeFileTags } from "@codecast/shared/contracts";
+import { isClosedSession, isLoopFresh, materializeFileTags } from "@codecast/shared/contracts";
 import { downloadAttachedFile } from "./attachedFileDownload.js";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -24451,6 +24451,11 @@ async function hibernationRefusalReason(cand: HibernationCandidate, io: Hibernat
   if (lifecycle.inboxPinnedAt === undefined || lifecycle.hasPendingMessages === undefined) return "lifecycle-degraded";
   if (lifecycle.inboxPinnedAt !== null) return "pinned";
   if (lifecycle.hasPendingMessages !== false) return "pending-messages";
+  // An armed /loop wakeup is a timer inside the agent process. Parking the pane
+  // kills it, and nothing resumes a parked session when it comes due, so the
+  // loop would silently stop. A server too old to say counts as unknown.
+  if (lifecycle.loopState === undefined) return "lifecycle-degraded";
+  if (lifecycle.loopState && isLoopFresh(lifecycle.loopState, io.now())) return "loop-armed";
   // A borrowed process means the pane belongs to a parent. Killing the tree
   // would kill the parent on the child's behalf.
   if (!await io.canReapPidTree(cand.sessionId)) return "borrowed-process";

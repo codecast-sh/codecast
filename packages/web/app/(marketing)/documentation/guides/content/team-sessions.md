@@ -16,7 +16,7 @@ Each teammate installs Codecast once ([Getting started](/documentation#getting-s
 | **Needs You** | Blocked on you: a question, a permission prompt, a finished turn to review |
 | **Done** | Delivered. Read it when you have time |
 | **Working** | The agent is still going |
-| **Dormant** | Waiting on something scheduled, such as a test run or a reply |
+| **Sleeping** | Waiting on something scheduled, such as a test run or a reply |
 
 ![The inbox with sessions under Needs You, Done and Working, and one conversation open beside it](/documentation/shots/inbox.webp "The inbox files sessions by who acts next, from every machine and every agent.")
 

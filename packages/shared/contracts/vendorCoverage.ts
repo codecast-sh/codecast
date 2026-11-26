@@ -52,6 +52,7 @@ export const FEATURE_VENDORS: Partial<Record<TeamFeatureKey, readonly ContentVen
   calls: ["livekit"],
   agent_faces: ["tavus"],
   agent_realtime: ["openai"],
+  close_advice: ["anthropic"],
 };
 
 /** The vendor a team feature still lacks a BAA with, or null when it has every one it needs. */

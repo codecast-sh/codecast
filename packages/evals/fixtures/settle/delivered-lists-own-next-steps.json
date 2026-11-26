@@ -1,0 +1,19 @@
+{
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "notes": "delivered a fix and lists the next steps the agent itself will take",
+  "label": {
+    "verdict": "done"
+  },
+  "snapshot": {
+    "newestFirst": [
+      {
+        "role": "assistant",
+        "content": "The retry fix is merged: webhook deliveries now back off exponentially and stop after 6 attempts, with a test for each branch. Next steps, mine: I'll watch tonight's delivery logs from the trigger I armed, and close the task once a full day passes with no duplicate sends."
+      },
+      {
+        "role": "user",
+        "content": "webhooks are being sent twice when the receiver is slow, fix the retries"
+      }
+    ]
+  }
+}

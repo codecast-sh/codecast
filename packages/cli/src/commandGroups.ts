@@ -294,6 +294,7 @@ Examples:
     description: "The older name for cast flow's working commands: the same subcommands, the same output",
     load: () => import("./lineCommand.js").then((m) => m.registerLineCommand),
   },
+  { token: "advise-close", hidden: true, args: ["<session>"], hasOptions: true, description: "Whether closing a session from the inbox loses anything (Close advice teams)", load: () => import("./closeAdviceCommand.js").then((m) => m.registerAdviseCloseCommand) },
   {
     token: "mod",
     aliases: ["mods"],
@@ -429,12 +430,11 @@ Subcommands:
   cast state clear               Remove it
   cast state show <session>      Print another session's state
 
---status is your answer to WHO ACTS NEXT, and it decides where the session
-files in the inbox when your turn ends:
+--status answers WHO ACTS NEXT and files the session in the inbox at turn end:
   working   still moving (default)
-  blocked   a human must act to unblock you            → Needs You
-  done      delivered; nothing stalled, review at leisure → Done
-  dormant   a machine wakes you; name the wake in the text → Dormant
+  blocked   a human must act, or you offer them named work, even optional → Needs You
+  done      delivered, no work for them (a You: line is refused) → Done
+  dormant   a machine wakes you; name the wake in the text → Sleeping
 done and dormant cover exactly the turn that declares them: after the next
 wake, declare again or the session returns to Needs You.
 

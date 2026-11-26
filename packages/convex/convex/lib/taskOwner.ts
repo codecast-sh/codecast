@@ -9,7 +9,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import { HEARTBEAT_ALIVE_MS } from "../inboxFilters";
-import { HANDOFF_COMMENT } from "./runAgentSessions";
+import { isHandoffComment } from "./runAgentSessions";
 
 // A session that touched the conversation this recently is treated as working
 // even without a daemon heartbeat (a cloud agent, a session between turns).
@@ -38,7 +38,7 @@ type TaskComment = { conversation_id?: Id<"conversations">; comment_type: string
  *  once. A session reviewing the task is none of them. */
 export async function handoffSessionsOf(ctx: { db: any }, task: any, comments: TaskComment[]): Promise<any[]> {
   const handoffs = comments
-    .filter((c) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text))
+    .filter(isHandoffComment)
     .sort((a, b) => b.created_at - a.created_at);
   const out: any[] = [];
   const seen = new Set<string>();

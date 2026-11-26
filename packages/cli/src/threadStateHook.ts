@@ -67,7 +67,7 @@ if [ ! -f "$DIR/$SESSION_ID.json" ]; then
   RECRUIT="$DIR/recruited/$SESSION_ID"
   [ -f "$RECRUIT" ] && return 0
   : > "$RECRUIT"
-  MSG="You are ending your turn without declaring who acts next. Run cast state --status done|blocked|dormant with one line saying where this stands (done = delivered, blocked = a human must act, dormant = a machine wakes you — name the wake), then stop. It decides where this session files in the inbox. The pin is already on the human's screen: run the command and stop, with no reply text about it."
+  MSG="You are ending your turn without declaring who acts next. Run cast state --status done|blocked|dormant with one line saying where this stands (done = delivered; blocked = a human must act or you offer them named work, even optional; dormant = a machine wakes you, name the wake), then stop. It decides where this session files in the inbox. The pin is already on the human's screen: run the command and stop, with no reply text about it."
   printf '{"decision":"block","reason":"%s"}\\n' "$MSG"
   return 0
 fi

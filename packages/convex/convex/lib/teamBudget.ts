@@ -75,6 +75,13 @@ export function worstCaseCost(model: string, promptChars: number, maxTokens: num
   return modelCost(model, { input_tokens: Math.ceil(promptChars / 3), output_tokens: maxTokens });
 }
 
+/** Whether a workspace pays for model calls at all (a cap above zero). With
+ *  none, a feature's own calls are codecast's (sessionGoals' judge, close
+ *  advice) and a budget-only feature is off. */
+export async function workspaceBudgeted(ctx: { db: any }, workspace: string): Promise<boolean> {
+  return ((await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).first())?.cap_usd ?? 0) > 0;
+}
+
 /** Longer than any call holds its reservation: Convex stops an action at 10 minutes. */
 export const HOLD_OUTLIVES_ANY_CALL_MS = 15 * 60_000;
 

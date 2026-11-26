@@ -23,7 +23,7 @@ const harnesses: Harness[] = [];
 const roots: string[] = [];
 const childPids: number[] = [];
 const attachers: ReturnType<typeof Bun.spawn>[] = [];
-const life = { status: "active", source: "lifecycle" as const, hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false };
+const life = { status: "active", source: "lifecycle" as const, hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false, loopState: null };
 const alive = (h: Harness) => tmuxRun(["has-session", "-t", `=${h.tmuxSession}`]).status === 0;
 
 // A child the agent started: "tool" the way Claude Code starts a Bash tool

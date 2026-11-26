@@ -148,7 +148,7 @@ export function BulkSessionMenuItems({
         Mark {n} needs you
       </CtxItem>
       <CtxItem icon={Moon} onSelect={() => { fileSessionsAsRest(sessions.map((s) => s._id), "dormant"); onClear?.(); }}>
-        Mark {n} dormant
+        Mark {n} sleeping
       </CtxItem>
       <CtxSeparator />
       {onStash && (

@@ -10,7 +10,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners";
+export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -130,6 +130,15 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     inDevelopment: true,
     snippets: [],
     personal: true,
+  },
+  {
+    key: "close_advice",
+    name: "Close advice",
+    desc: "After a Close or Kill, the undo bar says when a session you had not seen under Needs You asked you something; also cast advise-close. In development.",
+    short: "Whether closing a session loses anything",
+    inDevelopment: true,
+    personal: true,
+    snippets: [],
   },
   {
     key: "member_spend",

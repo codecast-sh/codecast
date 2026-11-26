@@ -111,9 +111,11 @@ const lifecycleOf = (over: Partial<ConversationLifecycle>): ConversationLifecycl
   inboxPinnedAt: null,
   hideStateKnown: true,
   hasPendingMessages: false,
+  loopState: null,
   source: "lifecycle",
   ...over,
 });
+const armedLoop = (wakeupAt: number) => ({ status: "armed" as const, wakeup_at: wakeupAt, armed_at: wakeupAt - 600_000, event_at: wakeupAt - 600_000 });
 
 afterEach(() => {
   for (const id of tracked.splice(0)) trackSessionPaneForTests(id, null);
@@ -295,6 +297,16 @@ describe("a live session is refused by both the pass and the command", () => {
       opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ hasPendingMessages: true }) : lifecycleOf({})) },
     },
     {
+      name: "an armed /loop wakeup would die with the pane, and nothing resumes it when due",
+      reason: "loop-armed",
+      opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ loopState: armedLoop(NOW + 600_000) }) : lifecycleOf({})) },
+    },
+    {
+      name: "a server too old to report the loop state",
+      reason: "lifecycle-degraded",
+      opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ loopState: undefined }) : lifecycleOf({})) },
+    },
+    {
       name: "the lifecycle answer is degraded, so the pin cannot be believed",
       reason: "lifecycle-degraded",
       opts: { lifecycle: (id: string) => (id === target ? lifecycleOf({ hideStateKnown: false }) : lifecycleOf({})) },
@@ -329,6 +341,11 @@ describe("a live session is refused by both the pass and the command", () => {
       expect(f.parked).toEqual([]);
     });
   }
+});
+
+test("a /loop wakeup long overdue is a dead harness, and holds nothing back", async () => {
+  const f = fixture({ count: 1, lifecycle: () => lifecycleOf({ loopState: armedLoop(NOW - 3_600_000) }) });
+  expect(await f.hibernate(f.sessions[0])).toEqual({ result: "hibernated" });
 });
 
 describe("a subagent quiet past the window", () => {

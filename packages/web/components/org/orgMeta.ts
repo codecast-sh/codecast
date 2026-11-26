@@ -13,7 +13,7 @@ import type { OrgHealth } from "./orgStaffingTypes";
 export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
   needs_input: { label: "needs you", color: "var(--sol-yellow)", chip: THREAD_STATE_STATUS_META.blocked.chip },
   working: { label: "working", color: "var(--sol-green)", chip: THREAD_STATE_STATUS_META.working.chip },
-  dormant: { label: "dormant", color: "var(--sol-blue)", chip: THREAD_STATE_STATUS_META.dormant.chip },
+  dormant: { label: "sleeping", color: "var(--sol-blue)", chip: THREAD_STATE_STATUS_META.dormant.chip },
   done: { label: "done", color: "var(--sol-cyan)", chip: THREAD_STATE_STATUS_META.done.chip },
   idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
 };
