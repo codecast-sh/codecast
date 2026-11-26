@@ -49,18 +49,27 @@ afterEach(async () => {
 
 describe("keychainArgs", () => {
   test("a macOS home without a login keychain gets the mock keychain flag", () => {
-    expect(keychainArgs({ HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
+    expect(keychainArgs(null, { HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
   });
 
   test("a macOS home with a login keychain keeps the real keychain", () => {
     const dir = path.join(tmpDir, "Library", "Keychains");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "login.keychain-db"), "");
-    expect(keychainArgs({ HOME: tmpDir }, "darwin")).toEqual([]);
+    expect(keychainArgs(null, { HOME: tmpDir }, "darwin")).toEqual([]);
+  });
+
+  test("Chrome for Testing gets the mock keychain even in a home with a login keychain", () => {
+    const dir = path.join(tmpDir, "Library", "Keychains");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "login.keychain-db"), "");
+    const cft = "/u/.codecast/chrome-for-testing/158/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+    expect(keychainArgs(cft, { HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
+    expect(keychainArgs("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", { HOME: tmpDir }, "darwin")).toEqual([]);
   });
 
   test("other platforms never pass the flag", () => {
-    expect(keychainArgs({ HOME: tmpDir }, "linux")).toEqual([]);
+    expect(keychainArgs(null, { HOME: tmpDir }, "linux")).toEqual([]);
   });
 });
 

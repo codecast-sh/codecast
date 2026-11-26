@@ -227,22 +227,33 @@ export function chromeBinaryProbes(): string[] {
  * in memory instead, which is right for such a home: no keychain can exist
  * there. A real home keeps the real keychain, so profiles that already hold
  * encrypted cookies stay readable.
+ *
+ * Chrome for Testing always gets the mock keychain. It only ever runs
+ * codecast's own profiles, and its "Chromium Safe Storage" item is shared with
+ * every Puppeteer and Playwright copy on the machine; the downloaded bundle's
+ * signature does not validate, so "Always Allow" never sticks and macOS asked
+ * for the login password on every workspace or thumbnail launch (2026-11-25).
  */
-export function keychainArgs(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+export function keychainArgs(
+  binary?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
   if (platform !== "darwin") return [];
+  if (binary?.includes("Google Chrome for Testing")) return ["--use-mock-keychain"];
   const home = env.HOME || os.homedir();
   const loginKeychain = path.join(home, "Library", "Keychains", "login.keychain-db");
   return fs.existsSync(loginKeychain) ? [] : ["--use-mock-keychain"];
 }
 
 /** Default args used for every launch. CDP + isolation + automation-friendly. */
-function defaultArgs(opts: LaunchChromeOptions): string[] {
+function defaultArgs(opts: LaunchChromeOptions, binaryPath: string): string[] {
   return [
     `--remote-debugging-port=${opts.cdpPort}`,
     `--user-data-dir=${opts.userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
-    ...keychainArgs(),
+    ...keychainArgs(binaryPath),
     // Disable Chrome's own update / metrics / telemetry side-channels.
     "--disable-background-networking",
     "--disable-sync",
@@ -273,7 +284,7 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
   }
 
   fs.mkdirSync(opts.userDataDir, { recursive: true });
-  const args = [...defaultArgs(opts), ...(opts.extraArgs ?? [])];
+  const args = [...defaultArgs(opts, binaryPath), ...(opts.extraArgs ?? [])];
 
   // A missing/invalid binary surfaces differently across runtimes: Node emits
   // an async 'error' event on the child; Bun may throw synchronously OR emit

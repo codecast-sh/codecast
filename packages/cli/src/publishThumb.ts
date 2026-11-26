@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "./proc.js";
-import { automationChromeBinary, keychainArgs } from "./workspace/chrome.js";
+import { automationChromeBinary } from "./workspace/chrome.js";
 
 const THUMB_TIMEOUT_MS = 10_000;
 
@@ -14,8 +14,9 @@ export const findChrome = (): string | null => automationChromeBinary();
 
 /** The headless command line for one thumbnail. Pure, so the flag set is
  * testable without spawning a browser. The throwaway profile dir keeps the
- * capture off the human's real profile (which a running Chrome holds locked)
- * and, with the keychain flag, off the macOS keychain when the home has none. */
+ * capture off the human's real profile (which a running Chrome holds locked).
+ * That profile is thrown away, so the macOS keychain is never worth touching:
+ * the mock keychain keeps every launch free of keychain prompts. */
 export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string, extraArgs: string[] = []): string[] {
   return [
     "--headless=new",
@@ -25,7 +26,7 @@ export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: 
     "--hide-scrollbars",
     "--disable-gpu",
     "--no-first-run",
-    ...keychainArgs(),
+    ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
     ...extraArgs,
     `file://${entryHtmlAbsPath}`,
   ];
