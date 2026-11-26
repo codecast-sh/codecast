@@ -62,9 +62,10 @@ export function flowDecisionsHref(sel: { who?: string | null; need?: string | nu
 export type DecisionSetSource = "named" | "queue" | "list";
 export type DecisionSlot = { key: string; at: number; src: DecisionSetSource };
 
-/** Which set a decision page flips through, and where in it: the named set, else the viewer's queue (the sidebar's
- *  count) when it holds the decision, else the list's order when that does, else the queue; a decision that left its
- *  set (answered) keeps the slot it had. */
+/** Which set a decision page flips through, and where in it: the named set, else the set the pass is already on
+ *  (`last`, the previous page's slot) when it holds the decision, so one pass keeps one count and total; else the
+ *  viewer's queue (the sidebar's count) when it holds the decision, else the list's order when that does, else the
+ *  queue. A decision that left its set (answered) keeps the slot it had. */
 export function decisionNav(
   sets: Record<DecisionSetSource, readonly string[]>,
   ids: readonly (string | undefined)[],
@@ -73,6 +74,7 @@ export function decisionNav(
   const key = ids.filter(Boolean).join("|");
   const kept = last?.key === key ? last : null;
   const src: DecisionSetSource = sets.named.length > 1 ? "named"
+    : last && last.src !== "named" && setPosition(sets[last.src], ids) ? last.src
     : setPosition(sets.queue, ids) ? "queue"
     : setPosition(sets.list, ids) ? "list"
     : kept?.src ?? "queue";
@@ -81,4 +83,17 @@ export function decisionNav(
   if (pos) return { src, set, ...pos, slot: { key, at: pos.at, src } };
   const at = kept ? Math.min(kept.at, set.length) : 0;
   return { src, set, at: -1, prev: at > 0 ? set[at - 1] : null, next: at < set.length ? set[at] : null, slot: kept };
+}
+
+// The slot a ‹ › step left from, handed to the page it lands on: a decision page may mount afresh for each decision,
+// so the pass's set has to outlive the component that chose it.
+let handoff: { to: string; slot: DecisionSlot } | null = null;
+
+export function handDecisionSlot(to: string, slot: DecisionSlot | null): void {
+  handoff = slot ? { to: to.toLowerCase(), slot } : null;
+}
+
+/** The slot handed to this decision by the step that opened it; null when it was opened some other way. */
+export function claimDecisionSlot(ids: readonly (string | undefined)[]): DecisionSlot | null {
+  return handoff && ids.some((x) => x?.toLowerCase() === handoff!.to) ? handoff.slot : null;
 }
