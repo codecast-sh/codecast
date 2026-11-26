@@ -1324,7 +1324,10 @@ function findFanin(node: WorkflowNode, graph: WorkflowGraph): WorkflowNode | nul
 // `$<fanin>.output`. A failed branch fails the fanout. With a fanin the run
 // still goes on to it, which carries the failure (runNodeLoop) so its edges
 // route on it, along with when the fanout started and what each failed branch
-// said, for the one brief that answers them all.
+// said, for the one brief that answers them all. A branch whose edge has a
+// condition runs only when it holds as the fanout starts (the change flow's
+// review, when the round's head already has one); one passed over keeps what
+// it last said.
 async function executeFanout(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -1333,7 +1336,7 @@ async function executeFanout(
   options: RunOptions,
   checkpoint: () => void,
 ): Promise<NodeOutcome> {
-  const branches = graph.edges.filter(e => e.from === node.id).map(e => graph.nodes.get(e.to)).filter((n): n is WorkflowNode => !!n);
+  const branches = graph.edges.filter(e => e.from === node.id && (!e.condition || evalCondition(e.condition, state.context))).map(e => graph.nodes.get(e.to)).filter((n): n is WorkflowNode => !!n);
   if (branches.length === 0) {
     console.log(`  ${c.yellow}fanout has no branches${c.reset}`);
     return "success";

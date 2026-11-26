@@ -359,7 +359,8 @@
     },
     {
       "from": "checks",
-      "to": "review"
+      "to": "review",
+      "condition": "not pr.json.reviewed.verdict"
     },
     {
       "from": "ci",

@@ -273,4 +273,32 @@ describe("a fanout goes on to its fanin", () => {
     expect(await runWorkflow(graph, options())).toBe("completed");
     expect(fs.existsSync(path.join(dir, "no-review"))).toBe(true);
   }, 60_000);
+
+  test("a branch whose edge has a condition runs only in the rounds it holds, and keeps what it last said", async () => {
+    taskServer();
+    // Round 1 reviews; later rounds (once Next has run) pass Review over, and Next still reads its last word.
+    const graph = parseWorkflowSource(`digraph gated {
+      graph [label="Gated"]
+      start [shape=Mdiamond]
+      mark [label="Mark", shape=parallelogram, script="if [ -f ${dir}/round2 ]; then echo '{\\"again\\": true}'; else echo '{\\"again\\": false}'; fi"]
+      split [shape=component]
+      ci [label="CI", shape=parallelogram, script="echo ci >> ${dir}/ran"]
+      review [label="Review", shape=parallelogram, script="echo review >> ${dir}/ran; echo '{\\"verdict\\": \\"ship\\"}'"]
+      join [label="CI and Review", shape=tripleoctagon]
+      next [label="Next", shape=parallelogram, script="echo $review.json.verdict >> ${dir}/said; touch ${dir}/round2"]
+      exit [shape=Msquare]
+      start -> mark
+      mark -> split
+      split -> ci
+      split -> review [condition="mark.json.again != true"]
+      ci -> join
+      review -> join
+      join -> exit [condition="next.visits >= 2"]
+      join -> next
+      next -> mark
+    }`, dir);
+    expect(await runWorkflow(graph, options())).toBe("completed");
+    expect(fs.readFileSync(path.join(dir, "ran"), "utf-8").trim().split("\n").sort()).toEqual(["ci", "ci", "ci", "review"]);
+    expect(fs.readFileSync(path.join(dir, "said"), "utf-8").trim().split("\n")).toEqual(["ship", "ship"]);
+  }, 60_000);
 });

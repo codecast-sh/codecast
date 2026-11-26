@@ -5,9 +5,13 @@
 // it carries this round's nonce from pr.json and names the head CI judged, or
 // one the run's own stations rebased into it: a file any process could write,
 // the change's own author included, never counts, and neither does a pin from
-// an earlier round or on a head pushed since. Only green CI on the pushed head
-// and an accepted `ship` merge; what only the machine can fix runs again once
-// in the round; the rest goes back to the session, never on to Merge.
+// an earlier round or on a head pushed since. A round whose head the last
+// accepted review already read runs no reviewer: the PR station carries that
+// review into pr.json (`reviewed`), and it stands for the round (Merge still
+// asks the server for the review it recorded on that head). Only green CI on
+// the pushed head and an accepted `ship` merge; what only the machine can fix
+// runs again once in the round; the rest goes back to the session, never on
+// to Merge.
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -20,7 +24,7 @@ export type Verdicts = {
   why: string;
   /** ci.json with only the failures the change causes, the first of them cut short (the whole report is ci.json). */
   ci_result: Record<string, any> | null;
-  /** The review as accepted for this round, null when none was. */
+  /** The review as accepted for this round, null when none was; `reused` when it is the last round's, on the same head. */
   review_result: Record<string, any> | null;
 };
 
@@ -80,9 +84,14 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
   const pr = readJson(prFile);
   const done = (v: Omit<Verdicts, "why"> & { why: string }): Verdicts => ({ ...v, why: v.why.slice(0, WHY_CAP) });
   const ci = readJson(path.join(dir, "ci.json"));
-  const pin = parse(reviewPin);
-  const problem = reviewProblem(pin, pr?.round, reviewedHeads(ci?.head_sha, pr?.rebases));
-  const review = problem ? null : { verdict: pin!.verdict, findings: Array.isArray(pin!.findings) ? pin!.findings : [], round: pin!.round, head_sha: pin!.head_sha };
+  const heads = reviewedHeads(ci?.head_sha, pr?.rebases);
+  // The last round's review, carried by the PR station because this round pushed a head it read, stands for the
+  // round while it speaks for the head CI judged; else a reviewer asked again pins this round's.
+  const carried = pr?.reviewed && typeof pr.reviewed === "object" ? { ...pr.reviewed, round: pr.round } : null;
+  const reused = carried && !reviewProblem(carried, pr?.round, heads) ? carried : null;
+  const pin = reused ?? parse(reviewPin);
+  const problem = reviewProblem(pin, pr?.round, heads);
+  const review = problem ? null : { verdict: pin!.verdict, findings: Array.isArray(pin!.findings) ? pin!.findings : [], round: pin!.round, head_sha: pin!.head_sha, ...(reused ? { reused: true } : {}) };
   const reviewFile = path.join(dir, "review.json");
   if (review) fs.writeFileSync(reviewFile, JSON.stringify(review, null, 2) + "\n");
   else fs.rmSync(reviewFile, { force: true });

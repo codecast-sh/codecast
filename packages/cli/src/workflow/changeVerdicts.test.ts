@@ -144,6 +144,17 @@ describe("changeVerdicts", () => {
     expect(JSON.stringify(v).length).toBeLessThan(20_000);
   });
 
+  test("a review the PR station carried for the same head stands for the round with no pin, and Merge reads it", () => {
+    const carried = { ...PR, reviewed: { verdict: "ship", findings: [], head_sha: "abc" } };
+    const d = dir({ "pr.json": carried, "ci.json": GREEN });
+    expect(changeVerdicts(d, pin({ verdict: "changes", round: "r1" }))).toMatchObject({ next: "merge", review: "ship" });
+    expect(read(d, "review.json")).toEqual({ verdict: "ship", findings: [], round: "r2", head_sha: "abc", reused: true });
+    // Carried for another head than CI judged, it is no review of this round: a reviewer is asked.
+    const elsewhere = { ...PR, reviewed: { verdict: "ship", findings: [], head_sha: "old" } };
+    expect(changeVerdicts(dir({ "pr.json": elsewhere, "ci.json": GREEN }), undefined).next).toBe("rerun_review");
+    expect(changeVerdicts(dir({ "pr.json": elsewhere, "ci.json": GREEN }), SHIP).next).toBe("merge");
+  });
+
   test("this round's rejection ends with the reviewer's reasons; an old round's does not", () => {
     expect(verdicts({ "ci.json": RED }, pin({ verdict: "rejected", findings: ["blocker x.ts:2 not wanted"] }))).toMatchObject({ next: "rejected", why: "blocker x.ts:2 not wanted" });
     expect(verdicts({ "ci.json": GREEN }, pin({ verdict: "rejected", round: "r1" })).next).toBe("rerun_review");

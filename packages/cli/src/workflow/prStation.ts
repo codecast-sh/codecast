@@ -16,12 +16,17 @@ import { readFrozenChange } from "./flowChangeFile.js";
  * `round` is a fresh nonce each round: a reviewer pins it with its verdict, and Verdicts counts only a verdict that
  * carries it. `local_sha` is the local branch tip a push came from, when the pushed commits had to be put onto
  * origin's branch first. Verdicts counts the round's reruns here, so a new round starts with none. `rebases` are the
- * round's heads the run's own stations made from the reviewed one, so its review still speaks for them.
+ * round's heads the run's own stations made from the reviewed one, so its review still speaks for them. `reviewed` is
+ * the last round's accepted review when this round pushed a head it read: the round asks no reviewer again.
  */
 export type PrRecord = {
   url: string; number: number; head_sha: string; branch: string; round: string;
   local_sha?: string; ci_reruns?: number; review_reruns?: number; rebases?: Array<{ from: string; to: string }>;
+  reviewed?: StandingReview;
 };
+
+/** A review that read a head and said ship or changes: what a round on that same head reuses. */
+export type StandingReview = { verdict: "ship" | "changes"; findings: unknown[]; head_sha: string };
 
 /** `new_round`: origin's branch moved by someone other than the run's stations, so the round's review no longer stands. */
 export type PrStationResult = { ok: true; pr: PrRecord } | { ok: false; reason: string; new_round?: true };
@@ -67,9 +72,32 @@ function replay(exec: Exec, cwd: string, onto: string, from: string, local: stri
   }
 }
 
+/**
+ * The last round's accepted review (its review.json, as Verdicts wrote it), when the head this round pushes is one it
+ * read: that head, or one the run's own stations rebased from it (the last round's `rebases`, carried on). A review
+ * binds to the head it read, so a round on that head reuses it rather than spending a reviewer on the same commit.
+ * Merge still clears only on the review the server recorded for the head. Null for any other head, or a rejection.
+ */
+export function standingReview(review: Record<string, any> | null, head: string, last: PrRecord | null): { reviewed: StandingReview; rebases?: PrRecord["rebases"] } | null {
+  if (!review || (review.verdict !== "ship" && review.verdict !== "changes") || typeof review.head_sha !== "string" || !review.head_sha) return null;
+  const rebases = last?.rebases?.length ? last.rebases : undefined;
+  if (!reviewedHeads(head, rebases).has(review.head_sha)) return null;
+  return { reviewed: { verdict: review.verdict, findings: Array.isArray(review.findings) ? review.findings : [], head_sha: review.head_sha }, ...(rebases && review.head_sha !== head ? { rebases } : {}) };
+}
+
+function readReview(dir: string): Record<string, any> | null {
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(dir, "review.json"), "utf-8"));
+    return v && typeof v === "object" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 export function prStation(args: { cwd: string; dir: string; branch: string; base: string; title?: string; body?: string; exec?: Exec }): PrStationResult {
   const exec = args.exec ?? defaultExec;
   const { cwd, dir, branch, base } = args;
+  const lastReview = readReview(dir);
   for (const f of ROUND_FILES) fs.rmSync(path.join(dir, f), { force: true });
   const tip = exec("git", ["rev-parse", "--verify", "-q", `refs/heads/${branch}^{commit}`], cwd);
   if (tip.status !== 0) return { ok: false, reason: `There is no branch ${branch} here to push.` };
@@ -131,7 +159,8 @@ export function prStation(args: { cwd: string; dir: string; branch: string; base
     number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);
     if (!number) return { ok: false, reason: `gh pr create named no pull request: ${url || "it printed nothing"}` };
   }
-  return { ok: true, pr: writePr(dir, { url, number, head_sha: head, branch, round: randomUUID(), ...(local ? { local_sha: local } : {}) }) };
+  const stands = standingReview(lastReview, head, last);
+  return { ok: true, pr: writePr(dir, { url, number, head_sha: head, branch, round: randomUUID(), ...(local ? { local_sha: local } : {}), ...(stands ?? {}) }) };
 }
 
 const newRound = (branch: string, remote: string, ours: string): PrStationResult => ({
