@@ -105,10 +105,8 @@ describe("parked_wake_kind: runs", () => {
     expect(await s.kind()).toBe("none");
   });
 
-  test("a run on another task, a workflow run, or one waiting on the session does not park it", async () => {
+  test("a workflow run, or one waiting on the session, does not park it", async () => {
     const s = await setup();
-    const other = await s.task();
-    await s.run({ task_id: other });
     await s.run({ run_kind: "workflow" });
     const waiting = await s.run({ waiting_on_session: { node_id: "n", conversation_id: String(s.conv), since: NOW, note: "review" } });
     expect(await s.kind()).toBe("none");
@@ -117,14 +115,13 @@ describe("parked_wake_kind: runs", () => {
     expect(await s.kind()).toBe("run");
   });
 
-  test("a run on the task the session holds parks it, and follows the binding", async () => {
+  test("a run on a task the session does not hold parks it until the run ends", async () => {
+    // A lead ships a builder's task (`cast flow run change --task ct-N`) holding no task.
     const s = await setup();
-    const held = await s.task();
-    await s.run({ task_id: held });
-    expect(await s.kind()).toBe("none");
-    await s.write((db) => db.patch(s.conv, { active_task_id: held }));
+    const builders = await s.task();
+    const r = await s.run({ task_id: builders, workflow_name: "change" });
     expect(await s.kind()).toBe("run");
-    await s.write((db) => db.patch(s.conv, { active_task_id: undefined }));
+    await s.write((db) => db.patch(r, { status: "completed" }));
     expect(await s.kind()).toBe("none");
   });
 
