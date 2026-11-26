@@ -160,7 +160,8 @@ const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boo
  *  deliberate deletion of any file with fewer than `depth` changes looked like undoing its creation (ct-98089: Union's
  *  ct-97881 replaced two files with one and was refused). A stale tree drops main's new files the same way, but it
  *  sets main's other recent changes back with them. So a deletion passes as the change's own when the branch's own
- *  commits, from where `head` left `onto`, deleted the file and the landing sets nothing else back. */
+ *  commits, from where `head` left `onto`, deleted the file and the landing sets nothing else back. A file set back to
+ *  before a commit the branch's own commits revert (branchReverts) is the branch's own too. */
 export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: string, opts: { head?: string; depth?: number; most?: number } = {}): Array<{ file: string; commit: string }> {
   const { head = landing, depth = 8, most = 5 } = opts;
   const git = (...args: string[]) => exec("git", args, cwd);
@@ -168,16 +169,26 @@ export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: st
   const blob = (rev: string, file: string) => { const r = git("rev-parse", "--verify", "-q", `${rev}:${file}`); return r.status === 0 ? r.stdout.trim() : ""; };
   const setBack: Array<{ file: string; commit: string }> = [];
   const dropped: Array<{ file: string; commit: string }> = [];
+  const reverted = branchReverts(git, onto, head);
   for (const file of lines(git("diff", "--name-only", "--no-renames", onto, landing).stdout)) {
     const mine = blob(landing, file);
     if (mine === blob(onto, file)) continue;
     const commit = lines(git("log", "--format=%H", "-n", String(depth), onto, "--", `:(top,literal)${file}`).stdout).find((c) => blob(`${c}^`, file) === mine);
-    if (commit) (mine ? setBack : dropped).push({ file, commit });
+    if (commit && !reverted.has(commit)) (mine ? setBack : dropped).push({ file, commit });
     if (setBack.length >= most) break;
   }
   if (setBack.length || !dropped.length) return [...setBack, ...dropped].slice(0, most);
   const deleted = branchDeletions(git, onto, head);
   return dropped.filter((d) => !deleted.has(d.file)).slice(0, most);
+}
+
+/** The commits the branch's own commits revert on purpose, from where `head` left `onto`: `git revert` names each in
+ *  its message ("This reverts commit <sha>."). Setting a file back to before one of them is the branch's point, not a
+ *  stale tree, so the guard lets that one commit's undoing through and still reads every other file. */
+function branchReverts(git: (...args: string[]) => ReturnType<Exec>, onto: string, head: string): Set<string> {
+  const base = git("merge-base", onto, head).stdout.trim();
+  if (!base) return new Set();
+  return new Set([...git("log", "--format=%B", `${base}..${head}`).stdout.matchAll(/This reverts commit ([0-9a-f]{40})/g)].map((m) => m[1]));
 }
 
 /** The files the branch's own commits deleted, from where `head` left `onto`: a branch built before a file existed
