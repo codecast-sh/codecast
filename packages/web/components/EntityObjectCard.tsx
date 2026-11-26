@@ -1,4 +1,5 @@
 import React, { useCallback, useId, useRef, useState } from "react";
+import { PriorityCard } from "./priorities/PriorityRef";
 import {
   ChevronDown,
   FileText,
@@ -106,6 +107,7 @@ const TYPE_ICON: Record<EntityType, any> = {
   person: UserRound,
   secret: KeyRound,
   flow: Workflow,
+  priority: Target,
 };
 
 /** An object's mark as its card and every list of it draw it: a task's
@@ -870,6 +872,8 @@ export function EntityObjectCard({ refId, count, unresolved }: {
     const slug = flowSlugOf(rawId);
     if (slug) return <div className="min-w-0" data-entity-card="flow">{renderFlowCard(slug, <EntityIdPill shortId={rawId} type="flow" />)}</div>;
   }
+  // A priority alone on its line reads as the card its pill opens: what is next and its button, Share and Open.
+  if (type === "priority" && entity) return <div className="min-w-0 max-w-md overflow-hidden rounded-lg border border-sol-border" data-entity-card="priority"><PriorityCard row={entity} /></div>;
   const isRepoObject = type === "pr" || type === "commit";
   // Same rule as the pill: a repository reference that names nothing codecast
   // knows is the text it was written as, not a "not available" card. One

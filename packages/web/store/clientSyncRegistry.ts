@@ -439,13 +439,27 @@ export const CLIENT_SYNC_REGISTRY = {
   // positions on the owner's other rows, which the server's own ordering may
   // place differently, so a field lock could never retire; the server's push
   // settles the paint, and a refused write is put back by its caller
-  // (store/prioritiesSlice). steps, counts and sessions are joined objects.
+  // (store/prioritiesSlice). steps, counts, sessions, links (each step's
+  // sessions and plans) and plan are joined objects.
   priorities: {
     persistence: { kind: "collection", key: "priorities" },
     indexes: "_id, workspace",
     hydration: { phase: "deferred" },
-    sync: { deepFields: ["steps", "counts", "sessions"] },
+    sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
     feeds: ["priorities.list"],
+  },
+  // What only convex priorities.show returns for a priority a page or a
+  // reference opened, keyed by the priority's _id (lib/priorityDetail): the
+  // owner's corrections, sessions whose milestone is gone, links and plan
+  // where the list row has none, and the row itself only for a priority the
+  // list does not hold. Readers lay it over the `priorities` row, which wins
+  // for every field it carries. Delta: each surface feeds its own; capped
+  // like the detail collections (lib/detailRows).
+  priorityDetails: {
+    persistence: { kind: "collection", key: "priorityDetails" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["corrections", "other_sessions", "links", "plan", "base"] },
+    feeds: ["priorities.show"],
   },
   // "Handled without you": decisions a role answered under a grant in the
   // last 14 days, with the role and grant for disagree / reopen. Snapshot.
@@ -2421,6 +2435,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   workflowRuns: "shared",
   weeklyCards: "shared",
   priorities: "shared",
+  priorityDetails: "local",
   signals: "shared",
   lineLabels: "shared",
   stationInputs: "shared",

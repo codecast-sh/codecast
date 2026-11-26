@@ -50,14 +50,15 @@
 
 /* The compact list (clientState.ui.inbox_compact, and the Dormant section,
    which always wears it): one line per session. The state's mark takes the
-   lead slot, its reason (when it has one) sits before the time, and the
-   second and third lines leave. The handoff strip stays: it carries a button. */
+   lead slot, its reason (when it has one) and, in the Priorities view, its
+   rank sit before the time, and the second and third lines leave. The handoff strip stays: it carries a button. */
 .modern-style .inbox-compact [data-sv-rail] [data-mc] :is([data-mc-line2], [data-mc-line3]),
 .modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-lead] > [data-mc-agent] {
   display: none;
 }
 .modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-lead] > [data-mc-lead-status],
-.modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-reason] {
+.modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-reason],
+.modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-rank] {
   display: inline-flex;
 }
 

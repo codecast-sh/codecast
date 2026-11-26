@@ -1,7 +1,8 @@
 "use client";
 
 import { useFaceRow } from "../../hooks/useFaceRow";
-import { BELOW_SM, useMediaQuery } from "../../hooks/useIsPhone";
+import { BELOW_SM } from "../../hooks/useIsPhone";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useCallStageOpen } from "../../lib/calls/callStage";
 import { isCallCard } from "../../lib/faces/faceRow";
 import { EngagementCard } from "../faces/EngagementCard";

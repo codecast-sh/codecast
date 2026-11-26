@@ -72,6 +72,7 @@ import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncOrgProposals } from "../hooks/useSyncOrgProposals";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { featurePageRedirect, useWorkspaceFeature } from "../lib/teamFeatures";
+import { useSyncInboxPriorities } from "../hooks/usePriorities";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useSessionCommandResults } from "../hooks/useSessionCommands";
@@ -530,6 +531,8 @@ function HostFeeders() {
   const orgOn = useWorkspaceFeature("org");
   useSyncOrgProposals(orgOn);
   useSyncOrgTreeFeeder(undefined, orgOn);
+  // The priorities the inbox's Priorities view sorts by, fed here whether or not this window draws the inbox panel.
+  useSyncInboxPriorities();
   useSyncSettings();
   // Decisions open on every page, not only where they are listed: the Line's
   // decision inbox (every workspace with a line), and the page context of

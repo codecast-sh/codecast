@@ -212,6 +212,21 @@ describe("the live card's toolbar", () => {
   });
 });
 
+describe("the Priorities view's rank on a classic card", () => {
+  test("a compact card keeps the rank chip: it sits in the meta row, which the compact rule exempts it from hiding", async () => {
+    const html = render({ _id: "c-ranked" }, { priorityRank: 3 });
+    const meta = html.slice(html.indexOf("data-sv-meta"));
+    // A direct child of the meta row, its first.
+    expect(meta).toMatch(/^data-sv-meta[^>]*><span data-priority-rank="3"/);
+    const css = await Bun.file(join(import.meta.dir, "../../app/globals.css")).text();
+    // The compact rule hides every child of the meta row; the rank is the exception, laid on the one line.
+    expect(css).toContain(".inbox-compact [data-sv-rail] :is([data-sv-state], [data-sv-meta], [data-sv-draft]) > * {\n  display: none;");
+    const rule = css.slice(css.indexOf(".inbox-compact [data-sv-rail] [data-sv-meta] > [data-priority-rank] {"));
+    expect(rule.slice(0, rule.indexOf("}"))).toContain("display: inline-flex;");
+    expect(render({ _id: "c-plain" })).not.toContain("data-priority-rank");
+  });
+});
+
 describe("the owners model on a classic card", () => {
   test("flag off: a role's working session says no With line", () => {
     const html = render({ _id: "c-off", is_idle: false, updated_at: NOW - 0.5 * MIN, org_role_id: "r1", role: ROLE } as never, { variant: "working" });

@@ -554,11 +554,11 @@ crons.cron(
   {}
 );
 
-// Each person's priorities follow their work: a pass for every (person,
-// workspace) with the feature on and a typed message or pin since its last
-// pass (priorityPassSweep.ts).
-// On the hour every three hours UTC, so the list can say when the next one runs (SWEEP_EVERY_MS).
-crons.cron("priority pass", "0 */3 * * *", (internal as any).priorityPassSweep.sweep, {});
+// Each person's priorities follow their work: their activity schedules a pass
+// (priorityPassSchedule.ts). This daily sweep is the safety net for what no
+// hook sees, such as typed messages in a session that never pinned or a
+// session that left its workspace (priorityPassSweep.ts).
+crons.cron("priority pass safety sweep", "50 10 * * *", (internal as any).priorityPassSweep.sweep, {});
 
 crons.interval(
   // Pin trail rows older than 30 days (prioritiesSchema.ts): the priorities

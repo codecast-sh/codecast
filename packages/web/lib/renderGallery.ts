@@ -44,6 +44,36 @@ import { EDIT_SKIP_FENCE, FLOW_EDGES, FLOW_NODES, FLOW_SOURCE, GALLERY_FLOW, shi
 export { GALLERY_FLOW };
 import { CONVERSATION_FENCE_LANG } from "./conversationFence";
 import { DIFF_FENCE } from "./castDiff";
+import { detailRowOf } from "./priorityDetail";
+import type { PriorityDetail } from "@codecast/shared/contracts/priorities";
+
+// A priority (pri-N): its pill in a sentence (critical meter, card on hover,
+// sheet on a tap), and alone on a line still the pill: a transcript promotes
+// no priority to a card (messageMarkdown ASSISTANT_CARDS). The loader seeds it into
+// priorityDetails as a `show` answer lands for a priority the list does not
+// hold (lib/priorityDetail detailRowOf). Its asking session is a fixture id no
+// inbox holds, so no live state overrides it and the card shows Next with its
+// Answer.
+export const GALLERY_PRIORITY = { id: "gallerypriority000000001", short: "pri-90001", asking: "galleryprioritysession0000000001" } as const;
+
+function priorityRecord(now: number, viewerId: string, workspace: string) {
+  const hour = 3_600_000;
+  const step = (key: string, title: string, tier: "critical" | "polish", done: boolean, at?: number) =>
+    ({ key, title, tier, tier_set_by: "pass" as const, refs: [], done, ...(done && at ? { done_at: at } : {}), sessions: [] });
+  const session = { short_id: "jx7pri9", conversation_id: GALLERY_PRIORITY.asking, title: "Priorities feature build", state: "needs_you" as const, mine: true, workflow: false, why: ["mapped" as const], last_active_at: now - 3 * hour };
+  const link = (key: string, sessions: typeof session[]) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false });
+  const show: PriorityDetail = {
+    _id: GALLERY_PRIORITY.id, short_id: GALLERY_PRIORITY.short, title: "Priorities for Union",
+    summary: "Priorities is live on Union; session mapping sits around 0.65, short of the 0.75 bar, and calibration waits on one answer.",
+    status: "active", rank: 7, person_pos: null, ai_rank: 7, rank_source: "ai", status_set_by: "pass", serves: null,
+    steps: [step("s1", "Priorities live behind a flag", "critical", true, now - 20 * hour), step("s2", "Calibrate goal finding and session mapping", "critical", false), step("s3", "Turn on for the Union team", "critical", true, now - 6 * hour), step("s4", "Session mapping reaches 0.75", "critical", false), step("s5", "Priorities page redesign", "polish", false)],
+    counts: { critical_done: 2, critical_total: 4 }, workspace, user_id: viewerId, owner: "You", mine: true,
+    first_seen_at: now - 30 * hour, last_active_at: now - hour, done_at: null, session_count: 1, session_count_more: false, sessions: [], correction_pending: false,
+    links: [link("s1", []), link("s2", [session]), link("s3", []), link("s4", []), link("s5", [])], plan: null,
+    other_sessions: [], corrections: [],
+  };
+  return detailRowOf(show, undefined, undefined, now);
+}
 
 /** Every gallery row's id starts with this, so a loader can replace an earlier copy. */
 export const GALLERY_ID_PREFIX = "gallery-";
@@ -200,6 +230,7 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
       options: [{ label: "Keep it", description: "One release, then delete" }, { label: "Delete now", description: "No fallback" }],
     }],
     ...deployRecords(now, workspace),
+    priorityDetails: [priorityRecord(now, viewerId, workspace)],
     pipelines: [{ ...PIPELINE, _id: GALLERY_FLOW.pipeline, workspace, published_at: now - 3_600_000 }],
     sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
   };
@@ -477,6 +508,7 @@ export function renderGalleryMessages(now: number): Row[] {
   user("> Replays your commits on top of main\n\nCan we rebase instead of merging here?");
   asst(REFS);
   asst(`A proposal and a decision alone on their lines draw with their answers, and one change of a proposal is its pill.\n\n${GALLERY_ORG.proposalShort}\n\n${GALLERY_ORG.decisionShort}\n\nThe role in ${GALLERY_ORG.proposalShort}#1 is new.\n\n${GALLERY_ORG.proposalShort}#2`);
+  asst(`A priority in a sentence is its pill, with its critical meter: can you pick up ${GALLERY_PRIORITY.short} next? Alone on its line in a transcript it is still the pill (team chat draws its card):\n\n${GALLERY_PRIORITY.short}`);
   asst(`A message naming two open decisions gets one review under it: ${GALLERY_ORG.decisionShort} first, then ${GALLERY_ORG.decision2Short}.`);
   asst(FENCES);
   asst(`<div style="padding:8px"><h3>A whole-HTML reply</h3><p>An agent wrote raw HTML without a fence.</p></div>`);

@@ -33,6 +33,8 @@ export type ModelStub = {
   reply: (prompt: string) => string;
   /** A status other than 200 answers as the model API would when overloaded. */
   status: number;
+  /** The tokens each reply reports, which price the run. */
+  usage: { input_tokens: number; output_tokens: number };
 };
 
 /** Every world a test made: its scheduled passes are cancelled when the test ends, so none runs into the next test's model. */
@@ -40,20 +42,21 @@ const worlds: Array<ReturnType<typeof convexTest>> = [];
 
 /** Stubs the model for every test of the suite that calls it (at its top level). */
 export function stubModel(): ModelStub {
-  const m: ModelStub = { prompts: [], reply: () => "", status: 200 };
+  const m: ModelStub = { prompts: [], reply: () => "", status: 200, usage: { input_tokens: 1_000, output_tokens: 200 } };
   const realFetch = globalThis.fetch;
   const realKey = process.env.ANTHROPIC_API_KEY;
   beforeEach(() => {
     m.prompts = [];
     m.reply = () => JSON.stringify({ priorities: [], unassigned: [] });
     m.status = 200;
+    m.usage = { input_tokens: 1_000, output_tokens: 200 };
     process.env.ANTHROPIC_API_KEY = "test-key";
     globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
       const body = JSON.parse(init.body);
       const prompt = body.messages[0].content as string;
       m.prompts.push(prompt);
       if (m.status !== 200) return new Response(JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }), { status: m.status });
-      return new Response(JSON.stringify({ content: [{ type: "text", text: m.reply(prompt) }], usage: { input_tokens: 1_000, output_tokens: 200 }, stop_reason: "end_turn" }));
+      return new Response(JSON.stringify({ content: [{ type: "text", text: m.reply(prompt) }], usage: m.usage, stop_reason: "end_turn" }));
     }) as unknown as typeof fetch;
   });
   afterEach(async () => {

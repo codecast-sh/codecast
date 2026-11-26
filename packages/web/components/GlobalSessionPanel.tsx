@@ -95,6 +95,8 @@ import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
+import { priorityPlaceReader, priorityRanksSig, rankLabelOf, sessionPriorityLinkSig, sortByPriority } from "../store/priorityOrder";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
 import { windowOrgTree } from "../store/orgSlice";
@@ -1709,7 +1711,12 @@ function SessionListPanelImpl({
     // task collection churns far more than the few facts a lens reads).
     s => orgLensWakeSig(s),
     // Every plan a "By plan" group may name, from any workspace: only while the lens is up.
-    s => (resolveInboxViewMode(s.clientState.ui) === "plan" ? allPlansSig(s.plans) : ""),
+    s => (resolveInboxViewMode(s) === "plan" ? allPlansSig(s.plans) : ""),
+    // What the Priorities view sorts and labels by: each session's priority
+    // link and each priority's owner, rank and milestones. Only while it is up.
+    s => (resolveInboxViewMode(s) === "priorities" ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}` : ""),
+    // The view mode itself: Priorities reads as grouped while the workspace has the feature off.
+    s => resolveInboxViewMode(s),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2010,12 +2017,24 @@ function SessionListPanelImpl({
   const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
   const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
     sectionHeaderCount(shown, full, n, showSubagents);
+  // The Priorities view keeps the status sections and sorts each by the
+  // viewer's priority a session serves, as the keyboard walk does
+  // (visualOrderSessions); Pinned keeps the person's own order. Decisions
+  // sorts its own groups (InboxDecisionQueue).
+  const priorityKey = resolveInboxViewMode(s) === "priorities"
+    ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ""}`
+    : "";
+  // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(s.priorities, s.currentUser?._id, useInboxStore.getState().sessions) : null), [priorityKey]);
+  const byPriority = useCallback((rows: InboxSession[]) => (priorityPlaceOf ? sortByPriority(rows, priorityPlaceOf) : rows), [priorityPlaceOf]);
   const statusPinned = filteredPinned;
-  const statusNew = filteredNew;
-  const statusNeedsInput = filteredNeedsInput;
-  const statusDone = filteredDone;
-  const statusDormant = filteredDormant;
-  const statusWorking = filteredWorking;
+  const statusNew = useMemo(() => byPriority(filteredNew), [byPriority, filteredNew]);
+  const statusNeedsInput = useMemo(() => byPriority(filteredNeedsInput), [byPriority, filteredNeedsInput]);
+  const statusStopped = useMemo(() => byPriority(filteredStopped), [byPriority, filteredStopped]);
+  const statusDone = useMemo(() => byPriority(filteredDone), [byPriority, filteredDone]);
+  const statusDormant = useMemo(() => byPriority(filteredDormant), [byPriority, filteredDormant]);
+  const statusWorking = useMemo(() => byPriority(filteredWorking), [byPriority, filteredWorking]);
   // The label / plan lenses dissolve the status sections back to one flat
   // active set; questions rows rejoin it so an asking session still shows
   // under its label.
@@ -2335,7 +2354,7 @@ function SessionListPanelImpl({
   // Reset each render; renderSection (a closure over this) consumes it in call order.
   let globalRenderedCards = 0;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
-  const viewMode: InboxViewMode = resolveInboxViewMode(s.clientState.ui);
+  const viewMode: InboxViewMode = resolveInboxViewMode(s);
   const flatView = viewMode === "time" || viewMode === "recent";
   // Manual drag-order overlay, only consulted in "time" mode (see comparator).
   const manualOrder = s.clientState.ui?.inbox_manual_order;
@@ -2412,6 +2431,8 @@ function SessionListPanelImpl({
   // feeder runs only while the lens is up.
   const planWsArgs = useWorkspaceArgs();
   useSyncPlansWithArgs(viewMode === "plan" ? planWsArgs : "skip");
+  // The priorities the Priorities view sorts by are fed by the sync host's feeders (useSyncInboxPriorities).
+  const prioritiesOn = useWorkspaceFeature("priorities");
   const workspacePlans = useWorkspaceCollection<PlanItem>("plans", planLensSig);
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
@@ -2471,8 +2492,8 @@ function SessionListPanelImpl({
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
   const showViewTabs = !favoritesView;
   const viewModes = useMemo(
-    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
-    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
+    () => inboxViewModes({ hasPriorities: prioritiesOn, hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
+    [prioritiesOn, visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
   );
   const viewModesKey = showViewTabs ? viewModes.join(",") : "";
   useWatchEffect(() => {
@@ -3091,6 +3112,7 @@ function SessionListPanelImpl({
                   roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  priorityRank={priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
@@ -3572,6 +3594,7 @@ function SessionListPanelImpl({
           extraSessions={statusQuestions}
           onSelectSession={handleQuestionSelect}
           matches={chipMatchesId}
+          priorityPlaceOf={priorityPlaceOf ?? undefined}
         />
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
@@ -3580,7 +3603,7 @@ function SessionListPanelImpl({
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
         {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
-        {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
+        {renderSection(STOPPED_SECTION.label, statusStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
           floor: true,
           headerAction: <RetryStoppedButton rows={filteredStopped} />,

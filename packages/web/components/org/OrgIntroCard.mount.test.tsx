@@ -64,7 +64,8 @@ beforeAll(async () => {
     useTrackedStore: () => fake.state,
   }));
   mock.module("next/navigation", () => ({ usePathname: () => fake.pathname, useRouter: () => ({ push: (p: string) => fake.pushes.push(p), replace: () => {} }) }));
-  mock.module("../../hooks/useIsPhone", () => ({ useIsPhone: () => fake.phone, useMinWidth: () => true }));
+  const realPhone = { ...(await import("../../hooks/useIsPhone")) };
+  mock.module("../../hooks/useIsPhone", () => ({ ...realPhone, useIsPhone: () => fake.phone, useMinWidth: () => true }));
   mock.module("sonner", () => ({
     toast: {
       custom: (render: (id: string) => React.ReactElement, opts: { id: string; onDismiss?: () => void }) => { fake.toasts.push({ id: opts.id, render, onDismiss: opts.onDismiss }); return opts.id; },

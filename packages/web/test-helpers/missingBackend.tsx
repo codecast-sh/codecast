@@ -213,7 +213,7 @@ function withOwner(error: unknown, info: { componentStack?: string }): Error {
   return Object.assign(e, { owner });
 }
 
-async function mountSurface(node: React.ReactNode): Promise<MountedSurface> {
+export async function mountSurface(node: React.ReactNode): Promise<MountedSurface> {
   const React = await import("react");
   const { createRoot } = await import("react-dom/client");
   const act: <T>(cb: () => T | Promise<T>) => Promise<T> = (React as any).act;

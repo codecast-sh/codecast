@@ -4,10 +4,50 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, mostActiveSessions, passDue, newSessionHref, nextPassLabel, ownerGroups, stepNeedsSession, paintRank, paintStatus, paintTier, pastBadge, rankAtDrop, stepCounts, stepSessions, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMerge, paintMove, paintSessionMove, paintSessionNotThis, paintStatus, paintTier, pastBadge, prioritySig,
+  withLiveRanks, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
+import { buildModels, distinctFrom, lastDays } from "../priorityList";
+import { priorityPlaceReader } from "../../store/priorityOrder";
+
+describe("distinctFrom: a session's part of \"milestone · session\"", () => {
+  const M = "Calibrate goal finding and session mapping";
+  test("a title of its own stays whole", () => {
+    expect(distinctFrom(M, "Scorer calibration", 1)).toBe("Scorer calibration");
+    expect(distinctFrom("Ship it", "Copy review", 1)).toBe("Copy review");
+  });
+  test("a title that repeats the milestone shows what differs, or which session it is", () => {
+    expect(distinctFrom(M, "Calibrate goal finding: scorer pass", 1)).toBe("scorer pass");
+    expect(distinctFrom(M, "Calibrate goal finding", 2)).toBe("session 2");
+    expect(distinctFrom("Ship it", "Ship it", 3)).toBe("session 3");
+  });
+  test("a plural and its singular are one word", () => {
+    expect(distinctFrom("Calibrate the scorer", "Calibrate the scorers", 2)).toBe("session 2");
+    expect(distinctFrom("Deploy webhooks", "Deploy webhook retries", 1)).toBe("retries");
+  });
+});
+
+describe("Stalled", () => {
+  const DAY = 86_400_000;
+  const at = (y: number, mo: number, d: number, h: number) => new Date(y, mo, d, h).getTime();
+  const NOW = at(2026, 10, 26, 9);
+  const model = (first_seen_at: number, done_at?: number) => buildModels([row("pri-1", {
+    status: "active", first_seen_at,
+    steps: [{ ...step("s1", "critical"), done: false }, ...(done_at ? [{ ...step("s2", "critical", true), done_at }] : [])],
+  })], undefined, () => undefined, lastDays(10, NOW), NOW)[0];
+  test("a three-day-old priority with nothing landed is not stalled", () => {
+    expect(model(NOW - 3 * DAY).stalledDays).toBeNull();
+  });
+  test("counts calendar days, as \"last Nd\" does", () => {
+    // First seen five calendar days ago late in the evening: under five 24-hour days, five by the calendar.
+    expect(model(at(2026, 10, 21, 23)).stalledDays).toBe(5);
+    // A landing five calendar days ago reads "last 5d" and Stalled 5d together.
+    const m = model(NOW - 20 * DAY, at(2026, 10, 21, 22));
+    expect([m.lastLandedDays, m.stalledDays]).toEqual([5, 5]);
+  });
+});
 
 const step = (key: string, tier: "critical" | "polish", done = false, refs: PriorityStep["refs"] = []): PriorityStep => ({ key, title: `Step ${key}`, tier, tier_set_by: "pass", refs, done });
 
@@ -19,7 +59,9 @@ function row(short_id: string, over: Partial<PriorityRow> = {}): PriorityRow {
     summary: "",
     status: "active",
     rank: null,
-    rank_set_by: "pass",
+    person_pos: null,
+    ai_rank: null,
+    rank_source: "ai",
     serves: null,
     steps: [],
     counts: { critical_done: 0, critical_total: 0 },
@@ -41,13 +83,13 @@ const ids = (rows: PriorityRow[]) => rows.map((r) => r.short_id);
 describe("ownerGroups", () => {
   test("the viewer's group first, active in rank order, then done, quiet and set aside", () => {
     const rows = [
-      row("pri-3", { rank: 2 }),
-      row("pri-1", { rank: 1 }),
+      row("pri-3", { ai_rank: 2 }),
+      row("pri-1", { ai_rank: 1 }),
       row("pri-9", { status: "set_aside" }),
       row("pri-7", { status: "quiet", last_active_at: 5 }),
       row("pri-8", { status: "done", done_at: 10 }),
       row("pri-4", { status: "merged" }),
-      row("pri-5", { rank: 1, user_id: "ash" as any, owner: "Ashot", mine: false }),
+      row("pri-5", { ai_rank: 1, user_id: "ash" as any, owner: "Ashot", mine: false }),
     ];
     const groups = ownerGroups(rows);
     expect(groups.map((g) => g.owner)).toEqual(["Jason", "Ashot"]);
@@ -57,25 +99,73 @@ describe("ownerGroups", () => {
   });
 });
 
-describe("the store actions' paints", () => {
-  const fresh = () => [row("pri-1", { rank: 1 }), row("pri-2", { rank: 2 }), row("pri-3", { rank: 3 }), row("pri-4", { rank: 1, user_id: "ash" as any, mine: false })];
+describe("a session's move, \"not this\" and a merge relink its inbox row at once", () => {
+  // The links name each session's conversation; the inbox reads the conversation's own priority_id and step.
+  const linked = (key: string, conv: string) => ({ key, sessions: [{ short_id: `jx7${conv}`, conversation_id: conv, title: conv, state: "dormant", mine: true, workflow: false, why: ["mapped"], last_active_at: 0 }], sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false });
+  const world = () => {
+    const one = row("pri-1", { ai_rank: 1, steps: [step("s1", "critical"), step("s2", "critical")], links: [linked("s1", "c-one") as any, { ...linked("s2", "x"), sessions: [] } as any] });
+    const two = row("pri-2", { ai_rank: 2, steps: [step("s1", "critical")], links: [linked("s1", "c-two") as any], sessions: [{ short_id: "jx7c-two", title: "c-two", step_key: "s1", updated_at: 0 }], session_count: 1 });
+    const sessions: Record<string, any> = { "c-one": { _id: "c-one", priority_id: one._id, priority_step_key: "s1" }, "c-two": { _id: "c-two", priority_id: two._id, priority_step_key: "s1" } };
+    return { one, two, s: { priorities: { [one._id]: one, [two._id]: two }, sessions } };
+  };
+  const rankOf = (w: ReturnType<typeof world>, conv: string) => priorityPlaceReader(w.s.priorities as any, "me", w.s.sessions)(w.s.sessions[conv]) as { rank: number; step: number } | null;
 
-  test("a dragged rank moves the row among its owner's active ones only, and marks it the person's", () => {
-    const rows = fresh();
-    paintRank(rows, "pri-3", rankAtDrop(0));
-    expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-3", "pri-1", "pri-2"]);
-    expect(rows.find((r) => r.short_id === "pri-3")!.rank_set_by).toBe("person");
-    expect(rows.find((r) => r.short_id === "pri-4")!.rank).toBe(1);
+  test("a move puts the conversation on its new priority and milestone: its inbox rank follows before the server echoes", () => {
+    const w = world();
+    expect(rankOf(w, "c-two")?.rank).toBe(2);
+    paintSessionMove(w.s as any, "jx7c-two", w.two, w.one, "s2", 0);
+    expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s2" });
+    expect(rankOf(w, "c-two")).toMatchObject({ rank: 1, step: 1 });
   });
 
-  test("a rank past the end lands last", () => {
+  test("\"not this priority\" leaves the conversation on none", () => {
+    const w = world();
+    paintSessionNotThis(w.s as any, "jx7c-two", w.two);
+    expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: null, priority_step_key: null });
+    expect(rankOf(w, "c-two")).toBeNull();
+  });
+
+  test("a merge carries every conversation on the merged priority to its new milestone keys", () => {
+    const w = world();
+    paintMerge(w.s as any, w.two, w.one);
+    expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s3" });
+    expect(w.s.sessions["c-one"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s1" });
+    expect(rankOf(w, "c-two")?.rank).toBe(1);
+  });
+});
+
+describe("the store actions' paints", () => {
+  const fresh = () => [row("pri-1", { ai_rank: 1 }), row("pri-2", { ai_rank: 2 }), row("pri-3", { ai_rank: 3 }), row("pri-4", { ai_rank: 1, user_id: "ash" as any, mine: false })];
+
+  test("a drag places the row between its new neighbours, as the server's move does, among its owner's active ones only", () => {
     const rows = fresh();
-    paintRank(rows, "pri-1", 99);
+    paintMove(rows, "pri-3", 1);
+    expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-3", "pri-1", "pri-2"]);
+    expect(withLiveRanks(rows).map((r) => [r.short_id, r.rank, r.person_pos, r.rank_source])).toEqual([
+      ["pri-1", 2, null, "ai"], ["pri-2", 3, null, "ai"], ["pri-3", 1, 0, "person"], ["pri-4", null, null, "ai"],
+    ]);
+  });
+
+  test("a teammate's priorities carry no rank, and keep their order among themselves", () => {
+    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { ai_rank: 2, user_id: "ash" as any, mine: false }), row("pri-5", { ai_rank: 1, user_id: "ash" as any, mine: false })];
+    const live = withLiveRanks(rows);
+    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", null], ["pri-5", null]]);
+    expect(ids(ownerGroups(live)[1].active)).toEqual(["pri-5", "pri-6"]);
+  });
+
+  test("past the end lands last; up and down step one place", () => {
+    const rows = fresh();
+    paintMove(rows, "pri-1", 99);
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-2", "pri-3", "pri-1"]);
+    paintMove(rows, "pri-1", "up");
+    expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-2", "pri-1", "pri-3"]);
+    paintMove(rows, "pri-2", "down");
+    expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-1", "pri-2", "pri-3"]);
+    expect(withLiveRanks(rows).find((r) => r.short_id === "pri-2")!.rank).toBe(2);
   });
 
   test("a step dragged across the line changes tier and the critical count follows", () => {
-    const r = row("pri-1", { rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
+    const r = row("pri-1", { ai_rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
     paintTier(r, "s2", "polish");
     expect(r.steps.map((s) => s.tier)).toEqual(["critical", "polish", "polish"]);
     expect(r.steps[1].tier_set_by).toBe("person");
@@ -90,6 +180,8 @@ describe("the store actions' paints", () => {
     const back = [...fresh(), row("pri-6", { status: "quiet" })];
     paintStatus(back, "pri-6", "active");
     expect(ids(ownerGroups(back)[0].active)).toEqual(["pri-1", "pri-2", "pri-3", "pri-6"]);
+    // Restored with the place after every ranked one, as the server writes it: no active priority is left without a place.
+    expect(back.find((r) => r.short_id === "pri-6")!.ai_rank).toBe(4);
   });
 });
 
@@ -120,47 +212,26 @@ describe("writeOrRestore", () => {
 
 describe("steps", () => {
   const s = step("s1", "critical", false, [{ kind: "task", id: "ct-12" }, { kind: "session", id: "jx2" }, { kind: "pr", id: "acme/web#4" }]);
-  const r = row("pri-1", {
-    title: "Trusted evals",
-    steps: [s],
-    sessions: [
-      { short_id: "jx1", title: "Grader", step_key: "s1", updated_at: 5 },
-      { short_id: "jx3", title: "Other", step_key: "s2", updated_at: 9 },
-    ],
-  });
+  const r = row("pri-1", { title: "Trusted evals", steps: [s] });
 
-  test("a step's sessions are those mapped to it, then those its refs name", () => {
-    expect(stepSessions(r, s).map((x) => x.short_id)).toEqual(["jx1", "jx2"]);
-  });
-
-  test("once the open row's show answers, a step's sessions are every one show maps to it", () => {
-    const detail = { ...r, steps: [{ ...s, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 1 }] }], other_sessions: [] } as any;
-    expect(stepSessions(r, s, detail).map((x) => x.short_id)).toEqual(["jx9", "jx2"]);
-    const bare = step("s5", "critical");
-    // The list's newest few cannot say a step has no session; show can.
-    expect(stepNeedsSession(r, bare, stepSessions(r, bare), undefined)).toBe(false);
-    expect(stepNeedsSession(r, bare, stepSessions(r, bare, detail), detail)).toBe(true);
-    expect(stepNeedsSession(r, { ...bare, done: true }, [], detail)).toBe(false);
-    // Never on a teammate's priority: starting their work is theirs to do.
-    expect(stepNeedsSession({ mine: false }, bare, [], detail)).toBe(false);
-    expect(mostActiveSessions(r, undefined, { ...detail, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 99 }] }).map((x) => x.short_id)).toEqual(["jx9"]);
-  });
-
-  test("+ new session opens the composer on the priority and step, its task attached", () => {
-    const href = newSessionHref(r, s);
-    expect(parseComposeLink(new URLSearchParams(href.split("?")[1]))).toEqual({ draft: "Trusted evals: Step s1", task: "ct-12" });
-    expect(parseComposeLink(new URLSearchParams(newSessionHref(r, step("s9", "polish")).split("?")[1]))).toEqual({ draft: "Trusted evals: Step s9" });
-  });
-
-  test("a step's strip sums its sessions' days; none without per-session counts", () => {
-    const history = { days: ["2026-11-22", "2026-11-23"], lanes: [], sessions: { jx1: [1, 2], jx2: [3, 0] } };
-    expect(stepCounts(history, stepSessions(r, s))).toEqual([4, 2]);
-    expect(stepCounts({ days: history.days, lanes: [] }, stepSessions(r, s))).toBeUndefined();
-  });
-
-  test("most active sessions by typing, else most recently updated", () => {
-    expect(mostActiveSessions(r, undefined).map((x) => x.short_id)).toEqual(["jx3", "jx1"]);
-    expect(mostActiveSessions(r, { days: ["d"], lanes: [], sessions: { jx1: [7] } }).map((x) => x.short_id)).toEqual(["jx1", "jx3"]);
+  test("Start opens the composer on a brief of live references, linked to the milestone and its plan", () => {
+    const link = (href: string) => parseComposeLink(new URLSearchParams(href.split("?")[1]));
+    const tasks: Record<string, { title: string; status: string }> = { "ct-12": { title: "Grader faults", status: "done" }, "ct-13": { title: "Seed the goals", status: "in_progress" } };
+    const m = { step: step("s1", "critical", false, [{ kind: "task", id: "ct-12" }, { kind: "task", id: "ct-13" }, { kind: "task", id: "ct-14" }, { kind: "pr", id: "acme/web#4" }]), plan: { short_id: "pl-7" } };
+    // A finished task is left out; one the store does not know goes by its id.
+    expect(link(milestoneStartHref(r, m, (id) => tasks[id]))).toEqual({
+      draft: "pri-1, milestone: Step s1\nOpen tasks:\n- ct-13 Seed the goals\n- ct-14\nPlan: pl-7\nRun `cast priorities show pri-1` for current detail.",
+      task: "ct-13", priority: "pri-1", step: "s1", plan: "pl-7",
+    });
+    // No milestone plan: the priority's own. No task, no plan: the reference lines alone.
+    expect(link(milestoneStartHref({ ...r, plan: { short_id: "pl-2" } }, { step: step("s9", "polish"), plan: null }, () => undefined))).toEqual({
+      draft: "pri-1, milestone: Step s9\nPlan: pl-2\nRun `cast priorities show pri-1` for current detail.",
+      priority: "pri-1", step: "s9", plan: "pl-2",
+    });
+    expect(link(milestoneStartHref(r, { step: step("s9", "polish") }, () => undefined))).toEqual({
+      draft: "pri-1, milestone: Step s9\nRun `cast priorities show pri-1` for current detail.",
+      priority: "pri-1", step: "s9",
+    });
   });
 });
 
@@ -197,5 +268,24 @@ describe("the pass's timing", () => {
     expect(nextPassLabel(new Date(2026, 10, 26, 1, 5).getTime(), now)).toBe("Next pass Thu 1:05 AM");
     expect(nextPassLabel(now - 1, now)).toBeNull();
     expect(nextPassLabel(null, now)).toBeNull();
+  });
+});
+
+describe("prioritySig", () => {
+  const plan = (short_id: string, title: string, done = 1) => ({ short_id, title, done, total: 4, size: 4 });
+  const sess = (over: Record<string, unknown> = {}) => ({ short_id: "jx7a", conversation_id: "conv-a", title: "A session", state: "dormant", mine: true, workflow: false, why: ["mapped"], last_active_at: 1, ...over });
+  const link = (over: Record<string, unknown> = {}) => ({ key: "s1", sessions: [sess()], sessions_more: 0, plan: plan("pl-1", "The plan"), part_of: [plan("pl-2", "The program")], looks_done: false, correction_pending: false, ...over });
+  const base = row("pri-1", { steps: [step("s1", "critical")], links: [link()] as any, plan: plan("pl-3", "Priority plan") as any });
+  const changed = (links: unknown, over: Partial<PriorityRow> = {}) => prioritySig({ ...base, links: links as any, ...over }) !== prioritySig(base);
+
+  test("wakes on every field a row draws from its links: looks done, a session's identity and kind, plan titles, what a milestone is part of", () => {
+    expect(changed([link({ looks_done: true })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ conversation_id: "conv-b" })] })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ mine: false })] })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ workflow: true })] })])).toBe(true);
+    expect(changed([link({ plan: plan("pl-1", "The plan, renamed") })])).toBe(true);
+    expect(changed([link({ part_of: [plan("pl-2", "Another program")] })])).toBe(true);
+    expect(changed([link()], { plan: plan("pl-3", "Priority plan, renamed") as any })).toBe(true);
+    expect(changed([link()])).toBe(false);
   });
 });

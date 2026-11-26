@@ -1,6 +1,6 @@
-// Priorities API (priorities.ts): who reads a priority, what history counts,
-// the pin line, and the owner's controls (rank, step tier, set aside) that the
-// pass must never override.
+// Priorities API reads (priorities.ts, priorityRead.ts, priorityHistory.ts):
+// who reads a priority, what history counts and the pin line. The owner's
+// controls are priorities.writes.test.ts.
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
@@ -9,8 +9,7 @@ import { allModules } from "./testModules.testkit";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorities";
-import { nextSweepAt } from "./priorityPassSweep";
+import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorityRead";
 import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
 import type { Id } from "./_generated/dataModel";
 
@@ -49,15 +48,15 @@ async function world() {
 
     const ws = `team:${acme}`;
     const insertPriority = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("priorities", {
-      user_id: ada, workspace: ws, short_id, title: `Priority ${short_id}`, summary: "", status: "active", rank_set_by: "pass",
+      user_id: ada, workspace: ws, short_id, title: `Priority ${short_id}`, summary: "", status: "active",
       steps: [], first_seen_at: NOW - 10 * DAY, last_active_at: NOW - DAY, pass_at: NOW, created_at: NOW, updated_at: NOW, ...fields,
     } as any);
-    const p1 = await insertPriority("pri-1", { rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
-    const p2 = await insertPriority("pri-2", { rank: 2 });
+    const p1 = await insertPriority("pri-1", { ai_rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
+    const p2 = await insertPriority("pri-2", { ai_rank: 2 });
     const p3 = await insertPriority("pri-3", { last_active_at: NOW - 2 * DAY });
     const p4 = await insertPriority("pri-4", { status: "done", done_at: NOW - DAY });
-    const personal = await insertPriority("pri-5", { workspace: `user:${ada}`, rank: 1 });
-    const dark = await insertPriority("pri-6", { workspace: `team:${off}`, rank: 1 });
+    const personal = await insertPriority("pri-5", { workspace: `user:${ada}`, ai_rank: 1 });
+    const dark = await insertPriority("pri-6", { workspace: `team:${off}`, ai_rank: 1 });
 
     const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
       user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
@@ -116,7 +115,7 @@ describe("reads", () => {
         } as any);
       }
       await ctx.db.insert("priorities", {
-        user_id: ada, workspace: ws, short_id: "pri-7", title: "Long done", summary: "", status: "done", rank_set_by: "pass", steps: [],
+        user_id: ada, workspace: ws, short_id: "pri-7", title: "Long done", summary: "", status: "done", steps: [],
         first_seen_at: NOW - 200 * DAY, last_active_at: NOW - 90 * DAY, done_at: NOW - 90 * DAY, pass_at: NOW, created_at: NOW, updated_at: NOW,
       } as any);
     });
@@ -159,11 +158,17 @@ describe("reads", () => {
     };
     const before = await meta();
     expect(before.behind_by_ms).toBeNull();
-    expect(before.next_pass_at).toBe(nextSweepAt(Date.now()));
+    // Nothing asked for a pass yet: none is pending.
+    expect(before.next_pass_at).toBeNull();
     await t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: ada, workspace: ws, started_at: NOW - 9 * 3_600_000, finished_at: NOW - 9 * 3_600_000, status: "ok", cursor_at: NOW - 8 * 3_600_000, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     expect(Math.floor((await meta()).behind_by_ms! / 3_600_000)).toBe(8);
+    // Activity schedules one: the list says when it runs.
+    const due = await t.mutation((internal as any).priorityPassSchedule.request, { user_id: ada, workspace: ws });
+    expect(due).toBeGreaterThan(Date.now());
+    expect((await meta()).next_pass_at).toBe(due);
     await t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: ada, workspace: ws, started_at: Date.now(), finished_at: Date.now(), status: "running", cursor_at: NOW - 8 * 3_600_000, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     expect((await meta()).next_pass_at!).toBeLessThanOrEqual(Date.now());
+    await t.run(async (ctx) => { for (const j of await ctx.db.system.query("_scheduled_functions").collect()) if (j.state.kind === "pending") await ctx.scheduler.cancel(j._id); });
   });
 
   test("turning the feature on starts that team's sweep at once", async () => {
@@ -179,6 +184,91 @@ describe("reads", () => {
     const p = await as(ada).query(pri.show, { short_id: "PRI-1" });
     expect(p.steps.map((s: any) => [s.key, s.sessions.map((c: any) => c.short_id)])).toEqual([["s1", ["jx7pvt3"]], ["s2", ["jx7one1"]], ["s3", []]]);
     expect(p.other_sessions).toEqual([]);
+  });
+
+  test("the viewer's own active row carries each step's sessions (state, mine, workflow, why), its plans, Looks done and pending corrections; nobody else's does", async () => {
+    const { t, as, ada, bea, acme, ws, p1, c1 } = await world();
+    await t.run(async (ctx) => {
+      const plan = (short_id: string, size: number, status = "active") => ctx.db.insert("plans", {
+        user_id: ada, team_id: acme, workspace: ws, short_id, title: `Plan ${short_id}`, status, source: "human", created_at: NOW, updated_at: NOW,
+        task_ids: [], progress: { total: size, done: 2, in_progress: 0, open: size - 2 },
+      } as any);
+      const small = await plan("pl-1075", 37);
+      const big = await plan("pl-619", 140);
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, updated_at: NOW - 3_600_000, message_count: 3, is_private: false, team_visibility: "full", status: "active", ...fields,
+      } as any);
+      const blocked = { thread_state_status: "blocked", thread_state_at: NOW, last_turn_at: NOW - 1000 };
+      const hidden = await conv("jx7hid1", { is_private: true, team_visibility: "private" });
+      const asks = await conv("jx7ask1", blocked);
+      const run = await conv("jx7run1", { title: "Review · ct-901 tidy", is_subagent: true, parent_conversation_id: c1, inbox_killed_at: NOW });
+      await conv("jx7prk1", { thread_state_status: "dormant", thread_state_at: NOW, last_turn_at: NOW - 1000 });
+      // Bea's session works Ada's task and asks Bea something: not Ada's to answer.
+      const beas = await conv("jx7bea1", { ...blocked, user_id: bea });
+      const task = (short_id: string, plan_id: Id<"plans"> | undefined, conversation_ids: Id<"conversations">[], status = "open") => ctx.db.insert("tasks", {
+        user_id: ada, team_id: acme, workspace: ws, short_id, title: `Task ${short_id}`, status, plan_id, conversation_ids, created_at: NOW, updated_at: NOW,
+      } as any);
+      // A task's newest two sessions only: the private one is older.
+      await task("ct-901", small, [hidden, asks, run]);
+      await task("ct-902", small, [beas]);
+      await task("ct-903", big, [], "done");
+      const p = await ctx.db.get(p1);
+      await ctx.db.patch(p1, { steps: [
+        { ...p!.steps[0], refs: [{ kind: "task", id: "ct-901" }] },
+        { ...p!.steps[1], refs: [{ kind: "task", id: "ct-902" }, { kind: "session", id: "jx7prk1" }] },
+        { ...p!.steps[2], refs: [{ kind: "task", id: "ct-903" }] },
+      ] } as any);
+      await ctx.db.insert("priority_corrections", {
+        user_id: ada, workspace: ws, priority_id: p1, step_key: "s2", text: "Session mapping is wrong", status: "pending", created_at: NOW,
+        snapshot: { short_id: "pri-1", title: "Priority pri-1", summary: "", status: "active", steps: [] },
+      } as any);
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const links = Object.fromEntries(row.links.map((l: any) => [l.key, l]));
+    // s1: the session asking via its task first, the mapped one, the closed workflow run last.
+    expect(links.s1.sessions.map((s: any) => [s.short_id, s.state, s.mine, s.workflow, s.why])).toEqual([
+      ["jx7ask1", "needs_you", true, false, ["via ct-901"]],
+      ["jx7pvt3", "idle", true, false, ["mapped"]],
+      ["jx7run1", "killed", true, true, ["via ct-901"]],
+    ]);
+    // s2: Bea's blocked session reads idle and not Ada's.
+    expect(links.s2.sessions.map((s: any) => [s.short_id, s.state, s.mine, s.why])).toEqual([
+      ["jx7prk1", "dormant", true, ["linked"]],
+      ["jx7one1", "idle", true, ["mapped"]],
+      ["jx7bea1", "idle", false, ["via ct-902"]],
+    ]);
+    // Last activity to the 10 minutes, so a heartbeat leaves the answer as it was.
+    for (const l of row.links) for (const s of l.sessions) expect(s.last_active_at % 600_000).toBe(0);
+    // pl-1075 holds tasks from two of three task-bearing steps: the priority's plan; the 140-task pl-619 only "part of".
+    expect(row.plan).toMatchObject({ short_id: "pl-1075", done: 2, total: 37 });
+    expect(links.s1.plan).toBeNull();
+    expect(links.s3.plan).toBeNull();
+    expect(links.s3.part_of.map((p: any) => p.short_id)).toEqual(["pl-619"]);
+    // s3 is open with its one task done; s1's task is open.
+    expect([links.s1.looks_done, links.s3.looks_done]).toEqual([false, true]);
+    expect([links.s1.correction_pending, links.s2.correction_pending]).toEqual([false, true]);
+    expect(row.correction_pending).toBe(true);
+    // A teammate's rows, and the viewer's past ones, carry no links.
+    const [theirs] = await rowsOf(as(bea), { workspace: ws });
+    expect(theirs.links).toBeUndefined();
+    const past = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-4");
+    expect(past.links).toBeUndefined();
+    // `show` (the page and the reference card) carries the same links and plan, on any priority the viewer can read.
+    const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
+    expect(shown.links).toEqual(row.links);
+    expect(shown.plan).toEqual(row.plan);
+    expect(Array.isArray((await as(ada).query(pri.show, { short_id: "pri-4" })).links)).toBe(true);
+    // A teammate reading the page learns of no correction waiting: corrections are the owner's alone.
+    const beaShown = await as(bea).query(pri.show, { short_id: "pri-1" });
+    expect(beaShown.links.map((l: any) => l.correction_pending)).toEqual([false, false, false]);
+    expect(beaShown.correction_pending).toBe(false);
+  });
+
+  test("history names today's sessions no priority holds, for the No priority share", async () => {
+    const { as, ada, ws } = await world();
+    const res = await as(ada).query(pri.history, { days: 10, workspace: ws });
+    expect(res.unassigned_today.map((s: any) => [s.short_id, s.title, s.count])).toEqual([["jx7two2", "Session jx7two2", 1]]);
   });
 
   test("history: the viewer's own priorities count their own typing, per priority and unassigned, never an option pick", async () => {
@@ -277,6 +367,23 @@ describe("reads", () => {
     expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
   });
 
+  test("a teammate reads no rank, in the list, on the page and on the pin line alike, so the owner's hidden #1 leaves no gap", async () => {
+    const { t, as, ada, bea, ws, p1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
+    const pin = await t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7two5")).first())!._id);
+    const listed = (await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
+    const shown = await as(bea).query(pri.show, { short_id: "pri-2" });
+    // No place of any kind: not the position, not the scale, not who set it.
+    for (const row of [listed, shown]) expect([row.rank, row.person_pos, row.ai_rank, row.rank_source]).toEqual([null, null, null, null]);
+    expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank ?? null).toBeNull();
+    // The owner reads the same rank from all three.
+    const own = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
+    expect([own.rank, (await as(ada).query(pri.show, { short_id: "pri-2" })).rank, (await as(ada).query(pri.pinLine, { conversation_id: pin })).rank]).toEqual([2, 2, 2]);
+    expect([own.ai_rank, own.rank_source]).toEqual([2, "ai"]);
+    // A write's echo is the owner's, with the place.
+    expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ rank: 1, rank_source: "person" });
+  });
+
   test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {
     const { t, as, ada, bea, acme, p1, c1 } = await world();
     await t.run(async (ctx) => {
@@ -298,7 +405,7 @@ describe("reads", () => {
       await ctx.db.insert("api_tokens", { user_id: bea, token_hash: await hashToken(BEA_TOKEN), name: "cli", created_at: NOW, last_used_at: NOW } as any);
       for (let i = 0; i < TEAMMATE_PRIORITIES_CAP; i++) {
         const p = await ctx.db.insert("priorities", {
-          user_id: ada, workspace: ws, short_id: `pri-${100 + i}`, title: `More ${i}`, summary: "", status: "active", rank_set_by: "pass",
+          user_id: ada, workspace: ws, short_id: `pri-${100 + i}`, title: `More ${i}`, summary: "", status: "active",
           steps: [], first_seen_at: NOW, last_active_at: NOW + i, pass_at: NOW, created_at: NOW, updated_at: NOW,
         } as any);
         await ctx.db.insert("conversations", {
@@ -338,6 +445,16 @@ describe("reads", () => {
     await t.run(async (ctx) => ctx.db.patch(c1, { is_private: true, team_visibility: "private" }));
     expect(await stepsOf(bea)).toEqual([["s2", ["ct-1", "acme/web#4"]]]);
     expect((await rowsOf(as(bea), {})).find((r: any) => r.short_id === "pri-1").steps.map((s: any) => s.key)).toEqual(["s2"]);
+    // The pin line of the shared session on s1 names no step to her, and names it to the owner.
+    const keep = await t.run(async (ctx) => {
+      const id = (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7keep")).first())!._id;
+      await ctx.db.patch(id, { priority_step_key: "s1" } as any);
+      return id;
+    });
+    const beaPin = await as(bea).query(pri.pinLine, { conversation_id: keep });
+    expect(beaPin?.short_id).toBe("pri-1");
+    expect(beaPin?.step_title).toBeUndefined();
+    expect((await as(ada).query(pri.pinLine, { conversation_id: keep }))?.step_title).toBe("From the shared session");
     // The owner sees every step whole.
     expect((await stepsOf(ada)).map(([key]: any) => key)).toEqual(["s1", "s2"]);
   });
@@ -372,7 +489,7 @@ describe("reads", () => {
     await t.run(async (ctx) => {
       for (let i = 0; i < 201; i++) {
         await ctx.db.insert("priorities", {
-          user_id: ada, workspace: ws, short_id: `pri-${300 + i}`, title: `Old ${i}`, summary: "", status: "done", rank_set_by: "pass",
+          user_id: ada, workspace: ws, short_id: `pri-${300 + i}`, title: `Old ${i}`, summary: "", status: "done",
           steps: [], first_seen_at: 1, last_active_at: NOW - 100 * DAY + i, done_at: NOW - 100 * DAY + i, pass_at: 1, created_at: 1, updated_at: 1,
         } as any);
       }
@@ -448,7 +565,7 @@ describe("reads", () => {
       const dee = await ctx.db.insert("users", { name: "Dee" } as any);
       await ctx.db.insert("team_memberships", { user_id: dee, team_id: acme, role: "member", joined_at: 1 } as any);
       const p = await ctx.db.insert("priorities", {
-        user_id: dee, workspace: ws, short_id: "pri-20", title: "Dee's", summary: "", status: "active", rank_set_by: "pass",
+        user_id: dee, workspace: ws, short_id: "pri-20", title: "Dee's", summary: "", status: "active",
         steps: [], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
       } as any);
       const c = await ctx.db.insert("conversations", {
@@ -509,127 +626,5 @@ describe("reads", () => {
     const offHistory = await as(ada).query(pri.history, {});
     expect(offHistory.lanes.map((l: any) => l.key)).toEqual(["unassigned"]);
     expect(offHistory.sessions).toEqual({});
-  });
-});
-
-describe("writes", () => {
-  const ranks = (t: any, ids: Id<"priorities">[]) => t.run(async (ctx: any) => Promise.all(ids.map(async (id) => {
-    const p = await ctx.db.get(id);
-    return [p.short_id, p.rank ?? null, p.rank_set_by];
-  })));
-
-  const positions = async (as: any) => (await rowsOf(as, { status: "active" })).filter((r: any) => r.workspace.startsWith("team:")).map((r: any) => `${r.rank}:${r.short_id}`);
-
-  test("rank pins one priority to a slot and moves nothing else; the list and the pin line show the effective positions", async () => {
-    const { t, as, ada, p1, p2, p3, c1 } = await world();
-    expect(await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 1 })).toMatchObject({ short_id: "pri-3", rank: 1, rank_set_by: "person" });
-    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 1, "pass"], ["pri-2", 2, "pass"], ["pri-3", 1, "person"]]);
-    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-1", "3:pri-2"]);
-    expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1", rank: 2 });
-    // A slot past the end shows as the last position.
-    expect(await t.mutation(pri.cliRank, { api_token: TOKEN, short_id: "pri-1", rank: 99 })).toMatchObject({ short_id: "pri-1", rank: 3 });
-    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
-    expect(await t.mutation(pri.cliRank, { api_token: TOKEN, short_id: "pri-4", rank: 1 })).toEqual({ error: expect.stringContaining("only active priorities are ranked") });
-  });
-
-  test("a person's slot taken by a later drag pushes the earlier one down, and a pass's write changes neither", async () => {
-    const { t, as, ada, p1, p2, p3 } = await world();
-    await as(ada).mutation(pri.rank, { short_id: "pri-1", rank: 2 });
-    await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 2 });
-    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 3, "person"], ["pri-2", 2, "pass"], ["pri-3", 2, "person"]]);
-    expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3", "3:pri-1"]);
-    // A pass touches the pushed one last; the slots hold.
-    await t.run(async (ctx) => ctx.db.patch(p1, { updated_at: Date.now() + 60_000, summary: "pass wrote" }));
-    expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3", "3:pri-1"]);
-    // A chain: pri-2 to #2 pushes pri-3 to 3, which pushes pri-1 to 4; pri-3 first takes the
-    // slot it shows at (#1 once pri-2 leaves the order), so pri-3 ends #1 and pri-1 #3.
-    expect(await as(ada).mutation(pri.rank, { short_id: "pri-2", rank: 2 })).toMatchObject({ rank: 2 });
-    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
-  });
-
-  test("rank is the position the person sees: a slot past the end counts as where it shows", async () => {
-    const { t, as, ada, p1, p2, p3 } = await world();
-    await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 1 });
-    await t.run(async (ctx) => ctx.db.patch(p1, { rank: 99, rank_set_by: "person" }));
-    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-2", "3:pri-1"]);
-    expect(await as(ada).mutation(pri.rank, { short_id: "pri-2", rank: 3 })).toMatchObject({ short_id: "pri-2", rank: 3 });
-    expect(await positions(as(ada))).toEqual(["1:pri-3", "2:pri-1", "3:pri-2"]);
-    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 2, "person"], ["pri-2", 3, "person"], ["pri-3", 1, "person"]]);
-    // Past the end is the last position.
-    expect(await as(ada).mutation(pri.rank, { short_id: "pri-3", rank: 10 })).toMatchObject({ rank: 3 });
-    expect(await positions(as(ada))).toEqual(["1:pri-1", "2:pri-2", "3:pri-3"]);
-  });
-
-  test("a step's tier is the person's once set", async () => {
-    const { t, as, ada, p1 } = await world();
-    await as(ada).mutation(pri.setStepTier, { short_id: "pri-1", step_key: "s2", tier: "polish" });
-    const steps = await t.run(async (ctx) => (await ctx.db.get(p1))!.steps);
-    expect(steps.find((s) => s.key === "s2")).toMatchObject({ tier: "polish", tier_set_by: "person" });
-    expect(steps.find((s) => s.key === "s1")).toMatchObject({ tier: "critical", tier_set_by: "pass" });
-    expect(await t.mutation(pri.cliSetStepTier, { api_token: TOKEN, short_id: "pri-1", step_key: "s9", tier: "critical" })).toEqual({ error: "pri-1 has no step s9; its steps: s1, s2, s3" });
-  });
-
-  test("set aside leaves the ranking; restore brings it back after the pass-ranked ones", async () => {
-    const { t, as, ada, p1, p2, p3 } = await world();
-    await as(ada).mutation(pri.setAside, { short_id: "pri-1" });
-    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", null, "pass"], ["pri-2", 2, "pass"], ["pri-3", null, "pass"]]);
-    expect((await t.run(async (ctx) => ctx.db.get(p1)))!.status).toBe("set_aside");
-    expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-3"]);
-    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-1" })).toMatchObject({ short_id: "pri-1", status: "active", rank: 2 });
-    expect(await ranks(t, [p1, p2, p3])).toEqual([["pri-1", 3, "pass"], ["pri-2", 2, "pass"], ["pri-3", null, "pass"]]);
-    expect(await positions(as(ada))).toEqual(["1:pri-2", "2:pri-1", "3:pri-3"]);
-    expect(await t.mutation(pri.cliRestore, { api_token: TOKEN, short_id: "pri-4" })).toEqual({ error: "pri-4 is done, not set aside; only a set-aside priority is restored" });
-    await expect(as(ada).mutation(pri.restore, { short_id: "pri-1" })).rejects.toThrow("only a set-aside priority is restored");
-  });
-
-  test("only the owner changes a priority", async () => {
-    const { t, as, bea, p1 } = await world();
-    await expect(as(bea).mutation(pri.rank, { short_id: "pri-1", rank: 2 })).rejects.toThrow("pri-1 is Ada's priority; only they can change it");
-    await expect(as(bea).mutation(pri.setAside, { short_id: "pri-1" })).rejects.toThrow("only they can change it");
-    expect((await t.run(async (ctx) => ctx.db.get(p1)))!).toMatchObject({ status: "active", rank: 1 });
-  });
-
-  test("with the feature off, writes and runs are refused", async () => {
-    const { t, as, ada, off } = await world();
-    const offMessage = teamFeatureOffMessage("priorities");
-    await expect(as(ada).mutation(pri.rank, { short_id: "pri-6", rank: 1 })).rejects.toThrow(offMessage);
-    expect(await t.mutation(pri.cliSetAside, { api_token: TOKEN, short_id: "pri-6" })).toEqual({ error: offMessage });
-    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: off })).toEqual({ error: offMessage });
-  });
-
-  test("run refuses a team the caller is not in, and schedules nothing", async () => {
-    const { t, acme } = await world();
-    expect(await t.mutation(pri.cliRun, { api_token: CY_TOKEN, team_id: acme })).toEqual({ error: "you are not a member of that team" });
-    expect(await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
-  });
-
-  test("run says why runNow would refuse, and schedules nothing", async () => {
-    const { t, ada, acme, ws } = await world();
-    await t.run(async (ctx) => ctx.db.insert("priority_pass_runs", {
-      user_id: ada, workspace: ws, started_at: Date.now() - 90_000, finished_at: Date.now(), status: "ok", cursor_at: 0, model: "m", cost_usd: 0.1,
-      counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 },
-    }));
-    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: "A pass ran here 2 minutes ago; run it again in 9 minutes." });
-    await t.run(async (ctx) => ctx.db.insert("priority_pass_runs", {
-      user_id: ada, workspace: ws, started_at: Date.now() - 60 * 60_000, finished_at: Date.now(), status: "ok", cursor_at: 0, model: "m", cost_usd: 2,
-      counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 },
-    }));
-    await t.run(async (ctx) => { for (const r of await ctx.db.query("priority_pass_runs").collect()) if (r.cost_usd === 0.1) await ctx.db.delete(r._id); });
-    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: "Passes here spent today's $1.50; the next one can run tomorrow." });
-    expect(await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
-  });
-
-  test("run schedules one pass for the caller in the workspace", async () => {
-    const { t, ada, acme, ws } = await world();
-    const res = await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme });
-    expect(res.scheduled).toEqual([ws]);
-    // Ada has no pass yet: the note says the first catch-up reads oldest work first, over a few minutes.
-    expect(res.note).toContain("results land in a few minutes");
-    expect(res.note).toContain("oldest work first");
-    const jobs = await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect());
-    const run = jobs.filter((j: any) => j.name.includes("priorityPassRun"));
-    expect(run.map((j: any) => [j.name, j.args[0]])).toEqual([["priorityPassRun:runNow", { user_id: ada, workspace: ws }]]);
-    // The pass itself is priorityPassRun's to test; never let it reach a model from here.
-    await t.run(async (ctx) => { for (const j of run) await ctx.scheduler.cancel(j._id); });
   });
 });

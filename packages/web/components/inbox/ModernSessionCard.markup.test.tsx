@@ -227,6 +227,24 @@ describe("the Modern session card", () => {
     expect(bare).toMatch(/<div data-mc-line3[^>]*><\/div>/);
   });
 
+  test("in the Priorities view the rank also sits on line 1, before the time, which a compact card (Dormant, inbox_compact) keeps", async () => {
+    const html = render({ _id: "c-ranked" }, { priorityRank: 3 });
+    const compactRank = html.indexOf("data-mc-compact-rank");
+    expect(compactRank).toBeGreaterThan(-1);
+    expect(compactRank).toBeLessThan(html.indexOf("data-mc-time"));
+    expect(html.slice(compactRank, compactRank + 400)).toContain('data-priority-rank="3"');
+    // The third line keeps its chip for the full card.
+    expect(html.slice(html.indexOf("data-mc-line3"))).toContain('data-priority-rank="3"');
+    // Hidden on a full card, shown where the compact rule hides the third line: under .inbox-compact, which
+    // both the Dormant section and the inbox_compact shell class put on the list.
+    expect(html.slice(compactRank - 10, compactRank + 60)).toContain('class="hidden"');
+    const css = await Bun.file(new URL("./modernSessionCard.css", import.meta.url)).text();
+    const show = css.slice(css.indexOf("[data-mc-compact-reason],"), css.indexOf("display: inline-flex", css.indexOf("[data-mc-compact-reason],")));
+    expect(show).toContain(".modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-rank]");
+    // Outside the Priorities view there is no rank anywhere.
+    expect(render({ _id: "c-plain-rank" })).not.toContain("data-mc-compact-rank");
+  });
+
   test("a nested row (a subagent) reads its own state and keeps to its own facts", () => {
     const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
     expect(html).toContain('data-mc="nested"');

@@ -139,6 +139,7 @@ const Capabilities = lazy(() => import("@/app/capabilities/page"));
 const AgentFeatures = lazy(() => import("@/app/agent-features/page"));
 const Week = lazy(() => import("@/app/week/page"));
 const Priorities = lazy(() => import("@/app/priorities/page"));
+const Priority = lazy(() => import("@/app/priorities/[id]/page"));
 const Files = lazy(() => import("@/app/files/page"));
 const Vault = lazy(() => import("@/app/vault/page"));
 const Artifacts = lazy(() => import("@/app/artifacts/page"));
@@ -352,6 +353,7 @@ export function App() {
               <Route path="agent-features" element={<E name="AgentFeatures"><AgentFeatures /></E>} />
               <Route path="week" element={<E name="Week"><Week /></E>} />
               <Route path="priorities" element={<E name="Priorities"><Priorities /></E>} />
+              <Route path="priorities/:id" element={<E name="Priority"><Priority /></E>} />
               <Route path="files" element={<E name="Files"><Files /></E>} />
               {/* /vault is the team Vault; an old /vault?f=… Files link redirects
                   to /files from inside it (lib/vault/vaultHref.ts). */}

@@ -3,7 +3,7 @@ import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { cleanReservationPurpose, pinnableAgentIds } from "@codecast/shared/contracts";
+import { cleanReservationPurpose, pinnableAgentIds, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { parseStagePinRef, stagePinRowId } from "@codecast/shared/contracts/stagePins";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
@@ -377,7 +377,7 @@ import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./live
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
 import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
-import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
+import { createComposeSlice, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -682,6 +682,9 @@ export type InboxSession = {
   // an outbox-cap/boot heal can reissue createSession without losing the
   // originating task/doc/plan relation; the server row never needs this field.
   _linkedObject?: { type: string; id: string };
+  // Local only: the priority milestone and plan a compose stub's create links
+  // (store/composeSlice bindComposeStart), kept for a heal like _linkedObject.
+  _start?: SessionStart;
   // Local only: a stub started from its project's own composer, so the create
   // makes it the project's canonical session (session-projects.md SP4).
   _projectDefault?: boolean;
@@ -902,6 +905,9 @@ export type InboxSession = {
   agent_name?: string | null;
   active_plan?: PlanRef;
   active_task?: TaskRef;
+  /** The priority the pass mapped this session to (a priorities _id) and its milestone's key. Read through sessionPriorityOf. */
+  priority_id?: string | null;
+  priority_step_key?: string | null;
   worktree_name?: string | null;
   worktree_branch?: string | null;
   // "Run in the cloud", before the host has it: the row is parked on the cloud
@@ -4952,18 +4958,17 @@ export function visualOrderSessions(
     walk?: InboxWalk;
     // Which project each session works in, for project chips (store/workProjects).
     projectOf?: (sessionId: string) => string | null;
+    // The Priorities view: each status section, Decisions included, sorted by
+    // the viewer's priority a session serves (store/priorityOrder). Pinned
+    // keeps the person's order.
+    priorityPlaceOf?: (s: InboxSession) => PriorityStanding;
+    // A conversation's loaded transcript, for the hosted stop rule's fallback
+    // (lib/hostedNotice hostedStopOf).
+    messagesOf?: (id: string) => readonly any[] | undefined;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
-  // done, working, dormant — the chokepoint's own sections, so the walk and
-  // the render can never disagree.
-  const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
-    [placed.needsInput, "needs_input"], [placed.done, "done"],
-    [placed.working, "working"], [placed.dormant, "dormant"],
-  ];
-  const result: InboxSession[] = [];
+  const placeOf = opts.priorityPlaceOf;
   // The shared predicate and section rule (chipFilterSection) so the walk and
   // the render can never disagree, including the mid-create stub carve-out.
   const chipOn = !!(projectFilters?.length || opts.bucketFilters?.length);
@@ -4973,11 +4978,31 @@ export function visualOrderSessions(
     bucketByConv: opts.bucketByConv ?? {},
     projectOf: opts.projectOf,
   });
-  for (const [section, key] of sections) {
+  const chipped = (rows: InboxSession[]) => (chipOn ? chipFilterSection(rows, placed.subsByParent, matches) : rows);
+  // Needs You splits as the panel draws it: the person's real turns, then the
+  // hosted conversations that ended on a stop ("Couldn't finish").
+  const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
+  // Same order the status view renders: questions, pinned, new, needs input,
+  // couldn't finish, done, working, dormant — the chokepoint's own sections,
+  // so the walk and the render can never disagree.
+  const sections: Array<[InboxSession[], string]> = [
+    [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
+    [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
+    [chipped(placed.working), "working"], [chipped(placed.dormant), "dormant"],
+  ];
+  const result: InboxSession[] = [];
+  for (const [rows, key] of sections) {
     if (collapsed?.[key]) continue;
-    result.push(...(chipOn ? chipFilterSection(section, placed.subsByParent, matches) : section));
+    result.push(...(placeOf && key !== "pinned" ? sortByPriority(rows, placeOf) : rows));
   }
-  return opts.walk ? result.filter(walkFilterOf(placed, opts.walk)) : result;
+  if (!opts.walk) return result;
+  const walked = result.filter(walkFilterOf(placed, opts.walk));
+  if (!placeOf || (opts.walk !== "needsYou" && opts.walk !== "done")) return walked;
+  // A Needs You or Done walk also takes the New rows whose turn settled on the
+  // person, from the section above: in the Priorities view the jump lands on
+  // the highest-ranked of them, and never on a "Couldn't finish" row first.
+  const stopped = new Set(needs.stopped.map((s) => s._id));
+  return [...sortByPriority(walked.filter((s) => !stopped.has(s._id)), placeOf), ...walked.filter((s) => stopped.has(s._id))];
 }
 
 // Canonical label ordering — ONE comparator drives the chip row, the "by
@@ -5468,6 +5493,9 @@ export function groupSessionsByPlan(
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
+import { priorityPlaceReader, sortByPriority, type PriorityStanding } from "./priorityOrder";
+import { splitHostedStops } from "../lib/hostedNotice";
+import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
@@ -5614,9 +5642,18 @@ export function resolveInboxCompact(ui: { inbox_compact?: boolean; visual_style?
 
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
-// which ordering is on screen.
-export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } | undefined): InboxViewMode {
-  return ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
+// which ordering is on screen. A stored Priorities view in a workspace with
+// Priorities off reads as the grouped view, so nothing sorts or labels by the
+// cached ranks there.
+export type InboxViewModeSource = {
+  clientState?: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; active_team_id?: string | null } };
+  teams?: readonly unknown[] | null;
+};
+export function resolveInboxViewMode(s: InboxViewModeSource): InboxViewMode {
+  const ui = s.clientState?.ui;
+  const mode = ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
+  if (mode === "priorities" && !workspaceFeatureEnabled((s.teams ?? []) as Parameters<typeof workspaceFeatureEnabled>[0], ui?.active_team_id, "priorities")) return "grouped";
+  return mode;
 }
 
 // Whether the flat views list oldest first. Shared by the panel's render and
@@ -6090,7 +6127,8 @@ export function manualOrderKeysForDrop(rows: InboxSession[], opts: {
 // is what re-plans the inbox warm loop (hooks/inboxWarm.ts). Lives beside the
 // chokepoint so the synced view keys are read inside the store, nowhere else.
 export function visualOrderViewSig(state: {
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean; active_team_id?: string | null } };
+  teams?: readonly unknown[] | null;
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
@@ -6102,7 +6140,7 @@ export function visualOrderViewSig(state: {
   const ui = state.clientState.ui;
   const terms = (list?: readonly BucketFilterTerm[]) => (list ?? []).map((t) => `${t.exclude ? "-" : "+"}${t.id}`).join(",");
   return [
-    resolveInboxViewMode(ui), resolveShowOld(ui), ui?.inbox_scope ?? "mine", resolveShowSubagents(ui),
+    resolveInboxViewMode(state), resolveShowOld(ui), ui?.inbox_scope ?? "mine", resolveShowSubagents(ui),
     state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
     terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
     nestsWorkers(ui), resolveInboxOldestFirst(ui),
@@ -6154,6 +6192,10 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // The viewer's machines: the machine lens groups only these.
   machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
+  // The priorities the Priorities view orders by (store/priorityOrder).
+  priorities?: Record<string, PriorityRow>;
+  // Loaded transcripts: the hosted stop rule's fallback splits "Couldn't finish" out of Needs You.
+  messages?: Record<string, readonly any[] | undefined>;
   // What the org lenses group by (orgLensSourcesOf); optional for callers
   // (tests) that model no org.
 } & Partial<Omit<OrgLensState, "sessions" | "currentUser">> & {
@@ -6193,7 +6235,7 @@ export function computeVisualOrder(state: {
     return opts.walk ? order.filter(walkFilterOf(placed, opts.walk)) : order;
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
-  const mode = resolveInboxViewMode(state.clientState.ui);
+  const mode = resolveInboxViewMode(state);
   const collapsed = state.collapsedSections ?? {};
   if (mode === "time" || mode === "recent") {
     // The flat views render under a single collapsible "All" section; collapsing
@@ -6220,9 +6262,11 @@ export function computeVisualOrder(state: {
   const base = visualOrderSessions(placed, chipProjectFilters(state), {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
-    collapsedSections: mode === "grouped" ? collapsed : undefined,
+    collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
     walk: opts.walk,
     projectOf: projectOfFromState(state),
+    priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state.priorities, state.currentUser?._id, state.sessions) : undefined,
+    messagesOf: (id) => state.messages?.[id],
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
@@ -11457,7 +11501,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.extraBucketFilters = next.extras;
     commitChipFilterChange(this, prev);
   }),
-  inboxViewMode: () => resolveInboxViewMode(get().clientState.ui),
+  inboxViewMode: () => resolveInboxViewMode(get()),
   setInboxViewMode: (mode: InboxViewMode) => {
     const state = get();
     const prev = snapshotInboxViewFromDraft(state);
@@ -12802,7 +12846,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // first_message/first_message_client_id ride the dispatch only: a hosted
   // conversation's start queues its first message server side, matched to
   // the optimistic bubble by its client id.
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } } & SessionStart) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -12896,6 +12940,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         agent_type: agentType,
         session_id: stubId,
         ...(cur?._linkedObject?.type && cur?._linkedObject?.id ? { linked_object: cur._linkedObject } : {}),
+        ...cur?._start,
         ...(fallback?.firstMessage
           ? { first_message: fallback.firstMessage.content, first_message_client_id: fallback.firstMessage.clientId }
           : {}),
@@ -12944,6 +12989,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
         ? { linked_object: cur._linkedObject }
         : {}),
+      ...cur?._start,
       // The project the stub was started in (session-projects.md SP1), and
       // whether it is the project's own composer (its canonical session).
       ...(cur?.project_id ? { project_id: cur.project_id, ...(cur._projectDefault ? { project_default: true } : {}) } : {}),
@@ -13746,7 +13792,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   freezeRecentForNav: () => {
-    if (resolveInboxViewMode(get().clientState.ui) !== "recent") return;
+    if (resolveInboxViewMode(get()) !== "recent") return;
     // Snapshot the live order once; later presses within the window just re-arm
     // the thaw timer so the same frozen order keeps being walked.
     if (!get().recentFreezeOrder) {

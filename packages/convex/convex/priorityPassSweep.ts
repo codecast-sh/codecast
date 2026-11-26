@@ -1,8 +1,11 @@
-// The priorities sweep (crons.ts, every SWEEP_EVERY_MS): which (person,
-// workspace) pairs get a pass (priorityPassRun.ts runPass). The cron reads the
-// teams in pages and fans out one sweep per team with the feature on, so no
-// one read covers every team; each team's sweep probes its members' pairs
-// within its own caps.
+// The priorities safety sweep (crons.ts, daily): which (person, workspace)
+// pairs get a pass that no activity asked for (priorityPassSchedule.ts asks on
+// pins, answers, task closes and corrections). It finds what no hook sees:
+// typed messages in a session that never pinned, a session that left its
+// workspace, a priority that needs a rewrite, a correction no pass has read,
+// a chain cut short. The cron reads the teams in pages and fans out one sweep
+// per team with the feature on, so no one read covers every team; each team's
+// sweep probes its members' pairs within its own caps.
 
 import { v } from "convex/values";
 import { internalAction, internalQuery } from "./functions";
@@ -12,12 +15,12 @@ import { sessionVisibility, type SessionVisibility } from "./lib/prioritySession
 import { teamHasFeature } from "./lib/teamFeatureGuard";
 import { PRIORITY_PASS_CAPS } from "./lib/priorityPass";
 import { LATE_MARGIN_MS, RESERVATION_TTL_MS, activitySince, cursorFor, cursorState, inWorkspace, livePriorities } from "./priorityPassInputs";
+import { scheduledPassAt } from "./priorityPassSchedule";
 
 /** (person, workspace) pairs one team's sweep runs; the rest wait for the next sweep. */
 export const SWEEP_MAX_PAIRS = 40;
-/** The sweep runs on the hour every three hours UTC (crons.ts), so when the next one runs is known. */
-export const SWEEP_EVERY_MS = 3 * 60 * 60_000;
-export const nextSweepAt = (now: number) => Math.floor(now / SWEEP_EVERY_MS) * SWEEP_EVERY_MS + SWEEP_EVERY_MS;
+/** The sweep runs once a day (crons.ts). */
+export const SWEEP_EVERY_MS = 24 * 60 * 60_000;
 /**
  * A team's sweep looks for strays among a pair's newest SWEEP_STRAY_PER_PAIR
  * priorities, a few sessions each (the pass reads as many), and among
@@ -36,16 +39,16 @@ const SWEEP_STAGGER_MS = 5_000;
 const SWEEP_ACTIVITY_READ = 300;
 // Codegen catches up on the next push.
 const self = (internal as any).priorityPassSweep;
-const run = (internal as any).priorityPassRun;
+const schedule = (internal as any).priorityPassSchedule;
 
 type Pair = { user_id: Id<"users">; workspace: string };
 
 /**
  * When a person's pass in a workspace runs, for the list: how far its cursor
  * lags now (null before any run settled), and the next pass (now while one is
- * running, else the next sweep).
+ * running, else the one their activity scheduled, else null).
  */
-export async function passTiming(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<{ behind_by_ms: number | null; next_pass_at: number }> {
+export async function passTiming(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<{ behind_by_ms: number | null; next_pass_at: number | null }> {
   const state = await cursorState(ctx, userId, workspace);
   const latest: Doc<"priority_pass_runs"> | null = await ctx.db
     .query("priority_pass_runs")
@@ -53,7 +56,7 @@ export async function passTiming(ctx: { db: any }, userId: Id<"users">, workspac
     .order("desc")
     .first();
   const running = latest?.status === "running" && latest.started_at > now - RESERVATION_TTL_MS;
-  return { behind_by_ms: state ? Math.max(0, now - state.cursor_at) : null, next_pass_at: running ? now : nextSweepAt(now) };
+  return { behind_by_ms: state ? Math.max(0, now - state.cursor_at) : null, next_pass_at: running ? now : await scheduledPassAt(ctx, userId, workspace, now) };
 }
 
 const flagged = async (ctx: { db: any }, team: Doc<"teams"> | null): Promise<boolean> =>
@@ -76,8 +79,8 @@ export const flaggedTeams = internalQuery({
  * in their personal workspace; those with a typed message or a pin there since
  * the cursor, or more activity since then than the probe reads (the pass moves
  * the cursor past what is not its own), or with a priority that holds a
- * session since gone from the workspace or needs a rewrite. At most
- * SWEEP_MAX_PAIRS.
+ * session since gone from the workspace or needs a rewrite, or a correction
+ * no pass has read. At most SWEEP_MAX_PAIRS.
  */
 export const sweepCandidates = internalQuery({
   args: { team_id: v.id("teams"), now: v.optional(v.number()) },
@@ -130,7 +133,7 @@ export const sweepCandidates = internalQuery({
     const start = quiet.length ? Math.floor(now / SWEEP_EVERY_MS) % quiet.length : 0;
     for (const pair of [...quiet.slice(start), ...quiet.slice(0, start)]) {
       if (out.length >= SWEEP_MAX_PAIRS) break;
-      if (await needsRewrite(ctx, pair) || (strayBudget.left > 0 && (await holdsStray(ctx, vis, pair, now, strayBudget)))) out.push(pair);
+      if (await needsRewrite(ctx, pair) || (await correctionPending(ctx, pair)) || (strayBudget.left > 0 && (await holdsStray(ctx, vis, pair, now, strayBudget)))) out.push(pair);
     }
     return out;
   },
@@ -141,6 +144,15 @@ async function needsRewrite(ctx: { db: any }, pair: Pair): Promise<boolean> {
   return !!(await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_rewrite", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("needs_rewrite", true))
+    .first());
+}
+
+/** Whether the person wrote a correction in the pair's workspace that no pass has read: one indexed read. */
+async function correctionPending(ctx: { db: any }, pair: Pair): Promise<boolean> {
+  return !!(await ctx.db
+    .query("priority_corrections")
+    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("status", "pending"))
+    .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
     .first());
 }
 
@@ -159,7 +171,7 @@ async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: Pair, 
   return false;
 }
 
-/** Every SWEEP_EVERY_MS (crons.ts): reads the teams a page at a time and schedules a sweep for each one with the feature on, a few seconds apart. */
+/** Daily (crons.ts): reads the teams a page at a time and schedules a sweep for each one with the feature on, a few seconds apart. */
 export const sweep = internalAction({
   args: {},
   handler: async (ctx): Promise<number> => {
@@ -174,12 +186,12 @@ export const sweep = internalAction({
   },
 });
 
-/** One team's sweep: a pass for each of its pairs with new work, a few seconds apart. Also the sweep a team gets the moment the feature turns on (teamFeatures afterFeatureChange). */
+/** One team's sweep: a pass for each of its pairs with new work, a few seconds apart, through each pair's schedule (so its gap holds). Also the sweep a team gets the moment the feature turns on (teamFeatures afterFeatureChange). */
 export const sweepTeam = internalAction({
   args: { team_id: v.id("teams") },
   handler: async (ctx, args): Promise<number> => {
     const pairs: Pair[] = await ctx.runQuery(self.sweepCandidates, { team_id: args.team_id });
-    for (const [i, pair] of pairs.entries()) await ctx.scheduler.runAfter(i * SWEEP_STAGGER_MS, run.runPass, pair);
+    if (pairs.length) await ctx.runMutation(schedule.requestMany, { pairs, stagger_ms: SWEEP_STAGGER_MS });
     return pairs.length;
   },
 });

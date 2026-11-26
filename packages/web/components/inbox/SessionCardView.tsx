@@ -9,7 +9,6 @@ import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatIdleDuration, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
 import { isHostedAgentType } from "@codecast/shared/contracts";
-import { AvatarImg } from "../../lib/avatarCache";
 import { ImageLightbox } from "../ImageGallery";
 import { FormattedSummary } from "../FormattedSummary";
 import { sessionCardSummary } from "../../lib/sessionSummary";
@@ -26,7 +25,6 @@ import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
 import { IdentityFace, SessionIdentityLine } from "../identity";
 import { sessionIdentity } from "../../lib/sessionIdentity";
-import { RoleFace } from "../org/RoleFace";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { BranchCodeLink } from "../repo/RepositoryLinks";
 import { LinkedPrChips, PrStatusChip } from "../PrStatusChip";
@@ -34,6 +32,7 @@ import type { LinkedPr } from "../../lib/sessionPullRequests";
 import { SessionShipChip } from "../ship/SessionShipChip";
 import type { SessionCardViewProps } from "./sessionCardTypes";
 import { ACTIVE_CARD_CLASS } from "./sessionCardTypes";
+import { PriorityRankChip } from "./PriorityRankChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
@@ -54,6 +53,7 @@ import {
   UnreadDot,
 } from "./SessionCardParts";
 import { SessionCloseTip } from "./SessionCloseTip";
+import { CardAuthor } from "./CardAuthor";
 
 const NO_PRS: readonly LinkedPr[] = [];
 
@@ -75,6 +75,7 @@ export function SessionCardView({
   liveTitle,
   isFavorite,
   sessionLabel,
+  priorityRank,
   variant = "default",
   sectionStatus,
   forkColorKey,
@@ -649,25 +650,8 @@ export function SessionCardView({
           </button>
         )}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
-          {author && (
-            <span className="flex items-center gap-1 min-w-0 max-w-[130px]" title={`${author.name}'s session`}>
-              {author.role ? (
-                <RoleFace role={author.role} size={14} title={author.name} prefs={chrome.prefs} />
-              ) : (
-                <AvatarImg
-                  src={author.avatar}
-                  alt={author.name}
-                  className="w-3.5 h-3.5 rounded-full object-cover"
-                  fallback={
-                    <span className="w-[18px] h-[18px] rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-mark font-semibold leading-none">
-                      {author.name.charAt(0).toUpperCase()}
-                    </span>
-                  }
-                />
-              )}
-              <span className="text-meta font-medium text-sol-violet truncate">{author.role ? author.name : author.name.split(" ")[0]}</span>
-            </span>
-          )}
+          {priorityRank !== undefined && <PriorityRankChip rank={priorityRank} />}
+          {author && <CardAuthor author={author} prefs={chrome.prefs} />}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
           <SessionProjectChip
             project={project}

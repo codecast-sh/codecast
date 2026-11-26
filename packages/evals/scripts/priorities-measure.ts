@@ -9,6 +9,21 @@
 //   bun packages/evals/scripts/priorities-measure.ts --golden ~/.codecast/emergent-goals/golden/jason.json \
 //     --user <email|user id> [--workspace all|personal|team:<id>] [--from 2026-11-10 --to 2026-11-24] [--chunk N] [--system-file <path>] [--out <dir>]
 //     --system-file replays the pass under a candidate system prompt (its sha goes in the result).
+//     --seed-golden starts every workspace's pass holding the golden priorities (titles and critical
+//     steps with their tasks, no sessions, nothing done), so session mapping measures placement given the person's goals.
+//   bun packages/evals/scripts/priorities-measure.ts --golden <path> --user <email|user id> --classifier [--holdout 4] [--model <id>]
+//     runs the per-session classifier (priorityClassifierEval:evalClassify, deployed to prod: deploy first) instead of
+//     the pass, over the same window, against the golden priorities seeded as open goals (done ones too: they were open
+//     during the window), asking about each session as live would have, when live would have (its first title or pin,
+//     and its first pin after a "new"). Every --holdout'th golden priority (4th, 8th, ...; 0 holds none out) is left out
+//     of the seed, so its sessions test "new". No judge: a seeded pri-N is its golden priority. It reports
+//       placement      sessions of seeded goals placed under their own goal
+//       new detection  sessions of held-out goals left unplaced
+//       combined       both together: the verdict, at the session bar
+//       standing       standing-role sessions left unplaced (free: the classifier never asks about them)
+//       as the pass scores it  placement and standing together, the quantity of the pass's seeded session mapping
+//     Read "as the pass scores it" against the pass's 0.86 (its --seed-golden run) only at --holdout 0, where both
+//     replays hold the same goals; with goals held out the seed has fewer distractors, so it reads a little high.
 //   bun packages/evals/scripts/priorities-measure.ts --rescore <result.json> [--golden <path>] [--out <dir>]
 //     scores a saved run's produced priorities again, without running the pass.
 //
@@ -25,6 +40,7 @@ import { join, resolve } from 'node:path';
 
 import { STRONG_MODEL, modelCost, parseJsonBlock, postMessages, replyText } from '../../convex/convex/lib/anthropic';
 import { PRIORITY_PASS_MODEL, PRIORITY_PASS_SYSTEM, type PassPriority } from '../../convex/convex/lib/priorityPass';
+import { PRIORITY_CLASSIFIER_MODEL, type ClassifierChoice } from '../../convex/convex/lib/priorityClassifier';
 import { evalsApiKey } from '../src/adapters/apiCall';
 import { REPO_ROOT } from '../src/paths';
 
@@ -213,6 +229,39 @@ export function modelJudge(apiKey: string) {
   return { judge, spent };
 }
 
+// ---------------------------------------------------------------- the classifier's score
+
+/** The golden priorities held out of a classifier replay's seed: every `every`th (none at 0). */
+export function heldOut(golden: Golden, every: number): Set<string> {
+  return new Set(every > 0 ? golden.priorities.filter((_, i) => i % every === every - 1).map((g) => g.id) : []);
+}
+
+/**
+ * The classifier's session score over the labeled sessions the window read.
+ * A seeded pri-N is golden priority N (seedState numbering). A session of a
+ * seeded goal is right when placed under that goal (placement), one of a
+ * held-out goal when left unplaced (new detection), and a standing one when
+ * left unplaced (standing, never asked about, so free).
+ */
+export function scoreClassifier(golden: Golden, produced: Produced[], read: Map<string, string>, held: Set<string>) {
+  const goldenOf = (key: string) => golden.priorities[Number(/:pri-(\d+)$/.exec(key)?.[1] ?? 0) - SEED_BASE - 1]?.id ?? null;
+  const holder = new Map<string, string>();
+  for (const p of produced) for (const id of p.sessions) holder.set(id, p.key);
+  const labels: Array<[string, string]> = [...Object.entries(golden.session_labels), ...golden.standing_sessions.map((id) => [id, 'standing'] as [string, string])];
+  const results = labels.filter(([id]) => read.has(id)).map(([session, label]) => {
+    const by = holder.get(session) ?? null;
+    const kind = label === 'standing' ? ('standing' as const) : held.has(label) ? ('new' as const) : ('placement' as const);
+    const correct = kind === 'placement' ? by !== null && goldenOf(by) === label : by === null;
+    return { session, title: read.get(session) ?? '', label, kind, produced: by, correct };
+  });
+  const of = (kinds: string[]) => {
+    const rs = results.filter((r) => kinds.includes(r.kind));
+    return { correct: rs.filter((r) => r.correct).length, of: rs.length, score: ratio(rs.filter((r) => r.correct).length, rs.length) };
+  };
+  const metrics = { placement: of(['placement']), new: of(['new']), combined: of(['placement', 'new']), standing: of(['standing']), as_pass: of(['placement', 'standing']) };
+  return { metrics, pass: (metrics.combined.score ?? 0) >= BAR.sessions, results, not_read: labels.filter(([id]) => !read.has(id)).map(([id]) => id) };
+}
+
 // ---------------------------------------------------------------- the run
 
 type EvalResult = {
@@ -250,7 +299,7 @@ const castTaskStatus: TaskStatus = async (ids) => {
 };
 
 /** What a run read and produced: from a fresh pass in production, or from a saved result.json (--rescore). */
-type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string } };
+type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string; seed_golden?: boolean; classifier?: boolean; model?: string; holdout?: number } };
 
 async function main() {
   const arg = (name: string, fallback?: string) => {
@@ -265,10 +314,11 @@ async function main() {
   const golden: Golden = JSON.parse(readFileSync(home(goldenPath), 'utf8'));
   const out = home(arg('out', join(homedir(), '.codecast', 'emergent-goals', 'calibration', new Date().toISOString().replace(/[:.]/g, '-'))));
   if (out === REPO_ROOT || out.startsWith(`${REPO_ROOT}/`)) throw new Error(`--out ${out} is inside the repo; the golden set and results are real content and stay outside it`);
+  const classifier = rescore ? !!rescore.args.classifier : process.argv.includes('--classifier');
   const key = evalsApiKey();
-  if (!key) throw new Error('no evals API key: set CODECAST_EVALS_ANTHROPIC_KEY or the keychain item (./evals doctor)');
+  if (!key && !classifier) throw new Error('no evals API key: set CODECAST_EVALS_ANTHROPIC_KEY or the keychain item (./evals doctor)');
 
-  const run = rescore
+  const run: PassRun = rescore
     ? {
         produced: rescore.produced as Produced[],
         read: new Map<string, string>(rescore.workspaces.filter((w: any) => w.scored).flatMap((w: any) => w.sessions_read.map((s: any) => [s.id, s.title]))),
@@ -277,14 +327,17 @@ async function main() {
         passUsd: rescore.cost.pass_usd as number,
         args: { ...rescore.args, golden: goldenPath },
       }
-    : runPasses(golden, goldenPath, arg);
+    : classifier
+      ? runClassifier(golden, goldenPath, arg)
+      : runPasses(golden, goldenPath, arg);
   const { produced, read, args } = run;
+  if (classifier) return reportClassifier(golden, run, out, rescore ? home(arg('rescore')) : null);
   // One workspace is scored only against the golden priorities whose sessions it read.
   const scopedGolden: Golden = args.workspace === 'all'
     ? golden
     : { ...golden, priorities: golden.priorities.filter((g) => Object.entries(golden.session_labels).some(([s, id]) => id === g.id && read.has(s))) };
 
-  const { judge, spent } = modelJudge(key);
+  const { judge, spent } = modelJudge(key!);
   const s = await score(scopedGolden, produced, read, judge, castTaskStatus);
 
   const fmt = (n: number | null) => (n == null ? '  -  ' : n.toFixed(2));
@@ -323,16 +376,59 @@ async function main() {
   console.error(`wrote ${out}`);
 }
 
-/** Runs evalPass in production for each workspace the user holds, resuming until each window is read. */
-function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallback?: string) => string): PassRun {
+/** Seeded priorities are numbered from here, clear of the person's real pri-N (a `serves` hint names those). */
+export const SEED_BASE = 100_000;
+
+/** The classifier replay's summary: its own scores (scoreClassifier), not the pass's. */
+function reportClassifier(golden: Golden, run: PassRun, out: string, rescoredFrom: string | null) {
+  const { args, produced, read } = run;
+  const held = heldOut(golden, args.holdout ?? 0);
+  const s = scoreClassifier(golden, produced, read, held);
+  const fmt = (m: { correct: number; of: number; score: number | null }) => `${m.score == null ? '  -  ' : m.score.toFixed(2)}  ${m.correct} of ${m.of}`;
+  const placements = (run.workspaces as Array<{ placements?: Array<{ choice: ClassifierChoice | null; asks: Array<{ trigger: string }>; inherited_from?: string }> }>).flatMap((w) => w.placements ?? []);
+  const titleOf = new Map(golden.priorities.map((g) => [g.id, g.title]));
+  const producedTitle = new Map(produced.map((p) => [p.key, p.title]));
+  const lines = [
+    `window ${args.from}..${args.to} · ${run.scoredNames.join(', ')} · classifier ${args.model}${rescoredFrom ? ' · rescored' : ''} · held out ${held.size ? [...held].join(', ') : 'none'} (every ${args.holdout || '-'})`,
+    `placement       ${fmt(s.metrics.placement)} sessions of seeded goals placed under their own goal`,
+    `new detection   ${fmt(s.metrics.new)} sessions of held-out goals left unplaced`,
+    `combined        ${fmt(s.metrics.combined)} (${s.not_read.length} labeled sessions not read)   bar ≥ ${BAR.sessions}`,
+    `standing        ${fmt(s.metrics.standing)} standing sessions left unplaced (never asked about)`,
+    `as the pass scores it ${fmt(s.metrics.as_pass)} placement and standing; the pass's seeded run: 0.86 (compare at --holdout 0)`,
+    `asks            ${placements.filter((p) => p.asks.length).length} sessions asked (${placements.filter((p) => p.asks.length > 1).length} again at their first pin) · ${placements.filter((p) => p.inherited_from).length} inherited from their parent · ${placements.filter((p) => p.choice && p.choice !== 'new').length} placed, ${placements.filter((p) => p.choice === 'new').length} new, ${placements.filter((p) => !p.choice).length} unreadable`,
+    `cost            classifier $${run.passUsd.toFixed(3)}`,
+    ...s.results.filter((r) => !r.correct && r.kind !== 'standing').map((r) => `  wrong ${r.kind.padEnd(9)} ${r.session} "${r.title}" · golden ${r.label} "${titleOf.get(r.label)}" · placed ${r.produced ? `${r.produced} "${producedTitle.get(r.produced)}"` : 'nowhere'}`),
+    `verdict         ${s.pass ? 'PASS' : 'FAIL'} (combined)`,
+  ];
+  console.log(lines.join('\n'));
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, 'result.json'), JSON.stringify({ args, ...(rescoredFrom ? { rescored_from: rescoredFrom } : {}), cost: { pass_usd: run.passUsd }, workspaces: run.workspaces, produced, score: s }, null, 2));
+  writeFileSync(join(out, 'summary.txt'), lines.join('\n') + '\n');
+  console.error(`wrote ${out}`);
+}
+
+/** The golden priorities as the pass would hold them already: titles and critical steps with their tasks, no sessions, nothing done. */
+export function seedState(golden: Golden, window_start: number) {
+  const priorities: PassPriority[] = golden.priorities.map((g, i) => ({
+    short_id: `pri-${SEED_BASE + i + 1}`,
+    title: g.title,
+    summary: g.title,
+    status: g.status === 'done' ? 'done' : 'active',
+    rank: null,
+    rank_set_by: 'pass',
+    serves: null,
+    steps: (g.critical ?? []).map((s, j) => ({ key: `s${j + 1}`, title: s.title, tier: 'critical', tier_set_by: 'person', refs: s.task ? [{ kind: 'task', id: s.task }] : [], done: false })),
+    last_active_at: window_start,
+    sessions: [],
+  }));
+  return { cursor_at: window_start, priorities, tasks: [], next_id: SEED_BASE + priorities.length };
+}
+
+/** The user's workspaces in scope and the window, from the flags. */
+function replayScope(golden: Golden, arg: (name: string, fallback?: string) => string) {
   const scope = arg('workspace', 'all');
   const from = arg('from', golden.window[0]);
   const to = arg('to', golden.window[1]);
-  const chunk = process.argv.includes('--chunk') ? Number(arg('chunk')) : null;
-  // A candidate system prompt replaces the pass's for this replay; the sha says which prompt a result came from.
-  const systemFile = process.argv.includes('--system-file') ? resolve(arg('system-file').replace(/^~/, homedir())) : null;
-  const system = systemFile ? readFileSync(systemFile, 'utf8') : PRIORITY_PASS_SYSTEM;
-  const system_sha = createHash('sha256').update(system).digest('hex').slice(0, 12);
   const targets = convexRun<{ user_id: string; workspaces: Array<{ workspace: string; name: string }> }>('priorityPassEval:evalTargets', { user: arg('user') });
   const workspaces = scope === 'all'
     ? targets.workspaces
@@ -340,17 +436,83 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
       ? targets.workspaces.filter((w) => w.workspace === `user:${targets.user_id}`)
       : targets.workspaces.filter((w) => w.workspace === scope);
   if (!workspaces.length) throw new Error(`no workspace ${scope} for this user`);
-  const window_start = Date.parse(`${from}T00:00:00Z`);
-  const window_end = Date.parse(`${to}T00:00:00Z`) + DAY;
+  return { scope, from, to, user_id: targets.user_id, workspaces, window_start: Date.parse(`${from}T00:00:00Z`), window_end: Date.parse(`${to}T00:00:00Z`) + DAY };
+}
 
+/** What a scored replay produced, keyed `<workspace name>:<pri-N>`. */
+function producedOf(runs: Array<{ name: string; priorities: PassPriority[] }>): Produced[] {
+  return runs.flatMap((r) => r.priorities.map((p) => ({
+    key: `${r.name}:${p.short_id}`,
+    workspace: r.name,
+    title: p.title,
+    summary: p.summary,
+    status: p.status,
+    steps: p.steps.map((s) => ({ title: s.title, tier: s.tier, done: s.done })),
+    sessions: p.sessions.map((s) => s.id),
+  })));
+}
+
+type ClassifierEval = { placements: Array<{ session: string; title: string; choice: ClassifierChoice | null; asks: Array<{ trigger: string }>; inherited_from?: string }>; priorities: PassPriority[]; sessions_read: Array<{ id: string; title: string }>; cost_usd: number; resume?: unknown };
+
+/** The classifier's seed: the golden priorities but the held-out ones, each open, as it was during the window. */
+export function classifierSeed(golden: Golden, window_start: number, held: Set<string>): PassPriority[] {
+  return seedState(golden, window_start).priorities.filter((_, i) => !held.has(golden.priorities[i]!.id)).map((p) => ({ ...p, status: 'active' as const }));
+}
+
+/** Runs the classifier in production for each workspace in scope against the seeded golden priorities, resuming until each window is read. */
+function runClassifier(golden: Golden, goldenPath: string, arg: (name: string, fallback?: string) => string): PassRun {
+  const { scope, from, to, user_id, workspaces, window_start, window_end } = replayScope(golden, arg);
+  const model = process.argv.includes('--model') ? arg('model') : PRIORITY_CLASSIFIER_MODEL;
+  const holdout = Number(arg('holdout', '4'));
+  const held = heldOut(golden, holdout);
+  const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
+  const runs: Array<{ workspace: string; name: string; result: ClassifierEval; scored: boolean }> = [];
+  for (const w of workspaces) {
+    const result: ClassifierEval = { placements: [], priorities: classifierSeed(golden, window_start, held), sessions_read: [], cost_usd: 0 };
+    let resume: unknown;
+    do {
+      console.error(`${w.name}: classifier ${resume ? '(resumed)' : ''}…`);
+      const r = convexRun<ClassifierEval>('priorityClassifierEval:evalClassify', { user_id, workspace: w.workspace, window_start, window_end, model, ...(resume ? { resume } : { priorities: result.priorities }) });
+      result.placements.push(...r.placements);
+      result.priorities = r.priorities;
+      result.cost_usd += r.cost_usd;
+      result.sessions_read.push(...r.sessions_read);
+      resume = r.resume;
+    } while (resume);
+    const scored = scope !== 'all' || result.sessions_read.some((s) => labeled.has(s.id));
+    runs.push({ ...w, result, scored });
+    const tally = (f: (c: unknown) => boolean) => result.placements.filter((p) => f(p.choice)).length;
+    console.error(`${w.name}: ${result.sessions_read.length} sessions, ${result.placements.length} classified (${tally((c) => !!c && c !== 'new')} placed, ${tally((c) => c === 'new')} new, ${tally((c) => !c)} unreadable), $${result.cost_usd.toFixed(3)}${scored ? '' : ' (no golden sessions: not scored)'}`);
+  }
+  const scoredRuns = runs.filter((r) => r.scored);
+  return {
+    read: new Map(scoredRuns.flatMap((r) => r.result.sessions_read.map((s) => [s.id, s.title] as [string, string]))),
+    produced: producedOf(scoredRuns.map((r) => ({ name: r.name, priorities: r.result.priorities }))),
+    scoredNames: scoredRuns.map((r) => r.name),
+    workspaces: runs.map((r) => ({ workspace: r.workspace, name: r.name, scored: r.scored, sessions_read: r.result.sessions_read, cost_usd: r.result.cost_usd, placements: r.result.placements })),
+    passUsd: runs.reduce((sum, r) => sum + r.result.cost_usd, 0),
+    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk: null, seed_golden: true, classifier: true, model, holdout },
+  };
+}
+
+/** Runs evalPass in production for each workspace the user holds, resuming until each window is read. */
+function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallback?: string) => string): PassRun {
+  const { scope, from, to, user_id, workspaces, window_start, window_end } = replayScope(golden, arg);
+  const chunk = process.argv.includes('--chunk') ? Number(arg('chunk')) : null;
+  // A candidate system prompt replaces the pass's for this replay; the sha says which prompt a result came from.
+  const systemFile = process.argv.includes('--system-file') ? resolve(arg('system-file').replace(/^~/, homedir())) : null;
+  const system = systemFile ? readFileSync(systemFile, 'utf8') : PRIORITY_PASS_SYSTEM;
+  const system_sha = createHash('sha256').update(system).digest('hex').slice(0, 12);
+
+  const seed = process.argv.includes('--seed-golden');
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   const runs: Array<{ workspace: string; name: string; result: EvalResult; scored: boolean }> = [];
   for (const w of workspaces) {
     const result: EvalResult = { outputs: [], priorities: [], cost_usd: 0, sessions_read: [], omitted: [] };
-    let resume: unknown;
+    let resume: unknown = seed ? seedState(golden, window_start) : undefined;
     do {
       console.error(`${w.name}: pass ${resume ? '(resumed)' : ''}…`);
-      const r = convexRun<EvalResult>('priorityPassEval:evalPass', { user_id: targets.user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}), ...(systemFile ? { system } : {}) });
+      const r = convexRun<EvalResult>('priorityPassEval:evalPass', { user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}), ...(systemFile ? { system } : {}) });
       result.outputs.push(...r.outputs);
       result.priorities = r.priorities;
       result.cost_usd += r.cost_usd;
@@ -367,19 +529,11 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
   const scoredRuns = runs.filter((r) => r.scored);
   return {
     read: new Map(scoredRuns.flatMap((r) => r.result.sessions_read.map((s) => [s.id, s.title] as [string, string]))),
-    produced: scoredRuns.flatMap((r) => r.result.priorities.map((p) => ({
-      key: `${r.name}:${p.short_id}`,
-      workspace: r.name,
-      title: p.title,
-      summary: p.summary,
-      status: p.status,
-      steps: p.steps.map((s) => ({ title: s.title, tier: s.tier, done: s.done })),
-      sessions: p.sessions.map((s) => s.id),
-    }))),
+    produced: producedOf(scoredRuns.map((r) => ({ name: r.name, priorities: r.result.priorities }))),
     scoredNames: scoredRuns.map((r) => r.name),
     workspaces: runs.map((r) => ({ workspace: r.workspace, name: r.name, scored: r.scored, sessions_read: r.result.sessions_read, omitted: r.result.omitted, cost_usd: r.result.cost_usd, outputs: r.result.outputs })),
     passUsd: runs.reduce((sum, r) => sum + r.result.cost_usd, 0),
-    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk, system_file: systemFile, system_sha },
+    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk, system_file: systemFile, system_sha, seed_golden: seed },
   };
 }
 

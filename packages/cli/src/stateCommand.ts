@@ -25,6 +25,7 @@ import {
   THREAD_STATE_STATUS_LABEL,
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
+import { parseServesHint } from "@codecast/shared/contracts/priorities";
 import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
 import { commandGroup } from "./commandGroups.js";
 
@@ -169,6 +170,37 @@ function printState(text: string, provenance: string): void {
   if (provenance) console.log(`  ${fmt.muted(provenance)}`);
 }
 
+/**
+ * A done pin with no --serves closes no milestone (it means the turn was
+ * delivered). When the session is linked to one, the server names it, and
+ * this line says how to close it.
+ */
+/** Why a done pin naming its milestone closed nothing (the server's serves_refused reason). */
+const REFUSED: Record<string, (serves: string) => string> = {
+  worker: (s) => `--serves ${s}: a worker's pin doesn't close a milestone; the session that started it closes it`,
+  machine: (s) => `--serves ${s}: a role's, trigger's or workflow's pin doesn't close a milestone`,
+  done: (s) => `--serves ${s} is already done; nothing changed`,
+  person: (s) => `--serves ${s}: the person marked this milestone not done; nothing changed`,
+};
+
+export function servesHint(result: {
+  milestone?: { serves: string; title: string } | null;
+  serves_mismatch?: { serves: string; milestone: string } | null;
+  serves_unlinked?: { serves: string } | null;
+  serves_refused?: { serves: string; reason: string } | null;
+  serves_decided_by?: "tasks" | "pull_requests" | null;
+}, serves?: string): string | null {
+  const r = result.serves_refused;
+  if (r) return REFUSED[r.reason]?.(r.serves) ?? `--serves ${r.serves}: nothing closed`;
+  if (result.serves_decided_by) return `${serves ?? "this milestone"} closes when its ${result.serves_decided_by === "tasks" ? "tasks close" : "pull requests merge"}; the pin closed nothing`;
+  const x = result.serves_mismatch;
+  if (x) return `--serves ${x.serves} doesn't match this session's milestone ${x.milestone}; nothing closed`;
+  const u = result.serves_unlinked;
+  if (u) return `this session isn't on ${u.serves.split("/")[0]} yet; the pin is kept and counts once it's linked`;
+  const m = result.milestone;
+  return m ? `Linked to ${m.serves} ${m.title}: if this finished it, re-pin with --serves ${m.serves}` : null;
+}
+
 export function registerStateCommand(program: Command, deps: PublishDeps): void {
   program
     .command("state")
@@ -179,8 +211,9 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       "Who acts next: working (default) | blocked | done | dormant; files the session under Needs You / Done / Sleeping when the turn ends",
     )
     .option("--for <session>", "Target another session (default: the current one)")
+    .option("--serves <pri-N/sK>", "The priority or milestone this session serves: a hint the priorities pass weighs, never a link")
     .option("--json", "Machine-readable output")
-    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string }) => {
+    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string; serves?: string }) => {
       const args = rawArgs ?? [];
 
       const intent = parseStateArgs(args, options.for);
@@ -198,6 +231,15 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       const askLabel = intent.mode === "set" ? doneAskLabel(status, intent.text) : null;
       if (askLabel) {
         console.error(doneWithAskRefusal(askLabel));
+        process.exit(1);
+      }
+      const serves = options.serves === undefined ? undefined : parseServesHint(options.serves);
+      if (serves === null) {
+        console.error(`"${options.serves}" is not a priority or milestone: --serves pri-N or pri-N/sK, like pri-3/s2`);
+        process.exit(1);
+      }
+      if (intent.mode !== "set" && serves !== undefined) {
+        console.error(`--serves goes with a state to pin: cast state --serves ${serves} "<text>"`);
         process.exit(1);
       }
       const session = intent.session || deps.detectCurrentSessionId();
@@ -234,7 +276,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       // station's edges route on it.
       const stationResult = intent.mode === "set" ? threadStateResult(intent.text) : null;
       // Setting the pin is safe to repeat, so a gateway 5xx or a timeout is retried before it is reported.
-      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined }, { retries: 2 });
+      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined, serves }, { retries: 2 });
       // Keep the reminder hook's local stamp in step with the write — but only
       // for THIS session. `--for` writes to somebody else's thread, and their
       // agent's reminder is keyed to their own machine's stamp, not ours.
@@ -280,5 +322,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       if ((result as { resurfaced?: boolean }).resurfaced) {
         console.log(`${c.yellow}!${c.reset} this session was hidden; declaring ${result.status ?? status} returned it to the user's inbox`);
       }
+      const hint = servesHint(result, serves);
+      if (hint) console.log(fmt.muted(hint));
     });
 }

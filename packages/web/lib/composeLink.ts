@@ -1,5 +1,6 @@
 // A link from outside the app that opens a NEW session's composer with a
-// draft already typed (`/inbox?compose=<text>[&task=ct-N][&agent=…][&project=…]`),
+// draft already typed (`/inbox?compose=<text>[&task=ct-N][&agent=…][&project=…]
+// [&priority=pri-N[&step=<key>]][&plan=pl-N]`),
 // ready to edit or send. Nothing is ever sent by the link: the person presses
 // Enter. A day view, a doc or a bookmark builds these; every value is untrusted
 // text from whoever wrote the link, so each one either resolves to something
@@ -14,7 +15,7 @@
 import { fromConvexAgentType, toConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
 import { PREFILL_MAX_LENGTH, buildPrefillText, type ComposerSeed } from "./composerPrefill";
 
-export const COMPOSE_LINK_PARAMS = ["compose", "task", "agent", "project"] as const;
+export const COMPOSE_LINK_PARAMS = ["compose", "task", "agent", "project", "priority", "step", "plan"] as const;
 
 export type ComposeLink = {
   /** The text the composer opens with, as written (capped, controls stripped). */
@@ -24,10 +25,21 @@ export type ComposeLink = {
   agent?: ConvexAgentType;
   /** A folder path or a project name; resolved against the viewer's machines later. */
   project?: string;
+  /** A priority (`pri-…`) and one of its milestones' keys: the session is mapped to it when created, if the priority is the viewer's (server: linkFromStart). */
+  priority?: string;
+  step?: string;
+  /** A plan (`pl-…`) the session is bound to when created, if the viewer can open it. */
+  plan?: string;
 };
+
+/** What a compose link starts the session in, beside its draft. */
+export type ComposeLinkStart = Pick<ComposeLink, "task" | "priority" | "step" | "plan">;
 
 const LEADING_BANG = /^[\s!]+/;
 const TASK_SHORT_ID = /^ct-[a-z0-9]{1,32}$/;
+const PRIORITY_SHORT_ID = /^pri-[a-z0-9]{1,32}$/;
+const STEP_KEY = /^[a-z0-9_-]{1,32}$/;
+const PLAN_SHORT_ID = /^pl-[a-z0-9]{1,32}$/;
 const PROJECT_MAX_LENGTH = 512;
 // C0 and C1 controls and DEL, except tab and newline: they only reach a
 // textarea's value, but a NUL or an escape sequence is never part of a draft
@@ -170,13 +182,23 @@ export function conversationLinkDraft(prefill: string | null, compose: string | 
 /** The link's parameters, or null when the address carries no compose link.
  *  A repeated parameter takes its first value. A task alone is a link too. */
 export function parseComposeLink(params: Pick<URLSearchParams, "get" | "has">): ComposeLink | null {
-  const rawTask = params.get("task")?.trim().toLowerCase();
-  const task = rawTask && TASK_SHORT_ID.test(rawTask) ? rawTask : undefined;
+  const id = (name: string, shape: RegExp) => {
+    const raw = params.get(name)?.trim().toLowerCase();
+    return raw && shape.test(raw) ? raw : undefined;
+  };
+  const task = id("task", TASK_SHORT_ID);
   if (!params.has("compose") && !task) return null;
   const draft = cleanDraft(params.get("compose") ?? "");
   const agent = knownAgent(params.get("agent"));
   const project = cleanText(params.get("project") ?? "", PROJECT_MAX_LENGTH).replace(/\s+/g, " ").trim() || undefined;
-  return { draft, ...(task ? { task } : {}), ...(agent ? { agent } : {}), ...(project ? { project } : {}) };
+  const priority = id("priority", PRIORITY_SHORT_ID);
+  // A step means nothing without its priority.
+  const step = priority ? id("step", STEP_KEY) : undefined;
+  const plan = id("plan", PLAN_SHORT_ID);
+  return {
+    draft, ...(task ? { task } : {}), ...(agent ? { agent } : {}), ...(project ? { project } : {}),
+    ...(priority ? { priority } : {}), ...(step ? { step } : {}), ...(plan ? { plan } : {}),
+  };
 }
 
 /** The draft with the task named in it: a task-only link reads like the task
@@ -209,10 +231,14 @@ export function resolveLinkProject(
 }
 
 /** The address that opens a new session's composer with `draft` typed, and
- *  the task attached when there is one: the link parseComposeLink reads. */
-export function composeLinkHref(draft: string, task?: string): string {
+ *  what it starts in (a task, a priority's milestone, a plan): the link
+ *  parseComposeLink reads. */
+export function composeLinkHref(draft: string, start: ComposeLinkStart = {}): string {
   const sp = new URLSearchParams({ compose: draft });
-  if (task) sp.set("task", task);
+  for (const k of ["task", "priority", "step", "plan"] as const) {
+    const v = start[k];
+    if (v) sp.set(k, v);
+  }
   return `/inbox?${sp.toString()}`;
 }
 

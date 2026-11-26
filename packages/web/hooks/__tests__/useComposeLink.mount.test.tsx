@@ -167,6 +167,29 @@ test("an answer for a different task is never bound", async () => {
   expect(opened).toEqual([{ text: "x", context: {} }]);
 });
 
+test("a milestone's Start opens its brief as the draft and carries the priority, milestone and plan to the create", async () => {
+  const { milestoneStartHref } = await import("../../lib/priorities");
+  const href = milestoneStartHref(
+    { short_id: "pri-57", plan: null },
+    { step: { key: "s2", title: "Deploy drops the eval job", refs: [{ kind: "task", id: "ct-12" }] }, plan: { short_id: "pl-1075" } },
+    () => ({ title: "Fix the eval job", status: "open" }),
+  );
+  await open(href);
+  await act(async () => setTaskAnswer({ _id: "k12", short_id: "ct-12", title: "Fix the eval job", status: "open" }));
+  await flush();
+  expect(opened).toEqual([{
+    text: "pri-57, milestone: Deploy drops the eval job\nOpen tasks:\n- ct-12 Fix the eval job\nPlan: pl-1075\nRun `cast priorities show pri-57` for current detail.",
+    context: {
+      linkedTask: { _id: "k12", short_id: "ct-12", title: "Fix the eval job", status: "open" },
+      start: { priority: "pri-57", priority_step: "s2", plan: "pl-1075" },
+    },
+  }]);
+  expect(location.search).toBe("");
+  // The task link's second dismiss lands 500ms on (useComposeLink): let it, so it never lands in the next test's toasts.
+  await act(async () => { await new Promise((r) => setTimeout(r, 520)); });
+  expect(toasts.at(-1)).toBe("dismiss");
+});
+
 test("an unknown folder and an unknown agent are dropped; known ones carry", async () => {
   await open("/inbox?compose=x&project=%2Fetc&agent=gpt");
   expect(opened).toEqual([{ text: "x", context: {} }]);

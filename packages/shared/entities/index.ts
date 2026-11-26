@@ -19,7 +19,7 @@ import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/ca
 import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
 import { parseReplayT, replayTParam } from "../replay/events";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret" | "flow";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret" | "flow" | "priority";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -88,6 +88,8 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // A flow of the pool opens in the Flows app's library, that flow open
   // (`/flows?view=flows&item=<slug>`, see entityRoute).
   flow: "/flows",
+  // A priority has a page of its own (`/priorities/pri-N`); `/priorities` is the list.
+  priority: "/priorities",
 };
 
 /**
@@ -111,6 +113,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   or: "role",
   pj: "project",
   sec: "secret",
+  pri: "priority",
 };
 
 /**
@@ -121,7 +124,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
  * followed by base 36 (`pj-mf3k2a`), and "pj" is no word. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "or", "dp", "sec"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "or", "dp", "sec", "pri"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -158,6 +161,8 @@ const SEGMENT_TYPE: Record<string, EntityType> = {
   ops: "source",
   vault: "secret",
   deploys: "deploy",
+  priorities: "priority",
+  priority: "priority",
 };
 
 /**

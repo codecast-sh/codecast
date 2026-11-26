@@ -2,3 +2,12 @@
 # reactCompiler.ts first: it does nothing unless REACT_COMPILER=1, and when it
 # does, it must be registered before preload.ts loads its first app module.
 preload = ["./test-helpers/reactCompiler.ts", "./test-helpers/preload.ts"]
+
+# Images load as files (their path), named outright. bun infers that loader by
+# default, but a test file of 50 KB or more comes back from bun's runtime
+# transpiler cache on a warm run, and loading one drops the inference: its
+# graph's .webp imports (lib/orgAvatars) were parsed as JavaScript and the file
+# died on load ("Expected ';'" in bear.webp), every test in it unrun. CI runs
+# its four web shards in one job, so every shard after the first is warm.
+[loader]
+".webp" = "file"

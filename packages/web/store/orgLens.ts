@@ -238,7 +238,7 @@ function lensPeopleSig(people: readonly LensPerson[]): string {
 export function orgLensWakeSig(state: OrgLensState & { clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } } }): string {
   const tree = lensTreeOf(state);
   const roles = lensRoleSig(tree?.roles ?? []) + "\u0002" + lensPeopleSig(tree?.people ?? []);
-  if (!isOrgLensMode(resolveInboxViewMode(state.clientState.ui))) return roles;
+  if (!isOrgLensMode(resolveInboxViewMode(state))) return roles;
   return [roles, lensTaskSig(state.tasks), lensTaskSig(state.plans), lensProjectSig(state.projects), lensGoalSig(state.initiatives)].join("\u0001");
 }
 

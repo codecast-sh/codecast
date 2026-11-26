@@ -43,7 +43,7 @@ import {
 import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { briefGoalRefs, LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
 import { causeBrief } from "./goals";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import type { SubscriptionVia } from "./notificationRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, createWorkContext, scopeByProject, explicitWorkspace } from "./data";
@@ -511,7 +511,7 @@ export async function moveTaskStatus(
   }
   // The fake test db patches the row in place: afterStatusMove reads the old status.
   const before = { ...task };
-  await patchTask(ctx, task, updates);
+  await patchTask(ctx, task, updates, o.conversationId ?? null);
   await afterStatusMove(ctx, before, next, o.actorUserId, o.conversationId);
   return moved;
 }
@@ -1038,7 +1038,7 @@ export async function releaseBoundSessions(ctx: any, task: any, conversationId?:
  * user must not close another workspace's task through --cascade). Each closed
  * child also releases any session bound to it, matching the single-task path.
  */
-async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, userId: Id<"users">, parent: any) {
+async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, userId: Id<"users">, parent: any, actor?: Doc<"conversations"> | null) {
   const now = Date.now();
   const scope = workspaceForResource(parent);
   const closing = new Set([String(parent._id), ...ids.map(String)]);
@@ -1047,7 +1047,7 @@ async function cascadeClose(ctx: any, ids: Id<"tasks">[], newStatus: string, use
     if (!t || !isSameWorkspace(t, scope)) continue;
     // status_id cleared: the cascade moves the subtree to a terminal category,
     // so any custom-status refinement from the old category is stale.
-    await patchTask(ctx, t, { status: newStatus, status_id: undefined, ...(t.status === newStatus ? {} : { closed_at: now }), updated_at: now });
+    await patchTask(ctx, t, { status: newStatus, status_id: undefined, ...(t.status === newStatus ? {} : { closed_at: now }), updated_at: now }, actor);
     await releaseBoundSessions(ctx, t);
     await recordTaskChange(ctx, id, { user_id: userId, actor_type: "system" }, [["status", t.status, newStatus]], now);
     // The parent's own release (afterStatusMove) runs after this one.
@@ -2432,7 +2432,7 @@ export const update = mutation({
     const changedBy: TaskChangeBy = { user_id: actor.user_id, actor_type: actor.kind === "role" ? "agent" : "user", conversation_id: linkedConvId };
     await recordTaskChange(ctx, task._id, changedBy, trackFields, now);
 
-    await patchTask(ctx, task, updates);
+    await patchTask(ctx, task, updates, conv);
     await schedulePushKeptTask(ctx, task, updates);
     if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, actor.name || "unknown", auth.userId);
     if (conv && releasedOwners.length) {
@@ -2459,7 +2459,7 @@ export const update = mutation({
       }
     }
     await tellReleased(ctx, releases, changedBy);
-    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, auth.userId, task);
+    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, auth.userId, task, conv);
     // Rollup walks the EFFECTIVE parent (the new one on a reparent+start), not
     // the pre-patch parent, so the task's actual parent flips to in_progress.
     await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);

@@ -26,7 +26,7 @@ export async function startHostedConversationFor(
   ctx: MutationCtx,
   userId: Id<"users">,
   args: HostedStartArgs,
-): Promise<{ conversation_id: Id<"conversations">; short_id: string }> {
+): Promise<{ conversation_id: Id<"conversations">; short_id: string; created: boolean }> {
   const sessionId = args.session_id?.trim() || crypto.randomUUID();
   if (args.session_id) {
     const existing = await ctx.db.query("conversations")
@@ -36,7 +36,7 @@ export async function startHostedConversationFor(
       if (String(existing.user_id) !== String(userId) || !isHostedAgentType(existing.agent_type)) {
         throw new Error("That session id belongs to another conversation");
       }
-      return { conversation_id: existing._id, short_id: shortIdOf(existing) };
+      return { conversation_id: existing._id, short_id: shortIdOf(existing), created: false };
     }
   }
   await checkRateLimit(ctx, userId, "createConversation");
@@ -66,7 +66,7 @@ export async function startHostedConversationFor(
       client_id: args.first_message_client_id,
     });
   }
-  return { conversation_id: conversationId, short_id: shortIdOf(conversation) };
+  return { conversation_id: conversationId, short_id: shortIdOf(conversation), created: true };
 }
 
 function shortIdOf(conversation: Doc<"conversations">): string {

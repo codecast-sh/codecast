@@ -167,6 +167,10 @@ import {
   toggleFavoriteWithRevision,
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
+import { inheritLink, mappedMilestone, sessionEvidence, unnamedMilestone, type ServesOutcome } from "./lib/priorityLinks";
+import { pinsAskForPass, prioritiesOn, prioritiesPossibleFor, sessionActivity } from "./lib/priorityPassSchedule";
+import { askClassifier } from "./lib/priorityClassifierHook";
+import { parseServesHint } from "@codecast/shared/contracts/priorities";
 export { generateShareToken, isNonEmptyMessage };
 
 // Single relevance-ranked search-index lookup shared by every message-search
@@ -1641,6 +1645,10 @@ export const createConversation = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
     if (forkOrigin) await recordFork(ctx, args.user_id, forkOrigin, conversationId);
+    // A fork or plan handoff the daemon found by its parent message continues the parent's milestone
+    // (lib/priorityLinks); a Task-tool subagent rolls up under its parent instead, and a fork from
+    // `args.fork` inherits in recordFork.
+    if (args.parent_message_uuid && !forkOrigin) await inheritLink(ctx, conversationId, parentConversationId, args.user_id);
     // Funnel: the user's first synced session ever. Stamped on the users doc so
     // this stays an O(1) check instead of a conversations scan per create.
     const creator = await ctx.db.get(args.user_id);
@@ -5925,6 +5933,7 @@ async function recordFork(
 ) {
   if (opts.counted !== false) await ctx.db.patch(origin._id, { fork_count: (origin.fork_count ?? 0) + 1 });
   await inheritLabelAssignment(ctx, userId, origin._id, forkId);
+  await inheritLink(ctx, forkId, origin._id, userId);
 }
 
 export const forkConversation = mutation({
@@ -8773,6 +8782,8 @@ async function enrichInboxSessionRow(
     ...(conv.history_import ? { history_import: true } : {}),
     project_path: conv.project_path,
     rewind_staged: conv.rewind_staged ?? null,
+    priority_id: conv.priority_id ?? null,
+    priority_step_key: conv.priority_step_key ?? null,
     git_root: conv.git_root,
     git_branch: conv.git_branch,
     git_remote_url: conv.git_remote_url,
@@ -9053,6 +9064,8 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     started_at: child.started_at,
     project_path: child.project_path,
     rewind_staged: child.rewind_staged ?? null,
+    priority_id: child.priority_id ?? null,
+    priority_step_key: child.priority_step_key ?? null,
     git_root: child.git_root,
     git_branch: child.git_branch,
     git_remote_url: child.git_remote_url,
@@ -12458,7 +12471,8 @@ export async function performSetThreadState(
   text: string,
   status: ThreadStateStatus,
   result?: string | null,
-): Promise<{ at: number; resurfaced: boolean }> {
+  serves?: string,
+): Promise<{ at: number; resurfaced: boolean; serves_outcome?: ServesOutcome | null }> {
   const at = Date.now();
   await ctx.db.patch(conv._id, {
     thread_state: text,
@@ -12471,10 +12485,19 @@ export async function performSetThreadState(
     thread_state_result_at: result ? at : undefined,
   });
   // The pin keeps only the latest; this keeps the trail the priorities pass reads,
-  // one row per change (an agent re-pinning the same words adds nothing).
-  if (text !== conv.thread_state || status !== conv.thread_state_status) {
-    await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status });
+  // one row per change of words, status or what it says it serves (an agent
+  // re-pinning the same ones adds nothing), and each change asks for the
+  // owner's pass unless a role or a machine wrote it (lib/priorityPassSchedule).
+  const changed = text !== conv.thread_state || status !== conv.thread_state_status;
+  const newServes = !changed && !!serves && (serves !== (await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).order("desc").first())?.serves);
+  if (changed || newServes) {
+    await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status, ...(serves ? { serves } : {}) });
+    if (pinsAskForPass(conv)) await sessionActivity(ctx, conv);
+    // A first pin places the session under a milestone, or asks again after a "new" (lib/priorityClassifierHook).
+    await askClassifier(ctx, conv, "pin");
   }
+  // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
+  const serves_outcome = status === "done" ? await sessionEvidence(ctx, conv, at, serves) : null;
   // A `blocked` declaration from a HIDDEN session is a claim on the user's
   // eyes — the same claim `cast trigger complete --needs-attention` makes,
   // cleared the same way (agentTasks.completeTaskRun). If the session is
@@ -12508,7 +12531,7 @@ export async function performSetThreadState(
   // worktree (subagentFleet.ts).
   const outcome = outcomeOfDeclaration(status);
   if (outcome && conv.parent_conversation_id) await subagentEnded(ctx, conv, outcome);
-  return { at, resurfaced };
+  return { at, resurfaced, serves_outcome };
 }
 
 export const setThreadState = mutation({
@@ -12520,6 +12543,8 @@ export const setThreadState = mutation({
     // common truth for a state written mid-session.
     status: v.optional(v.string()),
     result: v.optional(v.string()),
+    // `cast state --serves pri-N/sK`: a hint the priorities pass reads, never a link.
+    serves: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -12527,6 +12552,8 @@ export const setThreadState = mutation({
       ? await getAuthenticatedUserId(ctx, args.api_token)
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    const serves = args.serves === undefined ? undefined : parseServesHint(args.serves);
+    if (serves === null) throw new Error(`"${args.serves}" is not a priority or milestone (pri-N or pri-N/sK, like pri-3/s2)`);
 
     const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
       c.user_id?.toString() === userId.toString() ||
@@ -12549,8 +12576,26 @@ export const setThreadState = mutation({
     }
 
     const status = parseThreadStateStatus(args.status) ?? "working";
-    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result));
-    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced };
+    // Only the session's runner speaks for its milestone: a co-owner's pin names none, closes none and is told of none.
+    const runner = String(conv.user_id) === String(userId);
+    const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), runner ? serves : undefined);
+    // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
+    // Milestone replies only where priorities is on: where the session's priority is, or, on none yet, where the session could count.
+    const held = conv.priority_id ? ((await ctx.db.get(conv.priority_id as Id<"priorities">)) as Doc<"priorities"> | null) : null;
+    const priorities = runner && status === "done" && (held ? await prioritiesOn(ctx, held.workspace) : await prioritiesPossibleFor(ctx, conv));
+    const milestone = priorities && !serves ? await unnamedMilestone(ctx, conv) : null;
+    // One that names another milestone than the session's closes none either: the CLI says so.
+    const mapped = priorities && serves ? await mappedMilestone(ctx, conv) : null;
+    const serves_mismatch = mapped && mapped !== serves ? { serves, milestone: mapped } : null;
+    // One from a session on no milestone yet is kept: it counts once a link or the pass puts the session there (lib/priorityLinks replayDonePin).
+    const serves_unlinked = priorities && serves && !mapped ? { serves } : null;
+    return {
+      ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced,
+      ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}), ...(serves_unlinked ? { serves_unlinked } : {}),
+      // A pin naming its milestone that closed nothing says why.
+      ...(serves_outcome && "refused" in serves_outcome ? { serves_refused: { serves, reason: serves_outcome.refused } } : {}),
+      ...(serves_outcome && "decided_by" in serves_outcome ? { serves_decided_by: serves_outcome.decided_by } : {}),
+    };
   },
 });
 

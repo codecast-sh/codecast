@@ -10,12 +10,15 @@ import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import {
   useInboxStore, computeChipCounts, convBucketMap, sortLabels, resolveInboxViewMode, resolveInboxOldestFirst, type InboxViewMode,
 } from '@codecast/web/store/inboxStore';
+import { lensSegments } from '@/lib/inboxViews';
+import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 
-// The lens names as a segment says them. The two everyday lenses are always
-// shown; any other lens picked in the slide-out panel's View joins them while
-// it is the one in use, so the switch never hides what the list is showing.
+// The lens names as a segment says them. The everyday lenses (lib/inboxViews
+// lensSegments) are always shown; any other lens picked in the slide-out
+// panel's View joins them while it is the one in use.
 const SEGMENT: Partial<Record<InboxViewMode, string>> = {
   grouped: 'Status',
+  priorities: 'Priorities',
   recent: 'Recent',
   time: 'Created',
   bucket: 'Label',
@@ -50,13 +53,13 @@ export function useInboxFilterCounts() {
  *  projects on a full-width row under it. */
 export function InboxLensBar({ stacked = false, accessory }: { stacked?: boolean; accessory?: ReactNode }) {
   const Theme = useTheme();
-  const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const { labels, bucketCounts, projectCounts } = useInboxFilterCounts();
   const projects = stacked ? projectCounts : [];
-  const segments: InboxViewMode[] = viewMode === 'grouped' || viewMode === 'recent' ? ['grouped', 'recent'] : ['grouped', 'recent', viewMode];
+  const segments = lensSegments(viewMode, useWorkspaceFeatureState('priorities') === true);
   const store = useInboxStore.getState;
 
   const segmentControl = (

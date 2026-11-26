@@ -1,8 +1,9 @@
 // The priorities pass, run (lib/priorityPass.ts is its pure core): for one
 // person in one workspace, read what they touched since the last pass
 // (priorityPassInputs.ts), ask the model once, and write the plan. reserve
-// holds the pair, runPass asks, applyPlan writes atomically. A cron sweeps
-// every few hours (priorityPassSweep.ts); `cast priorities run` calls runNow.
+// holds the pair, runPass asks, applyPlan writes atomically. The person's
+// activity schedules it (priorityPassSchedule.ts), a daily sweep catches what
+// no hook saw (priorityPassSweep.ts); `cast priorities run` calls runNow.
 //
 // A run that reads more than one prompt holds moves the cursor to the last
 // session it read and chains another run for the rest. A run that finds
@@ -19,30 +20,35 @@ import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
-import { isTeamMember } from "./privacy";
-import { workspaceHasFeature } from "./lib/teamFeatureGuard";
-import { PRIORITY_PASS_MODEL, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
+import { passOn } from "./lib/priorityPassSchedule";
+import { askRerun } from "./lib/priorityClassifierHook";
+import { recomputeStepDone } from "./lib/priorityLinks";
+import { stepKeyMark } from "./lib/priorityGroup";
+import { PRIORITY_PASS_MODEL, mergePriorities, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
+import { stepKeyMax, holdPersonSteps, isPersonHeld, withPersonFields } from "./lib/priorityPassSteps";
+import { SESSION_PAGE, clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
+import { parsePriorityPassOutput } from "./lib/priorityPassParse";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
-/** Runs one pass chains for work that did not fit, the first included: the rest waits for the next sweep. */
+/** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
 export const MAX_CHAINED_RUNS = 6;
 const CHAIN_DELAY_MS = 2_000;
 /** After this many failed runs in a row on one cursor, the last one steps the cursor past what failed. */
 export const FAILURES_BEFORE_STEP = 3;
 /** What one (person, workspace) may spend on passes in a day; past it, passes skip until older runs age out. */
-export const PRIORITY_PASS_DAILY_USD = 1.5;
+export const PRIORITY_PASS_DAILY_USD = 5;
 /**
  * A pair's first catch-up (its runs before any ok run, and the runs that run
  * chains) reads up to FIRST_PASS_WINDOW_MS of work at once: it spends from
  * this one-time allowance instead of the daily ceiling, which applies after.
  */
 export const PRIORITY_PASS_FIRST_USD = 5;
-/** The most of a pair's runs the catch-up allowance reads, oldest first (the catch-up is its first runs). */
-const CATCH_UP_RUNS_READ = 200;
+/** The most of a pair's runs the catch-up allowance reads, newest first; a pair with more is past its catch-up. */
+export const CATCH_UP_RUNS_READ = 1_000;
 /** `cast priorities run` runs at most once in this long per (person, workspace). */
 export const RUN_NOW_EVERY_MS = 10 * MINUTE;
-/** A priority's sessions are counted from the index up to this many; past it the stored count goes on by the moves and is flagged. */
-export const SESSION_COUNT_CAP = 500;
+/** A merge moves an absorbed priority's corrections to the survivor this many at a time, until none is left. */
+export const CORRECTIONS_PAGE = 100;
 /** How long the model may take: a full prompt and a long reply run minutes. */
 export const PASS_TIMEOUT_MS = 5 * 60_000;
 /** The most runs of one pair in a day a reservation reads. */
@@ -72,7 +78,11 @@ const minutes = (ms: number) => Math.max(1, Math.ceil(ms / MINUTE));
 type BlockerKind = "busy" | "daily_ceiling" | "throttled";
 type Reservation = { run_id: Id<"priority_pass_runs">; catch_up: boolean } | { refused: BlockerKind; reason: string };
 
-const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<Doc<"priority_pass_runs">[]> =>
+/** A run that asked the model (or settled as if it had): what the gap, the throttle and the ceiling count. */
+export const isPaidRun = (r: Doc<"priority_pass_runs">): boolean => r.status === "ok" || r.status === "error" || (r.cost_usd ?? 0) > 0;
+
+/** The pair's runs started in the last day, newest first. */
+export const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now: number): Promise<Doc<"priority_pass_runs">[]> =>
   ctx.db
     .query("priority_pass_runs")
     .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).gte("started_at", now - DAY))
@@ -84,18 +94,25 @@ const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now
 export async function hasOkRun(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
   return !!(await ctx.db
     .query("priority_pass_runs")
-    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
-    .filter((q: any) => q.eq(q.field("status"), "ok"))
+    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "ok"))
     .first());
 }
 
-/** What the pair's first catch-up has spent of PRIORITY_PASS_FIRST_USD. */
-async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<number> {
-  const runs: Doc<"priority_pass_runs">[] = await ctx.db
-    .query("priority_pass_runs")
-    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
-    .take(CATCH_UP_RUNS_READ);
-  return runs.filter((r) => r.catch_up).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
+/**
+ * What the pair's first catch-up has spent of PRIORITY_PASS_FIRST_USD: its
+ * runs newest first, stopping once the allowance is spent. A pair with more
+ * runs than CATCH_UP_RUNS_READ counts as spent, so however many cheap runs it
+ * piles up, a catch-up never spends uncapped.
+ */
+export async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<number> {
+  let spent = 0;
+  let read = 0;
+  for await (const r of ctx.db.query("priority_pass_runs").withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace)).order("desc") as AsyncIterable<Doc<"priority_pass_runs">>) {
+    if (r.catch_up) spent += r.cost_usd ?? 0;
+    if (spent >= PRIORITY_PASS_FIRST_USD) return spent;
+    if (++read >= CATCH_UP_RUNS_READ) return Infinity;
+  }
+  return spent;
 }
 
 /**
@@ -106,7 +123,7 @@ async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: st
 export async function runBlocker(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number, runNow: boolean, catchUp = false): Promise<{ kind: BlockerKind; reason: string } | { catch_up: boolean } | null> {
   const day = await runsOfDay(ctx, userId, workspace, now);
   if (day.some((r) => r.status === "running" && r.started_at > now - RESERVATION_TTL_MS)) return { kind: "busy", reason: "A pass is already running here." };
-  const paid = day.filter((r) => r.status === "ok" || r.status === "error" || (r.cost_usd ?? 0) > 0).map((r) => r.started_at);
+  const paid = day.filter(isPaidRun).map((r) => r.started_at);
   const last = paid.length ? Math.max(...paid) : null;
   if (runNow && last !== null && now - last < RUN_NOW_EVERY_MS) {
     return { kind: "throttled", reason: `A pass ran here ${plural(minutes(now - last), "minute")} ago; run it again in ${plural(minutes(last + RUN_NOW_EVERY_MS - now), "minute")}.` };
@@ -149,16 +166,11 @@ export const reserve = internalMutation({
 
 type Gate = { on: boolean; cursor_at: number; budgeted: boolean };
 
-/** Whether the priorities feature is on where the pass would write (a team key only for a member, a personal key only for its own person), the cursor, and whether the workspace pays for model calls. */
+/** Whether the pass may write here (passOn), the cursor, and whether the workspace pays for model calls. */
 export const passGate = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string() },
   handler: async (ctx, args): Promise<Gate> => {
-    const ws = parseWorkspaceKey(args.workspace);
-    const on = !ws
-      ? false
-      : ws.type === "team"
-        ? (await isTeamMember(ctx, args.user_id, ws.teamId)) && (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities"))
-        : String(ws.userId) === String(args.user_id) && (await workspaceHasFeature(ctx, { user_id: args.user_id }, "priorities"));
+    const on = await passOn(ctx, args.user_id, args.workspace);
     const budget = await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first();
     return { on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0 };
   },
@@ -201,6 +213,9 @@ export const recordRun = internalMutation({
   args: { ...runRowArgs, status: v.union(v.literal("error"), v.literal("skipped")), error: v.optional(v.string()), step_to: v.optional(v.number()), repeats: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<Id<"priority_pass_runs">> => {
     const { step_to, ...run } = args;
+    // A run whose plan landed stays ok, whatever its action heard back.
+    const held: Doc<"priority_pass_runs"> | null = run.run_id ? await ctx.db.get(run.run_id) : null;
+    if (held?.status === "ok") return held._id;
     if (step_to === undefined || step_to <= run.cursor_at) return settleRun(ctx, run);
     if (run.status === "skipped") return settleRun(ctx, { ...run, cursor_at: step_to });
     if (!run.repeats) return settleRun(ctx, run);
@@ -215,6 +230,9 @@ export const recordRun = internalMutation({
   },
 });
 
+/** A milestone whose done state its tasks or pull requests decide (lib/priorityLinks evidenceFor). */
+const hasRecords = (st: { refs: Array<{ kind: string }> }) => st.refs.some((r) => r.kind === "task" || r.kind === "pr");
+
 /** Plan fields as row fields: null clears a field on a patch and is left out of an insert. */
 function rowFields(w: Record<string, unknown>, insert = false): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -225,33 +243,15 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
   return out;
 }
 
-/**
- * Moves sessions between priorities and then counts again, from the index,
- * every priority a session moved to or from, so a count that drifted heals:
- * the person's own in any workspace (a session made private leaves a team
- * priority from the personal pass).
- */
-function sessionMover(ctx: { db: any }) {
-  const moved = new Map<Id<"priorities">, number>();
-  const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined) => {
-    if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
-    if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
-    await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key });
-  };
-  const recount = async (userId: Id<"users">) => {
-    for (const [id, delta] of moved) {
-      const row: Doc<"priorities"> | null = await ctx.db.get(id);
-      if (!row || String(row.user_id) !== String(userId)) continue;
-      const held = (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP + 1)).length;
-      const capped = held > SESSION_COUNT_CAP;
-      const session_count = capped ? Math.max(SESSION_COUNT_CAP, (row.session_count ?? 0) + delta) : held;
-      if (session_count !== row.session_count || capped !== !!row.session_count_capped) {
-        await ctx.db.patch(id, { session_count, session_count_capped: capped || undefined });
-      }
-    }
-  };
-  return { move, recount };
+/** Moves every correction on `from` to `into`, a page at a time, each onto the step `stepFor` maps its step to. */
+export async function moveCorrections(ctx: { db: any }, from: Id<"priorities">, into: Id<"priorities">, stepFor: (key: string | undefined) => string | undefined): Promise<void> {
+  for (;;) {
+    const page: Doc<"priority_corrections">[] = await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", from)).take(CORRECTIONS_PAGE);
+    for (const c of page) await ctx.db.patch(c._id, { priority_id: into, step_key: stepFor(c.step_key) });
+    if (page.length < CORRECTIONS_PAGE) return;
+  }
 }
+
 
 /**
  * A session that left this workspace lets go of the priority here, so its new
@@ -289,16 +289,25 @@ export const releaseStrays = internalMutation({
 /**
  * Writes one pass's plan, atomically, with its run row at `cursor_at`. Re-checks
  * what the plan cannot know: a priority belongs to this person and workspace,
- * a session is theirs and in this workspace, and anything the person set while
- * the model was reading (a rank, a step's tier, a set-aside) still stands. A
- * run that another ok run finished under since it started writes nothing
- * (null) and records the cursor it started from: its plan was made from what
- * that run has since changed.
+ * a session is theirs and in this workspace, and everything the person set
+ * stands, as the rows are now (so a setting made while the model was reading
+ * holds too). The pass's output is rejected wherever it would change one: a
+ * placed rank (the plan writes ai_rank, and person_pos only to carry a
+ * merged priority's place to a survivor without one); a step's
+ * tier, title, done state or drop (holdPersonSteps); a set-aside, done or merged status; a session the person placed,
+ * a known link or the classifier mapped, or one
+ * mapped to a priority they said it is not part of. A step added to a
+ * priority since the input was read (a person's merge) is kept, and a new
+ * step of the plan's that took its key gets the next one. A merge moves the
+ * absorbed priority's corrections to the survivor. The pending corrections
+ * the run read turn applied, with the window it read. A run that another ok run finished under since
+ * it started writes nothing (null) and records the cursor it started from:
+ * its plan was made from what that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))) },
+  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))) },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, strays, ...run } = args;
+    const { plan: raw, from_cursor, strays, corrections, superseded, ...run } = args;
     const vis = sessionVisibility(ctx);
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
@@ -324,41 +333,135 @@ export const applyPlan = internalMutation({
         workspace: args.workspace,
         short_id,
         session_count: 0,
+        step_key_max: stepKeyMax(w.steps),
         created_at: now,
         updated_at: now,
       });
       ids.set(ref, id);
       counts.created++;
+      // A milestone born done takes its done time from its tasks and pull requests, not this pass (a catch-up builds from last week's).
+      for (const st of w.steps) if (st.done && hasRecords(st)) await recomputeStepDone(ctx, id, st.key);
     }
 
+    // Per priority this plan rewrote: its live step keys after the write, and the plan's new keys that moved.
+    const liveSteps = new Map<string, Set<string>>();
+    const rekeyed = new Map<string, Map<string, string>>();
+    // Per priority whose milestones this plan removed, those milestones as they were: a session on a key no live milestone holds loses the step, unless it anchors a removed one.
+    const gone = new Map<Id<"priorities">, Doc<"priorities">["steps"]>();
+    const stepMarks = new Map<Id<"priorities">, number>();
+    let newMilestone = false;
     for (const u of plan.updates) {
       const row = await mine(u.short_id);
-      if (!row) continue;
+      if (!row || row.status === "merged") continue;
       const patch: Partial<PriorityWrite> = { ...u.patch };
-      if (row.rank_set_by === "person") { delete patch.rank; delete patch.rank_set_by; }
-      if (row.status === "set_aside") { delete patch.status; delete patch.done_at; }
+      // A merge survivor's carried place lands only where the person has not placed it since.
+      // Never onto one the rank backfill has not reached: its old rank still decides its place.
+      if (row.person_pos != null || row.rank_set_by != null) delete patch.person_pos;
+      if (row.status === "set_aside" || row.status_set_by === "person") {
+        delete patch.status;
+        delete patch.done_at;
+        if (row.status !== "active") delete patch.ai_rank;
+      }
       if (patch.steps) {
-        const steps = patch.steps;
-        for (const held of row.steps.filter((s) => s.tier_set_by === "person")) {
-          const i = steps.findIndex((s) => s.key === held.key);
-          if (i >= 0) steps[i] = { ...steps[i], tier: held.tier, tier_set_by: "person" };
-          else steps.push(held);
+        const seen = new Set(u.seen_steps ?? row.steps.map((st) => st.key));
+        const unseen = row.steps.filter((st) => !seen.has(st.key));
+        // Keys this priority has spent (its mark, worked out once for one written before it), and the plan's new ones that would reuse one.
+        const spentUpTo = await stepKeyMark(ctx, row);
+        const known = new Set(row.steps.map((st) => st.key));
+        const reuses = (key: string) => !known.has(key) && stepKeyMax([{ key }]) <= spentUpTo;
+        let next = stepKeyMax([...row.steps, ...patch.steps], spentUpTo);
+        const moved = new Map<string, string>();
+        const steps = patch.steps.map((st) => {
+          if (!unseen.some((x) => x.key === st.key) && !reuses(st.key)) return st;
+          moved.set(st.key, `s${++next}`);
+          return { ...st, key: moved.get(st.key)! };
+        });
+        // A milestone carried in from a priority this plan merges stands as the person left it there since the input was read: dropped, renamed, re-tiered or done.
+        for (const m of plan.merges) {
+          const absorbed = m.merged_into === row.short_id ? await mine(m.short_id) : null;
+          for (const [from, to] of absorbed ? Object.entries(m.step_keys ?? {}) : []) {
+            const was = absorbed!.steps.find((st) => st.key === from);
+            const key = moved.get(to) ?? to;
+            const i = steps.findIndex((st) => st.key === key);
+            if (was && i >= 0 && isPersonHeld(was)) steps[i] = withPersonFields(steps[i], { ...was, key });
+          }
         }
+        // A milestone a session the person placed, or a known link, sits on stays: read its sessions only when the plan would remove one.
+        const proposedKeys = new Set([...steps, ...unseen].filter((st) => !st.dropped).map((st) => st.key));
+        const removing = new Set(row.steps.filter((st) => !st.dropped && !proposedKeys.has(st.key)).map((st) => st.key));
+        const anchored = new Set<string>();
+        if (removing.size) {
+          // The newest first: past SESSION_COUNT_CAP, the ones a person placed most recently are the ones seen.
+          for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).order("desc").take(SESSION_PAGE)) {
+            if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key && removing.has(conv.priority_step_key)) anchored.add(conv.priority_step_key);
+          }
+        }
+        patch.steps = holdPersonSteps(row.steps, [...steps, ...unseen], [], "", anchored);
+        const live = new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key));
+        liveSteps.set(row.short_id, live);
+        const removed = row.steps.filter((st) => !st.dropped && !live.has(st.key));
+        if (removed.length) gone.set(row._id, removed);
+        stepMarks.set(row._id, Math.max(next, stepKeyMax(patch.steps)));
+        newMilestone ||= patch.steps.some((st) => !st.dropped && !row.steps.some((x) => x.key === st.key));
+        if (moved.size) rekeyed.set(row.short_id, moved);
       }
       // A rewrite the priority needed is done: its title and summary are this pass's.
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
-      await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, updated_at: now });
+      // Every key it has held stays spent: the mark only rises.
+      const mark = stepMarks.has(row._id) ? { step_key_max: stepMarks.get(row._id)! } : {};
+      await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, ...mark, updated_at: now });
       counts.updated++;
+      // A milestone this write leaves done, or whose done state it changed, follows its tasks and pull requests as they are now
+      // (lib/priorityLinks): done_at is theirs, and a plan made before a task closed, or one that flips a merged milestone, never undoes them.
+      for (const st of patch.steps ?? []) {
+        const before = row.steps.find((x) => x.key === st.key);
+        if (hasRecords(st) && (st.done || (before && (before.done !== st.done || before.done_at !== st.done_at)))) await recomputeStepDone(ctx, row._id, st.key);
+      }
     }
 
-    const mergedInto = new Map<Id<"priorities">, Id<"priorities">>();
+    const mergedInto = new Map<Id<"priorities">, { into: Id<"priorities">; intoRow: Doc<"priorities">; step_keys: Record<string, string> }>();
     for (const m of plan.merges) {
       const row = await mine(m.short_id);
       const into = await resolve(m.merged_into);
-      if (!row || !into || row.status === "set_aside") continue;
-      await ctx.db.patch(row._id, { status: "merged", merged_into: into, rank: undefined, updated_at: now });
-      mergedInto.set(row._id, into);
+      const intoRow: Doc<"priorities"> | null = into ? await ctx.db.get(into) : null;
+      if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || intoRow.status === "merged") continue;
+      await ctx.db.patch(row._id, { status: "merged", merged_into: into, ai_rank: undefined, updated_at: now });
+      // A milestone of the absorbed priority a session the person placed (or a known link) sits on goes to the survivor too, as a person's merge carries every one
+      // (priorities.ts doMerge): the plan saw only its newest sessions. One the plan mapped live already has its key.
+      const step_keys: Record<string, string> = { ...(m.step_keys ?? {}) };
+      // A key the plan gave the survivor that this write moved (a person took it since the input was read): the moved key.
+      for (const k of Object.keys(step_keys)) step_keys[k] = rekeyed.get(intoRow.short_id)?.get(step_keys[k]) ?? step_keys[k];
+      const survivorLive = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
+      const held = new Set<string>();
+      // Its newest page of sessions, as the anchors of a plain rewrite are read.
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).order("desc").take(SESSION_PAGE)) {
+        if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key) held.add(conv.priority_step_key);
+      }
+      const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
+      // Its tombstones as the row has them now (one the person dropped after the plan's input was read included), unless the survivor holds that drop already.
+      const tombstones = row.steps.filter((st) => st.dropped && !intoRow.steps.some((x) => x.dropped && x.title === st.title));
+      let survivor = intoRow;
+      if (carried.length || tombstones.length) {
+        let next = stepKeyMax(intoRow.steps, await stepKeyMark(ctx, intoRow));
+        const added = [...carried, ...tombstones].map((st) => {
+          const key = `s${++next}`;
+          if (!st.dropped) {
+            step_keys[st.key] = key;
+            survivorLive.add(key);
+          }
+          return { ...st, key };
+        });
+        survivor = { ...intoRow, steps: [...intoRow.steps, ...added], step_key_max: next };
+        await ctx.db.patch(into, { steps: survivor.steps, step_key_max: next, updated_at: now });
+        liveSteps.set(intoRow.short_id, survivorLive);
+      }
+      mergedInto.set(row._id, { into, intoRow: survivor, step_keys });
       counts.merged++;
+      // Every one of its corrections follows it, onto the step their step became (step-less when that is unknown).
+      await moveCorrections(ctx, row._id, into, (key) => {
+        const to = key ? step_keys[key] : undefined;
+        return to && survivorLive.has(to) ? to : undefined;
+      });
     }
 
     const { move, recount } = sessionMover(ctx);
@@ -370,27 +473,47 @@ export const applyPlan = internalMutation({
         : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
       return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
     };
+    // The person's placement, a known link and the classifier's stand, and a priority they said a session is not part of never gets it.
+    const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
+      (!!conv.priority_set_by && conv.priority_set_by !== "pass") || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
     for (const s of plan.sessions) {
       const conv = await conversationOf(s.session);
       const priority = await resolve(s.priority);
-      if (!conv || !priority) continue;
-      await move(conv, priority, s.step_key ?? undefined);
+      if (!conv || !priority || refused(conv, priority)) continue;
+      const target: Doc<"priorities"> | null = await ctx.db.get(priority);
+      if (!target || target.status === "merged") continue;
+      // A step key this write moved: the moved key. One the priority does not hold live as written (left out, or dropped, whether or not this plan touched its steps): no step.
+      let step_key = s.step_key ?? undefined;
+      if (step_key) step_key = rekeyed.get(s.priority)?.get(step_key) ?? step_key;
+      if (step_key && !target.steps.some((st) => st.key === step_key && !st.dropped)) step_key = undefined;
+      await move(conv, priority, step_key);
       counts.mapped_sessions++;
     }
     for (const ref of plan.unmap) {
       const conv = await conversationOf(ref);
       const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
-      if (!conv || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
+      if (!conv || refused(conv) || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
       await move(conv, undefined, undefined);
     }
     await letGoStrays(ctx, vis, move, args, strays ?? [], new Set(plan.rewritten));
-    // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
-    for (const [from, into] of mergedInto) {
-      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
-      for (const conv of left) if (await inWorkspace(vis, conv, args.user_id, args.workspace)) await move(conv, into, undefined);
-    }
+    // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown;
+    // one the person placed (or a link or the classifier mapped) keeps that there, and one they said is not part of the survivor lets go.
+    // Every one of them, however many, a page now and the rest by scheduled runs: a merge leaves none behind on a merged priority.
+    for (const [from, { into, step_keys }] of mergedInto) await moveMergedSessionsNow(ctx, from, into, step_keys, { user_id: args.user_id, workspace: args.workspace });
+
+    // A session on a milestone this plan removed, or on a key no milestone holds (left from before), keeps the priority, step unknown, whoever put it there.
+    for (const [id, removed] of gone) await clearDeadStepKeysNow(ctx, id, removed);
 
     await recount(args.user_id);
+    // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
+    if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);
+
+    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
+      const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
+      if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
+        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
+      }
+    }
 
     await settleRun(ctx, { ...run, status: "ok", counts });
     return counts;
@@ -431,6 +554,9 @@ type PassArgs = { user_id: Id<"users">; workspace: string; force?: boolean; chai
 /** Model-call failures that come back the same on the same input: a reply with no whole JSON, or a call the spec check refuses. */
 const REPEATING_CALL_ERRORS = /^the answer (held no JSON|ran past max_tokens)/;
 
+/** A plan that failed to land for a reason the next try need not share: a write conflict that outlasted Convex's retries. A timeout is not one: a plan too big for one transaction times out on every try. */
+const TRANSIENT_APPLY_ERRORS = /changed while this mutation was being run|OptimisticConcurrency/;
+
 async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const started_at = Date.now();
   const pair = { user_id: args.user_id, workspace: args.workspace };
@@ -466,8 +592,8 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "error", reason: error };
   }
   const { cursor_at } = read;
-  // A priority that needs a rewrite (it held a session since gone from here) is work too.
-  if (!read.input.sessions.length && !read.input.calls.length && !args.force && !read.input.priorities.some((p) => p.needs_rewrite)) {
+  // A priority that needs a rewrite (it held a session since gone from here) is work too, and so is a correction no pass has read.
+  if (!read.input.sessions.length && !read.input.calls.length && !args.force && !read.input.priorities.some((p) => p.needs_rewrite) && !read.corrections.length && !read.superseded.length) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
     const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
@@ -497,7 +623,14 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
   const plan = mergePriorities(input, output);
-  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays });
+  // A plan that fails to land still cost the call: record it (the day's ceiling counts it), and a repeat failure steps the cursor past after FAILURES_BEFORE_STEP.
+  let counts: Counts | null;
+  try {
+    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return fail(`applying the plan failed: ${message}`.slice(0, 500), !TRANSIENT_APPLY_ERRORS.test(message));
+  }
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;

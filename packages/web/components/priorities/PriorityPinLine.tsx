@@ -1,6 +1,6 @@
 // The line Codecast adds under a session's pinned state once its priorities
 // pass has mapped the session: which of the person's priorities it serves,
-// how far that priority's critical path is, and this session's step. It opens
+// how far that priority's critical path is, and this session's milestone. It opens
 // that priority on /priorities. Written by Codecast, never by the agent; fed
 // by hooks/usePriorityPinLine.
 import Link from "next/link";
@@ -16,7 +16,7 @@ export function PriorityPinLineView({ line }: { line: PriorityPinLine | null }) 
         {line.rank != null && <span className="text-sol-text-dim">#{line.rank} </span>}
         <span className="font-medium text-sol-text">{line.title}</span>
         <span className="text-sol-text-dim"> · </span>
-        <span className="tabular-nums" title={`${line.critical_done} of ${line.critical_total} critical-path steps done`}>{line.critical_done}/{line.critical_total}</span>
+        <span className="tabular-nums" title={`${line.critical_done} of ${line.critical_total} critical-path milestones done`}>{line.critical_done}/{line.critical_total}</span>
         {line.step_title && (
           <>
             <span className="text-sol-text-dim"> · </span>

@@ -2,12 +2,15 @@
 // priorityPassInputs.ts): what it reads stays inside one person's workspace
 // and after its cursor, it skips where the feature is off, a failed reply
 // leaves the cursor where it was, what it writes is that person's alone, and
-// the person's own rank and tiers survive the next pass.
+// the person's own places and tiers survive the next pass.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { MergePlan } from "./lib/priorityPass";
 import { LATE_MARGIN_MS } from "./priorityPassInputs";
-import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
+import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
+import { api, internal } from "./_generated/api";
+
+const pri = (api as any).priorities;
 
 setDefaultTimeout(60_000);
 
@@ -108,19 +111,20 @@ describe("runPass", () => {
     expect(last.cursor_at).toBeGreaterThan(w.now - LATE_MARGIN_MS - 60_000);
   });
 
-  test("creates pri-N rows and maps the session; the person's rank and tier survive the next pass", async () => {
+  test("creates pri-N rows and maps the session; the person's tier survives the next pass", async () => {
     const w = await world();
     await w.send(w.ana, w.teamConv, w.now - 2 * H, "get grader faults under ten percent");
     model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
     expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
 
     const [created] = await w.priorities();
-    expect(created).toMatchObject({ short_id: "pri-1", user_id: w.ana, workspace: w.team, title: "Trusted evals", status: "active", rank: 1, rank_set_by: "pass" });
+    expect(created).toMatchObject({ short_id: "pri-1", user_id: w.ana, workspace: w.team, title: "Trusted evals", status: "active", ai_rank: 1 });
+    expect(created.person_pos).toBeUndefined();
     expect(created.steps).toEqual([{ key: "s1", title: "Grader faults under 10%", tier: "critical", tier_set_by: "pass", refs: [{ kind: "session", id: "jx7team" }], done: false }]);
     expect(await w.conversation(w.teamConv)).toMatchObject({ priority_id: created._id, priority_step_key: "s1" });
 
-    // The person ranks it third and moves its step to polish.
-    await w.t.run((ctx) => ctx.db.patch(created._id, { rank: 3, rank_set_by: "person", steps: [{ ...created.steps[0], tier: "polish", tier_set_by: "person" }] }));
+    // The person moves its step to polish.
+    await w.t.run((ctx) => ctx.db.patch(created._id, { steps: [{ ...created.steps[0], tier: "polish", tier_set_by: "person" }] }));
     // Stamped below the cursor but landing after the first pass: the overlap reads it.
     await w.send(w.ana, w.teamConv, w.now - 8 * 60_000, "grader faults at nine percent");
     model.reply = (prompt) => {
@@ -129,8 +133,48 @@ describe("runPass", () => {
     };
     expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
     const [after] = await w.priorities();
-    expect(after).toMatchObject({ short_id: "pri-1", summary: "Under ten percent", rank: 3, rank_set_by: "person" });
+    expect(after).toMatchObject({ short_id: "pri-1", summary: "Under ten percent" });
     expect(after.steps[0]).toMatchObject({ key: "s1", tier: "polish", tier_set_by: "person" });
+  });
+});
+
+describe("relative rank across pass runs", () => {
+  test("a pass run after the person's moves keeps what they placed in their order; a new priority slots in between them", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      for (const n of [1, 2, 3, 4]) {
+        await ctx.db.insert("priorities", {
+          user_id: w.ana, workspace: w.team, short_id: `pri-7${n}`, title: `Priority 7${n}`, summary: "", status: "active", ai_rank: n,
+          steps: [], first_seen_at: 1, last_active_at: w.now - DAY, pass_at: 1, created_at: 1, updated_at: 1,
+        });
+      }
+    });
+    const order = async () => (await w.t.withIdentity({ subject: `${w.ana}|session` }).query(pri.list, { workspace: w.team, status: "active" })).priorities
+      .map((p: any) => `${p.rank}:${p.short_id}:${p.rank_source}`);
+    const ana = w.t.withIdentity({ subject: `${w.ana}|session` });
+    await ana.mutation(pri.moveTo, { short_id: "pri-74", to: 1 });
+    await ana.mutation(pri.moveTo, { short_id: "pri-72", to: 3 });
+    expect(await order()).toEqual(["1:pri-74:person", "2:pri-71:ai", "3:pri-72:person", "4:pri-73:ai"]);
+    const placed = async () => (await w.priorities()).filter((p: any) => p.person_pos !== undefined).map((p: any) => [p.short_id, p.person_pos]);
+    const before = await placed();
+
+    // The reply ranks everything backwards, the placed ones included.
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "grader work");
+    model.reply = () => JSON.stringify({
+      priorities: ["pri-73", "pri-72", "pri-71", "pri-74"].map((short_id, i) => proposal({ short_id, title: `Priority ${short_id.slice(4)}`, rank: i + 1, steps: [], sessions: [] })),
+      unassigned: [],
+    });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(await placed()).toEqual(before);
+    expect(await order()).toEqual(["1:pri-73:ai", "2:pri-74:person", "3:pri-71:ai", "4:pri-72:person"]);
+
+    // A new priority the pass proposes at #3 lands between the two placed ones; the rest keep their places.
+    await w.send(w.ana, w.teamConv, w.now - 8 * 60_000, "new work");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Fresh", rank: 3 })], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(await placed()).toEqual(before);
+    const fresh = (await w.priorities()).find((p: any) => p.title === "Fresh")!;
+    expect(await order()).toEqual(["1:pri-73:ai", "2:pri-74:person", `3:${fresh.short_id}:ai`, "4:pri-71:ai", "5:pri-72:person"]);
   });
 });
 
@@ -205,7 +249,7 @@ describe("runPass, harder cases", () => {
   test("of two interleaved runs, the one that applies after the other finished writes nothing and keeps the newer cursor", async () => {
     const w = await world();
     const plan = (title: string): MergePlan => ({
-      creates: [{ ref: "new-1", first_seen_at: 1, title, summary: "", status: "active", rank: 1, rank_set_by: "pass", serves: null, steps: [], last_active_at: 1, done_at: null, pass_at: 1 }],
+      creates: [{ ref: "new-1", first_seen_at: 1, title, summary: "", status: "active", ai_rank: 1, serves: null, steps: [], last_active_at: 1, done_at: null, pass_at: 1 }],
       updates: [], merges: [], sessions: [{ session: "jx7team", priority: "new-1", step_key: null }], unmap: [], notes: [], rewritten: [],
     });
     const apply = (title: string, started_at: number, from_cursor: number, cursor_at: number) =>
@@ -290,6 +334,79 @@ describe("what a pass may read, and how far", () => {
     expect(model.prompts).toHaveLength(3);
   });
 
+  test("a plan that throws as it lands records the call's cost, and the third such failure steps past", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    const real = (applyPlan as any)._handler;
+    (applyPlan as any)._handler = async () => { throw new Error("write limit reached"); };
+    try {
+      for (let i = 0; i < 3; i++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    } finally {
+      (applyPlan as any)._handler = real;
+    }
+    const runs = await w.runs();
+    expect(runs.map((r: any) => [r.status, r.repeats, r.cost_usd > 0])).toEqual([["error", true, true], ["error", true, true], ["error", true, true]]);
+    expect(runs[0].error).toContain("applying the plan failed: write limit reached");
+    expect(runs[0].cursor_at).toBe(runs[1].cursor_at);
+    expect(runs[2].cursor_at).toBeGreaterThan(runs[0].cursor_at);
+    expect(runs[2].error).toContain("stepped past");
+  });
+
+  test("a plan that fails to land on a write conflict is not a repeat: the cursor stays", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    const real = (applyPlan as any)._handler;
+    const errors = [
+      'Documents read from or written to the "priorities" table changed while this mutation was being run and on every subsequent retry.',
+      "OptimisticConcurrencyControlFailure",
+      'Documents read from or written to the "conversations" table changed while this mutation was being run and on every subsequent retry.',
+    ];
+    let i = 0;
+    (applyPlan as any)._handler = async () => { throw new Error(errors[i++]); };
+    try {
+      for (let n = 0; n < 3; n++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    } finally {
+      (applyPlan as any)._handler = real;
+    }
+    const runs = await w.runs();
+    expect(runs.map((r: any) => [r.status, !!r.repeats, r.cost_usd > 0])).toEqual([["error", false, true], ["error", false, true], ["error", false, true]]);
+    expect(new Set(runs.map((r: any) => r.cursor_at)).size).toBe(1);
+    expect(runs.some((r: any) => r.error.includes("stepped past"))).toBe(false);
+  });
+
+  test("a plan that times out as it lands is a repeat: the third steps past", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    const real = (applyPlan as any)._handler;
+    (applyPlan as any)._handler = async () => { throw new Error("Your request timed out performing too many system operations"); };
+    try {
+      for (let n = 0; n < 3; n++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    } finally {
+      (applyPlan as any)._handler = real;
+    }
+    const runs = await w.runs();
+    expect(runs.map((r: any) => r.repeats)).toEqual([true, true, true]);
+    expect(runs[2].cursor_at).toBeGreaterThan(runs[0].cursor_at);
+    expect(runs[2].error).toContain("stepped past");
+  });
+
+  test("a failure recorded against a run that landed leaves it ok", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const ok = (await w.latestRun())!;
+    await w.t.mutation((internal as any).priorityPassRun.recordRun, {
+      user_id: w.ana, workspace: w.team, started_at: ok.started_at, cursor_at: ok.cursor_at, model: ok.model, run_id: ok._id,
+      status: "error", error: "applying the plan failed: the answer was lost", repeats: true, step_to: ok.cursor_at + 1,
+    });
+    expect(await w.latestRun()).toMatchObject({ _id: ok._id, status: "ok", cursor_at: ok.cursor_at });
+    expect((await w.latestRun())?.error).toBeUndefined();
+  });
+
   test("an overloaded model three times in a row loses no work: the cursor stays until a pass goes through", async () => {
     const w = await world();
     await w.send(w.ana, w.teamConv, w.now - H, "the work that must not be lost");
@@ -327,10 +444,50 @@ describe("what a pass may read, and how far", () => {
     const w = await world();
     await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 2 * H, finished_at: w.now - 2 * H, status: "ok", cursor_at: w.now - 2 * H, model: "m", cost_usd: PRIORITY_PASS_DAILY_USD, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     await w.send(w.ana, w.teamConv, w.now - H, "work");
-    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "Passes here spent today's $1.50; the next one can run tomorrow." });
-    expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "Passes here spent today's $1.50; the next one can run tomorrow." });
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: `Passes here spent today's $${PRIORITY_PASS_DAILY_USD.toFixed(2)}; the next one can run tomorrow.` });
+    expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: `Passes here spent today's $${PRIORITY_PASS_DAILY_USD.toFixed(2)}; the next one can run tomorrow.` });
     expect(model.prompts).toHaveLength(0);
     expect((await w.runs()).at(-1)).toMatchObject({ status: "skipped", error: "daily ceiling" });
+  });
+
+  test("whether a pair has an ok run is one indexed read on its status, however many runs it has", async () => {
+    const w = await world();
+    const run = (i: number, status: string) => ({ user_id: w.ana, workspace: w.team, started_at: w.now - i * 60_000, finished_at: w.now - i * 60_000, status, cursor_at: 1, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    await w.t.run(async (ctx) => { for (let i = 0; i < 600; i++) await ctx.db.insert("priority_pass_runs", run(i + 10, "skipped") as any); });
+    const read = async () => {
+      const used: string[] = [];
+      let found = false;
+      await w.t.run(async (ctx: any) => {
+        const db = new Proxy(ctx.db, {
+          get(target: any, prop: string) {
+            if (prop === "query") return (table: string) => {
+              const q = target.query(table);
+              return new Proxy(q, { get(qt: any, p: string) { if (p === "withIndex") return (name: string, fn: any) => (used.push(name), qt.withIndex(name, fn)); if (p === "filter") return () => { throw new Error("hasOkRun scanned with filter"); }; const v = qt[p]; return typeof v === "function" ? v.bind(qt) : v; } });
+            };
+            const value = target[prop];
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        found = await hasOkRun({ db }, w.ana, w.team);
+      });
+      return { used, found };
+    };
+    expect(await read()).toEqual({ used: ["by_user_workspace_status"], found: false });
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", run(5000, "ok") as any));
+    expect((await read()).found).toBe(true);
+  });
+
+  test("the catch-up allowance counts the newest runs: hundreds of old cheap runs cannot hide the dear ones that spent it", async () => {
+    const w = await world();
+    const run = (ago: number, cost_usd: number) => ({ user_id: w.ana, workspace: w.team, started_at: w.now - ago, finished_at: w.now - ago, status: cost_usd ? "error" : "skipped", cursor_at: 1, model: "m", cost_usd, catch_up: true, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++) await ctx.db.insert("priority_pass_runs", run(10 * DAY - i * 60_000, 0) as any);
+      for (let i = 0; i < 3; i++) await ctx.db.insert("priority_pass_runs", run(H - i * 60_000, 2) as any);
+    });
+    expect(await w.t.run((ctx) => catchUpSpent(ctx, w.ana, w.team))).toBeGreaterThanOrEqual(PRIORITY_PASS_FIRST_USD);
+    // So the next run is no catch-up: the daily ceiling applies.
+    const blocked = await w.t.run((ctx) => runBlocker(ctx, w.ana, w.team, w.now, false, true));
+    expect((blocked as any)?.catch_up).toBeUndefined();
   });
 
   test("the first catch-up spends from its own allowance, outside the daily ceiling, and its chained runs too; after it the ceiling applies", async () => {
@@ -384,17 +541,17 @@ describe("what a pass may read, and how far", () => {
 
 
 describe("applyPlan", () => {
-  const write = { title: "Mine", summary: "s", status: "active" as const, rank: 1, rank_set_by: "pass" as const, serves: null, steps: [], last_active_at: 1, done_at: null, pass_at: 1 };
+  const write = { title: "Mine", summary: "s", status: "active" as const, ai_rank: 1, serves: null, steps: [], last_active_at: 1, done_at: null, pass_at: 1 };
 
-  test("never maps a conversation of another person or another workspace, never touches another person's priority, and lets a rank set meanwhile stand", async () => {
+  test("never maps a conversation of another person or another workspace, never touches another person's priority, and lets a place the person set meanwhile stand", async () => {
     const w = await world();
-    const bens = await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ben, workspace: w.team, short_id: "pri-50", title: "Ben's", summary: "", status: "active", rank: 1, rank_set_by: "pass", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
-    const ranked = await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-51", title: "Ranked", summary: "", status: "active", rank: 2, rank_set_by: "person", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
+    const bens = await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ben, workspace: w.team, short_id: "pri-50", title: "Ben's", summary: "", status: "active", ai_rank: 1, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
+    const ranked = await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-51", title: "Ranked", summary: "", status: "active", person_pos: 2, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
     const plan: MergePlan = {
       creates: [{ ref: "new-1", first_seen_at: 1, ...write }],
       updates: [
         { short_id: "pri-50", patch: { title: "Taken over" } },
-        { short_id: "pri-51", patch: { rank: 1, rank_set_by: "pass", title: "Ranked still" } },
+        { short_id: "pri-51", patch: { ai_rank: 1, title: "Ranked still" } },
       ],
       merges: [{ short_id: "pri-50", merged_into: "new-1" }],
       sessions: ["jx7team", "jx7ben", "jx7mine", "jx7othr"].map((session) => ({ session, priority: "new-1", step_key: null })),
@@ -412,7 +569,24 @@ describe("applyPlan", () => {
     expect((await w.conversation(w.teamConv))?.priority_id).toBe(created._id);
     for (const other of [w.benConv, w.personalConv, w.otherConv]) expect((await w.conversation(other))?.priority_id).toBeUndefined();
     expect(await w.t.run((ctx) => ctx.db.get(bens))).toMatchObject({ title: "Ben's", status: "active" });
-    expect(await w.t.run((ctx) => ctx.db.get(ranked))).toMatchObject({ title: "Ranked still", rank: 2, rank_set_by: "person" });
+    expect(await w.t.run((ctx) => ctx.db.get(ranked))).toMatchObject({ title: "Ranked still", person_pos: 2 });
     expect((await w.runs()).at(-1)).toMatchObject({ status: "ok", cursor_at: 5 });
+  });
+
+  test("a merge survivor's carried place lands only on a row the person has not placed since", async () => {
+    const w = await world();
+    const insert = (short_id: string, extra: Record<string, unknown>) => w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1, ...extra,
+    }));
+    const open = await insert("pri-60", { ai_rank: 3 });
+    const placed = await insert("pri-61", { person_pos: 4 });
+    const plan: MergePlan = {
+      creates: [],
+      updates: [{ short_id: "pri-60", patch: { person_pos: 1 }, seen_steps: [] }, { short_id: "pri-61", patch: { person_pos: 1 }, seen_steps: [] }],
+      merges: [], sessions: [], unmap: [], notes: [], rewritten: [],
+    };
+    await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: 1, from_cursor: 1, cursor_at: 5, model: "m", plan });
+    expect((await w.t.run((ctx) => ctx.db.get(open)))!.person_pos).toBe(1);
+    expect((await w.t.run((ctx) => ctx.db.get(placed)))!.person_pos).toBe(4);
   });
 });

@@ -141,6 +141,9 @@ export const MUST_DELIVER_ACTIONS = new Set([
   // dedupes on client_id (and refuses to wake an anchor twice for it), so
   // re-driving it forever is safe.
   "dispatchChatSend",
+  // A correction to the priorities pass is typed text too. priorities.correct
+  // dedupes on its client_key, so re-driving it forever stores it once.
+  "correctPriority",
 ]);
 
 // Fork creates ride convCommand, so the action name alone can't mark them —

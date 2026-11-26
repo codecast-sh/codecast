@@ -17,3 +17,12 @@ export async function flagPriorityRewrite(ctx: { db: any }, conv: { priority_id?
   const priority = await ctx.db.get(conv.priority_id);
   if (priority && !priority.needs_rewrite) await ctx.db.patch(priority._id, { needs_rewrite: true });
 }
+
+/** A session moved between priorities outside a pass (lib/priorityLinks): each stored count follows. One without a count yet is counted on read. */
+export async function moveSessionCount(ctx: { db: any }, from: Id<"priorities"> | undefined, to: Id<"priorities"> | undefined): Promise<void> {
+  if (String(from ?? "") === String(to ?? "")) return;
+  for (const [id, delta] of [[from, -1], [to, 1]] as const) {
+    const priority = id ? await ctx.db.get(id) : null;
+    if (priority?.session_count !== undefined) await ctx.db.patch(priority._id, { session_count: Math.max(0, priority.session_count + delta) });
+  }
+}

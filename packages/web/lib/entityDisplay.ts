@@ -12,6 +12,7 @@ import { useSyncOrgProposal } from "../hooks/useSyncOrgProposals";
 import { useCallPlaces } from "../hooks/useSyncCalls";
 import { callTitle } from "./calls/roomLabels";
 import { useNamedFlow } from "../hooks/useFlowObject";
+import { usePriorityDetail, useSyncPriorityDetail } from "../hooks/usePriorityDetail";
 import { teamMembersOf } from "./activeTeam";
 const api = _api as any;
 
@@ -65,6 +66,7 @@ export const TYPE_LABEL: Record<EntityType, string> = {
   person: "Person",
   secret: "Secret",
   flow: "Flow",
+  priority: "Priority",
 };
 
 
@@ -295,6 +297,15 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // A flow (`flow:change`) is the pool's flow of that slug, shipped or the team's, else the viewer's own of that name.
   const { flow: namedFlow } = useNamedFlow(live && type === "flow" ? flowSlugOf(rawId) : null);
   const flow = useMemo(() => (namedFlow ? { ...namedFlow, _id: namedFlow.workflowId ?? rawId, short_id: `flow:${namedFlow.slug}`, title: namedFlow.label } : namedFlow), [namedFlow, rawId]);
+  // A priority (`pri-N`) is store-fed like a proposal: the feeder syncs
+  // priorities.show into priorityDetails and the reader lays it over the
+  // workspace list's row (lib/priorityDetail), so the pill, its card and the
+  // page paint the same row. One `show` refuses reads as no access, whatever
+  // the store held.
+  const priorityFeed = useSyncPriorityDetail(live && type === "priority" ? rawId : null);
+  const priorityRow = usePriorityDetail(live && type === "priority" ? rawId : null);
+  const priorityRefused = type === "priority" && priorityFeed.refused;
+  const priority = type === "priority" ? (priorityRefused ? null : priorityFeed.ready ? priorityRow ?? null : undefined) : undefined;
   // A role (`or-N`) seeds from the org tree in the store, which every
   // workspace screen feeds. The role card answers only for a role the tree
   // does not hold (another workspace's, or a page that never fed the tree):
@@ -304,7 +315,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     [live, type, rawId],
   );
   const { data: roleCard } = useQueryNoThrow(api.org.roleCard, live && type === "role" && !roleInTree ? { role_id: rawId } : "skip");
-  const served = fixtures ? fixture?.entity ?? null : type === "role" ? roleCard : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : type === "deploy" ? deploy : type === "flow" ? flow : undefined;
+  const served = fixtures ? fixture?.entity ?? null : type === "role" ? roleCard : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : type === "source" ? source : type === "replay" ? replay : type === "deploy" ? deploy : type === "flow" ? flow : type === "priority" ? priority : undefined;
 
   // Local-first: the client usually already holds this row, so paint the title
   // on the FIRST frame instead of flashing the raw id until the query answers.
@@ -315,7 +326,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     () => (live && type ? findEntityInStore(useInboxStore.getState(), type, replayRef?.replay ?? rawId) : undefined),
     [live, type, rawId, replayRef?.replay],
   );
-  const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : served ?? seed;
+  const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : priorityRefused ? null : served ?? seed;
   // An untitled call is named by where it happened ("Huddle in <session>"),
   // by the same rule the Calls list and its page use (callTitle).
   const callRow = type === "call" && entity?.room_key ? entity : null;
@@ -367,7 +378,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // of a proposal keeps its number, so the page opens with it in focus.
   // A project and a role open by their `pj-…` and `or-N` too, and a person
   // by handle (personRefOf), so one object never opens as two tabs.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : type === "person" ? (entity?._id ? personRefOf(entity) : rawId) : ((type === "initiative" || type === "project" || type === "role" || type === "proposal" || type === "decision" || type === "source" || type === "replay" || type === "deploy" || type === "flow") && entity?.short_id) || (entity?._id ?? rawId);
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : replayRef ? rawId.toLowerCase() : type === "person" ? (entity?._id ? personRefOf(entity) : rawId) : ((type === "initiative" || type === "project" || type === "role" || type === "proposal" || type === "decision" || type === "source" || type === "replay" || type === "deploy" || type === "flow" || type === "priority") && entity?.short_id) || (entity?._id ?? rawId);
   const href = (isSession ? sharedSessionHref(entity) : null) ?? entityRoute(type ?? "session", routeId) ?? "#";
 
   return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href, changeSeq: changeRef?.seq };

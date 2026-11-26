@@ -241,6 +241,16 @@ describe("must-deliver retention (user sends never drop)", () => {
     expect(d.entry.attempts).toBe(MAX_OUTBOX_BOOT_ATTEMPTS + 4);
   });
 
+  // A correction to the priorities pass is typed text; priorities.correct dedupes on its client key.
+  it("never gives up on a correctPriority entry, and a low-stakes write still hits the cap", () => {
+    const kept = outboxFailureDisposition(
+      seedEntry({ action: "correctPriority", args: ["pri-1", "Wrong milestone", null, "ck-1"], attempts: MAX_OUTBOX_BOOT_ATTEMPTS + 3 }),
+    );
+    expect(kept.keep).toBe(true);
+    const dropped = outboxFailureDisposition(seedEntry({ action: "setPriorityStepDone", attempts: MAX_OUTBOX_BOOT_ATTEMPTS }));
+    expect(dropped.keep).toBe(false);
+  });
+
   it("retains a sendMessage across far more failed boots than the cap", async () => {
     const { wrapped, outbox } = makeHarness();
     outbox.set("e1", seedEntry({ action: "sendMessage" }));

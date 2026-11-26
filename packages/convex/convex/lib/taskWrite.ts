@@ -13,6 +13,8 @@
 // echoing at each other (S4.1). This module is for OUR writes only.
 
 import { internal } from "../_generated/api";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
+import { taskStatusChanged } from "./priorityLinks";
 
 export const SYNCED_EXTERNAL_FIELDS = ["title", "description", "status", "priority", "assignee", "labels", "parent_id"] as const;
 
@@ -43,8 +45,17 @@ export async function schedulePushTask(ctx: any, task: any, updates: Record<stri
  * Patch a task row and push whatever synced field the patch moved. `task` is
  * the row as read BEFORE the write: the diff against it is what decides the
  * push, so a write that changes nothing the provider shows costs no call.
+ * `actor` is the session that made the change, when one did, or its id
+ * (read only where priorities is on); a machine's asks no priorities pass
+ * (lib/priorityLinks taskStatusChanged).
  */
-export async function patchTask(ctx: any, task: any, updates: Record<string, any>): Promise<void> {
+export async function patchTask(ctx: any, task: any, updates: Record<string, any>, actor?: any): Promise<void> {
   await ctx.db.patch(task._id, updates);
   await schedulePushTask(ctx, task, updates);
+  if (closesOrReopens(task, updates)) await taskStatusChanged(ctx, task, actor);
+}
+
+/** The write moves the task's status to or from done or dropped: the milestones naming it recompute (lib/priorityLinks). */
+export function closesOrReopens(task: { status?: string }, updates: Record<string, any>): boolean {
+  return "status" in updates && updates.status !== task.status && (isTerminalTaskStatus(updates.status) || isTerminalTaskStatus(task.status));
 }

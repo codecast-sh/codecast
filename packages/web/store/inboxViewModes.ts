@@ -4,7 +4,9 @@
 import type { InboxViewMode } from "./clientPrefsTypes";
 import type { OrgLensMode } from "./orgLens";
 
-export function inboxViewModes({ hasLabels, hasPlans, orgLenses, hasTriggers, hasMachines }: {
+export function inboxViewModes({ hasPriorities, hasLabels, hasPlans, orgLenses, hasTriggers, hasMachines }: {
+  /** The workspace has the priorities feature on. */
+  hasPriorities: boolean;
   hasLabels: boolean;
   hasPlans: boolean;
   orgLenses: readonly OrgLensMode[];
@@ -13,7 +15,9 @@ export function inboxViewModes({ hasLabels, hasPlans, orgLenses, hasTriggers, ha
   hasMachines: boolean;
 }): InboxViewMode[] {
   return [
-    "grouped", "recent", "time",
+    "grouped",
+    ...(hasPriorities ? ["priorities" as const] : []),
+    "recent", "time",
     ...(hasLabels ? ["bucket" as const] : []),
     ...(hasPlans ? ["plan" as const] : []),
     ...orgLenses,

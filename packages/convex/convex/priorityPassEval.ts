@@ -14,7 +14,8 @@ import { internalAction, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { runModelCall } from "./modelCalls";
-import { mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PassPriority, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { mergePriorities, priorityPassRequest, type MergePlan, type PassPriority, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { parsePriorityPassOutput } from "./lib/priorityPassParse";
 import { LATE_MARGIN_MS, MINUTE, type PassInputs } from "./priorityPassInputs";
 import { PASS_TIMEOUT_MS, callScope, fittingPrefix, runShare } from "./priorityPassRun";
 
@@ -65,7 +66,7 @@ export function applyPlanInMemory(state: EvalState, plan: MergePlan, input: Prio
   for (const c of plan.creates) {
     const short_id = `pri-${++next_id}`;
     ids.set(c.ref, short_id);
-    byId.set(short_id, { short_id, title: c.title, summary: c.summary, status: c.status, rank: c.rank, rank_set_by: c.rank_set_by, serves: c.serves, steps: c.steps, last_active_at: c.last_active_at, sessions: [] });
+    byId.set(short_id, { short_id, title: c.title, summary: c.summary, status: c.status, person_pos: null, ai_rank: c.ai_rank, serves: c.serves, steps: c.steps, last_active_at: c.last_active_at, sessions: [] });
   }
   for (const u of plan.updates) {
     const p = byId.get(u.short_id);
@@ -113,7 +114,14 @@ export const evalPass = internalAction({
       const tasks = new Map(state.tasks.map((t) => [t.short_id, t]));
       for (const s of read.input.sessions) for (const t of s.tasks) tasks.set(t.short_id, t);
       const stepTaskIds = new Set(state.priorities.flatMap((p) => p.steps.flatMap((s) => s.refs.filter((r) => r.kind === "task").map((r) => r.id))));
-      const full: PriorityPassInput = { ...read.input, priorities: state.priorities, step_tasks: [...stepTaskIds].flatMap((id) => tasks.get(id) ?? []) };
+      // A calibration run starts from empty: the person's real corrections and session placements name priorities it never made.
+      const full: PriorityPassInput = {
+        ...read.input,
+        priorities: state.priorities,
+        step_tasks: [...stepTaskIds].flatMap((id) => tasks.get(id) ?? []),
+        sessions: read.input.sessions.map(({ placed: _p, not_for: _n, ...session }) => session),
+        corrections: [],
+      };
       const { input, readTo, left } = runShare(read, full, Math.min(fittingPrefix(full), args.chunk ?? Infinity));
       if (left && readTo <= state.cursor_at) throw new Error(`calibration stuck at cursor ${state.cursor_at}: the next chunk would read the same sessions`);
       for (const s of input.sessions) readIds.set(s.id, s.title);

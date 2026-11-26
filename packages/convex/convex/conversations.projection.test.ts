@@ -886,3 +886,15 @@ describe("overlay read budget — the newest-message cache (ct-92571)", () => {
     expect(messageReads(next.ops)).toBe(1);
   });
 });
+
+describe("the row carries the priority it serves", () => {
+  test("priority_id and priority_step_key ride the base list, null when unmapped", async () => {
+    const tables = {
+      conversations: [conv("a", { priority_id: "priorities_1", priority_step_key: "s2" }), conv("b")],
+    };
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, { includeLiveness: false });
+    const byId = new Map(sessions.map((s: any) => [s._id, s]));
+    expect(byId.get("conversations_a")).toMatchObject({ priority_id: "priorities_1", priority_step_key: "s2" });
+    expect(byId.get("conversations_b")).toMatchObject({ priority_id: null, priority_step_key: null });
+  });
+});

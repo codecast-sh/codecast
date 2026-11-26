@@ -35,6 +35,7 @@ const ENTITY_PAGES: Record<EntityType, Page> = {
   deploy: ["components/deploys/DeploysBoard.tsx"],
   secret: ["components/secrets/SecretDetail.tsx"],
   flow: ["components/line/workspace/LineWorkspace.tsx"],
+  priority: ["components/priorities/PriorityPage.tsx"],
 };
 
 // Object pages that are not entity types of their own.

@@ -85,6 +85,8 @@ export * from '@/components/sessionFormat';
 import { useSessionShip } from '@codecast/web/hooks/useSessionShipState';
 import type { SessionShip } from '@codecast/web/lib/ship/sessionShip';
 import { formatRelativeTime, sessionTitle, projectColor, statusColor, statusLabel, projectName } from '@/components/sessionFormat';
+import type { PriorityRankLabel } from '@codecast/web/store/priorityOrder';
+import { PriorityRankTag } from '@/components/PriorityRankTag';
 
 /** Where a session's work is on its way to production, as a small tag in its tone. */
 function ShipTag({ ship }: { ship: SessionShip }) {
@@ -215,7 +217,7 @@ function RowWithOwner({ session, line = false, placedBucket, placedState, pendin
   return line ? <RNText style={styles.summaryText} numberOfLines={1}>{lead}</RNText> : lead;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number } & RowPlacementProps) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel } & RowPlacementProps) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   const { projectFilter, showImageThumb } = useRowEnv();
@@ -296,6 +298,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
           />
         </RNView>
         <RNView style={styles.rightMeta}>
+          {priorityRank !== undefined && <PriorityRankTag rank={priorityRank} />}
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
           {ownersModel && <RowCoOwners id={session._id} />}
           <RNText style={styles.timeText}>
@@ -402,7 +405,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend }: RowPlacementProps & {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank }: RowPlacementProps & {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -419,6 +422,8 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   clock?: number;
   /** When a revive was asked for this row (store blockedReviveRequestedAt). */
   reviveAt?: number;
+  /** The inbox's Priorities view only (lib/inboxPriorities): "#N", "—" or None. */
+  priorityRank?: PriorityRankLabel;
 }) {
   const Theme = useTheme();
   const translateX = useRef(new RNAnimated.Value(0)).current;
@@ -536,7 +541,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} />
+      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} priorityRank={priorityRank} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );

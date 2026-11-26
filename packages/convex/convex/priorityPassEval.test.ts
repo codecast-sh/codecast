@@ -136,7 +136,7 @@ describe("evalPass", () => {
   test("runs from empty over the window and writes nothing: no priority, no mapping, no run row", async () => {
     const w = await world();
     // A priority the person already has is not part of a calibration pass.
-    await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-60", title: "Already here", summary: "", status: "active", rank: 1, rank_set_by: "pass", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
+    await w.t.run((ctx) => ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-60", title: "Already here", summary: "", status: "active", ai_rank: 1, steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 }));
     await w.send(w.ana, w.teamConv, w.now - 2 * H, "get grader faults under ten percent");
     await w.send(w.ana, w.oldConv, w.now - 30 * DAY, "before the window");
     model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });

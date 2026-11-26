@@ -16,7 +16,8 @@ import { isRestricted } from "./chatAccess";
 import { isStandingSession } from "./lib/orgOwnership";
 import { isRunLog, parseRoomKey } from "@codecast/shared/contracts";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
-import { PRIORITY_PASS_CAPS, type PassCall, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { effectivePriorityOrder, rankSourceOf } from "@codecast/shared/contracts/priorities";
+import { PRIORITY_PASS_CAPS, type PassCall, type PassCorrection, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 
 export const DAY = 86_400_000;
 export const MINUTE = 60_000;
@@ -61,6 +62,10 @@ export type PassInputs = {
   read_to: number;
   /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. */
   strays: Id<"conversations">[];
+  /** The pending corrections the input holds: applyPlan marks them applied. */
+  corrections: Id<"priority_corrections">[];
+  /** Pending ones no prompt can hold (older than all it read, or their priority gone): applyPlan marks them applied as superseded. */
+  superseded: Id<"priority_corrections">[];
 };
 
 const sessionId = (conv: Doc<"conversations">) => conv.short_id ?? String(conv._id);
@@ -122,14 +127,19 @@ export async function activitySince(ctx: { db: any }, userId: Id<"users">, since
   return { sends, pins, more: horizon !== Infinity, read_to: horizon !== Infinity ? horizon - 1 : until };
 }
 
-/** The tasks a session links (the association rail, the tasks it filed, its active task), in this workspace. */
-async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string): Promise<PassTask[]> {
+/**
+ * The tasks a session links (the association rail, the tasks it filed, its
+ * active task), in this workspace. `asOf` keeps only the links and filings
+ * made by then, and leaves out the active task, whose binding time is not kept.
+ */
+export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string, asOf?: number): Promise<PassTask[]> {
+  const by = (row: { _creationTime: number }) => asOf === undefined || row._creationTime <= asOf;
   const ids = new Set<string>();
   const rail = await ctx.db.query("entity_conversations").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).take(50);
-  for (const row of rail) if (row.entity_type === "task") ids.add(String(row.entity_id));
+  for (const row of rail) if (row.entity_type === "task" && by(row)) ids.add(String(row.entity_id));
   const filed = await ctx.db.query("tasks").withIndex("by_created_from_conversation", (q: any) => q.eq("created_from_conversation", conv._id)).take(TASKS_PER_SESSION);
-  for (const t of filed) ids.add(String(t._id));
-  if (conv.active_task_id) ids.add(String(conv.active_task_id));
+  for (const t of filed) if (by(t)) ids.add(String(t._id));
+  if (conv.active_task_id && asOf === undefined) ids.add(String(conv.active_task_id));
   const out: PassTask[] = [];
   for (const raw of ids) {
     if (out.length >= TASKS_PER_SESSION) break;
@@ -165,6 +175,71 @@ async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: 
     out.set(key, pr);
   }
   return [...out.values()];
+}
+
+/** A priority's short id by its id, one read each per call. */
+function shortIds(ctx: { db: any }) {
+  const seen = new Map<string, Promise<string | null>>();
+  return (id: Id<"priorities">): Promise<string | null> => {
+    const key = String(id);
+    if (!seen.has(key)) seen.set(key, ctx.db.get(id).then((p: Doc<"priorities"> | null) => p?.short_id ?? null));
+    return seen.get(key)!;
+  };
+}
+
+/** Where the person (or a known link or the classifier) put a session and which priorities they said it is not part of, as the pass shows them. */
+async function personLinks(conv: Doc<"conversations">, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<Pick<PassSession, "placed" | "not_for">> {
+  const out: Pick<PassSession, "placed" | "not_for"> = {};
+  const by = conv.priority_set_by;
+  const placedOn = by && by !== "pass" && conv.priority_id ? await shortId(conv.priority_id) : null;
+  if (placedOn) out.placed = { priority: placedOn, step_key: conv.priority_step_key ?? null, ...(by === "link" || by === "classifier" ? { by } : {}) };
+  const not: string[] = [];
+  for (const id of conv.priority_not ?? []) {
+    const short = await shortId(id);
+    if (short) not.push(short);
+  }
+  if (not.length) out.not_for = not;
+  return out;
+}
+
+/** The most older pending corrections one pass marks superseded; a later pass takes the rest. */
+const SUPERSEDED_READ = 200;
+
+/**
+ * The person's corrections in the workspace the pass reads, newest
+ * PRIORITY_PASS_CAPS.corrections, oldest first, and the pending ones the
+ * pass turns applied when it succeeds: those it read, those whose priority is
+ * gone, and those older than every correction it read. A prompt only ever
+ * holds the newest ones, so an older correction can never reach a pass: left
+ * pending, it would put the pair in the sweep forever. It counts as
+ * superseded by the newer ones the pass read (`superseded`, apart from the
+ * ones a prompt holds), and stays listed as applied.
+ */
+async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: string, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<{ input: PassCorrection[]; pending: Id<"priority_corrections">[]; superseded: Id<"priority_corrections">[] }> {
+  const rows: Doc<"priority_corrections">[] = await ctx.db
+    .query("priority_corrections")
+    .withIndex("by_user_workspace_created", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+    .order("desc")
+    .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
+    .take(PRIORITY_PASS_CAPS.corrections);
+  const input: PassCorrection[] = [];
+  const pending: Id<"priority_corrections">[] = [];
+  const superseded: Id<"priority_corrections">[] = [];
+  for (const c of rows.reverse()) {
+    const priority = await shortId(c.priority_id);
+    if (priority) input.push({ priority, step_key: c.step_key ?? null, text: c.text, at: c.created_at });
+    if (c.status === "pending") (priority ? pending : superseded).push(c._id);
+  }
+  if (rows.length === PRIORITY_PASS_CAPS.corrections) {
+    const read = new Set(rows.map((c) => String(c._id)));
+    const waiting: Doc<"priority_corrections">[] = await ctx.db
+      .query("priority_corrections")
+      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "pending"))
+      .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
+      .take(SUPERSEDED_READ + read.size);
+    for (const c of waiting) if (!read.has(String(c._id))) superseded.push(c._id);
+  }
+  return { input, pending, superseded };
 }
 
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
@@ -304,7 +379,7 @@ export const passInputs = internalQuery({
     // the sessions they touched: the read stops at the SESSIONS_READ-th session
     // (or ACTIVITY_SCAN rows) and the cursor moves to just before the first
     // session it left out. Each session keeps its newest pin events only.
-    const touched = new Map<string, { conv: Doc<"conversations">; last: number; typed: PassSession["typed"]; pin_events: PassSession["pin_events"] }>();
+    const touched = new Map<string, { conv: Doc<"conversations">; last: number; typed: PassSession["typed"]; pin_events: PassSession["pin_events"]; serves?: string }>();
     const sendRows = ctx.db.query("user_sends").withIndex("by_user_timestamp", (q: any) => q.eq("user_id", args.user_id).gt("timestamp", since).lte("timestamp", until))[Symbol.asyncIterator]();
     const pinRows = ctx.db.query("thread_state_events").withIndex("by_user_at", (q: any) => q.eq("user_id", args.user_id).gt("at", since).lte("at", until))[Symbol.asyncIterator]();
     let send = await sendRows.next();
@@ -327,6 +402,8 @@ export const passInputs = internalQuery({
           else {
             t.pin_events.push({ at, text: row.text });
             if (t.pin_events.length > PRIORITY_PASS_CAPS.pin_events) t.pin_events.shift();
+            // The newest `serves` hint read stands.
+            if (row.serves) t.serves = row.serves;
           }
           touched.set(key, t);
         }
@@ -338,6 +415,7 @@ export const passInputs = internalQuery({
     // Earliest first activity first, as they were read.
     const oldestFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
     const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
+    const shortId = shortIds(ctx);
     const sessions: PassSession[] = [];
     for (const t of oldestFirst) {
       const conv = t.conv;
@@ -353,11 +431,20 @@ export const passInputs = internalQuery({
         prs: await sessionPrs(ctx, conv, prBudget),
         pin_events: t.pin_events,
         typed: t.typed,
+        ...(await personLinks(conv, shortId)),
+        ...(t.serves ? { serves: t.serves } : {}),
       });
     }
 
     // The person's priorities in this workspace, with their newest sessions.
     const rows = await livePriorities(ctx, args.user_id, args.workspace, now, PRIORITIES_READ);
+    // A group the rank backfill has not reached: each active row's place as it shows (and as the backfill will write it), so the pass slots around it.
+    const legacyPlace = new Map<string, Pick<PassPriority, "person_pos" | "ai_rank">>();
+    if (rows.some((p) => p.status === "active" && p.rank_set_by != null)) {
+      for (const [i, p] of effectivePriorityOrder(rows).entries()) {
+        legacyPlace.set(String(p._id), rankSourceOf(p) === "person" ? { person_pos: i + 1, ai_rank: null } : { person_pos: null, ai_rank: i + 1 });
+      }
+    }
     const priorities: PassPriority[] = [];
     const strays: Id<"conversations">[] = [];
     const stepTaskIds = new Set<string>();
@@ -380,14 +467,20 @@ export const passInputs = internalQuery({
         title: p.title,
         summary: p.summary,
         status: p.status as PassPriority["status"],
-        rank: p.rank ?? null,
-        rank_set_by: p.rank_set_by,
+        person_pos: p.person_pos ?? null,
+        ai_rank: p.ai_rank ?? null,
+        ...legacyPlace.get(String(p._id)),
+        ...(p.status_set_by ? { status_set_by: p.status_set_by } : {}),
         serves: p.serves ?? null,
         steps: p.steps,
         last_active_at: p.last_active_at,
-        sessions: readable.map((c) => ({ id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at })),
+        sessions: readable.map((c) => ({
+          id: sessionId(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
+          ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
+        })),
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
+        ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),
       });
       for (const s of p.steps) for (const r of s.refs) if (r.kind === "task") stepTaskIds.add(r.id);
     }
@@ -403,6 +496,7 @@ export const passInputs = internalQuery({
     const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
     const ws = parseWorkspaceKey(args.workspace);
     const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
+    const corrections = await correctionsFor(ctx, args.user_id, args.workspace, shortId);
     const calls = team ? await callsIn(ctx, vis, args.user_id, team._id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until, (landed) => fresh(landed, landed)) : [];
     return {
       input: {
@@ -415,11 +509,14 @@ export const passInputs = internalQuery({
         step_tasks,
         sessions,
         calls,
+        corrections: corrections.input,
       },
       cursor_at,
       more: stopAt !== null,
       read_to: stopAt !== null ? Math.max(cursor_at, Math.max(stopAt, cursor_at) - 1) : until,
       strays,
+      corrections: corrections.pending,
+      superseded: corrections.superseded,
     };
   },
 });

@@ -13,21 +13,11 @@ import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
 import { DrawerHeading as Heading, DrawerRow as Row } from '@/components/nav/DrawerRow';
 import { Places } from '@/components/nav/Places';
 import {
-  useInboxStore, sortLabels, resolveInboxViewMode, resolveInboxOldestFirst, type InboxViewMode,
+  useInboxStore, sortLabels, resolveInboxViewMode, resolveInboxOldestFirst,
 } from '@codecast/web/store/inboxStore';
+import { inboxViewOptions } from '@/lib/inboxViews';
+import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 
-/** The inbox lenses, the same names and availability rules as web's
- *  GlobalSessionPanel: by label once a label exists, by plan once a session
- *  carries one. The pick writes the shared inbox_view_mode pref. */
-export function inboxViewOptions(hasLabels: boolean, hasPlans: boolean): Array<{ key: InboxViewMode; label: string }> {
-  return [
-    { key: 'grouped', label: 'By status' },
-    { key: 'recent', label: 'By updated' },
-    { key: 'time', label: 'By created' },
-    ...(hasLabels ? [{ key: 'bucket' as const, label: 'By label' }] : []),
-    ...(hasPlans ? [{ key: 'plan' as const, label: 'By plan' }] : []),
-  ];
-}
 
 // The find field shows once the two lists outgrow a screen.
 const FIND_AT = 10;
@@ -41,7 +31,7 @@ export function InboxDrawer() {
   const buckets = useInboxStore((s) => s.buckets);
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
-  const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const [find, setFind] = useState('');
 
@@ -49,7 +39,8 @@ export function InboxDrawer() {
   const q = find.trim().toLowerCase();
   const shownLabels = q ? labels.filter((b) => b.name.toLowerCase().includes(q)) : labels;
   const shownProjects = q ? projectCounts.filter(([name]) => name.toLowerCase().includes(q)) : projectCounts;
-  const viewOptions = inboxViewOptions(sortLabels(buckets).length > 0, active.some((s) => !!(s as any).active_plan));
+  const hasPriorities = useWorkspaceFeatureState('priorities') === true;
+  const viewOptions = inboxViewOptions({ hasPriorities, hasLabels: sortLabels(buckets).length > 0, hasPlans: active.some((s) => !!(s as any).active_plan) });
   const viewLabel = viewOptions.find((o) => o.key === viewMode)?.label ?? 'By status';
 
   const pick = (apply: () => void) => {
