@@ -10,7 +10,7 @@
 // for good. Automatic passes of one pair start at least PASS_MIN_GAP_MS apart,
 // and only when a token bucket of dollars, refilled at 80% of the daily
 // ceiling a day, holds one more (priorityPassSchedule.ts passAllowedAt;
-// priorityPassRun PRIORITY_PASS_DAILY_USD, $1.50 a pair): dear passes spread
+// priorityPassRun PRIORITY_PASS_DAILY_USD, $5 a pair): dear passes spread
 // through the day instead of spending it by noon. Measured on
 // prod (Nov 25-26, 26 incremental runs): $0.01 to $0.24 a run, median $0.07,
 // mean $0.10; the heaviest pair's runs cost about $0.20 each and a 3-hour

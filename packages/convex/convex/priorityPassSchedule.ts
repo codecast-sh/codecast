@@ -43,7 +43,7 @@ const median = (xs: number[]) => {
  * needs no stored state. Catch-up runs spend their own allowance and count
  * only as the last run.
  */
-export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number): number {
+export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number, ceiling = PRIORITY_PASS_DAILY_USD): number {
   const last = day.find((r) => isPaidRun(r) || (r.status === "running" && r.started_at > now - RESERVATION_TTL_MS));
   if (!last) return -Infinity;
   const paid = day.filter((r) => isPaidRun(r) && !r.catch_up).reverse();
@@ -55,8 +55,8 @@ export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number): nu
     prev = r.started_at;
   }
   const expected = median(passes);
-  const capacity = Math.max(expected, Math.min(PASS_BUCKET_PASSES * expected, (1 - PASS_PACE_SHARE) * PRIORITY_PASS_DAILY_USD));
-  const perMs = Math.min(PASS_PACE_SHARE * PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_DAILY_USD - capacity) / DAY;
+  const capacity = Math.max(expected, Math.min(PASS_BUCKET_PASSES * expected, (1 - PASS_PACE_SHARE) * ceiling));
+  const perMs = Math.min(PASS_PACE_SHARE * ceiling, ceiling - capacity) / DAY;
   let level = capacity;
   let at = now - DAY;
   for (const r of paid) {

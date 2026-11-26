@@ -179,25 +179,26 @@ describe("rate limit", () => {
     expect(passes.filter(([h]) => h >= 24).length).toBeGreaterThanOrEqual(8);
   }, 600_000);
 
-  test("passAllowedAt: a token bucket of dollars, refilled at 80% of the ceiling a day, replayed from the day's runs", () => {
+  test("passAllowedAt: a token bucket of dollars, refilled at 80% of the ceiling a day, replayed from the day's runs (at a $1.50 ceiling)", () => {
+    const allowed = (day: any[], now: number) => passAllowedAt(day, now, 1.5);
     const now = Date.now();
     const at = (ago: number, cost_usd: number, catch_up = false) => ({ started_at: now - ago, status: "ok", cost_usd, ...(catch_up ? { catch_up } : {}) }) as any;
     // $1.20 a day is $0.05 an hour.
     const refill = (dollars: number) => (dollars / 0.05) * H;
     const near = (got: number, want: number) => expect(Math.abs(got - want)).toBeLessThan(1_000);
-    expect(passAllowedAt([], now)).toBe(-Infinity);
+    expect(allowed([], now)).toBe(-Infinity);
     // Cheap passes: the bucket always holds one, so the floor decides.
-    expect(passAllowedAt([at(H, 0.01), at(3 * H, 0.01)], now)).toBe(now - H + PASS_MIN_GAP_MS);
+    expect(allowed([at(H, 0.01), at(3 * H, 0.01)], now)).toBe(now - H + PASS_MIN_GAP_MS);
     // $0.23 a pass: the bucket holds $0.30 (the ceiling's room beside a day's refill). After one pass $0.12 is left, $0.11 short.
-    near(passAllowedAt([at(H, 0.23)], now), now + refill(0.11));
+    near(allowed([at(H, 0.23)], now), now + refill(0.11));
     // A chain's runs are one pass.
-    near(passAllowedAt([at(H - MIN, 0.115), at(H, 0.115)], now), now + refill(0.11));
+    near(allowed([at(H - MIN, 0.115), at(H, 0.115)], now), now + refill(0.11));
     // Three in three hours put the bucket $0.24 in debt: the next waits for $0.47.
-    near(passAllowedAt([at(H, 0.23), at(2 * H, 0.23), at(3 * H, 0.23)], now), now + refill(0.47));
+    near(allowed([at(H, 0.23), at(2 * H, 0.23), at(3 * H, 0.23)], now), now + refill(0.47));
     // A pass dearer than the room holds one pass, and the refill slows to keep the day under the ceiling ($0.90 a day).
-    near(passAllowedAt([at(H, 0.6)], now), now + (0.6 / (0.9 / 24) - 1) * H);
+    near(allowed([at(H, 0.6)], now), now + (0.6 / (0.9 / 24) - 1) * H);
     // A catch-up spends its own allowance.
-    expect(passAllowedAt([at(H, 2, true)], now)).toBe(now - H + PASS_MIN_GAP_MS);
+    expect(allowed([at(H, 2, true)], now)).toBe(now - H + PASS_MIN_GAP_MS);
   });
 });
 

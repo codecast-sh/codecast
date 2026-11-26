@@ -1,6 +1,7 @@
 // Priorities API (priorities.ts): who reads a priority, what history counts,
 // the pin line, and the owner's controls (a move, step tier, set aside) that the
 // pass must never override.
+import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
@@ -706,11 +707,11 @@ describe("writes", () => {
     }));
     expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: "A pass ran here 2 minutes ago; run it again in 9 minutes." });
     await t.run(async (ctx) => ctx.db.insert("priority_pass_runs", {
-      user_id: ada, workspace: ws, started_at: Date.now() - 60 * 60_000, finished_at: Date.now(), status: "ok", cursor_at: 0, model: "m", cost_usd: 2,
+      user_id: ada, workspace: ws, started_at: Date.now() - 60 * 60_000, finished_at: Date.now(), status: "ok", cursor_at: 0, model: "m", cost_usd: PRIORITY_PASS_DAILY_USD + 0.5,
       counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 },
     }));
     await t.run(async (ctx) => { for (const r of await ctx.db.query("priority_pass_runs").collect()) if (r.cost_usd === 0.1) await ctx.db.delete(r._id); });
-    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: "Passes here spent today's $1.50; the next one can run tomorrow." });
+    expect(await t.mutation(pri.cliRun, { api_token: TOKEN, team_id: acme })).toEqual({ error: `Passes here spent today's $${PRIORITY_PASS_DAILY_USD.toFixed(2)}; the next one can run tomorrow.` });
     expect(await t.run(async (ctx) => ctx.db.system.query("_scheduled_functions").collect())).toEqual([]);
   });
 

@@ -30,7 +30,7 @@ const CHAIN_DELAY_MS = 2_000;
 /** After this many failed runs in a row on one cursor, the last one steps the cursor past what failed. */
 export const FAILURES_BEFORE_STEP = 3;
 /** What one (person, workspace) may spend on passes in a day; past it, passes skip until older runs age out. */
-export const PRIORITY_PASS_DAILY_USD = 1.5;
+export const PRIORITY_PASS_DAILY_USD = 5;
 /**
  * A pair's first catch-up (its runs before any ok run, and the runs that run
  * chains) reads up to FIRST_PASS_WINDOW_MS of work at once: it spends from
