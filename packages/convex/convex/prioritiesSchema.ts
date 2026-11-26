@@ -59,9 +59,6 @@ export const priorityTables = {
      */
     person_pos: v.optional(v.number()),
     ai_rank: v.optional(v.number()),
-    /** The absolute rank these replaced: read and cleared by priorityRankBackfill, then deleted. */
-    rank: v.optional(v.number()),
-    rank_set_by: v.optional(setBy),
     /** The initiative short id ("in-5") it serves, if any. */
     serves: v.optional(v.string()),
     steps: v.array(priorityStep),
