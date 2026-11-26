@@ -149,6 +149,7 @@ import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
 import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
+import { ownersModelOnFor } from "../store/sessionOwnersSlice";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline, mergeTimelineMessages } from "../lib/compositeTimeline";
@@ -551,9 +552,11 @@ const ConversationViewInner = (
   useSqueezeToFit(squeezeRowRef, 7);
   const modernStyle = useIsModernStyle();
   // Subagents carry parent_conversation_id; visible children (agent-team
-  // teammates, spawns) carry spawned_by_conversation_id. The header chip and
-  // the overflow menu row both link here, so folding the chip loses nothing.
-  const parentLinkId = conversation?.parent_conversation_id || (conversation as any)?.spawned_by_conversation_id;
+  // teammates, spawns) carry spawned_by_conversation_id, which under the owners
+  // model makes a peer, not a child, so it links to nothing there. The header
+  // chip and the overflow menu row both link here, so folding the chip loses nothing.
+  const ownersModel = useInboxStore((st) => !!conversation?._id && ownersModelOnFor(st as any, conversation._id));
+  const parentLinkId = conversation?.parent_conversation_id || (ownersModel ? undefined : (conversation as any)?.spawned_by_conversation_id);
   // The unified session control panel behind the header badge (model, effort,
   // switch, fork, hand off). Controlled here so the overflow menu's one row
   // opens the same panel instead of duplicating it.

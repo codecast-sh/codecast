@@ -42,10 +42,12 @@ function world(flag: boolean) {
       conv("role_hand", 2, { org_role_id: "org_roles_r", owner_user_id: ME }),
       // A role started it on my account and no person owns it.
       conv("role_started", 3, { org_role_id: "org_roles_r", role_started: true }),
-      // A session my own session spawned, still owned by it.
-      conv("child", 4, { spawned_by_conversation_id: "conversations_own" }),
+      // A worker nested under my own session (`cast spawn --subagent`), still owned by it.
+      conv("child", 4, { parent_conversation_id: "conversations_own" }),
       // The same, taken over: released from its parent, mine again.
-      conv("released", 5, { spawned_by_conversation_id: "conversations_own", parent_released_at: EPOCH - 6 * H }),
+      conv("released", 5, { parent_conversation_id: "conversations_own", parent_released_at: EPOCH - 6 * H }),
+      // A plain spawn from my own session: its peer, so mine, never the spawner's.
+      conv("peer", 4.5, { spawned_by_conversation_id: "conversations_own" }),
       // A sub-agent I added myself to.
       conv("added_sub", 6, { is_subagent: true, parent_conversation_id: "conversations_own", owner_user_id: ME }),
       // Handed to a teammate: their owner row alone.
@@ -66,9 +68,10 @@ function world(flag: boolean) {
 const ids = (rows: any[]) => rows.filter((r) => !r.is_subagent || r.owners_model).map((r) => String(r._id).replace("conversations_", "")).sort();
 
 describe("membership: the inbox is the sessions you own", () => {
-  test("flag on: own, role-owned with my row, released and added-myself; not role-started, parent-owned or handed", async () => {
+  test("flag on: own, role-owned with my row, released, added-myself and a plain spawn's peer; not role-started, parent-owned or handed", async () => {
     const { sessions } = await computeInboxSessions({ db: world(true) }, ME as any, { includeLiveness: false });
-    expect(ids(sessions)).toEqual(["added_sub", "own", "released", "role_hand"]);
+    expect(ids(sessions)).toEqual(["added_sub", "own", "peer", "released", "role_hand"]);
+    expect(sessions.find((s: any) => s._id === "conversations_peer")).toMatchObject({ implicit_owner: ME, owner_session_id: null });
     const own = sessions.find((s: any) => s._id === "conversations_own");
     // A row names no owner list: the viewer's claim, and the implicit starter.
     expect(own).toMatchObject({ owners_model: true, implicit_owner: ME, owned_by_me: false });
@@ -84,10 +87,12 @@ describe("membership: the inbox is the sessions you own", () => {
     await off.patch("conversations_own", { needs_input_notified_key: "6:idle" });
     const { sessions } = await computeInboxSessions({ db: off }, ME as any, { includeLiveness: false });
     for (const s of sessions) expect([...INBOX_MODEL_ONLY_ROW_FIELDS].filter((k) => k in s)).toEqual([]);
-    // The role's rows, the spawned children and the released one are the
-    // runner's; the handed one is assigned away; the subagent rides its parent.
-    expect(ids(sessions)).toEqual(["child", "own", "released", "role_hand", "role_started"]);
-    expect(sessions.some((s: any) => s._id === "conversations_added_sub")).toBe(true); // a child row under its parent
+    // The role's rows and the spawned peer are the runner's; the handed one is
+    // assigned away; the nested workers ride their parent.
+    expect(ids(sessions)).toEqual(["own", "peer", "role_hand", "role_started"]);
+    for (const id of ["added_sub", "child", "released"]) {
+      expect(sessions.find((s: any) => s._id === `conversations_${id}`)).toMatchObject({ is_subagent: true, parent_conversation_id: "conversations_own" }); // a child row under its parent
+    }
   });
 
   test("a child whose parent session was killed falls back to its starter's inbox", async () => {
@@ -220,8 +225,11 @@ describe("placement: a wait its agent owner answers files as working", () => {
     const hand = rows.find((r) => r.id === "conversations_role_hand")!;
     expect(hand).toMatchObject({ work_state: "needs_input", bucket: "working", with_owner: "@role" });
     expect(rows.find((r) => r.id === "conversations_own")!.with_owner).toBeNull();
+    // A plain spawn's wait is its starter's own, with no agent owner.
+    expect(rows.find((r) => r.id === "conversations_peer")).toMatchObject({ bucket: "needs_input", with_owner: null });
     expect(counts.working).toBe(2);
-    expect(counts.needs_input).toBe(2);
+    // own, released and peer.
+    expect(counts.needs_input).toBe(3);
     const off = tallyInboxRows((await computeInboxSessions({ db: world(false) }, ME as any, { projection: true })).sessions, { labelByConv: new Map(), now: EPOCH });
     expect(off.rows.every((r) => r.with_owner === null)).toBe(true);
     expect(off.counts.working).toBe(0);
@@ -243,9 +251,9 @@ describe("an escalated wait is in the inbox of whoever it rings (review of ct-10
       conversations: [
         conv("lead_session", { inbox_closed_at: EPOCH - H, inbox_dismissed_at: EPOCH - H }),
         // (a) Its parent was closed: still the owner, but the wait went to the human who started it.
-        conv("closed_parent_child", { spawned_by_conversation_id: "conversations_lead_session", wait_up_at: EPOCH - 60_000, wait_up_count: 6, wait_up_person: ME }),
+        conv("closed_parent_child", { parent_conversation_id: "conversations_lead_session", wait_up_at: EPOCH - 60_000, wait_up_count: 6, wait_up_person: ME }),
         // The same once a message followed the escalation: the parent's again.
-        conv("answered_child", { spawned_by_conversation_id: "conversations_lead_session", message_count: 7, wait_up_at: EPOCH - 60_000, wait_up_count: 6, wait_up_person: ME }),
+        conv("answered_child", { parent_conversation_id: "conversations_lead_session", message_count: 7, wait_up_at: EPOCH - 60_000, wait_up_count: 6, wait_up_person: ME }),
         // (b) A role's run on an agent account; its wait reached where the role's line ends.
         conv("bot_run", { user_id: BOT, org_role_id: "org_roles_r", role_started: true, wait_up_at: EPOCH - 60_000, wait_up_count: 6, wait_up_person: LEAD }),
         // (c) Subagents whose parent was killed: mine through the implicit
@@ -406,15 +414,15 @@ describe("counts parity: the overlay is the shared projection over the replica's
       for (const seed of [601, 602, 603, 604, 605, 606]) {
         const gen = genWorld(seed, 60, EPOCH, ME);
         const rng = makeRng(seed);
-        // Spread the model's cases over the world: roles, spawned children
+        // Spread the model's cases over the world: roles, nested children
         // (some released), and rows handed to a teammate.
         for (const c of gen.conversations as any[]) {
           c.team_id = TEAM;
           const roll = rng();
           if (roll < 0.12) c.org_role_id = "org_roles_r";
           else if (roll < 0.16) { c.org_role_id = "org_roles_r"; c.role_started = true; }
-          else if (roll < 0.2 && !c.spawned_by_conversation_id) c.spawned_by_conversation_id = gen.conversations[0]._id;
-          if (c.spawned_by_conversation_id && rng() < 0.3) c.parent_released_at = EPOCH - H;
+          else if (roll < 0.2 && !c.parent_conversation_id) c.parent_conversation_id = gen.conversations[0]._id;
+          if (c.parent_conversation_id && rng() < 0.3) c.parent_released_at = EPOCH - H;
         }
         const db = () => makeFakeDb({
           teams: [{ _id: TEAM, name: "Union", features: flag ? { session_owners: true } : {} }],

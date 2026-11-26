@@ -795,22 +795,23 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
 
   // ── Org record (display-only history items) ────────────────────────────────
   reparentOrgSession: org(reparentSessionLabel),
-  // An owners change under the session_owners model (sessionOwnersSlice)
-  // carries the change that puts it back (args[2]), built from the owners it
-  // started from: undo replays that, and its own inverse is the change again.
-  // A take-over or a released parent has none: nothing puts a parent back.
+  // An owners change under the session_owners model (sessionOwnersSlice) carries
+  // the change(s) that put it back (args[2]; an adopt's may be several, sent in
+  // order as one entry): undo replays them, and its own inverse is the change
+  // again. A take-over or a released parent has none: nothing puts a parent back.
   applySessionOwners: {
     spec: {
       label: (ctx) => {
-        const change = ctx.args[1] as { take_over?: boolean; add?: string[]; remove?: string[] } | undefined;
+        const change = ctx.args[1] as { take_over?: boolean; add?: string[]; remove?: string[]; adopt_parent?: string } | undefined;
         const title = sessionTitle(ctx.before, ctx.args[0] as string);
         const me = String(ctx.before?.currentUser?._id ?? "");
         if (change?.take_over) return `Took over ${title}`;
+        if (change?.adopt_parent) return `Made ${title} a worker of ${sessionTitle(ctx.before, change.adopt_parent)}`;
         if (me && change?.remove?.length === 1 && change.remove[0] === me && !change.add?.length) return `Left ${title}`;
         if (me && change?.add?.length === 1 && change.add[0] === me && !change.remove?.length) return `Added you to ${title}`;
         return `Changed the owners of ${title}`;
       },
-      inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
+      inverse: (ctx) => (ctx.args[2] ? [ctx.args[2]].flat().map((step, i, all) => call("applySessionOwners", ctx.args[0], step, i === all.length - 1 ? ctx.args[1] : null)) : null),
     },
   },
   reparentOrgRole: org((ctx) => `Moved ${roleName(ctx.before, ctx.args[0] as string)} in the org`),

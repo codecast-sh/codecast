@@ -5,9 +5,13 @@
 import type { Id } from "../_generated/dataModel";
 import { liveRoleByHandle, requireRole } from "./orgAccess";
 import { roleMayHoldSession } from "./sessionTell";
-import { addSessionOwnerRow, removeSessionOwnerRow, sessionOwnerFactsOf, syncPrimaryOwnerCache, type OwnerRowSnapshot } from "../sessionOwners";
-import { applyOwnersChangeTo, ownersChangeRefusal, ownersLeftRefusal, ownersOf, type OwnersChange } from "@codecast/shared/contracts/sessionOwners";
+import { addSessionOwnerRow, ownersModelOn, removeSessionOwnerRow, sessionOwnerFactsOf, syncPrimaryOwnerCache, type OwnerRowSnapshot } from "../sessionOwners";
+import { applyOwnersChangeTo, mayEditOwners, ownersChangeRefusal, ownersLeftRefusal, ownersOf, type OwnersChange } from "@codecast/shared/contracts/sessionOwners";
+import { rehandWait } from "./inboxOwners";
 import type { ReparentSessionTarget } from "../sessionOwnership";
+import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
+import { checkConversationAccess } from "../privacy";
+import { isClosedSession } from "@codecast/shared/contracts";
 
 // Picker roster cap. The live listOwners subscription must NEVER walk the
 // team — that collect + N user-doc reads is what blew the syscall budget
@@ -169,7 +173,51 @@ export async function ownersChangeFor(
     ...(target.role === undefined ? {} : { role: target.role === null ? null : String((await resolveOwnerRole(ctx, authUserId, conversation, target.role))._id) }),
     ...(target.release_parent ? { releaseParent: true } : {}),
     ...(target.take_over ? { takeOver: true } : {}),
+    ...(target.adopt_parent || target.detach_parent ? assertMovableWorker(conversation) : {}),
+    ...(target.adopt_parent ? { adoptParent: await adoptableParentId(ctx, authUserId, conversation, target.adopt_parent) } : {}),
+    ...(target.detach_parent ? { detachParent: true } : {}),
   };
+}
+
+/** A session nested under its parent by how it was started, not by who owns
+ *  it, never moves between parents: a Claude Code subagent or a
+ *  `cast spawn --subagent` worker (is_subagent), a workflow station, a plan
+ *  handoff. An adopt or a detach of one is refused. */
+export function assertMovableWorker(conversation: any): {} {
+  if (conversation.is_subagent || conversation.is_workflow_sub || conversation.parent_message_uuid) throw new Error("It is nested under its session by how it was started; it can't be moved");
+  return {};
+}
+
+/** How many links up an adopt follows the target's parents looking for the
+ *  session itself: a safety bound, since a visited set ends any loop. */
+export const ADOPT_CHAIN_CAP = 50;
+
+// The session an adopt makes this one work for, resolved from any ref, or a
+// refusal. It must be one that can act for this one: the caller can read it,
+// it is alive and under the owners model, the caller owns or runs it (you
+// hand work only to a session that is yours), its runner can open this
+// session, and it is not nested under this session at any depth (a loop of
+// sessions answering each other). Adopting itself, or the parent it already
+// has, is the shared rule's refusal.
+export async function adoptableParentId(ctx: { db: any }, authUserId: Id<"users">, conversation: any, ref: string): Promise<string> {
+  const target: any = await findConversationByAnyRefWhere(ctx, ref, async (c) => (await checkConversationAccess(ctx as any, authUserId, c as any)) !== "denied");
+  if (!target) throw new Error(`No session you can read matches "${ref}"`);
+  if (String(target._id) === String(conversation._id)) return String(target._id);
+  if (target.inbox_killed_at) throw new Error("That session was killed; it cannot take workers");
+  if (isClosedSession(target)) throw new Error("That session is closed; it cannot take workers");
+  if (!(await ownersModelOn(ctx, target))) throw new Error("That session is not under session owners, so it cannot take workers");
+  if (!mayEditOwners(await sessionOwnerFactsOf(ctx, target), String(authUserId))) throw new Error("You can only hand work to a session you own or run");
+  if (!target.user_id || (await checkConversationAccess(ctx as any, target.user_id, conversation)) === "denied") {
+    throw new Error("That session's runner cannot open this one, so it could not answer it");
+  }
+  const seen = new Set<string>();
+  let link: unknown = target.parent_conversation_id;
+  while (link && !seen.has(String(link)) && seen.size < ADOPT_CHAIN_CAP) {
+    if (String(link) === String(conversation._id)) throw new Error("That session already works for this one: it cannot also be its worker");
+    seen.add(String(link));
+    link = (await ctx.db.get(link as Id<"conversations">))?.parent_conversation_id;
+  }
+  return String(target._id);
 }
 
 // A restored row (an undo of a remove) is held to the add rules: a teammate
@@ -248,9 +296,24 @@ export async function writeOwnersChange(
     patch.org_role_id = will.role ?? undefined;
     patch.org_role_hold = will.role ? opts.hold : undefined;
   }
-  if (next.parent_released_at !== facts.parent_released_at) patch.parent_released_at = next.parent_released_at ?? undefined;
+  if (change.adoptParent) {
+    // A worker of another session now: the parent owns it (released only
+    // when an undo puts a released parent back).
+    patch.parent_conversation_id = change.adoptParent;
+    // It still runs its own process (assertMovableWorker refused any nested
+    // by how it runs), so a revive treats it as itself (isSubagentConversation).
+    if (conversation.adopted_at == null) patch.adopted_at = now;
+    if ((conversation.parent_released_at ?? null) !== (next.parent_released_at ?? null)) patch.parent_released_at = next.parent_released_at ?? undefined;
+  } else if (change.detachParent) {
+    // Out from under any parent, as if it never had one (an adopt's undo).
+    if (conversation.parent_conversation_id !== undefined) patch.parent_conversation_id = undefined;
+    if (conversation.parent_released_at !== undefined) patch.parent_released_at = undefined;
+    if (conversation.adopted_at !== undefined) patch.adopted_at = undefined;
+  } else if (next.parent_released_at !== facts.parent_released_at) patch.parent_released_at = next.parent_released_at ?? undefined;
   if (facts.role_started && !next.role_started) patch.role_started = undefined;
   if (Object.keys(patch).length) await ctx.db.patch(conversation._id, patch);
+  // Its standing wait was settled for the agent owner it had: the new one hears it.
+  if (change.adoptParent || change.detachParent) await rehandWait(ctx, conversation);
   // The session reports to the person this change named last.
   const named = [...(change.add ?? []), ...(added.includes(authUserId) ? [String(authUserId)] : [])].filter((id) => will.people.includes(id));
   await syncPrimaryOwnerCache(ctx, conversation._id, named[named.length - 1] as Id<"users"> | undefined);

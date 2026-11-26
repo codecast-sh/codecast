@@ -54,7 +54,7 @@ describe("adviseAfterClose", () => {
    *  standing trigger armed into it. */
   async function world(opts: {
     featureOff?: boolean; conv?: Record<string, unknown>; managed?: Record<string, unknown>; trigger?: Record<string, unknown>;
-    ownersModel?: boolean; spawnedByLead?: boolean; outsider?: boolean; teammate?: boolean; haltedMidCall?: boolean; others?: number;
+    ownersModel?: boolean; workerOfLead?: boolean; outsider?: boolean; teammate?: boolean; haltedMidCall?: boolean; others?: number;
     /** The session's workspace keeps a model budget, so each call reserves and settles. */
     budget?: boolean;
   } = {}) {
@@ -68,14 +68,14 @@ describe("adviseAfterClose", () => {
       if (opts.budget) await teamBudget.setBudgetCap(ctx, `user:${user}`, undefined, 400, user, NOW);
       const teammate = await ctx.db.insert("users", { name: "Kai" } as any);
       await ctx.db.insert("team_memberships", { team_id: team, user_id: teammate, role: "member", joined_at: 1 } as any);
-      const lead = opts.spawnedByLead ? await ctx.db.insert("conversations", {
+      const lead = opts.workerOfLead ? await ctx.db.insert("conversations", {
         user_id: user, team_id: team, is_private: true, agent_type: "claude_code", status: "active", session_id: "s-lead",
         started_at: NOW - 9_000_000, updated_at: NOW - 60_000, message_count: 2, last_message_role: "assistant", title: "Lead",
       } as any) : undefined;
       const conv = await ctx.db.insert("conversations", {
         short_id: "jx7ci", user_id: user, team_id: team, is_private: true, agent_type: "claude_code", status: "active", session_id: "s-1",
         started_at: NOW - 7_200_000, updated_at: NOW - 3_600_000, message_count: 2, last_message_role: "assistant", title: "Fix login",
-        armed_trigger_kind: "standing", ...(lead ? { spawned_by_conversation_id: lead } : {}),
+        armed_trigger_kind: "standing", ...(lead ? { parent_conversation_id: lead } : {}),
         ...opts.conv,
       } as any);
       await ctx.db.insert("managed_sessions", {
@@ -221,12 +221,12 @@ describe("adviseAfterClose", () => {
     expect("off" in read).toBe(false);
   });
 
-  test("a session whose waits its agent owner answers skips: the owners model files it with its owner, not the person", async () => {
-    const owned = await world({ ...kill, ownersModel: true, spawnedByLead: true });
+  test("a worker whose waits its parent session answers skips: the owners model files it with its parent, not the person", async () => {
+    const owned = await world({ ...kill, ownersModel: true, workerOfLead: true });
     expect((await owned.advise()).results).toEqual([{ session: owned.ids.conv, verdict: "skip" }]);
     expect(prompts).toHaveLength(0);
     // The same session off the owners model is the person's.
-    const off = await world({ ...kill, spawnedByLead: true });
+    const off = await world({ ...kill, workerOfLead: true });
     expect((await off.advise()).results[0].verdict).toBe("needs_you");
   });
 

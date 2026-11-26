@@ -4,7 +4,7 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff, Square, Workflow, X } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
-import { withSafetyBlock, isClosedSession, isClosedHidden, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isClosedHidden, isStashHidden, underOwnersModel, type UserRest } from "@codecast/shared/contracts";
 import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatIdleDuration, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -122,8 +122,8 @@ export function SessionCardView({
   // Idempotent, so a container that already applied it (for its own clock
   // signature) hands the same row through.
   const session = withSafetyBlock(row);
-  const spawnedById = session.spawned_by_conversation_id || null;
-  const spawnedIsHandoff = isHandoffFrom(session, spawnedById);
+  const spawnedIsHandoff = isHandoffFrom(session, session.spawned_by_conversation_id);
+  const spawnedById = (spawnedIsHandoff || !underOwnersModel(session)) ? session.spawned_by_conversation_id || null : null; // owners model: a spawner is a peer
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isStashed = variant === "stashed" || variant === "snoozed";

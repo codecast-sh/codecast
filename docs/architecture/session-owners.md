@@ -12,16 +12,64 @@ A session's owners are:
 - **people**: its `session_owners` rows, in the order they were added. An
   agent account is never one.
 - **one role**: `conversations.org_role_id`.
-- **its parent session**, until released: the session a subagent is nested
-  under (`parent_conversation_id`), or the one that spawned it
-  (`spawned_by_conversation_id`). A person's release, or a takeover, writes
+- **its parent session**, until released: the session it is nested under as
+  a worker (`parent_conversation_id`): a Claude Code subagent, a
+  `cast spawn --subagent` worker, a workflow station, a Ship session, a hand a
+  role started, or a session a person dropped it onto in the sidebar
+  (`adopt_parent`). A person's release, or a takeover, writes
   `parent_released_at`. A killed or deleted parent counts as released.
 - **its implicit starter**: the human who started it (its author, else its
   runner, never an agent account), only while it has no people, no role and
   no parent, and never when a role started it (`role_started`).
 
+A session another one only spawned (`spawned_by_conversation_id` alone: a
+plain `cast spawn`, an agent-team teammate) is that session's peer. The
+spawner never owns it, and nothing draws it as a child: no Parent link (off
+the model the link stays), no row in the spawner's agents band. Its starter
+owns it like any session they start, so one marker decides both nesting and
+ownership.
+
+A peer a bot-run session spawned has no human of its own, so it takes its
+spawner's owners (`ownPeerByItsSpawnersHuman`, at spawn and at an agent-team
+link): the spawner's people get owner rows, or, when a role alone owns the
+spawner, the peer is that role's start (same team only). A spawner that is
+itself a worker passes on its parent's owners, up the chain.
+
 The agent owner is the role, else the parent session. Taking a session over
 removes every agent owner and makes the taker an owner.
+
+An adopt (a card dropped on the middle of another row in the inbox sidebar,
+`lib/adoptDrop`) makes the target the session's agent owner: it nests the
+session under the target, clears any release, takes its role off and takes
+the dropper's own owner row off; other people's rows stay. It never sets
+`is_subagent`, but the session is now the target's worker, so it goes down
+with the target's kill or dismiss. It still runs its own process, so the
+adopt stamps `adopted_at` (a detach clears it) and `isSubagentConversation`
+reads it: a usage-limit revive, auto-recovery and the blocked push treat it as
+a top-level session, and the waiting chime stays silent for it. The session is told whom it reports to, and
+a wait standing on it is handed to the target (`rehandWait`) without ringing
+its people again.
+
+It is refused when:
+
+- the target is the session itself, or nested under it (the parent chain,
+  followed up to 50 links);
+- the target is closed, killed, deleted, off the model, or unreadable to the
+  dropper;
+- the dropper neither owns nor runs the session, or neither owns nor runs the
+  target;
+- the target's runner cannot open the session;
+- the session is a role's standing session;
+- the session is nested by how it was started: a subagent (Task or
+  `--subagent`), a workflow station, or a plan handoff. A detach refuses the
+  same.
+
+Undo puts the session back under its previous parent when that parent was
+live, unreleased and one the dropper may hand work to; under a released or dead
+parent, or none, it detaches it. It restores the old role and the dropper's
+row, adding them back first when they do not run the session. When the old
+parent is someone else's, or it had both a role and a parent, no undo is
+offered.
 
 A role becomes an owner only by a deliberate filing (the owners menu, a drag
 onto the role on the org chart, a scope takeover) or by starting the session.
@@ -166,7 +214,7 @@ A killed or deleted parent counts as released. Its children fall back to their
 people and their implicit starter.
 
 `notifications.releaseDeadParentChildren` is a scheduled job, paged 50 children
-a call over the subagents and then the spawned sessions, that runs 60 s after
+a call over the sessions nested under the parent, that runs 60 s after
 the death so the kill cascade finishes first. It writes `parent_released_at`
 on each child under the model that is active with a live process or a
 standing wait, and runs the needs-input check again for each child with a
@@ -276,6 +324,18 @@ and any admin can turn it off.
 
    ```bash
    packages/convex/run.sh teamFeatures:setTeamFeatureInternal '{"team_id":"<id>","feature":"session_owners","enabled":true}'
+   ```
+
+6. Give the team's older bot-spawned peers an owner. A session another one
+   only spawned, on an agent account with no human of its own, takes its
+   spawner's owner at spawn (`ownPeerByItsSpawnersHuman`); one spawned before
+   the flag was on has none and lists for nobody. It runs after the flag,
+   since the owner rule reads it. Dry run first: it names each peer and the
+   owner it would get. Pass back `next` until it is null; a real run pages on
+   its own, and a rerun owns 0.
+
+   ```bash
+   packages/convex/run.sh ownerMigrations:backfillPeerOwners '{"team_id":"<id>","dryRun":true}'
    ```
 
 Turning it off is the same call with `"enabled":false`, never a code revert.

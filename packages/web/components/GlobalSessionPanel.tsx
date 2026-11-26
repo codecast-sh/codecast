@@ -14,6 +14,8 @@ import { BulkSessionMenuItems, InboxSelectionBar, MoveToDeviceSubmenu } from "./
 import { labelSessions } from "../lib/labelSessions";
 import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
+import { rowDropAt, useAdoptDrag } from "../hooks/useAdoptDrag";
+import { AdoptHint } from "./inbox/AdoptHint";
 import { copyToClipboard, formatShortDate } from "../lib/utils";
 import { LoginCodePaste } from "./LoginCodePaste";
 import type { ThreadStateStatus } from "@codecast/shared/contracts";
@@ -2600,9 +2602,7 @@ function SessionListPanelImpl({
   // While a card is in flight, an empty drop section still renders its header,
   // so "drag onto Done" works when nothing is filed there yet.
   const [sessionDragActive, setSessionDragActive] = useState(false);
-  useEventListener("dragstart", (e) => { if (e.dataTransfer?.types.includes("codecast/session-id")) setSessionDragActive(true); });
-  useEventListener("dragend", () => setSessionDragActive(false));
-  useEventListener("drop", () => setSessionDragActive(false));
+  const adoptDrag = useAdoptDrag(setSessionDragActive);
 
   // Drag-to-reorder in the "time" view. There's no separate grip handle — the
   // whole card is already draggable (the card→label "file it" drag, tagged
@@ -3126,36 +3126,50 @@ function SessionListPanelImpl({
             const reorderHere = reorderable && reorderOver?.id === session._id;
             const holdLeft = (s.newSessionHolds[session._id] ?? 0) - Date.now();
             const justStarted = key === "new" && Date.now() - (session.started_at ?? 0) < 4000;
+            const dropAt = (e: React.DragEvent<HTMLDivElement>, draggedId: string | null) => rowDropAt(e, session._id, draggedId, { reorderable, sectionDrop: isDropTarget });
             return (
               <div
                 key={session._id}
                 style={holdStyleOf(session._id)}
                 className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
-                onDragOver={reorderable ? (e) => {
+                onDragOver={(e) => {
                   if (!e.dataTransfer.types.includes("codecast/session-id")) return;
+                  const draggedId = adoptDrag.draggedRef.current;
+                  const { zone, top, height } = dropAt(e, draggedId);
+                  if (zone !== "adopt") adoptDrag.leave(session._id);
+                  if (!zone) return; // the drag falls through to the section (filing it)
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pos = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-                  setReorderOver((cur) => (cur?.id === session._id && cur.pos === pos ? cur : { id: session._id, pos }));
-                } : undefined}
-                onDragLeave={reorderable ? (e) => {
+                  if (zone === "adopt") {
+                    setDragOverSectionKey(null);
+                    setReorderOver((cur) => (cur?.id === session._id ? null : cur));
+                    return adoptDrag.hover(e, session._id, draggedId!, top, height);
+                  }
+                  setReorderOver((cur) => (cur?.id === session._id && cur.pos === zone ? cur : { id: session._id, pos: zone }));
+                }}
+                onDragLeave={(e) => {
                   if (e.currentTarget.contains(e.relatedTarget as Node)) return;
                   setReorderOver((cur) => (cur?.id === session._id ? null : cur));
-                } : undefined}
+                  adoptDrag.leave(session._id);
+                }}
                 onDragEnd={reorderable ? () => setReorderOver(null) : undefined}
-                onDrop={reorderable ? (e) => {
+                onDrop={(e) => {
                   const draggedId = e.dataTransfer.getData("codecast/session-id");
                   if (!draggedId) return;
-                  e.preventDefault();
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pos = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
-                  handleReorderDrop(draggedId, session._id, pos);
-                } : undefined}
+                  const { zone } = dropAt(e, draggedId);
+                  if (zone === "adopt") {
+                    setDragOverSectionKey(null);
+                    adoptDrag.drop(e, session._id, draggedId);
+                  } else if (zone && reorderable) {
+                    e.preventDefault();
+                    handleReorderDrop(draggedId, session._id, zone);
+                  }
+                }}
               >
                 {reorderHere && (
                   <div className={`absolute left-0 right-0 h-0.5 bg-sol-cyan z-10 pointer-events-none ${reorderOver!.pos === "before" ? "top-0" : "bottom-0"}`} />
                 )}
+                {adoptDrag.over?.id === session._id && <AdoptHint over={adoptDrag.over} />}
                 <SessionCard
                   session={session}
                   isSelected={selectedSet.has(session._id)}

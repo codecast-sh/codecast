@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performListSessionAgents } from "./sessionAgents";
 
-// The agents a session started, for its conversation's agents band: each
-// child's state, whether the session still owns it, and its person owners.
+// The workers nested under a session, for its conversation's agents band: each
+// child's state, whether the session still owns it, and its person owners. A
+// session it only spawned (spawned_by alone) is its peer and is not listed.
 const ME = "u".repeat(31) + "m";
 const MATE = "u".repeat(31) + "t";
 const TEAM = "teams_acme";
@@ -18,7 +19,9 @@ function world(flag: boolean) {
     conversations: [
       conv(LEAD, { title: "Lead" }),
       conv("a".repeat(32), { is_subagent: true, parent_conversation_id: LEAD, updated_at: 3 }),
-      conv("b".repeat(32), { spawned_by_conversation_id: LEAD, parent_released_at: 5, owner_user_id: MATE, updated_at: 2 }),
+      conv("b".repeat(32), { parent_conversation_id: LEAD, parent_released_at: 5, owner_user_id: MATE, updated_at: 2 }),
+      // A plain `cast spawn` from the lead: its peer, not its worker.
+      conv("c".repeat(32), { spawned_by_conversation_id: LEAD, updated_at: 4 }),
     ],
     session_owners: [{ _id: "so1", conversation_id: "b".repeat(32), user_id: MATE, added_by: ME, added_at: 1 }],
     managed_sessions: [{ _id: "ms1", conversation_id: "a".repeat(32), agent_status: "working" }],
@@ -40,7 +43,7 @@ describe("listSessionAgents", () => {
   test("a child the viewer cannot read stays out, though they can read the session", async () => {
     const db = world(true);
     await db.insert("team_memberships", { user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 });
-    await db.insert("conversations", { user_id: MATE, team_id: TEAM, is_private: true, status: "active", title: "secret", message_count: 1, updated_at: 9, spawned_by_conversation_id: LEAD });
+    await db.insert("conversations", { user_id: MATE, team_id: TEAM, is_private: true, status: "active", title: "secret", message_count: 1, updated_at: 9, parent_conversation_id: LEAD });
     const agents = await performListSessionAgents({ db } as any, ME as any, LEAD as any);
     expect(agents!.map((a) => a.title)).toEqual(["aaaa", "bbbb"]);
   });

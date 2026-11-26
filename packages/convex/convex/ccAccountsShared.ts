@@ -1202,11 +1202,14 @@ export function isRemoteAuthBlocked(
 // worktree session is a first-class task of its own.
 // Shared verbatim by the server selection and the web banner so the counts
 // shown always match what the actions touch.
+// A session a person dragged under another (adopted_at) works for it but runs
+// its own process, so it is revived as itself.
 export function isSubagentConversation(conv: {
   is_subagent?: boolean;
   parent_conversation_id?: string | null;
+  adopted_at?: number | null;
 }): boolean {
-  return conv.is_subagent === true || !!conv.parent_conversation_id;
+  return conv.is_subagent === true || (!!conv.parent_conversation_id && conv.adopted_at == null);
 }
 
 // The rows a fleet revive acts on, top-level first. Subagent workers join

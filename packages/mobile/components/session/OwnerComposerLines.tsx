@@ -1,6 +1,6 @@
 // The line above a session's composer under the session_owners model, the
 // phone twin of the web ComposerOwnerStrip: an agent owner (its role, else the
-// session that started it) answers the session: while the box is focused or
+// session it works for) answers the session: while the box is focused or
 // holds text, "<agent> answers here too" with Take it over, which removes every
 // agent owner and makes you an owner. Sending never takes anything over. It
 // draws nothing for a session off the model, nor reads past one store selector

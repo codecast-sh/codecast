@@ -3,6 +3,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { backfillRoleStartedPage, releaseBindingHoldsPage } from "./lib/roleStartedBackfill";
+import { ownPeerByItsSpawnersHuman, peerOwnerFromSpawner } from "./sessionOwners";
 
 // Stamp `role_started` on sessions a role started before spawn.recordHandStart
 // wrote it, so the owner rule gives them no implicit starter. A session is the
@@ -55,6 +56,40 @@ export const releaseBindingHolds = internalMutation({
     return res;
   },
 });
+
+// Give the team's peers a bot-run session spawned before spawn and the
+// agent-team link did it themselves (sessionOwners ownPeerByItsSpawnersHuman)
+// their spawner's owner: such a peer has no human of its own and no parent,
+// so it would be in nobody's inbox. Run once the flag is on (the owner rule
+// reads it). A peer someone already owns is left alone. One page of the
+// team's sessions per transaction; dry by default, naming each peer and the
+// owner it would get; a real run schedules its own next page; a rerun writes 0.
+//   packages/convex/run.sh ownerMigrations:backfillPeerOwners '{"team_id":"<id>","dryRun":true}'
+export const backfillPeerOwners = internalMutation({
+  args: { team_id: v.id("teams"), dryRun: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const res = await backfillPeerOwnersPage(ctx, args);
+    if (!res.dryRun && res.next) await ctx.scheduler.runAfter(0, internal.ownerMigrations.backfillPeerOwners, { team_id: args.team_id, dryRun: false, cursor: res.next, numItems: args.numItems });
+    return res;
+  },
+});
+
+export async function backfillPeerOwnersPage(ctx: { db: any }, args: { team_id: any; dryRun?: boolean; cursor?: string | null; numItems?: number }) {
+  const dryRun = args.dryRun !== false;
+  const page = await ctx.db.query("conversations").withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
+    .paginate({ cursor: args.cursor ?? null, numItems: Math.min(args.numItems ?? 200, 500) });
+  const owned: { session: string; owner: { people: string[] } | { role: string } }[] = [];
+  for (const c of page.page as any[]) {
+    if (!c.spawned_by_conversation_id || c.parent_conversation_id) continue;
+    if (await ctx.db.query("session_owners").withIndex("by_conversation", (q: any) => q.eq("conversation_id", c._id)).first()) continue;
+    const spawner = await ctx.db.get(c.spawned_by_conversation_id);
+    const owner = await peerOwnerFromSpawner(ctx, c, spawner);
+    if (!owner) continue;
+    if (!dryRun) await ownPeerByItsSpawnersHuman(ctx, c, spawner);
+    owned.push({ session: c.short_id ?? String(c._id), owner });
+  }
+  return { dryRun, scanned: page.page.length, owned, next: page.isDone ? null : page.continueCursor as string };
+}
 
 // Read-only, before turning session_owners on for a team: how many of the
 // conversations the flag would cover name a primary owner (owner_user_id)

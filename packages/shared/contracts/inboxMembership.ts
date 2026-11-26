@@ -149,7 +149,7 @@ export function answerOpenToChange(d: ChangeableAnswerRow): boolean {
 // ── The owners model (team feature session_owners) ─────────────────────────
 //
 // Under the flag a session is in the inbox of exactly its owners, and an agent
-// owner (its role, or the session that started it) answers its waits. The
+// owner (its role, or the session it works for) answers its waits. The
 // server stamps the owners fields on an inbox row only when the model applies
 // to it (enrichInboxSessionRow), so `owners_model` IS the marker: a row
 // without it places and lists exactly as before the flag. Every replica and

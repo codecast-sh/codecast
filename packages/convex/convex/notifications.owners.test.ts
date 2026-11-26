@@ -44,9 +44,12 @@ describe("agent owners answer a session's waits", () => {
     return world;
   };
 
-  const parentWorld = (flag: boolean, parent: Rec = {}) => {
+  // A worker nested under "parent", which owns it; a plain spawn (spawned_by alone) is its peer.
+  const nested: Rec = { parent_conversation_id: "parent" };
+  const peer: Rec = { spawned_by_conversation_id: "parent", agent_name: "worker" };
+  const parentWorld = (flag: boolean, parent: Rec = {}, link: Rec = nested) => {
     const world = settledIdleWorld({
-      conv: { ...blocked, spawned_by_conversation_id: "parent", agent_name: "worker" },
+      conv: { ...blocked, ...link },
       extra: { teams: teams(flag), pending_messages: [], session_owners: [] },
     });
     world.tables.conversations.push({ _id: "parent", user_id: "u1", title: "Lead session", status: "active", team_id: "team1", message_count: 30, updated_at: now - 60_000, ...parent });
@@ -88,11 +91,13 @@ describe("agent owners answer a session's waits", () => {
     expect(told(tables, "parent").length).toBe(1);
   });
 
-  test("off the flag the spawned session stands down as today and its parent hears nothing", async () => {
-    const { ctx, tables } = parentWorld(false);
-    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
-    expect(res.reason).toBe("agent_spawned");
-    expect(told(tables, "parent")).toEqual([]);
+  test("a plain spawn's wait rings its starter and never its spawner; off the flag nested and spawned stand down as today", async () => {
+    for (const [flag, link, reason] of [[true, peer, undefined], [false, nested, "subagent"], [false, peer, "agent_spawned"]] as const) {
+      const { ctx, tables } = parentWorld(flag, {}, link);
+      expect((await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" })).reason).toBe(reason);
+      expect(told(tables, "parent")).toEqual([]);
+      expect((tables.notifications ?? []).map((n) => String(n.recipient_user_id))).toEqual(flag ? ["u1"] : []);
+    }
   });
 
   test("a killed or deleted parent no longer owns it: the wait is its starter's, rung as their own", async () => {
@@ -297,6 +302,7 @@ describe("agent owners answer a session's waits", () => {
         // A running child in another team: its own team's flag decides.
         child("other_team_off", { team_id: "team2" }),
         child("other_team_on", { team_id: "team3" }),
+        // A session it only spawned, waiting: its peer, never released.
         { ...child("spawned_told", { hand_wake_notified_key: "5:x" }), is_subagent: false, parent_conversation_id: undefined, spawned_by_conversation_id: "parent" },
       ],
       managed_sessions: ["running", "other_team_off", "other_team_on"].map((c) => ({ _id: `ms_${c}`, conversation_id: c, user_id: "u1", session_id: `s_${c}`, last_heartbeat: now - 1000 })),
@@ -308,18 +314,15 @@ describe("agent owners answer a session's waits", () => {
       await releaseDeadParentChildrenLater(ctx as any, await db.get("parent"));
       if (!flag) { expect(runs).toEqual([]); continue; }
       expect(runs).toEqual([{ ms: 60_000, args: { parent_id: "parent", released_at: now - 5 } }]);
-      // The subagents' page, then the spawned sessions'.
+      // One pass, over the nested children only: a spawned peer is not its child.
       runs.length = 0;
       expect(await performReleaseDeadParentChildren(ctx as any, { parent_id: "parent", released_at: now - 5 })).toEqual({ released: 3, rechecked: 2 });
-      expect(runs.map((r) => r.args)).toEqual([{ conversation_id: "told" }, { conversation_id: "released_before" }, { parent_id: "parent", released_at: now - 5, spawned: true }]);
+      expect(runs.map((r) => r.args)).toEqual([{ conversation_id: "told" }, { conversation_id: "released_before" }]);
       const releasedAt = async (id: string) => (await db.get(id)).parent_released_at;
       expect(await Promise.all(["told", "running", "other_team_on"].map(releasedAt))).toEqual([now - 5, now - 5, now - 5]);
       expect(await Promise.all(["told_before", "idle", "finished", "killed", "other_team_off"].map(releasedAt))).toEqual([undefined, undefined, undefined, undefined, undefined]);
       expect(await releasedAt("released_before")).toBe(now - 100);
-      runs.length = 0;
-      await performReleaseDeadParentChildren(ctx as any, { parent_id: "parent", released_at: now - 5, spawned: true });
-      expect(runs.map((r) => r.args)).toEqual([{ conversation_id: "spawned_told" }]);
-      expect(await releasedAt("spawned_told")).toBe(now - 5);
+      expect(await releasedAt("spawned_told")).toBeUndefined();
     }
   });
 
@@ -403,7 +406,6 @@ describe("agent owners answer a session's waits", () => {
     tables.conversations[1].inbox_killed_at = now;
     scheduled.length = 0;
     await performReleaseDeadParentChildren(ctx as any, { parent_id: "parent", released_at: now });
-    await performReleaseDeadParentChildren(ctx as any, { parent_id: "parent", released_at: now, spawned: true });
     expect(tables.conversations[0].parent_released_at).toBe(now);
     expect(scheduled.map((r) => r.args)).toContainEqual({ conversation_id: "conv1" });
     res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -554,7 +556,7 @@ describe("agent owners answer a session's waits", () => {
   // A child no agent ever answered rang its starter with the daemon's own
   // push; its escalation (to seat it) must not ring a second time.
   test("a prompt on a child no agent answered rings once: the daemon's push, never a second from its escalation", async () => {
-    // A spawned child whose parent was already dead when it asked.
+    // A nested child whose parent was already dead when it asked.
     const dead = parentWorld(true, { inbox_killed_at: now - 1000 });
     // A released subagent its runner did not start (moved): author1 owns it.
     const moved = settledIdleWorld({
@@ -598,7 +600,7 @@ describe("agent owners answer a session's waits", () => {
       expect([rings, tables.conversations[0].hand_wake_notified_key]).toEqual([[], undefined]);
       tables.conversations[1].inbox_killed_at = now;
       if (released) {
-        await performReleaseDeadParentChildren({ ...ctx } as any, { parent_id: "parent", released_at: now, spawned: true });
+        await performReleaseDeadParentChildren({ ...ctx } as any, { parent_id: "parent", released_at: now });
         expect(tables.conversations[0].parent_released_at).toBe(now);
       }
       // A new transaction (each check is one): the owners read is per call.
