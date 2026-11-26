@@ -1068,7 +1068,7 @@ export default defineSchema({
     hand_wake_notified_key: v.optional(v.string()),
     // Under the session_owners team feature: when the session's current wait
     // reached its people (server time), because its agent owner (its role, or
-    // the session that started it) could not be told or passed it up; the
+    // the session it works for) could not be told or passed it up; the
     // message count it covers, so the next message hands the session's waits
     // back to the agent (shared waitReachedPeople); and who it reached when no
     // person owns it (shared waitAudience), whose inbox lists it meanwhile.
@@ -1523,8 +1523,8 @@ export default defineSchema({
     // only where the feature is on. `ownerMigrations:backfillRoleStarted`
     // stamps sessions from before the field.
     role_started: v.optional(v.boolean()),
-    // When a person took it over from the session that started it: the parent
-    // (parent_conversation_id, else spawned_by_conversation_id) no longer owns it.
+    // When a person took it over from the session it works for: the parent
+    // (parent_conversation_id) no longer owns it.
     parent_released_at: v.optional(v.number()),
     // Stamped on every owner write under the feature (people, role, parent
     // release), so a client holding the owners refetches them.

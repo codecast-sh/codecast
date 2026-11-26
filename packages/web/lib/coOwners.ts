@@ -39,7 +39,7 @@ export function coOwnersOf(s: State, conversationId: string, meId: string | null
   };
   const snap = read.role?.role_id === roleId ? read.role : null;
   const role = roleId ? { _id: roleId, handle: snap?.handle ?? "", name: snap?.name } : null;
-  const parentTitle = parentId ? (read.parent_session?.conversation_id === parentId ? read.parent_session.title : null) ?? "the session that started it" : null;
+  const parentTitle = parentId ? (read.parent_session?.conversation_id === parentId ? read.parent_session.title : null) ?? "the session it works for" : null;
   const names = [
     ...ids.map((id) => (id === meId ? "You" : person(id).name)),
     ...(role ? [role.name ?? (role.handle ? `@${role.handle}` : "its role")] : []),

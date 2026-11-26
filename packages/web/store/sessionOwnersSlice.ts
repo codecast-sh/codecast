@@ -74,6 +74,10 @@ export type SessionOwnersChange = {
   role?: string | null;
   release_parent?: boolean;
   take_over?: boolean;
+  /** Make it the worker of this session (a conversation id); the viewer's own row comes off. */
+  adopt_parent?: string;
+  /** Out from under any parent, link and release gone (an adopt's undo). */
+  detach_parent?: boolean;
 };
 
 type OwnersState = { sessions?: Record<string, any>; conversations?: Record<string, any>; sessionOwners?: Record<string, SessionOwnersRow> };
@@ -132,6 +136,7 @@ export function ownerFactsOf(s: OwnersState, conversationId: string): SessionOwn
   const parentId = read.parent_session?.conversation_id ?? null;
   const starter = read.starter_id ?? read.implicit_starter?.user_id ?? null;
   const facts: SessionOwnerFacts = {
+    conversation_id: conversationId,
     rows,
     starter: starter ? String(starter) : null,
     user_id: runner,
@@ -161,6 +166,8 @@ export function sharedChangeOf(change: SessionOwnersChange): OwnersChange {
     ...(change.role !== undefined ? { role: change.role } : {}),
     ...(change.release_parent ? { releaseParent: true } : {}),
     ...(change.take_over ? { takeOver: true } : {}),
+    ...(change.adopt_parent ? { adoptParent: change.adopt_parent } : {}),
+    ...(change.detach_parent ? { detachParent: true } : {}),
   };
 }
 
@@ -176,8 +183,9 @@ export function ownersChangeRefusalIn(s: OwnersState & { currentUser?: any }, co
 }
 
 export type SessionOwnersSliceActions = {
-  /** One owners change. `inverse` puts it back for undo; null when nothing can. */
-  applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | null) => void;
+  /** One owners change. `inverse` puts it back for undo, as one change or
+   *  several sent in order (one undo entry); null when nothing can. */
+  applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | SessionOwnersChange[] | null) => void;
 };
 
 /** A role as the owners read spells it (sessionOwnership ownersModelRead),
@@ -190,7 +198,7 @@ function roleRefOf(s: any, roleId: string): NonNullable<SessionOwnersRow["role"]
 
 export function createSessionOwnersSlice(): SessionOwnersSliceActions {
   return {
-    applySessionOwners: action(function (this: any, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | null) {
+    applySessionOwners: action(function (this: any, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | SessionOwnersChange[] | null) {
       const actor = String(this.currentUser?._id ?? "");
       if (!actor) return;
       const facts = ownerFactsOf(this, conversationId);
@@ -211,6 +219,10 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if (!sameIds(read.people_ids, next.people)) read.people_ids = next.people;
       if ((read.role?.role_id ?? null) !== next.role) read.role = next.role ? roleRefOf(this, next.role) : null;
       if (!next.parentSession && read.parent_session) read.parent_session = null;
+      if (change.adopt_parent && next.parentSession === change.adopt_parent && read.parent_session?.conversation_id !== next.parentSession) {
+        const home = ownersHomeOf(this, next.parentSession);
+        read.parent_session = { conversation_id: next.parentSession, short_id: home?.short_id ?? next.parentSession.slice(0, 7), title: home?.title ?? null };
+      }
       // The inbox row's stamps, as the server will stamp them for the viewer:
       // the row moves in or out of the inbox, and its agent stops or starts
       // answering, in the same tick.

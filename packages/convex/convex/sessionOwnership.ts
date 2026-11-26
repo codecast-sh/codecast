@@ -187,12 +187,15 @@ export type ReparentSessionTarget =
   // The owner model's one change (session_owners feature, shared
   // contracts/sessionOwners): people by ref, rows put back by an undo, the
   // role (a ref replaces it, null takes it off) and the parent's release.
-  // `take_over` takes every agent owner off and makes the caller an owner.
-  | { kind: "owners"; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean };
+  // `take_over` takes every agent owner off and makes the caller an owner;
+  // `adopt_parent` (a session ref) makes it that session's worker.
+  | { kind: "owners"; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean; adopt_parent?: string; detach_parent?: boolean };
 
 export type ReportsTo =
   | { kind: "user"; user_id: Id<"users">; name: string }
-  | { kind: "role"; role_id: Id<"org_roles">; short_id: string; handle: string; name: string };
+  | { kind: "role"; role_id: Id<"org_roles">; short_id: string; handle: string; name: string }
+  // Under the owners model: the session it works for (its parent, unreleased).
+  | { kind: "session"; conversation_id: Id<"conversations">; short_id: string; name: string };
 
 export type ReparentSessionResult = OwnerMutationResult & {
   org_role_id: Id<"org_roles"> | null;
@@ -212,30 +215,38 @@ export type ReparentSessionResult = OwnerMutationResult & {
 export function reportsToLine(to: ReportsTo, opts: { note?: string; handoff?: string } = {}): string {
   const head = to.kind === "role"
     ? `You now report to ${to.name} (@${to.handle}): what you need from a person goes to it first, and \`cast send @${to.handle}\` reaches it.`
-    : `You now report to ${to.name}: your questions and decisions go to them.`;
+    : to.kind === "session"
+      ? `You now report to session ${to.short_id} “${to.name}”: your questions go to it, and \`cast send ${to.short_id}\` reaches it.`
+      : `You now report to ${to.name}: your questions and decisions go to them.`;
   const note = opts.note?.trim();
   const handoff = opts.handoff?.trim();
   return [head, note, handoff && `Note handed to ${to.name} with this session: "${handoff}"`].filter(Boolean).join(" ");
 }
 
-// Who a session reports to: its role, else its primary owner (the
-// owner_user_id cache, which the chart files by; syncPrimaryOwnerCache is its
-// one writer).
+// Who a session reports to: its role, else (under the owners model,
+// `ownersModel`) the session it works for, a live unreleased parent, else its
+// primary owner (the owner_user_id cache, which the chart files by;
+// syncPrimaryOwnerCache is its one writer).
 // `read` is the doc read (a batch passes its memo, so a hundred sessions of
 // one host read that host once); `row` is the conversation when the caller
 // already holds it as it stands.
-async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">, roleId: Id<"org_roles"> | undefined, known: { read?: (id: any) => Promise<any>; row?: any } = {}): Promise<ReportsTo | null> {
+async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">, roleId: Id<"org_roles"> | undefined, known: { read?: (id: any) => Promise<any>; row?: any; ownersModel?: boolean } = {}): Promise<ReportsTo | null> {
   const read = known.read ?? ((id: any) => ctx.db.get(id));
   if (roleId) {
     const role = await read(roleId);
     if (role) return { kind: "role", role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name };
   }
-  const primary = (known.row ?? await ctx.db.get(conversationId))?.owner_user_id;
+  const row = known.row ?? await ctx.db.get(conversationId);
+  if (known.ownersModel && row?.parent_conversation_id && row.parent_released_at == null) {
+    const parent = await ctx.db.get(row.parent_conversation_id);
+    if (parent && !parent.inbox_killed_at) return { kind: "session", conversation_id: parent._id, short_id: parent.short_id ?? String(parent._id).slice(0, 7), name: parent.title || "Untitled session" };
+  }
+  const primary = row?.owner_user_id;
   const user = primary ? await read(primary) : null;
   return user ? { kind: "user", user_id: user._id, name: personName(user) } : null;
 }
 
-const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
+const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : r.kind === "session" ? `session:${r.conversation_id}` : `user:${r.user_id}`;
 
 // Take the previous holder's triage off a row that is being put in front of
 // someone: a handoff to a new owner. Only a stamp that
@@ -350,7 +361,7 @@ async function reparentSessionCore(
   const ownersModel = await (known ? known.batch.ownersModel(conversation) : ownersModelOn(ctx, conversation));
   rememberOrgRecord(ctx, conversation);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-  const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id, { read: known?.batch.read, row: conversation });
+  const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id, { read: known?.batch.read, row: conversation, ownersModel });
   const parentBefore = await sessionParent(ctx, conversation);
 
   const added: Id<"users">[] = [];
@@ -358,9 +369,13 @@ async function reparentSessionCore(
   const sharedWith: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
+  // An adopt, or its undo's detach, hands the session's standing wait on
+  // (writeOwnersChange): the line telling it so must not answer that wait.
+  let adopted = false;
 
   if (ownersModel) {
     const change = await ownersChangeFor(ctx, authUserId, conversation, args.target, targetRole);
+    adopted = !!(change.adoptParent || change.detachParent);
     const res = await writeOwnersChange(ctx, authUserId, conversation, change, {
       // The chart's drop on a role keeps its own access rule (mayFileUnderRole).
       checkEdit: args.target.kind !== "role",
@@ -499,10 +514,10 @@ async function reparentSessionCore(
     throw new Error(teamFeatureOffMessage("session_owners"));
   }
 
-  const after = await reportsToOf(ctx, conversation._id, roleId, { read: known?.batch.read });
+  const after = await reportsToOf(ctx, conversation._id, roleId, { read: known?.batch.read, ownersModel });
   const told: { sessions: number; roles: number; deferred?: number } = { sessions: 0, roles: 0 };
   if (after && reportsToKey(after) !== reportsToKey(before)) {
-    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after, { note, handoff }), args.from_session, reportsToKey(after), known?.batch);
+    const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after, { note, handoff }), args.from_session, reportsToKey(after), known?.batch, { keepsWait: adopted });
     if (how === "deferred") told.deferred = 1; else told.sessions = 1;
   }
   // Open questions follow the new owners. Without this, asked_user_ids and
@@ -695,7 +710,7 @@ export async function performRemoveSessionOwner(
 export async function performApplyOwnersChange(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean; note?: string; from_session?: string },
+  args: { session_id: string; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean; adopt_parent?: string; detach_parent?: boolean; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
   const { session_id, note, from_session, ...change } = args;
   return performReparentSession(ctx, authUserId, { session_id, target: { kind: "owners", ...change }, handoff: note, from_session });
@@ -855,6 +870,10 @@ export const applyOwnersChange = mutation({
     release_parent: v.optional(v.boolean()),
     // Take it over: every agent owner comes off and the caller becomes an owner.
     take_over: v.optional(v.boolean()),
+    // Make it the worker of this session (a session ref): the dragger's own row comes off.
+    adopt_parent: v.optional(v.string()),
+    // Out from under any parent, link and release gone (an adopt's undo).
+    detach_parent: v.optional(v.boolean()),
     note: v.optional(v.string()),
     from_session: v.optional(v.string()),
     api_token: v.optional(v.string()),

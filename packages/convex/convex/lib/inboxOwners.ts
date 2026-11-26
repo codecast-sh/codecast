@@ -103,7 +103,6 @@ export function inboxOwnersOf(ctx: { db: any }, conv: any): Promise<InboxOwnerFi
         user_id: conv.user_id,
         org_role_id: conv.org_role_id,
         parent_conversation_id: conv.parent_conversation_id,
-        spawned_by_conversation_id: conv.spawned_by_conversation_id,
         // A deleted or killed parent no longer owns it (sessionOwnerFactsOf's rule).
         parent_released_at: conv.parent_released_at ?? await deadParentAt({ db: { get: m.get } }, conv),
         role_started: conv.role_started ?? null,
@@ -219,4 +218,19 @@ export async function rerouteEscalatedWait(ctx: { db: any; scheduler?: any }, co
   conv.needs_input_notified_key = undefined;
   if (ctx.scheduler) await ctx.scheduler.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: conv._id });
   return true;
+}
+
+/** A session handed to a new agent owner (an adopt, or its undo): the wait
+ *  it stands in was settled for the owners it had. Its escalation and the old
+ *  parent's ask (hand_wake_notified_key) come off, and the needs-input check
+ *  runs again, so the new owner hears it, or its people do when it cannot.
+ *  The episode key stays: the agent path never reads it, and a wait that
+ *  already rang its people does not ring them again (the check's `dup`). */
+export async function rehandWait(ctx: { db: any; scheduler?: any }, conv: any): Promise<void> {
+  const stale = ["wait_up_at", "wait_up_count", "wait_up_person", "hand_wake_notified_key"].filter((k) => conv[k] !== undefined);
+  if (stale.length) {
+    await ctx.db.patch(conv._id, Object.fromEntries(stale.map((k) => [k, undefined])));
+    for (const k of stale) conv[k] = undefined;
+  }
+  if (ctx.scheduler) await ctx.scheduler.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: conv._id });
 }

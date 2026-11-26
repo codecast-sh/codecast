@@ -87,7 +87,7 @@ import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, 
 import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
-import { isSessionOwner, ownerRowsForUser, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
+import { isSessionOwner, ownerRowsForUser, ownPeerByItsSpawnersHuman, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
 import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession, resurfaceViewerTriageOnPin } from "./lib/viewerTriage";
 import { inboxMemoGet, inboxOwnersOf, ownersModelOnMemo, userMembershipsMemo, withInboxOwners } from "./lib/inboxOwners";
 import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
@@ -3333,10 +3333,9 @@ export const listConversations = query({
 
         const fullTitle = c.title || firstUserMessage || "New Session";
 
-        // spawned_by (visible child → its lead) joins the same parent
-        // resolution so the "sub of"/"spawned by" row and title come free.
-        let parentConversationId: string | null =
-          c.parent_conversation_id || c.spawned_by_conversation_id || null;
+        // Only a nested worker has a parent: a session another one only
+        // spawned (spawned_by) is its peer.
+        let parentConversationId: string | null = c.parent_conversation_id || null;
         let parentTitle: string | null = null;
         if (!parentConversationId && c.parent_message_uuid) {
           const parentMsg = await ctx.db
@@ -10018,7 +10017,7 @@ export async function computeInboxSessions(
     // invisible (parent was excluded from the idle query entirely) and
     // exposing them now would make active buckets pick them up as orphans.
     if (r.dismissed || r.stashed) continue;
-    // Under the owners model a child belongs to the session that started it,
+    // Under the owners model a child belongs to the session it works for,
     // not under its card: it is a row only where someone owns it, and the
     // conversation's agents list (listSessionAgents) shows the rest.
     if (underOwnersModel(r.conv)) continue;
@@ -13352,6 +13351,8 @@ export const linkSpawnedBy = mutation({
         ...(args.agent_name && !child.agent_name ? { agent_name: args.agent_name } : {}),
       });
     }
+
+    if (!child.spawned_by_conversation_id) await ownPeerByItsSpawnersHuman(ctx, child, parent);
 
     if (args.agent_team_name && !parent.agent_team_name) {
       await ctx.db.patch(args.parent_conversation_id, {

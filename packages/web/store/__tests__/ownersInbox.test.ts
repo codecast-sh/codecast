@@ -66,16 +66,24 @@ describe("membership: the inbox is the sessions you own", () => {
     expect(isForeignRow(roleStarted, ME)).toBe(false);
   });
 
-  it("flag on: a nested row the viewer owns is its own card; a parent-owned one is out; flag off: it nests under its parent", () => {
+  it("flag on: a nested row the viewer owns is its own card; a parent-owned one is out; a plain spawn is its starter's; flag off: nested rows nest under their parent", () => {
     const parent = row("parent");
     const sub = row("sub", { is_subagent: true, parent_conversation_id: "parent" });
-    const child = row("spawned", { spawned_by_conversation_id: "parent" });
+    // A worker nested under the parent (`cast spawn --subagent`): the parent owns it.
+    const worker = row("worker", { parent_conversation_id: "parent" });
+    // A plain spawn: the spawner's peer, so the server stamps no owner session.
+    const peer = row("spawned", { spawned_by_conversation_id: "parent" });
     // A subagent is a member through the viewer's owner row (the owned window).
-    const onPlaced = place([on(parent), on({ ...sub, owner_session_id: "parent", owned_by_me: true }), on({ ...child, owner_session_id: "parent" }, [])]);
-    expect(shown(onPlaced)).toEqual(["parent", "sub"]);
+    const onPlaced = place([
+      on(parent),
+      on({ ...sub, owner_session_id: "parent", owned_by_me: true }),
+      on({ ...worker, owner_session_id: "parent" }, []),
+      on({ ...peer, owner_session_id: null, implicit_owner: ME }, []),
+    ]);
+    expect(shown(onPlaced)).toEqual(["parent", "spawned", "sub"]);
     expect(onPlaced.placements.get("sub")).toMatchObject({ bucket: "working", work_state: "needs_input" });
-    expect(isSpawnedWorker(on(child, []))).toBe(false);
-    const offPlaced = place([parent, sub, child]);
+    expect(isSpawnedWorker(on(peer, []))).toBe(false);
+    const offPlaced = place([parent, sub, worker, peer]);
     expect(offPlaced.placements.has("sub")).toBe(false);
     expect(shown(offPlaced)).toEqual(["parent", "spawned"]);
   });

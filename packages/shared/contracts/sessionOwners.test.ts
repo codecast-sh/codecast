@@ -8,6 +8,7 @@ import {
   ownersModelOn,
   ownersOf,
   ownsSession,
+  waitAudience,
   type SessionOwnerFacts,
 } from "./sessionOwners";
 
@@ -34,11 +35,7 @@ describe("ownersOf", () => {
   test("a role or a parent session takes the starter's place", () => {
     expect(ownersOf(facts({ org_role_id: ROLE }))).toEqual({ people: [], role: ROLE, parentSession: null, implicitStarter: null });
     expect(ownersOf(facts({ parent_conversation_id: PARENT })).parentSession).toBe(PARENT);
-    expect(ownersOf(facts({ spawned_by_conversation_id: PARENT })).implicitStarter).toBeNull();
-  });
-
-  test("a sub-agent's parent wins over its spawner", () => {
-    expect(ownersOf(facts({ parent_conversation_id: PARENT, spawned_by_conversation_id: "c_other" })).parentSession).toBe(PARENT);
+    expect(ownersOf(facts({ parent_conversation_id: PARENT })).implicitStarter).toBeNull();
   });
 
   test("a released parent no longer owns it", () => {
@@ -54,6 +51,31 @@ describe("ownersOf", () => {
 
   test("a session with no human starter has no implicit owner", () => {
     expect(ownersOf(facts({ starter: null, user_id: BOT })).implicitStarter).toBeNull();
+  });
+});
+
+// Only a nested worker (parent_conversation_id) has a parent session owner. A
+// session another one only spawned (spawned_by_conversation_id: a plain
+// `cast spawn`, an agent-team teammate) is its spawner's peer. The facts type
+// no longer carries spawned_by, so these pass it through a cast to prove the
+// rule ignores it.
+describe("a plain spawn is its spawner's peer", () => {
+  const spawned = (over: Partial<SessionOwnerFacts> = {}) => facts({ spawned_by_conversation_id: PARENT, ...over } as Partial<SessionOwnerFacts>);
+  const reach = { agentReachable: true, fallbackPerson: null };
+
+  test("no parent session owns it: its starter does", () => {
+    expect(ownersOf(spawned())).toEqual({ people: [], role: null, parentSession: null, implicitStarter: ME });
+  });
+
+  test("its waits go to its starter, even with an agent reachable", () => {
+    expect(waitAudience(spawned(), reach)).toEqual({ agent: null, people: [ME], person: null });
+  });
+
+  test("a --subagent worker is owned by the session it is nested under, which hears its waits", () => {
+    for (const f of [facts({ parent_conversation_id: PARENT }), spawned({ parent_conversation_id: PARENT })]) {
+      expect(ownersOf(f)).toEqual({ people: [], role: null, parentSession: PARENT, implicitStarter: null });
+      expect(waitAudience(f, reach)).toEqual({ agent: { kind: "session", id: PARENT }, people: [], person: null });
+    }
   });
 });
 

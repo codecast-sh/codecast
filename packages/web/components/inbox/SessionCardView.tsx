@@ -121,8 +121,9 @@ export function SessionCardView({
   // Idempotent, so a container that already applied it (for its own clock
   // signature) hands the same row through.
   const session = withSafetyBlock(row);
-  const spawnedById = session.spawned_by_conversation_id || null;
-  const spawnedIsHandoff = isHandoffFrom(session, spawnedById);
+  // A spawner is a peer, never a parent: the card links back only to the
+  // session this one continues (a handoff).
+  const handoffFromId = (isHandoffFrom(session, session.spawned_by_conversation_id) && session.spawned_by_conversation_id) || null;
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isStashed = variant === "stashed" || variant === "snoozed";
@@ -765,8 +766,7 @@ export function SessionCardView({
         </div>
         <CardParentLinks
           session={session}
-          spawnedById={spawnedById}
-          spawnedIsHandoff={spawnedIsHandoff}
+          handoffFromId={handoffFromId}
           spawnedByTitle={spawnedByTitle}
           onOpenParent={onOpenParent}
           onNavigateToSession={onNavigateToSession}

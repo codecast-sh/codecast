@@ -72,6 +72,10 @@ export async function tellSession(
   fromSession: string | undefined,
   moveKey: string,
   batch?: { actor: any; sender: any | null },
+  // `keepsWait`: the line leaves the session's pinned wait standing. A line
+  // from a person otherwise answers it (enqueuePendingMessage), and a move
+  // that hands the wait to a new owner must not.
+  opts: { keepsWait?: boolean } = {},
 ): Promise<"told" | "deferred"> {
   const actor = batch ? batch.actor : await ctx.db.get(authUserId);
   const fromRef = fromSession?.trim();
@@ -81,7 +85,7 @@ export async function tellSession(
     content: formatSessionMessage(fromShortId, body, { name: personName(actor) }),
     client_id: `reparent:${conversation._id}:${moveKey}:${Date.now()}`,
     sender,
-    human: !sender,
+    human: !sender && !opts.keepsWait,
   });
 }
 

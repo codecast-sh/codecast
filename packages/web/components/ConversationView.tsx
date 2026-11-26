@@ -549,10 +549,11 @@ const ConversationViewInner = (
   const squeezeRowRef = useRef<HTMLDivElement>(null);
   useSqueezeToFit(squeezeRowRef, 7);
   const modernStyle = useIsModernStyle();
-  // Subagents carry parent_conversation_id; visible children (agent-team
-  // teammates, spawns) carry spawned_by_conversation_id. The header chip and
-  // the overflow menu row both link here, so folding the chip loses nothing.
-  const parentLinkId = conversation?.parent_conversation_id || (conversation as any)?.spawned_by_conversation_id;
+  // Only a nested worker (parent_conversation_id) has a parent. A session that
+  // was only spawned by another (spawned_by_conversation_id: agent-team
+  // teammates, plain spawns) is its peer and links to nothing. The header chip
+  // and the overflow menu row both link here, so folding the chip loses nothing.
+  const parentLinkId = conversation?.parent_conversation_id;
   // The unified session control panel behind the header badge (model, effort,
   // switch, fork, hand off). Controlled here so the overflow menu's one row
   // opens the same panel instead of duplicating it.

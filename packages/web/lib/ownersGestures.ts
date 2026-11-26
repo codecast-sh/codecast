@@ -10,6 +10,6 @@ export function ownersTitle(view: Pick<SessionOwnersView, "people" | "role" | "p
 }
 
 /** Applies an owners change with its toast and Undo. */
-export function applyOwnersWithToast(conversationId: string, change: SessionOwnersChange, inverse: SessionOwnersChange | null, message: string) {
+export function applyOwnersWithToast(conversationId: string, change: SessionOwnersChange, inverse: SessionOwnersChange | SessionOwnersChange[] | null, message: string) {
   gestureToast(message, () => useInboxStore.getState().applySessionOwners(conversationId, change, inverse));
 }

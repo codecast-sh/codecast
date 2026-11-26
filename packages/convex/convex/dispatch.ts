@@ -673,7 +673,7 @@ export async function applyPatches(
  *  (store/sessionOwnersSlice), and of a restored owner row in it. Anything
  *  else is refused, and every value is then checked by applyOwnersChange's own
  *  argument validator. */
-const OWNERS_CHANGE_KEYS = new Set(["add", "remove", "restore", "role", "release_parent", "take_over"]);
+const OWNERS_CHANGE_KEYS = new Set(["add", "remove", "restore", "role", "release_parent", "take_over", "adopt_parent", "detach_parent"]);
 const RESTORE_ROW_KEYS = ["user_id", "added_by", "added_at", "seen_at", "note"] as const;
 
 function ownersChangeArgs(conversationId: string, change: unknown): Record<string, unknown> {

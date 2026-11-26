@@ -1,5 +1,5 @@
 // Under the owners model (team feature session_owners) an agent owner answers
-// the session's waits: its role, or the session that started it (shared
+// the session's waits: its role, or the session it works for (shared
 // agentOwnerOfRow). A role hears through its route up (agentTasks
 // routeUpWaitingSession); a parent session is told directly, as a frame queued
 // as its next turn. A wait the agent cannot hear, or passes up, escalates to
@@ -100,11 +100,8 @@ export async function releaseDeadParentChildrenLater(
 ): Promise<void> {
   if (!ctx.scheduler || !(await ownersModelOnMemo(ctx, parent))) return;
   if (opts.onlyWithChildren) {
-    const [sub, spawned] = await Promise.all([
-      ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", parent._id)).first(),
-      ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", parent._id)).first(),
-    ]);
-    if (!sub && !spawned) return;
+    const sub = await ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", parent._id)).first();
+    if (!sub) return;
   }
   await ctx.scheduler.runAfter(DEAD_PARENT_RELEASE_MS, internal.notifications.releaseDeadParentChildren, { parent_id: String(parent._id), released_at: parent.inbox_killed_at ?? Date.now() });
 }
