@@ -329,6 +329,18 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s4")).done).toBe(false);
   });
 
+  test("with priorities off where the priority is, a --serves done pin closes nothing and the reply says nothing of milestones", async () => {
+    const { t, p1 } = await world();
+    await t.run(async (ctx: any) => { for (const team of await ctx.db.query("teams").collect()) await ctx.db.patch(team._id, { features: {} }); });
+    const named = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+    const bare = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done" });
+    const unlinked = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    for (const res of [named, bare, unlinked]) {
+      for (const field of ["milestone", "serves_mismatch", "serves_unlinked", "serves_refused", "serves_decided_by"]) expect(res[field]).toBeUndefined();
+    }
+  });
+
   test("a bare done pin closes nothing (it means the turn was delivered); the reply names the milestone and how to close it", async () => {
     const { t, p1 } = await world();
     const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done" });

@@ -168,7 +168,7 @@ import {
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
 import { inheritLink, mappedMilestone, sessionEvidence, unnamedMilestone, type ServesOutcome } from "./lib/priorityLinks";
-import { pinsAskForPass, sessionActivity } from "./lib/priorityPassSchedule";
+import { pinsAskForPass, prioritiesOn, prioritiesPossibleFor, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier } from "./lib/priorityClassifierHook";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
 export { generateShareToken, isNonEmptyMessage };
@@ -12578,12 +12578,14 @@ export const setThreadState = mutation({
     const status = parseThreadStateStatus(args.status) ?? "working";
     const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
     // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
-    const milestone = status === "done" && !serves ? await unnamedMilestone(ctx, conv) : null;
+    // Milestone replies only where priorities is on: where the session's priority is, or, on none yet, where the session could count.
+    const priorities = status === "done" && (conv.priority_id ? await prioritiesOn(ctx, (await ctx.db.get(conv.priority_id))?.workspace ?? "") : await prioritiesPossibleFor(ctx, conv));
+    const milestone = priorities && !serves ? await unnamedMilestone(ctx, conv) : null;
     // One that names another milestone than the session's closes none either: the CLI says so.
-    const mapped = status === "done" && serves ? await mappedMilestone(ctx, conv) : null;
+    const mapped = priorities && serves ? await mappedMilestone(ctx, conv) : null;
     const serves_mismatch = mapped && mapped !== serves ? { serves, milestone: mapped } : null;
     // One from a session on no milestone yet is kept: it counts once a link or the pass puts the session there (lib/priorityLinks replayDonePin).
-    const serves_unlinked = status === "done" && serves && !mapped ? { serves } : null;
+    const serves_unlinked = priorities && serves && !mapped ? { serves } : null;
     return {
       ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced,
       ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}), ...(serves_unlinked ? { serves_unlinked } : {}),

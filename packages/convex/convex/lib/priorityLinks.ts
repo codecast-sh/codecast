@@ -248,7 +248,8 @@ export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, s
   if (!serves || !conv?.priority_id || !conv.priority_step_key) return null;
   const p: Priority | null = await ctx.db.get(conv.priority_id);
   const step = p?.steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
-  if (!p || !step || serves !== `${p.short_id}/${step.key}`) return null;
+  // With priorities off where the priority is, a pin closes nothing and says nothing.
+  if (!p || !step || serves !== `${p.short_id}/${step.key}` || !(await prioritiesOn(ctx, p.workspace))) return null;
   if (!pinsAskForPass(conv)) return { refused: "machine" };
   if (isWorker(conv)) return { refused: "worker" };
   if (step.refs.some((r) => r.kind === "task")) return { decided_by: "tasks" };
