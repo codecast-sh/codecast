@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
 import { MemoryRouter } from "react-router";
 import { getFunctionName } from "convex/server";
-import type { SecretMeta } from "@codecast/shared/contracts/secrets";
+import { SECRET_REDACTION_MIN, type SecretMeta } from "@codecast/shared/contracts/secrets";
 import { useInboxStore } from "../../store/inboxStore";
 import { syncMetaKey } from "../../hooks/syncMetaKeys";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
@@ -159,6 +159,20 @@ test("a refused fill puts the request back, with the reason", async () => {
   expect(stored().status).toBe("requested");
   expect(t.q('[data-vault-request-state="open"]')).not.toBeNull();
   expect(t.q("input[name=vault-value]")).not.toBeNull();
+  await t.unmount();
+});
+
+test("a key under the Vault's minimum says so on the card and saves nothing; Decline stays beside it", async () => {
+  useInboxStore.getState().stageSecret(row({}));
+  const fake = fakeConvex();
+  const t = await mount(<VaultRequestCard name="zz-stripe-test" kind="key" output="" isError={false} />, fake.client);
+  expect(t.q("[data-vault-value-problem]")).toBeNull();
+  await typeInto(t.q("input[name=vault-value]") as HTMLInputElement, "123");
+  expect(t.q("[data-vault-value-problem]")?.textContent).toContain(`at least ${SECRET_REDACTION_MIN} characters`);
+  await act(async () => { t.q("[data-vault-value-editor]")!.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true })); });
+  expect(fake.calls).toHaveLength(0);
+  expect(stored().status).toBe("requested");
+  expect(t.q("[data-vault-request-decline]")).not.toBeNull();
   await t.unmount();
 });
 

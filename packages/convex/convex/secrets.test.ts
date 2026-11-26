@@ -170,7 +170,8 @@ test("declining a request tells the asking session no and wakes it; deleting a r
   expect(await as(ben).mutation(api.secrets.remove, { ref: asked.short_id })).toMatchObject({ removed: true });
   const pending = await t.run(async (ctx: any) => ctx.db.query("pending_messages").collect());
   expect(pending).toHaveLength(1);
-  expect(pending[0]).toMatchObject({ conversation_id: conv, content: formatVaultDeclined("prod-db") });
+  expect(pending[0]).toMatchObject({ conversation_id: conv, content: formatVaultDeclined("prod-db", "key") });
+  expect(pending[0].content).toMatch(/under 6 characters.*too short for the Vault/);
 
   const made = await as(ben).action(api.secrets.create, { name: "k", kind: "key", payload: { value: "value-one-12345" }, team_id: acme });
   await as(ben).mutation(api.secrets.remove, { ref: made.short_id });

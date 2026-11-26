@@ -867,7 +867,7 @@ export const remove = mutation({
     // Deleting frees the name for a twin holding a value the agent chose; a request holds no value, so declining one stays open.
     const held = row.status === "ready" ? askFirstRefusal(row, await isPerson(ctx), "deletes it") : null;
     if (held) return { error: held };
-    if (row.status === "requested") await tellAskers(ctx, row, userId, formatVaultDeclined(row.name), `vault-declined:${String(row._id)}`);
+    if (row.status === "requested") await tellAskers(ctx, row, userId, formatVaultDeclined(row.name, row.kind), `vault-declined:${String(row._id)}`);
     await recordSecretEvent(ctx, row, "deleted", { actor: userId });
     for (const r of await ctx.db.query("secret_versions").withIndex("by_secret", (q) => q.eq("secret_id", row._id)).collect()) await ctx.db.delete(r._id);
     for (const r of await ctx.db.query("secret_values").withIndex("by_secret", (q) => q.eq("secret_id", row._id)).collect()) await ctx.db.delete(r._id);

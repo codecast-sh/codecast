@@ -22,6 +22,7 @@ import { askLine, askYesNo } from "../terminalAsk.js";
 import {
   SECRET_HEALTH_DAYS,
   SECRET_KINDS,
+  SECRET_REDACTION_MIN,
   SECRET_VERSION_TTL_MS,
   DAY_MS,
   envFor,
@@ -516,6 +517,7 @@ function registerRequestVerbs(vault: Command, deps: PublishDeps): void {
     vault.command("request"),
     "Ask a person for a secret you do not have. They fill it from a card in this conversation or on the Vault page, never in chat; a message arrives here when it is ready",
     ". Then end your turn dormant: the fill wakes this session. A name the Vault already holds is not asked again; it says how to use it\n\n" +
+      `A value needs at least ${SECRET_REDACTION_MIN} characters, or the Vault refuses it when the person fills it. Never request a shorter one (a card security code, a PIN): have the person enter it at the step that needs it\n\n` +
       "Example: cast vault request stripe-test --env STRIPE_SECRET_KEY --why \"run the billing tests\"\n" +
       "Example: cast vault request vercel-signin --kind signin --site vercel.com --why \"check the deploy logs\"",
   )
