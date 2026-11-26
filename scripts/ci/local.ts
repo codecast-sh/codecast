@@ -16,6 +16,8 @@
 //   whole suite. test-always already ran each suite's guards, ratchets and
 //   crossing tests. Where the hub rule left tests out, the run says so.
 // - the steps in DEFAULT_DROPS run only with --full; RUNNER_SETUP never runs.
+// - a job whose `runs-on` is another OS and whose steps need it (xvfb-run,
+//   apt) is skipped as not reproducible here: neither a failure nor no verdict.
 //
 // Steps run as on a runner: on the bun CI pins (fetched once with bunx), with
 // CI=true, no agent client on PATH, no agent session's variables, and a tmux
@@ -290,9 +292,8 @@ function ciStep(job: string, step: any, temp: string, matrix: Matrix = {}): Step
     if (left) throw new Error(`ci.yml ${job} › ${step.name}: no local value for ${left[0]}`);
     return out;
   };
-  // macOS draws Electron without a virtual display; a runner's `--parallel` is four workers.
-  let run = expand(step.run).replace(/--parallel(?=\s|$)/g, `--parallel=${RUNNER_CORES}`);
-  if (process.platform !== "linux") run = run.replace(/^xvfb-run -a /m, "");
+  // A runner's `--parallel` is four workers.
+  const run = expand(step.run).replace(/--parallel(?=\s|$)/g, `--parallel=${RUNNER_CORES}`);
   const env = Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, expand(String(value))]));
   const label = Object.keys(matrix).length ? ` [${Object.values(matrix).join(", ")}]` : "";
   return { name: `${step.name}${label}`, cwd: join(ROOT, step["working-directory"] ?? "."), argv: ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run], env: { ...env, RUNNER_TEMP: temp } };
@@ -319,6 +320,22 @@ export function unmodeledSteps(workflow = WORKFLOW): string[] {
   return out;
 }
 
+const RUNNER_OS: Array<[RegExp, NodeJS.Platform]> = [[/^ubuntu|linux/, "linux"], [/^macos/, "darwin"], [/^windows/, "win32"]];
+/** What in a step's script only its runner's OS has: a virtual display, the Debian package manager. */
+const NEEDS_RUNNER_OS = /\b(xvfb-run|apt-get|apt)\b/;
+
+/**
+ * Why a job cannot be reproduced on this host, or null: its `runs-on` is another OS family and a step of its
+ * own (not runner setup) leans on that OS. A job that only installs a tool there (tmux) runs here as it is.
+ */
+export function hostMismatch(job: string, platform: string = process.platform, workflow = WORKFLOW): string | null {
+  const runsOn = String(workflow.jobs[job]["runs-on"] ?? "");
+  const family = RUNNER_OS.find(([pattern]) => pattern.test(runsOn))?.[1];
+  if (!family || family === platform) return null;
+  const leans = workflow.jobs[job].steps.some((step: any) => step.run && !RUNNER_SETUP[step.name] && NEEDS_RUNNER_OS.test(step.run));
+  return leans ? `CI runs it on ${runsOn}, not reproducible on ${platform}` : null;
+}
+
 /** What each CI job runs here for these changed paths, in ci.yml's order. */
 export function planJobs(changed: string[], o: { base: string; full: boolean; temp: string }): Plan[] {
   const flags = scopeFlags(changed);
@@ -334,6 +351,8 @@ function planJob(job: string, changed: string[], flags: Record<string, boolean>,
   const plan: Plan = { job, steps: [], narrowed: [], wide: [] };
   const gate = jobGate(job);
   if (gate && !flags[gate]) return { ...plan, skip: "nothing it gates on changed" };
+  const elsewhere = hostMismatch(job);
+  if (elsewhere) return { ...plan, skip: elsewhere };
   if (job === "typecheck") {
     const argv = ["cast", "check", ...(o.full ? TYPECHECK_PROJECTS : ["--changed-since", o.base]), "--json"];
     return { ...plan, steps: [{ name: argv.join(" "), cwd: ROOT, argv, typecheck: true }] };

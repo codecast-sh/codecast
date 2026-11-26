@@ -6,6 +6,7 @@ import {
   asJobLog,
   CAST_CHECK_REPLACES,
   DEFAULT_DROPS,
+  hostMismatch,
   localJobs,
   matrixOf,
   planJobs,
@@ -182,14 +183,15 @@ describe("planJobs", () => {
 
   test("an unclassified path gates every job on, as CI does", () => {
     const p = plan(["scripts/new-thing.ts"], true);
-    for (const job of ["build", "typecheck", "lint", "test-web", "test-cli", "test-electron"]) expect(p[job].skip).toBeUndefined();
+    // A job on another OS is skipped as not reproducible here, never as ungated.
+    for (const job of ["build", "typecheck", "lint", "test-web", "test-cli", "test-electron"]) expect(p[job].skip).toBe(hostMismatch(job) ?? undefined);
   });
 
   test("every ci.yml job reads locally: no step condition or expression without a local value", () => {
     const jobs = Object.keys(CI_YML.jobs).filter((job) => !["code_paths", "verify", "computer-macos"].includes(job));
     expect(localJobs()).toEqual(jobs);
     const p = plan(["scripts/new-thing.ts"], true);
-    for (const job of jobs) expect(p[job].steps.length).toBeGreaterThan(0);
+    for (const job of jobs) if (!hostMismatch(job)) expect(p[job].steps.length).toBeGreaterThan(0);
   });
 });
 
@@ -288,6 +290,34 @@ describe("failures", () => {
       { job: "typecheck", file: "packages/web/components/priorities/parts.tsx", line: 7, test: "local only (CI doesn't typecheck mobile): packages/web/components/priorities/parts.tsx: TS2307 Cannot find module 'next/link'." },
     ]);
     expect(unjudged).toMatchObject([{ job: "ci-station", test: "typecheck: sim", assertion: "ENOENT: no such file or directory, stat 'capacity.lock'" }]);
+  });
+});
+
+describe("a job this host cannot reproduce", () => {
+  test("a job on another OS whose own steps need it is skipped, read from runs-on", () => {
+    expect(hostMismatch("test-electron", "darwin")).toBe("CI runs it on ubuntu-latest, not reproducible on darwin");
+    expect(hostMismatch("test-electron", "linux")).toBeNull();
+  });
+
+  test("a job that only installs a tool on its runner (setup) still runs here", () => {
+    expect(hostMismatch("test-always", "darwin")).toBeNull();
+    expect(hostMismatch("test-cli", "darwin")).toBeNull();
+  });
+
+  test("any OS family and any such step, not one job", () => {
+    const workflow = {
+      jobs: {
+        win: { "runs-on": "windows-latest", steps: [{ name: "Deps", run: "sudo apt-get install -y x" }] },
+        mac: { "runs-on": "macos-15", steps: [{ name: "Test", run: "bun test" }] },
+      },
+    };
+    expect(hostMismatch("win", "darwin", workflow)).toBe("CI runs it on windows-latest, not reproducible on darwin");
+    expect(hostMismatch("mac", "linux", workflow)).toBeNull();
+  });
+
+  test.skipIf(process.platform === "linux")("the plan skips it, so it is neither a failure nor no verdict", () => {
+    const p = plan(["packages/electron/main.js"]);
+    expect(p["test-electron"]).toMatchObject({ skip: `CI runs it on ubuntu-latest, not reproducible on ${process.platform}`, steps: [] });
   });
 });
 
