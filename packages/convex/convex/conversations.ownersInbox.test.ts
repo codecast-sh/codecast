@@ -157,6 +157,32 @@ describe("every inbox row builder under the model spells the four owner stamps",
   });
 });
 
+// The client keeps one row per session, rewritten by whichever feeder pushed
+// last: a child its parent owns must come back from byIds and the crawl as the
+// inbox read sends it on the parent's card, or every catch-up rewrites it.
+describe("a parent-owned child is one row whichever feeder sends it", () => {
+  const childOf = (rows: any[]) => rows.find((r: any) => r._id === "conversations_child");
+
+  test("byIds and the crawl send the inbox read's slim child row, field for field", async () => {
+    const db = world(true);
+    const listed = childOf((await computeInboxSessions({ db }, ME as any, { includeLiveness: false })).sessions);
+    expect(listed).toMatchObject({ is_subagent: true, owner_session_id: "conversations_own" });
+    expect(childOf((await collectInboxSessionsByIds({ db }, ME as any, ["conversations_child"])).sessions)).toEqual(listed);
+    const page = await collectInboxSessionsPaginated({ db }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(childOf(page.page)).toEqual(listed);
+  });
+
+  test("an owner seat makes it a row of the viewer's own: the full row from every feeder, never the card's", async () => {
+    const db = world(true);
+    await db.insert("session_owners", { conversation_id: "conversations_child", user_id: ME, added_by: ME, added_at: 4 });
+    const listed = childOf((await computeInboxSessions({ db }, ME as any, { includeLiveness: false })).sessions);
+    expect(listed).toMatchObject({ owned_by_me: true, is_subagent: false });
+    expect(childOf((await collectInboxSessionsByIds({ db }, ME as any, ["conversations_child"])).sessions)).toMatchObject({ owned_by_me: true, is_subagent: false });
+    const page = await collectInboxSessionsPaginated({ db }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(childOf(page.page)).toBeUndefined();
+  });
+});
+
 describe("the flag is the session's own: its team's, or its runner's teams' for a personal session", () => {
   const OTHER_TEAM = "teams_x";
   function mixed() {

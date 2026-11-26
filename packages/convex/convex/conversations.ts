@@ -9064,6 +9064,16 @@ function isParentOwnedChild(child: any): boolean {
   return !child.org_role_id && !child.parent_released_at;
 }
 
+// A child drawn on its parent's card, in the slim child row: its parent still
+// owns it and it is none of the viewer's own inbox rows. An owner seat or a
+// wait escalated to the viewer makes it one, which the scan lists in the full
+// row. Every feeder of the row (the inbox read, the crawl, byIds) asks this one
+// rule, so the row is written one way whichever delivered it last.
+function nestedOnParentCard(child: any, viewerId: Id<"users">, myOwnerRow: any | null): boolean {
+  return isParentOwnedChild(child)
+    && !isInboxMember({ ...child, owners_model: true, implicit_owner: null, owned_by_me: !!myOwnerRow }, viewerId);
+}
+
 // The owners fields of such a child (inboxOwnerRowFields' shape), read off the
 // child alone: its parent owns it, so it has no implicit owner and costs no
 // owner read.
@@ -10086,10 +10096,11 @@ export async function computeInboxSessions(
     if (parentOwns && (opts.projection || opts.teamScope)) continue;
     for (const child of r.subagentChildren) {
       if (topLevelIds.has(child._id.toString())) continue;
-      if (parentOwns && !isParentOwnedChild(child)) continue;
+      const childOwnerRow = await scan.ownerRowFor(child);
+      if (parentOwns && !nestedOnParentCard(child, userId, childOwnerRow)) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, r.conv._id, (id) => ctx.db.get(id));
       if (parentOwns) Object.assign(childRow, parentOwnedChildFields(child, r.conv._id));
-      await stampInboxViewerFields(childRow, child, userId, await scan.ownerRowFor(child), getDoc);
+      await stampInboxViewerFields(childRow, child, userId, childOwnerRow, getDoc);
       stampChildRow?.(child, childRow);
       childRowIds.add(childRow._id.toString());
       results.push(childRow);
@@ -11642,10 +11653,11 @@ export async function collectInboxSessionsPaginated(
       // An adopted child is a top-level row of its own (shared isAdoptedChild),
       // listed by the scan itself, as listInboxSessions does.
       if (isAdoptedChild(child)) continue;
-      if (parentOwns && !isParentOwnedChild(child)) continue;
+      const childOwnerRow = await sessionOwnerRow(ctx, child._id, userId);
+      if (parentOwns && !nestedOnParentCard(child, userId, childOwnerRow)) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, conv._id, (id) => ctx.db.get(id));
       if (parentOwns) Object.assign(childRow, parentOwnedChildFields(child, conv._id));
-      await stampInboxViewerFields(childRow, child, userId, await sessionOwnerRow(ctx, child._id, userId), getDoc);
+      await stampInboxViewerFields(childRow, child, userId, childOwnerRow, getDoc);
       stripInboxLiveness(childRow);
       rows.push(childRow);
     }
@@ -11803,6 +11815,17 @@ async function escalatedToCaller(ctx: any, conv: any, userId: Id<"users">): Prom
   return (await ownersModelOnMemo(ctx, conv)) && (await checkConversationAccess(ctx, userId, conv)) !== "denied";
 }
 
+// The row is one the inbox read sends as a child on its parent's card: a
+// subagent child (enrichInboxSessionRow's test, adopted ones standing alone)
+// under the owners model, whose parent is alive to own it, and
+// nestedOnParentCard. The owner fields are the full row's own read, memoized,
+// so asking costs nothing the full row would not.
+async function sentOnParentCard(ctx: any, conv: any, userId: Id<"users">, myOwnerRow: any | null): Promise<boolean> {
+  if (!conv.parent_conversation_id || !(conv.is_subagent || !conv.parent_message_uuid) || isAdoptedChild(conv)) return false;
+  if (!nestedOnParentCard(conv, userId, myOwnerRow)) return false;
+  return !!(await inboxOwnersOf(ctx, conv))?.owner_session_id;
+}
+
 // Auth-free body of getInboxSessionsByIds, exported for tests.
 export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, ids: string[]) {
   const now = inboxEpoch(Date.now());
@@ -11823,6 +11846,17 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
     const myOwnerRow = await sessionOwnerRow(ctx, conv._id, userId);
     if (conv.user_id.toString() !== userId.toString() && !myOwnerRow && !(await escalatedToCaller(ctx, conv, userId))) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
+    // A child its parent owns comes back as the inbox read sends it, on its
+    // parent's card (nestedOnParentCard): the slim child row, not the full one,
+    // or the two feeders rewrite the row on every catch-up.
+    if (await sentOnParentCard(ctx, conv, userId, myOwnerRow)) {
+      const childRow = await buildSubagentChildRow(conv, EMPTY_INBOX_MAPS, now, conv.parent_conversation_id, getDoc);
+      Object.assign(childRow, parentOwnedChildFields(conv, conv.parent_conversation_id));
+      await stampInboxViewerFields(childRow, conv, userId, myOwnerRow, getDoc);
+      stripInboxLiveness(childRow);
+      sessions.push(childRow);
+      continue;
+    }
     const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true }, getDoc);
     await stampInboxViewerFields(row, conv, userId, myOwnerRow, getDoc);
     stripInboxLiveness(row);
