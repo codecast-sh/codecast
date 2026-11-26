@@ -40,8 +40,9 @@ async function setup() {
       created_at: o.at ?? NOW - 1000, updated_at: o.updated ?? o.at ?? NOW - 1000, ...(o.extra ?? {}),
     } as any));
   const task = (n: number, status = "in_progress") => t.run((ctx) => ctx.db.insert("tasks", { short_id: `ct-${n}`, title: `Task ${n}`, status, workspace: ids.ws, team_id: ids.team, user_id: ids.ana, created_at: NOW, updated_at: NOW } as any));
-  const read = (who: any, team = ids.team) => t.withIdentity({ subject: `${who}|session` }).query(api.workflow_runs.shippingRuns, { team_id: team });
-  return { t, ids, run, task, read };
+  const readAll = (who: any, team = ids.team) => t.withIdentity({ subject: `${who}|session` }).query(api.workflow_runs.shippingRuns, { team_id: team });
+  const read = async (who: any, team = ids.team) => (await readAll(who, team)).runs;
+  return { t, ids, run, task, read, readAll };
 }
 
 describe("workflow_runs.shippingRuns", () => {
@@ -97,8 +98,8 @@ describe("workflow_runs.shippingRuns", () => {
     const [, own] = await read(ids.ben);
     expect(own.spawner_title).toBe("Ben's private session");
     expect(Object.keys(open).sort()).toEqual([
-      "_id", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_prompt",
-      "node_statuses", "pr", "primary_conversation_id", "project_path", "spawner_conversation_id", "spawner_title", "status", "task_id",
+      "_id", "ci_verdict", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_prompt",
+      "merge", "node_statuses", "pr", "primary_conversation_id", "project_path", "review_verdict", "spawner_conversation_id", "spawner_title", "status", "task_id",
       "task_short_id", "task_title", "updated_at", "user_id", "workflow_label", "workflow_slug",
     ]);
   });
@@ -110,6 +111,42 @@ describe("workflow_runs.shippingRuns", () => {
     expect(await read(ids.ana)).toHaveLength(1);
     expect(await read(ids.eve)).toEqual([]);
     expect(await read(ids.eve, ids.other)).toHaveLength(1);
-    expect(await t.query(api.workflow_runs.shippingRuns, { team_id: ids.team })).toEqual([]);
+    expect(await t.query(api.workflow_runs.shippingRuns, { team_id: ids.team })).toEqual({ runs: [], shippers: [] });
+  });
+
+  test("a run carries its stations' verdicts and its merge", async () => {
+    const { run, read, ids } = await setup();
+    await run({ extra: { ci_verdict: { node_id: "ci", green: true, head_sha: "h1", at: 5, attempt: 1 }, review_verdict: { node_id: "review", verdict: "approve", head_sha: "h1", at: 6, attempt: 1 } } });
+    const [row] = await read(ids.ana);
+    expect(row).toMatchObject({ ci_verdict: { green: true, head_sha: "h1", at: 5 }, review_verdict: { verdict: "approve", at: 6 }, merge: null });
+  });
+});
+
+describe("workflow_runs.shippingRuns shippers", () => {
+  test("every change run of the window, completed and merged ones included, with who pressed Ship", async () => {
+    const { run, task, readAll, ids } = await setup();
+    const a = await task(1);
+    const merged = await run({ task: a, status: "completed", spawner: ids.open, extra: { merge: { sha: "e".repeat(40), branch: "x", into: "main", at: NOW } } });
+    const live = await run({ spawner: ids.secret, extra: { spawner_stand_in: true } });
+    await run({ flow: ids.build, status: "completed" });
+    await run({ status: "completed", updated: NOW - 31 * DAY });
+    const { shippers } = await readAll(ids.ana);
+    expect(shippers.map((s: any) => s.run_id).sort()).toEqual([merged, live].sort());
+    expect(shippers.find((s: any) => s.run_id === merged)).toEqual({
+      run_id: merged, task_short_id: "ct-1", merged_sha: "e".repeat(40), spawner_conversation_id: ids.open, spawner_title: "Ben's open session",
+      user_id: ids.ben, stand_in: false, created_at: NOW - 1000,
+    });
+    // Ben's private session: Ana sees which session it was, never its title or owner.
+    expect(shippers.find((s: any) => s.run_id === live)).toMatchObject({ task_short_id: null, merged_sha: null, stand_in: true, spawner_conversation_id: ids.secret, spawner_title: null, user_id: null });
+    const own = (await readAll(ids.ben)).shippers.find((s: any) => s.run_id === live);
+    expect(own).toMatchObject({ spawner_title: "Ben's private session", user_id: ids.ben });
+  });
+
+  test("another team's runs never show, and a stranger gets none", async () => {
+    const { run, readAll, ids } = await setup();
+    await run({ status: "completed" });
+    await run({ status: "completed", workspace: `team:${ids.other}` });
+    expect((await readAll(ids.ana)).shippers).toHaveLength(1);
+    expect(await readAll(ids.eve)).toEqual({ runs: [], shippers: [] });
   });
 });
