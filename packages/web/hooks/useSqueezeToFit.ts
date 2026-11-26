@@ -37,9 +37,13 @@ export function applySqueeze(row: HTMLElement, maxLevel: number, from = 0): numb
   let applied = -1;
   const apply = (level: number) => {
     const tokens = Array.from({ length: level }, (_, i) => String(i + 1)).join(" ");
+    applied = level;
+    // A trial at the level the row already carries writes nothing, so its read
+    // finds the layout the browser already has (a row that fits on mount
+    // forces no layout at all).
+    if ((row.getAttribute("data-squeeze") ?? "") === tokens) return;
     if (tokens) row.setAttribute("data-squeeze", tokens);
     else row.removeAttribute("data-squeeze");
-    applied = level;
   };
   const fits = (level: number) => { apply(level); return row.scrollWidth <= row.clientWidth + 1; };
   let level = Math.max(0, Math.min(from, maxLevel));
@@ -66,6 +70,7 @@ export function useSqueezeToFit(
     let lastLevel = 0;
 
     const fit = () => {
+      if (raf) cancelAnimationFrame(raf);
       raf = 0;
       lastLevel = applySqueeze(row, maxLevel, lastLevel);
     };
@@ -73,13 +78,18 @@ export function useSqueezeToFit(
       if (!raf) raf = requestAnimationFrame(fit);
     };
 
-    fit();
-    lastWidth = row.clientWidth;
+    // The first fit runs in the ResizeObserver's initial callback, not here:
+    // a trial read inside this commit forces a layout in React's own task,
+    // one full pass per level, on every mount (the inbox's first paint,
+    // ct-101552). The observer reports once the frame's layout is done and
+    // before it paints, so the row still never paints unsqueezed.
     const ro = new ResizeObserver(() => {
       const w = row.clientWidth;
       if (w === lastWidth) return;
+      const first = lastWidth < 0;
       lastWidth = w;
-      schedule();
+      if (first) fit();
+      else schedule();
     });
     ro.observe(row);
     const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
