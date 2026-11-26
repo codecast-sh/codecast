@@ -53,7 +53,7 @@ export type ClassifierChoice = { priority: string; step: string | null } | "new"
 export const PRIORITY_CLASSIFIER_SYSTEM = `You place one session of one person's work under one of their priorities in Codecast. A priority is an outcome the person is driving at; its milestones are the pieces of work on the way to it.
 
 Read the session (its title, its pinned state, what the person typed, the tasks it links) and choose:
-- "pri-N/sK": the milestone it serves. A session that works a milestone's task, or a task in the same plan or project, serves that milestone. Prefer an open milestone; a done one only when the session is that same finished work.
+- "pri-N/sK": the milestone it serves. A session that works one of a milestone's own tasks serves that milestone. A task in the same plan or project as a milestone's task is a weak hint, never enough on its own: choose that milestone only when what the session does is that milestone's work. Prefer an open milestone; a done one only when the session is that same finished work.
 - "pri-N": it serves that priority but no milestone fits.
 - "new": it serves none of them: another outcome, or a chore, a question or an aside no priority holds. Do not stretch a priority to fit.
 

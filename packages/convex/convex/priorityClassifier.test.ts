@@ -17,7 +17,7 @@ import { inheritLink, linkSession } from "./lib/priorityLinks";
 import { mergePriorities } from "./lib/priorityPass";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
 import { CLASSIFIER_DAILY_USD, RERUN_DELAY_MS, RERUN_MAX } from "./lib/priorityClassifierHook";
-import { parseClassifierReply, type ClassifierInput } from "./lib/priorityClassifier";
+import { PRIORITY_CLASSIFIER_SYSTEM, parseClassifierReply, type ClassifierInput } from "./lib/priorityClassifier";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { applyPlan } from "./priorityPassRun";
 
@@ -199,6 +199,12 @@ describe("what it reads", () => {
     expect(prompt).toContain("Laptop stops crashing");
     expect(prompt).not.toContain("Trusted evals");
     expect(await w.conversation(w.personalConv)).toMatchObject({ priority_id: w.personal, priority_step_key: "s1" });
+  });
+
+  test("a milestone's own task places a session there; the same plan or project is a weak hint, never enough alone", () => {
+    expect(PRIORITY_CLASSIFIER_SYSTEM).toContain("A session that works one of a milestone's own tasks serves that milestone.");
+    expect(PRIORITY_CLASSIFIER_SYSTEM).toContain("A task in the same plan or project as a milestone's task is a weak hint, never enough on its own");
+    expect(PRIORITY_CLASSIFIER_SYSTEM).not.toMatch(/same plan or project, serves/);
   });
 
   test("a reply naming a priority it was not shown places nothing", () => {
