@@ -270,6 +270,8 @@ describe("precedence: the person > a known link > the classifier > the pass", ()
   test("a plan that rewrites milestones but removes none reads no sessions to clear their steps", async () => {
     const w = await classifierWorld();
     await w.t.run((ctx) => ctx.db.patch(w.teamConv, { priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" } as any));
+    // A priority that already has its key mark (one written before it reads its sessions once for it).
+    await w.t.run((ctx) => ctx.db.patch(w.grader, { step_key_max: 2 } as any));
     const grader = await w.t.run((ctx) => ctx.db.get(w.grader));
     const tables: string[] = [];
     await w.t.run(async (ctx: any) => {

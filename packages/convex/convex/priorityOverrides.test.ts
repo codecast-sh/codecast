@@ -193,6 +193,46 @@ describe("a milestone holding a session the person placed survives the pass", ()
   });
 });
 
+describe("milestone keys from before the mark", () => {
+  test("a priority with no mark takes it from its milestones and its sessions' keys the first time it is written; a new key past a session's old one", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    // Written before the mark: a session still holds s5, from a milestone since removed.
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(p1._id, { step_key_max: undefined } as any);
+      await ctx.db.patch(w.oldConv, { priority_id: p1._id, priority_step_key: "s5" } as any);
+    });
+    const fresh = { key: "s5", title: "Grader in CI", tier: "critical", tier_set_by: "pass", refs: [], done: false };
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [{ short_id: "pri-1", seen_steps: p1.steps.map((s: any) => s.key), patch: { steps: [...p1.steps, fresh] } }], merges: [], sessions: [{ session: "jx7team", priority: "pri-1", step_key: "s5" }], unmap: [], notes: [], rewritten: [] },
+    });
+    const after = await byShort(w, "pri-1");
+    expect(after.steps.find((s: any) => s.title === "Grader in CI")?.key).toBe("s6");
+    expect(after.step_key_max).toBe(6);
+    // The session the plan put on the new milestone follows its new key.
+    expect((await w.conversation(w.teamConv))?.priority_step_key).toBe("s6");
+  });
+
+  test("a plan that removes a milestone clears it from every session on it, and a dangling key on a pass-mapped one", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { priority_id: p1._id, priority_step_key: "s2", priority_set_by: undefined } as any);
+      await ctx.db.patch(w.oldConv, { priority_id: p1._id, priority_step_key: "s9", priority_set_by: undefined } as any);
+    });
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [{ short_id: "pri-1", patch: { steps: p1.steps.filter((s: any) => s.key !== "s2") } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    for (const id of [w.teamConv, w.oldConv]) {
+      const conv = await w.conversation(id);
+      expect(conv?.priority_id).toBe(p1._id);
+      expect(conv?.priority_step_key).toBeUndefined();
+    }
+  });
+});
+
 describe("milestone keys are never reused", () => {
   test("the pass removes s3; its next new milestone is s4, not s3 again", async () => {
     const w = await seeded();

@@ -23,6 +23,7 @@ import { sessionVisibility, type SessionVisibility } from "./lib/prioritySession
 import { passOn } from "./lib/priorityPassSchedule";
 import { askRerun } from "./lib/priorityClassifierHook";
 import { recomputeStepDone, replayDonePin } from "./lib/priorityLinks";
+import { stepKeyMark } from "./lib/priorityGroup";
 import { PRIORITY_PASS_MODEL, stepKeyMax, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
@@ -372,8 +373,9 @@ export const applyPlan = internalMutation({
     // Per priority this plan rewrote: its live step keys after the write, and the plan's new keys that moved.
     const liveSteps = new Map<string, Set<string>>();
     const rekeyed = new Map<string, Map<string, string>>();
-    // Per priority, the milestones this plan removed or dropped: their linked and classified sessions lose the step.
+    // Per priority whose milestones this plan removed or dropped, its live keys after the write: a session on any other key loses the step.
     const gone = new Map<Id<"priorities">, Set<string>>();
+    const stepMarks = new Map<Id<"priorities">, number>();
     let newMilestone = false;
     for (const u of plan.updates) {
       const row = await mine(u.short_id);
@@ -390,10 +392,14 @@ export const applyPlan = internalMutation({
       if (patch.steps) {
         const seen = new Set(u.seen_steps ?? row.steps.map((st) => st.key));
         const unseen = row.steps.filter((st) => !seen.has(st.key));
-        let next = stepKeyMax([...row.steps, ...patch.steps], row.step_key_max);
+        // Keys this priority has spent (its mark, worked out once for one written before it), and the plan's new ones that would reuse one.
+        const spentUpTo = await stepKeyMark(ctx, row);
+        const known = new Set(row.steps.map((st) => st.key));
+        const reuses = (key: string) => !known.has(key) && stepKeyMax([{ key }]) <= spentUpTo;
+        let next = stepKeyMax([...row.steps, ...patch.steps], spentUpTo);
         const moved = new Map<string, string>();
         const steps = patch.steps.map((st) => {
-          if (!unseen.some((x) => x.key === st.key)) return st;
+          if (!unseen.some((x) => x.key === st.key) && !reuses(st.key)) return st;
           moved.set(st.key, `s${++next}`);
           return { ...st, key: moved.get(st.key)! };
         });
@@ -410,14 +416,15 @@ export const applyPlan = internalMutation({
         const live = new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key));
         liveSteps.set(row.short_id, live);
         const removed = row.steps.filter((st) => !st.dropped && !live.has(st.key)).map((st) => st.key);
-        if (removed.length) gone.set(row._id, new Set(removed));
+        if (removed.length) gone.set(row._id, live);
+        stepMarks.set(row._id, Math.max(next, stepKeyMax(patch.steps)));
         newMilestone ||= patch.steps.some((st) => !st.dropped && !row.steps.some((x) => x.key === st.key));
         if (moved.size) rekeyed.set(row.short_id, moved);
       }
       // A rewrite the priority needed is done: its title and summary are this pass's.
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
       // Every key it has held stays spent: the mark only rises.
-      const mark = patch.steps ? { step_key_max: stepKeyMax([...row.steps, ...patch.steps], row.step_key_max) } : {};
+      const mark = stepMarks.has(row._id) ? { step_key_max: stepMarks.get(row._id)! } : {};
       await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, ...mark, updated_at: now });
       counts.updated++;
       // A milestone this write leaves done, or whose done state it changed, follows its tasks and pull requests as they are now
@@ -446,7 +453,7 @@ export const applyPlan = internalMutation({
       const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
       let survivor = intoRow;
       if (carried.length) {
-        let next = stepKeyMax(intoRow.steps, intoRow.step_key_max);
+        let next = stepKeyMax(intoRow.steps, await stepKeyMark(ctx, intoRow));
         const added = carried.map((st) => {
           const key = `s${++next}`;
           step_keys[st.key] = key;
@@ -512,12 +519,10 @@ export const applyPlan = internalMutation({
       }
     }
 
-    // A session the person, a known link or the classifier put on a milestone this plan removed keeps the priority, step unknown.
-    for (const [id, keys] of gone) {
+    // A session on a milestone this plan removed, or on a key no milestone holds (left from before), keeps the priority, step unknown, whoever put it there.
+    for (const [id, live] of gone) {
       for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP)) {
-        if (conv.priority_set_by && conv.priority_set_by !== "pass" && conv.priority_step_key && keys.has(conv.priority_step_key)) {
-          await ctx.db.patch(conv._id, { priority_step_key: undefined });
-        }
+        if (conv.priority_step_key && !live.has(conv.priority_step_key)) await ctx.db.patch(conv._id, { priority_step_key: undefined });
       }
     }
 
