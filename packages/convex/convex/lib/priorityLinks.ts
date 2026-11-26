@@ -14,7 +14,8 @@
 // never undoes what tasks and pull requests say. The records
 // decide in order: a milestone with tasks follows its tasks alone (as the
 // pass does, lib/priorityPass stepDone); one with pull requests of its own
-// workspace is done once none is open and one merged; only one with neither
+// workspace is done once none is open and one merged, and not done once all
+// it found closed unmerged; only one with neither
 // is marked done by its sessions.
 // Session evidence never reopens a milestone, and a milestone already done
 // keeps its first done time. Evidence never touches a milestone the person
@@ -127,22 +128,27 @@ async function evidenceFor(ctx: Ctx, p: Priority, step: Step, sessionAt: number 
     }
     return stepDone(step.refs, undefined, status) ? { done: true, at } : { done: false };
   }
-  let at = 0;
-  let merged = false;
-  let open = false;
-  for (const r of step.refs) {
-    const m = r.kind === "pr" ? /^(.+)#(\d+)$/.exec(r.id) : null;
-    if (!m) continue;
-    const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", m[1]).eq("number", Number(m[2]))).first();
-    if (!pr || !prInWorkspace(pr, p.workspace)) continue;
-    if (pr.state === "open") open = true;
-    else {
-      merged ||= pr.state === "merged";
-      at = Math.max(at, (pr.state === "merged" ? pr.merged_at : pr.closed_at) ?? pr.updated_at);
+  // A milestone naming pull requests follows them alone, even ones not found (yet): never a pin.
+  if (step.refs.some((r) => r.kind === "pr")) {
+    let at = 0;
+    let merged = false;
+    let open = false;
+    let resolved = false;
+    for (const r of step.refs) {
+      const m = r.kind === "pr" ? /^(.+)#(\d+)$/.exec(r.id) : null;
+      if (!m) continue;
+      const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", m[1]).eq("number", Number(m[2]))).first();
+      if (!pr || !prInWorkspace(pr, p.workspace)) continue;
+      resolved = true;
+      if (pr.state === "open") open = true;
+      else {
+        merged ||= pr.state === "merged";
+        at = Math.max(at, (pr.state === "merged" ? pr.merged_at : pr.closed_at) ?? pr.updated_at);
+      }
     }
+    if (open || !resolved) return null;
+    return merged ? { done: true, at } : { done: false };
   }
-  if (open) return null;
-  if (merged) return { done: true, at };
   // A pin naming the milestone outranks a done the pass judged: it keeps the earlier time, and the mark.
   if (sessionAt !== undefined && step.done_set_by !== "evidence") return { done: true, at: step.done && step.done_at != null ? Math.min(step.done_at, sessionAt) : sessionAt, session: true };
   return null;

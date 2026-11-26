@@ -12,7 +12,7 @@ import { patchTask } from "./lib/taskWrite";
 import { patchPullRequest } from "./prShepherd";
 import { spawnSessionCore } from "./spawn";
 import { setTaskStatus } from "./orgInit";
-import { linkFromPlan, linkFromStart, linkFromTask, linkSession } from "./lib/priorityLinks";
+import { linkFromPlan, linkFromStart, linkFromTask, linkSession, recomputeStepDone } from "./lib/priorityLinks";
 import { TASK, SOURCE, ADA, apply, engineCtx, sameIssue } from "./issueSync.testkit";
 import type { Id } from "./_generated/dataModel";
 
@@ -276,6 +276,30 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     });
     await t.run((ctx: any) => patchPullRequest(ctx, open, { state: "closed", closed_at: NOW - H }));
     expect(await stepOf(t, p, "s1")).toMatchObject({ done: true, done_at: NOW - H });
+  });
+
+  test("a milestone's PRs all closed unmerged: not done, even where the pass judged it done", async () => {
+    const { t, p1, pr } = await world();
+    await t.run(async (ctx: any) => {
+      const p = await ctx.db.get(p1);
+      await ctx.db.patch(p1, { steps: p.steps.map((s: any) => (s.key === "s2" ? { ...s, done: true, done_at: NOW - 5 * H } : s)) });
+    });
+    await t.run((ctx: any) => patchPullRequest(ctx, pr, { state: "closed", closed_at: NOW - H }));
+    expect((await stepOf(t, p1, "s2")).done).toBe(false);
+  });
+
+  test("a milestone naming a PR not found here is still the PRs' to close: a pin naming it closes nothing and says so", async () => {
+    const { t, ada, p1 } = await world();
+    // s7 names a PR of another team's repository, which resolves to nothing in this workspace.
+    await t.run((ctx: any) => ctx.db.insert("conversations", {
+      user_id: ada, agent_type: "claude_code", session_id: "sess-jx7s7", short_id: "jx7s7", title: "s7", started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
+      priority_id: p1, priority_step_key: "s7",
+    }));
+    const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7s7", text: "Shipped", status: "done", serves: "pri-1/s7" });
+    expect(res.serves_decided_by).toBe("pull_requests");
+    expect((await stepOf(t, p1, "s7")).done).toBe(false);
+    // Evidence itself never lets a pin close it either.
+    expect(await t.run((ctx: any) => recomputeStepDone(ctx, p1, "s7", NOW))).toBe(false);
   });
 
   test("a PR of another team's workspace counts toward no personal milestone", async () => {
