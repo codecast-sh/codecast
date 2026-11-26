@@ -1,4 +1,4 @@
-// Per-device model inventory for dynamic clients (opencode, pi) — see
+// Per-device model inventory for dynamic clients (opencode, pi, antigravity) — see
 // DeviceModelInventory in @codecast/shared/contracts. Each client's own listing
 // command is the honest source of what THIS machine can launch (its catalog
 // filtered by the API keys / logins present here), so the daemon collects it and
@@ -8,7 +8,7 @@
 
 import { execFile } from "./proc.js";
 import crypto from "crypto";
-import { AGENT_CLIENTS, type DeviceModelInventory } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, agyBaseModelIds, type DeviceModelInventory } from "@codecast/shared/contracts";
 import { hasBin } from "./doctorClients.js";
 
 const REFRESH_MS = 6 * 60 * 60 * 1000;
@@ -30,9 +30,22 @@ export function parsePiModels(stdout: string): string[] {
     .map((cols) => `${cols[0]}/${cols[1]}`);
 }
 
-const COLLECTORS: { id: "opencode" | "pi"; args: string[]; parse: (stdout: string) => string[] }[] = [
+/** `agy models` prints "Fetching available models..." then one
+ *  `<id>\t<label>` row per model and effort the signed-in account can use,
+ *  best first; the picker takes their base ids. */
+export function parseAgyModels(stdout: string): string[] {
+  return agyBaseModelIds(stdout
+    .split("\n")
+    .map((l) => l.split("\t")[0].trim())
+    .filter((id) => /^[a-z0-9][a-z0-9._-]*$/.test(id) && /\d/.test(id)));
+}
+
+// `ordered`: the listing's own order is the menu's (agy puts its best model
+// first); the path-shaped catalogs are sorted.
+const COLLECTORS: { id: "opencode" | "pi" | "antigravity"; args: string[]; parse: (stdout: string) => string[]; ordered?: boolean }[] = [
   { id: "opencode", args: ["models"], parse: parseOpencodeModels },
   { id: "pi", args: ["--list-models"], parse: parsePiModels },
+  { id: "antigravity", args: ["models"], parse: parseAgyModels, ordered: true },
 ];
 
 function run(binary: string, args: string[]): Promise<string> {
@@ -57,7 +70,8 @@ export async function collectModelInventory(): Promise<DeviceModelInventory | nu
     const binary = AGENT_CLIENTS[c.id].binary;
     if (!hasBin(binary)) continue;
     try {
-      const ids = [...new Set(c.parse(await run(binary, c.args)))].sort().slice(0, MAX_IDS_PER_CLIENT);
+      const unique = [...new Set(c.parse(await run(binary, c.args)))];
+      const ids = (c.ordered ? unique : unique.sort()).slice(0, MAX_IDS_PER_CLIENT);
       if (ids.length > 0) clients[c.id] = ids;
     } catch {
       // A hung/failed listing just leaves this client out; the next refresh retries.

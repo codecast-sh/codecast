@@ -76,7 +76,7 @@ describe("agentCliInstallScript", () => {
       expect(r.stderr).toBe("");
       expect(r.status).toBe(0);
       expect(r.stdout).toContain("AGENT-CLIS-OK");
-      expect(parseAgentCliReport(r.stdout)).toMatch(/^claude=2\.1\.263 \(Claude Code\)  codex=codex-cli 0\.153\.4  gemini=  grok=1\.2\.3  opencode=missing  pi=missing  node=v18\.19\.1 \(curl: \(6\) Could not resolve host/);
+      expect(parseAgentCliReport(r.stdout)).toMatch(/^claude=2\.1\.263 \(Claude Code\)  codex=codex-cli 0\.153\.4  gemini=  grok=1\.2\.3  opencode=missing  pi=missing  agy=missing  node=v18\.19\.1 \(curl: \(6\) Could not resolve host/);
       expect(fs.existsSync(path.join(home, ".local", "bin"))).toBe(true);
       // A failed opencode download leaves no dangling link behind.
       expect(fs.existsSync(path.join(home, ".local", "bin", "opencode"))).toBe(false);

@@ -1,6 +1,6 @@
 "use client";
 
-// Live model options for dynamic clients (opencode/pi). Each device heartbeats
+// Live model options for dynamic clients (opencode, pi, and antigravity's `agy models`). Each device heartbeats
 // the `provider/model` ids its installed clients can actually launch (devices
 // row, model_inventory); this hook turns that into picker data: a curated
 // featured head plus the full searchable id list. Non-dynamic clients (and
@@ -13,7 +13,7 @@ import { useSyncDevices } from "./useSyncDevices";
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
-  featuredModelOptions,
+  featuredModelsFor,
   type ModelOption,
 } from "@codecast/shared/contracts";
 
@@ -48,8 +48,10 @@ export function useDynamicModels(
     // before routing is known, the union across reporting devices.
     const bound = ownerDeviceId ? rows.filter((d) => d.device_id === ownerDeviceId) : [];
     const source = bound.length > 0 ? bound : rows;
-    const all = [...new Set(source.flatMap((d) => d.model_inventory.clients[agentKey] as string[]))].sort();
-    const featured = featuredModelOptions(all);
+    const all = [...new Set(source.flatMap((d) => d.model_inventory.clients[agentKey] as string[]))];
+    // A bare catalog (agy) keeps its listing's order, best first.
+    if (cfg?.dynamic !== "bare") all.sort();
+    const featured = featuredModelsFor(agentType, all);
     return { dynamic, featured: featured.length > 0 ? featured : staticFeatured, all };
   }, [cfg, dynamic, devices, ownerDeviceId, agentKey]);
 }

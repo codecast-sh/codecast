@@ -15,6 +15,7 @@ import {
   GROK_EFFORT_LEVELS,
   MUSE_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
+  agyModelTakesEffort,
   PI_EFFORT_LEVELS,
   cloudAgentModel,
   findModelOption,
@@ -387,8 +388,10 @@ export function appendModelEffortFlags(
   } else if (agentType === "antigravity") {
     // agy takes the base model id and the effort apart (`--model gemini-4-neon
     // --effort low` ran as gemini-4-neon-low, agy 1.5.14).
+    // The Claude and GPT-OSS rows refuse --effort, which fails the launch,
+    // so the effort rides only a Gemini model (agyModelTakesEffort).
     if (modelAlias) args.push("--model", modelAlias);
-    if (input.requestedEffort && (ANTIGRAVITY_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
+    if (input.requestedEffort && (ANTIGRAVITY_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort) && agyModelTakesEffort(modelAlias)) {
       args.push("--effort", input.requestedEffort);
     }
   }

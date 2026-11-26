@@ -684,8 +684,12 @@ export function planAgentAuthPush(hosts: RemoteHost[], hash: string, lastByHost:
  * Every launchable agent whose login the bundle ships gets its CLI too: a
  * cloud session with `--agent opencode` must not find an auth file and no binary.
  */
-export type InstallableClient = "claude" | "codex" | "gemini" | "grok" | "opencode" | "pi";
-export const INSTALLABLE_CLIENTS: readonly InstallableClient[] = ["claude", "codex", "gemini", "grok", "opencode", "pi"];
+// Each entry is the client's BINARY name, which every user of this list probes
+// (`<bin> --version`, ~/.local/bin/<bin>): Antigravity's is `agy`. agy keeps its
+// login in the OS keychain, not a file, so no auth source ships it; a host signs
+// in itself.
+export type InstallableClient = "claude" | "codex" | "gemini" | "grok" | "opencode" | "pi" | "agy";
+export const INSTALLABLE_CLIENTS: readonly InstallableClient[] = ["claude", "codex", "gemini", "grok", "opencode", "pi", "agy"];
 
 /** The first `x.y.z` in a `--version` output ("2.1.263 (Claude Code)", "codex-cli 0.153.4"). */
 export function parseClientVersion(out: string): string | undefined {

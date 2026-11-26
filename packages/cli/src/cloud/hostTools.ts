@@ -163,7 +163,7 @@ const KNOWN_ON_HOST: ReadonlySet<string> = new Set([
   "type", "pwd", "readlink", "realpath", "stat", "kill", "ps", "pgrep", "pkill", "id", "whoami", "hostname", "uname", "df", "du", "mktemp", "tail", "seq",
   "expr", "diff", "cmp", "patch", "less", "more", "nohup", "timeout", "nproc", "base64", "md5sum", "sha256sum", "od", "hexdump", "yes", "tput", "clear",
   "sudo", "systemctl", "service", "apt", "apt-get", "dpkg", "make", "cc", "gcc", "perl", "ruby", "openssl", "gpg", "ssh-keygen", "ssh-agent", "ssh-add",
-  "docker", "cast", "claude", "codex", "gemini", "grok", "opencode", "pi", "muse", "node", "npm", "npx", "bun", "bunx", "gh", "uv", "uvx", "pip", "pip3",
+  "docker", "cast", "claude", "codex", "gemini", "agy", "grok", "opencode", "pi", "muse", "node", "npm", "npx", "bun", "bunx", "gh", "uv", "uvx", "pip", "pip3",
 ]);
 const SHELL_WORDS: ReadonlySet<string> = new Set([
   "if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while", "until", "case", "esac", "function", "select", "time", "coproc",
@@ -928,6 +928,9 @@ export function clientInstallSnippet(client: InstallableClient, version: string 
     case "opencode": return `command -v opencode >/dev/null 2>&1 || { (curl ${CURL_LIMITS} https://opencode.ai/install | bash -s -- --no-modify-path${ver ? ` --version ${ver}` : ""}) >/dev/null 2>&1; [ -x "$HOME/.opencode/bin/opencode" ] && mkdir -p "$HOME/.local/bin" && ln -sf "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; }`;
     // pi is the node script of @mariozechner/pi-coding-agent (daemon.ts matches its process by that path).
     case "pi": return `command -v pi >/dev/null 2>&1 || bun install -g @mariozechner/pi-coding-agent${ver ? `@${ver}` : ""} >/dev/null 2>&1`;
+    // Antigravity CLI: Google's installer writes ~/.local/bin/agy and takes no
+    // version (agy updates itself), so it installs unpinned.
+    case "agy": return `command -v agy >/dev/null 2>&1 || (curl ${CURL_LIMITS} https://antigravity.google/cli/install.sh | bash) >/dev/null 2>&1`;
   }
 }
 

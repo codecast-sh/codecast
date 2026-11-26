@@ -18,7 +18,7 @@
 // lookups.
 
 import type { CapabilityKind } from "./capabilities";
-import type { ModelOption } from "./modelOptions";
+import type { DynamicKeyShape, ModelOption } from "./modelOptions";
 import { ANTIGRAVITY_CLIENT } from "./antigravityClient";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentLaunchModelOptions } from "./cloudAgents";
 import {
@@ -35,8 +35,9 @@ import {
   PI_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS,
   MUSE_EFFORT_LEVELS,
-  isDynamicModelKey,
+  isDynamicKeyOfShape,
   dynamicModelOption,
+  featuredModelOptions,
 } from "./modelOptions";
 
 /** The single named union for a supported agent client — the daemon's
@@ -213,7 +214,28 @@ export interface AgentModelConfig {
    *  is a per-device fact (opencode, pi). Any well-formed `provider/model` key is
    *  a valid wire value — findModelOption synthesizes its option — and pickers
    *  render from the device's heartbeat-reported model inventory. */
-  dynamic?: boolean;
+  dynamic?: boolean | "bare";
+}
+
+/** The key shape a dynamic client's inventory uses, or null for a static
+ *  client. `true` is the `provider/model` namespace (opencode, pi); "bare" a
+ *  client's own catalog ids (antigravity's `agy models`). */
+function dynamicShape(cfg: AgentModelConfig | undefined): DynamicKeyShape | null {
+  if (!cfg?.dynamic) return null;
+  return cfg.dynamic === "bare" ? "bare" : "path";
+}
+
+/** Whether `key` is a model the client's device inventory can name. */
+export function isDynamicKeyFor(agentType: string | undefined, key: string): boolean {
+  const shape = dynamicShape(AGENT_MODEL_CONFIG[modelAgentKey(agentType)]);
+  return !!shape && isDynamicKeyOfShape(key, shape);
+}
+
+/** The featured head of a dynamic client's picker from a device inventory. */
+export function featuredModelsFor(agentType: string | undefined, inventory: string[]): ModelOption[] {
+  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  const shape = dynamicShape(cfg);
+  return shape ? featuredModelOptions(inventory, shape, cfg?.models ?? []) : [];
 }
 
 /** How the daemon tails a client's transcripts on disk. `json-store` is reserved
@@ -1413,7 +1435,7 @@ export function findModelOption(agentType: string | undefined, key: string): Mod
   // accept inventory-sourced models without a per-layer allowlist. The key
   // charset is a subset of the daemon's SAFE_ARG_RE, so the synthesized
   // cliAlias is launch-safe by construction.
-  if (cfg?.dynamic && isDynamicModelKey(key)) return dynamicModelOption(key);
+  if (isDynamicKeyFor(agentType, key)) return dynamicModelOption(key);
   return undefined;
 }
 
@@ -1429,7 +1451,7 @@ export function modelOptionKey(model: string | undefined | null, agentType: stri
   if (!model || !cfg) return "default";
   // Dynamic clients store the full `provider/model` string as both the wire key
   // and the row's model stamp — it IS the option key.
-  if (cfg.dynamic && isDynamicModelKey(model)) return model;
+  if (cfg.dynamic && isDynamicKeyFor(agentType, model) && !cfg.models.some((m) => m.key !== "default" && model.startsWith(`${m.key}-`))) return model;
   const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
   // Exact match wins over a versioned-prefix match so a longer key ("gpt-5.4-mini")
   // isn't swallowed by a shorter one that prefixes it ("gpt-5.4"); the prefix pass
@@ -1466,10 +1488,12 @@ export function modelFitsAgent(model: string | undefined | null, agentType: stri
   if (modelOptionKey(model, agentType) !== "default") return true;
   const mine = modelAgentKey(agentType);
   const cfg = AGENT_MODEL_CONFIG[mine];
-  if (cfg?.dynamic && isDynamicModelKey(model)) return true;
+  if (isDynamicKeyFor(agentType, model)) return true;
   for (const other of Object.keys(AGENT_MODEL_CONFIG)) {
     if (other === mine) continue;
-    if (modelOptionKey(model, other) !== "default") return false;
+    // Only another agent's own catalog claims a model: an open inventory
+    // namespace (agy's bare ids) would claim every id there is.
+    if (modelOptionKey(model, other) !== "default" && !isDynamicKeyFor(other, model)) return false;
   }
   return true;
 }

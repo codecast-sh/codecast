@@ -203,7 +203,50 @@ export interface DeviceModelInventory {
    *  when it changes. */
   hash: string;
   collected_at: number;
-  clients: { opencode?: string[]; pi?: string[] };
+  /** opencode and pi list `provider/model` ids; antigravity lists the base
+   *  ids of `agy models` (gemini-3.8-flash, claude-opus-4-6-thinking). */
+  clients: { opencode?: string[]; pi?: string[]; antigravity?: string[] };
+}
+
+/** A bare model id from a client's own catalog listing (`agy models`). Same
+ *  charset discipline as the path shape: a subset of the daemon's SAFE_ARG_RE. */
+const BARE_MODEL_KEY_RE = /^[a-z0-9][a-z0-9._-]{0,79}$/;
+
+/** Which key shape a dynamic client's inventory uses. */
+export type DynamicKeyShape = "path" | "bare";
+
+/** Whether `key` is a well-formed dynamic model key of the given shape. */
+export function isDynamicKeyOfShape(key: string, shape: DynamicKeyShape): boolean {
+  return shape === "bare" ? BARE_MODEL_KEY_RE.test(key) : isDynamicModelKey(key);
+}
+
+const AGY_EFFORT_SUFFIX_RE = /-(low|medium|high|xhigh|max)$/;
+
+/**
+ * `agy models` ids as the picker's base models. agy lists one row per model
+ * and effort (gemini-3.8-flash-high, -medium, -low) and takes them apart at
+ * launch (`--model gemini-3.8-flash --effort high`), so a row whose suffix is
+ * an effort level becomes its base id. A row standing alone
+ * (claude-sonnet-4-6, gpt-oss-120b-medium) keeps its whole id, because agy
+ * refuses --effort on it. Order is the listing's, best first.
+ */
+export function agyBaseModelIds(ids: string[]): string[] {
+  const bases = ids.map((id) => id.replace(AGY_EFFORT_SUFFIX_RE, ""));
+  const count = new Map<string, number>();
+  for (const b of bases) count.set(b, (count.get(b) ?? 0) + 1);
+  const out: string[] = [];
+  ids.forEach((id, i) => {
+    const pick = count.get(bases[i])! > 1 ? bases[i] : id;
+    if (!out.includes(pick)) out.push(pick);
+  });
+  return out;
+}
+
+/** Whether agy takes `--effort` with this model: its Gemini models do, the
+ *  Claude and GPT-OSS rows refuse it ("--effort is not supported for model
+ *  claude-sonnet-4-6", agy 1.5.14). No model means agy's own Gemini default. */
+export function agyModelTakesEffort(model: string | undefined): boolean {
+  return !model || model.startsWith("gemini-");
 }
 
 // Conservative shape for a dynamic model key: `provider/model` (aggregators nest,
@@ -241,7 +284,8 @@ export function prettifyModelId(id: string): string {
     }
   }
   return merged
-    .map((w) => MODEL_WORD_CASING[w.toLowerCase()] ?? (/^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w))
+    // A parameter count ("120b") reads as "120B".
+    .map((w) => MODEL_WORD_CASING[w.toLowerCase()] ?? (/^\d+b$/.test(w) ? w.toUpperCase() : /^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w))
     .join(" ");
 }
 
@@ -251,7 +295,7 @@ export function dynamicModelOption(key: string): ModelOption {
   return {
     key,
     label: prettifyModelId(segments[segments.length - 1]),
-    hint: `via ${segments.slice(0, -1).join("/")}`,
+    ...(segments.length > 1 ? { hint: `via ${segments.slice(0, -1).join("/")}` } : {}),
     cliAlias: key,
   };
 }
@@ -287,7 +331,15 @@ function compareVersionDesc(a: number[], b: number[]): number {
 }
 
 /** The curated head of a dynamic picker: best available id per featured family. */
-export function featuredModelOptions(inventory: string[]): ModelOption[] {
+export function featuredModelOptions(inventory: string[], shape: DynamicKeyShape = "path", curated: ModelOption[] = []): ModelOption[] {
+  // A bare catalog (`agy models`) is the account's whole menu, a handful of
+  // ids: every one is featured, in the listing's order, under the curated
+  // label where the client has one.
+  if (shape === "bare") {
+    return inventory
+      .filter((id) => isDynamicKeyOfShape(id, "bare"))
+      .map((id) => curated.find((m) => m.key === id) ?? dynamicModelOption(id));
+  }
   const clean = inventory.filter((id) => isDynamicModelKey(id) && !/[@:]|-fast$|-latest$/.test(id));
   const out: ModelOption[] = [];
   for (const family of FEATURED_MODEL_FAMILIES) {
