@@ -42,7 +42,7 @@ const base: InboxSession = {
   git_root: worktreePath,
 };
 
-function render(overrides: Partial<InboxSession>, subRow?: "trigger") {
+function render(overrides: Partial<InboxSession>, subRow?: "trigger", underParent = false) {
   return renderToStaticMarkup(
     <ConvexProvider client={client}>
       <SessionCard
@@ -53,6 +53,7 @@ function render(overrides: Partial<InboxSession>, subRow?: "trigger") {
         sessionLabel={null}
         isFavorite={false}
         subRow={subRow}
+        underParent={underParent}
       />
     </ConvexProvider>,
   );
@@ -97,20 +98,24 @@ describe("SessionCard: worktree and cloud sessions are first-class cards", () =>
   });
 
   test("a real Task subagent whose cwd is a worktree stays compact and keeps the chip", () => {
-    const html = render({ is_subagent: true, parent_conversation_id: "p", worktree_name: "cloud-d03aaa" });
+    const html = render({ is_subagent: true, parent_conversation_id: "p", worktree_name: "cloud-d03aaa" }, undefined, true);
     expect(html).toContain(SUBAGENT);
     expect(html).not.toContain(FAVORITE);
     expect(html).toContain("Worktree cloud-d03aaa");
+    // Standing as its own card (its parent off the list), it is a full card.
+    const alone = render({ is_subagent: true, parent_conversation_id: "p", worktree_name: "cloud-d03aaa" });
+    expect(alone).not.toContain(SUBAGENT);
+    expect(alone).toContain(FAVORITE);
   });
 
   test("a parent-linked row without the is_subagent flag still nests", () => {
-    const html = render({ parent_conversation_id: "p" });
+    const html = render({ parent_conversation_id: "p" }, undefined, true);
     expect(html).toContain(SUBAGENT);
     expect(html).not.toContain(FAVORITE);
   });
 
   test("an agent-team teammate stays compact", () => {
-    const html = render({ spawned_by_conversation_id: "lead", agent_team_name: "t", agent_name: "researcher" });
+    const html = render({ spawned_by_conversation_id: "lead", agent_team_name: "t", agent_name: "researcher" }, undefined, true);
     expect(html).toContain(SUBAGENT);
     expect(html).not.toContain(FAVORITE);
   });

@@ -250,11 +250,24 @@ describe("the Modern session card", () => {
   });
 
   test("a nested row (a subagent) reads its own state and keeps to its own facts", () => {
-    const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
+    const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working", underParent: true });
     expect(html).toContain('data-mc="nested"');
     expect(html).toContain('aria-label="Subagent"');
     expect(word(html)).toBe("Working");
     expect(html).not.toContain('data-mc-chip="project"');
+  });
+
+  // Its parent not on the list, a subagent is drawn as a card of its own
+  // below whatever card precedes it; drawn nested it would read as that
+  // card's subagent.
+  test("a subagent standing as its own card draws as a full card", () => {
+    const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
+    expect(html).toContain('data-mc="card"');
+    expect(html).not.toContain('data-mc="nested"');
+    expect(html).not.toContain('aria-label="Subagent"');
+    expect(html).not.toContain("pl-6");
+    expect(html).toContain('data-mc-chip="project"');
+    expect(word(html)).toBe("Working");
   });
 
   // Where the card is drawn decides, not what the row is: under its parent's

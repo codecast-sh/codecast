@@ -26,12 +26,15 @@ export function untitledSessionName(session: { first_prompt?: string | null }, p
   return ask ? promptTitle(cleanTitle(ask)) : "";
 }
 
-/** Whether a card draws as a nested child row: a trigger's run, a Task
- *  subagent, an agent-team teammate. A station the person adopted stands
- *  alone (isAdoptedChild), so it draws as a full card despite its parent. */
-export function drawsNested(session: InboxSession, subRow?: unknown): boolean {
+/** Whether a card draws as a nested child row, which follows where it is
+ *  drawn: a sub row (a trigger's run, a role's session, a worker), or a Task
+ *  subagent or agent-team teammate drawn under its parent's card
+ *  (underParent). The same child standing as its own card (its parent not on
+ *  the list) draws as a full card, or it reads as the card above's child; so
+ *  does a station the person adopted (isAdoptedChild). */
+export function drawsNested(session: InboxSession, subRow?: unknown, underParent = false): boolean {
   if (subRow) return true;
-  if (isAdoptedChild(session)) return false;
+  if (!underParent || isAdoptedChild(session)) return false;
   return !!session.is_subagent || !!nestParentIdOf(session);
 }
 

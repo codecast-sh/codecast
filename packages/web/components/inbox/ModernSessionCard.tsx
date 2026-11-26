@@ -132,7 +132,7 @@ export function ModernSessionCardView({
   const project = getProjectName(session.git_root, session.project_path);
   const isStashed = variant === "stashed" || variant === "snoozed";
   const isSetAside = isStashed || variant === "dismissed";
-  const nested = drawsNested(session, subRow);
+  const nested = drawsNested(session, subRow, underParent);
   const identity = identityProp ?? session;
   const isPersonified = sessionIdentity(identity, chrome.prefs).kind !== "plain";
   const displayTitle = liveTitle || sessionCardTitle(session);
@@ -145,8 +145,7 @@ export function ModernSessionCardView({
   // with the header above it), a subagent standing as its own card included; a
   // row drawn under another card and a list with no sections read the row's
   // own placement, the verdict the rail would file it under.
-  const drawnUnder = nested && (underParent || !!subRow);
-  const section = drawnUnder ? null : sectionOfProps(variant, sectionStatus);
+  const section = nested ? null : sectionOfProps(variant, sectionStatus);
   const status = sessionStatusOf({
     row: session,
     section,

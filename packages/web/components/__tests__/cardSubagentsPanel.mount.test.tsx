@@ -326,3 +326,52 @@ test("Recent's 50-card cap counts cards: the subagents under a card ride its slo
   expect(m.host.querySelector("[data-sv-show-more]")?.textContent).toBe("Show 5 more · 5 hidden");
   await m.unmount();
 });
+
+test("Recent keeps an open owned subagent and its card when the card sits past the cap, and counts only hidden cards", async () => {
+  const OLD_PARENT = id("oldparent");
+  const OPEN = id("openowned");
+  const owned = Array.from({ length: 6 }, (_, i) =>
+    row(id(`owned${i}`), { title: `Owned ${i}`, owners_model: true, owned_by_me: false, owner_session_id: OLD_PARENT, is_subagent: true, parent_conversation_id: OLD_PARENT, status: "completed", updated_at: NOW - 3_600_000 - i }));
+  const others = Array.from({ length: 52 }, (_, i) => row(id(`newer${String(i).padStart(2, "0")}`), { title: `Newer ${i}`, updated_at: NOW - 10_000 - i * 1_000 }));
+  seed([
+    row(OLD_PARENT, { title: "Old parent", owners_model: true, updated_at: NOW - 3_000_000 }),
+    row(OPEN, { title: "Open owned subagent", owners_model: true, owned_by_me: false, owner_session_id: OLD_PARENT, is_subagent: true, parent_conversation_id: OLD_PARENT, status: "completed", updated_at: NOW - 3_500_000 }),
+    ...owned,
+    ...others,
+  ], { inbox_view_mode: "recent", subagent_rows: "full", subagent_filter: "all" });
+  const m = await mountInbox(OPEN);
+  expect(cardOf(m.host, OLD_PARENT)).not.toBeNull();
+  expect(cardOf(m.host, OPEN)).not.toBeNull();
+  // 53 cards (52 newer + the old parent); 50 drawn, the parent force-kept: 2 cards hidden, whatever rides under them.
+  expect(m.host.querySelector("[data-sv-show-more]")?.textContent).toBe("Show 2 more · 2 hidden");
+  await m.unmount();
+});
+
+// Its parent not loaded, a subagent stands as a card of its own right below
+// whatever card precedes it. Drawn nested it would read as that card's
+// subagent, even in One line and Hidden, where nothing is drawn under a card;
+// drawn under its parent it keeps the nested look.
+test("a subagent whose parent is not loaded draws as a full card; under its parent it stays nested", async () => {
+  const ORPHAN = id("orphan");
+  const OTHER = id("other");
+  const look = (host: HTMLElement, sessionId: string) => cardOf(host, sessionId)?.getAttribute("data-mc") ?? null;
+  for (const view of ["grouped", "recent"]) {
+    for (const mode of ["folded", "hidden", "full"]) {
+      seed([
+        row(OTHER, { title: "Unrelated session", agent_status: "working", is_idle: false, updated_at: NOW - 3_000 }),
+        row(ORPHAN, { title: "Orphan subagent", is_subagent: true, parent_conversation_id: id("unloaded"), agent_status: "working", is_idle: false, updated_at: NOW - 4_000 }),
+      ], { inbox_view_mode: view, subagent_rows: mode, subagent_filter: "all" });
+      const m = await mountInbox(ORPHAN, { modern: true });
+      expect(look(m.host, OTHER)).toBe("card");
+      expect(look(m.host, ORPHAN)).toBe("card");
+      expect(cardOf(m.host, ORPHAN)?.querySelector('[aria-label="Subagent"]')).toBeNull();
+      await m.unmount();
+    }
+    seed([parent(), busy(), finished()], { inbox_view_mode: view, subagent_rows: "full", subagent_filter: "all" });
+    const under = await mountInbox(null, { modern: true });
+    expect(look(under.host, PARENT)).toBe("card");
+    expect(look(under.host, BUSY)).toBe("nested");
+    expect(cardOf(under.host, BUSY)?.querySelector('[aria-label="Subagent"]')).not.toBeNull();
+    await under.unmount();
+  }
+});

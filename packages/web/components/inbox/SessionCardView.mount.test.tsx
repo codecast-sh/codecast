@@ -66,8 +66,14 @@ test("the views render from props alone and leave the store untouched", () => {
   expect(card).toContain("Payments");
   expect(card).toContain('title="Working"');
 
-  const sub = render(<SessionCardView {...cardProps} session={{ ...session, is_subagent: true, parent_conversation_id: "p" } as InboxSession} />);
+  const subagent = { ...session, is_subagent: true, parent_conversation_id: "p" } as InboxSession;
+  const sub = render(<SessionCardView {...cardProps} session={subagent} underParent />);
   expect(sub).toContain('aria-label="Subagent"');
+  // Its parent not on the list, it stands as a full card: drawn nested it
+  // would read as the card above's subagent.
+  const alone = render(<SessionCardView {...cardProps} session={subagent} />);
+  expect(alone).not.toContain('aria-label="Subagent"');
+  expect(alone).toContain("Payments");
 
   expect(render(<SectionHeader label="Needs you" count={3} color="text-sol-yellow" sectionKey="needs_input" collapsed={false} />))
     .toContain('data-inbox-section-count="3"');

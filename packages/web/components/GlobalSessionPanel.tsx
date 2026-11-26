@@ -3051,14 +3051,20 @@ function SessionListPanelImpl({
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
           // session being viewed never vanishes from the list.
+          // A flat view lists the open subagent as a row of its own right
+          // after its parent, so both are kept, in list order.
           if (visibleItems.length < items.length && activeSessionId) {
-            const needed = items.find(
-              (i) => i._id === activeSessionId
-                || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId),
-            );
-            if (needed && !visibleItems.includes(needed)) visibleItems = [...visibleItems, needed];
+            const shown = new Set(visibleItems);
+            const needed = items.filter((i) => !shown.has(i) && (i._id === activeSessionId
+              || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId)));
+            if (needed.length) visibleItems = [...visibleItems, ...needed];
           }
-          const hiddenCount = items.length - visibleItems.length;
+          // Hidden cards, counted the way the cap counts them (a row drawn
+          // under its card rides that card's slot); rows alone when only a
+          // card's nested rows ran past the budget, so Show more stays.
+          const kept = new Set(visibleItems);
+          const hidden = items.filter((i) => !kept.has(i));
+          const hiddenCount = hidden.filter((i) => !flatUnderParent?.has(i._id)).length || hidden.length;
           globalRenderedCards += visibleItems.length;
           // The flat views hoist a role's session under its role's card as a
           // row of its own (hoistNestedUnderParent), so it takes the small row
