@@ -26,7 +26,11 @@ export interface ModelCallUsage {
 export type ModelCallResult =
   | { ok: true; text: string; json?: unknown; usage: ModelCallUsage; cost_usd: number; model: string; stop_reason?: string | null }
   /** budget: the team's budget had no room, nothing was sent. failed: the call failed or the answer was not what `output` asked for. */
-  | { ok: false; reason: "budget" | "failed"; error: string; cost_usd: number; model: string; /** budget: what the call would have reserved, the most it can cost. */ worst_case_usd?: number };
+  | {
+      ok: false; reason: "budget" | "failed"; error: string; cost_usd: number; model: string;
+      /** budget: what the call would have reserved, the most it can cost. */ worst_case_usd?: number;
+      /** failed: the request never got an answer (the network, a timeout, the API's 5xx), so another try may succeed. */ transient?: boolean;
+    };
 
 export const MODEL_CALL_LIMITS = {
   prompt_chars: 400_000,

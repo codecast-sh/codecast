@@ -9,7 +9,6 @@ export const automaticReviewValidator = v.object({
   pending: v.optional(v.boolean()),
   /** The model's answer; absent when it gave none (`failed`) or none came yet (`pending`). */
   mechanism: v.optional(v.boolean()),
-  verdict: v.optional(v.union(v.literal("ship"), v.literal("changes"), v.literal("rejected"))),
   /** The model's reason, or why no answer came (no mechanism file, a binary or too large a diff, a failure, no budget). */
   reason: v.string(),
   /** No answer: a person reads it whole. */

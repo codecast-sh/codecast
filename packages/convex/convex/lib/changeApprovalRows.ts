@@ -264,7 +264,7 @@ export async function approvalCardRefusal(
   if (by.via) return `Only ${who} answers this approval card, in person: an answer a session gives for its person does not count. Answer it on the web, or from a plain shell.`;
   if (!asked.includes(String(by.user_id))) return `Only ${who} answers this approval card: it asks them, not you.`;
   const approving = verdict?.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
-  const barred = !row.approval.run_id || row.approval.reason === "objection";
+  const barred = !row.approval.run_id || row.approval.reason === "held";
   if (approving && barred && String(await prAuthor(ctx, row.approval.repository, row.approval.pr_number)) === String(by.user_id)) {
     const others = names.length > 1 ? `; ${who} can, besides you` : "";
     return `You opened this pull request, so your approval of it does not count${others}.`;
@@ -281,8 +281,8 @@ export function approvalHandoffRefusal(row: { approval_card?: boolean; approval?
 }
 
 /**
- * A person approved the pull request on a card (mayClearHold): the hold an automatic review's mechanism or objection put
- * on it is cleared (changeApprovals.settle). Nothing else clears it.
+ * A person approved the pull request on a card (mayClearHold): the hold an automatic review's mechanism answer put on it
+ * is cleared (changeApprovals.settle). Nothing else clears it.
  */
 async function clearHold(ctx: { db: any }, repository: string, prNumber: number): Promise<void> {
   const rows: Doc<"pull_requests">[] = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", prNumber)).collect();
@@ -362,7 +362,7 @@ async function settleApprovalCard(
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
     const asked = (a.asked ?? row.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id));
-    const authorBarred = !a.run_id || a.reason === "objection";
+    const authorBarred = !a.run_id || a.reason === "held";
     if (by.via || !asked || (authorBarred && String(await prAuthor(ctx, a.repository, a.pr_number)) === String(by.user_id))) return;
     if (await mayClearHold(ctx, { asked: a.asked, held: a.held, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number);
     await ctx.db.insert("change_approvals", {
