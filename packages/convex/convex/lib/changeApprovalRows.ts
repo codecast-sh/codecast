@@ -192,9 +192,8 @@ export async function settleCardApproval(
     // Only a card that showed a judged diff ({pr, judged_key, files}) approves, and only that diff: an unstamped card's
     // Ship approves nothing, and the status asks again. The run's card read the change whole, so its Ship also binds to
     // the whole diff it showed, which covers a mechanism until any code changes.
+    // A run's own card never clears a hold: only codecast's approval card for it does (settleApprovalCard).
     const a = row.approval;
-    // The run's own card clears a hold only by the same rule as the hold's card: an asked person, in person, not the author.
-    if (a && (await mayClearHold(ctx, { asked: (a as any).asked, repository: a.repository, pr_number: a.pr_number }, by))) await clearHold(ctx, a.repository, a.pr_number);
     if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
       await ctx.db.insert("change_approvals", {
         repository: a.repository,
@@ -272,22 +271,11 @@ export async function approvalCardRefusal(
 }
 
 /**
- * Why an approval card codecast posted may not be passed or escalated, or null when it may: only someone it asked hands
- * it on, only to a person, and never to the pull request's author (`to`: the people it would go to; "role" for a role).
+ * Why a decision may not be passed or escalated: an approval card codecast posted never is, since only the people it
+ * asked when it was posted can answer it. Null for any other decision.
  */
-export async function approvalHandoffRefusal(
-  ctx: { db: any },
-  row: { approval_card?: boolean; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; asked?: Id<"users">[] } },
-  userId: Id<"users">,
-  to: Id<"users">[] | "role",
-): Promise<string | null> {
-  if (!row.approval_card || !row.approval) return null;
-  const asked = (row.approval.asked ?? row.asked_user_ids ?? []).map(String);
-  if (!asked.includes(String(userId))) return "Only the people an approval card asks hand it on.";
-  if (to === "role") return "An approval card is a person's to answer, never a role's.";
-  const author = await prAuthor(ctx, row.approval.repository, row.approval.pr_number);
-  if (author && to.some((id) => String(id) === String(author))) return "An approval card never goes to the pull request's author.";
-  return null;
+export function approvalHandoffRefusal(row: { approval_card?: boolean; approval?: unknown }): string | null {
+  return row.approval_card && row.approval ? "An approval card is answered by the people it asks: it is not handed on." : null;
 }
 
 /**

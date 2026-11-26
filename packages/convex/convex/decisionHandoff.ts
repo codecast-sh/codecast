@@ -90,7 +90,7 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
   if (row.holder?.kind === to.kind && row.holder.id === to.id && (to.kind === "role" || row.asked_user_ids?.length === 1)) {
     return { error: "It is already theirs" };
   }
-  const approvalRefusal = await approvalHandoffRefusal(ctx, row as any, userId, to.kind === "user" ? [to.id as Id<"users">] : "role");
+  const approvalRefusal = approvalHandoffRefusal(row as any);
   if (approvalRefusal) return { error: approvalRefusal };
   const now = Date.now();
   const note = cleanNote(rawNote);
@@ -144,9 +144,9 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
   const { row, teamId } = open;
   if (!teamId) return { error: "A personal session's decision has no one above it to escalate to" };
   const ownerId = (row.holder?.kind === "user" ? row.holder.id : userId) as Id<"users">;
-  const to = await escalationTargets(ctx, teamId, ownerId, userId);
-  const approvalRefusal = await approvalHandoffRefusal(ctx, row as any, userId, to);
+  const approvalRefusal = approvalHandoffRefusal(row as any);
   if (approvalRefusal) return { error: approvalRefusal };
+  const to = await escalationTargets(ctx, teamId, ownerId, userId);
   if (to.length === 0) return { error: String(ownerId) === String(userId) ? "Nobody is above you: no manager and no other admin in this workspace" : "Nobody else is above the owner: take it yourself instead" };
   const now = Date.now();
   const from = handoffFrom(row);

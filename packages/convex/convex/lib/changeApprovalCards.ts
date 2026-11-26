@@ -233,14 +233,16 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   if (!conversation) {
     // Nowhere to ask from (its person has no session at all): they are told, once per question, so it still lands.
     // No card_key is kept for a notification: the next evaluation posts the card once they have a session. They are
-    // told again only once they have read the last notice about this pull request, whatever else they have unread, and
-    // it reaches them whatever their notification switches say: only they can act on it.
-    const entity = `${a.repository}#${a.pr_number}`;
-    const notices: any[] = await ctx.db.query("notifications").withIndex("by_recipient_entity", (q: any) => q.eq("recipient_user_id", a.to.user_id).eq("entity_id", entity)).collect();
-    if (notices.some((n) => n.type === "card_waiting" && !n.read)) return null;
+    // told once a head, read or not, whatever else they have, and whatever their notification switches say: only
+    // they can act on it.
+    const entity = `${a.repository}#${a.pr_number}@${a.head_sha}`;
+    for (const id of asked) {
+      const notices: any[] = await ctx.db.query("notifications").withIndex("by_recipient_entity", (q: any) => q.eq("recipient_user_id", id).eq("entity_id", entity)).take(5);
+      if (notices.some((n) => n.type === "card_waiting")) return null;
+    }
     await emitNotification(ctx as any, {
       always: true,
-      event_type: "card_waiting", actor_name: "Codecast", entity_type: "code", entity_id: `${a.repository}#${a.pr_number}`,
+      event_type: "card_waiting", actor_name: "Codecast", entity_type: "code", entity_id: entity,
       message: `${a.repository}#${a.pr_number} waits for your approval: ${WHY[a.reason]}`,
       link: `https://github.com/${a.repository}/pull/${a.pr_number}`, recipient_ids: asked,
     });

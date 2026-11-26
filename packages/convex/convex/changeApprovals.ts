@@ -56,7 +56,7 @@ const DESCRIPTION_MAX = 140;
 
 export type ApprovalFacts =
   | { opted: false }
-  | { opted: true; unreadable: string; card?: { who: string; ref: string } | null }
+  | { opted: true; unreadable: string; card?: { who: string; ref: string } | null; held?: string; needs?: { review: string; objection?: string } }
   | {
       opted: true;
       judged: string[];
@@ -109,12 +109,12 @@ function pathList(paths: string[], room: number): string {
 export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (!f.opted) return null;
   const approved = (c: { who: string; ref: string }): ApprovalVerdict => ({ state: "success", description: fit(`approved by ${c.who} (${c.ref})`) });
-  if ("unreadable" in f) return f.card ? approved(f.card) : { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
+  // A hold outranks any approval of the change, a whole-diff one included: only clearing it releases the pull request.
+  const heldWaits = (): ApprovalVerdict => ({ state: "pending", description: fit(`needs a review by ${f.needs?.objection ?? f.needs?.review ?? "a person"}: ${f.held}`) });
+  if ("unreadable" in f) return f.held ? heldWaits() : f.card ? approved(f.card) : { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
   if (f.captain_revert) return { state: "success", description: "the Release Captain's revert: CI's required checks decide" };
   // No codecast run, and no automatic review has answered for this head yet (another evaluation is reading it): it waits,
   // and nobody is asked. A review that never answers fails closed (claimAutomaticReview), never waits for ever.
-  // A hold outranks any approval of the change, a whole-diff one included: only clearing it releases the pull request.
-  const heldWaits = (): ApprovalVerdict => ({ state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: ${f.held}`) });
   if (!f.run) {
     if (f.held) return heldWaits();
     if (f.card) return approved(f.card);
@@ -148,7 +148,8 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
  */
 export function cardReason(f: ApprovalFacts): CardReason | null {
   if (!f.opted) return null;
-  if ("unreadable" in f) return f.card ? null : "unreadable";
+  // A hold is asked on its own card (to.objection, never the author) whatever else is true.
+  if ("unreadable" in f) return f.held ? "objection" : f.card ? null : "unreadable";
   if (f.captain_revert) return null;
   if (!f.run) return null;
   if (f.mechanism === null) return f.run !== "ended" ? null : f.held ? "objection" : !f.card ? "review" : null;
@@ -663,8 +664,11 @@ export const settle = internalMutation({
     // A card codecast asked and then took back (or that is gone) asks nothing now: its key no longer stands, so the
     // question is asked again. A card someone answered keeps it.
     const heldCard: any = before?.card_id ? await ctx.db.get(before.card_id) : null;
-    const cardKeyStands = !!before?.card_key && !!heldCard && heldCard.status !== "withdrawn";
+    // While it waits, it stands only while someone it now asks is someone it first asked: else no one can answer it.
+    const answerable = (c: any) => c.status !== "pending" || (c.asked_user_ids ?? []).some((id: any) => (c.approval?.asked ?? c.asked_user_ids ?? []).map(String).includes(String(id)));
+    const cardKeyStands = !!before?.card_key && !!heldCard && heldCard.status !== "withdrawn" && answerable(heldCard);
     const beforeKey = cardKeyStands ? before!.card_key : undefined;
+    if (heldCard && heldCard.status === "pending" && !cardKeyStands) await withdrawApprovalCard(ctx, heldCard._id, Date.now(), "No one it asks now was asked when it was posted, so no one can answer it; a new card asks.");
     // Who each question goes to: a person, never a role (lib/changeApprovalCards.ts).
     const to = await cardPeople(ctx, {
       teamId: pr?.team_id ?? run?.team_id, run, camAsked, area_owner: args.people?.area_owner,
@@ -694,7 +698,7 @@ export const settle = internalMutation({
     const objection = auto && mechanism !== null && (auto.verdict === "changes" || auto.verdict === "rejected") ? auto.verdict : undefined;
 
     const facts: ApprovalFacts = args.unreadable !== undefined
-      ? { opted: true, unreadable: args.unreadable, card }
+      ? { opted: true, unreadable: args.unreadable, card, ...(held ? { held } : {}), needs }
       : {
           opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), run: runState, mechanism, card, press, needs,
           ...(auto ? { automatic: true } : {}), ...(auto?.failed ? { review_failed: auto.reason } : {}), ...(objection ? { objection } : {}),

@@ -946,30 +946,30 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "success" });
   });
 
-  test("a pass or an escalation adds no one who may answer, never reaches the author, and only an asked person hands a card on (round 5, finding 1)", async () => {
+  test("an approval card is never passed or escalated, and an ownership move never re-routes it (round 5, finding 1; round 6, findings 2 and 3)", async () => {
     const { passCore, escalateCore } = await import("./decisionHandoff");
+    const { reroutePendingDecisionsForConversation } = await import("./sessionDecisions");
     const db = heldWorld({
       users: [...people, { _id: "u_cam", name: "Cam" }],
       team_memberships: [...people, { _id: "u_cam" }].map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id, role: i === 0 ? "admin" : "member", joined_at: i })),
-      conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1, team_id: "team1" }, { _id: "c_cam", session_id: "cam", user_id: "u_cam", title: "Cam's own", updated_at: 1, team_id: "team1" }],
     });
     await (settle as any)._handler(ctxOf(db), heldArgs);
     const [card] = cards(db);
     expect(card.approval.asked).toEqual(["u_ashot"]);
-    // Ashot may not hand it to the author, nor to a role.
-    expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, { kind: "user", id: "u_jason" } as any)).toEqual({ error: "An approval card never goes to the pull request's author." });
-    expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, { kind: "role", id: "role1" } as any)).toEqual({ error: "An approval card is a person's to answer, never a role's." });
-    // He may hand it to Cam, but Cam's Approve does not count and clears nothing; the card stays open.
-    expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, { kind: "user", id: "u_cam" } as any)).toEqual({ passed: true });
-    expect(db._tables.session_decisions.find((d: any) => d._id === card._id).asked_user_ids).toEqual(["u_cam"]);
-    expect(await answerAs(db, card, "u_cam")).toEqual({ error: expect.stringContaining("Only Ashot answers this approval card") });
-    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
-    expect(approvals(db)).toEqual([]);
-    // Cam, holding it now, may not pass it on or escalate it: he was never asked.
-    expect(await passCore(ctxOf(db) as any, "u_cam" as any, card.short_id, { kind: "user", id: "u_ashot" } as any)).toEqual({ error: "Only the people an approval card asks hand it on." });
-    expect(await escalateCore(ctxOf(db) as any, "u_cam" as any, card.short_id, "too big for me")).toEqual({ error: "Only the people an approval card asks hand it on." });
-    // Ashot's own answer still counts.
-    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    const refusal = { error: "An approval card is answered by the people it asks: it is not handed on." };
+    for (const to of [{ kind: "user", id: "u_cam" }, { kind: "user", id: "u_jason" }, { kind: "role", id: "role1" }]) {
+      expect(await passCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, to as any)).toEqual(refusal);
+    }
+    expect(await escalateCore(ctxOf(db) as any, "u_ashot" as any, card.short_id, "too big for me")).toEqual(refusal);
+    // Its session changing hands moves nothing: the card stays Ashot's.
+    await reroutePendingDecisionsForConversation(ctxOf(db) as any, card.conversation_id, Date.now());
+    expect(db._tables.session_decisions.find((d: any) => d._id === card._id).asked_user_ids).toEqual(["u_ashot"]);
+    // A card some older path moved to people it never asked can be answered by no one: it is taken back and asked again.
+    db._tables.session_decisions.find((d: any) => d._id === card._id).asked_user_ids = ["u_cam"];
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    expect(cards(db).map((c: any) => [c.status, c.asked_user_ids])).toEqual([["withdrawn", ["u_cam"]], ["pending", ["u_ashot"]]]);
+    // Ashot's own answer on the new card still counts.
+    expect(await answerAs(db, cards(db)[1], "u_ashot")).not.toHaveProperty("error");
     expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
   });
 
@@ -1003,7 +1003,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     }
   });
 
-  test("the no-session notice is found by its pull request among any number unread, and reaches a person whose task notices are off (round 5, finding 4)", async () => {
+  test("the no-session notice goes once a head to each person asked, read or not, past their switches (round 5, finding 4; round 6, finding 4)", async () => {
     const busy = Array.from({ length: 250 }, (_, i) => ({ _id: `n${i}`, recipient_user_id: "u_ashot", type: "task_commented", entity_type: "task", entity_id: `t${i}`, message: "x", read: false, created_at: i }));
     const db = heldWorld({
       users: people.map((u) => (u._id === "u_ashot" ? { ...u, notification_preferences: { task_activity: false } } : u)),
@@ -1011,11 +1011,31 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     });
     await (settle as any)._handler(ctxOf(db), heldArgs);
     const notice = () => db._tables.notifications.filter((n: any) => n.type === "card_waiting");
-    expect(notice()).toEqual([expect.objectContaining({ recipient_user_id: "u_ashot", entity_id: `${REPO}#7` })]);
-    // The sweep's next evaluations tell him nothing new while it is unread.
+    expect(notice()).toEqual([expect.objectContaining({ recipient_user_id: "u_ashot", entity_id: `${REPO}#7@${HEAD}` })]);
+    // Read or not, the next evaluations of this head tell him nothing new.
+    notice()[0].read = true;
     await (settle as any)._handler(ctxOf(db), heldArgs);
     await (settle as any)._handler(ctxOf(db), heldArgs);
     expect(notice()).toHaveLength(1);
+    // A new head is news once.
+    const next = "c".repeat(40);
+    const nextArgs = { ...heldArgs, head_sha: next, whole_key: "w2", automatic: { head_sha: next, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: 3 } };
+    await (settle as any)._handler(ctxOf(db), nextArgs);
+    await (settle as any)._handler(ctxOf(db), nextArgs);
+    expect(notice().map((n: any) => n.entity_id)).toEqual([`${REPO}#7@${HEAD}`, `${REPO}#7@${next}`]);
+  });
+
+  test("a hold reaches past an unreadable pull request: the author's card approval never releases it, and the hold's card bars them (round 6, finding 1)", async () => {
+    const run = { _id: "run1", user_id: "u_jason", team_id: "team1", status: "completed", created_at: 1, primary_conversation_id: "c_jason", node_statuses: [], pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
+    // Jason wrote it and earlier approved it whole on an unreadable card; no owner names the area.
+    const db = heldWorld({ workflow_runs: [run], change_approvals: [{ _id: "ca1", repository: REPO, pr_number: 7, judged_key: `head:${HEAD}`, files: [], user_id: "u_jason", source: "card", created_at: 1 }] });
+    const unreadable = { repository: REPO, pr_number: 7, head_sha: HEAD, unreadable: "main's judges.txt", people: { title: "Bump", author_login: "jason-gh", engineers: [] } };
+    expect(await (settle as any)._handler(ctxOf(db), unreadable)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
+    const [card] = cards(db);
+    expect(card.approval.reason).toBe("objection");
+    expect(card.approval.asked).toEqual(["u_ashot"]);
+    expect(await answerAs(db, card, "u_jason")).toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
   });
 
   test("a hold outranks a whole-diff approval while no answer exists yet (round 5, finding 5)", async () => {

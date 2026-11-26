@@ -428,6 +428,9 @@ export async function reroutePendingDecisionsForConversation(
 
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
 export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
+  // An approval card is its people's (changeApprovalCards), never its session's: moving it would ask people whose
+  // answer cannot count.
+  if ((row as any).approval_card) return;
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
