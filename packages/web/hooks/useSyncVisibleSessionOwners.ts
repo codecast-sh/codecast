@@ -16,13 +16,14 @@ import { useConvexSync } from "./useConvexSync";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 import { useWatchEffect } from "./useWatchEffect";
 
-const SETTLE_MS = 400;
+/** How long the visible set must hold still before the feeder reads it. */
+export const OWNER_CARDS_SETTLE_MS = 400;
 
 export function useSyncVisibleSessionOwners(): void {
   const key = useSyncExternalStore(subscribeOwnerCards, ownerCardsKey, () => "");
   const [settled, setSettled] = useState(key);
   useWatchEffect(() => {
-    const t = setTimeout(() => setSettled(key), SETTLE_MS);
+    const t = setTimeout(() => setSettled(key), OWNER_CARDS_SETTLE_MS);
     return () => clearTimeout(t);
   }, [key]);
   const authSettled = useServerAuthSettled();
