@@ -503,7 +503,7 @@ async function treeCarry(root: string, tree: string, runDir: string, change: Fro
   const held = new Map<string, string>();
   const texts = await readBlobs(tree, changes.map((c) => c.blob ?? ""));
   for (const c of changes) {
-    const why = c.blob ? credentialReason(c.path, texts.get(c.blob) ?? null) : null;
+    const why = c.blob ? carriedCredential(c.path, texts.get(c.blob) ?? null) : null;
     if (why) held.set(c.path, why);
   }
   // What makes a lockfile or generated file: the change's own files, and the session's other edits here. A branch's
@@ -572,10 +572,14 @@ function setHeldAside(tree: string, runDir: string, carry: TreeCarry): void {
 /** Whether a change is frozen again from a checkout (the session's own edits, or a checkout's), not read off its branch. */
 const rebuiltFrom = (change: FrozenChange) => change.source === "checkout" || (change.source === "session" && !change.pushed);
 
+/** Why a file carried from the run's worktree is a credential, or null: a template of one (`.env.example`) is not. */
+const carriedCredential = (p: string, text: string | null) => (/\.(example|sample|template)$/i.test(p) ? null : credentialReason(p, text));
+
 /**
- * A credential the session committed in the run's worktree since the change was last frozen refuses the refreeze,
- * naming it: the run would carry that commit into the change, and rewriting the session's own commit is not the run's
- * to do. Nothing has moved when it refuses.
+ * A credential the session committed in the run's worktree since a change frozen from a checkout was last frozen
+ * refuses the refreeze, naming it: the run would carry that commit into the change, and rewriting the session's own
+ * commit is not the run's to do. A branch's commits are the session's own push, as from anywhere, and are not read.
+ * Nothing has moved when it refuses.
  */
 async function refuseCommittedCredentials(root: string, last: string, head: string): Promise<void> {
   if (head === last) return;
@@ -583,7 +587,7 @@ async function refuseCommittedCredentials(root: string, last: string, head: stri
   const written = (await treeDiff(root, from, head)).filter((e) => e.dst);
   const texts = await readBlobs(root, written.map((e) => e.dst!));
   const found = written.flatMap((e) => {
-    const why = credentialReason(e.path, texts.get(e.dst!) ?? null);
+    const why = carriedCredential(e.path, texts.get(e.dst!) ?? null);
     return why ? [`${e.path} (${why})`] : [];
   });
   if (found.length) throw new Error(`The session committed ${found.join(", ")} in the run's worktree, which the change never carries: take it out of those commits and end the turn again. Nothing moved`);
@@ -651,9 +655,9 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   const carry = worktreePath ? await treeCarry(root, worktreePath, runDir, before) : null;
   const head = carry?.head ?? (worktreePath ? await git(worktreePath, ["rev-parse", "HEAD"]) : before.tip);
   const top = carry?.commit ?? head;
-  await refuseCommittedCredentials(root, before.tip, head);
   let change: FrozenChange;
   if (rebuiltFrom(before)) {
+    await refuseCommittedCredentials(root, before.tip, head);
     // The run's worktree held the change as last frozen: one reset or rebased there holds something else.
     if (!(await isAncestor(root, before.tip, head))) throw new Error(`The run's worktree is at ${head.slice(0, 10)}, which does not hold the change as last frozen (${before.tip.slice(0, 10)}): it was reset or rebased there, so it is left as it is`);
     change = before.source === "checkout" ? await refreezeCheckoutChange(root, before, opts.roster, opts.since) : await refreezeOwnChange(root, before);

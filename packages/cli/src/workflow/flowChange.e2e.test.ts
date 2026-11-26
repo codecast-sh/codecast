@@ -363,6 +363,19 @@ describe("a named branch's fix comes back to the run", () => {
     expect(git(worktree, "rev-parse", "HEAD")).toBe(change.tip);
   }, 180_000);
 
+  test("a file the session committed on a branch is its own push: the refreeze takes it with the carry, credential name or not (ct-99118)", async () => {
+    const { origin, here, worktree, runDir, start } = originWorld("own");
+    start();
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, ".env.local", "KEY=1\n");
+    git(worktree, "add", ".env.local");
+    git(worktree, "commit", "--quiet", "-m", "local env");
+    write(worktree, "b.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(origin, "rev-parse", "feat")).toBe(change.tip);
+    expect([git(here, "show", `${change.tip}:.env.local`), git(here, "show", `${change.tip}:b.txt`)]).toEqual(["KEY=1", "left here"]);
+  }, 180_000);
+
   test("a lockfile regenerated for the branch's own manifest edit, made before the run, is carried (ct-99118)", async () => {
     const { origin, here, worktree, runDir, start } = originWorld("lock");
     write(worktree, "package.json", "{\"dependencies\":{\"y\":\"1\"}}\n");
@@ -902,5 +915,14 @@ describe("edits left in the run's worktree", () => {
     expect(held).toEqual([]);
     expect(git(root, "ls-tree", "--name-only", change.tip, "--", ".env.production")).toBe("");
     expect(fs.existsSync(path.join(tree, ".env.production"))).toBe(false);
+  }, 180_000);
+
+  test("a credential file's template is carried", async () => {
+    const { root, runDir, tree, show } = await carryWorld("cark");
+    await snapshotRunTree(tree, runDir);
+    write(tree, "backend/.env.example", "KEY=\n");
+    const { change, held } = await refreezeSessionChange(root, runDir, tree);
+    expect(held).toEqual([]);
+    expect(show(change.tip, "backend/.env.example")).toBe("KEY=");
   }, 180_000);
 });

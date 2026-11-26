@@ -283,8 +283,10 @@ refreeze commits every file that differs from it, deletions included. A
 credential written there, or a lockfile or generated file that neither the
 change's files (a branch's: all it changes off the default branch) nor those
 edits make, is held out: moved into `$run_dir/held` and named in the run's
-output and the next brief (`carry_held`). A credential the session committed
-in the worktree refuses the refreeze, naming the file. A branch's carry goes on
+output and the next brief (`carry_held`); a template (`.env.example`,
+`*.sample`, `*.template`) is not a credential here. For a change frozen from a
+checkout, a credential the session committed in the worktree refuses the
+refreeze, naming the file; a branch's commits are the session's own push. A branch's carry goes on
 top of a tip pushed from elsewhere since and is pushed to origin, always as a
 fast-forward of origin as just fetched: another clone's commits go under it,
 replayed, never over. A local-only branch is published to origin then. The
