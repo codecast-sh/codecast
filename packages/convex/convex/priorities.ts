@@ -973,7 +973,9 @@ export const pinLine = query({
       if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
     }
     if (!(await featureCheck(ctx)(p.workspace))) return null;
-    const step = p.steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
+    // A teammate reads a step only as the page shows it to them (Reader.stepsFor): never one written from a session they cannot see.
+    const steps = isOwner(viewer, p) ? p.steps : await (await readerFor(ctx, viewer)).stepsFor(p);
+    const step = steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
     return {
       short_id: p.short_id,
       title: p.title,

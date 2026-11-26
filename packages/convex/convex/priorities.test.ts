@@ -447,6 +447,16 @@ describe("reads", () => {
     await t.run(async (ctx) => ctx.db.patch(c1, { is_private: true, team_visibility: "private" }));
     expect(await stepsOf(bea)).toEqual([["s2", ["ct-1", "acme/web#4"]]]);
     expect((await rowsOf(as(bea), {})).find((r: any) => r.short_id === "pri-1").steps.map((s: any) => s.key)).toEqual(["s2"]);
+    // The pin line of the shared session on s1 names no step to her, and names it to the owner.
+    const keep = await t.run(async (ctx) => {
+      const id = (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7keep")).first())!._id;
+      await ctx.db.patch(id, { priority_step_key: "s1" } as any);
+      return id;
+    });
+    const beaPin = await as(bea).query(pri.pinLine, { conversation_id: keep });
+    expect(beaPin?.short_id).toBe("pri-1");
+    expect(beaPin?.step_title).toBeUndefined();
+    expect((await as(ada).query(pri.pinLine, { conversation_id: keep }))?.step_title).toBe("From the shared session");
     // The owner sees every step whole.
     expect((await stepsOf(ada)).map(([key]: any) => key)).toEqual(["s1", "s2"]);
   });
