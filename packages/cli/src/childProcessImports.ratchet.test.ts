@@ -37,6 +37,7 @@ const result = checkRatchet({
   fix: "Import the same names from src/proc.ts instead — identical signatures, plus windowsHide and the slow-sync spawn report.",
   pruneCommand: "cd packages/cli && RATCHET_WRITE=prune bun test src/childProcessImports.ratchet.test.ts",
   minScanned: 200,
+  shrinkFloor: 1,
 });
 
 describe("child_process import ratchet", () => {

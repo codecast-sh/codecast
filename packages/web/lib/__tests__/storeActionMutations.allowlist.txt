@@ -13,7 +13,7 @@ app/pr/[owner]/[repo]/[number]/page.tsx 1
 app/sessions/page.tsx 1
 app/settings/accounts/page.tsx 2
 app/settings/devices/page.tsx 1
-app/settings/migrate/page.tsx 2
+app/settings/migrate/page.tsx 1
 app/settings/profile/page.tsx 2
 app/settings/sync/page.tsx 3
 app/settings/team/join/page.tsx 1

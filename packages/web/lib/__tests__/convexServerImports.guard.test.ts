@@ -58,6 +58,7 @@ const result = checkRatchet({
   fix: "Move the shared value into @codecast/shared/contracts and import it from there on both sides.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/convexServerImports.guard.test.ts",
   minScanned: 400,
+  shrinkFloor: 1,
 });
 
 describe("convex function modules stay out of the web bundle", () => {

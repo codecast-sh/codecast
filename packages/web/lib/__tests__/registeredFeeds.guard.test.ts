@@ -48,6 +48,7 @@ const result = checkRatchet({
   fix: "Read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection) and mount the feeder hook in hooks/.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/registeredFeeds.guard.test.ts",
   minScanned: 400,
+  shrinkFloor: 1,
 });
 
 describe("registered feeds are subscribed only by feeder hooks", () => {

@@ -64,6 +64,7 @@ const result = checkRatchet({
   fix: "Call patchConversationVisibility from lib/conversationVisibility.ts instead — it patches the row and rewrites the workspace key of every linked work item.",
   pruneCommand: "cd packages/convex && RATCHET_WRITE=prune bun test convex/conversationVisibilityPatch.ratchet.test.ts",
   minScanned: 100,
+  shrinkFloor: 1,
 });
 
 describe("conversation visibility patch ratchet", () => {

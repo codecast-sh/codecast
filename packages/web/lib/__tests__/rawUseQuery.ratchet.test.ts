@@ -34,6 +34,7 @@ const result = checkRatchet({
   fix: "Mount the feeder in hooks/ and read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection); if the query only enriches a surface that can paint without it, use useQueryNoThrow.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/rawUseQuery.ratchet.test.ts",
   minScanned: 400,
+  shrinkFloor: 1,
 });
 
 describe("raw useQuery ratchet", () => {

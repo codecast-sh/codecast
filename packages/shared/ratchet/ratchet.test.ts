@@ -79,14 +79,14 @@ describe("shrink-only ratchet", () => {
     expect(problems.some((p) => p.includes("guarding nothing"))).toBe(true);
   });
 
-  test("prune drops gone entries and adds nothing", () => {
+  test("prune drops gone entries, lowers a number that came down, and adds nothing", () => {
     const root = fixture({ "a.ts": "banned();\n", "b.ts": "banned();\n", "c.ts": "allowed();\n" });
-    const spec = specFor(root);
+    const spec = { ...specFor(root), shrinkFloor: 1 };
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 5  # a reason worth keeping\nsrc/c.ts 1\n");
     syncAllowlist(spec, [{ key: "src/a.ts", value: 1 }, { key: "src/b.ts", value: 1 }], "prune");
     const written = parseAllowlist(readFileSync(spec.allowlist, "utf8"));
     expect([...written.keys()]).toEqual(["src/a.ts"]); // b never added, c dropped
-    expect(written.get("src/a.ts")).toEqual({ value: 5, note: "a reason worth keeping" }); // no floor: nothing to lower
+    expect(written.get("src/a.ts")).toEqual({ value: 1, note: "a reason worth keeping" }); // 1 is below 5 x 1
   });
 
   test("prune rewrites only the lines that fail and leaves every other line as written", () => {
