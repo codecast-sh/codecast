@@ -38,8 +38,8 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
 /** One run as the context panel draws it, from the rows it is given (the
  *  marketing hero passes fixtures). */
 export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { run: any; workflow?: any | null; defaultExpanded?: boolean }) {
-  // Same default as PlanContextPanel: the header already carries the run in
-  // aggregate, the session rows come on a click.
+  // Collapsed by default: the header already carries the run in aggregate,
+  // the session rows come on a click.
   const [expanded, setExpanded] = useState(defaultExpanded);
   const now = useCoarseNow(30_000);
   // A gate is a decision (the-line.md L4, L10): the panel renders the
