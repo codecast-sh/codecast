@@ -65,6 +65,16 @@ export function serializeDraftImages(images: PastedImage[]): DraftImageRow[] {
   }));
 }
 
+// The stored images whose preview needs its hosted URL: a restored draft's
+// blob died with the page that made it. A blob this page made is still in the
+// upload map and keeps painting, so the picture's address never changes while
+// it is shown: pins on it are counted per address (quoteFormat pinNumbers).
+export function staleDraftPreviewIds(images: readonly Pick<PastedImage, "previewUrl" | "storageId">[]): string[] {
+  return images
+    .filter(i => i.storageId && (!i.previewUrl || (i.previewUrl.startsWith("blob:") && !pendingImageUploads.has(i.previewUrl))))
+    .map(i => i.storageId!);
+}
+
 // Pasted images are sacred input: they reach the store draft synchronously at
 // paste time (uploading rows included, with their blob preview), not after the
 // upload finishes. The draft is what survives a composer remount — it is

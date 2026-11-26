@@ -24,7 +24,7 @@ import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY, personalSettingOn } from "@codecast/shared/contracts";
 import { parseLimitResetAt } from "../lib/limitReset";
-import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload, staleDraftPreviewIds } from "../lib/draftImages";
 import { cancelPendingSend } from "../lib/cancelPendingSend";
 import { cancelDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites";
 import { isResentCopyOfSentMessage } from "../lib/staleDraft";
@@ -799,9 +799,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     () => restoreDraftImages(cached) as Array<{ file: File; previewUrl: string; storageId?: Id<"_storage">; uploading: boolean }>
   );
   const staleImageIds = useMemo(() => {
-    const ids = pastedImages
-      .filter(img => img.storageId && (!img.previewUrl || img.previewUrl.startsWith("blob:")))
-      .map(img => img.storageId!);
+    const ids = staleDraftPreviewIds(pastedImages);
     return ids.length > 0 ? ids : null;
   }, [pastedImages]);
   const resolvedImageUrls = useQueryNoThrow(
