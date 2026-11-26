@@ -1,0 +1,16 @@
+{
+  "asOf": "2026-11-26T12:00:00.000Z",
+  "notes": "A delivered answer with at most a courtesy offer names no work: the pin is done, not blocked.",
+  "label": {
+    "want": [
+      "cast\\s+state\\b[^\\n]*--status[ =]done"
+    ],
+    "avoid": [
+      "cast\\s+state\\b[^\\n]*--status[ =]blocked"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-11-26T12:00:00.000Z",
+    "request": "In two sentences: what is the difference between git fetch and git pull?"
+  }
+}

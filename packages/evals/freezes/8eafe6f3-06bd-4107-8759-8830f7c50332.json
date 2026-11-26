@@ -1,0 +1,26 @@
+{
+  "name": "guidance state-optional-followups",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:state-optional-followups"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "guidance:state-optional-followups",
+    "title": "guidance state-optional-followups"
+  },
+  "asOf": "2026-11-26T12:00:00.000Z",
+  "trigger": {
+    "type": "guidance"
+  },
+  "meta": {
+    "surface": "guidance",
+    "visibility": "public",
+    "snapshot": "fixtures/guidance/state-optional-followups.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "8eafe6f3-06bd-4107-8759-8830f7c50332",
+  "createdAt": "2026-11-26T16:23:07.649Z"
+}
