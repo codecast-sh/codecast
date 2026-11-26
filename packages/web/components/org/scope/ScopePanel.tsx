@@ -36,6 +36,7 @@ import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeTriggersTab } from "./ScopeTriggersTab";
 import type { BriefPerson, RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
 import { PersonGoals } from "./PersonGoals";
+import { RoleReports } from "./RoleReports";
 import { OrgHistory } from "../history/OrgHistory";
 import type { PanelLayout } from "../../../hooks/usePanelLayout";
 import { SCOPE_WORK_VIEWS, scopeTabsFor, type ScopeTabKey, type ScopeWorkView } from "../../../lib/scopeTabs";
@@ -189,7 +190,7 @@ function viewerGoals(tree: OrgTree, role: OrgRole, people: BriefPerson[] | undef
 }
 
 /** A role's Overview: what it is for (the charter, edited in place), the
- *  briefing, the viewer's goals, the role's own notes behind a fold, and what
+ *  briefing, who reports to it, the viewer's goals, the role's own notes behind a fold, and what
  *  happened in its area lately. */
 function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
   const { tree, role } = p;
@@ -219,6 +220,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
       </section>
 
       <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} />
+      <RoleReports tree={tree} role={role} now={p.now} label={BLOCK_LABEL} />
       <RolePlaybookSections narrative={p.brief?.narrative} routine={p.brief?.role.routine ?? null} now={p.now} />
 
       {me && (
