@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { collectMigrationCandidates, heldReason, movabilityFacts } from "./sessionMigrations";
-import { makeFakeDb } from "./testDb";
+import { makeFakeDb, schemaIndexes } from "./testDb";
+import schema from "./schema";
 
 const USER = "users_me" as any;
 const LAPTOP = "laptop";
@@ -52,27 +53,58 @@ describe("collectMigrationCandidates", () => {
     const ctx = { db: makeFakeDb({ conversations, managed_sessions, workflow_runs: [] }) } as any;
     const found = await collectMigrationCandidates(ctx, USER, [{ device_id: LAPTOP }]);
     expect(found.map((c) => String(c._id))).toContain("conversations_worker");
-    const facts = await movabilityFacts(ctx, USER);
+    const facts = await movabilityFacts(ctx, USER, conversations);
     const held = Object.fromEntries(conversations.map((c) => [c._id, heldReason(c as any, facts)]));
     expect(held.conversations_worker).toBeNull();
     expect(held.conversations_task).toContain("moves with its parent");
   });
 
   // The runner watches a step through a local handle; a moved step reads as a dead station.
-  test("a running workflow step stays, named by short id or by its run's conversation", async () => {
+  // The runs are read by key from the steps' own conversations, never by scanning the account's live runs.
+  test("a running workflow step stays, named by short id, by session id or by its run's conversation", async () => {
     const now = Date.now();
     const conversations = [
-      { _id: "jx78540bjtf69k6dyr4kk9ayk58geqyz", user_id: USER, owner_device_id: LAPTOP, status: "active", is_subagent: true },
+      // Nested under a person's session that launched the run: the run names it by short id.
+      { _id: "jx78540bjtf69k6dyr4kk9ayk58geqyz", user_id: USER, owner_device_id: LAPTOP, status: "active", is_subagent: true, parent_conversation_id: "conversations_person" },
       { _id: "conversations_tmuxstep", user_id: USER, owner_device_id: LAPTOP, status: "active", is_subagent: true, parent_conversation_id: "conversations_line" },
+      // Reported by its session id, so the runner linked it to the run.
+      { _id: "conversations_linked", session_id: "wf-review-cd34", workflow_run_id: "workflow_runs_3", user_id: USER, owner_device_id: LAPTOP, status: "active" },
+    ];
+    const parents = [
+      { _id: "conversations_person", user_id: USER, status: "active", workflow_run_id: "workflow_runs_1" },
+      { _id: "conversations_line", user_id: USER, status: "active", workflow_run_id: "workflow_runs_2", is_workflow_primary: true },
     ];
     const managed_sessions = conversations.map((c, i) => ({ _id: `managed_sessions_${i}`, user_id: USER, conversation_id: c._id, last_heartbeat: now - 1000 }));
     const workflow_runs = [
       { _id: "workflow_runs_1", user_id: USER, status: "running", node_statuses: [{ node_id: "implement", status: "running", session_id: "jx78540" }] },
       { _id: "workflow_runs_2", user_id: USER, status: "running", primary_conversation_id: "conversations_line", node_statuses: [{ node_id: "review", status: "running", session_id: "wf-review-ab12" }] },
-      { _id: "workflow_runs_3", user_id: "users_other", status: "running", node_statuses: [] },
+      { _id: "workflow_runs_3", user_id: USER, status: "paused", node_statuses: [{ node_id: "review", status: "running", session_id: "wf-review-cd34" }] },
     ];
-    const ctx = { db: makeFakeDb({ conversations, managed_sessions, workflow_runs }) } as any;
-    const facts = await movabilityFacts(ctx, USER);
+    const ctx = { db: makeFakeDb({ conversations: [...conversations, ...parents], managed_sessions, workflow_runs }) } as any;
+    const facts = await movabilityFacts(ctx, USER, conversations);
     for (const c of conversations) expect(heldReason(c as any, facts)).toContain("workflow step");
+    // An ended run, or another account's, holds nothing.
+    workflow_runs[0].status = "completed";
+    workflow_runs[2].user_id = "users_other";
+    const after = await movabilityFacts(ctx, USER, conversations);
+    expect(heldReason(conversations[0] as any, after) ?? "").not.toContain("workflow step");
+    expect(heldReason(conversations[2] as any, after)).toBeNull();
+  });
+
+  // A person's session launches run A, then run B: its pointer names B. B ends while A's station still runs.
+  test("a step of an older run launched from a person's session stays after the session's newer run ends", async () => {
+    const now = Date.now();
+    const conversations = [
+      { _id: "jx7aaaabjtf69k6dyr4kk9ayk58geqyz", _creationTime: 1, user_id: USER, owner_device_id: LAPTOP, status: "active", is_subagent: true, parent_conversation_id: "conversations_person" },
+    ];
+    const person = { _id: "conversations_person", _creationTime: 0, user_id: USER, status: "active", workflow_run_id: "workflow_runs_b" };
+    const managed_sessions = [{ _id: "managed_sessions_0", user_id: USER, conversation_id: conversations[0]._id, last_heartbeat: now - 1000 }];
+    const workflow_runs = [
+      { _id: "workflow_runs_a", _creationTime: 1, user_id: USER, status: "running", primary_conversation_id: "conversations_person", node_statuses: [{ node_id: "implement", status: "running", session_id: "jx7aaaa" }] },
+      { _id: "workflow_runs_b", _creationTime: 2, user_id: USER, status: "completed", primary_conversation_id: "conversations_person", node_statuses: [] },
+    ];
+    const ctx = { db: makeFakeDb({ conversations: [...conversations, person], managed_sessions, workflow_runs }, { indexes: schemaIndexes(schema as any) }) } as any;
+    const facts = await movabilityFacts(ctx, USER, conversations);
+    expect(heldReason(conversations[0] as any, facts)).toContain("workflow step");
   });
 });

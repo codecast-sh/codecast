@@ -278,19 +278,27 @@ function unproven(graph: any, run: any, attempt: number, head: string | undefine
 const SHA = /^[0-9a-f]{40}$/;
 
 /** The canonical ids of the calling session: the conversation its agent session id names (or that id itself, when
- *  it is a conversation's), as its full id and as the short id the runner reports on the stations it spawns. */
-async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Promise<Set<string>> {
-  if (!sessionRef) return new Set();
+ *  it is a conversation's), as its full id and as the short id the runner reports on the stations it spawns. With
+ *  them, the runs those conversations name: a station is spawned nested under its run's own session, which carries
+ *  the run's id and is the primary of its running runs, and a station the runner found by its session id carries it
+ *  itself (workflow_runs.reportProgress). */
+async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Promise<{ ids: Set<string>; runIds: Set<string> }> {
+  const ids = new Set<string>();
+  const runIds = new Set<string>();
+  if (!sessionRef) return { ids, runIds };
   const byAgent = await ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", sessionRef)).take(5);
   const asId = ctx.db.normalizeId?.("conversations", sessionRef);
   const direct = asId ? await ctx.db.get(asId) : null;
-  const ids = new Set<string>();
   for (const c of [...byAgent, ...(direct ? [direct] : [])]) {
     if (String(c.user_id) !== String(userId)) continue;
     ids.add(String(c._id));
     ids.add(c.short_id ?? String(c._id).slice(0, 7));
+    const parent = c.parent_conversation_id ? await ctx.db.get(c.parent_conversation_id) : null;
+    for (const runId of [c.workflow_run_id, parent?.workflow_run_id]) if (runId) runIds.add(String(runId));
+    // A session that launched several runs points at its newest alone: each running one is read by its primary.
+    if (parent) for (const r of await ctx.db.query("workflow_runs").withIndex("by_primary_status", (q: any) => q.eq("primary_conversation_id", parent._id).eq("status", "running")).collect()) runIds.add(String(r._id));
   }
-  return ids;
+  return { ids, runIds };
 }
 
 /**
@@ -304,18 +312,26 @@ async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Pro
 export async function recordReviewVerdictCore(ctx: any, userId: Id<"users">, args: { session_id?: string; verdict: string; head_sha: string; round?: string; run_id?: string; node_id?: string; mechanism?: boolean }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
   if (!SHA.test(args.head_sha)) throw new Error(`${args.head_sha} is not a commit sha`);
   if (!["ship", "changes", "rejected"].includes(args.verdict)) throw new Error(`${args.verdict} is not a verdict: ship, changes or rejected`);
-  const ids = await callerIds(ctx, userId, String(args.session_id ?? ""));
+  const { ids, runIds } = await callerIds(ctx, userId, String(args.session_id ?? ""));
   if (!ids.size) throw new Error("This session is not one of your sessions codecast knows: a review verdict is recorded from the reviewer station's own session");
-  const runs: any[] = args.run_id
-    ? [await ctx.db.get(args.run_id as Id<"workflow_runs">)].filter((r) => r && String(r.user_id) === String(userId) && r.status === "running")
-    : await ctx.db.query("workflow_runs").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "running")).take(200);
-  const found: Array<{ run: any; node_id: string; attempt: number }> = [];
-  for (const run of runs) {
-    const attempt = runAttempt(run);
-    const mine = (run.node_statuses ?? []).filter((s: any) => ids.has(String(s.session_id ?? "")) && (s.started_at ?? 0) >= attempt && (!args.node_id || s.node_id === args.node_id));
-    if (!mine.length) continue;
-    const nodes = (await runWorkflowOf(ctx, run))?.nodes ?? [];
-    for (const s of mine) if (nodes.some((n: any) => n.id === s.node_id && n.type === "agent" && n.reviewer === true)) found.push({ run, node_id: s.node_id, attempt });
+  const reviewerOf = async (runs: any[]) => {
+    const found: Array<{ run: any; node_id: string; attempt: number }> = [];
+    for (const run of runs) {
+      if (!run || String(run.user_id) !== String(userId) || run.status !== "running") continue;
+      const attempt = runAttempt(run);
+      const mine = (run.node_statuses ?? []).filter((s: any) => ids.has(String(s.session_id ?? "")) && (s.started_at ?? 0) >= attempt && (!args.node_id || s.node_id === args.node_id));
+      if (!mine.length) continue;
+      const nodes = (await runWorkflowOf(ctx, run))?.nodes ?? [];
+      for (const s of mine) if (nodes.some((n: any) => n.id === s.node_id && n.type === "agent" && n.reviewer === true)) found.push({ run, node_id: s.node_id, attempt });
+    }
+    return found;
+  };
+  // The run is read by key: the one named, else the ones the caller's conversations name. An account can hold
+  // thousands of running runs (parked at a queue for weeks), so scanning them is only the fallback, newest first.
+  const get = (id: string) => ctx.db.get(id as Id<"workflow_runs">);
+  let found = await reviewerOf(await Promise.all(args.run_id ? [get(args.run_id)] : [...runIds].map(get)));
+  if (!args.run_id && !found.length) {
+    found = await reviewerOf(await ctx.db.query("workflow_runs").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "running")).order("desc").take(200));
   }
   if (!found.length) throw new Error("This session is no running run's reviewer station in this attempt: only the reviewer station's own session records its review verdict");
   if (found.length > 1) throw new Error(`This session is the reviewer station of ${found.length} running runs; pass --run to name one`);

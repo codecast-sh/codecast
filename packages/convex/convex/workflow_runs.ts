@@ -1643,10 +1643,10 @@ export const admitToStation = mutation({
     const run = await ctx.db.get(args.run_id);
     if (!run || run.user_id !== auth.userId) return { error: "Not found" };
     if (run.station_place?.node_id === args.node_id || !run.workspace) return { admitted: true };
-    const running = await ctx.db.query("workflow_runs")
-      .withIndex("by_workspace_status_updated", (q) => q.eq("workspace", run.workspace!).eq("status", "running"))
-      .collect();
-    const inside = running.filter((r) => r.station_place?.node_id === args.node_id).length;
+    // Only the runs holding a place there: the workspace's running runs are thousands, parked at a queue for weeks.
+    const inside = (await ctx.db.query("workflow_runs")
+      .withIndex("by_workspace_status_place", (q) => q.eq("workspace", run.workspace!).eq("status", "running").eq("station_place.node_id", args.node_id))
+      .take(Math.max(0, Math.ceil(args.cap)))).length;
     if (inside >= args.cap) return { admitted: false, inside, cap: args.cap };
     await ctx.db.patch(run._id, { station_place: { node_id: args.node_id, at: Date.now() } });
     return { admitted: true, inside: inside + 1, cap: args.cap };
@@ -1758,8 +1758,8 @@ export const liveRunsForDevice = mutation({
 // no machine has taken yet (the machine is offline) stays pending.
 export const STRANDED_PENDING_MS = 10 * 60_000;
 export async function failStrandedPendingRuns(ctx: Ctx, userId: Id<"users">, now: number): Promise<string[]> {
-  const stale = (await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", "pending")).take(200))
-    .filter((r: any) => r.user_id === userId && now - r.updated_at > STRANDED_PENDING_MS);
+  const stale = (await ctx.db.query("workflow_runs").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).take(200))
+    .filter((r: any) => now - r.updated_at > STRANDED_PENDING_MS);
   const failed: string[] = [];
   for (const run of stale) {
     // The run's command is queued with the run, so it executed after the run was created, or after the resume that
