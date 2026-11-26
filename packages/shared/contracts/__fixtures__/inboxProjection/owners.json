@@ -1,0 +1,197 @@
+{
+  "about": "The owners model (team feature session_owners), on rows the server stamped owners_model. Nothing rides: a role's hand stands alone beside the role's hidden standing session, a teammate files by its own state, not its lead's, and a subagent the viewer owns is a member of its own. A wait an agent owner answers (its role, or the session that started it) files as working with its raw work state; one whose wait reached its people (wait_up_count, no message since) is needs input; a question routed to the viewer (asking) is a question; a pin keeps its place.",
+  "epoch": "E",
+  "asking": [
+    "own_hand_asking"
+  ],
+  "rows": [
+    {
+      "_id": "own_lead",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 40,
+      "agent_status": "dormant",
+      "is_idle": true,
+      "anchor_id": "anchor_growth",
+      "standing_role_id": "growth",
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_hand_waiting",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 12,
+      "is_idle": true,
+      "org_role_id": "growth",
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_hand_passed_up",
+      "status": "active",
+      "updated_at": "E-3m",
+      "message_count": 12,
+      "is_idle": true,
+      "org_role_id": "growth",
+      "wait_up_at": "E-3m",
+      "wait_up_count": 12,
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_child_waiting",
+      "status": "active",
+      "updated_at": "E-4m",
+      "message_count": 6,
+      "is_idle": true,
+      "parent_conversation_id": "own_plain",
+      "is_subagent": true,
+      "owner_session_id": "own_plain",
+      "owned_by_me": true,
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_plain",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 9,
+      "is_idle": true,
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_mate",
+      "status": "active",
+      "updated_at": "E-6m",
+      "message_count": 5,
+      "agent_status": "done",
+      "is_idle": true,
+      "agent_team_name": "crew",
+      "agent_name": "worker",
+      "spawned_by_conversation_id": "own_plain",
+      "owner_session_id": "own_plain",
+      "owned_by_me": true,
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_hand_asking",
+      "status": "active",
+      "updated_at": "E-7m",
+      "message_count": 3,
+      "is_idle": true,
+      "org_role_id": "growth",
+      "owners_model": true,
+      "implicit_owner": "me"
+    },
+    {
+      "_id": "own_hand_pinned",
+      "status": "active",
+      "updated_at": "E-8m",
+      "message_count": 3,
+      "is_idle": true,
+      "org_role_id": "growth",
+      "inbox_pinned_at": "E-8m",
+      "owners_model": true,
+      "implicit_owner": "me"
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 1,
+        "pinned": 1,
+        "new": 0,
+        "needs_input": 2,
+        "done": 1,
+        "dormant": 0,
+        "working": 2,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "bd4879e3f548e4bb",
+    "placements": {
+      "ownchildwaitingz1500000000000000": [
+        "working",
+        "needs_input",
+        false
+      ],
+      "ownhandaskingz130000000000000000": [
+        "questions",
+        "needs_input",
+        false
+      ],
+      "ownhandpassedupz1500000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "ownhandpinnedz130000000000000000": [
+        "pinned",
+        "needs_input",
+        false
+      ],
+      "ownhandwaitingz14000000000000000": [
+        "working",
+        "needs_input",
+        false
+      ],
+      "ownleadz700000000000000000000000": [
+        "hidden",
+        "dormant",
+        false
+      ],
+      "ownmatez700000000000000000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "ownplainz80000000000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ]
+    },
+    "sort_at": {
+      "ownchildwaitingz1500000000000000": -240000,
+      "ownhandaskingz130000000000000000": -420000,
+      "ownhandpassedupz1500000000000000": -180000,
+      "ownhandpinnedz130000000000000000": -480000,
+      "ownhandwaitingz14000000000000000": -120000,
+      "ownleadz700000000000000000000000": -60000,
+      "ownmatez700000000000000000000000": -360000,
+      "ownplainz80000000000000000000000": -300000
+    },
+    "sort_order": {
+      "needs_input": [
+        "ownhandpassedupz1500000000000000",
+        "ownplainz80000000000000000000000"
+      ],
+      "working": [
+        "ownhandwaitingz14000000000000000",
+        "ownchildwaitingz1500000000000000"
+      ]
+    }
+  }
+}

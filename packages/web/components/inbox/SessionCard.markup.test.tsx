@@ -211,3 +211,18 @@ describe("the live card's toolbar", () => {
     expect(html.match(/aria-label="(Restore|Kill)"/g)).toEqual(['aria-label="Kill"', 'aria-label="Restore"']);
   });
 });
+
+describe("the owners model on a classic card", () => {
+  test("flag off: a role's working session says no With line", () => {
+    const html = render({ _id: "c-off", is_idle: false, updated_at: NOW - 0.5 * MIN, org_role_id: "r1", role: ROLE } as never, { variant: "working" });
+    expect(html).not.toContain("data-sv-with-owner");
+    expect(html).not.toContain("data-card-owners");
+  });
+
+  test("flag on: a wait its role answers says With @role", () => {
+    const html = render({ _id: "c-on", is_idle: false, updated_at: NOW - 0.5 * MIN, owners_model: true, owned_by_me: true, org_role_id: "r1", role: ROLE } as never, { variant: "working" });
+    expect(html).toContain("data-sv-with-owner");
+    expect(html).toContain("With @infra");
+  });
+});
+

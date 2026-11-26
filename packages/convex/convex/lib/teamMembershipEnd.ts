@@ -11,6 +11,7 @@ import { withdrawMember } from "./changesDirty";
 import { purgeChatMembership } from "../chat";
 import { removeFromTeamHosts } from "../teamHosts";
 import { scheduleSeatSync } from "./teamSeats";
+import { rerouteEscalatedWait } from "./inboxOwners";
 
 // An owner row on a session another account runs steers that account's
 // daemon, and it was granted inside one team: starting the session on a
@@ -61,6 +62,23 @@ async function releaseStrandedSessionOwnership(ctx: { db: any }, userId: Id<"use
   }
 }
 
+// A wait in this team that escalated to the leaver (wait_up_person) goes on
+// to the next person its audience names (shared waitAudience), never back to
+// them, and the needs-input check rings that person: one who left can neither
+// see the session nor act on it, and they were its whole audience.
+export async function handOnEscalatedWaits(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<void> {
+  const rows = await ctx.db
+    .query("conversations")
+    .withIndex("by_wait_up_person", (q: any) => q.eq("wait_up_person", userId))
+    .order("desc")
+    // This team's live waits, newest first: a killed session waits on nobody.
+    .filter((q: any) => q.eq(q.field("team_id"), teamId))
+    .filter((q: any) => q.eq(q.field("inbox_killed_at"), undefined))
+    .take(ESCALATIONS_PER_LEAVE);
+  for (const conv of rows) await rerouteEscalatedWait(ctx, conv, { exclude: [String(userId)] });
+}
+const ESCALATIONS_PER_LEAVE = 200;
+
 // End one user's membership in one team, and everything that rides on it:
 // the roster row, chat state (reads, follows, room seats, queued pushes), the
 // directory mappings that would keep stamping new conversations with the team,
@@ -98,6 +116,7 @@ export async function endMembership(
   for (const dm of mappings) await ctx.db.delete(dm._id);
   await withdrawMember(ctx, userId, teamId);
   await releaseStrandedSessionOwnership(ctx, userId, teamId);
+  await handOnEscalatedWaits(ctx, userId, teamId);
 
   const user = await ctx.db.get(userId);
   if (!user) return;

@@ -27,7 +27,7 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
 import { rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
@@ -158,6 +158,12 @@ export type StatusRow = {
   inbox_snoozed_until?: number | null;
   /** The person's own filing (Needs You, Done, Dormant), current until the next activity. */
   user_rest?: string | null;
+  // The owners model (shared personStateOf): a wait its agent owner answers reads working.
+  owners_model?: boolean | null;
+  org_role_id?: string | null;
+  owner_session_id?: string | null;
+  wait_up_count?: number | null;
+  wait_up_person?: string | null;
   // The replicated facts the rail re-derives liveness from (lib/liveness liveFactsOf).
   status?: string | null;
   agent_status_updated_at?: number | null;
@@ -280,7 +286,11 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   if (live.pendingSend) return "working";
   if (live.asking) return "needs_you";
   if ((row.message_count ?? 0) === 0) return statusStarting(row, now, live, hosted) ? "starting" : "idle";
-  switch (placement?.state ?? workStateOfRow(row, now)) {
+  // As a person reads it, the same rule the sections file by (shared
+  // personStateOf): a wait its agent owner answers is working, except in
+  // Questions and where the person filed it themselves.
+  const state = placement?.state ?? workStateOfRow(row, now);
+  switch (personStateOf(row, (placement?.bucket ?? state) as InboxBucket, state)) {
     case "working": return "working";
     case "needs_input": return statusFailure(row, now, live) ? "error" : "needs_you";
     case "done": return "done";

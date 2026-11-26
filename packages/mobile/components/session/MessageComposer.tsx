@@ -201,7 +201,7 @@ export function ComposerTool({ icon, label, onPress, on }: {
 
 export function MessageComposer({
   field, images, placeholder, placeholderColor, canSend, onSend, sendIcon = 'arrow-up', stop, status, attach = true,
-  tools, error, onDismissError, suggestion, above, cardStyle, inputStyle,
+  tools, error, onDismissError, suggestion, above, cardStyle, inputStyle, onFocusChange,
 }: {
   field: ReturnType<typeof useComposerField>;
   images: ReturnType<typeof useComposerImages>;
@@ -226,6 +226,8 @@ export function MessageComposer({
   above?: ReactNode;
   cardStyle?: StyleProp<ViewStyle>;
   inputStyle?: StyleProp<TextStyle>;
+  /** The inline box gained or lost focus (the owners strip shows while it has it). */
+  onFocusChange?: (focused: boolean) => void;
 }) {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -390,6 +392,8 @@ export function MessageComposer({
           ]}
           value={message}
           onChangeText={onChangeText}
+          onFocus={onFocusChange ? () => onFocusChange(true) : undefined}
+          onBlur={onFocusChange ? () => onFocusChange(false) : undefined}
           placeholder={ghost?.text ?? placeholder}
           placeholderTextColor={ghost ? Theme.textMuted0 : placeholderColor ?? Theme.textMuted0}
           multiline

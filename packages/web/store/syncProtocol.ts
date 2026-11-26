@@ -43,6 +43,10 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_adopted_at",
   "thread_state",
   "thread_state_at",
+  // An ack's clear (clearAssignedPing): the inbox feeds omit the ping when
+  // none waits, so an absent echo is the acknowledgement. Without it the null
+  // lock outlived the ack and hid every later "assigned to you" ping.
+  "assigned_ping",
   "thread_state_msg_count",
   "thread_state_status",
 ]);
@@ -56,6 +60,80 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
 export function withClearedInboxStamps<T extends Record<string, unknown>>(doc: T): T {
   const missing = [...OPTIONAL_INBOX_TIMESTAMPS].filter((f) => !(f in doc));
   return missing.length ? { ...doc, ...Object.fromEntries(missing.map((f) => [f, null])) } : doc;
+}
+
+// An owners lock its change's acknowledgement marked (store settleOwnersAck)
+// retires on the first server value for its field after the ack: the value
+// lands. A row that does not carry the field leaves the lock to the next,
+// except an owners stamp a whole inbox row under the model (owners_model:
+// true) leaves out: the server omits a clear one, so the row says it is null.
+const OWNERS_ROW_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id"],
+};
+
+// Whether any acked lock may exist: set by each mark (noteAckedLock), cleared
+// by a scan that finds none, and unknown at load (locks persist), so a window
+// that never acks (the flag off) scans once and then pays nothing.
+let ackedHint = true;
+let ackedScans = 0;
+export function noteAckedLock(): void {
+  ackedHint = true;
+}
+/** Test seam: how many times an apply scanned the pending map for acked locks. */
+export function _ackedScanCount(): number {
+  return ackedScans;
+}
+/** The multiplayer sim's per-window seam (sim/windowSlots.ts): each window holds its own hint. */
+export function __syncProtocolSimSlots() {
+  type Slots = { ackedHint: boolean; ackedScans: number };
+  return {
+    fresh: (): Slots => ({ ackedHint: true, ackedScans: 0 }),
+    get: (): Slots => ({ ackedHint, ackedScans }),
+    set: (s: object) => ({ ackedHint, ackedScans } = s as Slots),
+  };
+}
+function hasAcked(pending: Record<string, PendingEntry>, prefix: string): boolean {
+  if (!ackedHint) return false;
+  ackedScans++;
+  let any = false;
+  for (const key in pending) {
+    if (!(pending[key] as { acked?: boolean }).acked) continue;
+    if (key.startsWith(prefix)) return true;
+    any = true;
+  }
+  if (!any) ackedHint = false;
+  return false;
+}
+function releaseAckedFields(pending: Record<string, PendingEntry>, tableName: string, id: string, fields: Iterable<string>): Record<string, PendingEntry> {
+  let out = pending;
+  for (const field of fields) {
+    const key = `${tableName}:${id}:${field}`;
+    if (!(pending[key] as { acked?: boolean } | undefined)?.acked) continue;
+    if (out === pending) out = { ...pending };
+    delete out[key];
+  }
+  return out;
+}
+function releaseAckedRows<T extends Record<string, any>>(pending: Record<string, PendingEntry>, tableName: string, rows: T[]): { pending: Record<string, PendingEntry>; rows: T[] } {
+  if (!hasAcked(pending, `${tableName}:`)) return { pending, rows };
+  let out = pending;
+  let outRows = rows;
+  const omittable = OWNERS_ROW_FIELDS[tableName] ?? [];
+  rows.forEach((row, i) => {
+    if (!row || row._id == null) return;
+    const id = String(row._id);
+    out = releaseAckedFields(out, tableName, id, Object.keys(row));
+    // Only an inbox row under the owners model spells its stamps: a feed whose
+    // rows carry no owners_model (a team, crawl or killed-shelf row) says
+    // nothing of them by leaving them out.
+    if (row.owners_model !== true) return;
+    const cleared = omittable.filter((f) => !(f in row) && (out[`${tableName}:${id}:${f}`] as { acked?: boolean } | undefined)?.acked);
+    if (!cleared.length) return;
+    out = releaseAckedFields(out, tableName, id, cleared);
+    if (outRows === rows) outRows = [...rows];
+    outRows[i] = { ...row, ...Object.fromEntries(cleared.map((f) => [f, null])) };
+  });
+  return { pending: out, rows: outRows };
 }
 
 export function applySyncTable<T extends { _id: string }>(
@@ -74,6 +152,7 @@ export function applySyncTable<T extends { _id: string }>(
     pruneAbsentScope?: (record: T) => boolean;
   },
 ): { table: Record<string, T>; pending: Record<string, PendingEntry> } {
+  ({ pending, rows: incoming } = releaseAckedRows(pending, tableName, incoming));
   return engineApplySyncTable(tableName, incoming, pending, prev, {
     ...opts,
     ignoreFields: opts?.ignoreFields as string[] | undefined,
@@ -89,6 +168,7 @@ export function applySyncRecord(
   incoming: Record<string, any>,
   pending: Record<string, PendingEntry>,
 ): { record: Record<string, any>; pending: Record<string, PendingEntry> } {
+  if (hasAcked(pending, `${tableName}:${id}:`)) pending = releaseAckedFields(pending, tableName, id, Object.keys(incoming ?? {}));
   return engineApplySyncRecord(tableName, id, incoming, pending, OPTIONAL_INBOX_TIMESTAMPS);
 }
 
@@ -113,5 +193,6 @@ export function applySyncPatch(
   unset: readonly string[],
   pending: Record<string, PendingEntry>,
 ): { fields: Record<string, any>; unset: string[]; pending: Record<string, PendingEntry> } {
+  if (hasAcked(pending, `${tableName}:${id}:`)) pending = releaseAckedFields(pending, tableName, id, [...Object.keys(patch), ...unset]);
   return engineApplySyncPatch(tableName, id, patch, unset, pending, OPTIONAL_INBOX_TIMESTAMPS);
 }

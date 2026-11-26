@@ -30,7 +30,7 @@
 // whatever its score, so blocked-and-reachable always leads (sd-3584).
 // Among equal scores the oldest leads: a parked agent's cost grows with its
 // age, so oldest-first minimizes fleet idle time.
-import { BLOCKED_BANNER_KINDS, isHostedAgentType, isStackedAsk } from "@codecast/shared/contracts";
+import { BLOCKED_BANNER_KINDS, escalatedAsks, isHostedAgentType, isStackedAsk } from "@codecast/shared/contracts";
 import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
 import { byImpact } from "@codecast/shared/contracts/decisionImpact";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
@@ -395,7 +395,9 @@ export function sessionHasOpenQuestion(
   // surfaces can never disagree about what counts as parked.
   if (s.pending_api_error_kind && BLOCKED_BANNER_KINDS.has(s.pending_api_error_kind)) return false;
   if (questionResolvedLocally(s, resolutions)) return false;
-  return !!s.awaiting_input || s.agent_status === "permission_blocked";
+  // A current escalation of a prompt or a question carries its kind on the
+  // row (the server reads no liveness for it): shared escalatedAsks.
+  return !!s.awaiting_input || s.agent_status === "permission_blocked" || escalatedAsks(s);
 }
 
 /** Conversation ids with a pending `cast decide` the viewer must answer. */

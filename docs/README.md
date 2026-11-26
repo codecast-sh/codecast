@@ -61,6 +61,7 @@ here: each one opens with a dated status line that says what shipped and what re
 |---|---|
 | [Sessions in projects](architecture/session-projects.md) | A project as the workspace for its sessions, tasks, plans and docs |
 | [Session multiplayer](architecture/session-multiplayer.md) | Several people typing, sending and steering in one session |
+| [Session owners](architecture/session-owners.md) | Who owns a session, whose inbox it is in, and who hears its waits |
 | [Team kit](architecture/team-kit.md) | A team's shared skills, commands, subagents and instructions |
 | [Team machines](architecture/team-machines.md) | A Linux box that belongs to a team |
 | [Shared hosts](architecture/shared-hosts.md) | One Linux cloud host used by several teammates at once |

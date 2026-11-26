@@ -31,6 +31,11 @@ import { pendingAsk } from "../../lib/conversationTitle";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { ModernSessionCardView } from "./ModernSessionCard";
+import { ownerRoleHandleOf, ownerSessionTitleOf, withOwnerFactsOf, withOwnerLabelOf } from "../../lib/withOwner";
+import { coOwnersOf, coOwnersSig } from "../../lib/coOwners";
+import { holdOwnerCard, watchOwnerCard } from "../../lib/visibleOwnerCards";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { isConvexId } from "../../lib/entityLinks";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
@@ -160,6 +165,11 @@ export const SessionCard = memo(function SessionCard({
     // (a settings write) and never independently at heartbeat rate.
     (s) => cardChromeSig(s.clientState),
     (s) => spawnedByTitleOf(s, spawnedById),
+    // The title of the session that owns it, when that session answers its wait.
+    (s) => ownerSessionTitleOf(s, withOwnerFactsOf(s as never, session)),
+    (s) => ownerRoleHandleOf(s as never, withOwnerFactsOf(s as never, session)),
+    // Its other owners, from the owners read (sessionOwners), as one string.
+    (s) => coOwnersSig(s as never, cardId),
     (s) => (hasDraft ? ((s.drafts[cardId]?.draft_message as string | undefined) ?? "") : ""),
     (s) => s.currentUser?._id?.toString?.() ?? null,
     (s) => convAuthorSig(s.conversations[cardId]),
@@ -263,6 +273,19 @@ export const SessionCard = memo(function SessionCard({
   // churns on daemon heartbeat fields and would re-render every card.
   const currentUser = useMemo(() => (meId ? ({ _id: meId } as any) : null), [meId]);
   const teamMembers = rosterIdentity(teamMembersOf(st));
+  // Under the owners model, its other owners as faces beside the time.
+  const ownersSig = coOwnersSig(st as never, cardId);
+  const coOwners = useMemo(() => coOwnersOf(st as never, cardId, meId, teamMembers), [ownersSig, meId, teamMembers]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Under the owners model its owners are read in the window's batched read
+  // while the card is in the viewport.
+  const ownersModel = session.owners_model === true && isConvexId(cardId);
+  useWatchEffect(() => {
+    if (!ownersModel) return undefined;
+    const els = typeof document === "undefined" ? [] : [...document.querySelectorAll(`[data-session-id="${cardId}"]`)];
+    const releases = els.length ? els.map((el) => watchOwnerCard(el, cardId)) : [holdOwnerCard(cardId)];
+    return () => { for (const release of releases) release(); };
+  }, [ownersModel, cardId, modern]);
+  const ownerRow = withOwnerFactsOf(st as never, session);
   const convMetaSig = convAuthorSig(st.conversations[cardId]);
   const convMeta = useMemo(() => {
     if (convMetaSig === null) return null;
@@ -382,6 +405,8 @@ export const SessionCard = memo(function SessionCard({
       ship={sessionShipFromSig(sessionShipSig(st as any, cardId))}
       linkedPrs={linkedPrs}
       spawnedByTitle={spawnedByTitleOf(st, spawnedById)}
+      withOwner={withOwnerLabelOf(ownerRow, ownerSessionTitleOf(st, ownerRow), ownerRoleHandleOf(st as never, ownerRow))}
+      coOwners={coOwners}
       anchorIdentity={anchorIdentity}
       runHost={runHost}
       placeDevice={placeDevice}

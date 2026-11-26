@@ -18,6 +18,7 @@ import { recomputeWorkspaceForConversation } from "./access";
 import { recordAuthorityEvent } from "./authorityEvents";
 import { invalidateForConversation } from "./changesDirty";
 import { restampDecisionTeams } from "./decisionTeam";
+import { rerouteEscalatedWait } from "./inboxOwners";
 
 type AccessCtx = { db: any; scheduler?: Scheduler };
 
@@ -75,6 +76,8 @@ export async function patchConversationVisibility(
   });
   await invalidateForConversation(ctx, after);
   await refreshViewingAccess(ctx, after);
+  // A standing escalation goes on when its person can no longer open it.
+  if ((after as any).wait_up_person) await rerouteEscalatedWait(ctx as any, after);
   // A decision's team is routing (lib/decisionTeam.ts): it follows the conversation to its new team.
   if ("team_id" in updates && String(updates.team_id ?? "") !== String(conversation.team_id ?? "")) await restampDecisionTeams(ctx, conversation._id);
   return recomputeWorkspaceForConversation(ctx, after);

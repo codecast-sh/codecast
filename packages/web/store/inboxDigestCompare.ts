@@ -239,7 +239,7 @@ export function evaluateInboxCompare(state: InboxCompareState, ctx: InboxCompare
       // Eligibility windows, not just the selected ones: a held row the cap
       // cut on one side only is exactly the overflow case the flag names.
       const row = adapted.get(id);
-      const windows = row ? inWorkingSet(row, slot.epoch) : proj.windows.get(id);
+      const windows = row ? inWorkingSet(row, slot.epoch, meId) : proj.windows.get(id);
       if (windows && windows.length > 0 && windows.every((w) => truncatedWindows.has(w))) return true;
     }
     return false;

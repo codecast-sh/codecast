@@ -11,6 +11,7 @@ import {
 import { rebuildRows, rowHash } from "@codecast/shared/contracts/inboxSplit";
 import {
   INBOX_FACT_FIELDS,
+  INBOX_MODEL_ONLY_ROW_FIELDS,
   INBOX_PROJECTION_VERSION,
   INBOX_ROW_FIELDS,
   INBOX_WINDOW_CAPS,
@@ -374,7 +375,8 @@ describe("the row shape is INBOX_ROW_FIELDS plus the facts", () => {
     for (const r of [...byIds.sessions, ...floor.page]) for (const k of Object.keys(r)) written.add(k);
     const shape = new Set<string>([...INBOX_ROW_FIELDS, ...INBOX_FACT_FIELDS]);
     expect([...written].filter((k) => !shape.has(k)).sort()).toEqual([]);
-    expect([...shape].filter((k) => !written.has(k)).sort()).toEqual([]);
+    // Off the owners model (this world has no flagged team) a row omits the model-only fields.
+    expect([...shape].filter((k) => !written.has(k) && !INBOX_MODEL_ONLY_ROW_FIELDS.has(k)).sort()).toEqual([]);
   });
 
   test("the floor lists an adopted child once, as its own top-level row", async () => {

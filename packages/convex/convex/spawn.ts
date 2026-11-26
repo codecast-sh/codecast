@@ -12,7 +12,8 @@ import { resolveDefinitionFor } from "./agentDefinitions";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant, resolveCloudDevice } from "./cloudPlacement";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { listTeamMachines, retainSessionCreator, sessionLaunchRunner } from "./sessionLaunch";
-import { listSessionOwnerIds } from "./sessionOwners";
+import { listSessionOwnerIds, ownersModelOn } from "./sessionOwners";
+import { actsForRole } from "@codecast/shared/contracts/sessionOwners";
 import { roleOfConversation } from "./lib/actor";
 import { actingPersonOf } from "./lib/userSend";
 import { canAccessTask } from "./lib/access";
@@ -198,6 +199,10 @@ export async function spawnSessionCore(
     // Merge this isolated worker's changes into its parent's checkout when it
     // finishes done.
     mergeBackOnDone?: boolean;
+    // A role starts it: under the session_owners feature, read on the NEW row
+    // (it may land in another team than its spawner's), the account that
+    // asked is the role's seat, not a person who wants it, so it gets no owner row.
+    roleStarted?: boolean;
   },
 ): Promise<{ conversationId: Id<"conversations">; shortId: string; queued?: boolean }> {
   const now = Date.now();
@@ -260,7 +265,7 @@ export async function spawnSessionCore(
 
   const shortId = conversationId.toString().slice(0, 7);
   await ctx.db.patch(conversationId, { short_id: shortId });
-  await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+  if (!(opts.roleStarted && await ownersModelOn(ctx, await ctx.db.get(conversationId)))) await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
   if (opts.handoffFrom) {
     await applyHandoffLink(ctx, userId, opts.handoffFrom, { _id: conversationId, short_id: shortId, agent_type: agentType, model: opts.model });
   }
@@ -466,7 +471,17 @@ export const createSessionFromCli = mutation({
       : null;
     // A role's standing session, or one of its hands, starting a hand: the
     // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
-    const roleGate = await gateHandStart(ctx, spawner);
+    // Under the session_owners feature only a spawner that acts for the role
+    // (shared actsForRole: its standing session, or a session it started and
+    // still owns) starts a hand; a person's own session with a role among its
+    // owners starts a plain worker. A hand whose spawner acts for the role is
+    // the role's start (role_started), stamped on every team.
+    // The gate reads the flag on the spawner, the role acting; who owns the
+    // new session reads it on the new row (below).
+    const ownersModel = !!spawner && await ownersModelOn(ctx, spawner);
+    const spawnerActs = !!spawner && actsForRole(spawner);
+    const roleGate = ownersModel && !spawnerActs ? null : await gateHandStart(ctx, spawner);
+    const roleStarted = !!roleGate && spawnerActs;
     // A hand is a worker of the session that started it: nested under it, so
     // its settle wakes that session (workerSettle.tellParent) and the session
     // reads and steers it like any worker. Its prompt is the spawner's brief,
@@ -512,6 +527,7 @@ export const createSessionFromCli = mutation({
       // never waits for a slot behind the machine's other workers.
       fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
+      roleStarted,
     });
     // A cloud spawn (`cast spawn --cloud`) under a team policy with cloud
     // hosts off: refused after the insert, which the throw rolls back, so the
@@ -519,8 +535,9 @@ export const createSessionFromCli = mutation({
     if (args.cloud_device_id || args.cloud_seed) {
       await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", await ctx.db.get(conversationId)), apiToken: args.api_token }, "cloud_hosts_disabled");
     }
-    if (subagentFields) await inheritRunOwners(ctx, subagentFields.parent_conversation_id, conversationId);
-    if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
+    // A role's own hand takes no person owner from its run under the feature: it is the role's.
+    if (subagentFields && !(roleStarted && await ownersModelOn(ctx, await ctx.db.get(conversationId)))) await inheritRunOwners(ctx, subagentFields.parent_conversation_id, conversationId);
+    if (roleGate) await recordHandStart(ctx, roleGate, conversationId, roleStarted);
     if (roleGate || args.unattended) await ctx.db.patch(conversationId, { unattended: true });
     if (review) {
       await ctx.db.patch(conversationId, { review_of_task_id: review.task._id });
@@ -620,9 +637,11 @@ async function countHand(ctx: { db: any }, role: any): Promise<void> {
   await ctx.db.patch(role._id, { counters: { ...counters, hands: counters.hands + 1 }, updated_at: now });
 }
 
-export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">): Promise<void> {
+// `roleStarted`: the role itself started it (a hand whose spawner acts for
+// the role, or a line run), not a person's session filed under it.
+export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">, roleStarted: boolean): Promise<void> {
   await countHand(ctx, role);
-  await ctx.db.patch(conversationId, { org_role_id: role._id, org_role_hold: "filed" });
+  await ctx.db.patch(conversationId, { org_role_id: role._id, org_role_hold: "filed", ...(roleStarted ? { role_started: true } : {}) });
 }
 
 /** The first line of the briefing hands were started with until 2026-11-19;

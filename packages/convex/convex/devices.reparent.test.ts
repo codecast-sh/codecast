@@ -186,6 +186,17 @@ describe("performReparentSessionToDevice", () => {
       expect(conv(db).owner_device_id).toBe("mydev");
     });
 
+    test("under session_owners the person who started it keeps a row of their own; off, no row is written", async () => {
+      for (const on of [true, false]) {
+        const db = teamFixtures([JASON, ME]);
+        db._tables.teams = [{ _id: TEAM, name: "T", features: on ? { session_owners: true } : {} }];
+        await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+        const rows = db._tables.session_owners.map((r: any) => r.user_id);
+        expect(rows).toEqual(on ? [JASON] : []);
+        if (on) expect(conv(db).owners_changed_at).toBeGreaterThan(0);
+      }
+    });
+
     test("a bot caller does not get the team path — bots can't claim, so they can't pull", async () => {
       const db = teamFixtures([JASON, ME]);
       db._tables.users.find((u: any) => u._id === ME).is_bot = true;

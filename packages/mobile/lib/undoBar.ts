@@ -28,9 +28,29 @@ export type UndoBarItem = {
   onUndo?: () => void;
 };
 
-type UndoBarState = { item: UndoBarItem | null; heldKillId: string | null };
+type UndoBarState = {
+  item: UndoBarItem | null;
+  heldKillId: string | null;
+  /** The window y of the top of a screen's docked stack (a conversation's
+   *  composer and what rides the keyboard with it): the bar sits above it.
+   *  Null with no such screen focused: the bar sits over the tab bar. */
+  dockTop: number | null;
+};
 
-export const useUndoBar = create<UndoBarState>(() => ({ item: null, heldKillId: null }));
+export const useUndoBar = create<UndoBarState>(() => ({ item: null, heldKillId: null, dockTop: null }));
+
+/** A focused screen with a composer reports its docked stack's top, and null when it blurs. */
+export function setUndoBarDock(top: number | null) {
+  if (useUndoBar.getState().dockTop !== top) useUndoBar.setState({ dockTop: top });
+}
+
+/** How far above its host's bottom the bar sits to clear a docked stack whose
+ *  top is at `dockTop`, both in window coordinates: the host's own bottom, not
+ *  the window's height, which on Android edge-to-edge includes the navigation
+ *  bar below the root. */
+export function undoBarLift(hostBottom: number, dockTop: number): number {
+  return Math.max(0, hostBottom - dockTop);
+}
 
 let shown = 0;
 let held: { id: string; key: number; timer: ReturnType<typeof setTimeout> } | null = null;
@@ -80,12 +100,15 @@ export function holdKill(id: string) {
   useUndoBar.setState({ heldKillId: id });
 }
 
+/** A gesture's bar with Undo, which takes back the history entry `entryId`. */
+export function showUndo(label: string, entryId: string) {
+  const [title, note] = splitLabelNote(label);
+  show({ title, note, durationMs: UNDO_BAR_MS, tone: 'quiet', onUndo: () => { undoEntry(entryId); } });
+}
+
 setUndoNotifier({
   notify: showNotice,
-  notifyWithUndo: (label, entryId) => {
-    const [title, note] = splitLabelNote(label);
-    show({ title, note, durationMs: UNDO_BAR_MS, tone: 'quiet', onUndo: () => { undoEntry(entryId); } });
-  },
+  notifyWithUndo: showUndo,
 });
 
 // An account boundary: the history is gone, and a kill held for the account

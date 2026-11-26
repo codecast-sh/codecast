@@ -8,6 +8,7 @@ import type { IdentityPrefs, IdentityRow } from "../../lib/sessionIdentity";
 import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import type { SessionShip } from "../../lib/ship/sessionShip";
 import type { LinkedPr } from "../../lib/sessionPullRequests";
+import type { CoOwners } from "../../lib/coOwners";
 
 // The props of the inbox session card (SessionCardView): the row, its chrome
 // toggles, its live facts and the handlers every gesture leaves through.
@@ -115,6 +116,11 @@ export type SessionCardViewProps = {
   viewers: any[];
   /** The title of the session that spawned this one. */
   spawnedByTitle: string | null;
+  /** Under the owners model, who answers its wait (lib/withOwner): the card
+   *  says "With <owner>" where it says Working. Null otherwise. */
+  withOwner?: string | null;
+  /** Under the owners model, the session's other owners, drawn as faces beside the time (lib/coOwners). */
+  coOwners?: CoOwners | null;
   anchorIdentity: AnchorIdentity | null;
   /** The cloud host a worktree runs on; a local worktree needs no host. */
   runHost?: Device | null;

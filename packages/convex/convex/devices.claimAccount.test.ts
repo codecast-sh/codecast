@@ -52,6 +52,17 @@ function fixtures(over: { prevSeen?: number; conv?: Record<string, any> } = {}) 
 const conv = (db: any, id = "conv1") => db._tables.conversations.find((c: any) => c._id === id);
 
 describe("performClaimDeviceAccount", () => {
+  test("under session_owners the person who started a moved session keeps a row of their own", async () => {
+    for (const on of [true, false]) {
+      const db = fixtures();
+      db._tables.teams = [{ _id: TEAM, name: "T", features: on ? { session_owners: true } : {} }];
+      db._tables.session_owners = [];
+      await performClaimDeviceAccount({ db }, NEXT as any, { previousUserId: PREV as any, deviceId: "mini" }, NOW);
+      expect(conv(db).user_id).toBe(NEXT);
+      expect(db._tables.session_owners.map((r: any) => r.user_id)).toEqual(on ? [PREV] : []);
+    }
+  });
+
   test("sessions this device owns move to the new account without a resume", async () => {
     const db = fixtures();
     const result = await performClaimDeviceAccount({ db }, NEXT as any, {
