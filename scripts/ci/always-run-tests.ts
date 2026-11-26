@@ -17,6 +17,7 @@
 // still run these files too when they run.
 //
 // `bun scripts/ci/always-run-tests.ts` runs them; `--list` prints them.
+// `bun scripts/ci/local.ts` runs them and the CI jobs a branch's changes gate on, on a laptop, before a push.
 
 import { join, relative } from "node:path";
 import { crossingTests, jobTestFiles, TREE_WIDE_TEST } from "./test-reach";
