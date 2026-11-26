@@ -70,7 +70,8 @@ function RedirectToInbox({
         highlightQuery: highlightQuery ?? null,
       });
     } else {
-      store.navigateToSession(id);
+      // A linked open: a teammate's session is shown, not made current (opensAsPeek).
+      store.navigateToSession(id, "gesture", { linked: true });
     }
     // Hand the target id to the inbox via its durable `?s=` deep-link param rather
     // than relying solely on the transient `pendingNavigateId` store flag. When this
