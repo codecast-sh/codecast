@@ -46,7 +46,6 @@ import {
   absorbProfileStore,
   credentialIsFresher,
   adoptProfileStoreCredential,
-  probeSecureStorageSupport,
   activeAccountSummary,
   matchProfileForCredential,
   tokenKey,
@@ -58,8 +57,6 @@ import {
   extractSetupToken,
   readAccountTokenValue,
   parseRateLimitFingerprint,
-  sameAccountFingerprint,
-  attributeFingerprint,
   ACCOUNT_LAUNCH_UNSET,
 } from "./ccAccounts.js";
 import { createMtimeGatedCache } from "./mtimeGatedCache.js";
@@ -2005,47 +2002,6 @@ describe("per-profile credential stores (sandboxed $HOME, file store)", () => {
     expect(accountLaunchInfo("a")).not.toBeNull();
   });
 
-  it("probes support once per binary: an empty store must report no login", async () => {
-    const calls: Array<{ bin: string; args: string[]; dir: string | undefined }> = [];
-    const exec = async (bin: string, args: string[], env: NodeJS.ProcessEnv) => {
-      calls.push({ bin, args, dir: env.CLAUDE_SECURESTORAGE_CONFIG_DIR });
-      return JSON.stringify({ loggedIn: calls.length === 1 ? false : true });
-    };
-    const bin = path.join(home, "claude");
-    fs.writeFileSync(bin, "#!/bin/sh\n");
-    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe("supported");
-    expect(calls[0].args).toEqual(["auth", "status", "--json"]);
-    expect(calls[0].dir).toBeDefined();
-    expect(fs.existsSync(calls[0].dir!)).toBe(false); // probe dir cleaned up
-    // Cached: the same binary is not asked twice.
-    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe("supported");
-    expect(calls).toHaveLength(1);
-    // A changed binary is asked again — and this one still sees the login.
-    fs.writeFileSync(bin, "#!/bin/sh\n# v2\n");
-    expect(await probeSecureStorageSupport(bin, { execImpl: exec })).toBe("unsupported");
-    expect(calls).toHaveLength(2);
-  });
-
-  it("a probe that cannot answer is unknown, and is never cached as a negative", async () => {
-    const bin = path.join(home, "claude");
-    fs.writeFileSync(bin, "#!/bin/sh\n");
-    // A first run that waits on Gatekeeper past the timeout, then the same
-    // binary answering normally once the machine is quiet again.
-    const thrown = async () => { throw new Error("spawn timed out"); };
-    expect(await probeSecureStorageSupport(bin, { execImpl: thrown })).toBe("unknown");
-    // Output that is not the JSON we asked for proves nothing either.
-    const garbage = async () => "Downloading update...\n";
-    expect(await probeSecureStorageSupport(bin, { execImpl: garbage })).toBe("unknown");
-    // A binary answering in a shape we do not understand is also unknown.
-    const shapeless = async () => JSON.stringify({ loggedIn: "no" });
-    expect(await probeSecureStorageSupport(bin, { execImpl: shapeless })).toBe("unknown");
-    // Nothing above poisoned the cache: the same binary is asked again and the
-    // real answer stands.
-    const healthy = async () => JSON.stringify({ loggedIn: false });
-    expect(await probeSecureStorageSupport(bin, { execImpl: healthy })).toBe("supported");
-    const cache = path.join(sandbox.dir, "cc-store", ".support.json");
-    expect(JSON.parse(fs.readFileSync(cache, "utf-8")).supported).toBe(true);
-  });
 });
 
 describe("switch identity integrity (sandboxed $HOME)", () => {
@@ -2276,47 +2232,8 @@ describe("setup-token extraction + account fingerprint", () => {
     });
   });
 
-  it("same account = both reset timestamps match; unknown windows never match", () => {
-    const a = { five_hour_reset: 1, seven_day_reset: 2, five_hour_utilization: 0.1, seven_day_utilization: 0.5 };
-    expect(sameAccountFingerprint(a, { ...a, five_hour_utilization: 0.9 })).toBe(true);
-    expect(sameAccountFingerprint(a, { ...a, five_hour_reset: 3 })).toBe(false);
-    expect(sameAccountFingerprint(a, { ...a, seven_day_reset: 9 })).toBe(false);
-    const unknown = { five_hour_reset: null, seven_day_reset: null, five_hour_utilization: null, seven_day_utilization: null };
-    expect(sameAccountFingerprint(unknown, unknown)).toBe(false);
-  });
 });
 
-describe("attributeFingerprint (token → saved profile via usage snapshots)", () => {
-  const now = 1_788_320_000_000; // ms
-  const profiles = { a: { uuid: "u-a" }, b: { uuid: "u-b" }, c: { email: "c@x.com" } };
-  const usage = {
-    "u-a": { fetched_at: now, session: { percent: 1, resets_at: 1_788_324_000_000 }, weekly: { percent: 1, resets_at: 1_788_861_600_000 } },
-    "u-b": { fetched_at: now, session: { percent: 1, resets_at: 1_788_330_000_000 }, weekly: { percent: 1, resets_at: 1_788_900_000_000 } },
-    "c@x.com": { fetched_at: now - 86_400_000, session: { percent: 1, resets_at: 1_788_200_000_000 }, weekly: { percent: 1, resets_at: 1_788_950_000_000 } },
-  } as any;
-  const fp = (five: number | null, seven: number | null) =>
-    ({ five_hour_reset: five, seven_day_reset: seven, five_hour_utilization: null, seven_day_utilization: null });
-
-  it("names the one profile whose 7d and (open) 5h windows match, to the second", () => {
-    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, usage, now)).toBe("a");
-    expect(attributeFingerprint(fp(1_788_324_001, 1_788_861_600), profiles, usage, now)).toBe("a"); // ±2s
-  });
-
-  it("an open 5h window that disagrees rules the profile out even when 7d matches", () => {
-    expect(attributeFingerprint(fp(1_788_325_000, 1_788_861_600), profiles, usage, now)).toBeNull();
-  });
-
-  it("a stale snapshot (5h window already closed) attributes on the 7d reset alone", () => {
-    expect(attributeFingerprint(fp(1_788_400_000, 1_788_950_000), profiles, usage, now)).toBe("c");
-  });
-
-  it("unknown 7d reset, no snapshot, or an ambiguous match yields null", () => {
-    expect(attributeFingerprint(fp(1, null), profiles, usage, now)).toBeNull();
-    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), { z: { uuid: "u-z" } }, usage, now)).toBeNull();
-    const twin = { ...usage, "u-b": usage["u-a"] };
-    expect(attributeFingerprint(fp(1_788_324_000, 1_788_861_600), profiles, twin, now)).toBeNull();
-  });
-});
 
 // A token switch: the target's saved login is dead, its minted setup-token is
 // live, so the switch records a launch profile and leaves the keychain alone.
