@@ -4383,6 +4383,26 @@ const ConversationViewInner = (
   // keeps a readout and takes the control back only when the composer is gone.
   // The new-session page picks these in its own foot (NewSessionView).
   const composerHostsControl = ownerComposerMounted && !(inRevealBand && !bandComposerOpen) && !newSessionPage && !isHostedConv;
+  // The past-messages navigator hangs over the top of the feed, never inside
+  // the header: a hidden header (hideHeader, a role seat folded at rest) must
+  // not take it along. The drop clears the sticky prompt card, so a feed
+  // without one keeps it near the top. z-20: over the sticky card (z-15),
+  // under the Ask panel (z-25) whose close button it would otherwise cover.
+  const messageNav = conversation ? (
+    <div data-cc-message-nav className={`absolute top-0 right-3 z-20 ${stickyDisabled ? "mt-3" : "mt-24"}`}>
+      <MessageNavButton
+        conversationId={conversation._id}
+        senders={senderContext}
+        currentMessageId={navigatorCurrentId ?? activeStickyMsg?.id ?? null}
+        loadedMessages={messages}
+        scrollProgress={navScrollProgress}
+        onScrollToMessage={(messageId) => {
+          setNavigatorCurrentId(messageId);
+          scrollToMessageById(messageId);
+        }}
+      />
+    </div>
+  ) : null;
   const threadStatePanel = conversation ? (
     <div data-cc-thread-state>
       <SessionGoalPill conversationId={conversation._id.toString()} sessionTitle={conversation.title || "This session"} canSteer={effectiveIsOwner} />
@@ -5042,21 +5062,6 @@ const ConversationViewInner = (
           {conversation?._id && !guest && isOwner && <PeerTransferStrip conversationId={conversation._id} onRetry={handleRestartSession} />}
         </>}
       >
-        {conversation && (
-          <div className="absolute top-full right-3 mt-24 z-30">
-            <MessageNavButton
-              conversationId={conversation._id}
-              senders={senderContext}
-              currentMessageId={navigatorCurrentId ?? activeStickyMsg?.id ?? null}
-              loadedMessages={messages}
-              scrollProgress={navScrollProgress}
-              onScrollToMessage={(messageId) => {
-                setNavigatorCurrentId(messageId);
-                scrollToMessageById(messageId);
-              }}
-            />
-          </div>
-        )}
         {/* Live tmux view (opened from the tmux pill), docked across the top,
             above the trigger/plan/workflow strips in subHeaderContent.
             INSIDE the header on purpose: headerHeight's ResizeObserver counts
@@ -5214,6 +5219,7 @@ const ConversationViewInner = (
         </ErrorBoundary>
       )}
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>
+      {messageNav}
       {(isJumpingToTarget || (targetMessageId && timeline.length === 0)) && (
         <div
           className="absolute inset-x-0 z-20 flex justify-center pt-3 sm:pt-4 pointer-events-none"

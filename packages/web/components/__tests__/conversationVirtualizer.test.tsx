@@ -13,5 +13,5 @@ test("transcript resizing preserves geometry and progress without redundant rend
     new Response(child.stderr).text(),
   ]);
   expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
-  expect(stderr).toContain("5 pass");
+  expect(stderr).toContain("6 pass");
 }, 250_000);
