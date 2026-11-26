@@ -336,6 +336,27 @@ describe("a fork, spawn worker or handoff takes its parent's strength", () => {
     }
   });
 
+  test("a workflow's station, or a session under a run log, follows the person's placement only at the pass's strength", async () => {
+    const w = await classifierWorld();
+    const runRow = await w.t.run((ctx) => ctx.db.insert("workflow_runs", { user_id: w.ana, status: "running", created_at: 1 } as any));
+    const make = (ctx: any, short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+      user_id: w.ana, agent_type: "claude_code", session_id: short_id, short_id, team_id: w.acme, is_private: false, team_visibility: "full",
+      started_at: 1, updated_at: 1, message_count: 1, status: "active", ...fields,
+    } as any);
+    const kids = await w.t.run(async (ctx: any) => {
+      await ctx.db.patch(w.teamConv, { priority_id: w.grader, priority_step_key: "s1", priority_set_by: "person" });
+      const station = await make(ctx, "jx7stn1", { parent_conversation_id: w.teamConv, workflow_run_id: runRow, is_workflow_sub: true });
+      const log = await make(ctx, "jx7log1", { workflow_run_id: runRow, is_workflow_primary: true, priority_id: w.grader, priority_step_key: "s1", priority_set_by: "person" });
+      const underLog = await make(ctx, "jx7und1", { parent_conversation_id: log });
+      for (const [child, parent] of [[station, w.teamConv], [underLog, log]] as const) expect(await inheritLink(ctx, child, parent, w.ana)).toBe(true);
+      return [station, underLog];
+    });
+    for (const id of kids) {
+      const conv = await w.conversation(id);
+      expect([conv?.priority_id, conv?.priority_step_key, conv?.priority_set_by]).toEqual([w.grader, "s1", undefined]);
+    }
+  });
+
   test("a fork of a session the pass placed is the pass's to move", async () => {
     const w = await classifierWorld();
     const child = await w.t.run(async (ctx: any) => {

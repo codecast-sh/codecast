@@ -35,6 +35,7 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { PriorityRef } from "@codecast/shared/contracts/priorities";
+import { isRunLog } from "@codecast/shared/contracts";
 import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
 import { stepDone } from "./priorityPass";
 import { sessionVisibility } from "./prioritySessionVisibility";
@@ -424,8 +425,8 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
  * A fork, a `cast spawn` worker or a handoff of `parentId` starts under the
  * parent's priority and milestone, as strongly as the parent holds it: the
  * person's placement or a known link becomes a known link, the classifier's
- * stays the classifier's, and the pass's stays the pass's to move. A
- * Task-tool subagent the daemon syncs does not: it rolls up under its parent
+ * stays the classifier's, and the pass's stays the pass's to move; a
+ * workflow's station or run only ever the pass's. A Task-tool subagent the daemon syncs does not: it rolls up under its parent
  * and is never counted on its own.
  */
 export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parentId: Id<"conversations"> | undefined, ownerId: Id<"users">): Promise<boolean> {
@@ -434,6 +435,9 @@ export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parent
   const parent: Conv | null = await ctx.db.get(parentId);
   if (!parent?.priority_id) return false;
   const child: Conv | null = await ctx.db.get(childId);
-  const by: LinkedBy = parent.priority_set_by === "person" || parent.priority_set_by === "link" ? "link" : parent.priority_set_by === "classifier" ? "classifier" : "pass";
-  return !!child && linkSession(ctx, child, parent.priority_id, parent.priority_step_key, by);
+  if (!child) return false;
+  // A workflow's own session (a station, or the run under a run log) follows at the pass's strength: it never anchors a milestone.
+  const workflow = !!child.workflow_run_id || !!child.is_workflow_sub || !!child.is_workflow_primary || isRunLog(parent) || !!parent.is_workflow_sub;
+  const by: LinkedBy = workflow ? "pass" : parent.priority_set_by === "person" || parent.priority_set_by === "link" ? "link" : parent.priority_set_by === "classifier" ? "classifier" : "pass";
+  return linkSession(ctx, child, parent.priority_id, parent.priority_step_key, by);
 }
