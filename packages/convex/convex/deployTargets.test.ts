@@ -153,6 +153,11 @@ describe("the waiting queue (DP12)", () => {
       ["none", [["05", "running"]], "running"],
     ]);
     expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals", user_id: "user_me" });
+    // Main's order rides each commit, and a branch looked up and not found reads null, never absent.
+    for (const c of backend.queue.groups.flatMap((g: any) => g.commits)) {
+      expect(typeof c.main_at).toBe("number");
+      expect("branch" in c).toBe(true);
+    }
     expect(backend.queue.groups[0].commits[1].tasks).toEqual([{ task_id: "task_a", short_id: "ct-7", title: "Totals round wrong" }]);
     expect(backend.queue.groups[0].commits[0].ci_url).toBe("https://ci/2");
   });

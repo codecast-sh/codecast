@@ -23,7 +23,7 @@ const checkout = (over: Partial<CheckoutRow> & Pick<CheckoutRow, "path" | "branc
   ...over,
 });
 const pr = (over: Partial<ChangePullRequest> & Pick<ChangePullRequest, "number">): ChangePullRequest => ({ repository: repo, state: "open", updated_at: now - MIN, created_at: now - MIN, ...over });
-const queued = (sha: string, author: string | null): QueueCommit => ({ sha, subject: `commit ${sha}`, at: now - 20 * MIN, author, session: null, tasks: [], ci: "passed", ci_url: null });
+const queued = (sha: string, author: string | null): QueueCommit => ({ sha, subject: `commit ${sha}`, at: now - 20 * MIN, main_at: now - 20 * MIN, author, session: null, tasks: [], ci: "passed", ci_url: null });
 
 const jason: ChangeViewer = { userId: "u-jason", login: "JasonBenn", name: "Jason Benn", devices: new Set(["dev-jason"]) };
 const owners: Record<string, string[]> = { "c-jason": ["u-jason"], "c-ashot": ["u-ashot"] };

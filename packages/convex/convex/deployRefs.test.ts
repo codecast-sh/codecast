@@ -49,6 +49,8 @@ function ctxAs(userId: string, o: { priorities?: boolean } = {}) {
         { sha: SHA_A, subject: "one", conversation_id: "conv_open", task_ids: ["task_team"] },
         { sha: SHA_B, subject: "two (#42)", conversation_id: "conv_private", task_ids: ["task_private"] },
         { sha: SHA_C, subject: "three", conversation_id: "conv_private" },
+        // Recorded on the deploy but never seen on main: nothing to read its branch from.
+        { sha: "d".repeat(40), subject: "four", conversation_id: "conv_open", task_ids: ["task_team"] },
       ],
     }],
   });
@@ -77,7 +79,7 @@ describe("deployRefs.recentForTeam", () => {
 
   test("each session names its owner; a session the viewer may not read names nobody", async () => {
     const [mate] = await run(ANA);
-    expect(mate.sessions).toEqual([{ conversation_id: "conv_open", short_id: "conv_op", title: "Shared fix", user_id: BEN }]);
+    expect(mate.sessions).toEqual([{ conversation_id: "conv_open", short_id: "conv_op", title: "Shared fix", user_id: BEN, task_short_ids: ["ct-1"] }]);
     const [own] = await run(BEN);
     expect(own.sessions.map((s: any) => s.user_id)).toEqual([BEN, BEN]);
   });
@@ -101,6 +103,20 @@ describe("deployRefs.recentForTeam", () => {
     expect(c.insertions).toBeUndefined();
     expect(c.deletions).toBeUndefined();
     expect(c).toMatchObject({ pr_number: null, branch: "ben/secret" });
+  });
+
+  test("each session names the tasks its commits carry, only those the viewer may read", async () => {
+    const [own] = await run(BEN);
+    expect(own.sessions.find((x: any) => x.conversation_id === "conv_private").task_short_ids).toEqual(["ct-2"]);
+    expect(own.sessions.find((x: any) => x.conversation_id === "conv_open").task_short_ids).toEqual(["ct-1"]);
+  });
+
+  test("a commit looked up with no branch says null; one codecast never saw on main says nothing", async () => {
+    const [d] = await run(BEN);
+    expect("branch" in d.commit_rows[2]).toBe(true);
+    expect(d.commit_rows[2].branch).toBe("ben/secret");
+    expect(d.commit_rows[0].branch).toBeNull();
+    expect("branch" in d.commit_rows[3]).toBe(false);
   });
 
   test("a session's branch is never read for a viewer who may not read that session", async () => {

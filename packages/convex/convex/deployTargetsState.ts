@@ -111,6 +111,8 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     sha: c.sha,
     subject: c.message.split("\n")[0].slice(0, 200),
     at: c.main_at ?? c.timestamp,
+    // Queue commits come off main's order (mainCommitsAfter reads by_repository_main past a main_at), so every one has it.
+    main_at: c.main_at!,
     author: c.author_login ?? c.author_name ?? null,
     session,
     tasks,

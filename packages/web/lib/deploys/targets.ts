@@ -102,8 +102,11 @@ export type TeamDeployRow = {
   finished_at: number | null;
 } & Partial<DeployPushSummary>;
 
-/** `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may read it. */
-export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null; user_id?: string; priority?: { id: string; title: string | null } };
+/**
+ * `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may
+ * read it. `task_short_ids`: the tasks this session's commits in the deploy name, every commit counted.
+ */
+export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null; user_id?: string; priority?: { id: string; title: string | null }; task_short_ids?: string[] };
 
 /** Who sent a deploy codecast did not start, by where it reports from. */
 export function sourceWord(d: Pick<TeamDeployRow, "source" | "url">): string {

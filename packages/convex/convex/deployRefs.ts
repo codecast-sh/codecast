@@ -78,7 +78,16 @@ export const recentForTeam = query({
       const sessions = [];
       for (const id of sessionIds.slice(0, SESSION_ROWS)) {
         const c = await convOf(id as Id<"conversations">);
-        if (c) sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, ...(c.priority ? { priority: c.priority } : {}) });
+        if (!c) continue;
+        // The tasks this session's commits in the deploy name, every commit counted (not only the listed rows): how the
+        // page credits a flow's station session ("Review · ct-N") to the session that pressed Ship.
+        const taskIdsHere = [...new Set((d.commits ?? []).flatMap((x) => (String(x.conversation_id) === id ? (x.task_ids ?? []).map(String) : [])))];
+        const task_short_ids: string[] = [];
+        for (const t of taskIdsHere) {
+          const short = (await taskOf(t as Id<"tasks">))?.short_id;
+          if (short) task_short_ids.push(short);
+        }
+        sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, ...(c.priority ? { priority: c.priority } : {}), task_short_ids });
       }
       const taskIds = [...new Set([...d.carries.map((c) => String(c.task_id)), ...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String))])];
       const taskRows = [];

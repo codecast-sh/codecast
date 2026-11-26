@@ -375,9 +375,61 @@ export type QueueCommit = {
   deletions?: number;
   /** The pull request it came from: its own record, its linked pull request, else the "(#N)" its subject names. */
   pr_number?: number | null;
+  /** Its place in main's order (commits.main_at): the queue's order, never committer time. */
+  main_at: number;
   ci: CommitCiState;
   ci_url: string | null;
 };
+
+/** One Ship run still on its way to main, as the Deploys page's Shipping column reads it (workflow_runs.shippingRuns). */
+export type ShippingRun = {
+  _id: string;
+  status: "running" | "paused" | "failed" | "pending";
+  task_id: string | null;
+  task_short_id: string | null;
+  task_title: string | null;
+  workflow_slug: string | null;
+  workflow_label: string | null;
+  current_node_id: string | null;
+  current_node_label: string | null;
+  node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed" }>;
+  pr: { repository: string; number: number; first_head_sha: string; head_sha: string; at: number } | null;
+  fail_reason: string | null;
+  /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
+  ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
+  review_verdict?: { verdict: string; at: number } | null;
+  merge?: { sha: string; branch: string; into: string; at: number; pr_url?: string } | null;
+  gate_prompt: string | null;
+  gate_decision_short_id: string | null;
+  gate_decision_status: string | null;
+  spawner_conversation_id: string | null;
+  /** The session that pressed Ship: its title, only for a viewer who may read it. */
+  spawner_title: string | null;
+  primary_conversation_id: string | null;
+  project_path: string | null;
+  user_id: string;
+  created_at: number;
+  updated_at: number;
+};
+
+/**
+ * Who pressed Ship on a change run of the last 30 days, any status (merged ones included): the page credits a commit
+ * on main to that session, by `merged_sha` exactly, else by its task. `spawner_title` and `user_id` (the session's
+ * owner) only for a viewer who may read the session; `stand_in`: no session started the run, the spawner is the
+ * project lead's standing session.
+ */
+export type ShippingShipper = {
+  run_id: string;
+  task_short_id: string | null;
+  merged_sha: string | null;
+  spawner_conversation_id: string | null;
+  spawner_title: string | null;
+  user_id: string | null;
+  stand_in: boolean;
+  created_at: number;
+};
+
+export type ShippingRuns = { runs: ShippingRun[]; shippers?: ShippingShipper[] };
 
 export type QueueGroup = {
   /** "s:<conversation id>" for one session's commits, "none" for commits no session claims. */
