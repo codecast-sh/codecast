@@ -4,7 +4,8 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff, Square, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
-import { withSafetyBlock, isClosedSession, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isClosedHidden, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import { closedBackWords } from "../../lib/sessionClose";
 import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatIdleDuration, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -502,7 +503,7 @@ export function SessionCardView({
             </span>
           )}
           {isStashed && isStashHidden(session) && (
-            <span className="flex-shrink-0 flex items-center text-sol-text-dim" title="Stashed and hidden — trigger wakes don't bring it back; only an ask does">
+            <span className="flex-shrink-0 flex items-center text-sol-text-dim" title={isClosedHidden(session) ? `Closed: ${closedBackWords(session)}` : "Stashed and hidden: wakes don't bring it back; only an ask does"}>
               <EyeOff className="w-3 h-3" />
             </span>
           )}

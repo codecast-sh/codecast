@@ -1,3 +1,4 @@
+import { formatSessionMessage } from "@codecast/shared/contracts";
 import { describe, expect, test } from "bun:test";
 import type { Id } from "./_generated/dataModel";
 import { makeFakeDb } from "./testDb";
@@ -1429,6 +1430,27 @@ describe("conversation-global ordered delivery", () => {
       const resent = await abandonAmbiguousAndResendInDb(ctx, USER, { ...fence(started), newClientId: "handover-again", resolutionEvidence: "user accepted duplicate-effect risk", now: 23 });
       expect(((await db.get(resent.messageId)) as any).quiet).toBe(quiet || undefined);
       expect(((await db.get(CONVERSATION)) as any).inbox_stashed_at).toBe(quiet ? 50 : undefined);
+    }
+  });
+
+  // The same hide rule as the send (wakeHideFields): another session's message
+  // runs a closed session out of sight; a person's brings it back.
+  test("a risk resend into a closed session follows the send's rule: a session message keeps it hidden, a person's shows it", async () => {
+    for (const human of [false, true]) {
+      const db = makeFakeDb(tables());
+      const ctx = await initializeAndReady(db);
+      const content = formatSessionMessage("jx7work", "Report: CI is green");
+      const originalId = await enqueuePendingMessage(ctx, await db.get(CONVERSATION), USER, { content, client_id: "report", human });
+      const claimed = await claimDelivery(ctx, originalId);
+      const started = await startDeliveryInDb(ctx, USER, { ...fence(claimed.permit), now: 21 });
+      await markDeliveryAmbiguousInDb(ctx, USER, { ...fence(started), failureCode: "ACK_LOST", failureMessage: "the turn may have landed", now: 22 });
+      await db.patch(CONVERSATION, { inbox_dismissed_at: 40, inbox_closed_at: 40, inbox_stashed_at: undefined, inbox_stash_hidden: undefined });
+
+      const resent = await abandonAmbiguousAndResendInDb(ctx, USER, { ...fence(started), newClientId: "report-again", resolutionEvidence: "user accepted duplicate-effect risk", now: 23 });
+      expect(((await db.get(resent.messageId)) as any).human).toBe(human || undefined);
+      const conv = (await db.get(CONVERSATION)) as any;
+      expect(conv.inbox_stashed_at).toBe(human ? undefined : 40);
+      expect(conv.inbox_dismissed_at).toBeUndefined();
     }
   });
 });

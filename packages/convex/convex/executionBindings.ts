@@ -2089,6 +2089,8 @@ export async function abandonAmbiguousAndResendInDb(
     imageStorageIds: message.image_storage_ids,
     clientId: fence.newClientId,
     origin: message.origin,
+    // Who sent it decides whether it shows a hidden session (isMachineWake).
+    human: message.human,
     createdAt: fence.now,
     delivery: allocation,
     quiet: message.quiet,

@@ -3124,7 +3124,7 @@ program
     const grouped = result.cascaded_children
       ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
       : "";
-    const wake = opts.hide ? "stays hidden through trigger wakes" : "returns on the next trigger wake";
+    const wake = opts.hide ? "stays hidden through trigger wakes and session messages" : "returns on the next trigger wake";
     if (result.outcome === "viewer_hide") {
       // A teammate's session: out of YOUR board only; the runner still sees it.
       console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset}${c.dim}: a teammate's session, hidden from your team board only; their inbox and the agent are untouched (cast restore ${result.short_id} to bring back)${c.reset}`);

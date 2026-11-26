@@ -42,7 +42,10 @@ type HideFields = ClosedFields & { inbox_stashed_at?: number | null; inbox_stash
  *  a team session): the close becomes a hidden stash stamped with the close,
  *  so the agent runs out of sight (isClosedHidden). Null when it is no close. */
 export function closeWakeFields(row: HideFields): { inbox_dismissed_at: undefined; inbox_stashed_at: number; inbox_stash_hidden: true } | null {
-  return isClosedSession(row) ? { inbox_dismissed_at: undefined, inbox_stashed_at: row.inbox_closed_at!, inbox_stash_hidden: true } : null;
+  if (!isClosedSession(row)) return null;
+  // A person's own "Stash and hide" over the close wins: it keeps its stamp.
+  if (row.inbox_stash_hidden && row.inbox_stashed_at && row.inbox_stashed_at !== row.inbox_closed_at) return null;
+  return { inbox_dismissed_at: undefined, inbox_stashed_at: row.inbox_closed_at!, inbox_stash_hidden: true };
 }
 
 /** What a pinned thread state writes over a hidden session (performSetThreadState,

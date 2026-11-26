@@ -11,7 +11,7 @@ const trigger = (title: string, status = "scheduled"): TaskRow =>
 
 describe("the line under the menu's Close", () => {
   test("says the web tooltip's words without repeating Close", () => {
-    expect(closeDetail(settled, {}, NOW)).toBe("Stops it, back when it reports done or needs you");
+    expect(closeDetail(settled, {}, NOW)).toBe("Stops it, clears it from the list");
   });
 
   test("counts the armed triggers from the store's roster", () => {
@@ -39,7 +39,7 @@ describe("the line under the menu's Close", () => {
   test("a lead with finished subagents names them; a spawned child stays up, uncounted", () => {
     const kid = (id: string, sessionId: string) => ({ _id: id, session_id: sessionId, message_count: 3, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000, is_subagent: true, parent_conversation_id: ID });
     const sessions = { a: kid("a", "agent-a0a0a031"), b: kid("b", "agent-a0a0a032"), c: kid("c", "ca19ce3d-spawned") };
-    expect(closeDetail(settled, { sessions }, NOW)).toBe("Stops it and the 2 agents under it, back when it reports done or needs you");
+    expect(closeDetail(settled, { sessions }, NOW)).toBe("Stops it and the 2 agents under it, clears them from the list");
   });
 });
 

@@ -148,6 +148,18 @@ describe("pinning done", () => {
     expect(conv.inbox_stashed_at).toBeGreaterThan(0);
   });
 
+  test("a person's Stash and hide on top of a close keeps its own stamp through a wake, so done leaves it out", async () => {
+    const s = await closed();
+    const at = Date.now() + 10;
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_stashed_at: at, inbox_stash_hidden: true }); });
+    await s.wake({ origin: "scheduler" });
+    expect((await s.read()).conv.inbox_stashed_at).toBe(at);
+    await s.pin("done");
+    const { conv } = await s.read();
+    expect(conv.inbox_stashed_at).toBe(at);
+    expect(conv.inbox_stash_hidden).toBe(true);
+  });
+
   test("an earlier close left on a stash and hide does not mark it as closed", async () => {
     const s = await setup();
     const closedAt = Date.now() - 60_000;

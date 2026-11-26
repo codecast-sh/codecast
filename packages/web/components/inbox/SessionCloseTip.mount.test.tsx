@@ -61,7 +61,7 @@ describe("SessionCloseTip", () => {
 
   test("an idle lead whose spawned child is mid-turn stops alone: the child keeps running", async () => {
     await withKids({ "ca19ce3d-spawned": { agent_status: "working", updated_at: NOW - 1000 } }, async () => {
-      expect(await tip(settled)).toBe("Close: stops it, back when it reports done or needs you");
+      expect(await tip(settled)).toBe("Close: stops it, clears it from the list");
     });
   });
 
@@ -71,7 +71,7 @@ describe("SessionCloseTip", () => {
       "agent-a0a0a0636c6f736564": { inbox_dismissed_at: 5, inbox_closed_at: 5 },
       "ca19ce3d-spawned": {},
     }, async () => {
-      expect(await tip(settled)).toBe("Close: stops it and the 2 agents under it, back when it reports done or needs you");
+      expect(await tip(settled)).toBe("Close: stops it and the 2 agents under it, clears them from the list");
     });
   });
 
@@ -89,6 +89,6 @@ describe("SessionCloseTip", () => {
   });
 
   test("an ordinary finished session", async () => {
-    expect(await tip(settled)).toBe("Close: stops it, back when it reports done or needs you");
+    expect(await tip(settled)).toBe("Close: stops it, clears it from the list");
   });
 });

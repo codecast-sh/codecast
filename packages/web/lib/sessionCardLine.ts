@@ -39,8 +39,10 @@ export type CardLineInput = {
   /** The kept compose draft's text. */
   draft?: string | null;
   hosted?: boolean;
-  /** Stashed and hidden: trigger wakes do not bring it back. */
+  /** Stashed and hidden: machine wakes do not bring it back. */
   stashHidden?: boolean;
+  /** The hidden stash is a Close a machine woke (isClosedHidden): what brings it back. */
+  closedBack?: string;
 };
 
 export type CardLine = {
@@ -114,7 +116,8 @@ function reasonOf(input: CardLineInput): { reason: string | null; reasonTitle?: 
       if (row.user_rest === "done") return { reason: "Filed by you", reasonTitle: "Filed as done until the next wake" };
       return { reason: null };
     case "stashed":
-      return input.stashHidden ? { reason: "Hidden", reasonTitle: "Stashed and hidden: trigger wakes don't bring it back; only an ask does" } : { reason: null };
+      if (input.closedBack) return { reason: "Closed", reasonTitle: `Closed: ${input.closedBack}` };
+      return input.stashHidden ? { reason: "Hidden", reasonTitle: "Stashed and hidden: wakes don't bring it back; only an ask does" } : { reason: null };
     case "killed":
       return { reason: null };
   }

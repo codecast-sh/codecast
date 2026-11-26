@@ -33,7 +33,7 @@ export function HiddenSessionRow({ session, variant, onPress, onRestore, onKill,
             style={{ marginRight: 6 }}
           />
           {variant === "stashed" && session.inbox_stashed_at && session.inbox_stash_hidden ? (
-            // Stash and hide: trigger wakes don't bring it back (web's EyeOff mark).
+            // Stash and hide (or a Close a machine woke): wakes don't bring it back (web's EyeOff mark).
             <FontAwesome name="eye-slash" size={10} color={Theme.textMuted0} style={{ marginRight: 6 }} />
           ) : null}
           <RNText style={styles.dismissedTitle} numberOfLines={1}>

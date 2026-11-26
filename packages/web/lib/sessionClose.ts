@@ -49,12 +49,17 @@ export function closeKindOf(f: CloseFacts): CloseKind {
 /** Close sets it aside (the agent keeps running) instead of stopping it. */
 export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 
+// What brings a closed session back: its agent pinning done (an ordinary
+// session) or blocked (isClosedHidden, performSetThreadState), or a person
+// writing to it.
+const closedBack = (returnsOnDone: boolean) => (returnsOnDone ? "back when it reports done or needs you" : "back when it needs you");
+
+/** The words a closed session a machine woke shows for what brings it back. */
+export const closedBackWords = (row: Parameters<typeof closeReturnsOnDone>[0]) => closedBack(closeReturnsOnDone(row));
+
 export function closeTooltip(f: CloseFacts): string {
   const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
-  // What brings a closed session back: its agent pinning done (an ordinary
-  // session) or blocked (isClosedHidden, performSetThreadState), named by the
-  // or a person writing to it.
-  const back = f.returnsOnDone ? "back when it reports done or needs you" : "back when it needs you";
+  const back = closedBack(f.returnsOnDone);
   switch (closeKindOf(f)) {
     case "aside": return `Close: hides it, ${back}`;
     case "awaiting": return "Close: hides it; it still waits on you";
@@ -67,7 +72,7 @@ export function closeTooltip(f: CloseFacts): string {
       if (f.triggers === 0) return `Close: stops ${them}, ${back}`;
       return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, ${back}`;
     case "waits_on_run": return `Close: stops ${them}, its run goes on, ${back}`;
-    case "clears": return `Close: stops ${them}, ${back}`;
+    case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} from the list`;
   }
 }
 

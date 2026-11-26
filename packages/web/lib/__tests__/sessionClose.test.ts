@@ -61,12 +61,12 @@ describe("what Close does to a session", () => {
 
   test("an ordinary finished session stops and leaves the list", () => {
     expect(closeKindOf(facts())).toBe("clears");
-    expect(closeTooltip(facts())).toBe("Close: stops it, back when it reports done or needs you");
+    expect(closeTooltip(facts())).toBe("Close: stops it, clears it from the list");
   });
 
   test("a stop that takes the agents under it down names them, with the count", () => {
-    expect(closeTooltip(facts({ takesDown: 4 }))).toBe("Close: stops it and the 4 agents under it, back when it reports done or needs you");
-    expect(closeTooltip(facts({ takesDown: 1 }))).toBe("Close: stops it and the agent under it, back when it reports done or needs you");
+    expect(closeTooltip(facts({ takesDown: 4 }))).toBe("Close: stops it and the 4 agents under it, clears them from the list");
+    expect(closeTooltip(facts({ takesDown: 1 }))).toBe("Close: stops it and the agent under it, clears them from the list");
     expect(closeTooltip(facts({ takesDown: 2, triggers: 3 }))).toBe("Close: stops it and the 2 agents under it, runs its 3 triggers out of sight, back when it reports done or needs you");
     expect(closeTooltip(facts({ takesDown: 2, role: true }))).toBe("Close: stops it and the 2 agents under it, back when it needs you");
     expect(closeTooltip(facts({ takesDown: 2, waitingOnRun: true }))).toBe("Close: stops it and the 2 agents under it, its run goes on, back when it reports done or needs you");
@@ -173,6 +173,6 @@ describe("the facts of a row", () => {
     ];
     expect(closeTakesDownOf(rows as any, "lead").map((r: any) => r.session_id)).toEqual(["agent-a0a0a031", "agent-a0a0a032", "agent-a0a0a033", "uuid-mate"]);
     const f = closeFactsOf(settled, 0, NOW, false, nestedInFlightOf(rows as any, "lead", NOW), closeTakesDownOf(rows as any, "lead").length);
-    expect(closeTooltip(f)).toBe("Close: stops it and the 4 agents under it, back when it reports done or needs you");
+    expect(closeTooltip(f)).toBe("Close: stops it and the 4 agents under it, clears them from the list");
   });
 });
