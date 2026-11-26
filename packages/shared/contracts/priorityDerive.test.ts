@@ -4,7 +4,7 @@ import { attributePlans, bestSession, isWorkflowSession, nextActionOf, orderSess
 
 const plan = (id: string, size: number, status = "active"): PlanFacts => ({ id, short_id: id, title: id, done: 0, total: size, size, status });
 // The doc's shapes: pl-1075 "Every change merges green through one flow" (37 tasks), pl-619 a 140-task program.
-const PLANS = new Map([plan("pl-1075", 37), plan("pl-619", 140), plan("pl-88", 6, "abandoned"), plan("pl-12", 5)].map((p) => [p.id, p]));
+const PLANS = new Map([plan("pl-1075", 37), plan("pl-619", 143), plan("pl-88", 6, "abandoned"), plan("pl-12", 5), plan("pl-60", 60)].map((p) => [p.id, p]));
 const planOf = (id: string) => PLANS.get(id);
 
 describe("attributePlans", () => {
@@ -24,16 +24,28 @@ describe("attributePlans", () => {
     const a = attributePlans([
       { key: "deploy-drops", taskPlans: ["pl-1075", "pl-1075", null] },
       { key: "s2", taskPlans: ["pl-619"] },
-      { key: "s3", taskPlans: ["pl-619", null] },
-      { key: "s4", taskPlans: [] },
+      { key: "s3", taskPlans: [null] },
+      { key: "s4", taskPlans: [null, null] },
     ], planOf);
-    // pl-619 covers two of three task-bearing milestones but is a program: never the priority's.
+    // pl-619 (143 tasks) covers one of four task-bearing milestones: coverage keeps it off the priority.
     expect(a.priority).toBeNull();
     expect(a.steps.get("deploy-drops")!.plan?.short_id).toBe("pl-1075");
     expect(a.steps.get("s2")!.plan).toBeNull();
     expect(a.steps.get("s2")!.part_of.map((p) => p.short_id)).toEqual(["pl-619"]);
-    expect(a.steps.get("s3")!.part_of.map((p) => p.short_id)).toEqual(["pl-619"]);
     expect(a.steps.get("deploy-drops")!.part_of).toEqual([]);
+  });
+
+  test("a 60-task plan covering half or more of the task-bearing milestones is the priority's plan: the size cap is only a milestone's", () => {
+    const a = attributePlans([
+      { key: "s1", taskPlans: ["pl-60", "pl-60"] },
+      { key: "s2", taskPlans: ["pl-60", null] },
+      { key: "s3", taskPlans: [null] },
+      { key: "s4", taskPlans: ["pl-619"] },
+    ], planOf);
+    expect(a.priority?.short_id).toBe("pl-60");
+    // Never repeated as a milestone's own plan or its "part of".
+    for (const k of ["s1", "s2"]) expect([a.steps.get(k)!.plan, a.steps.get(k)!.part_of]).toEqual([null, []]);
+    expect(a.steps.get("s4")!.part_of.map((p) => p.short_id)).toEqual(["pl-619"]);
   });
 
   test("abandoned plans are ignored; a plan holding under half a milestone's tasks is not its plan", () => {

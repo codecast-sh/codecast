@@ -7,14 +7,14 @@ import type { PriorityPlanRef, PrioritySessionState } from "./priorities";
 
 // ── Plan attribution ─────────────────────────────────────────────────────
 
-/** A plan this big is a program, not a milestone's plan: it shows only inside an open milestone, as "Part of". */
+/** A plan this big is a program, not a milestone's plan: it shows only inside an open milestone, as "Part of". A priority's plan has no size cap: coverage alone decides it. */
 export const SMALL_PLAN_MAX = 40;
 const DEAD_PLAN = new Set(["abandoned", "cancelled", "canceled"]);
 
 export type PlanFacts = PriorityPlanRef & { id: string; status?: string };
 
 export type PlanAttribution = {
-  /** Holds tasks from at least half the priority's task-bearing milestones (≤ SMALL_PLAN_MAX tasks): shown once, on the priority. */
+  /** Holds tasks from at least half the priority's task-bearing milestones, whatever its size: shown once, on the priority. */
   priority: PlanFacts | null;
   /** Per milestone key: its own plan (≥ half its tasks, ≤ SMALL_PLAN_MAX, not the priority's), and the big plans it is part of. */
   steps: Map<string, { plan: PlanFacts | null; part_of: PlanFacts[] }>;
@@ -22,7 +22,8 @@ export type PlanAttribution = {
 
 /**
  * The design doc's rules: ignore abandoned and cancelled plans; a plan holding
- * tasks from at least half the task-bearing milestones is the priority's;
+ * tasks from at least half the task-bearing milestones is the priority's,
+ * whatever its size (a program that touches one milestone in four is not);
  * otherwise a plan holding at least half a milestone's tasks with at most
  * SMALL_PLAN_MAX tasks is that milestone's; bigger plans are only "part of".
  * `taskPlans` is each of a milestone's tasks' plan id (null with none).
@@ -52,12 +53,12 @@ export function attributePlans(
   const bearing = perStep.filter((x) => x.tasks > 0);
   const coverage = new Map<string, number>();
   for (const x of bearing) for (const id of x.counts.keys()) coverage.set(id, (coverage.get(id) ?? 0) + 1);
-  const priorityId = bearing.length ? best(coverage, (p, n) => small(p) && n * 2 >= bearing.length) : undefined;
+  const priorityId = bearing.length ? best(coverage, (_p, n) => n * 2 >= bearing.length) : undefined;
 
   const out = new Map<string, { plan: PlanFacts | null; part_of: PlanFacts[] }>();
   for (const x of perStep) {
     const own = best(x.counts, (p, n) => p.id !== priorityId && small(p) && n * 2 >= x.tasks);
-    const part_of = [...x.counts.keys()].map((id) => planOf(id)!).filter((p) => !small(p));
+    const part_of = [...x.counts.keys()].filter((id) => id !== priorityId).map((id) => planOf(id)!).filter((p) => !small(p));
     out.set(x.key, { plan: own ? planOf(own)! : null, part_of });
   }
   return { priority: priorityId ? planOf(priorityId)! : null, steps: out };
