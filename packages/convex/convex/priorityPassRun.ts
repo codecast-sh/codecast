@@ -39,8 +39,8 @@ export const PRIORITY_PASS_DAILY_USD = 5;
  * this one-time allowance instead of the daily ceiling, which applies after.
  */
 export const PRIORITY_PASS_FIRST_USD = 5;
-/** The most of a pair's runs the catch-up allowance reads, oldest first (the catch-up is its first runs). */
-const CATCH_UP_RUNS_READ = 200;
+/** The most of a pair's runs the catch-up allowance reads, newest first; a pair with more is past its catch-up. */
+export const CATCH_UP_RUNS_READ = 1_000;
 /** `cast priorities run` runs at most once in this long per (person, workspace). */
 export const RUN_NOW_EVERY_MS = 10 * MINUTE;
 /** A merge moves an absorbed priority's corrections to the survivor this many at a time, until none is left. */
@@ -98,13 +98,21 @@ export async function hasOkRun(ctx: { db: any }, userId: Id<"users">, workspace:
     .first());
 }
 
-/** What the pair's first catch-up has spent of PRIORITY_PASS_FIRST_USD. */
-async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<number> {
-  const runs: Doc<"priority_pass_runs">[] = await ctx.db
-    .query("priority_pass_runs")
-    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
-    .take(CATCH_UP_RUNS_READ);
-  return runs.filter((r) => r.catch_up).reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
+/**
+ * What the pair's first catch-up has spent of PRIORITY_PASS_FIRST_USD: its
+ * runs newest first, stopping once the allowance is spent. A pair with more
+ * runs than CATCH_UP_RUNS_READ counts as spent, so however many cheap runs it
+ * piles up, a catch-up never spends uncapped.
+ */
+export async function catchUpSpent(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<number> {
+  let spent = 0;
+  let read = 0;
+  for await (const r of ctx.db.query("priority_pass_runs").withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace)).order("desc") as AsyncIterable<Doc<"priority_pass_runs">>) {
+    if (r.catch_up) spent += r.cost_usd ?? 0;
+    if (spent >= PRIORITY_PASS_FIRST_USD) return spent;
+    if (++read >= CATCH_UP_RUNS_READ) return Infinity;
+  }
+  return spent;
 }
 
 /**

@@ -6,7 +6,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { MergePlan } from "./lib/priorityPass";
 import { LATE_MARGIN_MS } from "./priorityPassInputs";
-import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
+import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, catchUpSpent, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { api } from "./_generated/api";
 
@@ -375,6 +375,19 @@ describe("what a pass may read, and how far", () => {
     expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: `Passes here spent today's $${PRIORITY_PASS_DAILY_USD.toFixed(2)}; the next one can run tomorrow.` });
     expect(model.prompts).toHaveLength(0);
     expect((await w.runs()).at(-1)).toMatchObject({ status: "skipped", error: "daily ceiling" });
+  });
+
+  test("the catch-up allowance counts the newest runs: hundreds of old cheap runs cannot hide the dear ones that spent it", async () => {
+    const w = await world();
+    const run = (ago: number, cost_usd: number) => ({ user_id: w.ana, workspace: w.team, started_at: w.now - ago, finished_at: w.now - ago, status: cost_usd ? "error" : "skipped", cursor_at: 1, model: "m", cost_usd, catch_up: true, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++) await ctx.db.insert("priority_pass_runs", run(10 * DAY - i * 60_000, 0) as any);
+      for (let i = 0; i < 3; i++) await ctx.db.insert("priority_pass_runs", run(H - i * 60_000, 2) as any);
+    });
+    expect(await w.t.run((ctx) => catchUpSpent(ctx, w.ana, w.team))).toBeGreaterThanOrEqual(PRIORITY_PASS_FIRST_USD);
+    // So the next run is no catch-up: the daily ceiling applies.
+    const blocked = await w.t.run((ctx) => runBlocker(ctx, w.ana, w.team, w.now, false, true));
+    expect((blocked as any)?.catch_up).toBeUndefined();
   });
 
   test("the first catch-up spends from its own allowance, outside the daily ceiling, and its chained runs too; after it the ceiling applies", async () => {
