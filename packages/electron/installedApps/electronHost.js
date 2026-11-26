@@ -265,12 +265,14 @@ function createElectronHost(deps) {
   const now = deps.now || Date.now;
   const launchArgs = app.isPackaged ? [] : [app.getAppPath()];
   const startMenuDir = () => path.win32.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Codecast Apps");
-  // Electron joins login item args with spaces as they stand, so a path among
-  // them is quoted here. The exe is left to Electron (no `path`), which quotes
-  // it; a `path` given here would be written unquoted, and a profile folder
-  // with a space in it would then start the wrong program or none.
+  // Electron writes the Run value through Chromium's CommandLine, which quotes
+  // the exe and each arg that needs it (one with a space) and escapes any quote
+  // inside. So args go in raw: quoting one here wrote literal quote marks into
+  // the path Windows hands back at login (first Windows CI run, 2026-11-26).
+  // The exe is left to Electron too (no `path`). Packaged builds pass only
+  // --codecast-app; the app path is there for from-source runs.
   const setLoginItem = (slug, openAtLogin) =>
-    app.setLoginItemSettings({ openAtLogin, args: [...launchArgs.map((a) => `"${a}"`), `--codecast-app=${slug}`], name: `CodecastApp-${slug}` });
+    app.setLoginItemSettings({ openAtLogin, args: [...launchArgs, `--codecast-app=${slug}`], name: `CodecastApp-${slug}` });
 
   const apps = new Map(); // slug -> {win, popover, tray, shortcuts: Set, ignoreMouse, badge, toasts}
   const surfaces = new Map(); // webContents id -> {slug, surface, wc, frameVersion, loadVersion, covered}

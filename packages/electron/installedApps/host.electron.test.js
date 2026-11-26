@@ -260,15 +260,16 @@ test("install, call, republish and uninstall an app in the Electron-window host"
       } else {
         assert.equal(toast.result, "shown", `the toast reported ${toast.result}`);
       }
-      // Open at login: a Run value that starts this Codecast, its exe quoted
-      // by Electron and the app path by the host, then removed again.
+      // Open at login: a Run value that starts this Codecast, then removed
+      // again. Electron quotes the exe, and the app path only when it needs
+      // quoting (a space in it); no quote mark may sit inside either.
       await appPage.eval("cast.app.login.set(true)");
       const run = await readRunValue(`CodecastApp-${SLUG}`);
-      const parts = run && run.match(/^"([^"]+)" "([^"]+)" --codecast-app=(\S+)$/);
-      assert.ok(parts, `the Run value is a quoted exe, the quoted app path and the slug: ${run}`);
+      const parts = run && run.match(/^"([^"]+)" (?:"([^"]+)"|([^"\s]+)) --codecast-app=(\S+)$/);
+      assert.ok(parts, `the Run value is a quoted exe, the app path (quoted only when needed) and the slug: ${run}`);
       assert.equal(real(parts[1]), real(require("electron")));
-      assert.equal(real(parts[2]), real(ELECTRON_DIR));
-      assert.equal(parts[3], SLUG);
+      assert.equal(real(parts[2] ?? parts[3]), real(ELECTRON_DIR));
+      assert.equal(parts[4], SLUG);
       await appPage.eval("cast.app.login.set(false)");
       assert.equal(await readRunValue(`CodecastApp-${SLUG}`), null, "turning it off removes the Run value");
     }

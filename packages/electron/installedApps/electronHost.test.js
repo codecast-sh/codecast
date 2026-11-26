@@ -395,7 +395,7 @@ test("open at login quotes the args and leaves the exe for Electron to quote", a
   r.electron.app.getAppPath = () => "C:\\Users\\Jane Doe\\src\\codecast\\packages\\electron";
   const dev = createElectronHost({ electron: r.electron, registry: { get: () => r.records[SLUG], list: () => [], update() {} }, pageOrigin: ORIGIN, pageUrl: () => "", call: async () => ({}), appVersion: "1", platform: "win32", log: () => {} });
   dev["login.set"]({ slug: SLUG }, true);
-  assert.deepEqual(set[0], { openAtLogin: true, args: ['"C:\\Users\\Jane Doe\\src\\codecast\\packages\\electron"', `--codecast-app=${SLUG}`], name: `CodecastApp-${SLUG}` });
+  assert.deepEqual(set[0], { openAtLogin: true, args: ["C:\\Users\\Jane Doe\\src\\codecast\\packages\\electron", `--codecast-app=${SLUG}`], name: `CodecastApp-${SLUG}` });
   assert.equal("path" in set[0], false);
 });
 
