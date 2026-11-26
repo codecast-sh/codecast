@@ -42,7 +42,8 @@ mock.module("next/link", () => ({
 
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
-const { FocusChip, Paused, landFocus } = await import("../DeploysPage");
+const { FocusChip, Paused } = await import("../DeploysPage");
+const { landFocus } = await import("../../../lib/deploys/landFocus");
 
 afterAll(() => {
   closeDomWindow(dom);
