@@ -432,12 +432,34 @@ export const applyPlan = internalMutation({
       const intoRow: Doc<"priorities"> | null = into ? await ctx.db.get(into) : null;
       if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || intoRow.status === "merged") continue;
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, ai_rank: undefined, updated_at: now });
-      mergedInto.set(row._id, { into, intoRow, step_keys: m.step_keys ?? {} });
+      // A milestone of the absorbed priority a session the person placed (or a known link) sits on goes to the survivor too, as a person's merge carries every one
+      // (priorities.ts doMerge): the plan saw only its newest sessions. One the plan mapped live already has its key.
+      const step_keys: Record<string, string> = { ...(m.step_keys ?? {}) };
+      const survivorLive = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
+      const held = new Set<string>();
+      for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).take(SESSION_COUNT_CAP)) {
+        if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key) held.add(conv.priority_step_key);
+      }
+      const carried = row.steps.filter((st) => !st.dropped && held.has(st.key) && !(step_keys[st.key] && survivorLive.has(step_keys[st.key])));
+      let survivor = intoRow;
+      if (carried.length) {
+        let next = Math.max(0, ...intoRow.steps.map((st) => stepNumber(st.key)));
+        const added = carried.map((st) => {
+          const key = `s${++next}`;
+          step_keys[st.key] = key;
+          survivorLive.add(key);
+          return { ...st, key };
+        });
+        survivor = { ...intoRow, steps: [...intoRow.steps, ...added] };
+        await ctx.db.patch(into, { steps: survivor.steps, updated_at: now });
+        liveSteps.set(intoRow.short_id, survivorLive);
+      }
+      mergedInto.set(row._id, { into, intoRow: survivor, step_keys });
       counts.merged++;
       // Every one of its corrections follows it, onto the step their step became (step-less when that is unknown).
       await moveCorrections(ctx, row._id, into, (key) => {
-        const to = key ? m.step_keys?.[key] : undefined;
-        return to && liveSteps.get(intoRow.short_id)?.has(to) !== false ? to : undefined;
+        const to = key ? step_keys[key] : undefined;
+        return to && survivorLive.has(to) ? to : undefined;
       });
     }
 

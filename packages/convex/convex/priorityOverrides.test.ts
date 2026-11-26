@@ -212,6 +212,37 @@ describe("a pass merge keeps a placed session's milestone", () => {
   });
 });
 
+describe("a pass merge reads the absorbed priority's sessions itself", () => {
+  test("a placed session older than the newest eight the plan saw keeps its milestone: the survivor gains it", async () => {
+    const w = await seeded();
+    const pri2 = await w.t.run(async (ctx) => {
+      const id = await ctx.db.insert("priorities", {
+        user_id: w.ana, workspace: w.team, short_id: "pri-2", title: "Auth", summary: "", status: "active", ai_rank: 2,
+        steps: [{ key: "s1", title: "Auth rewrite", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
+        first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1, session_count: 10,
+      } as any);
+      for (let i = 0; i < 10; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: w.ana, agent_type: "claude_code", session_id: `jx7a${i}`, short_id: `jx7a${i}`, title: `a${i}`, team_id: w.acme, is_private: false, team_visibility: "full",
+          started_at: 1, updated_at: 1 + i, message_count: 3, status: "active", priority_id: id, ...(i === 0 ? { priority_step_key: "s1", priority_set_by: "person" } : {}),
+        } as any);
+      }
+      return id;
+    });
+    // The plan saw the newest eight, none on s1: it maps no step.
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [{ short_id: "pri-2", merged_into: "pri-1", step_keys: {} }], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    const survivor = await byShort(w, "pri-1");
+    const carried = survivor.steps.find((s: any) => s.title === "Auth rewrite");
+    expect([carried?.key, !!carried?.dropped]).toEqual(["s4", false]);
+    const placed = await w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7a0")).first())!);
+    expect(placed).toMatchObject({ priority_id: survivor._id, priority_step_key: "s4", priority_set_by: "person" });
+    void pri2;
+  });
+});
+
 describe("session overrides survive the next pass", () => {
   test("a session the person moved stays; one they said is not this never goes back there", async () => {
     const w = await seeded();
