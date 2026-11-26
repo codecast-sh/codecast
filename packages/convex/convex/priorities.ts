@@ -21,6 +21,7 @@ import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, moveCorrections, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
+import { backfillGroup, legacy } from "./priorityRankBackfill";
 import { inWorkspace } from "./priorityPassInputs";
 import { passTiming } from "./priorityPassSweep";
 import { passActivity } from "./lib/priorityPassSchedule";
@@ -653,10 +654,16 @@ async function doMove(ctx: Ctx, viewer: Id<"users">, shortId: string, to: MoveTo
   if (p.status !== "active") return { error: `${p.short_id} is ${p.status.replace("_", " ")}; only active priorities are ranked (restore it first)` };
   if (typeof to === "number" && (!Number.isInteger(to) || to < 1)) return { error: "a rank is a whole number from 1" };
   // Every status, so a renumber keeps a quiet or done priority's place for when it comes back.
-  const rows: Priority[] = (await ctx.db
+  const read = async (): Promise<Priority[]> => (await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace))
     .take(OWN_SCAN_READ)).filter((r: Priority) => r.status !== "merged");
+  let rows = await read();
+  // A group the rank backfill has not reached yet is rewritten as it would rewrite it, so the move starts from the order the person set.
+  if (rows.some((r) => r.status === "active" && legacy(r))) {
+    await backfillGroup(ctx, rows.filter((r) => r.status === "active"));
+    rows = await read();
+  }
   const row = rows.find((r) => String(r._id) === String(p._id))!;
   const at = positionsOf(rows).get(String(p._id))!;
   const now = Date.now();

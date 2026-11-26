@@ -626,19 +626,24 @@ describe("writes", () => {
     expect(await t.mutation(pri.cliMove, { api_token: TOKEN, short_id: "pri-2", to: 1.5 })).toEqual({ error: "a rank is a whole number from 1" });
   });
 
-  test("a move clears the old absolute rank on each row it rewrites, and only there", async () => {
-    const { t, as, ada, p1, p3 } = await world();
+  test("before the rank backfill: the order the person set shows, and a move starts from it (legacy person ranks 5,3,2,1,4, then pri-4 to #2)", async () => {
+    const { t, as, ada, ws, p1, p2, p3, p4 } = await world();
     await t.run(async (ctx) => {
-      for (const id of [p1, p3]) await ctx.db.patch(id, { rank: 7, rank_set_by: "pass" } as any);
+      const p7 = await ctx.db.insert("priorities", {
+        user_id: ada, workspace: ws, short_id: "pri-7", title: "Priority pri-7", summary: "", status: "active", steps: [],
+        first_seen_at: NOW, last_active_at: NOW - DAY, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      } as any);
+      for (const [id, rank] of [[p1, 5], [p2, 3], [p3, 2], [p4, 1], [p7, 4]] as const) {
+        await ctx.db.patch(id, { status: "active", done_at: undefined, ai_rank: undefined, person_pos: undefined, rank, rank_set_by: "person" } as any);
+      }
     });
-    await as(ada).mutation(pri.moveTo, { short_id: "pri-3", to: 1 });
-    const legacy = () => t.run(async (ctx: any) => Promise.all([p1, p3].map(async (id) => {
-      const p = await ctx.db.get(id);
-      return [p.short_id, p.rank ?? null, p.rank_set_by ?? null];
-    })));
-    expect(await legacy()).toEqual([["pri-1", 7, "pass"], ["pri-3", null, null]]);
-    await as(ada).mutation(pri.moveTo, { short_id: "pri-1", to: 99 });
-    expect(await legacy()).toEqual([["pri-1", null, null], ["pri-3", null, null]]);
+    const order = async () => (await rowsOf(as(ada), { workspace: ws, status: "active" })).map((r: any) => `${r.short_id}:${r.rank_source}`);
+    expect(await order()).toEqual(["pri-4:person", "pri-3:person", "pri-2:person", "pri-7:person", "pri-1:person"]);
+    await as(ada).mutation(pri.moveTo, { short_id: "pri-4", to: 2 });
+    expect(await order()).toEqual(["pri-3:person", "pri-4:person", "pri-2:person", "pri-7:person", "pri-1:person"]);
+    // The group was rewritten as the backfill would: no old rank left behind.
+    const left = await t.run(async (ctx) => (await ctx.db.query("priorities").collect()).filter((p: any) => p.workspace === ws && p.rank !== undefined));
+    expect(left).toEqual([]);
   });
 
   test("a merge, the person's or the pass's, moves every correction of the absorbed priority, however many", async () => {

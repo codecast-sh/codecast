@@ -23,7 +23,7 @@ type Priority = Doc<"priorities">;
 /** The most of one owner's active priorities in one workspace it rewrites at once: the reads' own cap (priorities.ts). */
 const GROUP_READ = 200;
 
-const legacy = (p: Priority) => p.rank !== undefined || p.rank_set_by !== undefined;
+export const legacy = (p: Priority) => p.rank !== undefined || p.rank_set_by !== undefined;
 
 /**
  * The order the absolute rank showed (the order it replaced): a rank the
@@ -46,6 +46,26 @@ export function legacyOrder(rows: Priority[]): Priority[] {
     slots.set(next, r);
   }
   return [...slots.entries()].sort(([a], [b]) => a - b).map(([, r]) => r);
+}
+
+/**
+ * Rewrites one owner's active priorities in one workspace (`group`, every one
+ * of them) from the absolute rank to relative rank, in the order it showed.
+ * Returns what it wrote, by kind.
+ */
+export async function backfillGroup(ctx: { db: any }, group: Priority[]): Promise<{ placed: number; slotted: number; appended: number }> {
+  const counts = { placed: 0, slotted: 0, appended: 0 };
+  const old = legacyOrder(group.filter(legacy));
+  for (const [i, r] of old.entries()) {
+    const placed = r.person_pos != null || r.rank_set_by === "person";
+    await ctx.db.patch(r._id, { rank: undefined, rank_set_by: undefined, ...(r.person_pos != null ? {} : placed ? { person_pos: i + 1 } : { ai_rank: i + 1 }) });
+    counts[placed ? "placed" : "slotted"]++;
+  }
+  for (const [i, r] of effectivePriorityOrder(group.filter((r) => !legacy(r) && r.person_pos == null)).entries()) {
+    await ctx.db.patch(r._id, { ai_rank: old.length + i + 1 });
+    counts.appended++;
+  }
+  return counts;
 }
 
 export const run = internalMutation({
@@ -73,16 +93,8 @@ export const run = internalMutation({
         .query("priorities")
         .withIndex("by_user_workspace_status", (q) => q.eq("user_id", p.user_id).eq("workspace", p.workspace).eq("status", "active"))
         .take(GROUP_READ);
-      const old = legacyOrder(group.filter(legacy));
-      for (const [i, r] of old.entries()) {
-        const placed = r.person_pos != null || r.rank_set_by === "person";
-        await ctx.db.patch(r._id, { rank: undefined, rank_set_by: undefined, ...(r.person_pos != null ? {} : placed ? { person_pos: i + 1 } : { ai_rank: i + 1 }) });
-        counts[placed ? "placed" : "slotted"]++;
-      }
-      for (const [i, r] of effectivePriorityOrder(group.filter((r) => !legacy(r) && r.person_pos == null)).entries()) {
-        await ctx.db.patch(r._id, { ai_rank: old.length + i + 1 });
-        counts.appended++;
-      }
+      const wrote = await backfillGroup(ctx, group);
+      for (const k of ["placed", "slotted", "appended"] as const) counts[k] += wrote[k];
     }
     if (args.auto && !page.isDone) {
       await ctx.scheduler.runAfter(0, (internal as any).priorityRankBackfill.run, { dryRun, cursor: page.continueCursor, numItems, auto: true });

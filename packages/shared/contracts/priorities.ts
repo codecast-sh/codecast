@@ -250,17 +250,25 @@ export type PriorityLooseSession = { short_id: string; conversation_id: string; 
 
 // ── Rank: relative to the priorities the person placed ──
 
-/** What the order reads off a priority. */
-export type PriorityOrderRow = { status: PriorityStatus; person_pos?: number | null; ai_rank?: number | null; last_active_at: number };
+/**
+ * What the order reads off a priority. `rank` and `rank_set_by` are the
+ * absolute rank relative rank replaced, read only until the backfill
+ * (convex priorityRankBackfill) rewrites a row: a rank the person set counts
+ * as placed, so nothing they ordered before it ran loses its place.
+ */
+export type PriorityOrderRow = { status: PriorityStatus; person_pos?: number | null; ai_rank?: number | null; rank?: number | null; rank_set_by?: PrioritySetBy | null; last_active_at: number };
 
-/** A priority's place on the one scale: the person's (person_pos), else the pass's (ai_rank), else none. */
-const orderKey = (r: PriorityOrderRow): number | null => r.person_pos ?? r.ai_rank ?? null;
+/** A priority's place on the one scale: the person's (person_pos, else a rank they set that the backfill has not rewritten yet), else the pass's (ai_rank, else its old rank), else none. */
+const orderKey = (r: PriorityOrderRow): number | null => r.person_pos ?? (r.rank_set_by === "person" ? r.rank : null) ?? r.ai_rank ?? r.rank ?? null;
 
-export const rankSourceOf = (r: PriorityOrderRow): PriorityRankSource => (r.person_pos != null ? "person" : "ai");
+/** The person placed it: a person_pos, or an absolute rank they set that the backfill has not rewritten yet. */
+const isPlaced = (r: PriorityOrderRow): boolean => r.person_pos != null || (r.rank_set_by === "person" && r.rank != null);
+
+export const rankSourceOf = (r: PriorityOrderRow): PriorityRankSource => (isPlaced(r) ? "person" : "ai");
 
 /** By place on the scale, the placed one first on a tie, then the most recently active; no place last. */
 const byPlace = (a: PriorityOrderRow, b: PriorityOrderRow) =>
-  (orderKey(a) ?? Infinity) - (orderKey(b) ?? Infinity) || Number(b.person_pos != null) - Number(a.person_pos != null) || b.last_active_at - a.last_active_at;
+  (orderKey(a) ?? Infinity) - (orderKey(b) ?? Infinity) || Number(isPlaced(b)) - Number(isPlaced(a)) || b.last_active_at - a.last_active_at;
 
 /**
  * One person's priorities in one workspace, the active ones in the order they
@@ -319,5 +327,5 @@ export function placePriority<T extends PriorityOrderRow>(rows: readonly T[], ro
   if (pos !== null) return [{ row, person_pos: pos }];
   const order = rows.filter((r) => r !== row && (orderKey(r) !== null || r.status === "active")).sort(byPlace);
   order.splice(at < others.length ? order.indexOf(others[at]) : order.indexOf(others[at - 1]) + 1, 0, row);
-  return order.map((r, i) => (r === row || r.person_pos != null ? { row: r, person_pos: i + 1 } : { row: r, ai_rank: i + 1 }));
+  return order.map((r, i) => (r === row || isPlaced(r) ? { row: r, person_pos: i + 1 } : { row: r, ai_rank: i + 1 }));
 }
