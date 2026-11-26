@@ -2264,6 +2264,9 @@ export type ClientUI = {
   // Successor to inbox_flat_view: see InboxViewMode. The legacy boolean is kept
   // coherent (true for either flat mode) so older readers still flatten. Ctrl+, cycles.
   inbox_view_mode?: InboxViewMode;
+  // The flat views (Updated, Created) list oldest first instead of newest
+  // first. Read through resolveInboxOldestFirst.
+  inbox_sort_oldest_first?: boolean;
   // Per-user manual order for the "time" view: a SPARSE map of conversation id →
   // sort key, where the key lives in the SAME epoch-ms space as started_at. Rows
   // absent from the map fall back to their creation time, so un-dragged rows and
@@ -5538,6 +5541,12 @@ export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbo
   return ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
 }
 
+// Whether the flat views list oldest first. Shared by the panel's render and
+// computeVisualOrder so Ctrl+J/K walks the order on screen.
+export function resolveInboxOldestFirst(ui: { inbox_sort_oldest_first?: boolean } | undefined): boolean {
+  return ui?.inbox_sort_oldest_first ?? false;
+}
+
 // Resolve the "show old sessions" toggle from client UI state. Shared by the
 // panel, the sidebar/dashboard badges, keyboard nav and mobile so every
 // consumer hides exactly the same rows. On by default: a new user sees their
@@ -5579,8 +5588,13 @@ const creationKey = (s: InboxSession) => s.started_at ?? s.updated_at ?? 0;
 // share the epoch-ms space of started_at, dragged and un-dragged rows sort on
 // one continuous scale. The _id tiebreak keeps equal keys from jittering.
 // Shared by computeVisualOrder (keyboard nav) and the panel's flat render so
-// both agree on row order.
-export function flatViewComparator(mode: "time" | "recent", manualOrder?: Record<string, number>) {
+// both agree on row order. oldestFirst flips the whole order, tiebreak included.
+export function flatViewComparator(mode: "time" | "recent", manualOrder?: Record<string, number>, oldestFirst = false) {
+  const newestFirst = newestFirstComparator(mode, manualOrder);
+  return oldestFirst ? (a: InboxSession, b: InboxSession) => newestFirst(b, a) : newestFirst;
+}
+
+function newestFirstComparator(mode: "time" | "recent", manualOrder?: Record<string, number>) {
   return (a: InboxSession, b: InboxSession) => {
     if (mode === "recent") {
       return (b.updated_at ?? b.started_at ?? 0) - (a.updated_at ?? a.started_at ?? 0)
@@ -5803,6 +5817,8 @@ export function flatViewSessions(
     freezeOrder?: string[] | null;
     /** Spawned workers ride their spawner's card (nestsWorkers). */
     nestWorkers?: boolean;
+    /** List oldest first (resolveInboxOldestFirst). */
+    oldestFirst?: boolean;
   },
 ): InboxSession[] {
   const subIds = opts.showSubagents
@@ -5811,7 +5827,7 @@ export function flatViewSessions(
   const list = subIds
     ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId)
     : [...sortedSessions];
-  list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined));
+  list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined, opts.oldestFirst));
   let ordered = list;
   if (opts.mode === "recent" && opts.freezeOrder?.length) {
     const byId = new Map(list.map((s) => [s._id, s]));
@@ -5940,6 +5956,43 @@ export function computeManualSortKey(orderedKeys: number[], insertIndex: number)
   return (before + after) / 2;
 }
 
+// The manual keys a drop in the "time" view writes: the moving rows (a ticked
+// selection, in on-screen order) land beside targetId on the `pos` side, as
+// the list shows them. A row nested under its parent owns no slot: it is
+// neither moved nor used as a neighbor, and a drop on one lands after its
+// parent's group. The keys run newest first, so an oldest-first list is walked
+// backwards and the drop side flips with it. Null when the target is gone.
+export function manualOrderKeysForDrop(rows: InboxSession[], opts: {
+  moving: Set<string>;
+  targetId: string;
+  pos: "before" | "after";
+  manualOrder?: Record<string, number>;
+  nestedUnder: (s: InboxSession) => string | null;
+  oldestFirst: boolean;
+}): Record<string, number> | null {
+  const { moving, nestedUnder, manualOrder } = opts;
+  const targetRow = rows.find((s) => s._id === opts.targetId);
+  if (!targetRow) return null;
+  const targetParent = nestedUnder(targetRow);
+  const screenPos = targetParent ? "after" : opts.pos;
+  const keyPos = opts.oldestFirst ? (screenPos === "before" ? "after" : "before") : screenPos;
+  const keyOrder = opts.oldestFirst ? [...rows].reverse() : rows;
+  const block = keyOrder.filter((s) => moving.has(s._id) && !nestedUnder(s));
+  const rest = keyOrder.filter((s) => !moving.has(s._id) && !nestedUnder(s));
+  const restKeys = rest.map((s) => manualOrder?.[s._id] ?? s.started_at ?? s.updated_at ?? 0);
+  const targetIdx = rest.findIndex((s) => s._id === (targetParent ?? opts.targetId));
+  if (targetIdx < 0) return null;
+  let insertIndex = keyPos === "before" ? targetIdx : targetIdx + 1;
+  // One write for the whole block, so the drag is one undo entry.
+  const keys: Record<string, number> = {};
+  for (const s of block) {
+    const key = computeManualSortKey(restKeys, insertIndex);
+    keys[s._id] = key;
+    restKeys.splice(insertIndex++, 0, key);
+  }
+  return keys;
+}
+
 // The session order AS RENDERED, re-shuffled for the active view mode. Accepts
 // the live store state or a mutative action draft, so keyboard nav (visualOrder)
 // and the dismiss/kill advance-to-next paths (hideSessionInDraft, markKilling)
@@ -5954,7 +6007,7 @@ export function computeManualSortKey(orderedKeys: number[], insertIndex: number)
 // is what re-plans the inbox warm loop (hooks/inboxWarm.ts). Lives beside the
 // chokepoint so the synced view keys are read inside the store, nowhere else.
 export function visualOrderViewSig(state: {
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
@@ -5969,7 +6022,7 @@ export function visualOrderViewSig(state: {
     resolveInboxViewMode(ui), resolveShowOld(ui), ui?.inbox_scope ?? "mine", resolveShowSubagents(ui),
     state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
     terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
-    nestsWorkers(ui),
+    nestsWorkers(ui), resolveInboxOldestFirst(ui),
   ].join("|");
 }
 
@@ -6034,7 +6087,7 @@ export function computeVisualOrder(state: {
   // Local answered/dismissed marks — same map the panel renders with, so nav
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
 }, opts: {
   // Only one slice of the rows (InboxWalk), in the same on-screen order; see
   // visualOrderSessions. Every mode honors it, so a jump lands on the first
@@ -6072,6 +6125,7 @@ export function computeVisualOrder(state: {
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
       chipMatches: (s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)),
       nestWorkers: nestsWorkers(state.clientState.ui),
+      oldestFirst: resolveInboxOldestFirst(state.clientState.ui),
     });
     // A flat card still wears the bucket verdict (its badge reads from the same
     // placement), so a walk is the same membership in flat order.
@@ -7230,6 +7284,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // Panel view mode with back-compat for the pre-bucket inbox_flat_view bool.
   inboxViewMode: () => InboxViewMode;
   setInboxViewMode: (mode: InboxViewMode) => void;
+  setInboxOldestFirst: (oldestFirst: boolean) => void;
   cycleInboxViewMode: () => void;
   /** Drag-to-reorder in the "time" view: pin each id at its key (epoch-ms
    *  space). Several cards' sort keys in one write: one drag, one undo entry. */
@@ -11227,6 +11282,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // later return to recent starts live.
     if (mode !== "recent") state.thawRecentOrder();
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(get()));
+  },
+  setInboxOldestFirst: (oldestFirst: boolean) => {
+    const state = get();
+    state.updateClientUI({ inbox_sort_oldest_first: oldestFirst });
+    // A frozen recent order was taken in the old direction.
+    state.thawRecentOrder();
   },
   // Steps through the tabs the panel shows, so the key never lands on a
   // grouping without a tab. With no panel showing them there is nothing to
