@@ -44,3 +44,11 @@ test("each main target opens on Deploys at its deploy: going, else failed, else 
     ["app", "/deploys?team=T1&repo=example-org%2Fexample-app&target=app"],
   ]);
 });
+
+test("a personal pipeline's targets are not links: Deploys belong to a team", () => {
+  const m = pipelineModel(example);
+  const model = { ...m, main: { waiting: 0, targets: [{ policy: "auto", runs: "here", waiting: 0, groups: [], live: { deploy: "dp-3", version: null, at: 1 }, going: null, failed: null, name: "web", tone: "current" }] } } as any;
+  const html = renderToStaticMarkup(<PipelineDiagram model={model} pipeline={example as any} teamId={null} />);
+  expect(html).toContain('data-pv-target="web"');
+  expect(html).not.toMatch(/<a [^>]*data-pv-target/);
+});

@@ -49,6 +49,13 @@ function scrollerOf(el: Element): Element | null {
   return null;
 }
 
+/** Whether a row sits more than a couple of pixels off the middle of what scrolls it (the window when nothing does). */
+function offCentre(row: Element, scroller: Element | null): boolean {
+  const r = row.getBoundingClientRect();
+  const s = scroller ? scroller.getBoundingClientRect() : { top: 0, height: window.innerHeight };
+  return Math.abs(r.top + r.height / 2 - (s.top + s.height / 2)) > 2;
+}
+
 /**
  * Land a link: bring each highlighted row to the middle of whatever scrolls it (each column scrolls on its own, so
  * each brings its own; one scroller takes the most telling), and flash each row once as it first appears. Queues,
@@ -61,23 +68,22 @@ function landFocus(): () => void {
   if (!pane) return () => {};
   const flashed = new WeakSet<Element>();
   let frame = 0;
-  let moved = true;
   let cap: ReturnType<typeof setTimeout> | undefined;
-  const sized = new ResizeObserver(() => { moved = true; later(); });
+  const sized = new ResizeObserver(() => later());
   const center = () => {
     frame = 0;
     // Sections mount late (each reads its own query): watch each as it appears, so its growth re-centres the rows.
     for (const s of pane.querySelectorAll("[data-deploy-col], [data-deploy-col] > *")) sized.observe(s);
     const rows = FOCUS_ROWS.flatMap((sel) => [...pane.querySelectorAll(sel)]);
+    if (!rows.length) return;
     const fresh = rows.filter((r) => !flashed.has(r));
-    if (!rows.length || (!moved && !fresh.length)) return;
-    moved = false;
     const centred = new Set<Element | null>();
     for (const r of rows) {
       const scroller = scrollerOf(r);
       if (centred.has(scroller)) continue;
       centred.add(scroller);
-      r.scrollIntoView({ block: "center" });
+      // Anything that pushed the row off the middle (a section growing, a banner arriving above) brings it back.
+      if (offCentre(r, scroller)) r.scrollIntoView({ block: "center" });
     }
     for (const r of fresh) {
       flashed.add(r);

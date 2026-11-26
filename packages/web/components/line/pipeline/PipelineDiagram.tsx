@@ -95,8 +95,11 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
           {model.main.targets.map((t) => {
             // The deploy its words are about (going out, else failed, else live while nothing waits), highlighted on the Deploys page.
             const dp = t.going?.deploy ?? t.failed?.deploy ?? (t.waiting ? null : t.live?.deploy) ?? null;
+            const body = <><i className="pv-led" data-tone={t.tone} aria-hidden /><b>{t.name}</b><span>{targetWords(t, now)}</span></>;
+            // Deploys belong to a team: a personal pipeline's targets have no page to open.
+            if (!teamId) return <span key={t.name} className="pv-target" data-tone={t.tone} data-pv-target={t.name}>{body}</span>;
             const href = deploysFocusHref({ team: teamId, repository: model.repository, target: t.name, focus: dp ? { kind: "deploy", id: dp } : null });
-            return <Link key={t.name} href={href} className="pv-target" data-tone={t.tone} title={`Open ${t.name} on the Deploys page`} data-pv-target={t.name}><i className="pv-led" data-tone={t.tone} aria-hidden /><b>{t.name}</b><span>{targetWords(t, now)}</span></Link>;
+            return <Link key={t.name} href={href} className="pv-target" data-tone={t.tone} title={`Open ${t.name} on the Deploys page`} data-pv-target={t.name}>{body}</Link>;
           })}
           {sessions.length ? (
             <button type="button" className="pv-waiting" onClick={() => setOpen({ kind: "main" })} data-pipeline-waiting>
