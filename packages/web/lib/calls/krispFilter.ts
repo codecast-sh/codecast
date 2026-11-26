@@ -32,6 +32,8 @@ export type KrispModule = {
   };
 };
 
+type KrispProcessor = ReturnType<KrispModule["KrispNoiseFilter"]>;
+
 let customLoader: (() => Promise<KrispModule | null>) | null = null;
 let cachedModule: Promise<KrispModule | null> | null = null;
 
@@ -111,6 +113,17 @@ async function ensureRunningAudioContext(room: Room, track: LocalAudioTrack): Pr
   return ctx.state !== "closed";
 }
 
+// Krisp's `onPublish` (which livekit-client's Room calls on every processor
+// update) fires `this.setEnabled(true)` without awaiting it, so any failure in
+// there (a server that refuses enhanced noise cancellation, a dispose mid-wait)
+// is an unhandled rejection. Shadow `setEnabled` on the instance so every call,
+// ours or the package's, settles to `false` instead of throwing.
+function settleEnable(processor: KrispProcessor): KrispProcessor {
+  const setEnabled = processor.setEnabled?.bind(processor);
+  if (setEnabled) processor.setEnabled = (enable) => setEnabled(enable).catch(() => false);
+  return processor;
+}
+
 // Serialize attach/detach per LocalAudioTrack so a join and a LocalTrackPublished
 // event arriving in the same turn never instantiate two processors on one mic.
 const inFlight = new WeakMap<object, Promise<boolean>>();
@@ -150,22 +163,17 @@ async function reconcileTrack(room: Room, track: LocalAudioTrack, enabled: boole
   }
 
   if (hasKrisp) {
-    try {
-      await ensureRunningAudioContext(room, track);
-      if (room.state === ConnectionState.Connected && !existing.isEnabled?.()) {
-        await existing.onPublish?.(room);
-      }
-      const res = await existing.setEnabled?.(true);
-      if (res === false) throw new Error("Krisp refused to enable");
+    if (existing.isEnabled?.()) {
       await applyKrispRawConstraints(track);
       return true;
-    } catch {
-      try {
-        await track.stopProcessor?.();
-      } catch {}
-      await applyFallbackConstraints(track);
-      return false;
     }
+    // Attached but not filtering means the track went through `restartTrack`
+    // (mic switch, unmute after a stopped mic). Krisp's `restart()` builds a new
+    // WASM filter node but keeps the "ready" flag of the old one, so enabling it
+    // throws WASM_OR_WORKER_NOT_READY. A fresh processor waits for its own node.
+    try {
+      await track.stopProcessor?.();
+    } catch {}
   }
 
   const mod = await loadKrisp();
@@ -179,7 +187,7 @@ async function reconcileTrack(room: Room, track: LocalAudioTrack, enabled: boole
     return false;
   }
 
-  const processor = mod.KrispNoiseFilter({ quality: "high" });
+  const processor = settleEnable(mod.KrispNoiseFilter({ quality: "high" }));
   try {
     await track.setProcessor(processor as any);
     // If the track was already published before setProcessor ran, Room's
