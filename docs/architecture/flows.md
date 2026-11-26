@@ -279,23 +279,28 @@ change again on the same branch and resets the run's worktree to it
 may fix it there and leave it uncommitted. The runner records that worktree as a
 git tree in the run's directory before the brief (`snapshotRunTree`; a restart
 keeps the first record, and writing `change.json` afresh drops it), and the
-refreeze commits every file that differs from it, deletions included. A
-credential written there, or a lockfile or generated file that neither the
-change's files (a branch's: all it changes off the default branch) nor those
-edits make, is held out: moved into `$run_dir/held` and named in the run's
-output and the next brief (`carry_held`); a template (`.env.example`,
-`*.sample`, `*.template`) is not a credential here. For a change frozen from a
+refreeze commits every file that differs from it. A deletion is always carried.
+A credential written there (a template such as `.env.example`, `*.sample` or
+`*.template` by its content only), or a written lockfile or generated file that
+neither the change's files (a branch's: all it changes off the default branch)
+nor those edits make, is held out: moved into `$run_dir/held` and named in the
+run's output and the next brief (`carry_held`). For a change frozen from a
 checkout, a credential the session committed in the worktree refuses the
-refreeze, naming the file; a branch's commits are the session's own push. A branch's carry goes on
-top of a tip pushed from elsewhere since and is pushed to origin, always as a
-fast-forward of origin as just fetched: another clone's commits go under it,
-replayed, never over. A local-only branch is published to origin then. The
-refreeze refuses, with the edits left in the worktree, when origin cannot be
-reached, when the push keeps failing, or when the branch is origin's default
-branch. A change frozen from a checkout carries the edits on top of each later
-freeze (`frozen_tip`, its files in `carried`, apart from `paths`). The branch
-moves only once the carry is on the new tip; a conflict moves nothing. What differed already at the brief is the
-run's own stations' writing, and the reset puts it back (ct-99118). A session that pins blocked asks a person, for the
+refreeze, naming the file; a branch's commits are the session's own push. The
+refreeze pushes nothing (the PR station pushes the branch as it always has). On
+a branch, task or pull request run the worktree must be on the change's branch,
+and when origin moved off the tip it had at the last freeze, the run's own
+commits are replayed onto origin's new tip, locally: what the worktree added
+since the last freeze, and every earlier carry origin did not hold then. Nothing
+else is replayed, so a commit a force-push took off origin stays off, and a fix
+the session rebuilt and force-pushed elsewhere replaces its earlier commits. A
+change frozen from a checkout carries the edits on top of each later freeze
+(`frozen_tip`, its files in `carried`, apart from `paths`). The worktree is
+read once more before the reset; a write made while the refreeze ran is carried
+on a second pass, and a worktree still changing after that is left as it is.
+The branch moves only once the carry is on the new tip; a conflict moves
+nothing. What differed already at the brief is the run's own stations'
+writing, and the reset puts it back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run
 waits for that person rather than stopping: the run's row says so
 (`waiting_on_session.blocked`, its note the pin), and the Ship bar reads

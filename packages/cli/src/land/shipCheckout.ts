@@ -135,6 +135,11 @@ export function shipSpec(root: string): ShipSpec {
 
 export function credentialReason(rel: string, text: string | null): string | null {
   if (isCredentialFilePath(rel)) return "named like a credential file";
+  return credentialContentReason(text);
+}
+
+/** Why a file's content is a credential (a private key, a live vendor token), or null. */
+export function credentialContentReason(text: string | null): string | null {
   if (!text) return null;
   if (PRIVATE_KEY_RE.test(text)) return "holds a private key";
   if (liveVendorToken(text)) return "holds an API token";

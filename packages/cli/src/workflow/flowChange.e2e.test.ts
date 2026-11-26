@@ -255,64 +255,6 @@ describe("a named branch's fix comes back to the run", () => {
     expect(fs.readFileSync(path.join(worktree, "a.txt"), "utf-8")).toBe("v2\n");
   });
 
-  test("an edit left uncommitted in the run's worktree goes on top of a tip pushed from elsewhere, reaches origin and stays through the next fix there, or refuses on a conflict (ct-99118)", async () => {
-    const origin = path.join(sandbox, "origin-carry.git");
-    const here = path.join(sandbox, "here-carry");
-    const there = path.join(sandbox, "there-carry");
-    execFileSync("git", ["init", "--quiet", "--bare", "-b", "main", origin]);
-    execFileSync("git", ["clone", "--quiet", origin, here], { env: { ...process.env, ...ENV } });
-    write(here, "a.txt", "a\n");
-    git(here, "add", "a.txt");
-    git(here, "commit", "--quiet", "-m", "base");
-    git(here, "push", "--quiet", "origin", "HEAD:main", "HEAD:refs/heads/feat");
-    git(here, "fetch", "--quiet", "origin");
-    git(here, "branch", "feat", "origin/feat");
-    const worktree = path.join(sandbox, "run-wt-carry");
-    git(here, "worktree", "add", "--quiet", worktree, "feat");
-    const base = git(here, "rev-parse", "feat");
-    const runDir = path.join(sandbox, "run-dir-carry-branch");
-    writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base, tip: base, remote_tip: base, branch: "feat", worktree: "run-wt-carry", paths: [], shared: [], held: [] } as any);
-    execFileSync("git", ["clone", "--quiet", "--branch", "feat", origin, there], { env: { ...process.env, ...ENV } });
-
-    await snapshotRunTree(worktree, runDir);
-    write(worktree, "b.txt", "left here\n");
-    write(there, "a.txt", "pushed there\n");
-    git(there, "commit", "--quiet", "-am", "fix there");
-    git(there, "push", "--quiet", "origin", "feat");
-    const pushed = git(there, "rev-parse", "HEAD");
-    const { change } = await refreezeSessionChange(here, runDir, worktree);
-    expect(git(here, "rev-parse", `${change.tip}^`)).toBe(pushed);
-    expect([git(here, "show", `${change.tip}:a.txt`), git(here, "show", `${change.tip}:b.txt`)]).toEqual(["pushed there", "left here"]);
-    expect(git(worktree, "rev-parse", "HEAD")).toBe(change.tip);
-    // Origin holds the carry: a fix built there on the old tip cannot replace it without taking it in first.
-    expect(git(origin, "rev-parse", "feat")).toBe(change.tip);
-    write(there, "a.txt", "fixed again there\n");
-    git(there, "commit", "--quiet", "-am", "fix again there");
-    expect(() => git(there, "push", "--quiet", "origin", "feat")).toThrow();
-    git(there, "fetch", "--quiet", "origin");
-    git(there, "reset", "--quiet", "--hard", "origin/feat");
-    write(there, "a.txt", "fixed again there\n");
-    git(there, "commit", "--quiet", "-am", "fix again there");
-    git(there, "push", "--quiet", "origin", "feat");
-    await snapshotRunTree(worktree, runDir);
-    const second = (await refreezeSessionChange(here, runDir, worktree)).change;
-    expect(second.tip).toBe(git(there, "rev-parse", "HEAD"));
-    expect([git(here, "show", `${second.tip}:a.txt`), git(here, "show", `${second.tip}:b.txt`)]).toEqual(["fixed again there", "left here"]);
-    expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here\n");
-
-    // Elsewhere b.txt is written otherwise and pushed, while another edit to it waits here: nothing moves.
-    await snapshotRunTree(worktree, runDir);
-    write(worktree, "b.txt", "left here again\n");
-    write(there, "b.txt", "pushed b\n");
-    git(there, "commit", "--quiet", "-am", "b there");
-    git(there, "push", "--quiet", "origin", "feat");
-    const theirs = git(there, "rev-parse", "HEAD");
-    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/conflict with the branch's tip/);
-    expect(git(here, "rev-parse", "feat")).toBe(second.tip);
-    expect(git(origin, "rev-parse", "feat")).toBe(theirs);
-    expect(readFrozenChange(runDir)?.tip).toBe(second.tip);
-    expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here again\n");
-  }, 180_000);
   /** Origin with main and `branch` at one base commit, this checkout's run worktree on `branch`, and another clone on it. */
   function originWorld(name: string, branch = "feat") {
     const origin = path.join(sandbox, `origin-${name}.git`);
@@ -325,31 +267,65 @@ describe("a named branch's fix comes back to the run", () => {
     write(here, "bun.lock", "lock 1\n");
     git(here, "add", "-A");
     git(here, "commit", "--quiet", "-m", "base");
-    git(here, "push", "--quiet", "origin", ...new Set(["HEAD:refs/heads/main", `HEAD:refs/heads/${branch}`]));
+    git(here, "push", "--quiet", "origin", "HEAD:refs/heads/main", `HEAD:refs/heads/${branch}`);
     git(here, "fetch", "--quiet", "origin");
-    if (branch === "main") git(here, "checkout", "--quiet", "--detach");
-    else git(here, "branch", branch, `origin/${branch}`);
+    git(here, "branch", branch, `origin/${branch}`);
     const worktree = path.join(sandbox, `run-wt-${name}`);
     git(here, "worktree", "add", "--quiet", worktree, branch);
     execFileSync("git", ["clone", "--quiet", "--branch", branch, origin, there], { env: { ...process.env, ...ENV } });
     const runDir = path.join(sandbox, `run-dir-${name}`);
-    // The run starts on the branch as it stands: its recorded base is its head then.
+    // The run starts on the branch as it stands: its recorded base is its head then, and origin's tip is that too.
     const start = () => {
       const tip = git(here, "rev-parse", branch);
-      writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: tip, tip, remote_tip: tip, branch, worktree: `run-wt-${name}`, paths: [], shared: [], held: [] } as any);
+      writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: tip, tip, remote_tip: git(origin, "rev-parse", branch), branch, worktree: `run-wt-${name}`, paths: [], shared: [], held: [] } as any);
       return tip;
     };
-    return { origin, here, there, worktree, runDir, start };
+    const push = (file: string, text: string, msg: string) => {
+      write(there, file, text);
+      git(there, "add", file);
+      git(there, "commit", "--quiet", "-m", msg);
+      git(there, "push", "--quiet", "origin", branch);
+      return git(there, "rev-parse", "HEAD");
+    };
+    return { origin, here, there, worktree, runDir, start, push };
   }
 
-  test("another clone's push between rounds goes under the session's commit and carry, never under a force-push (ct-99118)", async () => {
-    const { origin, here, there, worktree, runDir, start } = originWorld("under");
+  test("an edit left uncommitted in the run's worktree goes on a tip pushed from elsewhere, here only, and stays through the next fix pushed there; a conflict refuses (ct-99118)", async () => {
+    const { origin, here, worktree, runDir, start, push } = originWorld("carry");
     start();
-    write(there, "y.txt", "another clone\n");
-    git(there, "add", "y.txt");
-    git(there, "commit", "--quiet", "-m", "y there");
-    git(there, "push", "--quiet", "origin", "feat");
-    const theirs = git(there, "rev-parse", "HEAD");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "b.txt", "left here\n");
+    const pushed = push("a.txt", "pushed there\n", "fix there");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "rev-parse", `${change.tip}^`)).toBe(pushed);
+    expect([git(here, "show", `${change.tip}:a.txt`), git(here, "show", `${change.tip}:b.txt`)]).toEqual(["pushed there", "left here"]);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(change.tip);
+    // The refreeze pushes nothing: the run's PR station pushes the branch.
+    expect(git(origin, "rev-parse", "feat")).toBe(pushed);
+
+    // The next fix is pushed from elsewhere on origin's tip, which lacks the carry: the carry goes on top of it again.
+    const again = push("a.txt", "fixed again there\n", "fix again there");
+    await snapshotRunTree(worktree, runDir);
+    const second = (await refreezeSessionChange(here, runDir, worktree)).change;
+    expect(git(here, "rev-parse", `${second.tip}^`)).toBe(again);
+    expect([git(here, "show", `${second.tip}:a.txt`), git(here, "show", `${second.tip}:b.txt`)]).toEqual(["fixed again there", "left here"]);
+    expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here\n");
+
+    // Elsewhere b.txt is written otherwise and pushed, while another edit to it waits here: nothing moves.
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "b.txt", "left here again\n");
+    const theirs = push("b.txt", "pushed b\n", "b there");
+    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/conflict with origin's feat/);
+    expect(git(here, "rev-parse", "feat")).toBe(second.tip);
+    expect(git(origin, "rev-parse", "feat")).toBe(theirs);
+    expect(readFrozenChange(runDir)?.tip).toBe(second.tip);
+    expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here again\n");
+  }, 180_000);
+
+  test("another clone's push between rounds goes under the session's commit and carry (ct-99118)", async () => {
+    const { origin, here, worktree, runDir, start, push } = originWorld("under");
+    start();
+    const theirs = push("y.txt", "another clone\n", "y there");
     await snapshotRunTree(worktree, runDir);
     // The session commits one fix in the worktree and leaves another uncommitted.
     write(worktree, "x.txt", "committed here\n");
@@ -357,14 +333,43 @@ describe("a named branch's fix comes back to the run", () => {
     git(worktree, "commit", "--quiet", "-m", "x here");
     write(worktree, "z.txt", "left here\n");
     const { change } = await refreezeSessionChange(here, runDir, worktree);
-    expect(git(origin, "rev-parse", "feat")).toBe(change.tip);
     expect(git(here, "merge-base", "--is-ancestor", theirs, change.tip)).toBe("");
     expect(["x.txt", "y.txt", "z.txt"].map((f) => git(here, "show", `${change.tip}:${f}`))).toEqual(["committed here", "another clone", "left here"]);
     expect(git(worktree, "rev-parse", "HEAD")).toBe(change.tip);
+    expect(git(origin, "rev-parse", "feat")).toBe(theirs);
+  }, 180_000);
+
+  test("a commit a force-push took off origin is not brought back by the replay (ct-99118)", async () => {
+    const { origin, here, there, worktree, runDir, start } = originWorld("force");
+    // The branch held x.txt, here and on origin, when the run last froze it.
+    write(worktree, "x.txt", "taken off later\n");
+    git(worktree, "add", "x.txt");
+    git(worktree, "commit", "--quiet", "-m", "x");
+    git(worktree, "push", "--quiet", "origin", "feat");
+    start();
+    // Elsewhere the branch is rebuilt without it and force-pushed.
+    git(there, "fetch", "--quiet", "origin");
+    git(there, "reset", "--quiet", "--hard", "origin/main");
+    write(there, "y.txt", "rebuilt\n");
+    git(there, "add", "y.txt");
+    git(there, "commit", "--quiet", "-m", "y");
+    git(there, "push", "--quiet", "--force", "origin", "feat");
+    const rebuilt = git(origin, "rev-parse", "feat");
+    // Here the session commits one fix in the worktree and leaves another uncommitted.
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "w.txt", "committed here\n");
+    git(worktree, "add", "w.txt");
+    git(worktree, "commit", "--quiet", "-m", "w here");
+    write(worktree, "z.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "merge-base", "--is-ancestor", rebuilt, change.tip)).toBe("");
+    expect(git(here, "ls-tree", "--name-only", change.tip, "--", "x.txt")).toBe("");
+    expect([git(here, "show", `${change.tip}:w.txt`), git(here, "show", `${change.tip}:z.txt`)]).toEqual(["committed here", "left here"]);
+    expect(git(origin, "rev-parse", "feat")).toBe(rebuilt);
   }, 180_000);
 
   test("a file the session committed on a branch is its own push: the refreeze takes it with the carry, credential name or not (ct-99118)", async () => {
-    const { origin, here, worktree, runDir, start } = originWorld("own");
+    const { here, worktree, runDir, start } = originWorld("own");
     start();
     await snapshotRunTree(worktree, runDir);
     write(worktree, ".env.local", "KEY=1\n");
@@ -372,12 +377,11 @@ describe("a named branch's fix comes back to the run", () => {
     git(worktree, "commit", "--quiet", "-m", "local env");
     write(worktree, "b.txt", "left here\n");
     const { change } = await refreezeSessionChange(here, runDir, worktree);
-    expect(git(origin, "rev-parse", "feat")).toBe(change.tip);
     expect([git(here, "show", `${change.tip}:.env.local`), git(here, "show", `${change.tip}:b.txt`)]).toEqual(["KEY=1", "left here"]);
   }, 180_000);
 
   test("a lockfile regenerated for the branch's own manifest edit, made before the run, is carried (ct-99118)", async () => {
-    const { origin, here, worktree, runDir, start } = originWorld("lock");
+    const { here, worktree, runDir, start } = originWorld("lock");
     write(worktree, "package.json", "{\"dependencies\":{\"y\":\"1\"}}\n");
     git(worktree, "commit", "--quiet", "-am", "add y");
     git(worktree, "push", "--quiet", "origin", "feat");
@@ -386,19 +390,16 @@ describe("a named branch's fix comes back to the run", () => {
     write(worktree, "bun.lock", "lock 2\n");
     const { change, held } = await refreezeSessionChange(here, runDir, worktree);
     expect(held).toEqual([]);
-    expect(git(origin, "show", "feat:bun.lock")).toBe("lock 2");
-    expect(change.tip).toBe(git(origin, "rev-parse", "feat"));
+    expect(git(here, "show", `${change.tip}:bun.lock`)).toBe("lock 2");
   }, 180_000);
 
-  test("a carry on origin's default branch refuses and moves nothing (ct-99118)", async () => {
-    const { origin, here, worktree, runDir, start } = originWorld("main", "main");
+  test("a run worktree taken off the change's branch refuses and is left as it is (ct-99118)", async () => {
+    const { here, worktree, runDir, start } = originWorld("off");
     const tip = start();
-    await snapshotRunTree(worktree, runDir);
-    write(worktree, "b.txt", "left here\n");
-    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/origin's default branch/);
-    expect(git(origin, "rev-parse", "main")).toBe(tip);
-    expect(git(here, "rev-parse", "main")).toBe(tip);
-    expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here\n");
+    git(worktree, "checkout", "--quiet", "-b", "elsewhere");
+    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/not the change's branch feat/);
+    expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe("elsewhere");
+    expect(git(here, "rev-parse", "feat")).toBe(tip);
   }, 180_000);
 });
 
@@ -924,5 +925,70 @@ describe("edits left in the run's worktree", () => {
     const { change, held } = await refreezeSessionChange(root, runDir, tree);
     expect(held).toEqual([]);
     expect(show(change.tip, "backend/.env.example")).toBe("KEY=");
+  }, 180_000);
+
+  test("a template is a credential by its content, not its name: one holding a live token is held, and refuses when committed", async () => {
+    const token = ["sk", "ant", "api03", "Qz7Lm2Vx9Rt4Kp8Wn3Hj6Bd1Fs5Gy0Ce"].join("-");
+    const { root, runDir, tree } = await carryWorld("carl");
+    await snapshotRunTree(tree, runDir);
+    write(tree, "backend/.env.example", `KEY=${token}\n`);
+    const { held } = await refreezeSessionChange(root, runDir, tree);
+    expect(held).toEqual([{ path: "backend/.env.example", why: "holds an API token" }]);
+
+    await snapshotRunTree(tree, runDir);
+    write(tree, "config.sample", `KEY=${token}\n`);
+    git(tree, "add", "config.sample");
+    git(tree, "commit", "--quiet", "-m", "sample with a live key");
+    await expect(refreezeSessionChange(root, runDir, tree)).rejects.toThrow(/committed config\.sample \(holds an API token\)/);
+  }, 180_000);
+
+  test("deleting a lockfile nothing explains is carried, not held and put back", async () => {
+    const { root, runDir, tree } = await carryWorld("carm");
+    await snapshotRunTree(tree, runDir);
+    fs.rmSync(path.join(tree, "bun.lock"));
+    const { change, held } = await refreezeSessionChange(root, runDir, tree);
+    expect(held).toEqual([]);
+    expect(git(root, "ls-tree", "--name-only", change.tip, "--", "bun.lock")).toBe("");
+    expect(fs.existsSync(path.join(tree, "bun.lock"))).toBe(false);
+  }, 180_000);
+
+  /** A reference-transaction hook that writes `file` into the run's worktree when the change's branch moves: a write made while the refreeze runs. */
+  const writeWhileFreezing = (root: string, tree: string, branch: string, file: string, once: boolean) => {
+    const hook = path.join(root, ".git", "hooks", "reference-transaction");
+    const marker = path.join(root, ".git", "wrote-once");
+    fs.writeFileSync(hook, `#!/bin/sh
+[ "$1" = committed ] || exit 0
+grep -q "refs/heads/${branch}$" || exit 0
+${once ? `[ -e "${marker}" ] && exit 0
+touch "${marker}"` : ""}
+echo "written while freezing $$" > "${path.join(tree, file)}"
+`, { mode: 0o755 });
+    return () => fs.rmSync(hook, { force: true });
+  };
+
+  test("a write made while the refreeze runs is read again and carried, not lost to the reset", async () => {
+    const { root, runDir, tree, branch, show } = await carryWorld("carn");
+    await snapshotRunTree(tree, runDir);
+    write(tree, "b.txt", "fixed\n");
+    const unhook = writeWhileFreezing(root, tree, branch, "late.txt", true);
+    const { change } = await refreezeSessionChange(root, runDir, tree);
+    unhook();
+    expect(show(change.tip, "b.txt")).toBe("fixed");
+    expect(show(change.tip, "late.txt")).toMatch(/^written while freezing/);
+    expect(git(tree, "status", "--porcelain")).toBe("");
+  }, 180_000);
+
+  test("a worktree still changing on the second read refuses and is left as it is", async () => {
+    const { root, runDir, tree, branch } = await carryWorld("caro");
+    const before = git(root, "rev-parse", branch);
+    await snapshotRunTree(tree, runDir);
+    write(tree, "b.txt", "fixed\n");
+    const unhook = writeWhileFreezing(root, tree, branch, "late.txt", false);
+    await expect(refreezeSessionChange(root, runDir, tree)).rejects.toThrow(/kept changing/);
+    unhook();
+    expect(readFrozenChange(runDir)?.tip).toBe(before);
+    expect(git(root, "rev-parse", branch)).toBe(before);
+    expect(fs.readFileSync(path.join(tree, "b.txt"), "utf-8")).toBe("fixed\n");
+    expect(fs.existsSync(path.join(tree, "late.txt"))).toBe(true);
   }, 180_000);
 });
