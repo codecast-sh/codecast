@@ -1,8 +1,8 @@
 // The one read every rank comes from: a person's active priorities in one
 // workspace, most recently active first, whole up to ACTIVE_GROUP_READ. A
-// position (priorities.ts positionOf, the pin line, a list), a move (doMove)
-// and the rank backfill all order this same group (shared/contracts/priorities
-// effectivePriorityOrder), so none of them disagrees with another however big
+// position (priorities.ts positionOf, the pin line, a list) and a move
+// (doMove) both order this same group (shared/contracts/priorities
+// effectivePriorityOrder), so neither disagrees with the other however big
 // the group is.
 
 import type { Doc, Id } from "../_generated/dataModel";

@@ -9,7 +9,6 @@ import { allModules } from "./testModules.testkit";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { effectivePriorityOrder, legacyOrder } from "@codecast/shared/contracts/priorities";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -133,71 +132,6 @@ describe("writes", () => {
     expect((await as(ada).query(pri.show, { short_id: "pri-349" })).rank).toBe(1);
     expect((await as(ada).query(pri.show, { short_id: "pri-100" })).rank).toBe(2);
     void ids;
-  });
-
-  test("the rank backfill rewrites a group past 200 whole, in its old order; a pass merge writes no place onto a row it has not reached", async () => {
-    const { t, ada, ws, p1 } = await world();
-    await t.run(async (ctx) => {
-      for (const p of await ctx.db.query("priorities").collect()) await ctx.db.patch(p._id, { status: "quiet" } as any);
-      for (let i = 0; i < 250; i++) {
-        await ctx.db.insert("priorities", {
-          user_id: ada, workspace: ws, short_id: `pri-${100 + i}`, title: `P${i}`, summary: "", status: "active", rank: 250 - i, rank_set_by: i % 2 ? "person" : "pass", steps: [],
-          first_seen_at: 1, last_active_at: NOW - i * 60_000, pass_at: 1, created_at: 1, updated_at: 1,
-        } as any);
-      }
-    });
-    const before = await t.run(async (ctx) => legacyOrder((await ctx.db.query("priorities").collect()).filter((p) => p.workspace === ws && p.status === "active")).map((p) => p.short_id));
-    // A pass carrying a merged priority's place onto a row the backfill has not reached writes none.
-    const target = await t.run(async (ctx) => (await ctx.db.query("priorities").withIndex("by_short_id", (q) => q.eq("short_id", "pri-101")).first())!);
-    await t.mutation((internal as any).priorityPassRun.applyPlan, {
-      user_id: ada, workspace: ws, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
-      plan: { creates: [], updates: [{ short_id: "pri-101", patch: { person_pos: 0.5 } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
-    });
-    expect((await t.run((ctx) => ctx.db.get(target._id)))?.person_pos).toBeUndefined();
-    await t.mutation((internal as any).priorityRankBackfill.run, { dryRun: false, numItems: 100 });
-    const rows = await t.run(async (ctx) => (await ctx.db.query("priorities").collect()).filter((p) => p.workspace === ws && p.status === "active"));
-    expect(rows.filter((p) => p.rank !== undefined || p.rank_set_by !== undefined)).toEqual([]);
-    expect(effectivePriorityOrder(rows).map((p) => p.short_id)).toEqual(before);
-    void p1;
-  });
-
-  test("before the rank backfill, person ranks are fixed slots and pass ranks fill the free ones, in the list, a move and the pass's input alike", async () => {
-    const { t, as, ada, ws, p1, p2, p3, p4 } = await world();
-    // A person 1, F person 2, B pass 1, C pass 2.
-    await t.run(async (ctx) => {
-      for (const [id, rank, by] of [[p1, 1, "person"], [p2, 2, "person"], [p3, 1, "pass"], [p4, 2, "pass"]] as const) {
-        await ctx.db.patch(id, { status: "active", done_at: undefined, ai_rank: undefined, person_pos: undefined, rank, rank_set_by: by } as any);
-      }
-    });
-    const order = async () => (await rowsOf(as(ada), { workspace: ws, status: "active" })).map((r: any) => r.short_id);
-    expect(await order()).toEqual(["pri-1", "pri-2", "pri-3", "pri-4"]);
-    const { input } = await t.query((internal as any).priorityPassInputs.passInputs, { user_id: ada, workspace: ws });
-    expect(input.priorities.filter((p: any) => p.status === "active").map((p: any) => [p.short_id, p.person_pos, p.ai_rank]).sort()).toEqual([
-      ["pri-1", 1, null], ["pri-2", 2, null], ["pri-3", null, 3], ["pri-4", null, 4],
-    ]);
-    // C up one: what the person sees moves.
-    await as(ada).mutation(pri.moveUp, { short_id: "pri-4" });
-    expect(await order()).toEqual(["pri-1", "pri-2", "pri-4", "pri-3"]);
-  });
-
-  test("before the rank backfill: the order the person set shows, and a move starts from it (legacy person ranks 5,3,2,1,4, then pri-4 to #2)", async () => {
-    const { t, as, ada, ws, p1, p2, p3, p4 } = await world();
-    await t.run(async (ctx) => {
-      const p7 = await ctx.db.insert("priorities", {
-        user_id: ada, workspace: ws, short_id: "pri-7", title: "Priority pri-7", summary: "", status: "active", steps: [],
-        first_seen_at: NOW, last_active_at: NOW - DAY, pass_at: NOW, created_at: NOW, updated_at: NOW,
-      } as any);
-      for (const [id, rank] of [[p1, 5], [p2, 3], [p3, 2], [p4, 1], [p7, 4]] as const) {
-        await ctx.db.patch(id, { status: "active", done_at: undefined, ai_rank: undefined, person_pos: undefined, rank, rank_set_by: "person" } as any);
-      }
-    });
-    const order = async () => (await rowsOf(as(ada), { workspace: ws, status: "active" })).map((r: any) => `${r.short_id}:${r.rank_source}`);
-    expect(await order()).toEqual(["pri-4:person", "pri-3:person", "pri-2:person", "pri-7:person", "pri-1:person"]);
-    await as(ada).mutation(pri.moveTo, { short_id: "pri-4", to: 2 });
-    expect(await order()).toEqual(["pri-3:person", "pri-4:person", "pri-2:person", "pri-7:person", "pri-1:person"]);
-    // The group was rewritten as the backfill would: no old rank left behind.
-    const left = await t.run(async (ctx) => (await ctx.db.query("priorities").collect()).filter((p: any) => p.workspace === ws && p.rank !== undefined));
-    expect(left).toEqual([]);
   });
 
   test("a merge, the person's or the pass's, moves every correction of the absorbed priority, however many", async () => {
