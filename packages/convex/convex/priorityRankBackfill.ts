@@ -16,12 +16,10 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { activeGroup } from "./lib/priorityGroup";
 import { effectivePriorityOrder, legacyOrder } from "@codecast/shared/contracts/priorities";
 
 type Priority = Doc<"priorities">;
-
-/** The most of one owner's active priorities in one workspace it rewrites at once: the reads' own cap (priorities.ts). */
-const GROUP_READ = 200;
 
 export const legacy = (p: Priority) => p.rank !== undefined || p.rank_set_by !== undefined;
 
@@ -68,10 +66,8 @@ export const run = internalMutation({
         counts[p.rank_set_by === "person" ? "placed" : "slotted"]++;
         continue;
       }
-      const group: Priority[] = await ctx.db
-        .query("priorities")
-        .withIndex("by_user_workspace_status", (q) => q.eq("user_id", p.user_id).eq("workspace", p.workspace).eq("status", "active"))
-        .take(GROUP_READ);
+      // The whole group the ranks order (lib/priorityGroup), past any page size, so no legacy row of it is left behind.
+      const group: Priority[] = await activeGroup(ctx, p.user_id, p.workspace);
       const wrote = await backfillGroup(ctx, group);
       for (const k of ["placed", "slotted", "appended"] as const) counts[k] += wrote[k];
     }

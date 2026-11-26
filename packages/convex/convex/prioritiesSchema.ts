@@ -87,6 +87,8 @@ export const priorityTables = {
     updated_at: v.number(),
   })
     .index("by_user_workspace_status", ["user_id", "workspace", "status"])
+    // One person's active priorities in a workspace, the group every rank read orders (lib/priorityGroup).
+    .index("by_user_workspace_status_active", ["user_id", "workspace", "status", "last_active_at"])
     .index("by_workspace_status", ["workspace", "status"])
     // Newest first where recency decides what is read: one person's priorities
     // (the pass, the sweep's stray probe) and a workspace's by status (lists).
