@@ -795,10 +795,10 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     stubs();
     answers.push(said({ mechanism: true, reason: "Deletes every contact older than a year with no backup." }));
     const db = world();
-    expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of aaaaaaaaaa called it a mechanism" });
     const [card] = cards(db);
     expect(card.asked_user_ids).toEqual(["u_ashot"]);
-    expect(card.approval.reason).toBe("mechanism");
+    expect(card.approval.reason).toBe("objection");
     expect(card.context_md).toContain("Deletes every contact older than a year");
   });
 
@@ -807,7 +807,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
       stubs();
       answers.push(said({ verdict, reason: "high package.json:3 pins a version with a known RCE." }));
       const db = world();
-      expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: `needs a review by Ashot: the automatic review ${verdict === "rejected" ? "rejected it" : "asked for changes"}` });
+      expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: `needs a review by Ashot: the automatic review of aaaaaaaaaa ${verdict === "rejected" ? "rejected it" : "asked for changes"}` });
       const [card] = cards(db);
       // Plain reads: bun's toMatchObject with a nested asymmetric matcher empties the object it reads.
       expect(card.asked_user_ids).toEqual(["u_ashot"]);
@@ -847,7 +847,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     const db = world();
     await evaluateNow(db);
     const second = { head_sha: HEAD, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: Date.now() };
-    expect(await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", automatic: second })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    expect(await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", automatic: second })).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of aaaaaaaaaa called it a mechanism" });
     expect(stored(db)).toMatchObject({ mechanism: true, reason: "A bulk delete." });
     // And an evaluation of the same head keeps it: no second call.
     await evaluateNow(db);
@@ -1045,6 +1045,75 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
   });
 
+  test("with no run behind it, only codecast's approval card counts: a detached run's Ship never releases a hold (round 7, finding 1)", async () => {
+    // Jason's run approved the change whole on its own Ship card (Ashot pressed one too), then the run went away.
+    const runCard = (id: string, user: string) => ({ _id: id, short_id: `sd-${id}`, status: "answered", workflow_run_id: "gone", conversation_id: "c_jason", user_id: user, asked_user_ids: [user], question: "Ship?", kind: "single", options: [{ label: "Ship" }], approval: { repository: REPO, pr_number: 7, judged_key: "none", whole_key: "whole:w1", files: [] }, created_at: 1 });
+    const db = heldWorld({
+      session_decisions: [runCard("rc1", "u_jason"), runCard("rc2", "u_ashot")],
+      change_approvals: ["u_jason", "u_ashot"].map((u, i) => ({ _id: `ca${i}`, repository: REPO, pr_number: 7, judged_key: "whole:w1", files: [], user_id: u, source: "card", decision_id: i ? "rc2" : "rc1", created_at: 1 })),
+    });
+    // The head's own answer is a mechanism: the hold still decides, never those approvals.
+    db._tables.pull_requests[0].approval.automatic = { head_sha: HEAD, mechanism: true, verdict: "ship", reason: "A bulk delete.", at: 1 };
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
+    const card = cards(db).at(-1);
+    expect(card.approval).toMatchObject({ reason: "objection", asked: ["u_ashot"], held: true });
+    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
+  });
+
+  test("a card posted before the hold cannot clear it: a new hold takes it back and asks again with the hold shown (round 7, finding 2)", async () => {
+    const db = world();
+    // No answer could be had: a whole-read card, posted with no hold.
+    await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", whole_key: "w1", automatic: { head_sha: HEAD, failed: true, reason: "the model call failed: overloaded, twice", at: 1 } });
+    const [before] = cards(db);
+    expect(before.approval.held).toBeUndefined();
+    // A late answer for the head calls it a mechanism: the pull request is held, the old card taken back.
+    await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", whole_key: "w1", automatic: { head_sha: HEAD, mechanism: true, verdict: "ship", reason: "A bulk delete.", at: 2 } });
+    expect(db._tables.session_decisions.find((d: any) => d._id === before._id).status).toBe("withdrawn");
+    const now = cards(db).filter((c: any) => c.status === "pending");
+    expect(now).toHaveLength(1);
+    expect(now[0].approval).toMatchObject({ held: true, reason: "objection" });
+    expect(now[0].context_md).toContain("**Held:**");
+    // A card from before the hold (here: one that slipped past being taken back) approves, but does not release it.
+    const pre = { ...now[0], _id: "sd_pre", short_id: "sd-900", approval: { ...now[0].approval, held: undefined } };
+    db._tables.session_decisions.push(pre);
+    expect(await answerAs(db, pre, "u_ashot")).not.toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+    expect(await answerAs(db, now[0], "u_ashot")).not.toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
+  });
+
+  test("a pull request opened moments ago is not read yet, and an answer that lands after a run is recorded sets no hold (round 7, finding 3)", async () => {
+    stubs();
+    answers.push(said({ verdict: "changes", reason: "nit: rename x" }));
+    const fresh = world({ pull_requests: [{ ...prRow, created_at: Date.now() - 30_000 }] });
+    const { ctx, scheduled } = actionCtx(fresh);
+    expect(await evaluateNow(fresh, ctx)).toMatchObject({ state: "pending", description: "waiting for codecast's automatic review" });
+    expect(prompts).toEqual([]);
+    expect(scheduled.map((x) => x.name)).toContain("changeApprovals:evaluate");
+    expect(stored(fresh)).toBeUndefined();
+    // The answer comes back after the run that opened the pull request reported it: kept, but it holds nothing.
+    const run = { _id: "run1", user_id: "u_jason", status: "running", created_at: 1, node_statuses: [], pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
+    const raced = world({ workflow_runs: [run] });
+    raced._tables.pull_requests[0].approval = { head_sha: HEAD, state: "pending", description: "x", automatic: { head_sha: HEAD, pending: true, reason: "reading", at: Date.now() } };
+    await (settle as any)._handler(ctxOf(raced), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", automatic: { head_sha: HEAD, mechanism: false, verdict: "changes", reason: "nit: rename x", at: 2 } });
+    expect(stored(raced)).toMatchObject({ verdict: "changes" });
+    expect(raced._tables.pull_requests[0].approval.held).toBeUndefined();
+  });
+
+  test("with no owner, the card is held by the first admin asked who has a session in the team (round 7, finding 4)", async () => {
+    // Cam is the oldest admin and has no session in the team; Ashot has one.
+    const db = heldWorld({
+      users: [...people, { _id: "u_cam", name: "Cam" }],
+      team_memberships: [{ _id: "m0", team_id: "team1", user_id: "u_cam", role: "admin", joined_at: 0 }, { _id: "m1", team_id: "team1", user_id: "u_ashot", role: "admin", joined_at: 1 }, { _id: "m2", team_id: "team1", user_id: "u_jason", role: "member", joined_at: 2 }],
+    });
+    await (settle as any)._handler(ctxOf(db), { ...heldArgs, people: { ...heldArgs.people, area_owner: undefined } });
+    const [card] = cards(db);
+    expect(card.asked_user_ids).toEqual(["u_cam", "u_ashot"]);
+    expect(card.holder).toEqual({ kind: "user", id: "u_ashot" });
+    expect(card.conversation_id).toBe("c_ashot");
+  });
+
   test("a run-backed card answered by someone it did not ask is refused and stays open, rather than closing with nothing approved (round 4, finding 1)", async () => {
     const run = { _id: "run1", user_id: "host", team_id: "team1", status: "completed", created_at: 1, primary_conversation_id: "c_log", node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, mechanism: false, at: 3, attempt: 1 }, pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
     const db = world({ workflow_runs: [run], users: [...people, { _id: "host", name: "Host" }], conversations: [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }] });
@@ -1218,7 +1287,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
       routes.unshift({ method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ status: 404 }) });
       answers.push(said({ mechanism: true }));
       const db = world();
-      expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+      expect(await evaluateNow(db)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of aaaaaaaaaa called it a mechanism" });
       expect(cards(db)[0].asked_user_ids).toEqual(["u_ashot"]);
       routes = [];
     }

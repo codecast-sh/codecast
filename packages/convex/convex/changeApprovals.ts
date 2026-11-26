@@ -41,6 +41,7 @@ import { requireInstallationRevoker } from "./githubApp";
 import { fetchPRFiles, PR_FILES_CAP, type PRPath } from "./githubApi";
 import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
+import { prAuthor } from "./lib/changeApprovalRows";
 import { approvalContext, askerOf, changeJudgedFiles, gateOf, isCam, isReleaseCaptain, mayReadGate, preBuildYes } from "./lib/changeApprovalRows";
 import { askReviewForMechanism, cardPeople, cardStale, postApprovalCard, withdrawApprovalCard, type CardReason } from "./lib/changeApprovalCards";
 import { AUTOMATIC_REVIEW_CLAIM_MS, MECHANISM_FILE, reviewHead, type AutomaticReview } from "./lib/automaticReview";
@@ -128,10 +129,9 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
     if (f.card) return approved(f.card);
     return { state: "pending", description: fit(`needs a review by ${f.needs.review}: ${f.review_failed ? `the automatic review could not answer (${f.review_failed})` : "the review gave no mechanism answer"}`) };
   }
+  // A hold waits for a person to clear it on its card (changeApprovalRows mayClearHold): no other approval answers it.
+  if (f.held) return heldWaits();
   if (f.objection) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: the automatic review ${f.objection === "rejected" ? "rejected it" : "asked for changes"}`) };
-  // A hold waits for a person to clear it on its card (changeApprovalRows mayClearHold): no other approval answers it,
-  // a run's own Ship card included. An automatic answer that is itself a mechanism or objection asks its own card.
-  if (f.held && !(f.automatic && (f.mechanism || f.objection))) return heldWaits();
   if (!f.judged.length && !f.mechanism) return { state: "success", description: f.automatic ? "no judged paths; the automatic review: not a mechanism" : "no judged paths; the review: not a mechanism" };
   if (f.card) return approved(f.card);
   if (f.mechanism) return { state: "pending", description: fit(`needs ${f.needs.mechanism}: the review called it a mechanism`) };
@@ -154,7 +154,7 @@ export function cardReason(f: ApprovalFacts): CardReason | null {
   if (!f.run) return null;
   if (f.mechanism === null) return f.run !== "ended" ? null : f.held ? "objection" : !f.card ? "review" : null;
   // A hold is asked on its own card whatever else approved the change (decide).
-  if (f.held && !(f.automatic && (f.mechanism || f.objection))) return "objection";
+  if (f.held) return "objection";
   if (f.card) return null;
   if (f.objection) return "objection";
   if (f.mechanism) return "mechanism";
@@ -398,6 +398,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   if (!("unreadable" in read)) {
     const claim: Claim = await ctx.runMutation(internal.changeApprovals.claimAutomaticReview, { repository, pr_number: args.pr_number, head_sha: read.head_sha });
     if (claim.action === "stale") automatic = claim.record;
+    if (claim.action === "too_soon") await ctx.scheduler.runAfter(claim.in_ms, internal.changeApprovals.evaluate, { repository, pr_number: args.pr_number, post: true });
     if (claim.action === "no_record") {
       automatic = { head_sha: read.head_sha, failed: true, reason: "codecast keeps no record of this pull request to hold an answer (its repository is not shared with a team)", at: Date.now() };
     }
@@ -505,8 +506,12 @@ export const openNumbers = internalQuery({
   },
 });
 
+/** A pull request this new waits for its automatic review: a codecast run opening it reports it in that time. */
+const AUTOMATIC_REVIEW_GRACE_MS = 2 * 60_000;
+
 type Claim =
   | { action: "run_behind" | "kept" | "waiting" | "no_record" }
+  | { action: "too_soon"; in_ms: number }
   | { action: "stale"; record: AutomaticReview }
   | { action: "claimed"; scope: CallScope | null };
 
@@ -534,6 +539,9 @@ export const claimAutomaticReview = internalMutation({
     if (run) return { action: "run_behind" };
     const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
     if (!rows.length) return { action: "no_record" };
+    // Opened moments ago: the run that opened it may not have reported it yet. The evaluation set for then claims it.
+    const age = now - (rows[0].created_at ?? 0);
+    if (age < AUTOMATIC_REVIEW_GRACE_MS) return { action: "too_soon", in_ms: AUTOMATIC_REVIEW_GRACE_MS - age };
     const stored = rows[0].approval?.automatic;
     if (stored?.head_sha === args.head_sha) {
       if (!stored.pending) return { action: "kept" };
@@ -648,8 +656,17 @@ export const settle = internalMutation({
       .query("change_approvals")
       .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
       .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at));
-    const approvals = await keyed(key);
-    const wholeRow = (await keyed(wholeKey)).find((a) => a.source === "card");
+    // With no run behind the pull request, an approval counts only from codecast's own approval card, by someone it asked
+    // when it was posted who did not write the change: never a run's Ship card (a run since detached), never the author.
+    const noRunAuthor = run ? null : await prAuthor(ctx, repository, args.pr_number);
+    const counts = async (a: Doc<"change_approvals">): Promise<boolean> => {
+      if (run) return true;
+      const d: any = a.decision_id ? await ctx.db.get(a.decision_id) : null;
+      return !!d?.approval_card && (d.approval?.asked ?? []).some((id: any) => String(id) === String(a.user_id)) && String(a.user_id) !== String(noRunAuthor);
+    };
+    const countable = async (rows: Doc<"change_approvals">[]) => { const out: Doc<"change_approvals">[] = []; for (const a of rows) if (await counts(a)) out.push(a); return out; };
+    const approvals = await countable(await keyed(key));
+    const wholeRow = (await countable(await keyed(wholeKey))).find((a) => a.source === "card");
     const pressRow = approvals.find((a) => a.source === "ship_press");
     const yesRow = approvals.find((a) => a.source === "engineer_yes");
     const judgedCardRow = approvals.find((a) => a.source === "card");
@@ -667,7 +684,7 @@ export const settle = internalMutation({
     // While it waits, it stands only while someone it now asks is someone it first asked: else no one can answer it.
     const answerable = (c: any) => c.status !== "pending" || (c.asked_user_ids ?? []).some((id: any) => (c.approval?.asked ?? c.asked_user_ids ?? []).map(String).includes(String(id)));
     const cardKeyStands = !!before?.card_key && !!heldCard && heldCard.status !== "withdrawn" && answerable(heldCard);
-    const beforeKey = cardKeyStands ? before!.card_key : undefined;
+    let beforeKey = cardKeyStands ? before!.card_key : undefined;
     if (heldCard && heldCard.status === "pending" && !cardKeyStands) await withdrawApprovalCard(ctx, heldCard._id, Date.now(), "No one it asks now was asked when it was posted, so no one can answer it; a new card asks.");
     // Who each question goes to: a person, never a role (lib/changeApprovalCards.ts).
     const to = await cardPeople(ctx, {
@@ -690,8 +707,15 @@ export const settle = internalMutation({
     // not a run is behind the pull request now; only a person's card clears it (changeApprovalRows clearHold).
     // Only a fresh answer arrives as `given` (an evaluation that claimed the head, or found its claim stale): a second
     // answer for a head counts toward the hold though it never replaces the first.
-    const newHold = holdOf(given);
+    // A run recorded on the pull request before the answer settled: the answer is kept, its hold is not (the run's own
+    // review decides now).
+    const newHold = run ? undefined : holdOf(given);
     const held = before?.held ?? newHold;
+    // A hold newly set takes back the card that asked without it: only a card posted while held may clear the hold.
+    if (newHold && !before?.held && heldCard?.status === "pending") {
+      await withdrawApprovalCard(ctx, heldCard._id, Date.now(), "The pull request is held now; a new card asks with the hold shown.");
+      beforeKey = undefined;
+    }
     const mechanism = run ? mechanismOf(run, args.head_sha) : auto && !auto.failed && typeof auto.mechanism === "boolean" ? auto.mechanism : null;
     // A reviewer records its answer only while its run is pending or running (orgLineMerge.recordReviewVerdictCore).
     const runState = !run ? (auto ? "ended" : false) : run.status === "pending" || run.status === "running" ? "live" : "ended";

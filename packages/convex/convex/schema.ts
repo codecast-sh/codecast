@@ -5555,8 +5555,9 @@ export default defineSchema({
     // and its judged files as they stood when it was asked. Absent when the run had no pull request yet.
     // whole_key: the run's card also approves the whole diff it showed, which covers a mechanism.
     // `asked`: the people an approval card asked when codecast posted it (changeApprovalCards.postApprovalCard), the only
-    // ones whose answer counts: a pass or an escalation rewrites asked_user_ids, never this.
-    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()), asked: v.optional(v.array(v.id("users"))) })),
+    // ones whose answer counts: a pass or an escalation rewrites asked_user_ids, never this. `held`: posted while the pull
+    // request was held, so its approval clears the hold (changeApprovalRows mayClearHold).
+    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()), asked: v.optional(v.array(v.id("users"))), held: v.optional(v.boolean()) })),
     // An approval card codecast itself posted for a pull request's status (changeApprovals.ts): silent, one person's,
     // and settled by settleCardApproval from `approval` above.
     approval_card: v.optional(v.boolean()),

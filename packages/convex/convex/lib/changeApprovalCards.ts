@@ -229,7 +229,15 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     if (open.some((d) => d.approval_card && d.approval?.repository === a.repository && d.approval?.pr_number === a.pr_number && cardKeyOf(d.approval.judged_key, d.approval.reason) === card_key)) return null;
   }
   const asked = [a.to.user_id, ...(a.to.also ?? [])];
-  const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id, !a.run || a.reason === "objection", a.pr?.team_id ?? a.run?.team_id ?? a.teamId);
+  // The card is held by the first person it asks who has a session to ask it in (in the repository's team, for a card
+  // the author must not read); all of them are asked.
+  const own = !a.run || a.reason === "objection";
+  let conversation: any = null;
+  let holder = a.to.user_id;
+  for (const id of own ? asked : [a.to.user_id]) {
+    conversation = await askingConversation(ctx, a.run, a.pr, id, own, a.pr?.team_id ?? a.run?.team_id ?? a.teamId);
+    if (conversation) { holder = id; break; }
+  }
   if (!conversation) {
     // Nowhere to ask from (its person has no session at all): they are told, once per question, so it still lands.
     // No card_key is kept for a notification: the next evaluation posts the card once they have a session. They are
@@ -276,14 +284,14 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     blocking: true,
     silent: true,
     status: "pending",
-    holder: { kind: "user", id: String(a.to.user_id) },
-    holder_key: `user:${a.to.user_id}`,
+    holder: { kind: "user", id: String(holder) },
+    holder_key: `user:${holder}`,
     asked_user_ids: asked,
     addressed: true,
     hops: [],
     ...(a.run?.task_id ? { task_id: a.run.task_id } : {}),
     ...(a.pr?.team_id ? { team_id: a.pr.team_id } : {}),
-    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason, asked },
+    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason, asked, ...(a.held ? { held: true } : {}) },
     approval_card: true,
     created_at: a.now,
     session_title: conversation.title,
