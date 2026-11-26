@@ -765,6 +765,20 @@ describe("agent owners answer a session's waits", () => {
     }
   });
 
+  test("a leave hands on this team's live waits even past 200 newer waits from other teams or killed sessions", async () => {
+    const { ctx, tables } = roleWorld(true);
+    const wait = tables.conversations[0];
+    Object.assign(wait, { user_id: "bot1", role_started: true, wait_up_at: now - 100_000, wait_up_count: 5, wait_up_person: "lead1" });
+    tables.users.push({ _id: "bot1", is_bot: true }, { _id: "lead1" }, { _id: "admin1" });
+    tables.org_roles[0].reports_to = { kind: "user", user_id: "lead1" };
+    tables.team_memberships = [member("bot1"), member("lead1"), member("admin1", "admin")];
+    for (let i = 0; i < 200; i++) {
+      tables.conversations.unshift({ _id: `noise${i}`, user_id: "u9", team_id: i % 2 ? "team9" : "team1", ...(i % 2 ? {} : { inbox_killed_at: now }), status: "active", message_count: 5, updated_at: now, wait_up_at: now - i, wait_up_count: 5, wait_up_person: "lead1" } as any);
+    }
+    await handOnEscalatedWaits(ctx as any, "lead1" as any, "team1" as any);
+    expect(wait).toMatchObject({ wait_up_person: "admin1" });
+  });
+
   test("leaving the team hands an escalated wait on to the next person, never back to the leaver", async () => {
     const { ctx, tables } = roleWorld(true);
     Object.assign(tables.conversations[0], { user_id: "bot1", role_started: true, wait_up_at: now - 1000, wait_up_count: 5, wait_up_person: "lead1", needs_input_notified_key: "5:blocked" });

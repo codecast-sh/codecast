@@ -22,8 +22,8 @@ cast own <member>            # adds them as an owner of this session
 cast own <session> <member>  # a different session of yours
 ```
 
-They get a notification and the session sits in their inbox; it stays in
-yours. `cast disown` yourself only if the work is entirely theirs now.
+They get a notification and the session sits in their inbox. `cast disown`
+yourself only if the work is entirely theirs now.
 
 ## Brief
 

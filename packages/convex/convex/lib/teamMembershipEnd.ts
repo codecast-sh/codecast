@@ -70,11 +70,12 @@ export async function handOnEscalatedWaits(ctx: { db: any }, userId: Id<"users">
   const rows = await ctx.db
     .query("conversations")
     .withIndex("by_wait_up_person", (q: any) => q.eq("wait_up_person", userId))
+    .order("desc")
+    // This team's live waits, newest first: a killed session waits on nobody.
+    .filter((q: any) => q.eq(q.field("team_id"), teamId))
+    .filter((q: any) => q.eq(q.field("inbox_killed_at"), undefined))
     .take(ESCALATIONS_PER_LEAVE);
-  for (const conv of rows) {
-    if (String(conv.team_id ?? "") !== String(teamId)) continue;
-    await rerouteEscalatedWait(ctx, conv, { exclude: [String(userId)] });
-  }
+  for (const conv of rows) await rerouteEscalatedWait(ctx, conv, { exclude: [String(userId)] });
 }
 const ESCALATIONS_PER_LEAVE = 200;
 
