@@ -544,18 +544,33 @@ export function CardWorkersLine({
   count,
   needsYou,
   onOpen,
+  expanded = false,
+  onToggle,
 }: {
   count: number;
   needsYou: InboxSession[];
   onOpen: (session: InboxSession, e?: React.MouseEvent) => void;
+  /** This card's workers are listed under it. */
+  expanded?: boolean;
+  /** Lists or folds this card's workers under it, whatever the global
+   *  Sub-agents option says (ct-101636). */
+  onToggle?: () => void;
 }) {
   if (count <= 0) return null;
   const first = needsYou[0];
+  const noun = count === 1 ? "worker" : "workers";
   return (
     <div data-sv-workers={count} className="pl-[26px] pr-2 pb-1 text-[12px] leading-tight text-sol-text-muted tabular-nums">
-      <span title={`${count} ${count === 1 ? "session" : "sessions"} this agent spawned; View options › Sub-agents and workers lists them`}>
-        {count} {count === 1 ? "worker" : "workers"}
-      </span>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        data-sv-workers-toggle
+        onClick={(e) => { e.stopPropagation(); onToggle?.(); }}
+        className="hover:text-sol-text hover:underline underline-offset-2"
+        title={expanded ? `Fold the ${noun} this agent spawned` : `List the ${noun} this agent spawned`}
+      >
+        {count} {noun}
+      </button>
       {first && (
         <>
           <span aria-hidden> · </span>
