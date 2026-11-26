@@ -8,7 +8,7 @@ import { labelHexColor } from '@/lib/labelColors';
 import { projectColor } from '@/components/sessionFormat';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import {
-  useInboxStore, computeChipCounts, convBucketMap, sortLabels, resolveInboxViewMode, type InboxViewMode,
+  useInboxStore, computeChipCounts, convBucketMap, sortLabels, resolveInboxViewMode, resolveInboxOldestFirst, type InboxViewMode,
 } from '@codecast/web/store/inboxStore';
 
 // The lens names as a segment says them. The two everyday lenses are always
@@ -51,6 +51,7 @@ export function useInboxFilterCounts() {
 export function InboxLensBar({ stacked = false, accessory }: { stacked?: boolean; accessory?: ReactNode }) {
   const Theme = useTheme();
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const { labels, bucketCounts, projectCounts } = useInboxFilterCounts();
@@ -76,6 +77,9 @@ export function InboxLensBar({ stacked = false, accessory }: { stacked?: boolean
             accessibilityState={{ selected }}
           >
             <Text style={[styles.segmentText, selected && styles.segmentTextSelected]}>{SEGMENT[mode] ?? mode}</Text>
+            {selected && oldestFirst && (mode === 'recent' || mode === 'time') && (
+              <Feather name="arrow-up" size={12} color={Theme.text} accessibilityLabel="oldest first" />
+            )}
           </TouchableOpacity>
         );
       })}
@@ -195,7 +199,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: 10,
     height: 28,
     borderRadius: 7,
-    justifyContent: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
   },
   segmentSelected: {
     backgroundColor: Theme.bg,
