@@ -146,8 +146,11 @@ describe("findChrome", () => {
 });
 
 describe("thumbArgs", () => {
+  const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  const cft = "/u/.codecast/chrome-for-testing/158.0.8127.36/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+
   it("captures into a throwaway profile, never the default one", () => {
-    const args = thumbArgs("/x/index.html", "/x/out.png", "/x/profile");
+    const args = thumbArgs(chrome, "/x/index.html", "/x/out.png", "/x/profile");
     expect(args).toContain("--user-data-dir=/x/profile");
     expect(args).toContain("--headless=new");
     expect(args[args.length - 1]).toBe("file:///x/index.html");
@@ -157,7 +160,20 @@ describe("thumbArgs", () => {
     const saved = process.env.HOME;
     process.env.HOME = dir;
     try {
-      expect(thumbArgs("/x/index.html", "/x/out.png", "/x/profile").includes("--use-mock-keychain")).toBe(process.platform === "darwin");
+      expect(thumbArgs(chrome, "/x/index.html", "/x/out.png", "/x/profile").includes("--use-mock-keychain")).toBe(process.platform === "darwin");
+    } finally {
+      process.env.HOME = saved;
+    }
+  });
+
+  it("uses the mock keychain for Chrome for Testing even in a home with a login keychain", () => {
+    const saved = process.env.HOME;
+    fs.mkdirSync(path.join(dir, "Library", "Keychains"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "Library", "Keychains", "login.keychain-db"), "");
+    process.env.HOME = dir;
+    try {
+      expect(thumbArgs(cft, "/x/index.html", "/x/out.png", "/x/profile").includes("--use-mock-keychain")).toBe(process.platform === "darwin");
+      expect(thumbArgs(chrome, "/x/index.html", "/x/out.png", "/x/profile").includes("--use-mock-keychain")).toBe(false);
     } finally {
       process.env.HOME = saved;
     }

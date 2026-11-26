@@ -216,33 +216,46 @@ export function chromeBinaryProbes(): string[] {
 }
 
 /**
- * Keychain flags for a macOS launch.
+ * Keychain flags for a macOS launch of `binary` (null: the human's Chrome).
  *
- * Chrome on macOS stores its cookie encryption key ("Chrome Safe Storage") in
- * the login keychain of the home directory it runs under. Under a home that
- * has no login keychain (a test sandbox, a scratch HOME) the Security
- * framework answers "no default keychain" (-25307) and macOS raises a modal
- * "Keychain Not Found" dialog on the desktop for every launch, blocking Chrome
- * until a person dismisses it. `--use-mock-keychain` makes Chrome keep the key
- * in memory instead, which is right for such a home: no keychain can exist
- * there. A real home keeps the real keychain, so profiles that already hold
- * encrypted cookies stay readable.
+ * Chrome on macOS stores its cookie encryption key in the login keychain of
+ * the home directory it runs under: "Chrome Safe Storage" for Google Chrome,
+ * "Chromium Safe Storage" for Chromium and Chrome for Testing.
+ * `--use-mock-keychain` makes Chrome keep the key in memory instead. It is
+ * passed in two cases:
+ *
+ * - A Chrome for Testing build. Its keychain item belongs to whichever
+ *   Chromium created it first, and codecast's own build is unsigned, so macOS
+ *   cannot match it to the item's access list and asks for the login password
+ *   on the desktop ("Google Chrome for Testing wants to use your confidential
+ *   information stored in "Chromium Safe Storage""), again on every launch
+ *   nobody answers "Always Allow", and again for every new build. On an
+ *   unattended Mac the dialog waits for a person (2026-11-24). Codecast starts
+ *   Chrome for Testing only with its own profiles (automationChromeBinary), so
+ *   the real key protects nothing they need.
+ * - A home with no login keychain (a test sandbox, a scratch HOME): the
+ *   Security framework answers "no default keychain" (-25307) and macOS raises
+ *   a modal "Keychain Not Found" dialog for every launch.
+ *
+ * Google Chrome in a real home keeps the real keychain, so profiles cloned from
+ * the human's Chrome, whose cookies are sealed with its key, stay readable.
  */
-export function keychainArgs(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+export function keychainArgs(binary: string | null = null, env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
   if (platform !== "darwin") return [];
+  if (binary && path.basename(binary) === "Google Chrome for Testing") return ["--use-mock-keychain"];
   const home = env.HOME || os.homedir();
   const loginKeychain = path.join(home, "Library", "Keychains", "login.keychain-db");
   return fs.existsSync(loginKeychain) ? [] : ["--use-mock-keychain"];
 }
 
 /** Default args used for every launch. CDP + isolation + automation-friendly. */
-function defaultArgs(opts: LaunchChromeOptions): string[] {
+function defaultArgs(opts: LaunchChromeOptions, binaryPath: string): string[] {
   return [
     `--remote-debugging-port=${opts.cdpPort}`,
     `--user-data-dir=${opts.userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
-    ...keychainArgs(),
+    ...keychainArgs(binaryPath),
     // Disable Chrome's own update / metrics / telemetry side-channels.
     "--disable-background-networking",
     "--disable-sync",
@@ -273,7 +286,7 @@ export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeIns
   }
 
   fs.mkdirSync(opts.userDataDir, { recursive: true });
-  const args = [...defaultArgs(opts), ...(opts.extraArgs ?? [])];
+  const args = [...defaultArgs(opts, binaryPath), ...(opts.extraArgs ?? [])];
 
   // A missing/invalid binary surfaces differently across runtimes: Node emits
   // an async 'error' event on the child; Bun may throw synchronously OR emit

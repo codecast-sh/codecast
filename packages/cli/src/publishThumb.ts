@@ -12,11 +12,12 @@ const THUMB_TIMEOUT_MS = 10_000;
 /** The headless Chrome every codecast launcher uses: one the human's links can never reach (automationChromeBinary). */
 export const findChrome = (): string | null => automationChromeBinary();
 
-/** The headless command line for one thumbnail. Pure, so the flag set is
- * testable without spawning a browser. The throwaway profile dir keeps the
- * capture off the human's real profile (which a running Chrome holds locked)
- * and, with the keychain flag, off the macOS keychain when the home has none. */
-export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: string, extraArgs: string[] = []): string[] {
+/** The headless command line for one thumbnail taken by `chrome`. Pure, so the
+ * flag set is testable without spawning a browser. The throwaway profile dir
+ * keeps the capture off the human's real profile (which a running Chrome holds
+ * locked), and the keychain flags keep it off the macOS keychain
+ * (keychainArgs). */
+export function thumbArgs(chrome: string, entryHtmlAbsPath: string, outPng: string, profileDir: string, extraArgs: string[] = []): string[] {
   return [
     "--headless=new",
     `--screenshot=${outPng}`,
@@ -25,7 +26,7 @@ export function thumbArgs(entryHtmlAbsPath: string, outPng: string, profileDir: 
     "--hide-scrollbars",
     "--disable-gpu",
     "--no-first-run",
-    ...keychainArgs(),
+    ...keychainArgs(chrome),
     ...extraArgs,
     `file://${entryHtmlAbsPath}`,
   ];
@@ -51,7 +52,7 @@ export async function captureThumb(entryHtmlAbsPath: string, opts: { extraArgs?:
     if (!chrome) return null;
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-thumb-"));
     const outPng = path.join(tmpDir, "thumb.png");
-    const child = spawn(chrome, thumbArgs(entryHtmlAbsPath, outPng, path.join(tmpDir, "profile"), opts.extraArgs), { stdio: "ignore" });
+    const child = spawn(chrome, thumbArgs(chrome, entryHtmlAbsPath, outPng, path.join(tmpDir, "profile"), opts.extraArgs), { stdio: "ignore" });
     try {
       const deadline = Date.now() + (opts.timeoutMs ?? THUMB_TIMEOUT_MS);
       let exited = false;
