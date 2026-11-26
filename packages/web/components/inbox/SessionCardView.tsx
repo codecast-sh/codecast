@@ -5,7 +5,6 @@ import { Pin, Star, Clock, EyeOff, Square, Workflow, X } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
 import { withSafetyBlock, isClosedSession, isClosedHidden, isStashHidden, type UserRest } from "@codecast/shared/contracts";
-import { closedBackWords } from "../../lib/sessionClose";
 import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatIdleDuration, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -503,16 +502,9 @@ export function SessionCardView({
             </span>
           )}
           {isStashed && isStashHidden(session) && (
-            isClosedHidden(session) ? (
-              // A Close a machine woke: still the person's Close (the Modern card's "Closed").
-              <span className="flex-shrink-0 flex items-center text-sol-text-dim" title={`Closed: ${closedBackWords(session)}`} aria-label="Closed">
-                <X className="w-3 h-3" />
-              </span>
-            ) : (
-              <span className="flex-shrink-0 flex items-center text-sol-text-dim" title="Stashed and hidden: wakes don't bring it back; only an ask does">
-                <EyeOff className="w-3 h-3" />
-              </span>
-            )
+            <span className="flex-shrink-0 flex items-center text-sol-text-dim" title={isClosedHidden(session) ? "Closed" : "Stashed and hidden: wakes don't bring it back; only an ask does"}>
+              {isClosedHidden(session) ? <X className="w-3 h-3" aria-label="Closed" /> : <EyeOff className="w-3 h-3" />}
+            </span>
           )}
           {/* Unread sits in the card's left margin, beside the title, so it
               marks the row without pushing the title off the shared edge. */}
