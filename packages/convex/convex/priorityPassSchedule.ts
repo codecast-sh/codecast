@@ -19,42 +19,43 @@ const pair = { user_id: v.id("users"), workspace: v.string() };
 
 /** Runs that start within this of the run before are one pass: a chain's runs start seconds apart. */
 const PASS_SPAN_MS = 10 * MINUTE;
-/** The share of the daily ceiling automatic passes pace to; the rest is room for a long chain or a manual run. */
+/** The share of the daily ceiling automatic passes stay within; the rest is room for a long chain or a manual run. */
 export const PASS_PACE_SHARE = 0.8;
+
+const median = (xs: number[]) => {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0;
+};
 
 /**
  * When the pair's next automatic pass may start, from its runs of the last
  * day (newest first): PASS_MIN_GAP_MS after the last run that asked the model
- * or still holds the pair, widened so the day's passes spread over the day
- * when they cost enough that hourly ones would spend past PASS_PACE_SHARE of
- * PRIORITY_PASS_DAILY_USD (a pass's cost is its runs' mean over the day, a
- * chain counted as one), and never before the spend that the next pass would
- * take past the ceiling has aged out of the day. Catch-up runs spend their own
- * allowance and count only as the last run.
+ * or still holds the pair, and once the day's spend plus one more pass (the
+ * median of the day's passes, a chain counted as one) fits within
+ * PASS_PACE_SHARE of PRIORITY_PASS_DAILY_USD, waiting for older spend to age
+ * out of the day when it does not. Catch-up runs spend their own allowance
+ * and count only as the last run.
  */
 export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number): number {
   const last = day.find((r) => isPaidRun(r) || (r.status === "running" && r.started_at > now - RESERVATION_TTL_MS));
   if (!last) return -Infinity;
   const paid = day.filter((r) => isPaidRun(r) && !r.catch_up).reverse();
-  let passes = 0;
-  let spent = 0;
+  const passes: number[] = [];
   let prev = -Infinity;
   for (const r of paid) {
-    if (r.started_at - prev > PASS_SPAN_MS) passes++;
+    if (r.started_at - prev > PASS_SPAN_MS) passes.push(0);
+    passes[passes.length - 1] += r.cost_usd ?? 0;
     prev = r.started_at;
-    spent += r.cost_usd ?? 0;
   }
-  const perPass = passes ? spent / passes : 0;
-  const gap = Math.min(DAY, Math.max(PASS_MIN_GAP_MS, (perPass * DAY) / (PASS_PACE_SHARE * PRIORITY_PASS_DAILY_USD)));
-  // Oldest first, the spend that leaves the day until the next pass fits under the ceiling.
-  let over = spent + perPass - PRIORITY_PASS_DAILY_USD;
+  // Oldest first, the spend that leaves the day until the next pass fits.
+  let over = passes.reduce((a, b) => a + b, 0) + median(passes) - PASS_PACE_SHARE * PRIORITY_PASS_DAILY_USD;
   let back = -Infinity;
   for (const r of paid) {
     if (over <= 0) break;
     over -= r.cost_usd ?? 0;
     back = r.started_at + DAY;
   }
-  return Math.max(last.started_at + gap, back);
+  return Math.max(last.started_at + PASS_MIN_GAP_MS, back);
 }
 
 /** When the pair's next pass may start by its spend (passAllowedAt). */

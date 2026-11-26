@@ -124,11 +124,8 @@ describe("rate limit", () => {
     const asAna = w.t.withIdentity({ subject: `${w.ana}|session` });
     expect((await asAna.query((api as any).priorities.list, { workspace: w.team })).next_pass_at).toBe(t0 - 20 * MIN + PASS_MIN_GAP_MS);
   });
-
-  test("a day of pins from a person and a role spends under the ceiling, with passes spread through the day", async () => {
+  test("two days of pins from a person and a role, each pass dearer the longer since the last: spend stays under the ceiling and passes stay spread", async () => {
     const w = await world();
-    // About $0.23 a run, the heaviest pair's measured cost on prod.
-    model.usage = { input_tokens: 70_000, output_tokens: 9_000 };
     const role = await w.t.run(async (ctx) => {
       const seat = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: Date.now() } as any);
       return ctx.db.insert("conversations", {
@@ -137,38 +134,48 @@ describe("rate limit", () => {
       } as any);
     });
     const t0 = Date.now();
-    // The pair's first pass ran yesterday: today's passes all spend from the daily ceiling.
-    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: t0 - DAY - H, finished_at: t0 - DAY - H, status: "ok", catch_up: true, cost_usd: 0.2, cursor_at: t0 - DAY - H, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
-    for (let i = 0, at = t0; at < t0 + DAY; i++, at += 5 * MIN) {
-      // A due job fires on time.
-      for (const job of await jobs(w, "priorityPassSchedule:fire")) if (job.scheduledTime <= at) await fireAt(w, at);
+    // The pair's first pass (a catch-up) ran an hour ago: every pass here spends from the daily ceiling.
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: t0 - H, finished_at: t0 - H, status: "ok", catch_up: true, cost_usd: 0.2, cursor_at: t0 - H, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
+    let lastStart = t0 - H;
+    for (let i = 0, at = t0; at < t0 + 2 * DAY; i++, at += 5 * MIN) {
+      for (const job of await jobs(w, "priorityPassSchedule:fire")) {
+        if (job.scheduledTime > at) continue;
+        // A pass costs $0.03 plus $0.03 for each hour since the last one (input priced at $2 per million tokens).
+        model.usage = { input_tokens: Math.round((0.03 + (0.03 * (at - lastStart)) / H) * 500_000), output_tokens: 0 };
+        if ((await fireAt(w, at)) === "started") lastStart = at;
+      }
       // The role pins every five minutes, the person every twenty.
       await pinAt(w, role, at, `Role tick ${i}`);
       if (i % 4 === 0) await pinAt(w, w.teamConv, at, `Person step ${i}`);
     }
     const runs = (await w.runs()).filter((r) => r.started_at >= t0);
     const paid = runs.filter((r) => r.status === "ok");
-    const spent = paid.reduce((sum, r) => sum + (r.cost_usd ?? 0), 0);
-    expect(paid[0].cost_usd!).toBeGreaterThan(0.2);
     expect(runs.filter((r) => r.error === "daily ceiling")).toEqual([]);
-    expect(spent).toBeLessThanOrEqual(PRIORITY_PASS_DAILY_USD);
-    // Spread, not spent by noon: passes in every quarter of the day.
-    for (let q = 0; q < 4; q++) expect(paid.some((r) => r.started_at >= t0 + (q * DAY) / 4 && r.started_at < t0 + ((q + 1) * DAY) / 4)).toBe(true);
-  }, 300_000);
+    // No day's spend reaches the ceiling, wherever the day starts.
+    for (const r of paid) {
+      const day = paid.filter((x) => x.started_at > r.started_at - DAY && x.started_at <= r.started_at);
+      expect(day.reduce((sum, x) => sum + (x.cost_usd ?? 0), 0)).toBeLessThanOrEqual(PRIORITY_PASS_DAILY_USD);
+    }
+    // Spread, not collapsed: on the second day too, passes in every quarter.
+    for (let q = 0; q < 8; q++) expect(paid.some((r) => r.started_at >= t0 + (q * DAY) / 4 && r.started_at < t0 + ((q + 1) * DAY) / 4)).toBe(true);
+    expect(paid.filter((r) => r.started_at >= t0 + DAY).length).toBeGreaterThanOrEqual(8);
+  }, 600_000);
 
-  test("passAllowedAt: hourly while passes are cheap, spread when they cost, held while the next would cross the ceiling", () => {
+  test("passAllowedAt: hourly while the day's spend has room, held until older spend leaves the day when it has not", () => {
     const now = Date.now();
     const at = (ago: number, cost_usd: number, catch_up = false) => ({ started_at: now - ago, status: "ok", cost_usd, ...(catch_up ? { catch_up } : {}) }) as any;
     expect(passAllowedAt([], now)).toBe(-Infinity);
     expect(passAllowedAt([at(H, 0.01), at(3 * H, 0.01)], now)).toBe(now - H + PASS_MIN_GAP_MS);
-    // $0.30 a pass: a day holds 4 at 80% of $1.50, so they come 6 hours apart.
-    expect(passAllowedAt([at(H, 0.3)], now)).toBe(now - H + 6 * H);
-    // A chain's runs are one pass.
-    expect(passAllowedAt([at(H, 0.15), at(H + MIN, 0.15)], now)).toBe(now - H + 6 * H);
+    // A dear pass with room left: still the floor.
+    expect(passAllowedAt([at(H, 0.5)], now)).toBe(now - H + PASS_MIN_GAP_MS);
+    // Four $0.25 passes: $1.00 + $0.25 passes 80% of $1.50, so the next waits for the oldest to leave the day.
+    expect(passAllowedAt([at(2 * H, 0.25), at(3 * H, 0.25), at(4 * H, 0.25), at(5 * H, 0.25)], now)).toBe(now - 5 * H + DAY);
+    // The expected pass is the median: one dear outlier does not hold back cheap ones.
+    expect(passAllowedAt([at(2 * H, 0.05), at(3 * H, 0.05), at(4 * H, 0.9)], now)).toBe(now - 2 * H + PASS_MIN_GAP_MS);
+    // A chain's runs are one pass: two $0.30 passes and a $0.60 chain make the median $0.30, and $1.20 spent + $0.30 waits for the oldest.
+    expect(passAllowedAt([at(H, 0.3), at(H + MIN, 0.3), at(3 * H, 0.3), at(5 * H, 0.3)], now)).toBe(now - 5 * H + DAY);
     // A catch-up spends its own allowance.
     expect(passAllowedAt([at(H, 2, true)], now)).toBe(now - H + PASS_MIN_GAP_MS);
-    // Three $0.40 passes in three hours: the next would cross the ceiling, so it waits for the oldest to leave the day.
-    expect(passAllowedAt([at(2 * H, 0.4), at(3 * H, 0.4), at(4 * H, 0.4)], now)).toBe(now - 4 * H + DAY);
   });
 });
 
@@ -228,19 +235,29 @@ describe("each trigger asks for its owner's pass", () => {
     expect(await jobs(w, "priorityPassSchedule:fire", "")).toHaveLength(0);
   });
 
-  test("a role's standing session, a trigger's run and a workflow's session pin without asking", async () => {
+  test("a role's standing session, a trigger's run, a workflow's run log and its station agents pin without asking; the person's session that ran the workflow asks", async () => {
     const w = await world();
-    const ids = await w.t.run(async (ctx) => {
+    const { machines, caller } = await w.t.run(async (ctx) => {
       const seat = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: Date.now() } as any);
       const task = await ctx.db.insert("agent_tasks", { user_id: w.ana, title: "Nightly", prompt: "check", status: "scheduled", created_at: Date.now() } as any);
       const runRow = await ctx.db.insert("workflow_runs", { user_id: w.ana, status: "running", created_at: Date.now() } as any);
-      return Promise.all(([{ standing_role_id: seat }, { agent_task_id: task }, { workflow_run_id: runRow }] as const).map((fields, i) => ctx.db.insert("conversations", {
+      const conv = (i: number, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
         user_id: w.ana, agent_type: "claude_code", session_id: `jx7mach${i}`, short_id: `jx7mach${i}`, title: "Machine", started_at: Date.now(), updated_at: Date.now(),
         message_count: 3, status: "active", team_id: w.acme, is_private: false, team_visibility: "full", ...fields,
-      } as any)));
+      } as any);
+      const machines = [
+        await conv(0, { standing_role_id: seat }),
+        await conv(1, { agent_task_id: task }),
+        await conv(2, { workflow_run_id: runRow, is_workflow_primary: true }),
+        await conv(3, { workflow_run_id: runRow, is_workflow_sub: true }),
+      ];
+      return { machines, caller: await conv(4, { workflow_run_id: runRow }) };
     });
-    for (const id of ids) await pinAt(w, id, Date.now(), "Ran the nightly check");
+    for (const id of machines) await pinAt(w, id, Date.now(), "Ran the nightly check");
     expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(0);
+    await pinAt(w, caller, Date.now(), "Ran the review workflow; two findings fixed");
+    expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(1);
+    expect(await scheduleOf(w, w.ana, w.team)).not.toBeNull();
   });
 });
 

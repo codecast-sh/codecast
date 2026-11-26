@@ -8,9 +8,10 @@
 // The pass runs PASS_DEBOUNCE_MS after the last ask of a burst, and no later
 // than PASS_MAX_WAIT_MS after its first, so steady activity cannot hold it off
 // for good. Automatic passes of one pair start at least PASS_MIN_GAP_MS apart,
-// and further apart as they cost more (priorityPassSchedule.ts
-// passAllowedAt): the daily ceiling (priorityPassRun PRIORITY_PASS_DAILY_USD,
-// $1.50 a pair) is spread over the day rather than spent by noon. Measured on
+// and only while the last day's spend leaves room for one more under 80% of
+// the daily ceiling (priorityPassSchedule.ts passAllowedAt; priorityPassRun
+// PRIORITY_PASS_DAILY_USD, $1.50 a pair), so a pass never meets the ceiling's
+// refusal. Measured on
 // prod (Nov 25-26, 26 incremental runs): $0.01 to $0.24 a run, median $0.07,
 // mean $0.10; the heaviest pair's runs cost about $0.20 each and a 3-hour
 // sweep's chain of six cost $1.25, which reached the ceiling in a day. Pins
@@ -95,12 +96,14 @@ export async function sessionActivity(ctx: { db: any; scheduler?: any }, conv: D
 
 /**
  * Whether a session's pins ask for a pass: not a role's standing session, a
- * trigger's run or a workflow's session. A role's recurring output never drives
- * priorities; what the person typed there still counts, and the daily sweep
- * (priorityPassSweep.ts) finds it.
+ * trigger's run, a workflow's run log or one of its station agents. A person's
+ * own session that ran a workflow carries its run id too, and still asks. A
+ * role's recurring output never drives priorities; what the person typed
+ * there still counts, and the daily sweep (priorityPassSweep.ts) finds it.
  */
-export const pinsAskForPass = (conv: Pick<Doc<"conversations">, "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id">): boolean =>
-  !isStandingSession(conv) && !conv.agent_task_id && !conv.workflow_run_id;
+export const pinsAskForPass = (
+  conv: Pick<Doc<"conversations">, "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id" | "is_workflow_primary" | "is_workflow_sub">,
+): boolean => !isStandingSession(conv) && !conv.agent_task_id && !isRunLog(conv) && !conv.is_workflow_sub;
 
 /** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
 export async function passOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
