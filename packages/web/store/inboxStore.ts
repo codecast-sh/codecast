@@ -6264,12 +6264,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // strip consumes each nonce at most once, so a stale request is inert.
   // Ephemeral.
   triggerStripRequest: TriggerStripRequest | null;
-  // One-shot composer seed from a `?prefill=` deep link, published by the
+  // One-shot composer seed from a `?prefill=` or `?compose=` deep link
+  // (lib/composerPrefill's ComposerSeed), published by the
   // /conversation/<id> page before it redirects to the inbox. It cannot ride the
   // URL: that redirect drops the query, and the inbox canonicalizes the address
   // again once the session resolves. Keyed by conversation so only that
   // session's composer takes it, and consumed there at most once. Ephemeral.
-  composerPrefill: { convId: string; text: string } | null;
+  composerPrefill: { convId: string; fill: string; add: string } | null;
   viewingDismissedId: string | null;
   // The conversation the active inbox pane holds on screen in place of
   // currentSessionId: a link target not yet in `sessions` (loading, or a
@@ -6411,6 +6412,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
 
   clientState: ClientState;
   clientStateInitialized: boolean;
+  // The disk's drafts are in `drafts` (critical hydration applied, or there
+  // was no disk to read). clientStateInitialized can turn true a phase
+  // earlier, from the paint cache. Ephemeral.
+  draftsHydrated: boolean;
 
   drafts: Record<string, Record<string, any>>;
 
@@ -6833,7 +6838,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) => void;
   setTriggerStripRequest: (req: TriggerStripRequest | null) => void;
-  setComposerPrefill: (req: { convId: string; text: string } | null) => void;
+  setComposerPrefill: (req: { convId: string; fill: string; add: string } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -10347,6 +10352,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // fills in everything else and is the source of truth across tabs.
   clientState: { ui: readCriticalUiPrefs() as ClientUI },
   clientStateInitialized: false,
+  draftsHydrated: false,
 
   drafts: {},
   queuedMessages: {},
@@ -13543,7 +13549,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ triggerStripRequest: req }),
 
   // Raw set: one-shot composer seed (see the state field's comment).
-  setComposerPrefill: (req: { convId: string; text: string } | null) =>
+  setComposerPrefill: (req: { convId: string; fill: string; add: string } | null) =>
     set({ composerPrefill: req }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
@@ -16669,6 +16675,7 @@ export function clearProtectedInboxMemory(): void {
   // already mirrored to localStorage; no server or principal data is retained.
   reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
   reset.clientStateInitialized = false;
+  reset.draftsHydrated = false;
   // Monotonic through the reset: a bootstrap floor still in flight for the
   // old principal fences on the epoch it was cut at and must not apply into
   // this cleared store, and the next sign-in's floors must never resolve to
@@ -17139,6 +17146,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // "manual" handling, so a new key can never silently skip hydration (the
     // ct-34920 / buckets-pop-in bug class).
     apply(cached, HYDRATION_CRITICAL_KEYS);
+    useInboxStore.setState({ draftsHydrated: true });
 
     // Seed the authoritative active set from its persisted twin (manual
     // hydration — see clientSyncRegistry). Same synchronous pass as the
@@ -17249,10 +17257,10 @@ function bootPersistence(): void {
     void hydrateInboxCacheFromIDB().catch((error) => {
       console.error("[store] IDB hydration failed; continuing with live-only state", error);
       setHydrating(false);
-      useInboxStore.setState({ clientStateInitialized: true });
+      useInboxStore.setState({ clientStateInitialized: true, draftsHydrated: true });
     });
   } else {
-    useInboxStore.setState({ clientStateInitialized: true });
+    useInboxStore.setState({ clientStateInitialized: true, draftsHydrated: true });
   }
 }
 
