@@ -1,10 +1,9 @@
-// What /priorities draws, as pure functions over the rows convex/priorities.ts
-// returns: each owner's active priorities in order and their finished and
-// past ones after, a step's sessions and chips, the paints the store's
-// priority actions make and the restore when the server refuses one, and the
-// history strip's day cells.
-import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PrioritySession, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
-import { heatLevels } from "../components/ActivityHeatmap";
+// Priorities as pure functions over the rows convex/priorities.ts returns:
+// each owner's active priorities in order and their finished and past ones
+// after, the paints the store's priority actions make and the restore when
+// the server refuses one, and the pass's timing. What the list page derives
+// from them lives in lib/priorityList.
+import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import { composeLinkHref } from "./composeLink";
 import { serverErrorText } from "./errorCause";
 
@@ -48,27 +47,6 @@ export function nextPassLabel(at: number | null | undefined, now: number): strin
 /** Where a priority opens: its row on /priorities, expanded. */
 export function priorityHref(shortId: string): string {
   return `/priorities?open=${encodeURIComponent(shortId)}`;
-}
-
-/** "Nov 21" for a day key ("2026-11-21"), read as the calendar day it names. */
-export function dayLabel(day: string): string {
-  return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
-}
-
-export type StripCell = { day: string; count: number; title: string };
-
-export function stripCells(days: readonly string[], counts: readonly number[] | undefined): StripCell[] {
-  return days.map((day, i) => {
-    const count = counts?.[i] ?? 0;
-    return { day, count, title: `${dayLabel(day)}: ${count} typed` };
-  });
-}
-
-/** Level cutoffs shared by every strip on a page, so one priority's busy day reads as busy beside the others. */
-export function stripLevels(lanes: Iterable<readonly number[]>): number[] {
-  const all: number[] = [];
-  for (const lane of lanes) all.push(...lane);
-  return heatLevels(all);
 }
 
 export type { PriorityDetail, PriorityHistory, PriorityHistoryLane };
@@ -141,34 +119,6 @@ export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   return groups;
 }
 
-/** The rank a priority takes when dropped at `toIndex` among its owner's active ones. */
-export function rankAtDrop(toIndex: number): number {
-  return Math.max(1, toIndex + 1);
-}
-
-export type StepSession = { short_id: string; title: string };
-
-/**
- * The sessions working a step: those mapped to it, then any its refs name. A
- * list row carries only a priority's newest few sessions, so the open row's
- * `show` read (every session, by step) is the source once it has answered.
- */
-export function stepSessions(row: PriorityRow, step: PriorityStep, detail?: PriorityDetail | null): StepSession[] {
-  const mapped: PrioritySession[] = detail
-    ? detail.steps.find((s) => s.key === step.key)?.sessions ?? []
-    : row.sessions.filter((s) => s.step_key === step.key);
-  const out: StepSession[] = mapped.map((s) => ({ short_id: s.short_id, title: s.title }));
-  for (const ref of step.refs) {
-    if (ref.kind === "session" && !out.some((s) => s.short_id === ref.id)) out.push({ short_id: ref.id, title: "" });
-  }
-  return out;
-}
-
-/** "+ new session" only on the viewer's own open step that `show` says no session works: the list's few sessions cannot say so. */
-export function stepNeedsSession(row: Pick<PriorityRow, "mine">, step: PriorityStep, sessions: readonly StepSession[], detail: PriorityDetail | null | undefined): boolean {
-  return row.mine && !!detail && !step.done && sessions.length === 0;
-}
-
 export function stepTask(step: PriorityStep): string | undefined {
   return step.refs.find((r) => r.kind === "task")?.id;
 }
@@ -176,24 +126,6 @@ export function stepTask(step: PriorityStep): string | undefined {
 /** Opens a new session's composer on this step, its task attached. */
 export function newSessionHref(row: Pick<PriorityRow, "title">, step: PriorityStep): string {
   return composeLinkHref(`${row.title}: ${step.title}`, stepTask(step));
-}
-
-/** Typed messages per day across a step's sessions, or undefined when the server sent none per session. */
-export function stepCounts(history: PriorityHistory | undefined, sessions: readonly StepSession[]): number[] | undefined {
-  const by = history?.sessions;
-  if (!by || !history) return undefined;
-  const out = new Array(history.days.length).fill(0);
-  for (const s of sessions) (by[s.short_id] ?? []).forEach((n, i) => (out[i] += n));
-  return out;
-}
-
-/** The priority's sessions with the most typing first (the most recently updated when the server sent no per-session counts). */
-export function mostActiveSessions(row: PriorityRow, history: PriorityHistory | undefined, detail?: PriorityDetail | null, limit = 4): StepSession[] {
-  const total = (id: string) => (history?.sessions?.[id] ?? []).reduce((a, b) => a + b, 0);
-  return [...(detail?.sessions ?? row.sessions)]
-    .sort((a, b) => total(b.short_id) - total(a.short_id) || b.updated_at - a.updated_at)
-    .slice(0, limit)
-    .map((s) => ({ short_id: s.short_id, title: s.title }));
 }
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -209,7 +141,9 @@ export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_ac
 export function prioritySig(r: PriorityRow): string {
   const steps = r.steps.map((s) => `${s.key}:${s.tier}:${s.done ? 1 : 0}:${s.refs.length}:${s.title}`).join(",");
   const sessions = r.sessions.map((s) => `${s.short_id}:${s.step_key ?? ""}:${s.title}`).join(",");
-  return [r.rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, steps, sessions].join("|");
+  const links = (r.links ?? []).map((l) => `${l.key}:${l.sessions_more}:${l.plan?.short_id ?? ""}:${l.plan?.done ?? ""}:${l.part_of.length}:${l.sessions.map((x) => `${x.short_id}.${x.state}.${x.title}.${x.last_active_at}`).join(";")}`).join(",");
+  const plan = r.plan ? `${r.plan.short_id}:${r.plan.done}/${r.plan.total}` : "";
+  return [r.rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, steps, sessions, links, plan].join("|");
 }
 
 /** The person's controls, as the page hands them to its rows. */

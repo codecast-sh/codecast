@@ -439,12 +439,13 @@ export const CLIENT_SYNC_REGISTRY = {
   // positions on the owner's other rows, which the server's own ordering may
   // place differently, so a field lock could never retire; the server's push
   // settles the paint, and a refused write is put back by its caller
-  // (store/prioritiesSlice). steps, counts and sessions are joined objects.
+  // (store/prioritiesSlice). steps, counts, sessions, links (each step's
+  // sessions and plans) and plan are joined objects.
   priorities: {
     persistence: { kind: "collection", key: "priorities" },
     indexes: "_id, workspace",
     hydration: { phase: "deferred" },
-    sync: { deepFields: ["steps", "counts", "sessions"] },
+    sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
     feeds: ["priorities.list"],
   },
   // "Handled without you": decisions a role answered under a grant in the
