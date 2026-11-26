@@ -419,6 +419,16 @@ describe("a merge no role is behind", () => {
     await expect(recordStationRebaseCore(solo().ctx, HOST as any, { run_id: "workflow_runs_1", from: HEAD, to: HEAD }, NOW)).rejects.toThrow("two different commit shas");
   });
 
+  test("a recorded rebase re-posts the run's pull request status, which the push may have worked out before the link was stored", async () => {
+    const s = solo();
+    s.tables.github_app_installations = [{ _id: "inst1", installation_id: 42, account_login: "union-ai", approval_gate: [{ repository: "union-ai/union-mobile", judges_path: "outreach/line/change/judges.txt", mode: "required" }] }];
+    s.run().pr = { repository: "union-ai/union-mobile", number: 12, first_head_sha: HEAD, head_sha: HEAD, at: NOW };
+    const posts: any[] = [];
+    s.ctx.scheduler.runAfter = async (_ms: number, _fn: unknown, args: unknown) => { posts.push(args); };
+    await recordStationRebaseCore(s.ctx, HOST as any, { run_id: "workflow_runs_1", from: HEAD, to: "c".repeat(40) }, NOW + 2);
+    expect(posts).toEqual([{ repository: "union-ai/union-mobile", pr_number: 12, post: true }]);
+  });
+
   test("a change that edits CI clears only once a person answered Ship on this run's own card in this attempt", async () => {
     const refusal = "this change edits CI; a person must answer Ship on this run's card";
     const flagged = solo();

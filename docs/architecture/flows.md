@@ -363,7 +363,7 @@ reads a pull request no run reported as a bot's. A line whose own scripts open
 and rebase the pull request makes the same reports itself, or its pull requests
 wait on the approval status for good: `cast flow record-pr --number <n> --head
 <sha>` after opening or updating it, `cast flow record-rebase --from <sha> --to
-<sha>` after each rebase it pushes, and its reviewer's `cast flow
+<sha>` before pushing each rebase, and its reviewer's `cast flow
 review-verdict ... --mechanism <true|false>`. A report that fails is printed and
 never fails the station.
 A branch goes up as a fast forward, or with `--force-with-lease` over exactly
