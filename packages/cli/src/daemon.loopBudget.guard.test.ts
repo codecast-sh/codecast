@@ -181,6 +181,9 @@ const ROWS: Row[] = [
   // The panel detach path; closeSync is the daemon shutdown path and stays sync.
   { file: "terminal/controlClient.ts", name: "close", kind: "method", minLines: 10, mustContain: "verifyRestore" },
   { file: "terminal/controlClient.ts", name: "verifyRestore", kind: "method", minLines: 5, mustContain: "restoreRepairs" },
+  // The credential-store probe runs on every beat through ensureProfileStores.
+  { file: "ccStoreProbe.ts", name: "probeSecureStorageSupport", kind: "function", minLines: 20, mustContain: "fs.promises" },
+  { file: "ccStoreProbe.ts", name: "readCurrent", kind: "function", minLines: 5, mustContain: "fs.promises.readFile" },
   // Timers outside daemon.ts.
   { file: "browser/focusSentinel.ts", name: "startFocusSentinel", kind: "function", minLines: 20, mustContain: "frontAsnAsync" },
   { file: "browser/focusSentinel.ts", name: "commandOfPidAsync", kind: "function", minLines: 3, mustContain: "execFileAsync" },
