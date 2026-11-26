@@ -274,6 +274,10 @@ function ownersRead(i: number) {
 }
 
 async function seedStore(sessions: number, owners = false) {
+  // The store hydrates from IndexedDB as its module loads, and its last write
+  // (draftsHydrated) lands when it lands: before anything is seeded, never
+  // inside a measured run.
+  await until(() => useInboxStore.getState().draftsHydrated, "the store's boot hydration");
   const st = useInboxStore.getState() as any;
   st._setDispatch?.(async () => undefined);
   useInboxStore.setState({
@@ -472,7 +476,7 @@ async function inboxPanel(modern = false, owners = false) {
   // Under the owners model the window's owners feeder rides along, as the
   // dashboard mounts it (DashboardLayout's VisibleOwnersFeeder), and every
   // card it watches reports itself on screen.
-  const { useSyncVisibleSessionOwners } = await import("../hooks/useSyncVisibleSessionOwners");
+  const { useSyncVisibleSessionOwners, OWNER_CARDS_SETTLE_MS } = await import("../hooks/useSyncVisibleSessionOwners");
   function OwnersFeeder() { useSyncVisibleSessionOwners(); return null; }
   if (owners) (globalThis as any).IntersectionObserver = w.IntersectionObserver = VisibleObserver;
   const list = <SessionListPanel activeSessionId={convId(3)} onSessionSelect={() => {}} />;
@@ -480,7 +484,12 @@ async function inboxPanel(modern = false, owners = false) {
   if (modern) w.document.documentElement.classList.add("modern-style");
   const theme = { theme: "light", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} } as any;
   const panel = modern ? <ThemeContext.Provider value={theme}>{bare}</ThemeContext.Provider> : bare;
-  const show = async () => { await render(panel); await until(() => cards() > 0, "the session list to draw"); await settle(); };
+  // The feeder reads the cards on screen once they hold still for
+  // OWNER_CARDS_SETTLE_MS, longer than settle()'s quiet window: a shown list
+  // is still only once that timer has landed, or the next measured action
+  // counts the feeder catching up. (A hide unmounts the feeder and its timer.)
+  const feederSettled = async () => { if (owners) { await tick(OWNER_CARDS_SETTLE_MS); await settle(); } };
+  const show = async () => { await render(panel); await until(() => cards() > 0, "the session list to draw"); await settle(); await feederSettled(); };
   const hide = async () => { await act(async () => { root.render(null); }); await settle(); };
   return { show, hide };
 }
