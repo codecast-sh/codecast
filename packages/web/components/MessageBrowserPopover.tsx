@@ -482,9 +482,6 @@ function NavDropdown({
   );
 }
 
-/** The fewest asks a message rail is drawn for. */
-const MIN_RAIL = 2;
-
 const NO_PROGRESS = (): (() => void) => () => {};
 
 export function MessageNavButton({
@@ -630,7 +627,7 @@ export function MessageNavButton({
   // Skeleton: query in flight on a conversation with multiple messages.
   // Reserves space + gives a subtle pulse so the indicator doesn't pop in
   // late on big/cold conversations.
-  if (isLoading && storeMsgCount >= MIN_RAIL) {
+  if (isLoading && storeMsgCount > 0) {
     const skeletonCount = Math.min(Math.max(storeMsgCount, 6), 16);
     return (
       <div
@@ -644,7 +641,7 @@ export function MessageNavButton({
     );
   }
 
-  if (!messages || total < MIN_RAIL) return null;
+  if (!messages || total === 0) return null;
 
   const MAX_BARS = 72;
   const hasComments = topLevelComments.length > 0;
