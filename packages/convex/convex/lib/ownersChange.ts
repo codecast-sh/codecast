@@ -300,11 +300,15 @@ export async function writeOwnersChange(
     // A worker of another session now: the parent owns it (released only
     // when an undo puts a released parent back).
     patch.parent_conversation_id = change.adoptParent;
+    // It still runs its own process (assertMovableWorker refused any nested
+    // by how it runs), so a revive treats it as itself (isSubagentConversation).
+    if (conversation.adopted_at == null) patch.adopted_at = now;
     if ((conversation.parent_released_at ?? null) !== (next.parent_released_at ?? null)) patch.parent_released_at = next.parent_released_at ?? undefined;
   } else if (change.detachParent) {
     // Out from under any parent, as if it never had one (an adopt's undo).
     if (conversation.parent_conversation_id !== undefined) patch.parent_conversation_id = undefined;
     if (conversation.parent_released_at !== undefined) patch.parent_released_at = undefined;
+    if (conversation.adopted_at !== undefined) patch.adopted_at = undefined;
   } else if (next.parent_released_at !== facts.parent_released_at) patch.parent_released_at = next.parent_released_at ?? undefined;
   if (facts.role_started && !next.role_started) patch.role_started = undefined;
   if (Object.keys(patch).length) await ctx.db.patch(conversation._id, patch);

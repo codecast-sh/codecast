@@ -43,7 +43,10 @@ An adopt (a card dropped on the middle of another row in the inbox sidebar,
 session under the target, clears any release, takes its role off and takes
 the dropper's own owner row off; other people's rows stay. It never sets
 `is_subagent`, but the session is now the target's worker, so it goes down
-with the target's kill or dismiss. The session is told whom it reports to, and
+with the target's kill or dismiss. It still runs its own process, so the
+adopt stamps `adopted_at` (a detach clears it) and `isSubagentConversation`
+reads it: a usage-limit revive, auto-recovery and the blocked push treat it as
+a top-level session, and the waiting chime stays silent for it. The session is told whom it reports to, and
 a wait standing on it is handed to the target (`rehandWait`) without ringing
 its people again.
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performApplyOwnersChange } from "./sessionOwnership";
+import { actedBlockedConversations, blockedIncidentNotice, isSubagentConversation } from "./ccAccountsShared";
 
 // Adopting a parent (adopt_parent): a person drags one session onto another
 // in the sidebar and the dragged one becomes that session's worker. The write
@@ -194,6 +195,23 @@ describe("adopt_parent", () => {
     expect(conv(db).parent_conversation_id).toBeUndefined();
     expect(conv(db).parent_released_at).toBeUndefined();
     expect(people(db)).toEqual([ME]);
+  });
+
+  test("a dragged session still runs its own process: a revive takes it as itself, and a detach clears the mark", async () => {
+    const db = fixtures(true, {}, {}, [{ _id: CHILD, short_id: "jxchild" }]);
+    addRow(db, ME, 1);
+    await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, adopt_parent: LEAD });
+    expect(conv(db).adopted_at).toBeGreaterThan(0);
+    const parked = { ...conv(db), pending_api_error: true, pending_api_error_kind: "limit", updated_at: 1 };
+    expect(isSubagentConversation(parked)).toBe(false);
+    expect(actedBlockedConversations([parked], false).map((c: any) => c._id)).toEqual([S]);
+    expect(blockedIncidentNotice([parked])?.anchor._id).toBe(S);
+    // Moving it to another parent keeps the first mark.
+    const was = conv(db).adopted_at;
+    await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, adopt_parent: CHILD });
+    expect(conv(db).adopted_at).toBe(was);
+    await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, detach_parent: true });
+    expect(conv(db).adopted_at).toBeUndefined();
   });
 
   test("neither the adopt's report line nor its undo's answers a standing wait", async () => {
