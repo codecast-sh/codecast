@@ -24,6 +24,8 @@ import { CodecastAuthRoot } from "@/lib/authRoot";
 import { CONVEX_URL } from "@/lib/localAuth";
 import { DOCS_SHOTS, docsShotsConvex } from "@/lib/docsShots/flag";
 import { AgentTabOverride } from "@/lib/agentTabGuard";
+import { bindCloseAdviceCall, type AdviseAfterClose } from "@/lib/closeAdviceBar";
+import { api } from "@codecast/convex/convex/_generated/api";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The person's own key bindings (client_state.ui.key_bindings) into the live
@@ -133,6 +135,16 @@ const convex: ConvexReactClient = DOCS_SHOTS
 if (import.meta.hot) {
   import.meta.hot.data.convexClient = convex;
 }
+
+// Close advice on the undo bar (lib/closeAdviceBar): the one server call. In
+// dev, `window.__closeAdviceOverride = (sessions) => ({ results })` answers in
+// its place, since a dev server talks to prod where the action may not be yet.
+const adviseAfterClose: AdviseAfterClose = (sessions, gesture) => {
+  const override = import.meta.env.DEV && typeof window !== "undefined" ? (window as any).__closeAdviceOverride : undefined;
+  if (typeof override === "function") return Promise.resolve(override(sessions, gesture));
+  return convex.action(api.closeAdvice.adviseAfterClose, { sessions, gesture });
+};
+if (!DOCS_SHOTS) bindCloseAdviceCall(adviseAfterClose);
 
 // Dev-only introspection, next to `window.__inboxStore`: the perf harness
 // (scripts/perf/ws-bytes.mjs) names socket traffic by asking the client which

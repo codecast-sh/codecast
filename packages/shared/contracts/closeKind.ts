@@ -141,6 +141,15 @@ export function closeEffect(f: CloseFacts): string {
 
 export const closeTooltip = (f: CloseFacts): string => `Close: ${closeEffect(f)}`;
 
+/** The Close facts as a Kill leaves them (convex cleanup.ts): a Kill cuts off
+ *  what is in flight and retires the session, canceling its triggers and
+ *  queued messages, so neither a park nor a run's report brings it back. A
+ *  persistent anchor's Kill is dormancy instead: its triggers and park stay. */
+export function killFacts(f: CloseFacts, persistent: boolean): CloseFacts {
+  if (persistent) return { ...f, inFlight: null };
+  return { ...f, inFlight: null, triggers: 0, parkedWake: null, waitingOnRun: false };
+}
+
 // ── Close advice (`cast advise-close`, convex closeAdvice) ──
 
 export type CloseVerdict = "close" | "needs_input";
@@ -151,3 +160,22 @@ export type CloseAdvice = { verdict: CloseVerdict; reason: string; decided_by: "
  *  feature is off ("team": the session's team lacks it; "personal": none of a
  *  personal session's owner's teams has it), with the shared off wording. */
 export type CloseAdviceResult = { short_id: string } & ({ off: "team" | "personal"; message: string } | { advice: CloseAdvice } | { error: string });
+
+// ── After a Close or Kill in the app (convex closeAdvice.adviseAfterClose) ──
+
+/** The gesture advice is asked about: what it is read for is what the
+ *  gesture leaves (killFacts), however far its write has landed. */
+export type CloseGesture = "close" | "kill";
+/** At most this many sessions of one gesture are advised; the rest are "skip". */
+export const AFTER_CLOSE_MAX = 20;
+/** How long each after-close model call may run. The app takes the verdicts
+ *  only until its receipt plus CLOSE_ADVICE_HOLD_MS (11 s from the press; web
+ *  lib/closeAdviceBar), and the calls run together, so this stays well under
+ *  that: the action answers in time with every verdict that made it. */
+export const AFTER_CLOSE_CALL_MS = 7000;
+/** One closed session, of those the client did not file under Needs You:
+ *  "needs_you" when it asked the person something (`reason` is the action,
+ *  starting with a verb); "close" when closing lost nothing, or advice failed;
+ *  "skip" when it was not advised (unreadable, the feature off, its waits
+ *  answered by an agent owner, or past AFTER_CLOSE_MAX). */
+export type AfterCloseResult = { session: string; verdict: "needs_you" | "close" | "skip"; reason?: string };

@@ -30,7 +30,7 @@ import { useQuery } from 'convex/react';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
+import { closeWithAdvice, holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
 import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
 import { closeDetail, reviewedKill } from '@/lib/sessionVerbs';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
@@ -150,7 +150,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const catchingUp = useInboxStore((s) => s.livenessHeldAt != null);
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const stashSession = useInboxStore((s) => s.stashSession);
-  const closeSession = useInboxStore((s) => s.closeSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   // Store actions, not the raw convex mutation: the hide data-transition is
@@ -219,10 +218,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
 
   // Close: done looking at it, the web card's one remove (store closeSession).
   // A turn in progress is set aside and finishes; anything else stops and
-  // files under Closed, keeping its triggers and queued messages.
+  // files under Closed, keeping its triggers and queued messages. Close
+  // advice is asked beside it (lib/undoBar closeWithAdvice).
   const handleClose = useCallback((conversationId: string) => {
-    closeSession(conversationId);
-  }, [closeSession]);
+    closeWithAdvice(conversationId);
+  }, []);
 
   const handleRestore = useCallback((conversationId: string) => {
     restoreSession(conversationId);

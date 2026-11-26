@@ -167,6 +167,14 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   },
   "store/undo/policies/work.ts:SECRET_CLEARS": CONSTANT,
   "store/undoStack.ts:liveEntryToasts": { shared: "ids of the undo toasts on screen; the sim renders no toasts" },
+  "store/undoStack.ts:liveAdvice": { shared: "close advice of the undo toasts on screen; the sim renders no toasts" },
+  "lib/closeAdviceBar.ts:NEEDS_YOU_BUCKETS": CONSTANT,
+  "lib/closeAdviceBar.ts:OWN_FILING_BUCKETS": CONSTANT,
+  "lib/closeAdviceBar.ts:boundCall": { shared: "the server call, bound once at app load; the sim binds none" },
+  "lib/closeAdviceBar.ts:armed": "transient",
+  "lib/composerToasterLift.ts:lift": { shared: "the toaster's offset over the composer on screen; the sim renders no toasts" },
+  "lib/composerToasterLift.ts:holders": { shared: "how many toasts on screen hold the lift; the sim renders no toasts" },
+  "lib/composerToasterLift.ts:listeners": NO_REACT,
 
   // The store's engine (@platform/engine, mirrored under platform/packages).
   // Each browser window keeps its own undo history: ⌘Z in one window never

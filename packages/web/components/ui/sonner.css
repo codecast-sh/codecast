@@ -308,6 +308,24 @@
   background: color-mix(in srgb, var(--sol-text) 6%, transparent);
 }
 
+/* A Close or Kill receipt that close advice turned into a card (CLOSE_ADVICE_CLASS
+   in store/undoStack.ts): the standard two-answer card, its note the ask
+   clamped to two lines, a Kill's triggers line under it. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-ask .cc-toast-ask-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-ask .cc-toast-ask-reason {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-ask .cc-toast-ask-triggers {
+  color: var(--sol-text-dim);
+}
+
 /* ── Modern (the opt-in style: .modern-style on <html>) ───────────────────────
  * Everything above is Classic and Minimal, untouched. Modern draws the toast
  * on the primitive tokens (app/globals.css): the card radius, the one

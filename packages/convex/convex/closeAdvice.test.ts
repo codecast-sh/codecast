@@ -107,6 +107,9 @@ test("the prompt carries the facts and marks the final message", () => {
   expect(kept).not.toContain("Nothing the system can see will wake this session");
   expect(kept).not.toContain("none of the wakes above is armed");
   expect(kept).not.toContain("Armed wakes: none");
+  // A closed session's wakes run it out of sight (#212): only a person's message brings it back by itself.
+  expect(prompt).toContain("a person's message brings it back, and a wake runs it out of sight until it reports");
+  expect(prompt).not.toContain("a new message brings it back");
   // The verdict words are the graded ones either way.
   for (const p of [prompt, kept]) expect(p).toContain("VERDICT: <close | needs_you>");
 });

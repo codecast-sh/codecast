@@ -74,7 +74,7 @@ describe("animatedHideSessions", () => {
   });
 
   test("killing a three-row selection is one entry", async () => {
-    expect(await animatedHideSessions(IDS, "kill")).toEqual(IDS);
+    expect((await animatedHideSessions(IDS, "kill")).ids).toEqual(IDS);
     const items = getUndoHistory().items;
     expect(items).toHaveLength(1);
     expect(items[0]!.label).toStartWith("Killed 3 sessions");

@@ -55,6 +55,7 @@ import { SessionPrewarm } from "../SessionPrewarm";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { HOLD_MS, nextEntryId, type DockDot, type DockEntry } from "./dockModel";
+import { killWithCloseAdvice } from "../../store/undoActions";
 import "./agentDock.css";
 import { Button } from "../ui/button";
 
@@ -273,7 +274,6 @@ function DockCard({ entry, entries, onGo, onClose }: { entry: DockEntry; entries
   const item: QueueItem | null = entry.kind === "ask" ? entry.item ?? null : null;
   const decision = useDecisionAnswer(item);
   const stashSession = useInboxStore((s) => s.stashSession);
-  const killSession = useInboxStore((s) => s.killSession);
   const convex = useConvex();
   const messages = useInboxStore((s) => s.messages[entry.id]);
   const now = useCoarseNow(30_000);
@@ -318,7 +318,7 @@ function DockCard({ entry, entries, onGo, onClose }: { entry: DockEntry; entries
     tone: "quiet",
     commit: () => (item ? decision.dismiss() : stashSession(entry.id)),
   }), [hold, item, decision, stashSession, entry.id]);
-  const kill = useCallback(() => hold({ label: "Agent killed", tone: "kill", commit: () => killSession(entry.id) }), [hold, killSession, entry.id]);
+  const kill = useCallback(() => hold({ label: "Agent killed", tone: "kill", commit: () => killWithCloseAdvice(entry.id) }), [hold, entry.id]);
 
   useCardKeys({
     onClose: () => (held ? setHeld(null) : onClose()),
