@@ -3,6 +3,7 @@ import { cursorParam, filesHref } from "../vault/vaultHref";
 import { editorHref, editedLineRange, firstChangedLine, gitRefForDiffBase, localCheckoutFile } from "../filesPane";
 import { parseCursorTarget } from "../code/editorHost";
 import { filePathHref, filePathMention, parseFilePathHref } from "../filePathLinks";
+import { besideSessionId } from "../code/agent/sessions";
 
 describe("the editor address", () => {
   test("line, column and a flash range share `l`", () => {
@@ -29,6 +30,14 @@ describe("the editor address", () => {
     const ctx = { base: "/Users/ada/src/app", home: "/Users/ada" };
     expect(editorHref({ path: "lib/x.ts", line: 5, column: 2, ctx })).toBe("/files?path=%2FUsers%2Fada%2Fsrc%2Fapp%2Flib%2Fx.ts&l=5%3A2");
     expect(editorHref({ path: "lib/x.ts", line: 5, ctx })).toBe(filePathHref("lib/x.ts", 5, ctx));
+    // An Edit's range flashes; the same address a link carries, plus `-end`.
+    expect(editorHref({ path: "lib/x.ts", line: 40, endLine: 42, ctx })).toBe("/files?path=%2FUsers%2Fada%2Fsrc%2Fapp%2Flib%2Fx.ts&l=40-42");
+  });
+
+  test("a cloud host session's path opens on that host", () => {
+    const ctx = { base: "/home/ada/app", home: "/home/ada", deviceId: "host-1" };
+    expect(editorHref({ path: "x.ts", line: 3, ctx })).toBe("/files?path=%2Fhome%2Fada%2Fapp%2Fx.ts&d=host-1&l=3");
+    expect(editorHref({ path: "x.ts", line: 3, ctx })).toBe(filePathHref("x.ts", 3, ctx));
   });
 
   test("a path mention's column survives into the link and back", () => {
@@ -56,6 +65,16 @@ describe("ranges", () => {
     expect(editedLineRange("no numbers", "x")).toBeUndefined();
   });
 
+  test("editedLineRange matches the whole block, nearest the snippet's middle", () => {
+    // A `}` head appears three times; only the block at 45 has `return b;` after it.
+    const snippet = [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+      .map((n) => `    ${n}→${({ 41: "}", 43: "}", 44: "return a;", 45: "}", 46: "return b;", 49: "}", 50: "return b;" } as Record<number, string>)[n] ?? "x"}`)
+      .join("\n");
+    expect(editedLineRange(snippet, "}\nreturn b;")).toEqual({ line: 45, endLine: 46 });
+    // A replacement longer than the snippet shows still places by what it shows.
+    expect(editedLineRange("    10→a\n    11→b", "b\nc\nd")).toEqual({ line: 11, endLine: 13 });
+  });
+
   test("a diff base maps to the git ref the editor diffs against", () => {
     expect(gitRefForDiffBase("session", [])).toEqual({ ref: "HEAD", label: "HEAD" });
     expect(gitRefForDiffBase("session", [{ changeType: "commit" }])?.ref).toBe("@merge-base");
@@ -73,5 +92,19 @@ describe("ranges", () => {
     expect(localCheckoutFile(checkouts, "here", "v1.2", "lib/x.ts")).toBe("/Users/ada/src/app/lib/x.ts");
     expect(localCheckoutFile(checkouts, "nowhere", "main", "x")).toBeNull();
     expect(localCheckoutFile(checkouts, null, "main", "x")).toBeNull();
+  });
+});
+
+describe("the editor's linked session", () => {
+  const leaf = (id: string, path: string) => ({ type: "leaf", id, path });
+  const s1 = "1".repeat(32);
+  const s2 = "2".repeat(32);
+  const tab = (editorOpenedFrom?: string) => ({ id: "t1", path: "/files?f=x.ts", editorOpenedFrom, layout: { type: "split", children: [leaf("a", `/conversation/${s1}`), leaf("b", `/conversation/${s2}`), leaf("c", "/files?f=x.ts")] } });
+
+  test("prefers the conversation the editor was opened from while it is on stage", () => {
+    expect(besideSessionId([tab()], "t1", null)).toBe(s1);
+    expect(besideSessionId([tab(s2)], "t1", null)).toBe(s2);
+    // Gone from the stage: the first conversation beside it again.
+    expect(besideSessionId([tab("s9")], "t1", null)).toBe(s1);
   });
 });

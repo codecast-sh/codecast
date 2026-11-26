@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, Suspense } from "react";
+import { useState, useRef, useMemo, useCallback, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -26,7 +26,9 @@ import { getRelativePath } from "@codecast/shared/render";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
-import { filePathHref } from "../lib/filePathLinks";
+import { filePathHref, type FilePathContextValue } from "../lib/filePathLinks";
+import { useConversationOwnerDevice } from "../hooks/useConversationOwnerDevice";
+import { inferHomeDir } from "../lib/utils";
 import { firstChangedLine, gitRefForDiffBase } from "../lib/filesPane";
 import { OpenInEditorButton } from "./OpenInEditorButton";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
@@ -342,7 +344,7 @@ export function ConversationDiffLayout({
             <ConversationView {...conversationViewProps} />
           </TabsContent>
           <TabsContent value="diff" className="flex-1 overflow-auto m-0">
-            <DiffPane conversation={conversation} />
+            <DiffPane conversation={conversation} foreign={!isOwner || guest} />
           </TabsContent>
         </Tabs>
       </div>
@@ -390,7 +392,7 @@ export function ConversationDiffLayout({
             </div>
             {/* Diff Content */}
             <div className="flex-1 h-full min-w-0">
-              <DiffPane conversation={conversation} />
+              <DiffPane conversation={conversation} foreign={!isOwner || guest} />
             </div>
           </div>
         </Panel>
@@ -426,9 +428,17 @@ const BASE_EMPTY: Record<DiffBase, string> = {
   review: "Nothing changed since your review",
 };
 
-export function DiffPane({ conversation }: { conversation?: ConversationData }) {
+export function DiffPane({ conversation, foreign }: { conversation?: ConversationData; foreign?: boolean }) {
   const conversationId = conversation?._id;
   const gitRoot = conversation?.git_root;
+  // The conversation's file context, as its transcript links have it
+  // (hooks/useToolResultMaps), with paths relative to the checkout root: a
+  // changed file opens on the session's machine, never a same-named local path.
+  const deviceId = useConversationOwnerDevice(conversationId);
+  const fileCtx = useMemo<FilePathContextValue>(
+    () => ({ deviceId, base: gitRoot ?? undefined, home: inferHomeDir([gitRoot ?? undefined]), gitRoot, conversationId: conversationId ? String(conversationId) : null, foreign: !!foreign }),
+    [deviceId, gitRoot, conversationId, foreign],
+  );
   const { selectedChangeIndex, rangeStart, rangeEnd, changes, selectedFile, focusNonce, bodies, missingBodies, setDiffBase } = useDiffViewerStore();
   const ui = useTrackedStore([
     (s) => (conversationId ? s.clientState.ui?.diff_base?.[conversationId] : undefined),
@@ -513,6 +523,23 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
     </div>
   ) : null;
 
+  // Each file's "Edit": the local file in the editor beside, at its first
+  // changed line, with the editor's own diff against the git ref this base
+  // stands for, so reviewing and editing happen in one place. A base git has
+  // no ref for (a turn, a review mark, a picked range) opens the file alone,
+  // and a deleted file has nothing to open.
+  const editRef = rangeStart !== null ? null : gitRefForDiffBase(base, changes);
+  const editRefKey = editRef ? `${editRef.ref}\n${editRef.label}` : "";
+  const fileAction = useCallback(
+    (filename: string, file: { patch?: string; status?: string }) =>
+      file.status === "removed" || file.status === "deleted" ? null : (
+        <OpenInEditorButton label="Edit" editorOnly target={{ path: filename, line: firstChangedLine(file.patch), ctx: fileCtx }} diffAgainst={editRef ?? undefined} />
+      ),
+    // editRef is keyed by its content: the changes array moves on every sync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fileCtx, editRefKey],
+  );
+
   if (changes.length === 0) {
     return (
       <div className="h-full w-full flex flex-col bg-background">
@@ -551,27 +578,13 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
         : `All ${changes.length} changes`)
     + (pendingFiles > 0 ? ` · loading ${pendingFiles} ${pendingFiles === 1 ? "file" : "files"}` : "");
 
-  // Each file's "Edit": the local file in the editor beside, at its first
-  // changed line, with the editor's own diff against the git ref this base
-  // stands for, so reviewing and editing happen in one place. A base git has
-  // no ref for (a turn, a review mark, a picked range) opens the file alone.
-  const editRef = rangeStart !== null ? null : gitRefForDiffBase(base, changes);
-  const fileAction = (filename: string, file: { patch?: string }) => (
-    <OpenInEditorButton
-      label="Edit"
-      target={{ path: filename, line: firstChangedLine(file.patch), ctx: { base: gitRoot ?? undefined, gitRoot } }}
-      diffAgainst={editRef ?? undefined}
-    />
-  );
-
   // A changed file's name (tree row or header) opens the same menu as a file
   // link in the transcript: open it, its folder, the sessions that touched it.
   const onFileContextMenu = (e: React.MouseEvent) => {
     if (e.shiftKey) return;
     const path = (e.target as HTMLElement).closest<HTMLElement>("[data-diff-file]")?.dataset.diffFile;
     if (!path) return;
-    const ctx = { base: gitRoot ?? undefined, gitRoot };
-    requestFilePathMenu(e, { path, href: filePathHref(path, undefined, ctx), ctx });
+    requestFilePathMenu(e, { path, href: filePathHref(path, undefined, fileCtx), ctx: fileCtx });
   };
 
   return (

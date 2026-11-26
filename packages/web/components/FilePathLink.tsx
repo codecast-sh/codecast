@@ -8,17 +8,17 @@
 //
 // Plain click opens the file in the code editor BESIDE the conversation, at
 // the line and column, in the Files pane already on stage when there is one
-// (lib/filesPane openInEditor), and links that conversation to the editor.
+// (lib/filesPane openConversationPath), and links that conversation to the
+// editor. Where this machine cannot reach the conversation's files, a file the
+// session changed opens in its own changes instead.
 // Modified clicks keep the Link compat's tab/window behaviour; right-click
 // offers the rest (a split, the folder, Finder, new tab).
 
 import { useCallback, useContext, type ReactNode } from "react";
 import Link from "next/link";
 import { FilePathContext, filePathHref } from "../lib/filePathLinks";
-import { openSessionChangedPath } from "../lib/sessionChangedFiles";
-import { canOpenFilesBeside, openInEditor } from "../lib/filesPane";
+import { openConversationPath } from "../lib/filesPane";
 import { requestFilePathMenu } from "../lib/filePathMenu";
-import { useVaultStore } from "../store/vaultStore";
 import { useTabContext } from "../lib/tabParams";
 
 export function FilePathLink({
@@ -44,13 +44,8 @@ export function FilePathLink({
     (e: React.MouseEvent<HTMLAnchorElement>) => {
       onClick?.(e);
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      if ((ctx?.foreign || useVaultStore.getState()?.connection === "no-daemon") && openSessionChangedPath(path, ctx)) {
-        e.preventDefault();
-        return;
-      }
-      if (!canOpenFilesBeside()) return; // the Link takes the tab there
       e.preventDefault();
-      openInEditor({ path, line, column, ctx }, { fromLeaf });
+      openConversationPath({ path, line, column, ctx }, { fromLeaf });
     },
     [path, line, column, ctx, fromLeaf, onClick],
   );

@@ -28,7 +28,7 @@ const opened: Array<{ target: Record<string, unknown>; opts: Record<string, unkn
 const realPane = { ...(await import("../../../lib/filesPane")) };
 mock.module("../../../lib/filesPane", () => ({
   ...realPane,
-  openInEditor: (target: Record<string, unknown>, opts: Record<string, unknown> = {}) => opened.push({ target, opts }),
+  openConversationPath: (target: Record<string, unknown>, opts: Record<string, unknown> = {}) => opened.push({ target, opts }),
 }));
 
 const { act } = await import("react");
@@ -38,10 +38,14 @@ const { ConvexProvider } = await import("convex/react");
 const { offlineConvexClient } = await import("../../../test-helpers/offlineConvex");
 const { ToolBlock } = await import("../blocks/toolBlocks");
 const { FilePathContext } = await import("../../../lib/filePathLinks");
+const { useVaultStore } = await import("../../../store/vaultStore");
+
+type Ctx = { base?: string; home?: string; foreign?: boolean; conversationId?: string };
+const OWN: Ctx = { base: "/Users/ada/src/app", home: "/Users/ada" };
 
 const client = offlineConvexClient();
 
-async function mount(tool: { id: string; name: string; input: string }, result?: { tool_use_id: string; content: string }) {
+async function mount(tool: { id: string; name: string; input: string }, result?: { tool_use_id: string; content: string }, ctx: Ctx = OWN) {
   const host = dom.window.document.createElement("div");
   dom.window.document.body.appendChild(host);
   const root = createRoot(host);
@@ -49,7 +53,7 @@ async function mount(tool: { id: string; name: string; input: string }, result?:
     root.render(
       <ConvexProvider client={client}>
         <MemoryRouter>
-          <FilePathContext.Provider value={{ base: "/Users/ada/src/app", home: "/Users/ada" }}>
+          <FilePathContext.Provider value={ctx}>
             <ToolBlock tool={tool as never} result={result as never} />
           </FilePathContext.Provider>
         </MemoryRouter>
@@ -73,12 +77,15 @@ describe("tool card Open in editor", () => {
     const input = JSON.stringify({ file_path: "/Users/ada/src/app/lib/x.ts", old_string: "a", new_string: "const b = 2;\nconst c = 3;" });
     const snippet = "The file has been updated. Here's the result:\n    40→// head\n    41→const b = 2;\n    42→const c = 3;\n    43→// tail";
     const { host, unmount } = await mount({ id: "t1", name: "Edit", input }, { tool_use_id: "t1", content: snippet });
+    const expanded = () => host.querySelector("[data-cc-row-head]")?.getAttribute("aria-expanded");
+    const before = expanded();
     await press(host);
     expect(opened).toHaveLength(1);
     expect(opened[0].target).toMatchObject({ path: "/Users/ada/src/app/lib/x.ts", line: 41, endLine: 42 });
     expect((opened[0].target.ctx as { base?: string }).base).toBe("/Users/ada/src/app");
     // The press is the button's: the row did not expand or collapse under it.
-    expect(host.querySelector("[data-cc-row-head]")?.getAttribute("aria-expanded")).toBe("true");
+    expect(before).not.toBeUndefined();
+    expect(expanded()).toBe(before);
     await unmount();
   });
 
@@ -101,5 +108,21 @@ describe("tool card Open in editor", () => {
     const bash = await mount({ id: "t4", name: "Bash", input: JSON.stringify({ command: "ls" }) });
     expect(bash.host.querySelector("[data-open-in-editor]")).toBeNull();
     await bash.unmount();
+  });
+
+  test("no button where this machine cannot reach the conversation's files", async () => {
+    const read = { id: "t5", name: "Read", input: JSON.stringify({ file_path: "/Users/bo/app/x.ts" }) };
+    const foreign = await mount(read, undefined, { ...OWN, foreign: true, conversationId: "c1" });
+    expect(foreign.host.querySelector("[data-open-in-editor]")).toBeNull();
+    await foreign.unmount();
+    const prev = useVaultStore.getState().connection;
+    useVaultStore.setState({ connection: "no-daemon" } as never);
+    try {
+      const offline = await mount(read);
+      expect(offline.host.querySelector("[data-open-in-editor]")).toBeNull();
+      await offline.unmount();
+    } finally {
+      useVaultStore.setState({ connection: prev } as never);
+    }
   });
 });

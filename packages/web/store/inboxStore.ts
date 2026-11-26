@@ -269,6 +269,7 @@ import { pathOnMyMachines, savedDefaultProject, wakesOnUse, type MachineCandidat
 import type { DeviceNameSource } from "@codecast/shared/contracts";
 import { machineChipKey, projectAxisLabel, projectAxisNoun, projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
 import { pendingJoinRow } from "../lib/teamMachines";
+import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "./browserTabsView";
 import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
@@ -713,6 +714,12 @@ export type InboxSession = {
   // (TeamSessionSwitch). Team is folded into createSession as `team`;
   // Personal, or no pick, changes nothing.
   _team?: "mine" | "team";
+  // Local only: what the team sees of a new session, picked in the composer
+  // (Hidden / Summary / Full, the share popover's levels). Folded into
+  // createSession: Hidden as `private` (no folder rule can share it), Summary
+  // or Full as `team_visibility`. Ignored for a Team pick, which the team
+  // reads whole; no pick sends nothing, so the folder rule decides.
+  _visibility?: TeamShareMode;
   // Local-only "kept draft" marker for a deferred compose stub the user chose
   // to keep instead of abandoning. It is what makes a 0-message blank VISIBLE
   // in the inbox (placeInboxRows' engaged-blank gate) and immune to the
@@ -2406,6 +2413,10 @@ export type AppTab = {
    */
   layout?: StageNode;
   focusedLeafId?: string;
+  /** The conversation this tab's Files pane was last opened from (a path
+   *  link, a tool card, a diff's Edit: lib/filesPane openInEditor). The code
+   *  editor's agent link prefers it while it is still on the stage. */
+  editorOpenedFrom?: string;
 };
 
 /** How a leaf joins the stage: under a named id (a pane the shell keeps
@@ -4375,6 +4386,17 @@ export function viewerCommandsSession(
 
 let _lastParityCheckAt = 0;
 
+/** The placement placeInboxRows last computed for this view, however old, or
+ *  null when it never ran. For a surface that only nudges an order by it (the
+ *  palette's ranking) and should not pay for a fresh placement. */
+export function lastPlacedInbox(
+  state: Pick<PlaceInboxState, "clientState">,
+  opts: { focusedId?: string | null; scope?: "mine" | "team" } = {},
+): PlacedInbox | null {
+  const scope = opts.scope ?? state.clientState.ui?.inbox_scope ?? "mine";
+  return _placedMemo.get(`${scope}\x1f${opts.focusedId ?? ""}`)?.val ?? null;
+}
+
 export function placeInboxRows(
   state: PlaceInboxState,
   opts: { focusedId?: string | null; scope?: "mine" | "team"; now?: number; nowMono?: number } = {},
@@ -4970,22 +4992,30 @@ export function isUnsentConversation(s: { message_count?: number; last_user_mess
 }
 
 
-/** One placed section narrowed by the chip filter. A row nested under a card
- *  the chip drops stands in that card's place, its own nested rows still under
- *  it: a project's session that rides its role's standing session (which works
- *  elsewhere) shows under the project chip instead of vanishing with that card. */
+/** One placed section narrowed by the chip filter. A card the chip drops stays
+ *  when a subagent or worker nested under it matches, so the match keeps
+ *  nesting under its own card (and the Sub-agents option still decides whether
+ *  it draws). A role's session never draws under its role's card, so a match
+ *  there stands in the card's place instead: a project's session that rides
+ *  its role's standing session (which works elsewhere) shows under the project
+ *  chip rather than vanishing with that card. */
 export function chipFilterSection(
   items: readonly InboxSession[],
   subsByParent: ReadonlyMap<string, readonly InboxSession[]>,
   matches: (s: InboxSession) => boolean,
 ): InboxSession[] {
+  const nestedMatch = (row: InboxSession, seen: Set<string>): boolean => {
+    if (seen.has(row._id)) return false;
+    seen.add(row._id);
+    return (subsByParent.get(row._id) ?? []).some((sub) => !isUnderRole(sub) && (matches(sub) || nestedMatch(sub, seen)));
+  };
   const out: InboxSession[] = [];
   const seen = new Set<string>();
   const visit = (row: InboxSession) => {
     if (seen.has(row._id)) return;
     seen.add(row._id);
-    if (matches(row)) { out.push(row); return; }
-    for (const sub of subsByParent.get(row._id) ?? []) visit(sub);
+    if (matches(row) || nestedMatch(row, new Set())) { out.push(row); return; }
+    for (const sub of subsByParent.get(row._id) ?? []) if (isUnderRole(sub)) visit(sub);
   };
   for (const s of items) visit(s);
   return out;
@@ -5546,6 +5576,7 @@ import { priorityPlaceReader, sortByPriority, type PriorityStanding } from "./pr
 import { splitHostedStops } from "../lib/hostedNotice";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
+import type { TeamShareMode } from "../lib/teamFeedRows";
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
 // a kept session that isn't in the cache — an old favorite the inbox window never
@@ -6241,6 +6272,8 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // The viewer's machines: the machine lens groups only these.
   machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
+  // Open browser tabs per session: the Browser view lists only those sessions.
+  browserTabs?: Record<string, BrowserTabRow>;
   // The priorities the Priorities view orders by (store/priorityOrder).
   priorities?: Record<string, PriorityRow>;
   // Loaded transcripts: the hosted stop rule's fallback splits "Couldn't finish" out of Needs You.
@@ -6304,6 +6337,13 @@ export function computeVisualOrder(state: {
     // A flat card still wears the bucket verdict (its badge reads from the same
     // placement), so a walk is the same membership in flat order.
     return opts.walk ? flat.filter(walkFilterOf(placed, opts.walk)) : flat;
+  }
+  // The Browser view: every session holding a tab, stashed rows and workers
+  // included, flat (GlobalSessionPanel's browserView).
+  if (mode === "browser") {
+    if (collapsed.browser) return [];
+    const rows = Object.values(state.sessions).filter((s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)));
+    return groupSessionsByBrowser(rows, browserTabsByConversation(state.browserTabs, Date.now()));
   }
   // Grouped and the lenses: the placed status sections over the SAME visible
   // set; the lens branches below regroup all of it, pinned rows included (each
@@ -6918,7 +6958,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   confirmSessionCommand: (requestId: string) => void;
   dismissSessionCommand: (requestId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; team_visibility?: "summary" | "full"; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -7087,6 +7127,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // in-place switches, reconfigure/create stamps for launches.
   setConversationModel: (id: string, opts: { model?: string | null; effort?: string | null }) => void;
   setStubTeam: (id: string, team: "mine" | "team") => void;
+  setStubVisibility: (id: string, visibility: TeamShareMode) => void;
   // Stamp per-session stable-context launch prefs on a NEW-session stub row
   // (local-only; folded into createSession by createSessionFromStub, same
   // lifecycle as the model/effort stamps). mode: "team" | "solo" | "off";
@@ -7111,6 +7152,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   applyTailMessages: (convId: string, anchorTs: number, msgs: Message[], lastTimestamp: number | null) => void;
   setUserMessages: (convId: string, msgs: UserMessage[], source?: "cache") => void;
+  dropConversationContent: (convId: string) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
@@ -7813,7 +7855,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean; sessions_read_dms?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -12901,7 +12943,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // first_message/first_message_client_id ride the dispatch only: a hosted
   // conversation's start queues its first message server side, matched to
   // the optimistic bubble by its client id.
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } } & SessionStart) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; team_visibility?: "summary" | "full"; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } } & SessionStart) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -13037,8 +13079,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
-      ...(fallback?.private ? { private: true } : {}),
-      // Team asks for a team session; Personal changes nothing (the folder rule decides who sees it).
+      // What the team sees (Hidden locks it private from the first write,
+      // Summary or Full shares it at that level); Team asks for a team session
+      // and outranks it; no pick sends nothing, so the folder rule decides.
+      ...(fallback?.private || (cur?._visibility === "private" && cur?._team !== "team") ? { private: true } : {}),
+      ...(!fallback?.private && cur?._team !== "team" && (cur?._visibility === "summary" || cur?._visibility === "full") ? { team_visibility: cur._visibility } : {}),
       ...(cur?._team === "team" && !fallback?.private ? { team: true } : {}),
       ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
@@ -14030,11 +14075,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  // The new-session composer's Personal | Team switch ("mine" is Personal):
-  // local until the first send folds it into createSession
-  // (createSessionFromStub); only Team is sent.
+  // The new-session composer's Personal | Team switch ("mine" is Personal)
+  // and what-the-team-sees picker: local until the first send folds them into
+  // createSession (createSessionFromStub).
   setStubTeam: sync(function (this: Draft, id: string, team: "mine" | "team") {
     for (const row of [this.sessions[id], this.conversations[id]] as any[]) if (row) row._team = team;
+  }),
+  setStubVisibility: sync(function (this: Draft, id: string, visibility: TeamShareMode) {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) if (row) row._visibility = visibility;
   }),
 
   setStableContextPrefs: sync(function (this: Draft, id: string, prefs: { mode?: string | null; exclude?: string[] | null }) {
@@ -14130,6 +14178,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // =====================
   // MESSAGE MANAGEMENT
   // =====================
+
+  // The viewer may no longer read this transcript (its owner shares it as a
+  // summary): forget the messages cached while they could, here and in IDB.
+  dropConversationContent: sync(function (this: Draft, convId: string) {
+    if (!this.messages[convId] && !this.userMessages[convId] && !this.pagination[convId]) return;
+    delete this.messages[convId];
+    delete this.userMessages[convId];
+    delete this.pagination[convId];
+  }),
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>, source?: "cache") {
     msgs = dedupeReplayedMessages(msgs);
@@ -17379,6 +17436,26 @@ export function seedTeamInboxIdsFromCache(cachedSnapshot: unknown) {
   });
 }
 
+// What each deferred collection's read cost (ms) at the last boot, so the next
+// boot reads the cheap ones first. Row counts are a poor proxy: a few rows can
+// hold 400 KB, and an empty table still pays a transaction. localStorage
+// because it reads synchronously. A hint only; a missing or stale entry changes
+// the order, never what loads.
+const HYDRATION_COSTS_KEY = "codecast:hydration-costs";
+function readHydrationCosts(): Record<string, number> {
+  try {
+    const parsed = typeof localStorage === "undefined" ? null : JSON.parse(localStorage.getItem(HYDRATION_COSTS_KEY) ?? "null");
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function writeHydrationCosts(costs: Record<string, number>): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(HYDRATION_COSTS_KEY, JSON.stringify(costs));
+  } catch {}
+}
+
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 async function hydrateInboxCacheFromIDB(): Promise<boolean> {
   if (!PERSISTENCE_AVAILABLE) return false;
@@ -17632,11 +17709,43 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // hydrate and persist. setTimeout fires (throttled) even when hidden.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     if (superseded()) return false;
-    const deferred = await loadCache(HYDRATION_DEFERRED_KEYS, {
-      pending: cached?.pending,
-    });
+    // Each collection lands as soon as its own read finishes, cheapest first.
+    // IndexedDB serves reads in the order they were issued, so read as one batch
+    // a page over a two-row collection (the Flows page's pipelines) waited
+    // seconds behind the 50k-row tasks and signals reads it never draws.
+    // Arrivals in the same task are applied together, one store notify a burst.
+    const costs = readHydrationCosts();
+    const order = [...HYDRATION_DEFERRED_KEYS].sort((a, b) => (costs[a] ?? 0) - (costs[b] ?? 0));
+    // Reads finish in the order issued, so the gap since the previous one is this one's cost.
+    const seen: Record<string, number> = {};
+    let lastDone = performance.now();
+    let landed: Record<string, any> = {};
+    let landedKeys: string[] = [];
+    let flushQueued = false;
+    const flushLanded = () => {
+      flushQueued = false;
+      if (!landedKeys.length) return;
+      const [source, keys] = [landed, landedKeys];
+      landed = {};
+      landedKeys = [];
+      apply(source, keys);
+    };
+    await Promise.all(order.map((key) =>
+      loadCache([key], { pending: cached?.pending }).then((rows) => {
+        const now = performance.now();
+        // Averaged with the last boot's, so one read caught behind a long task does not reorder the next boot alone.
+        const cost = now - lastDone;
+        seen[key] = Math.round(costs[key] == null ? cost : (costs[key] + cost) / 2);
+        lastDone = now;
+        if (!rows || superseded()) return;
+        Object.assign(landed, rows);
+        landedKeys.push(key);
+        if (!flushQueued) { flushQueued = true; setTimeout(flushLanded, 0); }
+      }),
+    ));
+    flushLanded();
     if (superseded()) return false;
-    apply(deferred, HYDRATION_DEFERRED_KEYS);
+    writeHydrationCosts(seen);
       // Re-enable IDB write-through only AFTER the deferred collections land.
       // If a live delta arrives while write-through is open but the store still
       // holds just the windowed payload (tasks' 300, sessions' ~30d), then
