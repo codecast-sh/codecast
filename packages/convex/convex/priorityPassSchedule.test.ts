@@ -13,7 +13,7 @@ import { patchTask } from "./lib/taskWrite";
 import { priorityPassRequest } from "./lib/priorityPass";
 import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, passOn, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier, classifierOn } from "./lib/priorityClassifierHook";
-import { inheritLink, linkFromPlan, linkFromTask, linkSession, pullRequestClosed, taskStatusChanged } from "./lib/priorityLinks";
+import { inheritLink, linkFromPlan, linkFromTask, linkSession, pullRequestMoved, taskStatusChanged } from "./lib/priorityLinks";
 import { answerAsksForPass } from "./sessionDecisions";
 import { passAllowedAt } from "./priorityPassSchedule";
 import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
@@ -410,7 +410,7 @@ describe("with priorities off, a pin, title, PR close or link costs about a read
       repository: "o/r", number: 1, github_pr_id: 1, title: "PR", body: "", state: "merged", author_github_username: "c", linked_session_ids: [carlConv], team_id: other, created_at: 1, updated_at: 1,
     } as any));
     const prRow = (await w.t.run((c) => c.db.get(pr)))!;
-    expect(await reads(w, (ctx) => pullRequestClosed(ctx, prRow))).toEqual(["get"]);
+    expect(await reads(w, (ctx) => pullRequestMoved(ctx, prRow))).toEqual(["get"]);
     // The link writers: no priority, task or plan read.
     const plan = await w.t.run((ctx) => ctx.db.insert("plans", { user_id: carl, workspace: `team:${other}`, short_id: "pl-9", title: "P", status: "active", source: "human", created_at: 1, updated_at: 1 } as any));
     const planRow = (await w.t.run((c) => c.db.get(plan)))!;
@@ -486,7 +486,7 @@ describe("with priorities off, a pin, title, PR close or link costs about a read
       const id = await ctx.db.insert("pull_requests", { repository: "o/r", number: 2, github_pr_id: 2, title: "PR", body: "", state: "merged", author_github_username: "c", linked_session_ids: [carlConv], created_at: 1, updated_at: 1 } as any);
       return (await ctx.db.get(id))!;
     });
-    await recorded((ctx) => pullRequestClosed(ctx, pr));
+    await recorded((ctx) => pullRequestMoved(ctx, pr));
     expect(queries.filter((q) => q !== "team_memberships")).toEqual([]);
   });
 });

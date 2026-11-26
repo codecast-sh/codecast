@@ -266,7 +266,7 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
   });
 
-  test("a team PR linked only from a private session reaches its team milestone; closing the last open one unmerged finishes it", async () => {
+  test("a team PR linked only from a private session reaches its team milestone; closing the last open one unmerged finishes it, and reopening it reopens the milestone", async () => {
     const { t, ada } = await world();
     const { p, open } = await t.run(async (ctx: any) => {
       const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } });
@@ -288,6 +288,9 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     });
     await t.run((ctx: any) => patchPullRequest(ctx, open, { state: "closed", closed_at: NOW - H }));
     expect(await stepOf(t, p, "s1")).toMatchObject({ done: true, done_at: NOW - H });
+    await t.run((ctx: any) => patchPullRequest(ctx, open, { state: "open", closed_at: undefined }));
+    const reopened = await stepOf(t, p, "s1");
+    expect([reopened.done, reopened.done_at]).toEqual([false, undefined]);
   });
 
   test("a milestone whose PR is still open stays open when the pass judges it done", async () => {
