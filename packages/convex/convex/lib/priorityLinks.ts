@@ -203,7 +203,7 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
  * no team each person's own, wherever the linking session is listed.
  */
 export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Promise<void> {
-  // A team's PR counts only there: its flag first, one read.
+  // A team's PR counts only there: its flag first, one read. A PR with no team (the schema requires one; older rows) counts in each linking owner's personal workspace, whose flag each is read before its milestones.
   if (pr.team_id && !(await prioritiesOn(ctx, `team:${pr.team_id}`))) return;
   const sessions = await sessionsOf(ctx, [pr.shepherd_conversation_id, ...pr.linked_session_ids]);
   const places = [];

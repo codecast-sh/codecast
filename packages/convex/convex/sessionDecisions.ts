@@ -61,6 +61,7 @@ import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { approvalCardRefusal, approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 import { pinsAskForPass, sessionActivity } from "./lib/priorityPassSchedule";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -828,6 +829,17 @@ async function settleGateRun(ctx: Ctx, row: DecisionRow, verdict: Verdict, now: 
 // this was its last member. Shared by finalizeAnswer (server answers) and the
 // web's generic dispatch patch (settleClientResolution), so the two paths
 // cannot drift. Returns whether a run consumed the answer as its open gate.
+/**
+ * An answered card's session asks for its owner's priorities pass. The flag
+ * first: with priorities on in none of its owner's workspaces, the session
+ * is never read.
+ */
+export async function answerAsksForPass(ctx: { db: any; scheduler?: any }, row: Pick<DecisionRow, "conversation_id" | "user_id">): Promise<void> {
+  if (!(await workspaceHasFeature(ctx, { user_id: row.user_id }, "priorities"))) return;
+  const conv = await ctx.db.get(row.conversation_id);
+  if (conv && pinsAskForPass(conv)) await sessionActivity(ctx, conv);
+}
+
 async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: AnsweredBy, now: number): Promise<boolean> {
   await setInboxStatus(ctx, row._id, "done");
   await scoreOverride(ctx, row, verdict, by, now);
@@ -852,10 +864,7 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
   // An answer asks for its owner's priorities pass, unless a machine's session asked it. It closes no milestone: a card is a question asked mid-work.
-  if (verdict.status === "answered") {
-    const conv = await ctx.db.get(row.conversation_id);
-    if (conv && pinsAskForPass(conv)) await sessionActivity(ctx, conv);
-  }
+  if (verdict.status === "answered") await answerAsksForPass(ctx, row);
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).

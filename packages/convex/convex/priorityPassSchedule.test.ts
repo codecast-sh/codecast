@@ -14,6 +14,7 @@ import { priorityPassRequest } from "./lib/priorityPass";
 import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier } from "./lib/priorityClassifierHook";
 import { linkFromPlan, linkFromTask, linkSession, pullRequestClosed } from "./lib/priorityLinks";
+import { answerAsksForPass } from "./sessionDecisions";
 import { passAllowedAt } from "./priorityPassSchedule";
 import { PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
 import { DAY, H, pass, stubModel, world } from "./priorityPassRun.testkit";
@@ -370,6 +371,36 @@ describe("with priorities off, a pin, title, PR close or link costs about a read
     const linkCost = await reads(w, (ctx) => linkSession(ctx, conv!, p, undefined));
     expect(linkCost).toEqual(["get", "get"]);
     expect((await w.conversation(carlConv))?.priority_id).toBeUndefined();
+  });
+
+  test("an answered card reads the flag before its session; a PR with no team reads no milestone where priorities is off", async () => {
+    const w = await world();
+    const { carlConv, carl } = w;
+    const gets: string[] = [];
+    const queries: string[] = [];
+    const recorded = (fn: (ctx: any) => Promise<unknown>) => w.t.run(async (ctx: any) => {
+      const db = new Proxy(ctx.db, {
+        get(target: any, prop: string) {
+          if (prop === "query") return (table: string) => (queries.push(table), target.query(table));
+          if (prop === "get") return (id: any) => (gets.push(String(id)), target.get(id));
+          const value = target[prop];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      await fn({ ...ctx, db });
+    });
+    await recorded((ctx) => answerAsksForPass(ctx, { conversation_id: carlConv, user_id: carl }));
+    expect(gets).not.toContain(String(carlConv));
+    expect(queries.filter((q) => q !== "team_memberships")).toEqual([]);
+    // A PR with no team: its linking sessions' owners are read, then each owner's flag; no milestone read.
+    gets.length = 0;
+    queries.length = 0;
+    const pr = await w.t.run(async (ctx) => {
+      const id = await ctx.db.insert("pull_requests", { repository: "o/r", number: 2, github_pr_id: 2, title: "PR", body: "", state: "merged", author_github_username: "c", linked_session_ids: [carlConv], created_at: 1, updated_at: 1 } as any);
+      return (await ctx.db.get(id))!;
+    });
+    await recorded((ctx) => pullRequestClosed(ctx, pr));
+    expect(queries.filter((q) => q !== "team_memberships")).toEqual([]);
   });
 });
 
