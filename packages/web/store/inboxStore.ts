@@ -12008,6 +12008,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (this.sessions[sid]) {
         this.sessions[sid].inbox_dismissed_at = null;
         this.sessions[sid].inbox_stashed_at = null;
+        // The hidden flag goes with the stash, so a later plain stash is plain.
+        if (this.sessions[sid].inbox_stash_hidden) this.sessions[sid].inbox_stash_hidden = null;
         this.sessions[sid].inbox_snoozed_until = null;
         this.sessions[sid].inbox_killed_at = null;
       }
@@ -12015,6 +12017,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (conv) {
         conv.inbox_dismissed_at = null;
         conv.inbox_stashed_at = null;
+        if (conv.inbox_stash_hidden) conv.inbox_stash_hidden = null;
         conv.inbox_snoozed_until = null;
         conv.inbox_killed_at = null;
       }

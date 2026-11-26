@@ -167,16 +167,6 @@ describe("pinning done", () => {
     inInbox((await s.read()).conv);
   });
 
-  test("a woken close files by when it woke, not when it was closed", async () => {
-    const s = await closed();
-    const old = Date.now() - 60 * 86_400_000;
-    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_dismissed_at: old, inbox_closed_at: old }); });
-    await s.wake(sessionMessage);
-    const { conv } = await s.read();
-    hiddenStash(conv);
-    expect(conv.inbox_stashed_at).toBeGreaterThan(Date.now() - 60_000);
-  });
-
   test("an earlier close left on a stash and hide does not mark it as closed", async () => {
     const s = await setup();
     const closedAt = Date.now() - 60_000;
@@ -276,10 +266,8 @@ describe("the paths around a closed session", () => {
       await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, fields as any);
     });
     await send(sessionMessage);
-    const lead = await row(s.ids.conv);
-    hiddenStash(lead);
-    // The wake re-stamps the close at the wake, and the adoption moves with it.
-    expect((await row(kid)).inbox_adopted_at).toBe(lead.inbox_closed_at);
+    hiddenStash(await row(s.ids.conv));
+    expect((await row(kid)).inbox_adopted_at).toBe(adopted);
     // A person writing ends the close: the worker nests under its lead again.
     await send({ content: "what did it find?", human: true });
     inInbox(await row(s.ids.conv));

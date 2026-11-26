@@ -2101,7 +2101,7 @@ export async function abandonAmbiguousAndResendInDb(
     updated_at: fence.now,
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
-    ...wakeHideFields(conversation, { machine: isMachineWake(message), now: fence.now }),
+    ...wakeHideFields(conversation, { machine: isMachineWake(message) }),
   });
   if (isMachineWake(message)) await hideViewerClosesOnWake(ctx, conversation);
   return {

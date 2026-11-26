@@ -148,7 +148,8 @@ function SheetBody({ popup, leave }: { popup: Extract<Popup, { kind: 'sheet' }>;
                 >
                   {item.label}
                 </Text>
-                {item.detail ? <Text style={styles.rowDetail} numberOfLines={2}>{item.detail}</Text> : null}
+                {/* Three lines: a Close's detail names what it keeps and what brings it back (sessionVerbs). */}
+                {item.detail ? <Text style={styles.rowDetail} numberOfLines={3}>{item.detail}</Text> : null}
               </View>
               {item.selected ? <Feather name="check" size={16} color={Theme.cyan} /> : null}
             </Pressable>

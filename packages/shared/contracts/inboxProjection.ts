@@ -898,14 +898,13 @@ export function isMachineWake(m: { origin?: string | null; quiet?: boolean | nul
  *  ordinary session (closeReturnsOnDone; conversations performSetThreadState). */
 export function wakeHideFields(
   row: ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
-  wake: { machine: boolean; now: number },
-): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_closed_at?: number; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true | undefined } {
+  wake: { machine: boolean },
+): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true | undefined } {
   const out: ReturnType<typeof wakeHideFields> = {};
   if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
   if (row.inbox_killed_at) out.inbox_killed_at = undefined;
-  const closed = wake.machine ? closeWakeFields(row, wake.now) : null;
+  const closed = wake.machine ? closeWakeFields(row) : null;
   if (closed) {
-    out.inbox_closed_at = closed.inbox_closed_at;
     out.inbox_stashed_at = closed.inbox_stashed_at;
     out.inbox_stash_hidden = true;
   } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
