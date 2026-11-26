@@ -29,6 +29,14 @@ import {
 } from '@codecast/web/lib/line/runReport';
 import { landingOf, ownGraphOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
+import { journeyOf, type TargetState } from '@codecast/web/lib/ship/journey';
+import { changeHeadline, changeLinks, changePr, type ChangeLink } from '@codecast/web/lib/ship/changePage';
+import { landedSha } from '@codecast/web/lib/ship/runRecord';
+import { reachTargets } from '@codecast/web/lib/ship/sessionShip';
+import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
+import { useRunFlow } from '@codecast/web/hooks/useFlowObject';
+import { takesSessionChange } from '@codecast/shared/contracts/flowPool';
+import type { JourneyTone } from '@codecast/web/lib/ship/journeyWords';
 import { ResumeAtAction } from '@/components/session/ResumeAtAction';
 import { compactAge } from '@codecast/web/lib/threadState';
 import { Text as RNText, TextInput } from '@/components/Themed';
@@ -38,7 +46,7 @@ import { codeFont } from '@/constants/fonts';
 import { copyToClipboard } from '@/lib/clipboard';
 import { appAlert } from '@/lib/popups';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
-import { openAppRoute } from '@/lib/links';
+import { openAppRoute, openLink } from '@/lib/links';
 import { ActionButton, FactChip, FactRow, Facts, LinkRow, MoreToggle, ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 
 type IconName = React.ComponentProps<typeof FontAwesome>['name'];
@@ -92,6 +100,19 @@ const STEP_MARK: Record<StepState, { icon: IconName; tone: keyof Palette }> = {
   unknown: { icon: 'question', tone: 'textMuted' },
 };
 
+/** A change run's head and link tones (lib/ship/changePage.ts), as the web's run page colors them. */
+function toneColor(tone: JourneyTone | ChangeLink['tone'], t: Palette): string {
+  switch (tone) {
+    case 'ok': return t.green;
+    case 'bad': return t.red;
+    case 'wait': return t.yellow;
+    case 'you': case 'working': return t.blue;
+    case 'agent': return t.orange;
+    case 'session': return t.violet;
+    default: return t.textMuted;
+  }
+}
+
 const answerColor = (answer: string | null, t: Palette) =>
   optionIsShip(answer) ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
 
@@ -127,7 +148,19 @@ export default function RunScreen() {
   const [gateText, setGateText] = useState('');
   const respondToGate = useInboxStore((s) => s.respondToGate);
   // The session the run waits on asks a person: its card, answered on the decision's own screen.
-  const ask = useJourneyViewer(run as any).ask ?? null;
+  const viewer = useJourneyViewer(run as any);
+  const ask = viewer.ask ?? null;
+  // A change run (its flow takes a session's change): its head says where the change stands, with its PR, CI, review,
+  // merge and deploys as links, as the web's run page says it (ChangeRunHead).
+  const { flow: runFlow } = useRunFlow(run as any);
+  const changeFlow = runFlow && takesSessionChange(runFlow) ? runFlow : null;
+  const mergedSha = run && changeFlow ? landedSha(run as any) : null;
+  const changeRepo = run && changeFlow ? changePr(run as any)?.repository ?? null : null;
+  const reach = useDeployReach(mergedSha && changeRepo ? `${changeRepo}@${mergedSha}` : null);
+  const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
+  const journey = useMemo(() => (run && changeFlow ? journeyOf(changeFlow, run as any, targets, viewer) : null), [run, changeFlow, targets, viewer]);
+  const head = journey && run ? changeHeadline(journey, run as any) : null;
+  const links = journey && run ? changeLinks(run as any, targets) : [];
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -201,8 +234,25 @@ export default function RunScreen() {
           {cardChip ? <FactChip icon="question-circle" label={cardChip} color={waitingOnCard ? Theme.yellow : answerColor(answer, Theme)} onPress={() => go(`/decisions/${run.gate_decision_short_id}`)} link testID="run-card" /> : null}
         </RNView>
 
-        <RNText style={[styles.outcome, { color: outcomeColor(outcome.tone, Theme) }]} testID="run-outcome">{outcome.text}</RNText>
-        {asking ? (
+        {head ? (
+          <RNView style={styles.changeHead} testID="run-change-head">
+            <RNView style={styles.changeWordsRow}>
+              <RNView style={[styles.changeDot, { backgroundColor: toneColor(head.tone, Theme) }]} />
+              <RNText style={styles.changeWords} testID="run-change-words">{head.words}</RNText>
+            </RNView>
+            {head.waits ? (
+              <TouchableOpacity disabled={!head.href} onPress={() => head.href && void openLink(head.href)} activeOpacity={0.6} testID="run-change-waits">
+                <RNText style={[styles.changeWaits, head.href ? { textDecorationLine: 'underline' } : null]} numberOfLines={3}>{head.waits}</RNText>
+              </TouchableOpacity>
+            ) : null}
+            {links.length ? (
+              <RNView style={objectStyles.chips}>
+                {links.map((l) => <FactChip key={`${l.kind}:${l.label}`} label={l.label} color={toneColor(l.tone, Theme)} onPress={() => void openLink(l.href)} link testID={`run-change-${l.kind}`} />)}
+              </RNView>
+            ) : null}
+          </RNView>
+        ) : <RNText style={[styles.outcome, { color: outcomeColor(outcome.tone, Theme) }]} testID="run-outcome">{outcome.text}</RNText>}
+        {asking && !head ? (
           <RNView style={[styles.gate, { borderColor: Theme.yellow + '55', backgroundColor: Theme.yellow + '10' }]} testID="run-session-asks">
             <RNText style={[styles.gatePrompt, { fontWeight: '600' }]}>{asking.head}</RNText>
             {asking.body ? <RNText style={styles.gatePrompt}>{asking.body}</RNText> : null}
@@ -389,6 +439,11 @@ function StepRow({ step: s, onOpen, dim }: { step: ReportStep; onOpen: (href: st
 const styles = themedStyles((Theme) => StyleSheet.create({
   flow: { ...codeFont, fontSize: 12, color: Theme.textMuted, marginBottom: 6 },
   outcome: { fontSize: 16, lineHeight: 22, fontWeight: '600', marginBottom: Spacing.lg },
+  changeHead: { marginBottom: Spacing.lg, gap: 6 },
+  changeWordsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  changeDot: { width: 9, height: 9, borderRadius: 5 },
+  changeWords: { flex: 1, fontSize: 18, lineHeight: 24, fontWeight: '600', color: Theme.text },
+  changeWaits: { marginLeft: 17, fontSize: 14, lineHeight: 20, color: Theme.textMuted },
   gate: { borderWidth: 1, borderRadius: 10, padding: Spacing.md, marginBottom: Spacing.lg, gap: Spacing.sm },
   gatePrompt: { fontSize: 14, lineHeight: 20, color: Theme.text },
   gateChoices: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },

@@ -222,7 +222,8 @@ function useBriefMessageId(conversationId: string | null, at: number | null): st
 
 /** What is happening now, and the person's part in it. `again` draws Ship again, primary when re-running is the fix. */
 /** `personal`: a personal Ship's run: its reasons show whole, and its Deploy, which deploys itself, opens Deploys only with targets. */
-export function JourneyNowBar({ now, run, now_ms, children, again, personal = false }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean }) {
+/** `onRunPage`: drawn on the run's own page, where opening the run goes nowhere. */
+export function JourneyNowBar({ now, run, now_ms, children, again, personal = false, onRunPage = false }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean; onRunPage?: boolean }) {
   const since = (at: number | null | undefined) => (at ? <span className="sj-since">{ageShort(now_ms - at)}</span> : null);
   // The conversation on screen: opening the run's session from inside it goes nowhere, so the brief it sent is the press.
   const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
@@ -233,7 +234,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
   const briefId = useBriefMessageId(inSession ? here : null, stop?.briefAt ?? null);
   // A stop that says to resume the run leads with that press (ResumeAtPress); opening the run follows it.
   const resume = stop?.resume && run?._id ? stop.resume : null;
-  const openRun = run?._id ? <Link className="sj-act" data-primary={resume ? undefined : ""} href={`/workflows/runs/${run._id}`} data-journey-open-run>Open run</Link> : null;
+  const openRun = run?._id && !onRunPage ? <Link className="sj-act" data-primary={resume ? undefined : ""} href={`/workflows/runs/${run._id}`} data-journey-open-run>Open run</Link> : null;
   switch (now.kind) {
     case "idle": return null;
     case "starting":
@@ -254,8 +255,9 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
         <div className="sj-now" data-kind="session">
           <CornerDownLeft className="w-3.5 h-3.5" aria-hidden />
           <b>{sentBackWords(now)}</b>
-          <span className="sj-what">this session is fixing it{now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}</span>
+          <span className="sj-what">{onRunPage ? "its session" : "this session"} is fixing it{now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}</span>
           {since(now.since)}
+          {onRunPage && now.conversation ? <Link className="sj-act" href={`/conversation/${now.conversation}`} data-journey-open-session>Open session</Link> : null}
           {children}
           {now.note ? <p className="sj-note" data-journey-note>{now.note}</p> : null}
         </div>
@@ -386,7 +388,8 @@ export function RunSessionAsk({ run, now_ms }: { run: any; now_ms: number }) {
 }
 
 /** `targets`, when the caller knows them from the landed commit's deploy reach, are where the change is: never guessed from the session's commits. */
-export function JourneyView({ journey, run, now_ms, compact, actions, again, targets }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState> }) {
+/** `onRunPage`: the run's own page, whose head links each deploy already and where opening the run goes nowhere. */
+export function JourneyView({ journey, run, now_ms, compact, actions, again, targets, onRunPage = false }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState>; onRunPage?: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   const insideId = useId();
   const opened = open ? journey.stages.find((s) => s.id === open) ?? null : null;
@@ -397,8 +400,9 @@ export function JourneyView({ journey, run, now_ms, compact, actions, again, tar
       <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} task={run?.task_short_id ?? null} />
       {opened?.inside ? <SegmentInside stage={opened} id={insideId} /> : null}
       {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} task={run?.task_short_id ?? null} /> : null}
-      {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal}>{actions}</JourneyNowBar> : null}
-      {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
+      {/* On the run's own page, an end the page head already says whole (Live, Done) leaves the person nothing to do here. */}
+      {run && !(onRunPage && (journey.now.kind === "live" || journey.now.kind === "passed")) ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal} onRunPage={onRunPage}>{actions}</JourneyNowBar> : null}
+      {run && landed && team && run.spawner_conversation_id && !onRunPage ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
     </div>
   );
 }
