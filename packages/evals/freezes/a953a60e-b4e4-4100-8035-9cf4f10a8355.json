@@ -1,0 +1,26 @@
+{
+  "name": "settle delivered-offers-optional-follow-up",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-offers-optional-follow-up"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:delivered-offers-optional-follow-up",
+    "title": "settle delivered-offers-optional-follow-up"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/delivered-offers-optional-follow-up.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "a953a60e-b4e4-4100-8035-9cf4f10a8355",
+  "createdAt": "2026-11-26T08:46:51.552Z"
+}

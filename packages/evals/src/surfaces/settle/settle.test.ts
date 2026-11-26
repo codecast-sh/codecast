@@ -72,7 +72,7 @@ async function replayWith(snap: SettleSnap, reply: string): Promise<{ result: Re
 
 describe('settle fixtures', () => {
   test('all 17 legacy cases moved, rows and labels unchanged', () => {
-    const got = Object.fromEntries(fixtures.map(({ kase, fixture }) => [kase, createHash('sha256').update(JSON.stringify({ verdict: fixture.label.verdict, newestFirst: fixture.snapshot.newestFirst })).digest('hex')]));
+    const got = Object.fromEntries(fixtures.filter(({ kase }) => kase in LEGACY_FINGERPRINTS).map(({ kase, fixture }) => [kase, createHash('sha256').update(JSON.stringify({ verdict: fixture.label.verdict, newestFirst: fixture.snapshot.newestFirst })).digest('hex')]));
     expect(got).toEqual(LEGACY_FINGERPRINTS);
   });
 

@@ -1,0 +1,26 @@
+{
+  "name": "settle delivered-lists-own-next-steps",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:delivered-lists-own-next-steps"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "settle:delivered-lists-own-next-steps",
+    "title": "settle delivered-lists-own-next-steps"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "settle"
+  },
+  "meta": {
+    "surface": "settle",
+    "visibility": "public",
+    "snapshot": "fixtures/settle/delivered-lists-own-next-steps.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "d9d0ed59-3b14-412f-a73f-040a7d879398",
+  "createdAt": "2026-11-26T08:46:52.315Z"
+}
