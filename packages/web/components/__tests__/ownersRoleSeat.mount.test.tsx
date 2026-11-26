@@ -123,12 +123,12 @@ describe("the parent session is the role's standing session", () => {
     expect($("[data-owners-save]")!.hasAttribute("disabled")).toBe(true);
   });
 
-  test("staging another role brings the session that started it back as its own row", async () => {
+  test("staging another role brings the session it works for back as its own row", async () => {
     seed([myRow], true);
     await render(<OwnersSegment conversationId={S} />);
     await click($("[data-owners-seg]"));
     await click($('[data-owner-candidate="r:r_design"] .own-plus'));
-    expect($$("[data-owner-row]").map(rowText)).toEqual(["YouOwner", "Aesthetics leadRole · answers for you · new", "Eval Suite leadSession that started it"]);
+    expect($$("[data-owner-row]").map(rowText)).toEqual(["YouOwner", "Aesthetics leadRole · answers for you · new", "Eval Suite leadSession it works for"]);
   });
 });
 
@@ -145,7 +145,7 @@ test("a parent that is some other session keeps its own row", async () => {
   await render(<OwnersSegment conversationId={S} />);
   expect($("[data-owners-seg]")!.title).toBe("Owners: Eval Suite lead, Eval Suite lead");
   await click($("[data-owners-seg]"));
-  expect($$("[data-owner-row]").map(rowText)).toEqual(["Eval Suite leadRole · answers for you", "Eval Suite leadSession that started it"]);
+  expect($$("[data-owner-row]").map(rowText)).toEqual(["Eval Suite leadRole · answers for you", "Eval Suite leadSession it works for"]);
 });
 
 describe("the inbox card's co-owners", () => {
