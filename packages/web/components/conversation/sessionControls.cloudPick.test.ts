@@ -20,7 +20,7 @@ const between = (from: string, to: string) => {
 
 test("a chip pick and the toggle derive the selection from the pure helpers", () => {
   expect(between("const handleMachinePick = useCallback(", "const toggleCloudMode")).toContain("machineSelectionAfterPick(");
-  expect(between("const toggleCloudMode = useCallback(", "const setSessionTargetDevice")).toContain("machineSelectionAfterCloudToggle(");
+  expect(between("const toggleCloudMode = useCallback(", "\n  }, [")).toContain("machineSelectionAfterCloudToggle(");
 });
 
 test("cloud mode is derived from the routed machine, never read from the store", () => {
