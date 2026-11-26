@@ -37,7 +37,7 @@ import { useCircleFace } from "../../hooks/useCircleFace";
 import { CircleFace } from "../calls/FaceCircle";
 import { getCallTiles, subscribeCallTiles, type ParticipantTile } from "../../lib/calls/callManager";
 import { useFaceKey, useWalkieFaces, type FaceKey } from "../presence/useFaceKey";
-import { useOpenDm } from "../../hooks/useOpenDm";
+import { useOpenChatPath, useOpenDm } from "../../hooks/useOpenDm";
 import { closeFacePanel, getFaceChat, openFacePanel, useFaceChatBadge, useFaceChatPanelId } from "../../lib/chat/faceChat";
 import { FaceCard, GuestFaceCard } from "./FaceCard";
 import { useWalkieLevelVar } from "../../hooks/useWalkie";
@@ -225,6 +225,7 @@ function FaceSeat({
   const presence = PRESENCE_OF[entry.state];
   const canOpen = callsEnabled || !entry.me;
   const openDm = useOpenDm();
+  const openChat = useOpenChatPath();
   // Red is messages: what they said that this window showed and you have
   // not opened, plus DM unread beyond it (lib/chat/faceChat).
   const unread = useFaceChatBadge(entry.id, entry.unread);
@@ -315,7 +316,13 @@ function FaceSeat({
             e.preventDefault();
             e.stopPropagation();
             if (density === "bar") openFacePanel(entry.id);
-            else openDm([entry.id]);
+            else {
+              // An agent writes where it works, not in a DM: go to the newest
+              // line its count stands for (ct-102115).
+              const last = entry.bot ? getFaceChat().unseen[entry.id]?.at(-1) : undefined;
+              if (last) openChat(`/chat/${last.channelId}?m=${last.messageId}`);
+              else openDm([entry.id]);
+            }
             markFaceRead(entry.id);
           }}
         >

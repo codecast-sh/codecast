@@ -127,6 +127,7 @@ export function FaceMessages({
   name,
   focus,
   onLeave,
+  canDm = true,
 }: {
   memberId: string;
   name: string;
@@ -134,6 +135,9 @@ export function FaceMessages({
   focus: boolean;
   /** The card closes before a route change. */
   onLeave: () => void;
+  /** An agent takes no DM (the server refuses one): its card reads where it
+   *  spoke and answers there, and with nothing said draws nothing. */
+  canDm?: boolean;
 }) {
   const openChat = useOpenChatPath();
   const viewerId = useInboxStore((s: any) => String(s.currentUser?._id ?? ""));
@@ -295,6 +299,7 @@ export function FaceMessages({
   const openChatAt = () => {
     const at = target ?? newestDm;
     if (at) return openRow(at);
+    if (!canDm) return;
     const channelId = useInboxStore.getState().openDmChannel([memberId]);
     if (!channelId) return;
     onLeave();
@@ -307,6 +312,7 @@ export function FaceMessages({
     if (!input || !text) return;
     const st = useInboxStore.getState();
     if (toDm) {
+      if (!canDm) return;
       const channelId = dmId ?? st.openDmChannel([memberId]);
       if (!channelId) return;
       st.sendChatMessage(channelId, text);
@@ -324,6 +330,7 @@ export function FaceMessages({
   const placeOf = (r: Row) => (r.isDm ? "dm" : `${r.channelId}:${r.threadRootId ?? (r.inThread ? r.id : "")}`);
   const joins = (a: Row | undefined, b: Row | undefined) =>
     !!a && !!b && a.me === b.me && b.at - a.at < RUN_GAP_MS && (!mixed || placeOf(a) === placeOf(b));
+  if (!canDm && !rows.length) return null;
   return (
     <div className="fc-card-msgs" style={{ "--fc-hue": hueFor(name) } as React.CSSProperties}>
       <div className="fc-card-msgs-head">
@@ -367,7 +374,7 @@ export function FaceMessages({
           })}
         </div>
       )}
-      {!replyHere ? (
+      {!canDm && toDm ? null : !replyHere ? (
         <div className="fc-reply">
           <button type="button" className="fc-reply-thread" onClick={openChatAt}>
             Reply in the thread <ArrowUpRight className="h-3 w-3" />
