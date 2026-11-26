@@ -7,9 +7,9 @@ import { sessionCardTitle } from "../../lib/sessionCard";
 import { sessionStartupState } from "../../lib/sessionLifecycle";
 import { isClosedSession, isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "../../lib/conversationProcessor";
-import type { InboxSession } from "../../store/inboxStore";
+import type { InboxSession, SubagentRow } from "../../store/inboxStore";
 import { SESSION_STATUS } from "../../lib/sessionStatus";
-import { subagentStateGroups, type SubagentRow } from "../../lib/subagentRows";
+import { subagentStateGroups } from "../../lib/subagentRows";
 import { SchedChildArrow } from "../TriggerRow";
 import { SessionStatusMark } from "./SessionStatusMark";
 import { AuthErrorBadge } from "../AuthErrorBadge";
@@ -602,13 +602,6 @@ export function CardSubagentsLine({ rows, onOpen }: {
       })}
     </div>
   );
-}
-
-/** The rail row that draws a session: its card, or its Compact row under its
- *  parent's card. The rows keep their own attribute rather than a card's
- *  data-session-id, which the rail's card styling keys on (app/globals.css). */
-export function railRowSelector(id: string): string {
-  return `[data-session-id="${id}"], [data-sv-subagent-row="${id}"]`;
 }
 
 /** Compact: under a card, one short row per subagent (its state's mark, its

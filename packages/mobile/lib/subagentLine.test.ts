@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import type { InboxSession } from '@codecast/web/store/inboxStore';
-import { drawsSubagentLine, filterHoistedSubagents, subagentGroupWords, subagentLines } from './subagentLine';
+import { flatViewSessions, subagentKeepOf, type InboxSession } from '@codecast/web/store/inboxStore';
+import { drawsSubagentLine, subagentGroupWords, subagentLines } from './subagentLine';
 
 const NOW = 1_700_000_000_000;
 let seq = 0;
@@ -77,17 +77,22 @@ describe('subagentLines', () => {
   });
 });
 
-describe('filterHoistedSubagents', () => {
-  test('drops the hoisted subagents the filter drops, keeps the open one and every top-level row', () => {
-    const parent = row({ is_subagent: false });
-    const busy = working();
-    const quiet = finished();
-    const open = finished();
-    const list = [parent, busy, quiet, open];
+// The phone's flat Full rows: the shared flatViewSessions with the store's
+// filter, the list the rail and its keyboard order walk.
+describe('flat Full rows', () => {
+  test('list the subagents the filter keeps under their parent, the open one always', () => {
+    const parent = row({ is_subagent: false, updated_at: NOW - 60_000 });
+    const under = { parent_conversation_id: parent._id };
+    const busy = working(under);
+    const quiet = finished(under);
+    const open = finished(under);
     const subs = new Map([[parent._id, [busy, quiet, open]]]);
-    expect(filterHoistedSubagents(list, subs, NOW, 'active', open._id).map((s) => s._id)).toEqual([parent._id, busy._id, open._id]);
-    expect(filterHoistedSubagents(list, subs, NOW, 'active_done', null)).toHaveLength(4);
-    expect(filterHoistedSubagents(list, subs, NOW, 'all', null)).toHaveLength(4);
+    const flat = (filter: 'active' | 'active_done' | 'all', focusedId: string | null) =>
+      flatViewSessions([parent, busy, quiet, open], subs, { mode: 'recent', showSubagents: true, focusedId, keepSub: subagentKeepOf(filter, NOW, focusedId, {}) }).map((s) => s._id);
+    expect(flat('active', open._id)).toEqual(expect.arrayContaining([parent._id, busy._id, open._id]));
+    expect(flat('active', open._id)).not.toContain(quiet._id);
+    expect(flat('active_done', null)).toHaveLength(4);
+    expect(flat('all', null)).toHaveLength(4);
   });
 });
 

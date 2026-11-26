@@ -1,5 +1,5 @@
 // A card's subagents under it, mounted in jsdom from real rows through the
-// shared helper (lib/subagentRows): Folded is one line of a mark and a count
+// shared helper (store subagentRowsOf): Folded is one line of a mark and a count
 // per state, most urgent first and no words, each count opening the newest
 // subagent in its state; Compact rows is one row each (mark, title, state
 // word) in the same order, opening that subagent, the open one highlighted.
@@ -12,7 +12,7 @@ import type { InboxSession } from "../../store/inboxStore";
 let React: typeof import("react");
 let createRoot: typeof import("react-dom/client").createRoot;
 let parts: typeof import("./SessionCardParts");
-let rowsOf: typeof import("../../lib/subagentRows").subagentRowsOf;
+let rowsOf: typeof import("../../store/inboxStore").subagentRowsOf;
 let dom: { window: { close(): void } };
 
 beforeAll(async () => {
@@ -27,7 +27,7 @@ beforeAll(async () => {
   React = await import("react");
   ({ createRoot } = await import("react-dom/client"));
   parts = await import("./SessionCardParts");
-  ({ subagentRowsOf: rowsOf } = await import("../../lib/subagentRows"));
+  ({ subagentRowsOf: rowsOf } = await import("../../store/inboxStore"));
 }, 60_000);
 
 afterAll(() => {

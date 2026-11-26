@@ -59,10 +59,13 @@ export function isAdoptedChild(conv: InboxRowIdentity): boolean {
   return !!conv.inbox_adopted_at && isNestedIdentity(conv);
 }
 
-// Under the owners model (team feature session_owners) nothing rides a parent:
-// a nested row belongs to whoever owns it, and the row is a member of exactly
-// its owners' inboxes, standing on its own facts. The server stamps
-// owners_model only on a row the model applies to: that IS the marker.
+// Under the owners model (team feature session_owners) no row's membership or
+// placement rides a parent: a nested row belongs to whoever owns it, and the
+// row is a member of exactly its owners' inboxes, standing on its own facts. A
+// child its session owns (owner_session_id, in nobody's inbox) is still drawn
+// on that session's card, for display only (web store ownedChildrenOf). The
+// server stamps owners_model only on a row the model applies to: that IS the
+// marker.
 export function underOwnersModel(row: { owners_model?: boolean | null }): boolean {
   return row.owners_model === true;
 }

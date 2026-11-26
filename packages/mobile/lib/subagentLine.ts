@@ -1,11 +1,11 @@
 // The phone's half of subagents on inbox cards. The states, the filter and
-// their order are web's (lib/subagentRows), so the phone and the rail agree on
+// their order are web's (store subagentRowsOf), so the phone and the rail agree on
 // every subagent; the phone has no menu and follows the rail's prefs.
 // No React Native here: lib/subagentLine.test.ts loads it under bun.
 import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
-import { subagentPasses, subagentRowsOf, subagentStateGroups, subagentStatusOf, type SubagentStateGroup } from '@codecast/web/lib/subagentRows';
+import { subagentStateGroups, type SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 import { standingRoleIdOf } from '@codecast/web/lib/sessionIdentity';
-import type { InboxSession, SubagentFilter, SubagentRowsMode } from '@codecast/web/store/inboxStore';
+import { subagentRowsOf, type InboxSession, type SubagentFilter, type SubagentRowsMode } from '@codecast/web/store/inboxStore';
 
 /** Whether cards draw the folded line. Folded and Compact rows draw it. Full
  *  rows list subagents as rows of their own in the flat views (Updated,
@@ -44,21 +44,6 @@ export function subagentLines(
     out.set(id, old && groupsSig(old) === groupsSig(groups) ? old : groups);
   }
   return out;
-}
-
-/** Full rows in a flat view: the hoisted subagents the filter drops leave the
- *  list; the open one always stays. */
-export function filterHoistedSubagents(
-  list: readonly InboxSession[],
-  subsByParent: ReadonlyMap<string, readonly InboxSession[]>,
-  now: number,
-  filter: SubagentFilter,
-  focusedId: string | null | undefined,
-): InboxSession[] {
-  if (filter === 'all') return [...list];
-  const nested = new Set<string>();
-  for (const subs of subsByParent.values()) for (const s of subs) nested.add(s._id);
-  return list.filter((s) => !nested.has(s._id) || s._id === focusedId || subagentPasses(subagentStatusOf(s, now), filter));
 }
 
 /** A count's words, for screen readers: "2 subagents working". */

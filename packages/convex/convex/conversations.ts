@@ -10080,7 +10080,10 @@ export async function computeInboxSessions(
     // Under the owners model a child belongs to the session it works for,
     // not to the viewer: it still rides that session's card, carrying its
     // owner stamps so the client nests it there and files it nowhere else.
+    // Only the web's own inbox draws them on a card: the CLI's list and the
+    // team board would count each one as a session of its own.
     const parentOwns = underOwnersModel(r.conv);
+    if (parentOwns && (opts.projection || opts.teamScope)) continue;
     for (const child of r.subagentChildren) {
       if (topLevelIds.has(child._id.toString())) continue;
       if (parentOwns && !isParentOwnedChild(child)) continue;

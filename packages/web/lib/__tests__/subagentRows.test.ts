@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { InboxSession } from "../../store/inboxStore";
-import { resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, useInboxStore } from "../../store/inboxStore";
-import { subagentLiveOf, subagentPasses, subagentRowsOf, subagentStateGroups, subagentStatusOf } from "../subagentRows";
+import { resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, subagentLiveOf, subagentPasses, subagentRowsOf, subagentStatusOf, useInboxStore } from "../../store/inboxStore";
+import { subagentStateGroups } from "../subagentRows";
 import { SESSION_STATUSES } from "../sessionStatus";
 
 const NOW = 1_700_000_000_000;

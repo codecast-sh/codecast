@@ -14,7 +14,7 @@ import { formatDateFull } from "../../lib/utils";
 import { sessionIdentity } from "../../lib/sessionIdentity";
 import { SESSION_STATUS, sessionStatusOf, type StatusSection } from "../../lib/sessionStatus";
 import { sessionCardLine } from "../../lib/sessionCardLine";
-import { getProjectName, isFork, showsBlockedBadge, railRowPlacement } from "../../store/inboxStore";
+import { getProjectName, isFork, showsBlockedBadge, railRowPlacement, isOwnedChildRow } from "../../store/inboxStore";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import { ImageLightbox } from "../ImageGallery";
 import { ViewerFaces } from "../presence/ViewerFaces";
@@ -151,6 +151,9 @@ export function ModernSessionCardView({
     now,
     live: { pendingSend: isPendingSend, blocked, stopped: !!liveness.stopped, asking: !!liveness.asking || !!liveness.asksOk },
     hosted,
+    // Drawn under its parent: under the owners model only a child its session
+    // owns is; one the viewer owns stands as its own card.
+    nested: nested && (!underOwnersModel(session) || isOwnedChildRow(session)),
   });
   const meta = SESSION_STATUS[status];
   // Under the owners model a wait its agent owner answers says who has it.

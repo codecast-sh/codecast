@@ -24,7 +24,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, resolveSubagentRows, resolveSubagentFilter, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated, type InboxSectionKey } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -74,9 +74,9 @@ import { blockedLanes, type BlockedLane, type LaneAccount } from "../lib/blocked
 import { useAccountPool, useSyncAccountPool } from "../hooks/useSyncAccountPool";
 import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
-import { CardWorkersLine, CardSubagentsLine, CardSubagentRows, railRowSelector } from "./inbox/SessionCardParts";
-import { subagentRowsOf, type SubagentRow } from "../lib/subagentRows";
-import { awaitingOkIds } from "../lib/decisionQueue";
+import { CardWorkersLine } from "./inbox/SessionCardParts";
+import { railRowSelector } from "../lib/subagentRows";
+import { useCardSubagents } from "../hooks/useCardSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "../store/browserTabsView";
@@ -1706,8 +1706,6 @@ const SECTION_DECLARED_STATUS: Record<string, ThreadStateStatus | undefined> = {
   needs_input: "blocked", done: "done", new_results: "done", dormant: "dormant",
 };
 
-const EMPTY_SUBAGENT_ROWS: readonly SubagentRow[] = [];
-
 function SessionListPanelImpl({
   onSessionSelect,
   activeSessionId,
@@ -2057,61 +2055,12 @@ function SessionListPanelImpl({
   // reach the shared classifier), identically on every client and the server.
   // The header number is the chokepoint's section COUNT (flat cards plus
   // members nested under a same-bucket lead — what the tally and the CLI
-  // report) while no chip narrows the list and the nested rows are on screen;
-  // shared sectionHeaderCount, so this panel and mobile can't drift.
-  const subagentRows = resolveSubagentRows(s.clientState.ui);
-  const showSubagents = subagentRows === "full";
-  const subagentFilter = resolveSubagentFilter(s.clientState.ui);
-  // Each card's subagents and the workers waiting on the person, with their
-  // states, as the filter keeps them (lib/subagentRows), the open one always.
-  // Worked out once per change to the lists, the clock, the filter, the open
-  // session or a live fact a state reads (an unconfirmed send, a revive stamp,
-  // a pending decision, a hosted stop), never per card per render. Hidden
-  // reads none.
-  const askingIds = awaitingOkIds(s.sessionDecisions);
-  const subagentsHidden = subagentRows === "hidden";
-  const subagentRowsByParent = useMemo(() => {
-    const out = new Map<string, SubagentRow[]>();
-    if (subagentsHidden) return out;
-    for (const id of new Set([...globalSubByParent.keys(), ...workersNeedingYouByParent.keys()])) {
-      out.set(id, subagentRowsOf([...(globalSubByParent.get(id) ?? []), ...(workersNeedingYouByParent.get(id) ?? [])], coarseNow, subagentFilter, activeSessionId));
-    }
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subagentsHidden, globalSubByParent, workersNeedingYouByParent, coarseNow, subagentFilter, activeSessionId, s.pendingMessages, s.blockedReviveRequestedAt, askingIds, stopsSig]);
-  // The nested rows the filter keeps: what Full rows draw as cards.
-  const keptSubIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const rows of subagentRowsByParent.values()) for (const r of rows) ids.add(String(r.session._id));
-    return ids;
-  }, [subagentRowsByParent]);
-  // A set-aside bucket's cards nest their own rows (hiddenBucketTree), so
-  // their rows are worked out where the open bucket draws them.
-  const rowsUnder = (parent: InboxSession, bucketSubs?: readonly InboxSession[]): readonly SubagentRow[] =>
-    bucketSubs ? subagentRowsOf(bucketSubs, coarseNow, subagentFilter, activeSessionId) : (subagentRowsByParent.get(parent._id) ?? EMPTY_SUBAGENT_ROWS);
-  // Whether the open session is one of these rows in Compact: its row stands
-  // in for its card. A role lead's card draws no rows, so there it keeps its card.
-  const openIsCompactRow = (parent: InboxSession, rows: readonly SubagentRow[]) =>
-    subagentRows === "compact" && !standingRoleIdOf(parent) && rows.some((r) => r.session._id === activeSessionId);
-  // The nested cards under a card: in Full rows the ones the filter keeps,
-  // otherwise only the open one, unless its Compact row stands in. Whatever
-  // the mode, the open session is on the list.
-  const nestedCardsOf = (parent: InboxSession, subs: readonly InboxSession[], rows: readonly SubagentRow[]) => {
-    if (subs.length === 0) return subs;
-    if (!showSubagents) return subs.filter((sub) => sub._id === activeSessionId && !openIsCompactRow(parent, rows));
-    const kept = new Set(rows.map((r) => String(r.session._id)));
-    return subs.filter((sub) => sub._id === activeSessionId || kept.has(sub._id));
-  };
-  // Folded and Compact rows: under a card, its subagents and the workers
-  // waiting on the person, as one line or one short row each. A role lead's
-  // card keeps its session count instead. Folded leaves out the open one,
-  // which is on the list as a card of its own.
-  const cardSubagents = (parent: InboxSession, rows: readonly SubagentRow[]) => {
-    if ((subagentRows !== "folded" && subagentRows !== "compact") || standingRoleIdOf(parent)) return null;
-    return subagentRows === "compact"
-      ? <CardSubagentRows rows={rows} activeSessionId={activeSessionId} onOpen={handleSelect} />
-      : <CardSubagentsLine rows={rows.some((r) => r.session._id === activeSessionId) ? rows.filter((r) => r.session._id !== activeSessionId) : rows} onOpen={handleSelect} />;
-  };
+  // report) while no chip narrows the list and the nested rows are on screen
+  // (useCardSubagents countOf, over the shared sectionHeaderCount mobile reads).
+  const { mode: subagentRows, showSubagents, filter: subagentFilter, keptSubIds, rowsUnder, nestedCardsOf, cardSubagents, countOf, withoutCompactOpen } = useCardSubagents({
+    ui: s.clientState.ui, decisions: s.sessionDecisions, liveKeys: [s.pendingMessages, s.blockedReviveRequestedAt, stopsSig],
+    placed, now: coarseNow, activeSessionId, onOpen: handleSelect,
+  });
   // Modern focused folds the workers an agent spawned under its card (nestsWorkers).
   const nestWorkers = nestsWorkers(s.clientState.ui);
   const modernFocused = useIsModernFocused();
@@ -2124,18 +2073,6 @@ function SessionListPanelImpl({
     return ids;
   }, [globalSubByParent]);
   const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
-  // Full rows draw only the nested rows the filter keeps, so the header
-  // counts only those.
-  const filteredNestedBySection = useMemo(() => {
-    const out = new Map<InboxSectionKey, number>();
-    if (!showSubagents) return out;
-    for (const [id, k] of placed.nestedSectionOf) {
-      if (id !== activeSessionId && !keptSubIds.has(id)) out.set(k, (out.get(k) ?? 0) + 1);
-    }
-    return out;
-  }, [showSubagents, placed.nestedSectionOf, keptSubIds, activeSessionId]);
-  const countOf = (shown: InboxSession[], full: InboxSession[], key: InboxSectionKey) =>
-    sectionHeaderCount(shown, full, placed.counts[key] - (filteredNestedBySection.get(key) ?? 0), showSubagents);
   // The Priorities view keeps the status sections and sorts each by the
   // viewer's priority a session serves, as the keyboard walk does
   // (visualOrderSessions); Pinned keeps the person's own order. Decisions
@@ -2481,12 +2418,10 @@ function SessionListPanelImpl({
   // activity (updated_at, reshuffles as work happens), "time" by creation
   // (started_at, a stable chronology, with any manual drag pins overlaid).
   // Shared flatViewComparator so this render and the keyboard-nav order
-  // (computeVisualOrder) can't drift. It still honors the subagent mode: unless
-  // it is Full rows, the same sessions the grouped view nests away
-  // (subsByParent / globalSubByParent) are excluded here — except the selected
-  // one, which always renders — and in Full rows the ones the filter drops
-  // (keptSubIds). Folded and Compact draw their line or rows under each card
-  // here as in the grouped view.
+  // (computeVisualOrder) can't drift. Unless subagents are Full rows, the rows
+  // the grouped view nests away are left out but the selected one; in Full rows
+  // the ones the filter drops (keptSubIds). Folded and Compact draw their line
+  // or rows under each card here as in the grouped view.
   // Render and keyboard-nav share the same frozen order during recent-mode j/k
   // (see recentFreezeOrder) so the list can't move out from under the cursor.
   const recentFreezeOrder = s.recentFreezeOrder;
@@ -2507,21 +2442,7 @@ function SessionListPanelImpl({
       }),
     [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, oldestFirst, fullKeptIds, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
-  // Compact rows in a flat view: the open subagent is listed as its own row,
-  // but when its parent's card is listed too, the parent's Compact row for it
-  // stands in, as in the grouped view.
-  const flatShown = useMemo(() => {
-    if (subagentRows !== "compact" || !activeSessionId) return flatList;
-    const listed = new Map(flatList.map((sess) => [sess._id, sess]));
-    for (const [parentId, subs] of globalSubByParent) {
-      const parent = listed.get(parentId);
-      if (!parent || !subs.some((sub) => sub._id === activeSessionId)) continue;
-      if (!openIsCompactRow(parent, rowsUnder(parent))) break;
-      return flatList.filter((sess) => sess._id !== activeSessionId);
-    }
-    return flatList;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flatList, subagentRows, activeSessionId, globalSubByParent, subagentRowsByParent]);
+  const flatShown = useMemo(() => withoutCompactOpen(flatList), [flatList, withoutCompactOpen]);
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
@@ -2968,7 +2889,7 @@ function SessionListPanelImpl({
           <div>
             {visibleTop.map((session) => {
               const bucketSubs = subMap.get(session._id) ?? [];
-              const rows = subagentsHidden ? EMPTY_SUBAGENT_ROWS : rowsUnder(session, [...bucketSubs, ...(workersNeedingYouByParent.get(session._id) ?? [])]);
+              const rows = rowsUnder(session, [...bucketSubs, ...(workersNeedingYouByParent.get(session._id) ?? [])]);
               return (
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard

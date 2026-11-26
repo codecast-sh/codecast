@@ -475,6 +475,20 @@ describe("the nested window: released subagents only", () => {
     }
   });
 
+  // Only the web's own inbox draws them on the lead's card. The CLI's list
+  // and the team board count each row as a session of its own.
+  test("cast sessions and the team board list the lead, not the subagents it owns", async () => {
+    const owned = () => nestedWorld(Array.from({ length: 3 }, (_, i) => sub(`busy${i}`, i + 1)));
+    const busyIn = (rows: any[]) => rows.filter((s: any) => String(s._id ?? s.id).startsWith("conversations_busy"));
+    expect(busyIn((await computeInboxSessions({ db: owned() }, ME as any, { includeLiveness: false })).sessions)).toHaveLength(3);
+    const { sessions } = await computeInboxSessions({ db: owned() }, ME as any, { projection: true });
+    const { rows } = tallyInboxRows(sessions, { labelByConv: new Map(), now: EPOCH });
+    expect(rows.map((r) => r.id)).toEqual(["conversations_lead"]);
+    const team = await computeInboxSessions({ db: owned() }, ME as any, { includeLiveness: false, teamScope: TEAM as any });
+    expect(team.sessions.map((s: any) => s._id)).toContain("conversations_lead");
+    expect(busyIn(team.sessions)).toEqual([]);
+  });
+
   test("past its cap the window names itself and keeps the newest releases, the replica's selection", async () => {
     const released = Array.from({ length: INBOX_WINDOW_CAPS.nested + 1 }, (_, i) =>
       // Released in the opposite order to their activity: the release decides.

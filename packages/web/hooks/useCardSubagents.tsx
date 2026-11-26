@@ -1,0 +1,103 @@
+import React, { useCallback, useMemo } from "react";
+import { resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
+import { awaitingOkIds } from "../lib/decisionQueue";
+import { standingRoleIdOf } from "../lib/sessionIdentity";
+import { CardSubagentRows, CardSubagentsLine } from "../components/inbox/SessionCardParts";
+
+// The rail's subagents on cards (GlobalSessionPanel): which of a card's
+// subagents and waiting workers it shows under the person's "Subagents on
+// cards" and "Which ones" picks, as a line, short rows or nested cards, and
+// what the section headers count for them.
+
+const EMPTY_SUBAGENT_ROWS: readonly SubagentRow[] = [];
+
+export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeSessionId, onOpen }: {
+  ui: ClientUI | undefined;
+  decisions: Record<string, SessionDecisionItem> | undefined;
+  /** The other live facts a state reads (an unconfirmed send, a revive stamp, a hosted stop): a change re-reads the states. */
+  liveKeys: readonly unknown[];
+  placed: Pick<PlacedInbox, "subsByParent" | "workersNeedingYouByParent" | "nestedSectionOf" | "counts">;
+  now: number;
+  activeSessionId: string | null | undefined;
+  onOpen: (session: InboxSession, e?: React.MouseEvent) => void;
+}) {
+  const mode = resolveSubagentRows(ui);
+  const showSubagents = mode === "full";
+  const filter = resolveSubagentFilter(ui);
+  const hidden = mode === "hidden";
+  const { subsByParent, workersNeedingYouByParent, nestedSectionOf, counts } = placed;
+  const askingIds = awaitingOkIds(decisions);
+  // Each card's subagents and the workers waiting on the person, with their
+  // states, as the filter keeps them, the open one always. Worked out once per
+  // change to the lists, the clock, the filter, the open session or a live
+  // fact a state reads, never per card per render. Hidden reads none.
+  const rowsByParent = useMemo(() => {
+    const out = new Map<string, SubagentRow[]>();
+    if (hidden) return out;
+    for (const id of new Set([...subsByParent.keys(), ...workersNeedingYouByParent.keys()])) {
+      out.set(id, subagentRowsOf([...(subsByParent.get(id) ?? []), ...(workersNeedingYouByParent.get(id) ?? [])], now, filter, activeSessionId));
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hidden, subsByParent, workersNeedingYouByParent, now, filter, activeSessionId, askingIds, ...liveKeys]);
+  // The nested rows the filter keeps: what Full rows draw as cards.
+  const keptSubIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const rows of rowsByParent.values()) for (const r of rows) ids.add(String(r.session._id));
+    return ids;
+  }, [rowsByParent]);
+  // A set-aside bucket's cards nest their own rows (hiddenBucketTree), so
+  // their rows are worked out where the open bucket draws them.
+  const rowsUnder = (parent: InboxSession, bucketSubs?: readonly InboxSession[]): readonly SubagentRow[] =>
+    hidden ? EMPTY_SUBAGENT_ROWS : bucketSubs ? subagentRowsOf(bucketSubs, now, filter, activeSessionId) : (rowsByParent.get(parent._id) ?? EMPTY_SUBAGENT_ROWS);
+  // Whether the open session is one of these rows in Compact: its row stands
+  // in for its card. A role lead's card draws no rows, so there it keeps its card.
+  const openIsCompactRow = (parent: InboxSession, rows: readonly SubagentRow[]) =>
+    mode === "compact" && !standingRoleIdOf(parent) && rows.some((r) => r.session._id === activeSessionId);
+  // The nested cards under a card: in Full rows the ones the filter keeps,
+  // otherwise only the open one, unless its Compact row stands in. Whatever
+  // the mode, the open session is on the list.
+  const nestedCardsOf = (parent: InboxSession, subs: readonly InboxSession[], rows: readonly SubagentRow[]) => {
+    if (subs.length === 0) return subs;
+    if (!showSubagents) return subs.filter((sub) => sub._id === activeSessionId && !openIsCompactRow(parent, rows));
+    const kept = new Set(rows.map((r) => String(r.session._id)));
+    return subs.filter((sub) => sub._id === activeSessionId || kept.has(sub._id));
+  };
+  // Folded and Compact rows: under a card, its subagents and the workers
+  // waiting on the person, as one line or one short row each. A role lead's
+  // card keeps its session count instead. Folded leaves out the open one,
+  // which is on the list as a card of its own.
+  const cardSubagents = (parent: InboxSession, rows: readonly SubagentRow[]) => {
+    if ((mode !== "folded" && mode !== "compact") || standingRoleIdOf(parent)) return null;
+    return mode === "compact"
+      ? <CardSubagentRows rows={rows} activeSessionId={activeSessionId} onOpen={onOpen} />
+      : <CardSubagentsLine rows={rows.some((r) => r.session._id === activeSessionId) ? rows.filter((r) => r.session._id !== activeSessionId) : rows} onOpen={onOpen} />;
+  };
+  // Full rows draw only the nested rows the filter keeps, so the header
+  // counts only those.
+  const droppedBySection = useMemo(() => {
+    const out = new Map<InboxSectionKey, number>();
+    if (!showSubagents) return out;
+    for (const [id, k] of nestedSectionOf) {
+      if (id !== activeSessionId && !keptSubIds.has(id)) out.set(k, (out.get(k) ?? 0) + 1);
+    }
+    return out;
+  }, [showSubagents, nestedSectionOf, keptSubIds, activeSessionId]);
+  const countOf = (shown: InboxSession[], full: InboxSession[], key: InboxSectionKey) =>
+    sectionHeaderCount(shown, full, counts[key] - (droppedBySection.get(key) ?? 0), showSubagents);
+  // Compact rows in a flat view: the open subagent is listed as its own row,
+  // but when its parent's card is listed too, the parent's Compact row for it
+  // stands in, as in the grouped view.
+  const withoutCompactOpen = useCallback((flatList: InboxSession[]) => {
+    if (mode !== "compact" || !activeSessionId) return flatList;
+    const listed = new Map(flatList.map((sess) => [sess._id, sess]));
+    for (const [parentId, subs] of subsByParent) {
+      const parent = listed.get(parentId);
+      if (!parent || !subs.some((sub) => sub._id === activeSessionId)) continue;
+      if (standingRoleIdOf(parent) || !(rowsByParent.get(parentId) ?? []).some((r) => r.session._id === activeSessionId)) break;
+      return flatList.filter((sess) => sess._id !== activeSessionId);
+    }
+    return flatList;
+  }, [mode, activeSessionId, subsByParent, rowsByParent]);
+  return { mode, showSubagents, filter, hidden, keptSubIds, rowsUnder, nestedCardsOf, cardSubagents, countOf, withoutCompactOpen };
+}

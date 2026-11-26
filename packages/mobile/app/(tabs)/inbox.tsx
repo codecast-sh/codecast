@@ -14,7 +14,7 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type BucketItem,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, resolveSubagentRows, resolveSubagentFilter, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, subagentKeepOf, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
@@ -43,8 +43,7 @@ import { AreaBar } from '@/components/nav/AreaBar';
 import { LivePulse } from '@/components/calls/LiveRooms';
 import { HiddenSessionRow } from '@/components/inbox/HiddenSessionRow';
 import { useInboxPriorityView, usePrioritySections } from '@/hooks/useInboxPriorityView';
-import { drawsSubagentLine, filterHoistedSubagents, subagentLines } from '@/lib/subagentLine';
-import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
+import { useSubagentLines } from '@/hooks/useSubagentLines';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
 // multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
@@ -178,11 +177,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // draft keystroke synced from any device. inbox_manual_order is an array, so
   // its wake rides a stringified key (ref may flip without content change).
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
-  // How cards show their subagents and which ones: the rail's view menu sets
-  // both; the phone has no menu and follows them.
-  const subagentRows = useInboxStore((s) => resolveSubagentRows(s.clientState?.ui));
-  const subagentFilter = useInboxStore((s) => resolveSubagentFilter(s.clientState?.ui));
-  const showSubagents = subagentRows === 'full';
+  // How cards show their subagents and which ones, and each card's line.
+  const { subagentFilter, showSubagents, lines: subagentLinesByParent } = useSubagentLines(placed, coarseNow, viewMode === 'recent' || viewMode === 'time');
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
@@ -365,19 +361,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
 
   const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
 
-  // Each card's folded subagents line (lib/subagentLine), or none at all.
-  // The previous map rides along so an unchanged line keeps its array and
-  // the memoized row does not re-render.
-  const flatView = viewMode === 'recent' || viewMode === 'time';
-  const subagentLinesRef = useRef<Map<string, SubagentStateGroup[]> | undefined>(undefined);
-  const subagentLinesByParent = useMemo(() => {
-    if (!drawsSubagentLine(subagentRows, flatView)) return null;
-    const all = useInboxStore.getState().sessions;
-    const next = subagentLines([placed.subsByParent, placed.workersNeedingYouByParent], (id) => all[id], coarseNow, subagentFilter, subagentLinesRef.current);
-    subagentLinesRef.current = next;
-    return next;
-  }, [placed, coarseNow, subagentRows, subagentFilter, flatView]);
-
   const renderSessionItem = useCallback((s: InboxSession) => {
     const row = (
     <SwipeableSessionItem
@@ -525,10 +508,10 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         manualOrder: useInboxStore.getState().clientState?.ui?.inbox_manual_order,
         chipMatches,
         oldestFirst,
+        // Full rows: the nested ones the filter keeps, as the rail lists them.
+        keepSub: showSubagents ? subagentKeepOf(subagentFilter, coarseNow, currentSessionId) : undefined,
       });
-      // Full rows: the hoisted subagents follow the same filter as the line.
-      const rows = showSubagents ? filterHoistedSubagents(flat, subsByParent, coarseNow, subagentFilter, currentSessionId) : flat;
-      return renderSection("All", rows, Theme.cyan, "all");
+      return renderSection("All", flat, Theme.cyan, "all");
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled
