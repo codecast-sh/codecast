@@ -10,7 +10,8 @@ import * as path from "node:path";
 import { DEPLOY_WAIT_CAP_MS, parseDeployTargets } from "@codecast/shared/contracts/deployTargets";
 import type { MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { parseWorkflowSource } from "./parser";
-import { awaitDeploy, ciGateOf, deployDuties, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type MainCi } from "./awaitDeploy";
+import { RESUME_ENV } from "./stationReexec";
+import { awaitDeploy, ciGateOf, deployDuties, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, runAwaitDeploy, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type DeployWaitPlace, type MainCi } from "./awaitDeploy";
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 let dir = "";
@@ -360,16 +361,42 @@ describe("awaitDeploy", () => {
 
   // A newer CLI takes the wait over between polls (stationReexec.ts), handed the clock, but never one with a deploy out.
   test("between polls the wait may move to a newer CLI with its clock, until it has sent a deploy", async () => {
-    const handed: DeployClock[] = [];
-    const between = async (c: DeployClock) => { handed.push(structuredClone(c)); };
+    const handed: DeployWaitPlace[] = [];
+    const between = async (p: DeployWaitPlace) => { handed.push(structuredClone(p)); };
     const press = fake((tick) => [{ name: "desktop", history: tick >= 3 ? [dp("dp-6", "live")] : [] }], { between });
     expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["desktop/f.ts"], { held }), intervalMs: MIN }, press.io)).code).toBe(0);
-    expect(handed).toEqual([0, 1, 2].map(() => ({ sha: SHA, start: 0, since: { desktop: 0 } })));
+    expect(handed).toEqual([0, 1, 2].map(() => ({ clock: { sha: SHA, start: 0, since: { desktop: 0 } }, held: [] })));
     handed.length = 0;
     const sends = fake((tick) => [{ name: "cli", history: tick >= 1 ? [dp("dp-3", tick >= 3 ? "live" : "running")] : [] }], { between });
     expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, sends.io)).code).toBe(0);
     expect(sends.sends).toHaveLength(1);
     expect(handed).toEqual([]);
+  });
+
+  // A send that failed at a head main had not passed is held, not failed. The release has ended, so nothing is out and
+  // the wait may move; the newer CLI must still hold that deploy once the head goes green, and send again.
+  test("a deploy held on its own CI step is still held after the wait moves to a newer CLI", async () => {
+    class Moved extends Error { constructor(readonly place: DeployWaitPlace) { super("moved"); } }
+    const older = fake((tick) => [{ name: "cli", history: tick >= 1 ? [dp("dp-3", "failed", HEAD2)] : [] }], {
+      head: (tick) => (tick >= 1 ? HEAD2 : HEAD),
+      ci: (_tick, sha) => (sha === HEAD2 ? RUNNING : GREEN),
+      send: async () => ({ code: 1, last: "FAIL  cli  dp-3" }),
+      between: async (p) => { if (p.held.length) throw new Moved(structuredClone(p)); },
+    });
+    const moved = await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, older.io).catch((e) => e);
+    expect(moved).toBeInstanceOf(Moved);
+    const { place } = moved as Moved;
+    expect(place.held).toEqual(["dp-3"]);
+    // On the newer CLI the head is green now.
+    const newer = (held?: string[]) => {
+      const f = fake((tick) => [{ name: "cli", history: tick >= 1 ? [{ ...dp("dp-4", "live", HEAD2), created_at: 2 }, dp("dp-3", "failed", HEAD2)] : [dp("dp-3", "failed", HEAD2)] }], { head: () => HEAD2, clock0: place.clock });
+      return { f, run: awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN, held }, f.io) };
+    };
+    const resumed = newer(place.held);
+    expect(await resumed.run).toEqual({ code: 0, line: "Live: 1a2b3c4 on cli dp-4." });
+    expect(resumed.f.sends).toHaveLength(1);
+    // Without the holds it was handed, that deploy reads as a failure of this change.
+    expect((await newer().run).code).toBe(1);
   });
 
   test("an after target someone else sends holds its dependent unsent until it is live with the commit", async () => {
@@ -586,5 +613,30 @@ describe("recordMergedSha", () => {
     posts.length = 0;
     expect(await recordMergedSha({ base: "main" }, SHA, post(null), () => {})).toBeNull();
     expect(posts).toEqual([]);
+  });
+});
+
+// A Deploy station resumed on a newer CLI starts from the merged commit and duties it was handed: in a real run there is
+// no --merge or --sha, and the reads the older CLI made at its start (the run on the server, origin) could fail now.
+describe("runAwaitDeploy resumed on a newer CLI", () => {
+  test("skips reading the merged commit and its duties, and waits on what it was handed", async () => {
+    const env = { cwd: work, cast: async () => { throw new Error("no cast call"); }, post: async () => { throw new Error("the server is not reachable"); } };
+    const opts = { base: "main", interval: "5" };
+    const printed: string[] = [];
+    const log = console.log;
+    console.log = (l: string) => { printed.push(l); };
+    try {
+      // Fresh, with no merged sha anywhere it can read, nothing was merged.
+      expect(await runAwaitDeploy(opts, env)).toBe(4);
+      const ack = path.join(dir, "resume.ack");
+      const merged = { sha: git(work, "rev-parse", "HEAD"), files: ["README.md"] };
+      process.env[RESUME_ENV] = JSON.stringify({ args: process.argv.slice(process.argv[2] === "--" ? 3 : 2), parent: process.ppid, ack, hops: 1, place: { merged, plan: { duties: [], left: [] }, clock: { sha: merged.sha, start: 0, since: {} }, held: [] } });
+      expect(await runAwaitDeploy(opts, env)).toBe(0);
+      expect(fs.existsSync(ack)).toBe(true);
+      expect(printed.at(-1)).toBe(`${merged.sha.slice(0, 7)} is on main; nothing this run deploys ships its files.`);
+    } finally {
+      console.log = log;
+      delete process.env[RESUME_ENV];
+    }
   });
 });

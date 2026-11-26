@@ -186,7 +186,7 @@ export interface CiStationOptions {
 }
 
 /** Where the wait stands, handed to a newer CLI: a resumed station keeps its deadline and never reruns twice. */
-type CiPlace = { started: number; reran: boolean; reruns: Array<[number, number]>; seen: string | null };
+type CiPlace = { started: number; reran: boolean; reruns: Array<[number, number]>; seen: string | null; settled: boolean; said: string };
 
 const minutes = (ms: number) => `${Math.floor(ms / 60_000)}m`;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -258,14 +258,14 @@ class Station {
     let reruns = new Map<number, number>(back?.reruns ?? []);
     result.reran = back?.reran ?? false;
     // A green must hold over two looks, so an outside check that registers once Actions finishes is still seen.
-    let settled = false;
-    let said = "";
+    let settled = back?.settled ?? false;
+    let said = back?.said ?? "";
     // The head the last look saw. ci.json's head_sha names only a head the station judged.
     let seen: string | null = back?.seen ?? null;
     // Between polls nothing is in flight, so that is where the wait may move onto a newer CLI.
     const rest = async () => {
       await this.sleep(o.pollMs ?? POLL_MS);
-      await this.cli.between({ started, reran: result.reran, reruns: [...reruns], seen } satisfies CiPlace);
+      await this.cli.between({ started, reran: result.reran, reruns: [...reruns], seen, settled, said } satisfies CiPlace);
     };
     for (;;) {
       const read = this.read();

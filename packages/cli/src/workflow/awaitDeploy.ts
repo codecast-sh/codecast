@@ -225,8 +225,13 @@ export type DeployWaitIO = {
   block: (text: string) => Promise<void>;
   clock: { load: () => DeployClock | null; save: (c: DeployClock) => void };
   /** Between polls while no deploy the run sent is out: may move the wait onto a newer installed CLI (stationReexec.ts). */
-  between?: (clock: DeployClock) => Promise<void>;
+  between?: (wait: DeployWaitPlace) => Promise<void>;
 };
+
+/** Where a wait stands between polls: its clock, and the deploys it holds as failed at a head main had not passed. */
+export type DeployWaitPlace = { clock: DeployClock; held: string[] };
+/** All a Deploy station hands a newer CLI: the wait's place, and the merged commit and duties it read at the start. */
+type DeployPlace = DeployWaitPlace & { merged: { sha: string; files: string[] }; plan: DeployDuties };
 
 export type DeployWaitResult = { code: 0 | 1 | 3 | 5; line: string };
 
@@ -241,7 +246,7 @@ const minutes = (ms: number) => {
  * capped at DEPLOY_WAIT_CAP_MS. Ends 0 live, 1 when a deploy that would carry it failed, 5 when a target missed its
  * deadline or the cap (after one blocker on the task), and with `once` (which sends nothing) 3 while it still waits.
  */
-export async function awaitDeploy(input: { sha: string; base: string; plan: DeployDuties; intervalMs: number; once?: boolean }, io: DeployWaitIO): Promise<DeployWaitResult> {
+export async function awaitDeploy(input: { sha: string; base: string; plan: DeployDuties; intervalMs: number; once?: boolean; held?: string[] }, io: DeployWaitIO): Promise<DeployWaitResult> {
   const { sha, plan } = input;
   const short = sha.slice(0, 7);
   const duties = plan.duties;
@@ -266,7 +271,8 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
   // Each release target asked for: null while its `cast deploy` runs, then how that ended.
   const sent = new Map<string, { code: number; last: string } | null>();
   // Deploys that failed at a head main had not yet passed: a hold, not a failure, for as long as the wait runs.
-  const heldDeploys = new Set<string>();
+  // A wait resumed on a newer CLI keeps them: one counted failed there would end the run as a failed deploy.
+  const heldDeploys = new Set<string>(input.held ?? []);
   // Where each target last stood, so a deadline missed while the server cannot be read still names a state.
   const live = new Map<string, string>();
   const said = new Map<string, { words: string; detail?: string }>(plan.duties.map((d) => [d.target, { words: "nothing recorded yet" }]));
@@ -398,7 +404,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
     if (input.once) return { code: 3, line };
     await io.sleep(input.intervalMs);
     // What the run sent lives in this process (its release and how it ended), so a run that sent a deploy stays on this CLI.
-    if (!sent.size) await io.between?.(clock);
+    if (!sent.size) await io.between?.({ clock, held: [...heldDeploys] });
   }
 }
 
@@ -419,16 +425,25 @@ const CALL_MS = 60_000;
 /** `cast flow await-deploy`: the deploy segment's parked station. Prints the verdict last and returns the exit code. */
 export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployEnv): Promise<number> {
   const { cwd } = env;
-  const merge = opts.merge ? readMerge(opts.merge) : null;
-  const sha = await mergedSha(opts, merge, (run) => env.post("/cli/workflow-runs/get", { run_id: run }));
-  const fromRun = (opts.files ?? "").split(/\s+/).filter(Boolean);
-  const merged = await mergedCommit(cwd, sha, opts.base, fromRun.length ? fromRun : merge?.files);
-  // Exit 4 is Not merged; a station that could not read origin failed, and says why.
-  if ("error" in merged) { console.log(merged.error); return merged.unread ? 1 : 4; }
-  await recordMergedSha(opts, merged.sha, env.post, (l) => console.error(l));
-
+  // Taken first, so the binary it watches is the one this run started on, and a run resumed on a newer CLI
+  // (stationReexec.ts) skips the reads below: it carries on from the merged commit and duties it was handed.
+  const { stationCli } = await import("./stationReexec.js");
+  const cli = stationCli();
+  const back = cli.resumed<DeployPlace>();
+  let merged: { sha: string; files: string[] };
   let plan: DeployDuties;
-  try { plan = await landedDuties(cwd, merged, opts); } catch (err) { console.log(`Cannot read the deploy targets ${merged.sha.slice(0, 10)} declares: ${err instanceof Error ? err.message : String(err)}`); return 1; }
+  if (back) ({ merged, plan } = back);
+  else {
+    const merge = opts.merge ? readMerge(opts.merge) : null;
+    const sha = await mergedSha(opts, merge, (run) => env.post("/cli/workflow-runs/get", { run_id: run }));
+    const fromRun = (opts.files ?? "").split(/\s+/).filter(Boolean);
+    const read = await mergedCommit(cwd, sha, opts.base, fromRun.length ? fromRun : merge?.files);
+    // Exit 4 is Not merged; a station that could not read origin failed, and says why.
+    if ("error" in read) { console.log(read.error); return read.unread ? 1 : 4; }
+    merged = { sha: read.sha, files: [...read.files] };
+    await recordMergedSha(opts, merged.sha, env.post, (l) => console.error(l));
+    try { plan = await landedDuties(cwd, merged, opts); } catch (err) { console.log(`Cannot read the deploy targets ${merged.sha.slice(0, 10)} declares: ${err instanceof Error ? err.message : String(err)}`); return 1; }
+  }
   // A finished verdict on a commit never changes, so looking back for where main went red asks GitHub once per commit.
   const verdicts = new Map<string, MainCi>();
   const ciOf = async (at: string, gate: CiGate) => {
@@ -444,10 +459,6 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
   const repository = checkoutRepository(cwd);
   const { resolveCastInvocation } = await import("../castInvocation.js");
   const castCmd = resolveCastInvocation();
-  const { stationCli } = await import("./stationReexec.js");
-  const cli = stationCli();
-  // The clock a run on an older CLI handed over: without a merge file there is no clock file to read it back from.
-  const handed = cli.resumed<DeployClock>();
 
   const io: DeployWaitIO = {
     now: () => Date.now(),
@@ -485,12 +496,13 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     },
     block: async (text) => { if (opts.task) await env.cast(["task", "comment", opts.task, text, "-t", "blocker"]); },
     clock: {
-      load: () => { if (handed) return handed; try { return clockFile ? JSON.parse(fs.readFileSync(clockFile, "utf-8")) : null; } catch { return null; } },
+      // A handed clock first: without a merge file there is no clock file to read it back from.
+      load: () => { if (back) return back.clock; try { return clockFile ? JSON.parse(fs.readFileSync(clockFile, "utf-8")) : null; } catch { return null; } },
       save: (c) => { if (clockFile) fs.writeFileSync(clockFile, `${JSON.stringify(c)}\n`); },
     },
-    between: (c) => cli.between(c),
+    between: (wait) => cli.between({ ...wait, merged, plan } satisfies DeployPlace),
   };
-  const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once }, io);
+  const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once, held: back?.held }, io);
   console.log(result.line);
   return result.code;
 }
