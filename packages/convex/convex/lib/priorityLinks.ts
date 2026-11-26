@@ -105,6 +105,14 @@ async function sessionsOf(ctx: Ctx, ids: Array<Id<"conversations"> | undefined>)
   return out;
 }
 
+/** The team's member behind a GitHub login, or null. */
+async function teamMemberByGithub(ctx: Ctx, teamId: Id<"teams">, login: string): Promise<Id<"users"> | null> {
+  const user: Doc<"users"> | null = login ? await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", login)).first() : null;
+  if (!user) return null;
+  const member = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", user._id).eq("team_id", teamId)).first();
+  return member ? user._id : null;
+}
+
 /** A pull request counts only toward a priority in its own team's workspace, or, with no team, a personal one. */
 const prInWorkspace = (pr: Doc<"pull_requests">, workspace: string) => (pr.team_id ? workspace === `team:${pr.team_id}` : workspace.startsWith("user:"));
 
@@ -217,11 +225,14 @@ export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Pro
   // A team's PR counts only there: its flag first, one read. A PR with no team (the schema requires one; older rows) counts in each linking owner's personal workspace, whose flag each is read before its milestones.
   if (pr.team_id && !(await prioritiesOn(ctx, `team:${pr.team_id}`))) return;
   const sessions = await sessionsOf(ctx, [pr.shepherd_conversation_id, ...pr.linked_session_ids]);
-  const places = [];
+  const places: Place[] = [];
   for (const c of sessions) {
     const workspace = pr.team_id ? `team:${pr.team_id}` : `user:${c.user_id}`;
     if (pr.team_id || (await prioritiesOn(ctx, workspace))) places.push({ user: c.user_id, workspace });
   }
+  // Its author's own milestones too, when they are a member of its team: a PR that arrives already merged has no session linked yet.
+  const author = pr.team_id ? await teamMemberByGithub(ctx, pr.team_id, pr.author_github_username) : null;
+  if (author) places.push({ user: author, workspace: `team:${pr.team_id}` });
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 

@@ -6,6 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireUser } from "./lib/auth";
 import { commitRecordedBy, isConversationLinkable, normalizeRepository } from "./lib/gitRefs";
 import { patchPullRequest } from "./prShepherd";
+import { pullRequestClosed } from "./lib/priorityLinks";
 import { linkPullRequestSessions, pullRequestsLinkedToConversation, syncPullRequestSessions, SESSION_CARD_MAX_SESSIONS, SESSION_CARD_PR_FIELDS } from "./lib/prSessions";
 import {
   canAccessConversation,
@@ -195,6 +196,11 @@ export const syncPRFromGitHub = internalMutation({
       pr_comment_posted: false,
       created_at: args.created_at,
     });
+    // One that arrives already merged or closed is evidence at once, as a merge seen live is (prShepherd patchPullRequest).
+    if (args.state !== "open") {
+      const row = await ctx.db.get(prId);
+      if (row) await pullRequestClosed(ctx, row);
+    }
     return { pr_id: prId, created: true };
   },
 });

@@ -312,6 +312,26 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect(await t.run((ctx: any) => recomputeStepDone(ctx, p1, "s7", NOW))).toBe(false);
   });
 
+  test("a PR that first arrives already merged marks its author's team milestone done at the merge", async () => {
+    const { t, ada } = await world();
+    const { p, acme } = await t.run(async (ctx: any) => {
+      await ctx.db.patch(ada, { github_username: "ada" });
+      const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } });
+      await ctx.db.insert("team_memberships", { user_id: ada, team_id: acme, role: "member", joined_at: 1 });
+      const p = await ctx.db.insert("priorities", {
+        user_id: ada, workspace: `team:${acme}`, short_id: "pri-4", title: "Team PR", summary: "", status: "active", ai_rank: 1,
+        steps: [step("s1", [{ kind: "pr", id: `${REPO}#42` }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      });
+      return { p, acme };
+    });
+    const mergedAt = NOW - 4 * H;
+    await t.mutation((internal as any).pull_requests.syncPRFromGitHub, {
+      team_id: acme, github_pr_id: 4242, repository: REPO, number: 42, title: "PR 42", body: "", state: "merged", author_github_username: "ada",
+      created_at: NOW - 5 * H, updated_at: mergedAt, merged_at: mergedAt,
+    });
+    expect(await stepOf(t, p, "s1")).toMatchObject({ done: true, done_at: mergedAt });
+  });
+
   test("a PR of another team's workspace counts toward no personal milestone", async () => {
     const { t, p1, foreignPr } = await world();
     await t.run((ctx: any) => patchPullRequest(ctx, foreignPr, { state: "merged", merged_at: NOW - H }));
