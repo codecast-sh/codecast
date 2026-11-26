@@ -12,7 +12,7 @@ import { patchTask } from "./lib/taskWrite";
 import { patchPullRequest } from "./prShepherd";
 import { spawnSessionCore } from "./spawn";
 import { setTaskStatus } from "./orgInit";
-import { linkFromStart } from "./lib/priorityLinks";
+import { linkFromPlan, linkFromStart, linkFromTask } from "./lib/priorityLinks";
 import { TASK, SOURCE, ADA, apply, engineCtx, sameIssue } from "./issueSync.testkit";
 import type { Id } from "./_generated/dataModel";
 
@@ -421,6 +421,35 @@ describe("a known link maps a session at creation, with no pass", () => {
     await t.withIdentity({ subject: `${ada}|session` }).mutation(api.dispatch.dispatch, { action: "createSession", args: [{ agent_type: "claude_code", session_id: "stub-other", priority: "pri-9", priority_step: "s1" }] });
     const conv = await t.run((ctx: any) => ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", "stub-other")).first());
     expect(conv.priority_id).toBeUndefined();
+  });
+
+  test("a task or plan binds no role's seat, trigger's run, workflow session or subagent to a milestone; the person's own session it does", async () => {
+    const { t, ada, p1 } = await world();
+    const out = await t.run(async (ctx: any) => {
+      const seat = await ctx.db.insert("org_roles", { title: "Head of Evals", created_at: NOW });
+      const agentTask = await ctx.db.insert("agent_tasks", { user_id: ada, title: "Nightly", prompt: "check", status: "scheduled", created_at: NOW });
+      const runRow = await ctx.db.insert("workflow_runs", { user_id: ada, status: "running", created_at: NOW });
+      const make = (short_id: string, fields: Record<string, unknown> = {}) => ctx.db.insert("conversations", {
+        user_id: ada, agent_type: "claude_code", session_id: `sess-${short_id}`, short_id, title: short_id, started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active", ...fields,
+      });
+      const plan = await ctx.db.query("plans").withIndex("by_short_id", (q: any) => q.eq("short_id", "pl-1")).first();
+      const kinds: Array<[string, Record<string, unknown>]> = [
+        ["jx7seat", { standing_role_id: seat }],
+        ["jx7trig", { agent_task_id: agentTask }],
+        ["jx7stat", { workflow_run_id: runRow, is_workflow_sub: true }],
+        ["jx7sub1", { is_subagent: true }],
+        ["jx7mine", {}],
+      ];
+      const res: Array<[string, boolean, boolean]> = [];
+      for (const [id, fields] of kinds) {
+        const a = await make(`${id}a`, fields);
+        const b = await make(`${id}b`, fields);
+        res.push([id, await linkFromTask(ctx, await ctx.db.get(a), { short_id: "ct-1" }), await linkFromPlan(ctx, await ctx.db.get(b), plan)]);
+      }
+      return res;
+    });
+    expect(out).toEqual([["jx7seat", false, false], ["jx7trig", false, false], ["jx7stat", false, false], ["jx7sub1", false, false], ["jx7mine", true, true]]);
+    void p1;
   });
 
   test("`cast task start` on a task a milestone names", async () => {

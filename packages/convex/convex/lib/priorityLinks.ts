@@ -39,6 +39,7 @@ import { stepDone } from "./priorityPass";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
 import { passActivity, pinsAskForPass } from "./priorityPassSchedule";
+import { classifierReads } from "./priorityClassifierHook";
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -318,8 +319,12 @@ export async function startPlanId(ctx: Ctx, shortId: string, stepKey: string | u
   return (attribution.steps.get(stepKey!)?.plan ?? attribution.priority)?.id ?? null;
 }
 
-/** A session bound to a task (lib/taskOwner claimTaskOwnership, `cast task start`): the first milestone naming the task, active priorities first. */
+/**
+ * A session bound to a task (lib/taskOwner claimTaskOwnership, `cast task start`): the first milestone naming the task, active priorities first.
+ * Never a role's seat, a trigger's run, a workflow's session or a subagent (classifierReads): their work is not the person's.
+ */
 export async function linkFromTask(ctx: Ctx, conv: Conv, task: Pick<Doc<"tasks">, "short_id">): Promise<boolean> {
+  if (!classifierReads(conv)) return false;
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
     const step = p.steps.find((s) => !s.dropped && s.refs.some((r) => r.kind === "task" && r.id === task.short_id));
@@ -333,10 +338,11 @@ export async function linkFromTask(ctx: Ctx, conv: Conv, task: Pick<Doc<"tasks">
  * first milestone the plan is the plan of, by the design doc's attribution
  * rules 1 and 3 (not abandoned; at most MILESTONE_PLAN_MAX_TASKS tasks; holds
  * at least half of the milestone's tasks). A session already mapped keeps its
- * mapping: a plan is a weaker sign than the link it has.
+ * mapping: a plan is a weaker sign than the link it has. As for a task, only
+ * a session the classifier would read.
  */
 export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">, "_id" | "status">): Promise<boolean> {
-  if (conv.priority_id || plan.status === "abandoned") return false;
+  if (conv.priority_id || plan.status === "abandoned" || !classifierReads(conv)) return false;
   const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).take(MILESTONE_PLAN_MAX_TASKS + 1);
   if (!tasks.length || tasks.length > MILESTONE_PLAN_MAX_TASKS) return false;
   const inPlan = new Set(tasks.map((t) => t.short_id));
