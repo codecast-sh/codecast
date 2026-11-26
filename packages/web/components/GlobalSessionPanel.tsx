@@ -2868,35 +2868,7 @@ function SessionListPanelImpl({
     if (variant !== "snoozed") topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className={modern ? undefined : "border-t border-sol-border/30"}>
-        {modern ? (
-          <HiddenBucketHead label={label} count={items.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={liveCount} action={headerAction} />
-        ) : (
-        <div data-sv-hidden-head className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
-          <button
-            onClick={onToggle}
-            className="flex-1 min-w-0 pl-3 py-1.5 flex items-center text-left"
-          >
-            <span data-sv-hidden-label className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
-              {/* The count wears the section headers' markup (SectionHeader) and
-                  counts what the bucket draws, as the live sections do
-                  (sectionHeaderCount): subagents folded under a card add none. */}
-              {label}{items.length > 0 ? ` (${showSubagents ? items.length : topLevel.length})` : null}
-            </span>
-            {liveCount > 0 && (
-              <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium">
-                <LivePulseDot still />
-                {liveCount} running
-              </span>
-            )}
-          </button>
-          {headerAction}
-          <button onClick={onToggle} className="shrink-0 pl-2 pr-3 py-1.5">
-            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${expanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </div>
-        )}
+        <HiddenBucketHead modern={modern} label={label} count={showSubagents ? items.length : topLevel.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={liveCount} action={headerAction} />
         {expanded && topLevel.length > 0 && (() => {
           // Cap the hidden bucket too — KILLED/STASHED can hold hundreds of rows
           // when expanded ("show killed/stashed" on). Same per-bucket cap + show-more
