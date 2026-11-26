@@ -20,6 +20,6 @@ export function inboxViewOptions({ hasPriorities, hasLabels, hasPlans }: { hasPr
 
 /** The bar's segments: Status, Priorities (while it is on), Recent, then the view in use when it is none of them. */
 export function lensSegments(viewMode: InboxViewMode, hasPriorities: boolean): InboxViewMode[] {
-  const everyday: InboxViewMode[] = ['grouped', ...(hasPriorities ? ['priorities' as const] : []), 'recent', 'time'];
+  const everyday: InboxViewMode[] = ['grouped', ...(hasPriorities ? ['priorities' as const] : []), 'recent'];
   return everyday.includes(viewMode) ? everyday : [...everyday, viewMode];
 }

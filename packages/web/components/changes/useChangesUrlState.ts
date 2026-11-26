@@ -13,9 +13,15 @@ export type ChangesUrl = {
   branches: "main" | "all";
   risk: boolean;
   q?: string;
-  /** The story a link points at: the page scrolls to it and marks it. */
+  /** The story whose evidence drawer is open. */
   story?: string;
+  /** How far out the whole timeline reads; unset, each period picks its own by age (zoomOf). */
+  zoom?: Zoom;
 };
+
+/** Every story, each day told whole, or each week told whole. */
+export type Zoom = "changes" | "days" | "weeks";
+export const ZOOMS: readonly Zoom[] = ["changes", "days", "weeks"];
 
 export const EMPTY_URL: ChangesUrl = { areas: [], branches: "main", risk: false };
 
@@ -33,6 +39,7 @@ export function parseChangesUrl(params: URLSearchParams): ChangesUrl {
     risk: params.get("risk") === "1",
     q: text(params.get("q")),
     story: text(params.get("story")),
+    zoom: ZOOMS.find((z) => z === params.get("zoom")),
   };
 }
 
@@ -46,6 +53,7 @@ export function serializeChangesUrl(s: ChangesUrl): string {
   if (s.risk) p.set("risk", "1");
   if (s.q) p.set("q", s.q);
   if (s.story) p.set("story", s.story);
+  if (s.zoom) p.set("zoom", s.zoom);
   const qs = p.toString().replace(/%2C/gi, ",").replace(/%2F/gi, "/");
   return qs ? `?${qs}` : "";
 }

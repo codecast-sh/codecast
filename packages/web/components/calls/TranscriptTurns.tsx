@@ -13,9 +13,7 @@ import { formatCallTime } from "@codecast/shared/entities";
 import { ParticipantTag } from "./GuestTag";
 import { groupTurns, turnsAnchor, type Turn } from "./transcriptTurnModel";
 import { CallLinkButton } from "./CallLinkButton";
-import { isSpeakerKey, lineFilmed } from "@codecast/shared/contracts";
-import { useSpeakerAttribution } from "./speakerContext";
-import { LineSpeakerMenu, TurnSpeakerName } from "./SpeakerAttribution";
+import { lineFilmed } from "@codecast/shared/contracts";
 
 /** The line a click (or a key) landed on, read from its `data-seq`; the
  *  turn's first line when it landed on the speaker row or between lines.
@@ -87,7 +85,6 @@ export function TranscriptTurnList({
   const hold = useLongPress((index: number) => onTurnHold?.(index));
   const holds = selectable && !!onTurnHold;
   const followed = activeSeq !== undefined;
-  const voices = useSpeakerAttribution();
   const link = (t: Turn) => {
     const anchor = callId ? turnsAnchor([t]) : null;
     return anchor ? (
@@ -99,12 +96,10 @@ export function TranscriptTurnList({
       {turns.map((t) => {
         const active = activeIndex === t.index;
         const selected = isSelected?.(t.index);
-        const voice = !compact && voices && isSpeakerKey(t.speaker_id);
         return (
         <div
           key={t.index}
           data-turn={t.index}
-          {...(voice ? { "data-speaker": t.speaker_id } : {})}
           {...(selectable
             ? {
                 role: "button",
@@ -112,7 +107,7 @@ export function TranscriptTurnList({
                 "aria-pressed": selected,
                 "aria-label": compact
                   ? `Line at ${formatCallTime(t.t0)}`
-                  : `Turn by ${voice ? t.speaker_name : speakerShortName(t.speaker_name, t.speaker_id)} at ${formatCallTime(t.t0)}`,
+                  : `Turn by ${speakerShortName(t.speaker_name, t.speaker_id)} at ${formatCallTime(t.t0)}`,
                 onClick: (e: React.MouseEvent) => {
                   if (hold.takeSpent()) return;
                   onTurnClick(t.index, e, clickedLine(t, e.target));
@@ -167,21 +162,6 @@ export function TranscriptTurnList({
               {link(t)}
             </div>
           ) : (
-            voice ? (
-            <>
-              <div className="text-meta">
-                <TurnSpeakerName segment={t} />
-                <span className="ml-2 text-sol-text-dim">{formatCallTime(t.t0)}</span>
-                {link(t)}
-              </div>
-              {t.segments.map((s) => (
-                <p key={s.seq} data-seq={s.seq} className={`group/line ${lineClass(s, followed, active, activeSeq, filmed)}`}>
-                  {s.text}
-                  <LineSpeakerMenu seq={s.seq} speakerKey={t.speaker_id} />
-                </p>
-              ))}
-            </>
-            ) : (
             <>
               <div className={`text-meta font-medium ${speakerColor(t.speaker_id)}`}>
                 {firstName(t.speaker_name)}
@@ -195,7 +175,6 @@ export function TranscriptTurnList({
                 </p>
               ))}
             </>
-            )
           )}
         </div>
         );

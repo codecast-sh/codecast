@@ -15,7 +15,6 @@ import { VENDORS, type Vendor } from "@codecast/shared/contracts/vendorCoverage"
 const ALLOWED: Record<string, { vendor: Vendor; receives: string }> = {
   "api.anthropic.com": { vendor: "anthropic", receives: "transcript content: model calls (lib/anthropic, gated by lib/vendorGuard)" },
   "api.openai.com": { vendor: "openai", receives: "transcript content: suggestions, embeddings, transcription, realtime voice (lib/openai, gated by lib/vendorGuard)" },
-  "api.elevenlabs.io": { vendor: "elevenlabs", receives: "voice note audio: Scribe words and speakers for teams with voice_speakers (lib/elevenlabs, gated by lib/vendorGuard)" },
   "slack.com": { vendor: "slack", receives: "the team's own Slack workspace (its Slack plan must carry a BAA; ct-87104)" },
   "api.github.com": { vendor: "github", receives: "the team's own GitHub repos: org membership, deploy targets" },
   "api.linear.app": { vendor: "linear", receives: "the team's own Linear workspace, issues the team links" },
@@ -51,12 +50,11 @@ describe("outbound hosts", () => {
     // A content vendor reached over a literal host must be one the guard knows; LiveKit and Tavus are reached
     // at computed URLs (LIVEKIT_URL, the face worker) and gate in callRooms.callsOffReason and callFace.faceMode.
     const contentHosts = Object.values(ALLOWED).filter((e) => VENDORS[e.vendor].receives === "content").map((e) => e.vendor);
-    // Our speech worker (SPEECH_WORKER_URL, lib/speechWorker) is our own service at a computed URL, not a vendor.
-    expect(contentHosts.sort()).toEqual(["anthropic", "elevenlabs", "openai"]);
+    expect(contentHosts.sort()).toEqual(["anthropic", "openai"]);
   });
 
   test("a content vendor's host is fetched only from its chokepoint", () => {
-    const CHOKEPOINT: Partial<Record<Vendor, string>> = { anthropic: "lib/anthropic.ts", openai: "lib/openai.ts", elevenlabs: "lib/elevenlabs.ts" };
+    const CHOKEPOINT: Partial<Record<Vendor, string>> = { anthropic: "lib/anthropic.ts", openai: "lib/openai.ts" };
     const stray: string[] = [];
     for (const file of sources(ROOT)) {
       for (const m of readFileSync(file, "utf8").matchAll(FETCH_HOST)) {

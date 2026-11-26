@@ -327,19 +327,8 @@ async function hostForwardedEndpoint(convex: ConvexReactClient, deviceId: string
   // wait on a discovery round, so the registry answers first.
   if ((await forwardHostPort(convex, deviceId)) === null) return null;
   // A cached local endpoint settles "not this machine" without asking the
-  // target, so its reply may not be in hand yet. A reply held from earlier
-  // may be stale (the host rotated its token or moved port): when the
-  // forward built from it does not answer, ask the host once more.
-  const held = missedReplies.has(deviceId);
-  if (!held) await discover(convex, deviceId);
-  const ep = await forwardFromReply(convex, deviceId);
-  if (ep || !held) return ep;
-  missedReplies.delete(deviceId);
-  await discover(convex, deviceId);
-  return forwardFromReply(convex, deviceId);
-}
-
-async function forwardFromReply(convex: ConvexReactClient, deviceId: string): Promise<TerminalEndpoint | null> {
+  // target, so its reply may not be in hand yet.
+  if (!missedReplies.has(deviceId)) await discover(convex, deviceId);
   const reply = missedReplies.get(deviceId);
   if (!reply) return null;
   const port = await forwardHostPort(convex, deviceId, reply.port);

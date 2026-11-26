@@ -1,7 +1,7 @@
 "use client";
 
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Check, MessageSquare, MessagesSquare } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem, type DecisionDetailItem } from "../../store/inboxStore";
@@ -16,7 +16,7 @@ import { RunFallbackLine } from "./RunFallbackLine";
 import { DecisionOptionList, RecommendedMark } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, DecisionReport, LeadRecommendation } from "./DecisionSections";
-import { FlowContext } from "../FlowContext";
+import { GateRunChip } from "./DecisionCompactCard";
 import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OriginTrail } from "../line/widgets/OriginTrail";
 import "../line/workspace/workspace.css";
@@ -37,14 +37,13 @@ import { Button } from "../ui/button";
 // answers land there first) and the page context from decisionDetails, which
 // useSyncDecisionDetail feeds from getWithDoc. The answer footer is the same
 // store action the compact card and the transcript card use.
-/** `nav` replaces the page's own way back and next step, for a host that walks decisions itself (the stepper). */
-export function DecisionDocument({ id, pager = true, nav }: { id: string; pager?: boolean; nav?: ReactNode }) {
+export function DecisionDocument({ id, pager = true }: { id: string; pager?: boolean }) {
   const page = useDecisionPage(id);
   if (!page.detail || !page.decision) {
     if (page.missing && page.ready) return <Empty text="This decision does not exist, or it is not yours to read." />;
     return <AppLoader />;
   }
-  return <DocumentBody decision={page.decision} detail={page.detail} answerable={page.answerable} pager={pager} nav={nav} />;
+  return <DocumentBody decision={page.decision} detail={page.detail} answerable={page.answerable} pager={pager} />;
 }
 
 function Empty({ text }: { text: string }) {
@@ -56,7 +55,7 @@ function Empty({ text }: { text: string }) {
   );
 }
 
-function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean; pager: boolean; nav?: ReactNode }) {
+function DocumentBody({ decision, detail, answerable, pager }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean; pager: boolean }) {
   const a = useDecisionAnswering(decision, detail, answerable);
   const meId = useInboxStore((st) => st.currentUser?._id as string | undefined);
   const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, banner, doubt } = a;
@@ -88,14 +87,14 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
     <div className={`h-full overflow-y-auto decision-doc${pager ? " decision-doc-nav" : ""}`} data-main-scroll>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
-        {nav ?? (pager && (
+        {pager && (
           <nav className="decision-nav flex items-center gap-3" data-decision-nav>
             <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
               <ArrowLeft className="w-3 h-3" /> All decisions
             </Link>
             <span className="ml-auto"><DecisionPager step={step} /></span>
           </nav>
-        ))}
+        )}
 
         {/* ── Header ── */}
         <header className="mt-4">
@@ -112,14 +111,14 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
             )}
             <span>{!outcome && !banner && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
             {decision.resolved_at && !outcome && !banner && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
+            {/* A gate on the line (the-line.md L4): the run this question pauses. */}
+            {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
             {/* A line card answered Ship: the deploy that put its fix live (deploys.md). */}
             {decision.workflow_run_id && decision.status === "answered" && <DeployedIn taskId={decision.task_id} />}
             {/* The id is for citing, so it trails the line. */}
             <span className="font-mono opacity-70">{decision.short_id ?? "decision"}</span>
             <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
           </div>
-          {/* A gate on a flow: the whole flow around the station that asks, every station one click away. */}
-          {decision.workflow_run_id && <FlowContext runId={decision.workflow_run_id} focus={{ decisionId: decision._id, nodeId: decision.gate_node_id }} className="mt-3" />}
           {/* A change card leads with what changed, and its cause and goal under
               it, so the first line says what and the second says why. */}
           {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} questionFirst className="mt-3" /> : (
@@ -203,7 +202,7 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}
         {!verdictBar && !outcome && <section className="mt-8">
-          <h2 className="decision-kicker">{!pending && a.changeable ? "Change your answer" : decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
+          <h2 className="decision-kicker">{decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
           {/* Option pages (L6) compare side by side above the list; a card's
               number answers on a single kind, where one option is the answer. */}
           <div className="mt-3 empty:hidden">
@@ -223,7 +222,7 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
             {answerInOptions ? (
               <>
                 {heldNote}
-                <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={pending ? onDismiss : undefined} keys recommendation={rec} />
+                <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys recommendation={rec} />
               </>
             ) : (
               <DecisionOptionList
@@ -255,7 +254,7 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         </section>}
 
         {/* Settled: where to go from here, the thread that asked or the next decision waiting. */}
-        {!pending && !nav && <DecisionNext decisionId={decision._id} step={step} openSession={jumpToAsk} />}
+        {!pending && <DecisionNext decisionId={decision._id} step={step} openSession={jumpToAsk} />}
       </div>
     </div>
   );

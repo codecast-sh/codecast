@@ -62,7 +62,6 @@ import BlogFieldManualChapter from "@/app/(marketing)/blog/field-manual/ChapterP
 import CompareIndex from "@/app/(marketing)/compare/page";
 import Compare from "@/app/(marketing)/compare/ComparePage";
 import FeatureDeepDive from "@/app/(marketing)/features/FeatureDeepDivePage";
-import AgentSetup from "@/app/(marketing)/setup/SetupPage";
 
 export { SEO_ROUTES, SITE_URL, seoFor, cardHeading, cardImagePath } from "@/lib/seoRoutes";
 export { buildBlogFeed, BLOG_FEED_PATH } from "@/lib/blogFeed";
@@ -137,7 +136,6 @@ export function render(path: string): string {
             <Route path="blog/field-manual/:chapter" element={<BlogFieldManualChapter />} />
             <Route path="compare" element={<CompareIndex />} />
             <Route path="compare/:slug" element={<Compare />} />
-            <Route path="setup/:tool" element={<AgentSetup />} />
           </Route>
         </Routes>
       </MemoryRouter>

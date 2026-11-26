@@ -3,8 +3,7 @@
 // a role reports to, and what a role is doing this minute.
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { personRefOf } from "@codecast/shared/entities";
-import type { OrgParentRef, OrgRole, OrgSession, OrgTree } from "../../orgTypes";
-import { roleManagers } from "@codecast/shared/contracts/orgLead";
+import type { OrgRole, OrgSession, OrgTree } from "../../orgTypes";
 import { sessionsLine } from "../nowModel";
 import { roleWords } from "../../orgStaffingTypes";
 import type { Member } from "../objects";
@@ -28,19 +27,17 @@ export function goalAncestors(goals: readonly InitiativeRow[], goal: InitiativeR
 }
 
 /** Whom a role reports to, as the sheet that opens them: a role, or a person by handle. */
-/** Everyone a role reports to, all equal (org-people.md P3), each named as
- *  a link: the drawn line first. A manager the tree cannot name is left out. */
-export function managersNamed(tree: OrgTree | null, members: readonly Member[], role: OrgRole): Named[] {
-  return roleManagers<OrgParentRef>(role).flatMap((m): Named[] => {
-    if (m.kind === "role") {
-      const parent = tree?.roles.find((r) => r._id === m.role_id);
-      return parent ? [{ kind: "role", ref: parent.short_id, title: roleWords(parent).title }] : [];
-    }
-    const person = tree?.people.find((p) => p.user_id === m.user_id);
-    const member = members.find((x) => String(x._id) === m.user_id);
-    const name = person?.name ?? member?.name;
-    return name ? [{ kind: "person", ref: personRefOf({ _id: m.user_id, github_username: member?.github_username }), title: name }] : [];
-  });
+export function reportsToNamed(tree: OrgTree | null, members: readonly Member[], role: OrgRole): Named | null {
+  if (role.reports_to.kind === "role") {
+    const id = role.reports_to.role_id;
+    const parent = tree?.roles.find((r) => r._id === id);
+    return parent ? { kind: "role", ref: parent.short_id, title: roleWords(parent).title } : null;
+  }
+  const uid = role.reports_to.user_id;
+  const person = tree?.people.find((p) => p.user_id === uid);
+  const member = members.find((m) => String(m._id) === uid);
+  const name = person?.name ?? member?.name;
+  return name ? { kind: "person", ref: personRefOf({ _id: uid, github_username: member?.github_username }), title: name } : null;
 }
 
 const newest = (sessions: readonly OrgSession[], state: OrgSession["state"]) =>

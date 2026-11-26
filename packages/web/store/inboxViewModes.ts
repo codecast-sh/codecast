@@ -4,7 +4,7 @@
 import type { InboxViewMode } from "./clientPrefsTypes";
 import type { OrgLensMode } from "./orgLens";
 
-export function inboxViewModes({ hasPriorities, hasLabels, hasPlans, orgLenses, hasTriggers, hasMachines, hasBrowser = false }: {
+export function inboxViewModes({ hasPriorities, hasLabels, hasPlans, orgLenses, hasTriggers, hasMachines }: {
   /** The workspace has the priorities feature on. */
   hasPriorities: boolean;
   hasLabels: boolean;
@@ -13,8 +13,6 @@ export function inboxViewModes({ hasPriorities, hasLabels, hasPlans, orgLenses, 
   hasTriggers: boolean;
   /** Sessions run on more than one machine. */
   hasMachines: boolean;
-  /** A session has a browser tab open. */
-  hasBrowser?: boolean;
 }): InboxViewMode[] {
   return [
     "grouped",
@@ -25,6 +23,5 @@ export function inboxViewModes({ hasPriorities, hasLabels, hasPlans, orgLenses, 
     ...orgLenses,
     ...(hasTriggers ? ["trigger" as const] : []),
     ...(hasMachines ? ["machine" as const] : []),
-    ...(hasBrowser ? ["browser" as const] : []),
   ];
 }

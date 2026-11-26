@@ -153,30 +153,6 @@ describe("pendingLocalReads and answerLocalRead", () => {
     expect(other.scheduled).toEqual([{ ms: 0, args: { request_id: id } }]);
   });
 
-  test("a decline that changes nothing writes nothing and schedules no second GitHub read", async () => {
-    const second = { _id: "s3", user_id: "reader", team_id: "team", repository: "acme/demo", root: "/home/r/demo", enabled: true, last_synced_at: 1, created_at: 1, updated_at: 1 };
-    const ctx = context("publisher", { repo_sources: [
-      { _id: "s", user_id: "publisher", team_id: "team", repository: "acme/demo", root: "/home/p/src/demo", enabled: true, last_synced_at: 1, created_at: 1, updated_at: 1 },
-      second,
-    ] });
-    await request(ctx, { fallback_installation_id: 7, fallback_team_id: "team" });
-    const id = ctx.db._tables.repo_read_requests[0]._id;
-    await answer(ctx, { request_id: id, error: "not in this checkout" });
-    // The same person's other machine declines too: the row is left as it was.
-    const before = { ...ctx.db._tables.repo_read_requests[0] };
-    expect(await answer(ctx, { request_id: id, error: "not on this host" })).toEqual({ ok: true, reason: "declined" });
-    expect(ctx.db._tables.repo_read_requests[0]).toEqual(before);
-
-    const other = context("reader", { repo_sources: ctx.db._tables.repo_sources, repo_read_requests: ctx.db._tables.repo_read_requests });
-    await answer(other, { request_id: id, error: "not here either" });
-    expect(other.scheduled).toHaveLength(1);
-    // A late decline after the request failed does not fail it again or re-arm the fallback.
-    const failed = { ...other.db._tables.repo_read_requests[0] };
-    expect(await answer(other, { request_id: id, error: "late" })).toEqual({ ok: true, reason: "declined" });
-    expect(other.db._tables.repo_read_requests[0]).toEqual(failed);
-    expect(other.scheduled).toHaveLength(1);
-  });
-
   test("a commit request writes the diff onto the commit row", async () => {
     const ctx = context("publisher");
     await request(ctx, { kind: "commit", ref: sha, path: "", params: {} });

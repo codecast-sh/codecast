@@ -17,7 +17,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 // The -owners workloads are the same inbox with every session under the
 // session_owners model: each row carries its owner fields and each has an
 // owners read in the store, which the cards' owner faces read.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "inbox-load-owners" | "inbox-heartbeat-owners" | "inbox-owners-push" | "diff" | "palette-open" | "palette-type" | "palette-idle";
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "inbox-load-owners" | "inbox-heartbeat-owners" | "inbox-owners-push" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -148,41 +148,17 @@ console.error = (...args: unknown[]) => { if (String(args[0]).includes("not wrap
 // attaches by (read by react-dom when it loads): a fiber that did work in a
 // commit carries the PerformedWork flag (1).
 let rendered = new Map<string, number>();
-let lastCurrent = new WeakSet<object>();
-const typeName = (t: any) => typeof t === "string" ? null : t?.displayName || t?.name || t?.type?.displayName || t?.type?.name || null;
-// A lazy component's elementType is the lazy wrapper, which has no name; its
-// type is the component it resolved to.
-const fiberName = (f: any) => typeName(f.elementType) ?? typeName(f.type);
+const fiberName = (f: any) => { const t = f.elementType ?? f.type; return typeof t === "string" ? null : t?.displayName || t?.name || t?.type?.displayName || t?.type?.name || null; };
 (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
   supportsFiber: true, renderers: new Map(), inject: () => 1, checkDCE() {}, onScheduleFiberRoot() {}, onCommitFiberUnmount() {}, onPostCommitFiberRoot() {},
   onCommitFiberRoot(_id: number, fiberRoot: any) {
-    const before = process.env.PERF_COMMITS ? new Map(rendered) : null;
     const stack = [fiberRoot.current];
-    // A subtree this commit never visited keeps last commit's fibers, render
-    // flags included; only a fiber object new since the last commit ran now.
-    const seen = new WeakSet<object>();
     while (stack.length) {
       const f = stack.pop();
-      seen.add(f);
-      if (f.alternate && f.flags & 1 && !lastCurrent.has(f)) { const name = fiberName(f); if (name) rendered.set(name, (rendered.get(name) ?? 0) + 1); }
+      if (f.alternate && f.flags & 1) { const name = fiberName(f); if (name) rendered.set(name, (rendered.get(name) ?? 0) + 1); }
       if (f.child) stack.push(f.child);
       if (f.sibling) stack.push(f.sibling);
     }
-    lastCurrent = seen;
-    // PERF_COMMITS=1 logs what each commit rendered, for finding a commit
-    // nothing on screen asked for.
-    if (before && process.env.PERF_HOOKS) {
-      const find = (f: any): any => { const st = [f]; while (st.length) { const x = st.pop(); if (fiberName(x) === process.env.PERF_HOOKS && x.alternate) return x; if (x.child) st.push(x.child); if (x.sibling) st.push(x.sibling); } return null; };
-      const f = find(fiberRoot.current);
-      if (f && f.flags & 1) {
-        const changed: string[] = [];
-        let a = f.memoizedState, b = f.alternate.memoizedState, i = 0;
-        while (a && b) { if (a.queue && a.memoizedState !== b.memoizedState) changed.push(`#${i}=${String(JSON.stringify(a.memoizedState) ?? a.memoizedState).slice(0, 60)}`); a = a.next; b = b.next; i++; }
-        const propsChanged = f.memoizedProps !== f.alternate.memoizedProps;
-        console.log("hooks:", process.env.PERF_HOOKS, propsChanged ? "props" : "", changed.join(" ") || "(context/parent)");
-      }
-    }
-    if (before) console.log("commit:", [...rendered].filter(([k, n]) => n !== (before.get(k) ?? 0)).map(([k, n]) => `${k}+${n - (before.get(k) ?? 0)}`).slice(0, 14).join(" "));
   },
 };
 
@@ -324,9 +300,6 @@ async function seedStore(sessions: number, owners = false) {
 let commits = 0;
 // Time React spent rendering in those commits (the Profiler's actualDuration).
 let renderMs = 0;
-// Each commit's render time, in order: the first is what stood between an
-// action and its first paint.
-let commitMs: number[] = [];
 let host: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 let render: (node: React.ReactNode) => Promise<void>;
@@ -340,7 +313,7 @@ function mount() {
       root.render(
         <ConvexProviderWithAuth client={convex} useAuth={useAuth}>
           <MemoryRouter>
-            <Profiler id="perf" onRender={(_id, _phase, actualDuration) => { commits++; renderMs += actualDuration; commitMs.push(actualDuration); }}>{node}</Profiler>
+            <Profiler id="perf" onRender={(_id, _phase, actualDuration) => { commits++; renderMs += actualDuration; }}>{node}</Profiler>
           </MemoryRouter>
         </ConvexProviderWithAuth>,
       );
@@ -378,7 +351,6 @@ const tally = (xs: string[]) => [...xs.reduce((m, x) => m.set(x, (m.get(x) ?? 0)
 async function measure(action: () => Promise<void>): Promise<Report> {
   commits = 0;
   renderMs = 0;
-  commitMs = [];
   rendered = new Map();
   layoutReads = [];
   convexAsked = { subscribe: [], query: [], mutation: [], action: [] };
@@ -409,7 +381,7 @@ async function measure(action: () => Promise<void>): Promise<Report> {
       convexSubscribes: convexAsked.subscribe.length, convexQueries: convexAsked.query.length,
       convexMutations: convexAsked.mutation.length, convexActions: convexAsked.action.length,
     },
-    detail: { renderMs: [renderMs.toFixed(2)], commitMs: commitMs.map((ms) => ms.toFixed(1)), layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
+    detail: { renderMs: [renderMs.toFixed(2)], layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
   };
 }
 
@@ -663,95 +635,7 @@ async function setupDiff(): Promise<Bench> {
   };
 }
 
-// The command palette over a cache the size a busy account holds (measured on
-// one on 2026-11-25): 2,700 sessions, 29,000 rows in the session index, 52,000
-// tasks, 20,000 docs, 640 plans and 4,500 routines. PALETTE_SAMPLE names a JSON
-// file of real rows per kind ({ sessions: [...], tasks: [...], ... }) to clone
-// up to those counts instead of the synthetic rows; such a file holds private
-// data and stays out of git.
-const PALETTE_SCALE = { sessions: 2700, sessionIndex: 29000, tasks: 52000, docs: 20000, plans: 640, agentTasks: 4500 };
-type PaletteKind = keyof typeof PALETTE_SCALE;
-const WORDS = ["sync", "inbox", "palette", "deploy", "review", "typing", "search", "convex", "store", "release", "mobile", "audit", "fix", "ship", "plan", "docs", "call", "chat"];
-const words = (i: number, n: number) => Array.from({ length: n }, (_, k) => WORDS[(i * 7 + k * 13) % WORDS.length]).join(" ");
-function syntheticRow(kind: PaletteKind, i: number): any {
-  const at = now - i * 37_000;
-  const base = { _id: `${kind.slice(0, 2)}7${String(i).padStart(29, "0")}`, _creationTime: at, updated_at: at, created_at: at, user_id: i % 5 ? ME : "user_teammate", team_id: "team_perf", workspace: i % 3 ? "team:team_perf" : `user:${ME}` };
-  switch (kind) {
-    case "sessions": return { ...sessionRows(1)[convId(0)], ...base, _id: convId(i), title: `Session ${i}: ${words(i, 5)}`, project_path: `/src/p${i % 40}` };
-    case "sessionIndex": return { _id: convId(PALETTE_SCALE.sessions + i), agent_type: "claude_code", first_prompt: `${words(i, 30)}`, idle_summary: words(i + 1, 12), message_count: 40 + (i % 300), project_path: `/src/p${i % 40}`, title: `Indexed ${i}: ${words(i, 4)}`, updated_at: at - 40 * 86_400_000 };
-    case "tasks": return { ...base, short_id: `ct-${i}`, title: `Task ${i}: ${words(i, 6)}`, description: words(i, 120), status: ["open", "in_progress", "done", "dropped"][i % 4], priority: "medium", task_type: "task", triage_status: "active", project_path: `/src/p${i % 40}` };
-    case "docs": return { ...base, title: `Doc ${i}: ${words(i, 5)}`, doc_type: i % 9 ? "note" : "plan", author_name: "Perf" };
-    case "plans": return { ...base, short_id: `pl-${i}`, title: `Plan ${i}: ${words(i, 5)}`, status: i % 4 ? "active" : "done" };
-    case "agentTasks": return { ...base, short_id: `tr-${i}`, title: `Routine ${i}: ${words(i, 4)}`, prompt: words(i, 40), status: i % 3 ? "completed" : "scheduled" };
-  }
-}
-function paletteRows(kind: PaletteKind, sample: any[] | undefined): any[] {
-  const n = PALETTE_SCALE[kind];
-  if (!sample?.length) return Array.from({ length: n }, (_, i) => syntheticRow(kind, i));
-  return Array.from({ length: n }, (_, i) => {
-    const row = sample[i % sample.length];
-    const id = `${String(row._id).slice(0, 20)}${String(i).padStart(12, "0")}`;
-    return { ...row, _id: id, title: `${row.title ?? ""} ${i}`, updated_at: (row.updated_at ?? now) - i * 1000 };
-  });
-}
-
-async function setupPalette(mode: "open" | "type" | "idle"): Promise<Bench> {
-  const typing = mode !== "open";
-  const { PaletteHost } = await import("../components/shell/ShellHosts");
-  const sample = process.env.PALETTE_SAMPLE ? JSON.parse(await Bun.file(process.env.PALETTE_SAMPLE).text()) : {};
-  const st = useInboxStore.getState() as any;
-  st._setDispatch?.(async () => undefined);
-  useInboxStore.setState({ sessions: {}, conversations: {}, currentUser: sample.currentUser ?? { _id: ME, name: "Perf" }, clientStateInitialized: true, ...(sample.mentionIndex ? { mentionIndex: sample.mentionIndex } : {}) } as any);
-  for (const kind of Object.keys(PALETTE_SCALE) as PaletteKind[]) useInboxStore.getState().syncTable(kind as any, paletteRows(kind, sample[kind]) as any);
-  mount();
-  await render(<PaletteHost />);
-  const input = () => host.ownerDocument.querySelector<HTMLInputElement>("[cmdk-input]");
-  const items = () => host.ownerDocument.querySelectorAll("[cmdk-item]").length;
-  const open = async () => {
-    await act(async () => { useInboxStore.getState().openPalette(); });
-    await until(() => !!input() && items() > 0, "the palette to open");
-    await settle(50);
-  };
-  const close = async () => { await act(async () => { useInboxStore.getState().closePalette(); }); await settle(50); };
-  const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value")!.set!;
-  const QUERY = process.env.PALETTE_QUERY ?? "sync review";
-  // One key: the box takes the value, then the deferred ranking render and
-  // whatever it schedules settle.
-  const key = async (value: string) => {
-    const el = input()!;
-    await act(async () => { setter.call(el, value); el.dispatchEvent(new w.Event("input", { bubbles: true })); });
-    await settle(30);
-  };
-  // Between opens the app keeps living: twenty sessions beat and a task
-  // changes, so an open never finds the store exactly as it left it.
-  let beat = 0;
-  const churn = async () => {
-    beat++;
-    const state = useInboxStore.getState() as any;
-    const rows = Object.values(state.sessions).slice(0, 20).map((r: any) => ({ ...r, updated_at: now + beat * 1000, last_heartbeat: now + beat * 1000 }));
-    const task = Object.values(state.tasks)[beat % 50] as any;
-    await act(async () => {
-      useInboxStore.getState().syncTable("sessions", rows as any, { isDelta: true } as any);
-      useInboxStore.getState().syncTable("tasks", [{ ...task, updated_at: now + beat * 1000 }] as any, { isDelta: true } as any);
-    });
-  };
-  // The first open loads the palette's lazy chunks; runs measure a warm app.
-  await open();
-  if (!typing) await close();
-  // Open and untouched while the app lives on: what a heartbeat costs it.
-  if (mode === "idle") return { run: () => measure(async () => { await churn(); await settle(30); }), reset: async () => {} };
-  return typing
-    ? {
-        run: () => measure(async () => { for (let i = 1; i <= QUERY.length; i++) await key(QUERY.slice(0, i)); }),
-        reset: async () => { await key(""); },
-      }
-    : { run: () => measure(open), reset: async () => { await close(); await churn(); } };
-}
-
 const setups: Record<Workload, () => Promise<Bench>> = {
-  "palette-open": () => setupPalette("open"),
-  "palette-type": () => setupPalette("type"),
-  "palette-idle": () => setupPalette("idle"),
   switch: setupSwitch,
   append: setupAppend,
   "inbox-load": () => setupInboxLoad(),

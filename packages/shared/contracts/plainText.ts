@@ -41,14 +41,6 @@ export function plainAgentLine(text: string): string {
   return stripMarkdown(stripMachineText(text)).replace(/\s+/g, " ").trim();
 }
 
-/** A markdown body as plain paragraphs, for a clipped preview: machine text and code fences gone, a line holding
- *  only a link dropped (the full body draws it as a card), list items as bullets, paragraph breaks kept. */
-export function plainParagraphs(text: string): string {
-  if (!text) return "";
-  const lines = stripMachineText(text).split("\n").filter((l) => !/^\s*<?https?:\/\/\S+>?\s*$/.test(l));
-  return stripMarkdown(lines.join("\n").replace(/^(\s*)[-*+]\s+/gm, "$1• "), { keepNewlines: true });
-}
-
 /** An agent's words as its voice says them: a link is something to look at
  *  in the chat, never something to read out. */
 export function spokenAgentLine(text: string): string {

@@ -120,13 +120,7 @@ function useArmed(ms: number | undefined): boolean {
   return armed;
 }
 
-/**
- * `fill`: the review is the whole window (a consent window the desktop opens on
- * its own, /apps/consent): it fills the viewport edge to edge, with the footer
- * held at the bottom (pinned there while the rest scrolls, when the window is
- * shorter than the review), instead of floating over a dimmed page.
- */
-export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children, armAfterMs, fill }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void; children?: ReactNode; armAfterMs?: number; fill?: boolean }) {
+export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children, armAfterMs }: { ledger: SwitchLedger; onClose: () => void; onConfirm: () => void; onPick?: (option: string) => void; children?: ReactNode; armAfterMs?: number }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const [typed, setTyped] = useState("");
   const armed = useArmed(armAfterMs);
@@ -145,9 +139,7 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children, 
         onOpenAutoFocus={(e) => { e.preventDefault(); cancel.current?.focus(); }}
         // One column that never grows past the dialog: every part may shrink, nothing may push the edge.
         // Taller than the window, it scrolls (the dialog's cap), so the buttons stay in reach.
-        className={fill
-          ? "!left-[50%] !top-0 !flex h-[100dvh] max-h-none w-full max-w-[32rem] !translate-x-[-50%] !translate-y-0 sm:border-x sm:border-sol-border/60 flex-col gap-0 overflow-x-hidden overflow-y-auto rounded-none border-y-0 bg-sol-bg p-0 text-sol-text shadow-none !animate-none sm:rounded-none modern:rounded-none modern:border-y-0 modern:bg-sol-bg modern:shadow-none modern:max-h-none [&>*]:min-w-0 [&>*]:shrink-0 [&>footer]:sticky [&>footer]:bottom-0 [&>footer]:mt-auto [&>footer]:bg-[color-mix(in_srgb,var(--sol-bg-alt)_40%,var(--sol-bg))]"
-          : "w-[30rem] max-w-[calc(100vw-1.5rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-x-hidden overflow-y-auto border-sol-border bg-sol-bg p-0 text-sol-text sm:rounded-xl [&>*]:min-w-0"}
+        className="w-[30rem] max-w-[calc(100vw-1.5rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-x-hidden overflow-y-auto border-sol-border bg-sol-bg p-0 text-sol-text sm:rounded-xl [&>*]:min-w-0"
         data-switch-review={l.name}
       >
         <header className="flex items-start justify-between gap-3 border-b border-sol-border/60 px-5 py-3.5" data-switch-part>
@@ -161,7 +153,7 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children, 
             </span>
           )}
         </header>
-        <DialogDescription className="sr-only">{l.subject ? `${l.name}: ${l.subject}` : l.name}. {l.confirm}.</DialogDescription>
+        <DialogDescription className="sr-only">{l.name}: {l.subject}. {l.confirm}.</DialogDescription>
 
         {l.alert && (
           <p className="flex items-center gap-2 bg-sol-red px-5 py-2.5 text-[14px] font-semibold text-sol-bg" role="alert" data-switch-alert data-switch-part>

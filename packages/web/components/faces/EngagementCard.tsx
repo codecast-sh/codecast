@@ -17,7 +17,7 @@ import { ENGINE_CARD_ACTIONS, sentence, type CardActions, type Incoming, type Li
 // says what in one breath. The tones and button names are the strip's
 // (calls/walkie.css) and the ring card's (calls/ringCard.css), compacted in
 // faceRow.css, so a colour still means what it meant.
-import { Lock, MicOff, Mic, Phone, PhoneOff, Video, VideoOff } from "lucide-react";
+import { Lock, MicOff, Mic, PhoneOff, Video, VideoOff } from "lucide-react";
 import type { FaceCard } from "../../lib/faces/faceRow";
 import type { FaceDensity } from "../../lib/faces/layout";
 import { WalkiePttButton } from "../calls/WalkiePtt";
@@ -142,18 +142,6 @@ function LiveControls({ card, actions, accessory }: { card: Live; actions: CardA
   return (
     <div className="walkie-strip-actions">
       {accessory}
-      {card.kind === "live" && card.callTo && (
-        <button
-          type="button"
-          className="walkie-strip-join"
-          data-card-action="call"
-          title="Call: ring them and keep the line open"
-          onClick={() => actions.call(card)}
-        >
-          <Phone className="h-3.5 w-3.5" />
-          Call
-        </button>
-      )}
       {(card.mute || card.camera) && (
         <span className="engagement-card-toggles" role="group" aria-label="Microphone and camera">
           {card.mute && (

@@ -10,8 +10,6 @@ import { teamMembersOf } from "../../lib/activeTeam";
 import { lazyNamed } from "../../lib/lazyNamed";
 
 const CommandPalette = lazyNamed(() => import("../CommandPalette"), "CommandPalette");
-// Past the boot's own work: the first paint, the cache hydrate, the first syncs.
-const PALETTE_WARM_DELAY_MS = 4000;
 const PeopleWallModal = lazyNamed(() => import("../people/PeopleWallModal"), "PeopleWallModal");
 const CreateTaskModal = lazyNamed(() => import("../CreateTaskModal"), "CreateTaskModal");
 const CreateDocModal = lazyNamed(() => import("../CreateDocModal"), "CreateDocModal");
@@ -77,17 +75,6 @@ function CreateModal({ kind }: { kind: CreateModalKind }) {
 // The address bar is the palette's sibling overlay and rides the same host.
 export function PaletteHost() {
   const open = useInboxStore((s) => s.palette.open);
-  // Once the app has settled, load the palette's code and build its search
-  // entries in idle time, so the first ⌘K neither waits on a download nor
-  // builds tens of thousands of entries on its first key.
-  useMountEffect(() => {
-    let cancelWarm: (() => void) | undefined;
-    const timer = setTimeout(() => {
-      void import("../CommandPalette").catch(() => {});
-      void import("../../lib/paletteRecents").then((m) => { cancelWarm = m.warmPaletteSearch(() => useInboxStore.getState() as any); }).catch(() => {});
-    }, PALETTE_WARM_DELAY_MS);
-    return () => { clearTimeout(timer); cancelWarm?.(); };
-  });
   return (
     <>
       {open && (

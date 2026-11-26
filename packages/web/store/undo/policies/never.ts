@@ -146,7 +146,6 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setSessionTargetDevice: DRAFT,
   setStableContextPrefs: DRAFT,
   setStubTeam: DRAFT,
-  setStubVisibility: DRAFT,
   setSessionNewProject: DRAFT,
 
   // Creates

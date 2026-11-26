@@ -632,7 +632,6 @@ function actionsInto(log: Pressed[]) {
     end: on("end"),
     mute: on("mute"),
     camera: on("camera"),
-    call: on("call"),
     answer: on("answer"),
     decline: on("decline"),
     cancel: on("cancel"),
@@ -716,12 +715,6 @@ describe("the engagement card renders the model's card", () => {
     expect(h.q('[data-card-action="mute"]')).toBeNull();
     await h.click(h.q('[data-card-action="end"]')!);
     expect(log.map((p) => p.action)).toEqual(["end"]);
-    // No one to ring: no Call. With someone, Call comes first and rings them.
-    expect(h.q('[data-card-action="call"]')).toBeNull();
-    await h.draw(<EngagementCard card={{ ...card, callTo: ["u-ann"] }} density="float" actions={actionsInto(log)} />);
-    expect(h.all(".walkie-strip-actions [data-card-action]").map((el) => el.getAttribute("data-card-action"))[0]).toBe("call");
-    await h.click(h.q('[data-card-action="call"]')!);
-    expect(log.at(-1)).toMatchObject({ action: "call", card: { callTo: ["u-ann"] } });
 
     // A huddle: no walkie words, the room's name, and a mute that toggles.
     const huddle: FaceCard = { kind: "live", roomKey: ROOM, title: "Ann", end: true, mute: true, muted: true, camera: true, cameraOn: false, words: null, hearing: null };
@@ -875,13 +868,6 @@ describe("the engagement card renders the model's card", () => {
     expect(h.q('[data-face-id="u-bob"]')!.dataset.folded).toBe("1");
     expect(h.q(".face-row-track")!.getAttribute("data-link-kind")).toBe("ring");
     expect(h.q(".face-row-strip")!.getAttribute("data-track")).toBe("1");
-    // An incoming ring has no room yet: the team still folds off to the side.
-    await h.draw(
-      <FaceRow row={{ ...row, room: null }} density="float" viewerId={ME}>
-        <EngagementCard card={card} density="float" />
-      </FaceRow>,
-    );
-    expect(h.q('[data-face-id="u-bob"]')!.dataset.folded).toBe("1");
     // Nobody linked: no track, and the strip goes back to the row's end.
     await h.draw(
       <FaceRow row={rowOf([entry("u-bob", "Bob", { state: "online", tier: "online" })])} density="float" viewerId={ME}>

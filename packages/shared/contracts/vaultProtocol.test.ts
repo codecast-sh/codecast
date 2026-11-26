@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   isVaultAssetPath,
   isVaultMarkdownPath,
-  isVaultBinaryPath,
+  isVaultTextPath,
   vaultFileKind,
   VAULT_MAX_PREVIEW_BYTES,
   VAULT_MAX_SERVE_BYTES,
@@ -44,31 +44,27 @@ describe("vaultFileKind", () => {
     expect(vaultFileKind("LICENSE")).toBe("text");
   });
 
-  test("known binary extensions say so instead of decoding", () => {
-    // A wall of mojibake is worse than "no preview", and these are exactly
-    // what a repo is full of.
+  test("anything else is binary, so the viewer says so instead of decoding it", () => {
+    // The whole point of this branch: a wall of mojibake is worse than "no
+    // preview", and these are exactly what a repo is full of.
     expect(vaultFileKind("db.sqlite")).toBe("binary");
     expect(vaultFileKind("app.wasm")).toBe("binary");
     expect(vaultFileKind("fonts/Inter.woff2")).toBe("binary");
     expect(vaultFileKind("archive.zip")).toBe("binary");
-  });
-
-  test("an unlisted extension opens as text", () => {
-    expect(vaultFileKind("line/ideas.cast")).toBe("text");
-    expect(vaultFileKind("noextension")).toBe("text");
+    expect(vaultFileKind("noextension")).toBe("binary");
   });
 
   test("the kinds partition: every path is exactly one of them", () => {
     for (const p of ["a.md", "a.png", "a.ts", "a.bin", "Makefile", ".gitignore"]) {
-      const flags = [isVaultMarkdownPath(p), isVaultAssetPath(p), isVaultBinaryPath(p)];
+      const flags = [isVaultMarkdownPath(p), isVaultAssetPath(p), isVaultTextPath(p)];
       const kind = vaultFileKind(p);
       // A path may match more than one predicate (".md" is not text, but a
       // future overlap must not change what kind() answers), so assert the
       // resolution order rather than mutual exclusion.
       if (flags[0]) expect(kind).toBe("markdown");
       else if (flags[1]) expect(kind).toBe("asset");
-      else if (flags[2]) expect(kind).toBe("binary");
-      else expect(kind).toBe("text");
+      else if (flags[2]) expect(kind).toBe("text");
+      else expect(kind).toBe("binary");
     }
   });
 });

@@ -7,7 +7,6 @@ import { windowDrawsTranscripts } from "../lib/windowRole";
 import { windowOrgTree } from "../store/orgSlice";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
-import { buildDecisionQueue } from "./useDecisionQueue";
 
 // Background warming of inbox conversations so opening one is instant.
 //
@@ -39,19 +38,16 @@ import { buildDecisionQueue } from "./useDecisionQueue";
  *  same window a cold open would have fetched. */
 export const WARM_DEEP_ROWS = 200;
 /** How many rows from the top of the rendered list get the deep window. */
-export const WARM_DEEP_RANKS = 80;
+export const WARM_DEEP_RANKS = 40;
 /** Newest-page size for every row below the deep tier: the slice the
  *  conversation view paints on open, so the click is instant. */
 export const WARM_TAIL_ROWS = 60;
-/** Newest team-feed rows warmed per feed: the ones on screen when the
- *  activity page opens. */
-export const WARM_FEED_ROWS = 30;
 /** Cold warms started per pass — a freshly loaded inbox must not fire a query
  *  per row at once; the rest drain over later passes (every list change, every
  *  view change, and the 15s recovery poll). */
-export const MAX_COLD_WARM_PER_PASS = 100;
+export const MAX_COLD_WARM_PER_PASS = 60;
 /** Deepen fetches started per pass. */
-export const MAX_DEEPEN_PER_PASS = 20;
+export const MAX_DEEPEN_PER_PASS = 10;
 
 export type WarmAction =
   | { kind: "row"; id: string }
@@ -299,11 +295,8 @@ function runDeepen(convex: ConvexClient, action: Extract<WarmAction, { kind: "de
 
 /**
  * Every row a click, a jump or a reveal can land on, in warm priority: the
- * decision queue (it leads the inbox panel, and each of its rows opens the
- * asking session's transcript, often a teammate's or a worker's that is in no
- * inbox), then the rendered list, then the rest of the inbox in both scopes,
- * then every role's standing session, then favorites, then the newest rows of
- * the team activity feed. A collapsed section, a chip, the favorites shelf or
+ * rendered list first, then the rest of the inbox in both scopes, then every
+ * role's standing session. A collapsed section, a chip, the favorites shelf or
  * the other scope hides rows from the render without taking them out of the
  * inbox, and a role's standing session files behind its role card or on the
  * org page; opening any of them must find a warm row. Rows behind the show-old
@@ -322,7 +315,6 @@ export function warmOrder(st: ReturnType<typeof useInboxStore.getState>): { id: 
     byId.set(id, entry);
     order.push(entry);
   };
-  for (const item of decisionQueueOf(st)) add(item.conversationId, st.sessions[item.conversationId], !st.sessions[item.conversationId]);
   for (const s of renderedOrder(st)) add(String(s._id), s);
   // Membership without the focus rule: the open conversation is warm anyway,
   // and asking per focused id gave placement a new memo slot on every switch,
@@ -336,24 +328,7 @@ export function warmOrder(st: ReturnType<typeof useInboxStore.getState>): { id: 
     if (id) add(id, st.sessions[id], !st.sessions[id]?.is_anchor);
   }
   for (const s of Object.values(st.sessions)) if (s.standing_role_id) add(String(s._id), s, !s.is_anchor);
-  // A favorite outside the inbox may have no store row at all (the shelf
-  // draws a placeholder for it).
-  for (const fav of st.favorites ?? []) if (fav?._id) add(String(fav._id), st.sessions[fav._id], !st.sessions[fav._id]);
-  for (const rows of Object.values(st.feedConversations ?? {})) {
-    for (const row of (rows ?? []).slice(0, WARM_FEED_ROWS)) if (row?._id) add(String(row._id), st.sessions[row._id] ?? row);
-  }
   return order;
-}
-
-// The decision queue the inbox panel draws (useDecisionQueue), rebuilt only
-// when one of its inputs changed identity.
-let queueMemo: { deps: unknown[]; queue: ReturnType<typeof buildDecisionQueue> } | null = null;
-function decisionQueueOf(st: ReturnType<typeof useInboxStore.getState>) {
-  const deps: unknown[] = [st.sessionDecisions, st.sessions, st.questionResolutions, st.currentUser?._id];
-  if (queueMemo && deps.every((d, i) => d === queueMemo!.deps[i])) return queueMemo.queue;
-  const queue = buildDecisionQueue(st.sessionDecisions, st.sessions, st.questionResolutions, st.currentUser?._id as string | undefined);
-  queueMemo = { deps, queue };
-  return queue;
 }
 
 // The rendered order, recomputed only when what it is drawn from moved: the
@@ -437,19 +412,12 @@ const WARM_MAX_DEFER_MS = 3_000;
 const warmSessionsSig = makeCollectionSig<InboxSession>((s) => `${sessionStructuralSig(s)}|${s.message_count ?? ""}|${s.is_anchor ? 1 : 0}|${s.agent_type ?? ""}`);
 const warmMessagesSig = makeCollectionSig<{ timestamp?: number }[] | undefined>((m) => (m ? `${m.length}|${m[m.length - 1]?.timestamp ?? ""}` : null));
 const warmPaginationSig = makeCollectionSig<{ hasMoreAbove?: boolean } | undefined>((p) => (p?.hasMoreAbove ? "1" : "0"));
-// An ask opening or closing changes which conversations the queue holds.
-const warmDecisionsSig = makeCollectionSig<{ status?: string; conversation_id?: string }>((d) => (d.status === "pending" ? String(d.conversation_id) : null));
 
-type WarmInputs = Pick<ReturnType<typeof useInboxStore.getState>, "sessions" | "messages" | "pagination" | "sessionDecisions" | "favorites" | "feedConversations" | "liveInboxIds" | "teamInboxIds" | "orgTree">;
-const feedIdsSig = (feeds: Record<string, any[]> | undefined) =>
-  Object.values(feeds ?? {}).map((rows) => (rows ?? []).slice(0, WARM_FEED_ROWS).map((r) => r?._id).join(",")).join("|");
+type WarmInputs = Pick<ReturnType<typeof useInboxStore.getState>, "sessions" | "messages" | "pagination" | "liveInboxIds" | "teamInboxIds" | "orgTree">;
 const warmInputsChanged = (a: WarmInputs, b: WarmInputs) =>
   (a.sessions !== b.sessions && warmSessionsSig(a.sessions) !== warmSessionsSig(b.sessions))
   || (a.messages !== b.messages && warmMessagesSig(a.messages) !== warmMessagesSig(b.messages))
   || (a.pagination !== b.pagination && warmPaginationSig(a.pagination) !== warmPaginationSig(b.pagination))
-  || (a.sessionDecisions !== b.sessionDecisions && warmDecisionsSig(a.sessionDecisions) !== warmDecisionsSig(b.sessionDecisions))
-  || a.favorites !== b.favorites
-  || (a.feedConversations !== b.feedConversations && feedIdsSig(a.feedConversations) !== feedIdsSig(b.feedConversations))
   || a.liveInboxIds !== b.liveInboxIds || a.teamInboxIds !== b.teamInboxIds || a.orgTree !== b.orgTree;
 
 /**

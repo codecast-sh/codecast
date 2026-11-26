@@ -54,10 +54,8 @@ export function ComposerShell({
   metaEnd?: ReactNode;
   /** Between the status line and the field (thread state, menus). */
   between?: ReactNode;
-  /** Drawn on the field's top edge, in a band as tall as its raised height,
-   *  so whatever sits above (the pinned state, the pull request strip) never
-   *  touches it: a handle for what opens upward into the field (the branch
-   *  map's layers). */
+  /** Drawn on the field's top edge, taking no height of its own: a handle
+   *  for what opens upward into the field (the branch map's layers). */
   tab?: ReactNode;
   /** Inside the field, above the text row (queue, images, review quotes). */
   fieldTop?: ReactNode;
@@ -98,11 +96,10 @@ export function ComposerShell({
           )}
           {between}
           <form onSubmit={onSubmit} className={bare ? "w-full" : `mx-auto ${colClass}`}>
-            {/* An anchor at the field's top edge, as tall as the tab's raised
-                layer (9px) so the tab keeps clear of what sits above it.
-                Positioning the form itself would paint the field over the
-                status controls that Modern lays into its footer. */}
-            {!bare && tab && <div className="relative h-[9px]">{tab}</div>}
+            {/* A zero-height anchor at the field's top edge: positioning the
+                form itself would paint the field over the status controls
+                that Modern lays into its footer. */}
+            {!bare && tab && <div className="relative h-0">{tab}</div>}
             <div data-composer-field={composeMode ? "" : undefined} data-cc-composer-box={variant} className={`flex flex-col ${bare ? "" : "border"} transition-colors duration-150 ${bare ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : inline ? "border px-3 py-1.5 rounded-xl bg-sol-bg-alt" : hero ? "border px-4 pt-3 pb-1 rounded-2xl shadow-lg bg-sol-bg-alt focus-within:border-sol-cyan/50 [&_textarea]:min-h-[4.5rem]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${expanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]" : ""} ${selectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bare ? "" : hero ? "border-sol-border/60" : "border-sol-border"}`}>
               {fieldTop}
               {children}

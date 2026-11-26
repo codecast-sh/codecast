@@ -52,11 +52,6 @@ export interface FleetInventoryItem {
   command?: string;
   url?: string;
   event?: string;
-  /** MCP only: how it is reached, and whether its client last found it asking for a sign-in. */
-  transport?: string;
-  auth?: string;
-  /** The agent client that reported it. */
-  client?: string;
 }
 
 /**
@@ -327,9 +322,6 @@ function toReportedItem(item: FleetInventoryItem): Record<string, unknown> {
   if (item.sha) meta.sha = item.sha;
   if (item.version) meta.version = item.version;
   if (item.marketplace) meta.marketplace = item.marketplace;
-  if (item.url) meta.url = item.url;
-  if (item.transport) meta.transport = item.transport;
-  if (item.auth) meta.auth = item.auth;
   return {
     kind: item.kind,
     name: item.name,
@@ -337,8 +329,6 @@ function toReportedItem(item: FleetInventoryItem): Record<string, unknown> {
     scope: item.scope,
     enabled: item.enabled,
     installed: item.installed,
-    source: item.source,
-    client: item.client,
     meta,
   };
 }

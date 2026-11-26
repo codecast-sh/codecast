@@ -184,7 +184,7 @@ export function Chip({ children, tone, mono, href, object, onRemove }: { childre
  *  is not a name); it labels both the button and the input. Enter commits a
  *  single line; a multiline field commits on the modifier plus Enter and
  *  shows that as keycaps beside the save button. */
-export function InlineEdit({ value, onSave, className, style, placeholder, multiline, canEdit, ariaLabel, display, maxLength }: { value: string; onSave: (v: string) => void; className?: string; style?: React.CSSProperties; placeholder?: string; multiline?: boolean; canEdit: boolean; ariaLabel?: string; /** What the closed control shows in place of the value text. */ display?: React.ReactNode; /** Typing stops here, the store's own limit. */ maxLength?: number }) {
+export function InlineEdit({ value, onSave, className, style, placeholder, multiline, canEdit, ariaLabel }: { value: string; onSave: (v: string) => void; className?: string; style?: React.CSSProperties; placeholder?: string; multiline?: boolean; canEdit: boolean; ariaLabel?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   if (!editing) {
@@ -198,7 +198,7 @@ export function InlineEdit({ value, onSave, className, style, placeholder, multi
         title={canEdit ? "Click to edit" : undefined}
         aria-label={ariaLabel ? (canEdit ? `Edit ${ariaLabel}` : ariaLabel) : undefined}
       >
-        {value && display ? display : <span className={cn(!value && "italic opacity-60")}>{value || placeholder}</span>}
+        <span className={cn(!value && "italic opacity-60")}>{value || placeholder}</span>
         {canEdit && <Pencil className="inline-block w-3 h-3 ml-1.5 align-[-1px] opacity-0 group-hover:opacity-60 transition-opacity" />}
       </button>
     );
@@ -211,7 +211,6 @@ export function InlineEdit({ value, onSave, className, style, placeholder, multi
         autoFocus
         value={draft}
         rows={multiline ? 3 : undefined}
-        maxLength={maxLength}
         onChange={(e: any) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e: any) => {

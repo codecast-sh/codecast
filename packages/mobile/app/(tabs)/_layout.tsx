@@ -2,9 +2,8 @@ import React, { useMemo } from 'react';
 import { Tabs, usePathname } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
-import { AppMenu } from '@/components/nav/AppMenu';
-import { MenuButton } from '@/components/nav/MenuButton';
-import { setAppMenuOpen, useAppMenuOpen } from '@/lib/appMenu';
+import { InboxDrawer } from '@/components/inbox/InboxDrawer';
+import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { TAB_BAR_HEIGHT, useAppearanceKey, useTheme } from '@/constants/Theme';
 import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { Mono, useMonoFace } from '@/constants/fonts';
@@ -14,7 +13,6 @@ import {
   MOBILE_HEADER_STYLE,
   MOBILE_HEADER_TITLE_STYLE,
   MOBILE_TAB,
-  MOBILE_TABS,
   MOBILE_TAB_BAR_STYLE,
   MOBILE_TAB_LABEL_STYLE,
 } from '@codecast/shared/render/mobileTabsStyle';
@@ -30,11 +28,9 @@ export default function TabLayout() {
   // sizes them: they follow the phone's text size here.
   const textSize = useTextSize();
   const { unreadCount, chatMentions, anyLive } = useTabSignals();
-  // The app menu slides out from behind every tab; a screen pushed over the
-  // tabs (a conversation, a call) has its own, so the drag is live only on a
-  // tab's root.
-  const onTab = TAB_PATHS.has(usePathname());
-  const menuOpen = useAppMenuOpen();
+  // The slide-out panel belongs to the inbox: its drag is live only there.
+  const onInbox = usePathname() === '/inbox';
+  const drawerOpen = useInboxDrawerOpen();
 
   // The tabs are memoized on what they read: the pathname changes on every
   // tab press, and rebuilding the navigator then re-rendered every tab.
@@ -69,10 +65,6 @@ export default function TabLayout() {
           fontFamily: titleFace,
         }, textSize),
         headerTintColor: Theme.text,
-        // The tabs that draw their header through the navigator get the
-        // same ☰ the others draw in their own.
-        headerLeft: menuButton,
-        headerLeftContainerStyle: { paddingLeft: 20 },
       }}>
       <Tabs.Screen
         name="inbox"
@@ -132,12 +124,10 @@ export default function TabLayout() {
   ), [Theme, appearance, labelFace, titleFace, textSize, unreadCount, chatMentions, anyLive]);
 
   return (
-    <SlideOutDrawer enabled={onTab} open={menuOpen} setOpen={setAppMenuOpen} drawer={menuPanel}>
+    <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={drawerPanel}>
       {tabs}
     </SlideOutDrawer>
   );
 }
 
-const menuPanel = <AppMenu />;
-const menuButton = () => <MenuButton />;
-const TAB_PATHS = new Set(MOBILE_TABS.map((t) => `/${t.name}`));
+const drawerPanel = <InboxDrawer />;

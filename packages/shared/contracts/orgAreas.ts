@@ -38,7 +38,7 @@ export const AREA_STATUS_ATTENTION: Record<AreaStatus, "person" | "head" | "none
   not_started: "none",
 };
 
-export type AreaSignalCode = "waiting_sessions" | "review_stall" | "blocked_sessions" | "overloaded" | "idle" | "program_ended" | "raised" | "people_waiting";
+export type AreaSignalCode = "waiting_sessions" | "review_stall" | "blocked_sessions" | "overloaded" | "idle" | "program_ended" | "raised";
 
 /** One sentence that changes what a person would do about the area. */
 export type AreaSignal = { code: AreaSignalCode; text: string; severity: "info" | "warn" | "blocker" };
@@ -223,16 +223,9 @@ export type AreaInput = {
   age_days: number;
   idle: boolean;
   program_ended: { ended: string; then: "retire" | "review" } | null;
-  /** The people who report to the role with something of the area stuck on
-   *  them (org-people.md P2): decisions in their queue past a day, tasks
-   *  assigned to them in review past a day. Only people with one of either. */
-  people_waiting?: Array<{ name: string; decisions: number; review_stalls: number }>;
 };
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
-
-const peopleWaitWords = (p: { decisions: number; review_stalls: number }) =>
-  [p.decisions ? n(p.decisions, "decision") : "", p.review_stalls ? `${n(p.review_stalls, "task")} in review` : ""].filter(Boolean).join(" and ");
 
 /** The status the signals add up to, most pressing first. */
 export function areaStatusOf(a: AreaInput): AreaStatus {
@@ -240,7 +233,7 @@ export function areaStatusOf(a: AreaInput): AreaStatus {
   if (!a.has_standing) return "not_started";
   if (a.check_fault?.status === "down") return "down";
   if (a.standing_waits_on_person) return "waiting_on_you";
-  if (a.waiting_unanswered > 0 || a.review_stalls > 0 || a.blocked_sessions > 0 || a.people_waiting?.length) return "stuck";
+  if (a.waiting_unanswered > 0 || a.review_stalls > 0 || a.blocked_sessions > 0) return "stuck";
   if (a.overloaded) return "overloaded";
   // A check a person turned off: nothing presses, but nothing wakes the role
   // either, so it never reads as on track.
@@ -262,7 +255,6 @@ export function areaStatusLine(a: AreaInput, status: AreaStatus): string {
       if (a.waiting_unanswered > 0) parts.push(`${n(a.waiting_unanswered, "session")} under it waiting unanswered`);
       if (a.review_stalls > 0) parts.push(`${n(a.review_stalls, "task")} stuck in review`);
       if (a.blocked_sessions > 0) parts.push(`${n(a.blocked_sessions, "task")} blocked`);
-      for (const p of a.people_waiting ?? []) parts.push(`${peopleWaitWords(p)} on ${p.name}`);
       return `Stuck: ${parts.join(", ")}.`;
     }
     case "overloaded": {
@@ -286,7 +278,6 @@ export function areaSignalsOf(a: AreaInput): AreaSignal[] {
   else if (a.waiting_total > 0) out.push({ code: "waiting_sessions", severity: "info", text: `${n(a.waiting_total, "session")} under it ${a.waiting_total === 1 ? "is" : "are"} waiting on someone.` });
   if (a.review_stalls > 0) out.push({ code: "review_stall", severity: "warn", text: `${n(a.review_stalls, "task")} ${a.review_stalls === 1 ? "has" : "have"} sat in review for more than a day with nobody owning the verdict.` });
   if (a.blocked_sessions > 0) out.push({ code: "blocked_sessions", severity: "warn", text: `${n(a.blocked_sessions, "task")} still open whose session reported blocked or missing context.` });
-  if (a.people_waiting?.length) out.push({ code: "people_waiting", severity: "warn", text: `Waiting more than a day on people who report to it: ${a.people_waiting.map((p) => `${p.name} (${peopleWaitWords(p)})`).join(", ")}.` });
   if (a.overloaded) {
     const why = a.reached ? reachedSentence(a.reached) : "";
     out.push({ code: "overloaded", severity: "warn", text: `More reaches it than one role can answer: ${a.overloaded_by.join(", ")}.${why ? ` ${why}` : ""}` });

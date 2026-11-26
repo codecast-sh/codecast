@@ -58,9 +58,6 @@ const CURRENT_USER_METADATA_FIELDS = [
   // The shutter, for exactly the same reason: dropped in projection it reads
   // as "not snoozed", which is a door somebody shut opening itself again.
   "walkie_snoozed_until",
-  // Voice recognition consent (voiceprints.ts): Settings › Voice reads the
-  // switch off currentUser, and a dropped field would read as off.
-  "voice_id_enabled",
   "timezone",
   "hide_activity",
   "username",
@@ -102,9 +99,6 @@ export function projectPrincipalTeam(team: Record<string, any>, membership: Reco
     ...(team.task_statuses !== undefined ? { task_statuses: team.task_statuses } : {}),
     ...(team.features !== undefined ? { features: team.features } : {}),
     ...(team.default_flow !== undefined ? { default_flow: team.default_flow } : {}),
-    // Installed apps policy (teams.setAppsPolicy); unset reads as the default (pageApp teamAppsPolicy).
-    ...(team.apps_install !== undefined ? { apps_install: team.apps_install } : {}),
-    ...(team.apps_full_access !== undefined ? { apps_full_access: team.apps_full_access } : {}),
     role: membership.role,
     joined_at: membership.joined_at,
     visibility: currentMembershipVisibility(membership),

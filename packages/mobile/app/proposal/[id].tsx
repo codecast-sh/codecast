@@ -33,7 +33,6 @@ import { useProposalEntries } from '@codecast/web/components/org/proposalLedgerM
 import { proposalProgressWords } from '@codecast/web/components/org/proposalSubjects';
 import type { OrgProposalListRow } from '@codecast/web/components/org/orgStaffingTypes';
 import { looksAfter, structureOf, type Shift } from '@/lib/proposalStructure';
-import { ownProfilesOnly } from '@codecast/shared/contracts/orgPersonProfile';
 
 export default function ProposalScreen() {
   const Theme = useTheme();
@@ -57,10 +56,7 @@ export default function ProposalScreen() {
   if (!row) return <ObjectMissing what="Proposal" id={id || rawId} loading={!feed.missing} />;
 
   const me = tree?.people.find((p) => p.is_me);
-  // A person decides the profile changes about them; everything else is an
-  // admin's. The answers go as one batch, so a non-admin decides here only
-  // when every live change is their own (the server's rule, ownProfilesOnly).
-  const mayDecide = !!tree && (tree.workspace.kind === 'user' || me?.role === 'admin' || me?.role === 'owner' || ownProfilesOnly(me?.user_id, changes));
+  const mayDecide = !!tree && (tree.workspace.kind === 'user' || me?.role === 'admin' || me?.role === 'owner');
   const open = row.status === 'open';
   const batchKey = `proposal:${row._id}`;
   const thread = row.thread?.conversation_id ?? null;
@@ -87,13 +83,7 @@ export default function ProposalScreen() {
       },
     ]);
   };
-  // A proposal only about one person's profile is theirs to decide too.
-  const live = changes.filter((c: any) => c.status !== 'removed');
-  const subjectOf = (c: any): string | undefined => (c.change.kind === 'person_profile' ? (c.change as { user_id?: string }).user_id : undefined);
-  const soleSubject = live.length && subjectOf(live[0]) && live.every((c: any) => subjectOf(c) === subjectOf(live[0]))
-    ? tree?.people.find((p) => p.user_id === (live[0].change as any).user_id)?.name ?? null
-    : null;
-  const readonlyWords = !open ? undefined : !tree ? 'Loading who can decide it…' : !mayDecide ? (soleSubject ? `Only ${soleSubject} or a team admin can decide this.` : 'Only a team admin can decide this proposal.') : undefined;
+  const readonlyWords = !open ? undefined : !tree ? 'Loading who can decide it…' : !mayDecide ? 'Only a team admin can decide this proposal.' : undefined;
 
   return (
     <>

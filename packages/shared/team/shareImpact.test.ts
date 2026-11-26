@@ -1,7 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  readShareImpact,
-  shareImpactKey,
   describeMappingScope,
   describeShareSpan,
   describeTeammates,
@@ -85,19 +83,5 @@ describe("labels", () => {
     expect(listNames(["a", "b"])).toBe("a and b");
     expect(listNames(["a", "b", "c"])).toBe("a, b and c");
     expect(listNames(["a", "b", "c", "d"])).toBe("a, b and 2 more");
-  });
-});
-
-describe("shareImpactKey / readShareImpact", () => {
-  const summary = { count: 3, first_started_at: 1, last_started_at: 2, truncated: false };
-  test("a folder Convex cannot take as a field name round-trips through its encoded key", () => {
-    const path = "/Users/shahzad/littlebird-art-motion/代码工程";
-    const key = shareImpactKey(path);
-    expect(/^[\x20-\x7e]*$/.test(key)).toBe(true);
-    expect(key.startsWith("%")).toBe(true);
-    expect(readShareImpact({ [key]: summary, "/Users/a/plain": summary })).toEqual({ [path]: summary, "/Users/a/plain": summary });
-  });
-  test("an ASCII folder keeps its own path as the key", () => {
-    expect(shareImpactKey("/Users/a/my repo")).toBe("/Users/a/my repo");
   });
 });

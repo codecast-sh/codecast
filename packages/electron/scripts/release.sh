@@ -25,21 +25,15 @@ R2_BUCKET="codecast"
 # push must be one controlled step: the caller commits and pushes by hand.
 # --no-floor: publish without raising the fleet floor. scripts/deploy-all.sh
 # sets it itself once the fleet runs the CLI that installs the app safely.
-# --windows: also build the Windows installer (scripts/build-win.sh, cross-
-# built here) and publish it with latest.yml beside the mac files, where the
-# Windows app's updater reads it. Opt-in while Windows builds are unsigned
-# (sd-4722); make it the default once they are signed.
 BUMP_TYPE="patch"
 NO_GIT=0
 NO_FLOOR=0
-WINDOWS=0
 for arg in "$@"; do
   case "$arg" in
     patch|minor|major) BUMP_TYPE="$arg" ;;
     --no-git) NO_GIT=1 ;;
     --no-floor) NO_FLOOR=1 ;;
-    --windows) WINDOWS=1 ;;
-    *) echo "Usage: ./scripts/release.sh [patch|minor|major] [--no-git] [--no-floor] [--windows]"; exit 1 ;;
+    *) echo "Usage: ./scripts/release.sh [patch|minor|major] [--no-git] [--no-floor]"; exit 1 ;;
   esac
 done
 
@@ -100,13 +94,6 @@ for src in $(jq -r '.build.files[] | select(endswith(".js"))' package.json); do
   done
 done
 
-WIN_INSTALLER="Codecast-${NEW_VERSION}-x64-setup.exe"
-if [ "$WINDOWS" = "1" ]; then
-  echo ""
-  echo "[1.6/4] Building the Windows installer..."
-  scripts/build-win.sh 2>&1
-fi
-
 echo ""
 echo "[2/4] Uploading to R2..."
 ARTIFACTS=(
@@ -116,8 +103,6 @@ ARTIFACTS=(
   "dist/Codecast-${NEW_VERSION}-arm64.dmg.blockmap"
   "dist/latest-mac.yml"
 )
-# The feed goes last so no updater sees it before the installer it names.
-if [ "$WINDOWS" = "1" ]; then ARTIFACTS+=("dist/$WIN_INSTALLER" "dist/latest.yml"); fi
 # Versioned binaries are immutable, but latest-mac.yml is polled for new releases.
 IMMUTABLE_CC="public, max-age=31536000, immutable"
 for f in "${ARTIFACTS[@]}"; do
@@ -128,7 +113,6 @@ for f in "${ARTIFACTS[@]}"; do
   case "$f" in
     *.dmg) CT="application/x-apple-diskimage"; CC="$IMMUTABLE_CC" ;;
     *.zip) CT="application/zip"; CC="$IMMUTABLE_CC" ;;
-    *.exe) CT="application/vnd.microsoft.portable-executable"; CC="$IMMUTABLE_CC" ;;
     *.blockmap) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
     *.yml) CT="text/yaml"; CC="no-cache" ;;
     *) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
@@ -150,15 +134,6 @@ if [[ "$REMOTE" != "version: $NEW_VERSION" ]]; then
   exit 1
 fi
 echo "  Verified: $REMOTE"
-if [ "$WINDOWS" = "1" ]; then
-  REMOTE_WIN=$(curl -sf https://dl.codecast.sh/desktop/latest.yml | head -1)
-  if [[ "$REMOTE_WIN" != "version: $NEW_VERSION" ]]; then
-    echo "  ERROR: Remote latest.yml does not match v$NEW_VERSION"
-    echo "  Got: $REMOTE_WIN"
-    exit 1
-  fi
-  echo "  Verified (Windows): $REMOTE_WIN"
-fi
 
 # Prewarm the CDN so the fleet's forced update doesn't hit a cold cache: the
 # first fetch after upload streams from the R2 origin (measured minutes for
@@ -167,9 +142,7 @@ fi
 # zone, at the upper tier every other edge fills from. Best-effort — a warm
 # failure must never fail the release.
 echo "  Prewarming CDN..."
-PREWARM=("Codecast-${NEW_VERSION}-arm64-mac.zip" "Codecast-${NEW_VERSION}-arm64.dmg")
-if [ "$WINDOWS" = "1" ]; then PREWARM+=("$WIN_INSTALLER"); fi
-for f in "${PREWARM[@]}"; do
+for f in "Codecast-${NEW_VERSION}-arm64-mac.zip" "Codecast-${NEW_VERSION}-arm64.dmg"; do
   curl -so /dev/null --max-time 300 -w "    $f: %{speed_download} B/s\n" "https://dl.codecast.sh/desktop/$f" || echo "    $f: prewarm failed (non-fatal)"
 done
 
@@ -211,4 +184,3 @@ echo ""
 echo "=== Desktop v$NEW_VERSION released ==="
 echo "  https://dl.codecast.sh/desktop/latest-mac.yml"
 echo "  https://dl.codecast.sh/desktop/Codecast-${NEW_VERSION}-arm64.dmg"
-if [ "$WINDOWS" = "1" ]; then echo "  https://dl.codecast.sh/desktop/$WIN_INSTALLER"; fi

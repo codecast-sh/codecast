@@ -65,7 +65,7 @@ import { animatedCloseSessions, animatedHideSessions, fileSessionsAsRest } from 
 import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, switchPending } from "../lib/sessionCommands";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown, Globe } from "lucide-react";
+import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
 import { BlockedLaneRow } from "./BlockedLaneRow";
 import { blockedLanes, type BlockedLane, type LaneAccount } from "../lib/blockedLanes";
@@ -76,8 +76,6 @@ import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { foldedRunning } from "../lib/foldedSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
-import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "../store/browserTabsView";
-import { SessionBrowserTabs } from "./inbox/SessionBrowserTabs";
 import { SessionCard } from "./inbox/SessionCard";
 import { SectionHeader } from "./inbox/SectionHeader";
 import { hostedStopOf, hostedStopsSig, lastAskOf, lastNoticeKind, splitHostedStops } from "../lib/hostedNotice";
@@ -400,37 +398,6 @@ function BlockedSessionsBanner({
     else next.add(id);
     setPicked(next);
   };
-  // Tick or untick every pickable row in a group at once.
-  const togglePickAll = (ids: string[]) => {
-    const next = new Set(chosenIds);
-    const all = ids.every((id) => next.has(id));
-    for (const id of ids) {
-      if (all) next.delete(id);
-      else next.add(id);
-    }
-    setPicked(next);
-  };
-  const pickAllRow = (rows: InboxSession[]) => {
-    const ids = rows.filter((sess) => pickableIds.has(sess._id)).map((sess) => sess._id);
-    if (ids.length < 2) return null;
-    const ticked = ids.filter((id) => chosenIds.has(id)).length;
-    return (
-      <label className="flex w-full cursor-pointer items-center gap-2 py-1 text-meta text-sol-text-dim hover:text-sol-text">
-        <input
-          type="checkbox"
-          checked={ticked === ids.length}
-          ref={(el) => {
-            if (el) el.indeterminate = ticked > 0 && ticked < ids.length;
-          }}
-          disabled={busy !== null}
-          onChange={() => togglePickAll(ids)}
-          className="h-3 w-3 shrink-0 accent-amber-500"
-          aria-label="Include every session in the restart"
-        />
-        <span className="tabular-nums">{ticked} of {ids.length}</span>
-      </label>
-    );
-  };
   // Rows show their cause only when the causes differ; otherwise the headline says it.
   const mixedCauses = new Set(blocked.map((sess) => sess.pending_api_error_kind)).size > 1;
 
@@ -749,7 +716,7 @@ function BlockedSessionsBanner({
       <button
         onClick={() => handleAcknowledge([sess._id])}
         className="shrink-0 rounded p-0.5 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:bg-sol-bg-alt hover:text-sol-text transition-opacity"
-        title="Never restart this session: remove it from this list (a line step's session is stopped, so its run moves on)"
+        title="Never restart this session: remove it from this list"
         aria-label="Dismiss this session"
       >
         <X className="h-3 w-3" />
@@ -864,7 +831,6 @@ function BlockedSessionsBanner({
                       </div>
                     )}
                     <div className="mt-1 max-h-48 overflow-y-auto scrollbar-auto divide-y divide-sol-border/30">
-                      {canAct && pickAllRow(rows)}
                       {rows.map((sess) => sessionRow(sess, canAct, workers > 0 && plain > 0))}
                     </div>
                   </>
@@ -875,7 +841,7 @@ function BlockedSessionsBanner({
         </div>
       )}
       {expanded && unlaned.length > 0 && (
-        <div className="mt-1.5 divide-y divide-sol-border/30">{pickAllRow(unlaned)}{unlaned.map((sess) => sessionRow(sess, pickableIds.has(sess._id), true))}</div>
+        <div className="mt-1.5 divide-y divide-sol-border/30">{unlaned.map((sess) => sessionRow(sess, pickableIds.has(sess._id), true))}</div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <button
@@ -896,7 +862,8 @@ function BlockedSessionsBanner({
         )}
         <button
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
-          title="Never restart these: clear all of them from the blocked set permanently (line steps' sessions are stopped, so their runs move on)"
+          disabled={busy !== null}
+          title="Never restart these — clear all of them from the blocked set permanently"
           className="ml-auto rounded px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
         >
           {blocked.length === 1 ? "Dismiss" : "Dismiss all"}
@@ -1580,9 +1547,6 @@ const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
 // (fires on scroll AND container resize with zero per-frame work); a
 // per-render node check re-attaches it when a resort replaces the card's DOM
 // node without any scroll event.
-// A move of the open row this soon after a send from here counts as caused by it.
-const SEND_MOVE_WINDOW_MS = 15_000;
-
 function SessionBeacon({
   containerRef,
   targetId: activeSessionId,
@@ -1606,17 +1570,6 @@ function SessionBeacon({
   // where it was.
   const inViewRef = useRef(false);
   const observedIdRef = useRef<string | null | undefined>(null);
-  // When the person last sent into the target from this window. A move that
-  // their own send caused (Needs input to Working) leaves the list where it
-  // is: the pill points at the row instead, so the list does not jump under
-  // the reader the moment they press Enter.
-  const sentAtRef = useRef(0);
-  useMountEffect(() => useInboxStore.subscribe((st, prev) => {
-    const id = observedIdRef.current;
-    if (!id || st.pendingMessages[id] === prev.pendingMessages[id]) return;
-    const before = new Set((prev.pendingMessages[id] ?? []).map((m) => m._id));
-    if ((st.pendingMessages[id] ?? []).some((m) => m._isOptimistic && !m._isLocalQueue && !before.has(m._id))) sentAtRef.current = Date.now();
-  }));
 
   // No dep array on purpose: the parent re-renders exactly when the list
   // restructures, which is when the active card's node can change identity.
@@ -1629,8 +1582,7 @@ function SessionBeacon({
       : null;
     if (el === observedRef.current) return;
     ioRef.current?.disconnect();
-    const movedBySend = Date.now() - sentAtRef.current < SEND_MOVE_WINDOW_MS;
-    const follow = !!el && !!container && observedIdRef.current === activeSessionId && inViewRef.current && !movedBySend;
+    const follow = !!el && !!container && observedIdRef.current === activeSessionId && inViewRef.current;
     observedRef.current = el;
     observedIdRef.current = activeSessionId;
     if (!el || !container) {
@@ -1765,8 +1717,6 @@ function SessionListPanelImpl({
     s => (resolveInboxViewMode(s) === "priorities" ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}` : ""),
     // The view mode itself: Priorities reads as grouped while the workspace has the feature off.
     s => resolveInboxViewMode(s),
-    // Open browser tabs per session (the Browser view): changes only when a daemon reports.
-    s => s.browserTabs,
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2494,15 +2444,6 @@ function SessionListPanelImpl({
     if (viewMode !== "machine") return null;
     return groupSessionsByMachine(lensRows, namedMachine);
   }, [viewMode, lensRows, namedMachine]);
-  // "Browser" view: only the sessions with a browser tab open, most recently
-  // driven first, each card followed by its tabs.
-  const browserTabsByConv = useMemo(() => browserTabsByConversation(s.browserTabs as Record<string, BrowserTabRow>, coarseNow), [s.browserTabs, coarseNow]);
-  // Whichever session holds the tab is listed, stashed rows and workers
-  // included (they are most of the browser work), flat; the chips still narrow it.
-  const browserView = useMemo(
-    () => (viewMode === "browser" ? groupSessionsByBrowser(Object.values(s.sessions).filter((x) => chipMatchesSession(x, chipFilterOpts(s, bucketByConv))), browserTabsByConv) : null),
-    [viewMode, browserTabsByConv, s.sessions, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
-  );
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2551,8 +2492,8 @@ function SessionListPanelImpl({
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
   const showViewTabs = !favoritesView;
   const viewModes = useMemo(
-    () => inboxViewModes({ hasPriorities: prioritiesOn, hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1, hasBrowser: browserTabsByConv.size > 0 || viewMode === "browser" }),
-    [prioritiesOn, visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length, browserTabsByConv.size > 0 || viewMode === "browser"],
+    () => inboxViewModes({ hasPriorities: prioritiesOn, hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
+    [prioritiesOn, visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
   );
   const viewModesKey = showViewTabs ? viewModes.join(",") : "";
   useWatchEffect(() => {
@@ -2785,8 +2726,6 @@ function SessionListPanelImpl({
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
           ]
-        : viewMode === "browser" && browserView
-        ? [[browserView, "browser"] as [InboxSession[], string]]
         : viewMode === "machine" && machineView
         ? [
             ...machineView.machineGroups.map(({ deviceId, items }) => [items, `machine_${deviceId}`] as [InboxSession[], string]),
@@ -3178,9 +3117,6 @@ function SessionListPanelImpl({
                   isFavorite={cardIsFavorite(session)}
                   {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
                 />
-                {key === "browser" && browserTabsByConv.has(session._id) && (
-                  <SessionBrowserTabs tabs={browserTabsByConv.get(session._id)!.tabs} sessionUuid={session.session_id ?? null} />
-                )}
                 {/* The bars stack under their card the way subagent rows do —
                     schedule rows keep the dock roster's full anatomy (name,
                     gist, cadence, countdown, hover verbs); click selects the
@@ -3527,8 +3463,6 @@ function SessionListPanelImpl({
           </div>
         ))}
         </>
-        ) : viewMode === "browser" && browserView ? (
-          renderSection("Browser", browserView, "text-sol-cyan", undefined, true, { key: "browser", icon: <Globe className="w-3 h-3 shrink-0" /> })
         ) : viewMode === "machine" && machineView ? (
         <>
         {machineView.machineGroups.map(({ deviceId, items }) => {

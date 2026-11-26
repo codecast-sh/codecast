@@ -117,8 +117,8 @@ export function AutoStage({
                   }}
                   className={`shrink-0 rounded-full px-2.5 py-0.5 font-mono text-meta transition-colors ${
                     t.key === hero.key
-                      ? isPinShare(t) ? "bg-sol-cyan/20 text-sol-text" : "bg-sol-violet/30 text-sol-text"
-                      : "bg-sol-text/[0.05] text-sol-text-muted hover:bg-sol-text/[0.08] hover:text-sol-text"
+                      ? isPinShare(t) ? "bg-sol-cyan/20 text-sol-text" : "bg-sol-violet/30 text-white"
+                      : "bg-white/[0.05] text-sol-text-muted hover:bg-white/[0.08] hover:text-sol-text"
                   } modern:rounded-control modern:font-sans modern:font-medium`}
                 >
                   <span className="flex max-w-[220px] items-center gap-1">
@@ -286,7 +286,7 @@ function FocusFace({ m, speaking }: { m: any; speaking?: ReadonlySet<string> }) 
   const on = useIsSpeaking(String(m.user_id), speaking);
   return (
     <div
-      className={`flex h-full w-full flex-col items-center justify-center gap-4 rounded-xl bg-sol-text/[0.05] transition-shadow ${
+      className={`flex h-full w-full flex-col items-center justify-center gap-4 rounded-xl bg-white/[0.05] transition-shadow ${
         on ? SPEAKING_RING : ""
       }`}
     >
@@ -305,7 +305,7 @@ function StripVoiceRow({ m, speaking, onPin }: { m: any; speaking?: ReadonlySet<
     <PersonMenuArea identity={String(m.user_id)} name={m.user_name} className="shrink-0">
       <button
         onClick={() => onPin(String(m.user_id))}
-        className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-sol-text/[0.06] ${
+        className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
           on ? "bg-sol-cyan/10" : ""
         } modern:rounded-control`}
         title="Pin this person"
@@ -367,7 +367,7 @@ function GridVoiceTile({ m, speaking }: { m: any; speaking?: ReadonlySet<string>
     <PersonMenuArea
       identity={String(m.user_id)}
       name={m.user_name}
-      className={`group flex min-h-0 flex-col items-center justify-center gap-2.5 rounded-xl bg-sol-text/[0.05] transition-shadow ${
+      className={`group flex min-h-0 flex-col items-center justify-center gap-2.5 rounded-xl bg-white/[0.05] transition-shadow ${
         on ? SPEAKING_RING : ""
       }`}
     >

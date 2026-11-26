@@ -6,62 +6,61 @@
 // path like `lib/pageLayout.tsx` resolves against that session's working
 // directory before it leaves the page.
 //
-// Plain click opens the file in the code editor BESIDE the conversation, at
-// the line and column, in the Files pane already on stage when there is one
-// (lib/filesPane openConversationPath), and links that conversation to the
-// editor. Where this machine cannot reach the conversation's files, a file the
-// session changed opens in its own changes instead.
-// Modified clicks keep the Link compat's tab/window behaviour; right-click
-// offers the rest (a split, the folder, Finder, new tab).
+// Plain click opens the file BESIDE the conversation when the stage allows
+// (lib/filesPane); modified clicks keep the Link compat's tab/window
+// behaviour; right-click offers the rest (folder, Finder, new tab).
 
 import { useCallback, useContext, type ReactNode } from "react";
 import Link from "next/link";
 import { FilePathContext, filePathHref } from "../lib/filePathLinks";
-import { openConversationPath } from "../lib/filesPane";
+import { openSessionChangedPath } from "../lib/sessionChangedFiles";
+import { canOpenFilesBeside, openFilesBeside } from "../lib/filesPane";
 import { requestFilePathMenu } from "../lib/filePathMenu";
-import { useTabContext } from "../lib/tabParams";
+import { useVaultStore } from "../store/vaultStore";
 
 export function FilePathLink({
   path,
   line,
-  column,
   children,
   className,
   onClick,
 }: {
   path: string;
   line?: number;
-  column?: number;
   children: ReactNode;
   className?: string;
   onClick?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 }) {
   const ctx = useContext(FilePathContext);
-  const fromLeaf = useTabContext()?.leafId ?? null;
-  const href = filePathHref(path, line, ctx, column);
+  const href = filePathHref(path, line, ctx);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>) => {
       onClick?.(e);
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if ((ctx?.foreign || useVaultStore.getState()?.connection === "no-daemon") && openSessionChangedPath(path, ctx)) {
+        e.preventDefault();
+        return;
+      }
+      if (!canOpenFilesBeside()) return; // the Link takes the tab there
       e.preventDefault();
-      openConversationPath({ path, line, column, ctx }, { fromLeaf });
+      openFilesBeside(href);
     },
-    [path, line, column, ctx, fromLeaf, onClick],
+    [href, onClick, path, ctx],
   );
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent<HTMLAnchorElement>) => {
-      requestFilePathMenu(e, { path, line, column, href, ctx, fromLeaf });
+      requestFilePathMenu(e, { path, line, href, ctx });
     },
-    [path, line, column, href, ctx, fromLeaf],
+    [path, line, href, ctx],
   );
 
   return (
     <Link
       href={href}
       className={`fs-link${className ? ` ${className}` : ""}`}
-      title={`Open ${path}${line ? `:${line}` : ""} in the editor`}
+      title={`Open ${path} in Files`}
       onClick={handleClick}
       onContextMenu={handleContextMenu}
     >

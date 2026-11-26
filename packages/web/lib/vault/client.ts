@@ -1,9 +1,8 @@
 // Loopback client for the daemon's vault bridge. The vault routes live on the
 // same per-boot-token HTTP server as the integrated terminal, so endpoint
 // discovery is shared with lib/terminal/endpoint.ts — whichever daemon answers
-// the probe is the machine the browser is physically on. A vault on a cloud
-// host is reached through that machine's SSH forward; every request here is
-// routed by its vault (lib/vault/hosts/routes.ts).
+// the probe is the machine the browser is physically on, and that machine's
+// filesystem is the vault's canonical store.
 
 import type { ConvexReactClient } from "convex/react";
 import type {
@@ -22,18 +21,6 @@ import {
   type TerminalEndpoint,
 } from "../terminal/endpoint";
 import { openWebSocket } from "../openWebSocket";
-import {
-  hostOfEndpoint,
-  hostOfVault,
-  onHostEndpointChange,
-  reestablishHost,
-  routeEndpoint,
-  routeEndpointOpening,
-  tagHostVault,
-  vaultOfPath,
-  wirePath,
-  wireVaultId,
-} from "./hosts/routes";
 
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -83,34 +70,6 @@ const ADDRESS_SPACE_INIT: Record<string, unknown> = pickAddressSpaceInit(
  *  local-network hints. Every page that talks to the bridge goes through this
  *  (vault routes here, memory routes in lib/memory/client.ts). */
 export async function loopbackFetch(ep: VaultEndpoint, path: string, init?: RequestInit): Promise<Response> {
-  // Each vault's requests go to the daemon that holds it (lib/vault/hosts):
-  // this machine's, or a cloud host's through its forward.
-  const vault = vaultOfPath(path);
-  const routed = await routeEndpointOpening(ep, vault);
-  // A host's vault with no forward open, or this machine's vault with no
-  // local daemon known: the request goes nowhere, the way a refused
-  // connection does. Neither machine stands in for the other.
-  if (!routed) {
-    const host = hostOfVault(vault);
-    throw new TypeError(host ? `${host} is not reachable` : "Files is not connected to this machine");
-  }
-  const wire = wirePath(path);
-  try {
-    return await loopbackFetchAt(routed, wire, init);
-  } catch (e) {
-    // A forward closes after 10 idle minutes and its port then refuses every
-    // connection. Open a fresh one and retry once, only when the port moved:
-    // a refused connection to a closed listener reached nothing, so no
-    // request (a PUT included) can land twice.
-    const host = hostOfEndpoint(routed);
-    if (!host || !(e instanceof TypeError)) throw e;
-    const fresh = await reestablishHost(host);
-    if (!fresh || fresh.port === routed.port) throw e;
-    return loopbackFetchAt(fresh, wire, init);
-  }
-}
-
-async function loopbackFetchAt(ep: VaultEndpoint, path: string, init?: RequestInit): Promise<Response> {
   const request = {
     ...init,
     headers: { ...authHeaders(ep), ...(init?.headers as Record<string, string>) },
@@ -140,8 +99,7 @@ export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
   const res = await loopbackFetch(ep, "/vault/roots");
   if (!res.ok) throw new VaultRequestError(`vault roots: ${res.status}`, res.status);
   const body = (await res.json()) as { vaults: VaultInfo[] };
-  const host = hostOfEndpoint(routeEndpoint(ep));
-  return (body.vaults ?? []).map((v) => tagHostVault(v, host));
+  return body.vaults ?? [];
 }
 
 /** The vault holding a local path, registered by the daemon when none did
@@ -149,10 +107,7 @@ export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
  *  throws VaultRequestError(404) for a daemon that predates the route. */
 export async function locateVault(ep: VaultEndpoint, localPath: string): Promise<VaultLocateResponse | null> {
   const res = await loopbackFetch(ep, `/vault/locate?path=${encodeURIComponent(localPath)}`);
-  if (res.ok) {
-    const located = (await res.json()) as VaultLocateResponse;
-    return { ...located, vault: tagHostVault(located.vault, hostOfEndpoint(routeEndpoint(ep))) };
-  }
+  if (res.ok) return (await res.json()) as VaultLocateResponse;
   const body = (await res.json().catch(() => ({}))) as { error?: string };
   if (res.status === 404 && body.error === "no such path") return null;
   throw new VaultRequestError(`vault locate: ${res.status}`, res.status);
@@ -209,9 +164,7 @@ function capabilityKey(ep: VaultEndpoint, vaultId: string): string {
 
 /** Fetch and cache a read capability for this vault, unless a fresh one is
  *  already held. Resolves quietly for a daemon that has no such route. */
-export async function ensureVaultCapability(endpoint: VaultEndpoint, vaultId: string): Promise<void> {
-  const ep = routeEndpoint(endpoint, vaultId);
-  if (!ep) return;
+export async function ensureVaultCapability(ep: VaultEndpoint, vaultId: string): Promise<void> {
   const key = capabilityKey(ep, vaultId);
   if (legacyCapabilityDaemons.has(key)) return;
   const held = capabilities.get(key);
@@ -266,14 +219,8 @@ export async function readVaultFile(
 /** URL for an asset (image etc.) — usable directly as an <img> src.
  *  Null while no capability is held yet: scanVault mints one before any note
  *  renders, so this is the cold path only, and it starts a mint of its own. */
-export function vaultAssetUrl(endpoint: VaultEndpoint, vaultId: string, path: string): string | null {
-  const ep = routeEndpoint(endpoint, vaultId);
-  if (!ep) {
-    const host = hostOfVault(vaultId);
-    if (host) void reestablishHost(host).catch(() => {});
-    return null;
-  }
-  const base = `${termHttpBase(ep)}/vault/file?vault=${encodeURIComponent(wireVaultId(vaultId))}&path=${encodeURIComponent(path)}`;
+export function vaultAssetUrl(ep: VaultEndpoint, vaultId: string, path: string): string | null {
+  const base = `${termHttpBase(ep)}/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}`;
   const key = capabilityKey(ep, vaultId);
   // A daemon from before the capability accepts nothing else. Keeping the old
   // form for it is what lets the web build ship ahead of the CLI release.
@@ -299,11 +246,10 @@ export async function writeVaultFile(
   path: string,
   content: string,
   baseEtag?: string,
-  opts: VaultWriteOptions = {},
 ): Promise<VaultWriteResponse> {
   const res = await loopbackFetch(
     ep,
-    `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}${ignoredParam(opts)}`,
+    `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}`,
     {
       method: "PUT",
       body: content,
@@ -321,24 +267,12 @@ export async function writeVaultFile(
       etag: res.headers.get("ETag") ?? "",
     });
   }
-  if (!res.ok) {
-    // The daemon names why ("read-only", "binary", "bad path"); say it.
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(`vault write ${path}: ${res.status}${body.error ? ` ${body.error}` : ""}`);
-  }
+  if (!res.ok) throw new Error(`vault write ${path}: ${res.status}`);
   return (await res.json()) as VaultWriteResponse;
 }
 
-export interface VaultWriteOptions {
-  /** The path is one the scan flags ignored (a gitignored file opened from
-   *  the tree or a link): the daemon writes those only when asked to. */
-  ignored?: boolean;
-}
-
-const ignoredParam = (opts: VaultWriteOptions) => (opts.ignored ? "&ignored=1" : "");
-
-export async function vaultOp(ep: VaultEndpoint, vaultId: string, op: VaultOpRequest, opts: VaultWriteOptions = {}): Promise<VaultOpResponse> {
-  const res = await loopbackFetch(ep, `/vault/op?vault=${encodeURIComponent(vaultId)}${ignoredParam(opts)}`, {
+export async function vaultOp(ep: VaultEndpoint, vaultId: string, op: VaultOpRequest): Promise<VaultOpResponse> {
+  const res = await loopbackFetch(ep, `/vault/op?vault=${encodeURIComponent(vaultId)}`, {
     method: "POST",
     body: JSON.stringify(op),
     headers: { "Content-Type": "application/json" },
@@ -372,60 +306,9 @@ export function subscribeVaultEvents(
   let failures = 0;
   let staleNotified = false;
 
-  const host = hostOfVault(vaultId);
-  const wire = wireVaultId(vaultId);
-  // A host's socket drops when its forward closed or the SSH channel died:
-  // reopen the forward before the next attempt (a live forward just answers
-  // the probe). This machine's daemon has no such step.
-  //
-  // A host that could not be reached is not asked again on a timer: each ask
-  // costs a relay round and an `ssh` probe on this machine. The socket waits
-  // for the host's next forward, which the next use opens (a read, a save,
-  // the header's machine chip).
-  let parked: (() => void) | null = null;
-  const retry = (at: VaultEndpoint | null) => {
-    const wait = retryMs;
-    retryMs = Math.min(retryMs * 2, 15_000);
-    const owner = host ?? hostOfEndpoint(at);
-    if (!owner) {
-      setTimeout(connect, wait);
-      return;
-    }
-    void reestablishHost(owner).then((fresh) => {
-      if (disposed) return;
-      if (fresh) {
-        setTimeout(connect, wait);
-        return;
-      }
-      parked?.();
-      parked = onHostEndpointChange((device, ep) => {
-        if (device !== owner || !ep) return;
-        parked?.();
-        parked = null;
-        retryMs = 1000;
-        connect();
-      });
-    });
-  };
-  const down = () => {
-    failures += 1;
-    handlers.onDown?.();
-    if (failures >= 3 && !staleNotified) {
-      staleNotified = true;
-      handlers.onStale?.();
-    }
-  };
-
   const connect = () => {
     if (disposed) return;
-    // Routed on every attempt: a host's forward may have reopened on a new
-    // port since the last one, or be closed (then it is reopened first).
-    const at = routeEndpoint(ep, vaultId);
-    if (!at) {
-      down();
-      return retry(null);
-    }
-    ws = openWebSocket(loopbackWsUrl(at, "/vault/ws"));
+    ws = openWebSocket(loopbackWsUrl(ep, "/vault/ws"));
     if (!ws) {
       // No socket can ever open against this endpoint: report it down and
       // stale at once so the caller rediscovers, and stop retrying it.
@@ -437,7 +320,7 @@ export function subscribeVaultEvents(
       return;
     }
     ws.onopen = () => {
-      ws?.send(JSON.stringify({ type: "hello", token: at.token, vault: wire }));
+      ws?.send(JSON.stringify({ type: "hello", token: ep.token, vault: vaultId }));
       retryMs = 1000;
       failures = 0;
       staleNotified = false;
@@ -445,15 +328,19 @@ export function subscribeVaultEvents(
     };
     ws.onmessage = (msg) => {
       try {
-        const ev = JSON.parse(String(msg.data)) as VaultWsEvent;
-        // The daemon names the vault by its own id.
-        handlers.onEvent(ev.vault === wire ? { ...ev, vault: vaultId } : ev);
+        handlers.onEvent(JSON.parse(String(msg.data)) as VaultWsEvent);
       } catch {}
     };
     ws.onclose = () => {
       if (disposed) return;
-      down();
-      retry(at);
+      failures += 1;
+      handlers.onDown?.();
+      if (failures >= 3 && !staleNotified) {
+        staleNotified = true;
+        handlers.onStale?.();
+      }
+      setTimeout(connect, retryMs);
+      retryMs = Math.min(retryMs * 2, 15_000);
     };
     ws.onerror = () => ws?.close();
   };
@@ -461,7 +348,6 @@ export function subscribeVaultEvents(
   connect();
   return () => {
     disposed = true;
-    parked?.();
     ws?.close();
   };
 }

@@ -9,12 +9,9 @@ import { ModernAskCard } from "./ModernAsk";
 // whose question is a tooltip; Modern docks the ask itself: the loud card
 // (ModernAsk) with the question, its options as 32px Buttons (the agent's
 // default, else the first, primary), a field for an answer in the person's
-// own words, and the first lines of its reasoning under the question, since a
-// question alone rarely carries enough to answer it. Expand, at the card's top
-// right beside its place in the queue, opens the whole sheet with all of the
-// reasoning and its keys; so does pressing the excerpt. An ask the card cannot
-// answer in place (a multi or ranked form, a change card, a permission prompt,
-// a harness dialog) shows its question, its excerpt and Expand.
+// own words, and Open for the whole sheet with its reasoning and keys. An ask
+// the card cannot answer in place (a multi or ranked form, a change card, a
+// permission prompt, a harness dialog) shows its question and Open.
 //
 // A thread can hold several open asks. The card answers one and lists the
 // rest under it, each a row with its place in the thread's order and its
@@ -23,7 +20,7 @@ import { ModernAskCard } from "./ModernAsk";
 // agent is going ahead with says so on its face, in the words the sheet uses
 // ("proceeding with this"): a filled button with no word on it read as the
 // person's own answer, already given. Where the options are not drawn here,
-// the same words name the option under the question.
+// the same words name the option beside Open.
 //
 // What is typed is the caller's to hold: it outlives the card, which is
 // drawn again for each ask.
@@ -42,10 +39,8 @@ const OTHERS_SHOWN = 3;
 /** Another open ask of the same thread, as the card lists it. */
 export type DockedAsk = { key: string; position: number; question: string };
 
-export function ModernDecisionDock({ question, excerpt, kicker, aside, options, recommended, proceedingWith, proceedingLabel, held, onAnswer, text, onText, onAnswerText, onOpen, answerable, others = [], othersOpen, onOthersOpen, onPick, collapsed = false, onCollapsed }: {
+export function ModernDecisionDock({ question, kicker, aside, options, recommended, proceedingWith, proceedingLabel, held, onAnswer, text, onText, onAnswerText, onOpen, answerable, others = [], othersOpen, onOthersOpen, onPick, collapsed = false, onCollapsed }: {
   question: string;
-  /** The ask's reasoning as plain text; its first lines show under the question. */
-  excerpt?: string;
   kicker?: ReactNode;
   aside?: ReactNode;
   options: Array<{ label: string; description?: string; index: number }>;
@@ -93,13 +88,7 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
       {collapsed ? <ChevronUp aria-hidden className="h-4 w-4" /> : <ChevronDown aria-hidden className="h-4 w-4" />}
     </button>
   );
-  const expand = (
-    <Button type="button" size="sm" variant="outline" onClick={onOpen} title="The whole question, its reasoning and its keys" data-decision-open className="-my-1">
-      <Maximize2 aria-hidden />Expand
-    </Button>
-  );
-  const corner = <span className="inline-flex items-center gap-2">{aside}{!collapsed && expand}{fold}</span>;
-  const proceeding = !drawn && proceedingLabel ? `proceeding with ${proceedingLabel}` : null;
+  const corner = (aside || fold) && <span className="inline-flex items-center gap-2">{aside}{fold}</span>;
   if (collapsed && onCollapsed) return (
     <ModernAskCard
       kicker={
@@ -127,17 +116,6 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
       data-decision-dock
       className="!my-1"
     >
-      {excerpt && (
-        <button
-          type="button"
-          onClick={onOpen}
-          data-decision-excerpt
-          className="-mt-1.5 mb-3 block w-full min-w-0 text-left text-ui leading-5 text-sol-text-muted [overflow-wrap:anywhere] transition-colors hover:text-sol-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/60"
-        >
-          <span className="line-clamp-3 whitespace-pre-wrap">{excerpt}</span>
-        </button>
-      )}
-      {proceeding && <div className="-mt-1.5 mb-3 text-meta text-sol-text-dim" data-decision-proceeding="">{proceeding}</div>}
       {drawn && (
         <div className="flex flex-wrap items-center gap-2" data-decision-options>
           {options.map((o) => (
@@ -157,8 +135,9 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
           ))}
         </div>
       )}
-      {onAnswerText && (
-          <form className={`flex min-w-0 items-center gap-2 ${drawn ? "mt-2" : ""}`} onSubmit={(e) => { e.preventDefault(); if (text.trim()) onAnswerText(text.trim()); }}>
+      <div className={`flex min-w-0 items-center gap-2 ${drawn ? "mt-2" : ""}`}>
+        {onAnswerText ? (
+          <form className="flex min-w-0 flex-1 items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (text.trim()) onAnswerText(text.trim()); }}>
             <Input
               value={text}
               onChange={(e) => onText(e.target.value)}
@@ -168,7 +147,15 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
             />
             <Button type="submit" size="md" variant="outline" disabled={!text.trim()}>Send</Button>
           </form>
-      )}
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-meta text-sol-text-dim" data-decision-proceeding={!drawn && proceedingLabel ? "" : undefined}>
+            {!drawn && proceedingLabel ? `proceeding with ${proceedingLabel}` : null}
+          </span>
+        )}
+        <Button type="button" size="md" variant="ghost" onClick={onOpen} title="Open the whole question, its reasoning and its keys" data-decision-open>
+          <Maximize2 aria-hidden />Open
+        </Button>
+      </div>
       {others.length > 0 && onPick && (
         <ul className="-mx-2 mt-3 border-t border-sol-border pt-1.5" data-decision-others>
           {rows.map((a) => (

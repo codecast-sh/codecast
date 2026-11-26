@@ -12,15 +12,9 @@ dom.window.HTMLElement.prototype.scrollIntoView = function () {
   if (!list || !this.matches("[cmdk-item]")) return;
   const index = Array.from(list.querySelectorAll("[cmdk-item]")).indexOf(this);
   const top = index * 48;
-  if (top < list.scrollTop) scrollList(list, top);
-  else if (top + 48 > list.scrollTop + 480) scrollList(list, top + 48 - 480);
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (top + 48 > list.scrollTop + 480) list.scrollTop = top + 48 - 480;
 };
-// The list learns where it is from its scroll events, which a browser fires
-// for every scroll and jsdom never does.
-function scrollList(list: HTMLElement, top: number) {
-  list.scrollTop = top;
-  list.dispatchEvent(new dom.window.Event("scroll"));
-}
 const restoreGlobals = replaceGlobals({
   window: dom.window,
   document: dom.window.document,
@@ -71,13 +65,13 @@ afterAll(async () => {
 test("typing returns to the top even when the first result stays selected", async () => {
   const list = await render("ai");
   const selected = container.querySelector('[aria-selected="true"]');
-  await act(() => scrollList(list, 800));
+  list.scrollTop = 800;
 
   await render("aiv");
   expect(container.querySelector('[aria-selected="true"]')).toBe(selected);
   expect(list.scrollTop).toBe(0);
 
-  await act(() => scrollList(list, 400));
+  list.scrollTop = 400;
   await render("aive");
   expect(list.scrollTop).toBe(0);
   expect(list.style.overflowAnchor).toBe("none");
@@ -86,7 +80,7 @@ test("typing returns to the top even when the first result stays selected", asyn
 
 test("clearing the query resets the viewport", async () => {
   const list = await render("aivery");
-  await act(() => scrollList(list, 600));
+  list.scrollTop = 600;
   await render("");
   expect(list.scrollTop).toBe(0);
 });
@@ -99,7 +93,7 @@ test("keyboard navigation still reveals its selection and typing resets it", asy
   expect(container.querySelector('[aria-selected="true"]')?.textContent).toBe(rows.at(-1)!);
   expect(scrolledItems.at(-1)?.textContent).toBe(rows.at(-1)!);
 
-  await act(() => scrollList(list, 900));
+  list.scrollTop = 900;
   await render("aiv");
   expect(list.scrollTop).toBe(0);
   expect(container.querySelector('[aria-selected="true"]')?.textContent).toBe(rows[0]);
@@ -107,7 +101,7 @@ test("keyboard navigation still reveals its selection and typing resets it", asy
 
 test("results arriving for the same query preserve the user's scroll position", async () => {
   const list = await render("ai");
-  await act(() => scrollList(list, 300));
+  list.scrollTop = 300;
   await render("ai", [...rows, "Aivery delayed result"]);
   expect(list.scrollTop).toBe(300);
 });

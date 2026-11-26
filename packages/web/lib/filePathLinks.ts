@@ -26,9 +26,8 @@ const ABS_ROOTS = "Users|home|tmp|private|var|etc|opt|root|mnt|Volumes|Applicati
 const ABS = String.raw`/(?:${ABS_ROOTS})(?:/${SEG})*/?`;
 const HOME = String.raw`~(?:/${SEG})+/?`;
 const REL = String.raw`(?:\.{1,2}/)?${SEG}(?:/${SEG})+/?`;
-// A trailing `:12` or `:12:4` / `:12-20` — the editor convention for "this line"
-// (and column, when the second number follows a colon).
-const LINE = String.raw`(?::(\d+)(?::(\d+)|-\d+)?)?`;
+// A trailing `:12` or `:12:4` / `:12-20` — the editor convention for "this line".
+const LINE = String.raw`(?::(\d+)(?:[-:]\d+)?)?`;
 // A GitHub / Antigravity `#L12` or `#L12-L20` line fragment on a file link.
 const HASH_LINE = String.raw`(?:#L(\d+)(?:-L?\d+)?)?`;
 
@@ -57,7 +56,6 @@ export interface FilePathMention {
    *  sentence end) — the caller puts them back as plain text. */
   rest: string;
   line?: number;
-  column?: number;
 }
 
 function looksLikePath(path: string): boolean {
@@ -83,7 +81,7 @@ function looksLikePath(path: string): boolean {
 const GIT_REF_ROOTS = new Set(["origin", "upstream", "refs", "remotes"]);
 
 /** Interpret one regex match (from FILE_PATH_SCAN_RE or the whole-string form). */
-export function mentionFromMatch(full: string, rawPath: string, line?: string, column?: string): FilePathMention | null {
+export function mentionFromMatch(full: string, rawPath: string, line?: string): FilePathMention | null {
   const trimmed = rawPath.replace(TRAILING_PUNCT, "");
   if (!trimmed || !looksLikePath(trimmed)) return null;
   // The line suffix only counts when nothing was trimmed between it and the path.
@@ -95,7 +93,6 @@ export function mentionFromMatch(full: string, rawPath: string, line?: string, c
     text,
     rest: full.slice(text.length),
     ...(suffixed ? { line: parseInt(line, 10) } : {}),
-    ...(suffixed && column ? { column: parseInt(column, 10) } : {}),
   };
 }
 
@@ -103,14 +100,11 @@ export function mentionFromMatch(full: string, rawPath: string, line?: string, c
 export function filePathMention(text: string): FilePathMention | null {
   const m = WHOLE_RE.exec(text.trim());
   if (!m) return null;
-  const mention = mentionFromMatch(m[0], m[1], m[2], m[3]);
+  const mention = mentionFromMatch(m[0], m[1], m[2]);
   return mention && !mention.rest ? mention : null;
 }
 
 export interface FilePathContextValue {
-  /** The machine the session runs on. A path opens on that machine: a cloud
-   *  host's file through the forward, not a same-named local checkout. */
-  deviceId?: string | null;
   /** The directory relative mentions resolve against — the session's working
    *  directory. Without it, relative paths go to the Files page as written and
    *  resolve against whichever vault is open there. */
@@ -203,35 +197,29 @@ export const FilePathContext = createContext<FilePathContextValue | null>(null);
  * here so the link names the file regardless of which vault is open; without it,
  * the raw path rides along and the page does its best.
  */
-export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null, column?: number, endLine?: number): string {
+export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null): string {
   const abs = resolveMentionPath(path, ctx);
-  return filesHref({ localPath: abs ?? path, line, column, endLine, device: ctx?.deviceId });
+  return filesHref({ localPath: abs ?? path, line });
 }
 
 /** Reads a mention back out of a link the plugin minted, so a component can
  *  re-resolve it with context it has and the parser did not. */
-export function parseFilePathHref(href: string | undefined): { path: string; line?: number; column?: number } | null {
+export function parseFilePathHref(href: string | undefined): { path: string; line?: number } | null {
   if (!href) return null;
   const absolute = ABS_HREF_RE.exec(href) ?? FILE_URI_RE.exec(href);
   if (absolute) {
     const encoded = absolute[1].replace(/\+/g, "%2B").replace(/&/g, "%26");
     const path = new URLSearchParams(`path=${encoded}`).get("path")!;
-    const line = Number(absolute[2] ?? absolute[4]);
-    const column = Number(absolute[3]);
-    return {
-      path,
-      ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}),
-      ...(Number.isSafeInteger(column) && column > 0 ? { column } : {}),
-    };
+    const line = Number(absolute[2] ?? absolute[3]);
+    return { path, ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) };
   }
   if (!href.startsWith("/files?") && !href.startsWith("/vault?")) return null;
   const params = new URLSearchParams(href.slice(href.indexOf("?") + 1));
   const path = params.get("path");
   if (!path) return null;
-  const at = /^(\d+)(?::(\d+))?/.exec(params.get("l") ?? "");
-  const line = at ? parseInt(at[1], 10) : undefined;
-  const column = at?.[2] ? parseInt(at[2], 10) : undefined;
-  return { path, ...(line ? { line } : {}), ...(column ? { column } : {}) };
+  const l = params.get("l");
+  const line = l ? parseInt(l, 10) : undefined;
+  return { path, ...(line ? { line } : {}) };
 }
 
 /**

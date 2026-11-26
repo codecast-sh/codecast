@@ -272,7 +272,7 @@ test("on the stage before transcription starts, an earlier call's events do not 
   await r.unmount();
 });
 
-test("before transcription starts, the moment the viewer joined leaves earlier chat out, and an event's time sits outside its sentence", async () => {
+test("before transcription starts, the moment the viewer joined sets earlier chat apart, and an event's time sits outside its sentence", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
   const rows = [
@@ -285,10 +285,12 @@ test("before transcription starts, the moment the viewer joined leaves earlier c
   const r = await render(
     <RoomThread roomKey={ROOM} call={null} rows={rows as any} liveTranscriptId={null} surface="stage" seated sinceAt={START} />,
   );
-  // An earlier huddle is another conversation, possibly between other
-  // people: its lines are not this thread's.
-  expect(r.container.querySelector(".rt-divider")).toBeNull();
-  expect([...r.container.querySelectorAll(".rt-line")].map((l) => l.textContent)).toEqual([expect.stringContaining("hello again")]);
+  const dividers = [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
+  // An earlier huddle is another conversation (this one's own lines stay in
+  // it through a rejoin or a switch to off), so it starts folded.
+  expect(dividers).toEqual(["Earlier in this room · 2 lines"]);
+  expect(r.container.querySelector(".rt-divider")?.getAttribute("aria-expanded")).toBe("false");
+  expect(r.container.querySelectorAll(".rt-line").length).toBe(1);
   await r.unmount();
 
   // With a call, the event's time is a flex child beside the sentence, not inside it.
@@ -303,7 +305,7 @@ test("before transcription starts, the moment the viewer joined leaves earlier c
   await r2.unmount();
 });
 
-test("after the call an agent's event reads in the past, and other calls' lines and events are gone", async () => {
+test("after the call an agent's event reads in the past, typed lines from other calls are set apart, and other calls' events are gone", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };
   const END = START + 120_000;
@@ -312,7 +314,6 @@ test("after the call an agent's event reads in the past, and other calls' lines 
     { _id: "old-ev", user_id: "u-ann", user_name: "Ann Lee", text: "", at: START - 3_600_000, mine: false, agent: own, event: "agent_joined" },
     { _id: "old", user_id: "u-ann", user_name: "Ann Lee", text: "see https://example.com/notes before we start", at: START - 3_500_000, mine: false, agent: null },
     { _id: "e0", user_id: "u-me", user_name: "Ashot P", text: "", at: START + 100, mine: false, agent: own, event: "agent_joined" },
-    { _id: "mine", user_id: "u-me", user_name: "Ashot P", text: "the deck is at https://example.com/deck", at: START + 60_000, mine: true, agent: null },
     { _id: "e1", user_id: "u-me", user_name: "Ashot P", text: "", at: END - 100, mine: false, agent: null, event: "transcribe_off" },
     // The next call in this room: its events are its own, its typed line is "later".
     { _id: "next-ev", user_id: "u-me", user_name: "Ashot P", text: "", at: END + 180_000, mine: false, agent: own, event: "agent_joined" },
@@ -330,22 +331,30 @@ test("after the call an agent's event reads in the past, and other calls' lines 
   );
   // Past tense, and no present tense promise about what the agent does.
   expect(eventTexts(r.container)).toEqual(["Room agent was in the room", "You switched transcription off"]);
-  // The call's page is this call: the room's earlier and later huddles'
-  // lines are other conversations.
-  expect(r.container.querySelector(".rt-divider")).toBeNull();
-  expect([...r.container.querySelectorAll(".rt-line")].map((l) => l.textContent)).toEqual([expect.stringContaining("the deck is at")]);
+  // An ended call's page folds the earlier lines away: a month old "hello"
+  // has no place between the recap and the first words. Folded, "This
+  // call" has nothing above it to divide from.
+  const dividers = () => [...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent);
+  expect(dividers()).toEqual(["Earlier in this room · 1 line", "Later in this room"]);
+  const earlier = r.container.querySelector<HTMLButtonElement>(".rt-divider")!;
+  expect(earlier.getAttribute("aria-expanded")).toBe("false");
+  expect([...r.container.querySelectorAll(".rt-line")].map((l) => l.textContent)).toEqual([expect.stringContaining("picking this up again")]);
+  await act(() => {
+    earlier.click();
+  });
+  expect(dividers()).toEqual(["Earlier in this room · 1 line", "This call", "Later in this room"]);
   // Typed lines only, no spoken words: nothing a summary would cover, so no note about one.
-  expect(r.container.querySelector(".rt-note")).toBeNull();
+  expect(r.container.querySelector(".rt-note:not(.rt-divider)")).toBeNull();
   // A link a person typed is a link, the same as one an agent wrote.
   const link = r.container.querySelector<HTMLAnchorElement>(".rt-line a");
-  expect(link?.getAttribute("href")).toBe("https://example.com/deck");
+  expect(link?.getAttribute("href")).toBe("https://example.com/notes");
   await r.unmount();
 });
 
 test("a line belongs to the huddle it was stamped with, not to the clock", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const rows = [
-    // The previous huddle in this room: not this thread's, whatever its time.
+    // The previous huddle in this room: folded away, whatever its time.
     { _id: "prev", user_id: "u-ann", user_name: "Ann Lee", text: "the last call's link", at: START - 900_000, mine: false, agent: null, transcript_id: "t0" },
     // Typed in this huddle before its record started (a ring not yet
     // answered), claimed by the record when it did: this call's.
@@ -355,76 +364,11 @@ test("a line belongs to the huddle it was stamped with, not to the clock", async
   const r = await render(
     <RoomThread roomKey={ROOM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="stage" seated />,
   );
-  expect(r.container.querySelector(".rt-divider")).toBeNull();
+  expect([...r.container.querySelectorAll(".rt-divider")].map((d) => d.textContent)).toEqual(["Earlier in this room · 1 line"]);
   expect([...r.container.querySelectorAll(".rt-line")].map((l) => l.textContent)).toEqual([
     expect.stringContaining("joining in a sec"),
     expect.stringContaining("ok we are live"),
   ]);
-  await r.unmount();
-});
-
-test("a 1:1 lists its own earlier calls, not the group call held in the same room, and turns to the group's when a third person is seated", async () => {
-  // The room Ann and I huddle in. Yesterday Bo was rung into it, so that call
-  // ran under this 1:1's key with three people on it.
-  const DM = "dm:u-ann:u-me";
-  const past = (id: string, title: string, at: number, ids: string[], room = DM) => ({
-    _id: id,
-    short_id: id,
-    room_key: room,
-    status: "ended",
-    started_at: at,
-    ended_at: at + 600_000,
-    title,
-    participants: ids.map((p) => ({ id: p, name: p })),
-    started_by: ids[0],
-  });
-  useInboxStore.setState({
-    currentUser: { _id: "u-me" },
-    liveRooms: [],
-    callList: {
-      g: past("g", "Group call with Bo", START - 86_400_000, ["u-me", "u-ann", "u-bo", "agent:conv_x"]),
-      o: past("o", "Our last 1:1", START - 2 * 86_400_000, ["u-ann"]),
-      t: past("t", "Three of us, elsewhere", START - 3 * 86_400_000, ["u-me", "u-ann", "u-bo"], "dm:u-ann:u-bo:u-me"),
-      r: past("r", "My voice note", START - 3_600_000, ["u-me"], "rec:abcdef12-3456"),
-    },
-  } as any);
-  const rows = [
-    { _id: "g-line", user_id: "", user_name: "Clover", text: "Bo, the evals are on the board", at: START - 86_000_000, mine: false, agent: null, transcript_id: "g" },
-  ];
-  const two = [
-    { id: "u-me", name: "Me Self" },
-    { id: "u-ann", name: "Ann Lee" },
-  ];
-  const { MemoryRouter } = await import("react-router");
-  const r = await render(
-    <MemoryRouter>
-      <RoomThread roomKey={DM} call={call()} rows={rows as any} liveTranscriptId="t1" surface="stage" seated people={two} />
-    </MemoryRouter>,
-  );
-  const listed = () => [...r.container.querySelectorAll(".rt-earlier-title")].map((t) => t.textContent);
-  // The group call is the three people's: neither its lines nor its row show in the 1:1.
-  expect(r.container.textContent).not.toContain("the evals are on the board");
-  expect(r.container.querySelector(".rt-divider")?.textContent).toBe("Earlier with Ann");
-  expect(listed()).toEqual(["Our last 1:1"]);
-  expect(r.container.querySelector<HTMLAnchorElement>(".rt-earlier-row")?.getAttribute("href")).toBe("/calls/o");
-  // Bo is rung in: the list turns to the three people's calls, wherever they were held.
-  await act(() =>
-    root(r).render(
-      <MemoryRouter>
-        <RoomThread
-          roomKey={DM}
-          call={call()}
-          rows={rows as any}
-          liveTranscriptId="t1"
-          surface="stage"
-          seated
-          people={[...two, { id: "u-bo", name: "Bo Diaz" }]}
-        />
-      </MemoryRouter>,
-    ),
-  );
-  expect(r.container.querySelector(".rt-divider")?.textContent).toBe("Earlier with Ann · Bo");
-  expect(listed()).toEqual(["Group call with Bo", "Three of us, elsewhere"]);
   await r.unmount();
 });
 

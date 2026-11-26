@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
@@ -107,15 +107,7 @@ export interface FileDiffLayoutProps {
   fileHref?: (filename: string) => string | undefined;
   // Lay the diff into the page instead of filling a pane. See DiffFlow.
   flow?: DiffFlow;
-  // An action in each file's header, after its name (the conversation diff's
-  // "Edit", which opens the local file in the editor). Called with the file's
-  // ORIGINAL path.
-  fileAction?: (filename: string, file: DiffFile) => React.ReactNode;
 }
-
-// Every layout's file header draws FileHeaderName, so the per-file action
-// rides a context to it rather than through each layout's props.
-const FileActionContext = createContext<FileDiffLayoutProps["fileAction"]>(undefined);
 
 /**
  * The page form of the diff. The files stack in the page's own flow and the
@@ -229,7 +221,6 @@ function FileHeaderName({
 }) {
   const path = file.originalFilename ?? file.filename;
   const href = fileHref?.(path);
-  const fileAction = useContext(FileActionContext);
   const dir = getFileDirectory(file.filename);
   const name = getFileName(file.filename);
   const label = (
@@ -254,7 +245,6 @@ function FileHeaderName({
         <span data-diff-file={path} className={cn("font-mono text-xs truncate min-w-0", className)}>{label}</span>
       )}
       <CopyButton text={path} />
-      {fileAction?.(path, file)}
     </>
   );
 }
@@ -969,15 +959,7 @@ const MOBILE_BREAKPOINT = 768;
 
 type ViewMode = "split" | "unified";
 
-export function FileDiffLayout(props: FileDiffLayoutProps) {
-  return (
-    <FileActionContext.Provider value={props.fileAction}>
-      <FileDiffLayoutBody {...props} />
-    </FileActionContext.Provider>
-  );
-}
-
-function FileDiffLayoutBody({
+export function FileDiffLayout({
   files,
   title,
   subtitle,

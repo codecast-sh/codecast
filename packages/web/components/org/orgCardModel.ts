@@ -143,8 +143,6 @@ export type RoleCardRows = {
   header: number; titleLines: number;
   meta: number; metaLines: number;
   tenure: number; seat: number;
-  /** The other managers it reports to (org-people.md P3), one line. */
-  also: number;
   standing: number; standingLines: number;
   chips: number; state: number;
   changes: number;
@@ -163,7 +161,6 @@ export function roleCardRows(r: OrgRole, o: { ghost?: boolean; changes?: number;
   const metaLines = wrapLines(roleMetaLine(r, ghost), CARD.metaChars, CARD.metaMax);
   const meta = 6 + metaLines * CARD.metaLine;
   const tenure = o.tenure ? CARD.tenureRow : 0;
-  const also = !ghost && r.also_reports_to?.length ? CARD.metaLine : 0;
   const seat = seatHeight(o.seat);
   const st = standingText(r);
   const standingLines = st ? wrapLines(`${st.label} · ${st.text ?? ""}`, CARD.standingChars, open ? CARD.standingOpenMax : CARD.standingMax) : 0;
@@ -181,8 +178,8 @@ export function roleCardRows(r: OrgRole, o: { ghost?: boolean; changes?: number;
   const leads = open && !ghost ? section(open.leads.length) : 0;
   const tasks = open && !ghost ? section(Math.min(CARD.openTasksMax, open.tasks.length)) : 0;
   const sessions = open && !ghost ? section(Math.min(CARD.openSessionsMax, r.sessions.length)) : 0;
-  const h = CARD.rolePad + header + meta + also + tenure + seat + standing + chips + state + changes + charter + work + running + leads + tasks + sessions;
-  return { header, titleLines, meta, metaLines, also, tenure, seat, standing, standingLines, chips, state, changes, charter, charterLines, charterText: text, work, running, leads, tasks, sessions, h };
+  const h = CARD.rolePad + header + meta + tenure + seat + standing + chips + state + changes + charter + work + running + leads + tasks + sessions;
+  return { header, titleLines, meta, metaLines, tenure, seat, standing, standingLines, chips, state, changes, charter, charterLines, charterText: text, work, running, leads, tasks, sessions, h };
 }
 
 /** A session's close detail: where it stands, the task it is bound to and, for an open card, its latest messages. */
@@ -218,13 +215,11 @@ const farSummary = (text: string | null | undefined) => (text ? wrapLines(text, 
 const farSummaryH = (lines: number) => (lines ? CARD.far.summaryGap + lines * CARD.far.summaryLine : 0);
 
 /** A role's far card: its name, then its standing agent's line. */
-export function roleFarRows(r: OrgRole): { nameLines: number; summaryLines: number; also: number; h: number } {
+export function roleFarRows(r: OrgRole): { nameLines: number; summaryLines: number; h: number } {
   const nameLines = wrapLines(roleWords(r).subtitle, CARD.far.nameChars, CARD.far.nameMax);
   const st = standingText(r);
   const summaryLines = st ? farSummary(`${st.label} · ${st.text ?? ""}`) : 0;
-  // Its other managers (org-people.md P3), one line: the chart draws one.
-  const also = r.also_reports_to?.length ? farSummaryH(1) : 0;
-  return { nameLines, summaryLines, also, h: Math.max(CARD.role.far, CARD.far.pad + nameLines * CARD.far.nameLine + farSummaryH(summaryLines) + also) };
+  return { nameLines, summaryLines, h: Math.max(CARD.role.far, CARD.far.pad + nameLines * CARD.far.nameLine + farSummaryH(summaryLines)) };
 }
 
 /** A session's far card: its title on one line, then where it stands. */
@@ -234,7 +229,5 @@ export function sessionFarRows(s: Pick<OrgSession, "state">, d: OrgSessionDetail
 }
 
 /** A person's far card: their name, then one line of what waits on them and what runs. */
-/** `hasTitle`: the person's title, one line under the name (org-people.md P4);
- *  `hasAlso`: one line naming the managers the chart draws no line to (P3). */
-export const personFarHeight = (name: string, hasCounts: boolean, hasTitle = false, hasAlso = false) =>
-  Math.max(84, CARD.far.pad + wrapLines(name, CARD.far.nameChars, CARD.far.nameMax) * CARD.far.nameLine + (hasCounts ? farSummaryH(1) : 0) + (hasTitle ? farSummaryH(1) : 0) + (hasAlso ? farSummaryH(1) : 0));
+export const personFarHeight = (name: string, hasCounts: boolean) =>
+  Math.max(84, CARD.far.pad + wrapLines(name, CARD.far.nameChars, CARD.far.nameMax) * CARD.far.nameLine + (hasCounts ? farSummaryH(1) : 0));

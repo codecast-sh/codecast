@@ -7,6 +7,7 @@ export const RELEASES_2026_AUG_SEP: Release[] = [
     sortDate: "2026-09-01",
     version: "v1.1.114 – v1.1.143",
     desktop: "Desktop v1.1.112",
+    tag: "Latest",
     headline: "The org, pull requests, and sessions in the cloud",
     summary:
       "This month codecast got a shape for standing work. A role sits in an org tree and holds a responsibility after any one session ends, so a task or a mention goes to the role and not to whoever happens to be running. Pull requests and issues became objects that a session owns and answers. Sessions start on a cloud host with one flag, idle ones hibernate, and `cast browser` moved into your own Chrome.",

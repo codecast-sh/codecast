@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import {
-  readShareImpact,
   summarizeShareImpact,
   type PathShareSummary,
   type ProjectCounts,
@@ -36,7 +35,7 @@ export function useShareImpact(
     stable.length > 0 ? { path_prefixes: stable, since: sinceArg } : "skip",
   );
   return useMemo(
-    () => summarizeShareImpact(selectedPaths, data === undefined ? undefined : readShareImpact(data as Record<string, PathShareSummary>), rows),
+    () => summarizeShareImpact(selectedPaths, data as Record<string, PathShareSummary> | undefined, rows),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [key, data, rows],
   );

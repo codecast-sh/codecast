@@ -39,8 +39,6 @@ import { FlagDots } from "./FlagDots";
 import { RoleWeekBody } from "./orgFlowViz";
 import type { RoleFlow } from "./orgFlow";
 import { useIdentityPrefs } from "../../hooks/useIdentityPrefs";
-import { useInboxStore } from "../../store/inboxStore";
-import { windowOrgTree } from "../../store/orgSlice";
 
 // ---------------------------------------------------------------- shared chrome
 
@@ -191,7 +189,7 @@ function CollapseToggle({ collapsed, hidden, onClick }: { collapsed: boolean; hi
 
 // ---------------------------------------------------------------- person
 
-export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean; hidden: number; overflow: number; /** Managers besides the drawn line, from the layout that booked their row. */ alsoReports?: OrgParentRef[] };
+export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean; hidden: number; overflow: number };
 
 
 /** "+174 · 60 needs input · 4 working": what the stack does not draw, and
@@ -211,7 +209,7 @@ export function OverflowTally({ overflow, counts }: { overflow: number; counts: 
 /** The far card (orgZoom): the name, large, one dot in the seat's colour and,
  *  when there is one, what it is doing in the far card's summary type. */
 function FarBody({ name, color, hollow, dim, summary, actions, children }: { name: string; color: string; hollow?: boolean; dim?: boolean; summary?: { label: string; color: string; text: string | null; lines: number }; /** The card's buttons (open, fold), at the end of the name row. */ actions?: ReactNode; children?: ReactNode }) {
-  const below = summary?.lines || children ? <>{summary?.lines ? <FarSummary {...summary} /> : null}{children}</> : null;
+  const below = summary?.lines ? <FarSummary {...summary} /> : children;
   const head = (
     <div className={cn("flex min-w-0 items-center gap-[0.5em]", !below && "h-full")} style={{ fontSize: zoomText(15, 24) }} data-zoom-far>
       <span className="block h-[0.55em] w-[0.55em] shrink-0 rounded-full" style={hollow ? { border: `2px solid ${color}` } : { background: color }} aria-hidden />
@@ -254,29 +252,6 @@ function RunningList({ holder }: { holder: { sessions: OrgSession[] } }) {
   );
 }
 
-/** The managers besides the drawn line (a role's `also_reports_to`, a
- *  person's otherManagers from the layout), each named the way headers name
- *  them; one that will not resolve still reads as someone, so the row the
- *  layout booked is drawn. The selector answers a string, so a tree push that
- *  renames nobody wakes nothing. `far`: in the far card's summary type and
- *  row (farSummaryH). */
-function AlsoReportsTo({ refs, style, far }: { refs: readonly OrgParentRef[] | undefined; style?: React.CSSProperties; far?: boolean }) {
-  const names = useInboxStore((s) => {
-    if (!refs?.length) return "";
-    const tree = windowOrgTree(s);
-    return refs.map((m) => m.kind === "user" ? tree?.people.find((p) => p.user_id === m.user_id)?.name ?? "a teammate" : (() => { const r = tree?.roles.find((x) => x._id === m.role_id); return r ? roleWords(r).subtitle : "a role"; })()).join(", ");
-  });
-  if (!names) return null;
-  const box: React.CSSProperties = far
-    ? { fontSize: zoomText(12, 16), marginTop: CARD.far.summaryGap, lineHeight: CARD.far.summaryLine / 16 }
-    : { lineHeight: `${CARD.metaLine}px`, height: CARD.metaLine };
-  return (
-    <div className={cn("truncate", !far && "text-meta")} style={{ ...box, color: "var(--sol-text-dim)", ...style }} title={`Also reports to ${names}`} data-also-reports-to>
-      also reports to <span style={{ color: "var(--sol-text-muted)" }}>{names}</span>
-    </div>
-  );
-}
-
 /** The close card's line under the name, on a row of its own so it reads whole (ORG_SIZES.closeMetaRow). */
 function CloseMeta({ children, dim }: { children: ReactNode; dim?: boolean }) {
   return <div className="text-meta" style={{ marginTop: ORG_SIZES.closeMetaRow - ORG_SIZES.closeMetaLine, lineHeight: `${ORG_SIZES.closeMetaLine}px`, color: "var(--sol-text-dim)", opacity: dim ? GHOST.opacity : 1 }} data-close-meta>{children}</div>;
@@ -301,16 +276,12 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
       <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5" kind={p.is_me ? "me" : "person"}>
         <Ports />
         <FarBody name={p.name} color={p.presence ? PRESENCE[p.presence] : PRESENCE.offline} actions={<CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />}>
-          {p.title && (
-            <div className="truncate" style={{ fontSize: zoomText(12, 16), marginTop: CARD.far.summaryGap, lineHeight: CARD.far.summaryLine / 16, color: "var(--sol-text-muted)" }} title={p.title} data-person-title>{p.title}</div>
-          )}
           {/* What waits on them and what runs, in the far card's summary type (it fits the card's booked height). */}
           {stateWords(p.counts, 2).length > 0 && (
             <div style={{ fontSize: zoomText(12, 16), marginTop: CARD.far.summaryGap, lineHeight: CARD.far.summaryLine / 16 }} data-far-summary>
               <StateWords counts={p.counts} className="text-[1em]" />
             </div>
           )}
-          <AlsoReportsTo refs={data.alsoReports} far />
         </FarBody>
       </Frame>
     );
@@ -321,10 +292,9 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
   const meta = (
     <>
       {p.role === "owner" ? <Crown className="w-3 h-3 shrink-0" /> : p.role === "admin" ? <Shield className="w-3 h-3 shrink-0" /> : null}
-      {/* What they do, when they said; else their access. The icon still marks an admin. */}
-      {p.title ? <span className="truncate min-w-0" style={{ color: "var(--sol-text-muted)" }} title={`${p.title} · ${p.role}`} data-person-title>{p.title}</span> : <span className="capitalize">{p.role}</span>}
+      <span className="capitalize">{p.role}</span>
       <span aria-hidden>·</span>
-      <span className={cn("tabular-nums shrink-0", !close && "truncate")}>{plural(p.total, "session")}</span>
+      <span className={cn("tabular-nums", !close && "truncate")}>{plural(p.total, "session")}</span>
     </>
   );
   return (
@@ -356,9 +326,7 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
         </div>
         <CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} />
       </div>
-      {close && <CloseMeta><span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap">{you}{meta}</span></CloseMeta>}
-      {close && p.focus && <CloseMeta><span className="block truncate" title={p.focus} data-person-focus>{p.focus}</span></CloseMeta>}
-      {close && !!data.alsoReports?.length && <CloseMeta><AlsoReportsTo refs={data.alsoReports} /></CloseMeta>}
+      {close && <CloseMeta><span className="flex items-center gap-1.5">{you}{meta}</span></CloseMeta>}
       <div className="mt-2.5 flex items-center gap-2">
         <StateBar counts={p.counts} className="flex-1" />
         <OverflowTally overflow={overflow} counts={p.counts} />
@@ -424,9 +392,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
         <Ports />
         {data.retire && <div aria-hidden className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: GHOST.hatch }} />}
         <FarBody name={roleWords(r).subtitle} color={ghost && !ghost.solid ? GHOST.color : plate} hollow={!r.standing} dim={dim} summary={farStanding(r)}
-          actions={!ghost && <><OpenToggle open={false} onClick={() => data.onToggleOpen?.(id)} /><CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} /></>}>
-          {!ghost && r.also_reports_to?.length ? <AlsoReportsTo refs={r.also_reports_to} far /> : null}
-        </FarBody>
+          actions={!ghost && <><OpenToggle open={false} onClick={() => data.onToggleOpen?.(id)} /><CollapseToggle collapsed={collapsed} hidden={hidden} onClick={() => data.onToggleCollapse?.(id)} /></>} />
       </Frame>
     );
   }
@@ -489,7 +455,6 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
           {data.retire && <> <GhostTag quiet label="retire" status={data.retire.status} tone="color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" className="!inline" /></>}
         </div>
       </div>
-      {rows.also > 0 && <AlsoReportsTo refs={r.also_reports_to} style={ink} />}
       {/* A program seat says when it ends, on its own line (S10). */}
       {tenure && (
         <div className="flex items-end gap-1 min-w-0" style={{ height: rows.tenure, ...ink }}>

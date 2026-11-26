@@ -10,7 +10,7 @@ import type { TeamDeployRow } from "../lib/deploys/targets";
 import { railRowPlacement, useInboxStore } from "../store/inboxStore";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { useCoarseNow } from "./useCoarseNow";
-import type { DeployInfo } from "../lib/priorityList";
+import type { DeployInfo } from "../components/priorities/parts";
 
 /**
  * The inbox's verdict for each linked session the store holds, by

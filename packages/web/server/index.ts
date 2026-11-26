@@ -67,25 +67,18 @@ const BINARIES: Record<string, string> = {
 // Railway build (1.1.119 downloaded as 1.1.118, 2026-09-24). The constant is
 // only the fallback when the feed cannot be read.
 const MAC_DMG_VERSION = "1.1.132";
-/** The latest version a desktop feed under desktop/ names, read at most once a
- * minute; `fallback` until the feed is read. latest-mac.yml is the Mac feed,
- * latest.yml the Windows one (electron-updater's names). */
-function desktopFeedVersion(yml: string, fallback: string): () => Promise<string> {
-  let latest = { version: fallback, at: 0 };
-  return async () => {
-    if (Date.now() - latest.at < 60_000) return latest.version;
-    latest = { ...latest, at: Date.now() };
-    try {
-      const res = await fetch(`https://dl.codecast.sh/desktop/${yml}`, { signal: AbortSignal.timeout(3_000) });
-      const version = res.ok ? (await res.text()).match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] : undefined;
-      if (version) latest = { version, at: Date.now() };
-    } catch {}
-    return latest.version;
-  };
+const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
+let desktopLatest = { version: MAC_DMG_VERSION, at: 0 };
+async function latestDesktopVersion(): Promise<string> {
+  if (Date.now() - desktopLatest.at < 60_000) return desktopLatest.version;
+  desktopLatest = { ...desktopLatest, at: Date.now() };
+  try {
+    const res = await fetch(DESKTOP_FEED, { signal: AbortSignal.timeout(3_000) });
+    const version = res.ok ? (await res.text()).match(/^version:\s*(\d+\.\d+\.\d+)\s*$/m)?.[1] : undefined;
+    if (version) desktopLatest = { version, at: Date.now() };
+  } catch {}
+  return desktopLatest.version;
 }
-const latestDesktopVersion = desktopFeedVersion("latest-mac.yml", MAC_DMG_VERSION);
-// No fallback: until a Windows release is published there is nothing to point at.
-const latestWindowsVersion = desktopFeedVersion("latest.yml", "");
 const macDmgUrl = (version: string) => `https://dl.codecast.sh/desktop/Codecast-${version}-arm64.dmg`;
 
 app.get("/api/health", async (c) =>
@@ -114,15 +107,6 @@ app.get("/download/mac", async (c) => {
   const version = await latestDesktopVersion();
   phCapture("desktop_dmg_downloaded", { version });
   return c.redirect(`${macDmgUrl(version)}?v=${version}`, 302);
-});
-
-// The Windows installer, named as the nsis artifactName in
-// packages/electron/package.json builds it.
-app.get("/download/windows", async (c) => {
-  const version = await latestWindowsVersion();
-  if (!version) return c.text("The Windows app is not published yet.", 503);
-  phCapture("desktop_windows_installer_downloaded", { version });
-  return c.redirect(`https://dl.codecast.sh/desktop/Codecast-${version}-x64-setup.exe?v=${version}`, 302);
 });
 
 // Latest published desktop version, same-origin so the in-app update banner can

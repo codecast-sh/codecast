@@ -347,7 +347,7 @@ describe("Changes keys", () => {
     for (const action of ["changes.next", "changes.prev"]) {
       expect(changes.filter((d) => d.action === action).every((d) => !d.noRepeat)).toBe(true);
     }
-    // Enter opens and closes a change; held, it would reopen what it just closed.
+    // Both evidence bindings, e and enter.
     expect(changes.filter((d) => d.action === "changes.evidence").every((d) => d.noRepeat)).toBe(true);
   });
 });

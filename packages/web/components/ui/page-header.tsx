@@ -7,7 +7,6 @@ import { crumbsForTitle } from "../../lib/navPlace";
 import { usePlaceCrumbs } from "../../hooks/usePlace";
 import { useIsListBesideItem } from "../../lib/detailSplitContext";
 import { BackControl } from "../nav/BackControl";
-import { useBackTarget } from "../../hooks/useNavTrail";
 import { PlaceCrumbs } from "../nav/PlaceCrumbs";
 import { PageHeaderTitle } from "./page-header-title";
 import "./page-header.css";
@@ -77,8 +76,8 @@ export function PageHeader({ legacy, ...props }: PageHeaderProps) {
 }
 
 /** The page's place from its address, minus any crumb the title already says. */
-function AutoCrumbs({ title, backLabel }: { title: string; backLabel?: string | null }) {
-  return <PlaceCrumbs crumbs={crumbsForTitle(usePlaceCrumbs(), title, backLabel)} />;
+function AutoCrumbs({ title }: { title: string }) {
+  return <PlaceCrumbs crumbs={crumbsForTitle(usePlaceCrumbs(), title)} />;
 }
 
 function PageHeaderBar({ title, icon: Icon, count, crumbs, tabs, actions, share, children, className, back, backFallback, glyph, status, onRename, renameLabel, titleNode, ...rest }: Omit<PageHeaderProps, "legacy">) {
@@ -87,15 +86,13 @@ function PageHeaderBar({ title, icon: Icon, count, crumbs, tabs, actions, share,
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   // The list beside an open item leaves the way back to the item's header.
   const besideItem = useIsListBesideItem();
-  const backTarget = useBackTarget(backFallback);
-  const backShown = back === undefined && !besideItem;
   return (
     <header data-cc-page-head className={cn("border-b border-sol-border bg-sol-bg", className)} {...rest}>
       <div ref={titlebarRef} className="cc-page-head__row">
         <div className="flex min-w-0 items-center gap-2">
           {back === undefined ? (besideItem ? null : <BackControl fallback={backFallback} divider />) : back || null}
           {crumbs === undefined ? (
-            <AutoCrumbs title={title} backLabel={backShown ? backTarget?.label : null} />
+            <AutoCrumbs title={title} />
           ) : crumbs ? (
             <>
               <div className="flex shrink-0 items-center gap-1 text-ui text-sol-text-dim">{crumbs}</div>

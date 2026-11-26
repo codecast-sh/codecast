@@ -160,30 +160,3 @@ test("a folded line card is its change and its proof, with no cause and no answe
   expect(doc.querySelector(".cc-verdicts")).toBeNull();
   expect(doc.querySelector("[data-cc-proof-dots]")).not.toBeNull();
 });
-
-// A decision whose words live only in its attached document (sd-4198 asked that way) drew as a bare question.
-describe("DecisionCompactCardView body", () => {
-  const view = (decision: SessionDecisionItem, extra: Record<string, unknown> = {}) => wrap(
-    <DecisionCompactCardView decision={decision} now={NOW} onAnswer={() => {}} onDismiss={() => {}} onJumpToAsk={() => {}} {...extra} />,
-  );
-  const doc = "work_state: build\n- **Seen here:** the rebase changed nothing.\n\n```conversation\n{\"thread\":[]}\n```\n\nhttps://codecast.sh/a/Df6nLauldgsL";
-
-  test("previews the attached document as plain lines, with the way to read the rest", () => {
-    const html = view(base, { docContent: doc });
-    expect(html).toContain("data-decision-context");
-    expect(html).toContain("• Seen here: the rebase changed nothing.");
-    expect(html).not.toContain("work_state");
-    expect(html).not.toContain("thread");
-    expect(html).not.toContain("Df6nLauldgsL");
-    // The fence and the page are left out of the preview, so the toggle shows though the lines fit.
-    expect(html).toContain("Read the whole decision");
-  });
-
-  test("embedded in a run's band it draws no box and no asker row", () => {
-    const html = view({ ...base, short_id: "sd-9" } as any, { embedded: true, session: { title: "Webhook retry rewrite" } });
-    expect(html).toContain("data-embedded");
-    expect(html).toContain('class="decision-card transition-colors ');
-    expect(html).not.toContain("Webhook retry rewrite");
-    expect(html).toContain(base.question);
-  });
-});

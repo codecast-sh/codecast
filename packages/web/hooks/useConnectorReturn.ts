@@ -24,20 +24,6 @@ const api = _api as any;
 /** One toast per return, so a remount on the same landing cannot stack two. */
 const CONNECT_TOAST_ID = "connector-return";
 
-/** A callback a landing route read before moving the window on. The move can
- *  outrun the reading page: SettingsRedirect sends a hard load of
- *  /settings/integrations home, boot restore then puts the last conversation
- *  in the address bar, and the lazily loaded panel mounts to find the confirm
- *  token gone. Held in memory for one read, never in storage, because the
- *  token is a credential. */
-let held: { search: string; hash: string } | null = null;
-
-/** A later call whose URL carries no callback leaves the held one alone: the
- *  redirect's effect can run again after the move, on the stripped address. */
-export function holdConnectorReturn(search: string, hash: string): void {
-  if (parseConnectorReturn(hash, search)) held = { search, hash };
-}
-
 /** The callback's outcome, once known: an error to show (in the connector's
  *  words, for describeConnectorError), or a success. Null when the page was
  *  opened without a callback, or while a confirmation is still in flight.
@@ -60,9 +46,7 @@ export function useConnectorReturn<X extends string = never>(
   // ONE read of the landing URL. Re-reading it would let a back-navigation
   // replay a confirmation the user already spent.
   useWatchEffect(() => {
-    const from = held ?? { hash: window.location.hash, search: window.location.search };
-    held = null;
-    const hit = parseConnectorReturn(from.hash, from.search, extra);
+    const hit = parseConnectorReturn(window.location.hash, window.location.search, extra);
     if (!hit) return;
     window.history.replaceState(
       null,

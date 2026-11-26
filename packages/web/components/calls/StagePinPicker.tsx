@@ -83,11 +83,11 @@ export function StagePinPicker({ roomKey, pins, onClose }: { roomKey: string; pi
   return (
     <div
       ref={rootRef}
-      className="absolute right-0 top-full z-20 mt-1.5 w-[340px] overflow-hidden rounded-xl bg-sol-bg-alt shadow-2xl ring-1 ring-sol-text/[0.08]"
+      className="absolute right-0 top-full z-20 mt-1.5 w-[340px] overflow-hidden rounded-xl bg-sol-bg-alt shadow-2xl ring-1 ring-white/[0.08]"
       role="dialog"
       aria-label="Pin to the stage"
     >
-      <div className="grid grid-cols-3 gap-1 border-b border-sol-text/[0.06] p-1.5">
+      <div className="grid grid-cols-3 gap-1 border-b border-white/[0.06] p-1.5">
         <QuickButton icon={<SquareKanban className="h-4 w-4 text-sol-cyan" />} label="Call board" busy={busy === "board"} onClick={pinBoard} />
         <QuickButton icon={<Plus className="h-4 w-4 text-sol-text-muted" />} label="New board" busy={busy === "board-new"} onClick={() => void createAndPin("board")} />
         <QuickButton icon={<Sheet className="h-4 w-4 text-sol-green" />} label="New sheet" busy={busy === "sheet-new"} onClick={() => void createAndPin("sheet")} />
@@ -113,7 +113,7 @@ export function StagePinPicker({ roomKey, pins, onClose }: { roomKey: string; pi
             }
           }}
           placeholder="Find a doc, or paste a link or id"
-          className="h-8 w-full rounded-md bg-sol-text/[0.05] px-2.5 text-[13px] text-sol-text outline-none ring-1 ring-sol-text/[0.06] placeholder:text-sol-text-dim focus:ring-sol-cyan/50"
+          className="h-8 w-full rounded-md bg-white/[0.05] px-2.5 text-[13px] text-sol-text outline-none ring-1 ring-white/[0.06] placeholder:text-sol-text-dim focus:ring-sol-cyan/50"
           style={{ fontVariantLigatures: "none" }}
         />
         <div className="mt-1 max-h-[280px] overflow-y-auto">
@@ -136,7 +136,7 @@ export function StagePinPicker({ roomKey, pins, onClose }: { roomKey: string; pi
                 type="button"
                 onMouseEnter={() => setCursor(i)}
                 onClick={() => pick(i)}
-                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${i === cursor ? "bg-sol-text/[0.07]" : ""}`}
+                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${i === cursor ? "bg-white/[0.07]" : ""}`}
               >
                 <DocTypeMark type={d.doc_type ?? "note"} size={14} />
                 <span className="min-w-0 flex-1 truncate text-[13px] text-sol-text">{d.display_title ?? d.title ?? "Untitled"}</span>
@@ -155,7 +155,7 @@ function QuickButton({ icon, label, busy, onClick }: { icon: React.ReactNode; la
       type="button"
       onClick={onClick}
       disabled={busy}
-      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-text/[0.06] hover:text-sol-text disabled:opacity-50"
+      className="flex flex-col items-center gap-1 rounded-lg px-2 py-2 font-mono text-meta text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text disabled:opacity-50"
     >
       {icon}
       {busy ? "…" : label}
@@ -170,7 +170,7 @@ export function StagePinButton({ roomKey, pins, className }: { roomKey: string; 
     <span className="relative shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
-        className={`${className} ${open ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-text/[0.06] hover:text-sol-text"}`}
+        className={`${className} ${open ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-muted hover:bg-white/[0.06] hover:text-sol-text"}`}
         title="Pin a board, doc, sheet or page to the stage for everyone in the call"
         aria-label="Pin to the stage"
         aria-expanded={open}

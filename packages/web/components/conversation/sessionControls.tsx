@@ -1,8 +1,5 @@
 import { LogoIcon } from "../Logo";
 import { TeamSessionSwitch } from "./TeamSessionSwitch";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { SegmentedChoice, TEAM_SHARE_MODES } from "../TeamShareModePicker";
-import type { TeamShareMode } from "../../lib/teamFeedRows";
 import { FolderSyncControl } from "./FolderSyncControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
 import { usePolicyRefusal } from "../../lib/managedPolicy";
@@ -1275,36 +1272,6 @@ function NewSessionProjectToggle({ conversation }: { conversation: ConversationD
   );
 }
 
-/** What the team sees of a new session: the share popover's Hidden / Summary
- *  / Full, picked before it starts. It opens on what the folder rule would
- *  give (sessionVisibilityPreview.creationTeam: Hidden where the folder keeps
- *  it private, else the member's level for the team, none of the three for
- *  an activity-only level). Drawn wherever there is a team to see it, and not
- *  for a Team pick, which the team reads whole. */
-export function NewSessionVisibilityPicker({ conversation }: { conversation: ConversationData }) {
-  const id = conversation._id;
-  const sig = useInboxStore((st) => {
-    const row: any = st.sessions[id];
-    return [row?._visibility ?? "", row?._team === "team" ? "1" : "", row?.git_root || row?.project_path || ""].join("\u0001");
-  });
-  const [picked, team, path] = sig.split("\u0001");
-  const destination = useQueryNoThrow(api.sessionVisibilityPreview.creationTeam, { path: path || undefined }).data;
-  if (isConvexId(id) || team || !destination) return null;
-  const level = destination.visibility === "hidden" ? "private" : destination.visibility;
-  const value = (picked || (level === "activity" ? undefined : level)) as TeamShareMode | undefined;
-  return (
-    <span className="inline-flex" title={`What ${destination.team_name} sees`}>
-      <SegmentedChoice
-        compact
-        label={`What ${destination.team_name} sees`}
-        options={TEAM_SHARE_MODES}
-        value={value}
-        onPick={(v) => useInboxStore.getState().setStubVisibility(id, v)}
-      />
-    </span>
-  );
-}
-
 /** The new-session composer's foot: the slot NewSessionView fills with the
  *  launch pickers, and attach. The page (ConversationView) and the popup
  *  (ComposeView) both hand it to MessageInput as composerFoot. */
@@ -1452,7 +1419,6 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             {!hosted && <div ref={setModeSlot} className="contents" />}
             {!hosted && <span className="ml-2 inline-flex"><NewSessionProjectToggle conversation={conversation} /></span>}
             {!hosted && <TeamSessionSwitch conversationId={String(conversation._id)} />}
-            {!hosted && <span className="ml-2 inline-flex"><NewSessionVisibilityPicker conversation={conversation} /></span>}
           </>,
           slots.foot,
         )}
@@ -1492,7 +1458,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
           </ErrorBoundary>
           <div className="flex-1" />
-          <div className="w-full px-4 mb-2 flex items-center"><NewSessionProjectToggle conversation={conversation} /><TeamSessionSwitch conversationId={String(conversation._id)} /><span className="ml-2 inline-flex"><NewSessionVisibilityPicker conversation={conversation} /></span></div>
+          <div className="w-full px-4 mb-2 flex items-center"><NewSessionProjectToggle conversation={conversation} /><TeamSessionSwitch conversationId={String(conversation._id)} /></div>
           {contextLine("w-full px-4 mb-4")}
         </>
       )}

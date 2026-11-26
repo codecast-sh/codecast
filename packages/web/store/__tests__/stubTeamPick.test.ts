@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 
-// The new-session composer's Personal | Team switch (setStubTeam) and its
-// Hidden / Summary / Full picker (setStubVisibility) stamp the local stub, and
-// createSessionFromStub folds them into the create: Team as `team`, Hidden as
-// `private`, Summary or Full as `team_visibility`, the level ignored for Team;
-// no pick sends nothing, so the folder rule decides. A pick lost on this hop would start a
+// The new-session composer's Personal | Team switch (TeamSessionSwitch) stamps
+// the pick on the local stub (setStubTeam) and createSessionFromStub folds it
+// into the create: Team as `team`; Personal and no pick send neither, so the
+// folder rule decides on the server. A pick lost on this hop would start a
 // session the person said was theirs as the team's, or the other way round.
 
 const STUB = "stubteampick1";
@@ -38,28 +37,12 @@ async function createOpts(): Promise<any> {
   return calls[0];
 }
 
-describe("the new-session Personal | Team and visibility picks", () => {
+describe("the new-session Personal | Team pick", () => {
   it("no pick sends neither, so the folder rule decides", async () => {
     seedStub();
     const opts = await createOpts();
     expect(opts.private).toBeUndefined();
     expect(opts.team).toBeUndefined();
-  });
-
-  it("Hidden sends private, Summary and Full send the level, Team outranks them", async () => {
-    seedStub();
-    useInboxStore.getState().setStubVisibility(STUB, "private");
-    expect(await createOpts()).toMatchObject({ private: true });
-
-    useInboxStore.getState().setStubVisibility(STUB, "summary");
-    const summary = await createOpts();
-    expect(summary.private).toBeUndefined();
-    expect(summary.team_visibility).toBe("summary");
-
-    useInboxStore.getState().setStubTeam(STUB, "team");
-    const teamOpts = await createOpts();
-    expect(teamOpts.team_visibility).toBeUndefined();
-    expect(teamOpts.team).toBe(true);
   });
 
   it("Team sends team; Personal sends nothing, so the folder rule still decides", async () => {

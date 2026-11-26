@@ -28,8 +28,6 @@ import { replayFrameSeenRef } from "@codecast/shared/contracts/replayPlayer";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE } from "../../messageMarkdown";
 import { FilePathLink } from "../../FilePathLink";
-import { OpenInEditorButton } from "../../OpenInEditorButton";
-import { editedLineRange } from "../../../lib/filesPane";
 import { ObservedChanges } from "./ObservedChanges";
 import { GitOutcomeRow } from "./GitOutcomeRow";
 import { unwrapShellCommand, browserTabOf, type BrowserRowState } from "../../castCommand";
@@ -811,28 +809,6 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   };
   const startLine = getStartLine();
 
-  // Where the card's "Open in editor" lands: the lines a Read read, the lines
-  // an Edit wrote (flashed on arrival), the top of a written file, a patch's
-  // first file at its first hunk. A deleted file has nothing to open.
-  const editorTarget = useMemo(() => {
-    if (isApplyPatch) {
-      const first = applyPatchDiffs.find((d) => d.operation !== "Delete");
-      if (!first) return null;
-      const at = first.hunks.find((h) => h.newStart > 0)?.newStart;
-      return { path: first.filePath, ...(at ? { line: at } : {}) };
-    }
-    if (!filePath || (!isStandardEdit && !isRead)) return null;
-    if (isRead) {
-      const offset = typeof parsedInput.offset === "number" && parsedInput.offset > 0 ? parsedInput.offset : undefined;
-      return { path: filePath, ...(offset ? { line: offset } : {}) };
-    }
-    if (isWriteTool(tool.name)) return { path: filePath, line: 1 };
-    const firstEdit = Array.isArray(parsedInput.edits) ? (parsedInput.edits[0] as Record<string, unknown> | undefined) : undefined;
-    const newText = editStringsFromInput(firstEdit ?? parsedInput)?.newStr;
-    const range = result && !result.is_error ? editedLineRange(safeString(result.content), newText) : undefined;
-    return { path: filePath, ...(range ?? {}) };
-  }, [isApplyPatch, applyPatchDiffs, filePath, isStandardEdit, isRead, parsedInput, tool.name, result]);
-
   const toolColor = toolColorClass(isApplyPatch ? "apply_patch" : tool.name);
 
   const handleClick = (e: React.MouseEvent | React.KeyboardEvent) => {
@@ -915,9 +891,6 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
               <FilePathLink path={filePath} onClick={(e) => e.stopPropagation()}><PathText path={summary} className={mh ? undefined : "[text-decoration:inherit]"} /></FilePathLink>
             ) : summary}
           </span>
-        )}
-        {editorTarget && (
-          <OpenInEditorButton target={editorTarget} className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" />
         )}
         {browserTab && <BrowserTabPill tab={browserTab} />}
         {gitOutcome && <GitOutcomeRow outcome={gitOutcome} repository={outcomeRepository} />}

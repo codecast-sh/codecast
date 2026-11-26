@@ -1,4 +1,3 @@
-import { stationName } from "./flowContext";
 import { flowName } from "@codecast/shared/contracts/flowPool";
 import type { DecisionDetailItem, SessionDecisionItem } from "../store/inboxStore";
 import { inViewerQueue } from "./decisionQueue";
@@ -48,12 +47,12 @@ export function gateRunLabel(
   run: { workflow_name?: string; workflow_label?: string; current_node_id?: string; current_node_label?: string; node_statuses?: Array<{ node_id: string; label?: string }> } | null | undefined,
   gateNodeId?: string,
 ): GateRunLabel {
-  if (!run) return { workflow: "a workflow run", node: gateNodeId ? stationName(gateNodeId) : undefined, known: false };
+  if (!run) return { workflow: "a workflow run", node: gateNodeId, known: false };
   const nodeId = gateNodeId ?? run.current_node_id;
   const fromStatuses = nodeId ? run.node_statuses?.find((n) => n.node_id === nodeId)?.label : undefined;
   // current_node_label is listRuns's join against the stored graph; the get
   // channel carries only the row, whose node_statuses may label the node.
-  const node = (gateNodeId === undefined || gateNodeId === run.current_node_id ? run.current_node_label : undefined) ?? fromStatuses ?? (nodeId ? stationName(nodeId) : undefined);
+  const node = (gateNodeId === undefined || gateNodeId === run.current_node_id ? run.current_node_label : undefined) ?? fromStatuses ?? nodeId;
   return { workflow: flowName({ label: run.workflow_label, name: run.workflow_name }) || "a workflow run", node, known: true };
 }
 

@@ -17,8 +17,7 @@ import { ArrowRightLeft, ArrowUpToLine, Search } from "lucide-react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { sessionWorkState, useInboxStore, type InboxSession } from "../../store/inboxStore";
-import { managersAfterMove, orgPersonReparentMakesCycle, orgRoleReparentMakesCycle, reparentToastLine } from "../../store/orgSlice";
-import { mayChangeManagers } from "../../store/orgProfile";
+import { orgPersonReparentMakesCycle, orgRoleReparentMakesCycle, reparentToastLine } from "../../store/orgSlice";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../ui/dialog";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { OrgButton } from "./OrgButton";
@@ -37,8 +36,8 @@ export type OrgMoves = {
   canEditRole: (roleId: string) => boolean;
   canMoveSession: (s: OrgSession) => boolean;
   /** Whether `userId` may go under `managerId` (null: the top) by this viewer's hand. */
-  canMovePerson: (userId: string, target: OrgParentRef | null) => boolean;
-  canDropPerson: (userId: string, target: OrgParentRef) => boolean;
+  canMovePerson: (userId: string, managerId: string | null) => boolean;
+  canDropPerson: (userId: string, managerId: string) => boolean;
   /** Which cards may be picked up at all. */
   canDrag: (n: OrgLayoutNode) => boolean;
   /** A drop on the People chart: moves at once, with an Undo on the toast. */
@@ -73,13 +72,13 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
   }, [tree, isAdmin, myId]);
   const canMoveSession = useCallback((s: OrgSession) => isAdmin || s.owner_user_id === myId, [isAdmin, myId]);
   const teamId = tree?.workspace.kind === "team" ? tree.workspace.id : null;
-  // The server's rule (orgPeople.performSetManagers), on the list the move writes.
-  const canMovePerson = useCallback((userId: string, target: OrgParentRef | null) => {
-    if (!teamId || !myId || !tree) return false;
-    return mayChangeManagers(tree, userId, managersAfterMove(tree, userId, target));
-  }, [teamId, myId, tree]);
-  const canDropPerson = useCallback((userId: string, target: OrgParentRef) => canMovePerson(userId, target), [canMovePerson]);
-  // Who may drop a person where is canDropPerson's (the managers rule); in a team every person card can be picked up.
+  const canMovePerson = useCallback((userId: string, managerId: string | null) => {
+    if (!teamId || !myId) return false;
+    if (isAdmin || userId === myId || managerId === myId) return true;
+    return managerId === null && tree?.people.find((p) => p.user_id === userId)?.reports_to_user_id === myId;
+  }, [teamId, myId, isAdmin, tree]);
+  const canDropPerson = useCallback((userId: string, managerId: string) => canMovePerson(userId, managerId), [canMovePerson]);
+  // Anyone may take a teammate under themself, so every person card in a team is draggable.
   const canDrag = useCallback((n: OrgLayoutNode) => (n.kind === "session" ? canMoveSession(n.session) : n.kind === "role" ? canEditRole(n.role._id) : n.kind === "person" ? !!teamId : false), [canMoveSession, canEditRole, teamId]);
 
   const { findSession, currentParentOf, movePagedSession } = people;
@@ -87,9 +86,8 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
   const commit = useCallback(async (subject: MoveSubject, target: OrgParentRef | null, targetTitle: string): Promise<string | null> => {
     const st = useInboxStore.getState();
     if (subject.kind === "person") {
-      if (!teamId) return null;
-      if (!tree) return null;
-      st.reparentOrgPerson(teamId, subject.id, managersAfterMove(tree, subject.id, target));
+      if (!teamId || (target && target.kind !== "user")) return null;
+      st.reparentOrgPerson(teamId, subject.id, target?.user_id ?? null);
       return target ? `${subject.title} now reports to ${targetTitle}.` : `${subject.title} now reports to nobody.`;
     }
     if (!target) return null;
@@ -111,8 +109,8 @@ export function useOrgMoves(tree: OrgTree | null, people: Pick<OrgPeopleView, "f
   const allowed = useCallback((subject: MoveSubject, target: OrgParentRef | null): boolean => {
     if (!tree) return false;
     if (subject.kind === "person") {
-      if (target && ((target.kind === "user" && target.user_id === subject.id) || orgPersonReparentMakesCycle(tree, subject.id, target))) return false;
-      if (!canMovePerson(subject.id, target)) return false;
+      if (target && (target.kind !== "user" || target.user_id === subject.id || orgPersonReparentMakesCycle(tree, subject.id, target.user_id))) return false;
+      if (!canMovePerson(subject.id, target?.user_id ?? null)) return false;
     } else if (!target) {
       return false;
     } else if (subject.kind === "role") {

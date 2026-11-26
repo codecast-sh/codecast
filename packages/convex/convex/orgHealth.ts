@@ -23,7 +23,6 @@ import { isActiveTask } from "@codecast/shared/tasks";
 import { approxMessageBytes, isNavigableUserMessage } from "./userMessagesFilter";
 import { roleCharterOf } from "./lib/roleCharter";
 import { teamRooms } from "./chatAccess";
-import { roleReportsOf } from "./orgPeople";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
 // capacity model needs, per role, per person and for the company, with the
@@ -659,12 +658,6 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
     const briefDoc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
     const people = await computeReportingPeople(ctx, userId, role, briefDoc ? { content: briefDoc.content ?? "", updated_at: briefDoc.updated_at ?? briefDoc._creationTime ?? 0 } : null, null, now, now);
     const goalStalls = people.reduce((n, p) => n + p.goals.filter((g) => g.stalled || g.unmatched).length, 0);
-    // What of the area is stuck on the people who report to it (org-people.md
-    // P2): a decision in their queue past a day, a task of theirs in review
-    // past a day. Read with the caller's grants, like every row here.
-    const peopleWaiting = (await roleReportsOf(ctx, role, userId, now, { memberships: scan.memberships, roles }))
-      .filter((p) => p.waits.decisions_over_day > 0 || p.waits.review_over_day > 0)
-      .map((p) => ({ name: p.name, decisions: p.waits.decisions_over_day, review_stalls: p.waits.review_over_day }));
     const load: RoleLoad = {
       items_per_day: activity.wakes_7d.total / 7,
       decisions_per_day: decisions7 / 7,
@@ -768,7 +761,6 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
       age_days: activity.age_days,
       idle: activity.idle,
       program_ended: programEnded,
-      ...(peopleWaiting.length ? { people_waiting: peopleWaiting } : {}),
     };
     const areaStatus = areaStatusOf(areaInput);
     const area: RoleArea = {

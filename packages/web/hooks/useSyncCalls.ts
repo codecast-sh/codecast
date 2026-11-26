@@ -1,8 +1,6 @@
 import { useMemo } from "react";
-import { useConvex } from "convex/react";
-import { useWatchEffect } from "./useWatchEffect";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { applyCollectionFeed, entityIdArgs, useSyncCollection } from "./useSyncCollection";
+import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -61,39 +59,6 @@ export function useCallDetail(transcriptId: string | undefined): any | null | un
   return useMemo(() => (refused ? null : row ?? undefined), [row, refused]);
 }
 
-/** The calls page's own list size, so the two share one subscription. */
-const PREFETCHED_CALL_LIST = 100;
-/** Newest calls whose transcripts are read ahead of any open. */
-const PREFETCHED_CALL_DETAILS = 5;
-const callDetailRead = new Set<string>();
-
-/** Feeder, sync host: the call list and the newest calls' transcripts, so
- *  the calls page and a call opened from a pill, a task or chat paint at once.
- *  Transcripts are one-shot reads; the open call's own feeder keeps it live. */
-export function useSyncCallsAhead(): void {
-  const convex = useConvex();
-  const { calls } = useCallList(PREFETCHED_CALL_LIST);
-  const newest = calls.slice(0, PREFETCHED_CALL_DETAILS).map((c: any) => String(c._id)).filter(isConvexId).join(",");
-  useWatchEffect(() => {
-    const held = (useInboxStore.getState() as any).callDetails ?? {};
-    const need = newest ? newest.split(",").filter((id) => !held[id] && !callDetailRead.has(id)) : [];
-    let cancelled = false;
-    void (async () => {
-      for (const id of need) {
-        if (cancelled) return;
-        callDetailRead.add(id);
-        try {
-          const row = await convex.query(api.transcripts.webGetCall, { transcript_id: id } as any);
-          if (!cancelled && row) applyCollectionFeed("callDetails", row, SELECT_ONE.select);
-        } catch {
-          callDetailRead.delete(id);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [convex, newest]);
-}
-
 const NO_PLACES: Record<string, CallPlace | null> = {};
 
 /** The server's place names for the calls the store cannot name
@@ -122,13 +87,4 @@ export function useCallPlaces(calls: any[]): Record<string, CallPlace | null> {
     for (const id of ids.split(",")) out[id] = (data as Record<string, CallPlace> | undefined)?.[id] ?? null;
     return out;
   }, [ids, data, error]);
-}
-
-/** The viewer's own voice samples: how many, how many seconds, the last
- *  added (voiceprints.myVoiceprint, registry `myVoiceprint`). undefined until
- *  the cache or the server has it. The switch is currentUser.voice_id_enabled.
- *  Write through the store's setVoiceIdEnabled and deleteMyVoiceprints. */
-export function useMyVoiceprint(): { count: number; seconds: number; last_added_at: number | null } | undefined {
-  useSyncCollection("myVoiceprint", api.voiceprints.myVoiceprint, {});
-  return useInboxStore((s: any) => s.myVoiceprint ?? undefined);
 }

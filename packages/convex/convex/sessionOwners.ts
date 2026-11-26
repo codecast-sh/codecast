@@ -2,7 +2,6 @@ import { Id } from "./_generated/dataModel";
 import { dropViewerTriage, mayBeTeamOwned, viewerTriageFor, viewerTriageMap } from "./lib/viewerTriage";
 import { ownersOf, parentLinkOf, type SessionOwnerFacts } from "@codecast/shared/contracts/sessionOwners";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
-import { roleManagers, type OrgPartyRef } from "@codecast/shared/contracts/orgLead";
 
 // ── Owner-set primitives (session_owners join table) ─────────────────────────
 // The join table is the canonical multi-owner store: the humans whose inboxes a
@@ -347,19 +346,18 @@ export async function sessionOwnerFactsOf(ctx: { db: any }, conversation: any): 
 }
 
 // A role's standing session is owned by whom the role reports to (org-staffing.md
-// S28): reporting to a person IS being in their inbox, so a seat has every
-// person among the role's managers as an owner (org-people.md P3), and a seat
-// under roles only has none (it rides the parent lead's card through
-// org_role_id). One writer, called wherever a role's managers are set:
-// provisioning, a move, a retire's re-home and the backfill.
+// S28): reporting to a person IS being in their inbox, so a seat under a person
+// has exactly that person as owner, and a seat under a role has none (it rides
+// the parent lead's card through org_role_id). One writer, called wherever a
+// role's parent is set: provisioning, a move, a retire's re-home and the backfill.
 export async function stampSeatOwners(
   ctx: { db: any },
   conversationId: Id<"conversations">,
-  role: { reports_to?: OrgPartyRef | null; also_reports_to?: OrgPartyRef[] | null } | null | undefined,
+  reportsTo: { kind: "user"; user_id: Id<"users"> } | { kind: "role"; role_id: any } | null | undefined,
   addedBy: Id<"users">,
 ): Promise<boolean> {
-  const bosses = role ? roleManagers(role).flatMap((p) => (p.kind === "user" ? [String(p.user_id)] : [])) : [];
-  return setSessionOwnerRows(ctx, conversationId, bosses, addedBy);
+  const boss = reportsTo?.kind === "user" ? reportsTo.user_id : null;
+  return setSessionOwnerRows(ctx, conversationId, boss ? [String(boss)] : [], addedBy);
 }
 
 // A session's owner set as one comparable value: the primary (the

@@ -78,7 +78,6 @@ const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const SessionMap = lazy(() => import("@/app/map/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Simulator = lazy(() => import("@/app/simulator/page"));
-const Triage = lazy(() => import("@/app/triage/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
 const Community = lazy(() => import("@/app/community/page"));
@@ -187,7 +186,6 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
-const AppConsent = lazy(() => import("@/app/apps/consent/[id]/page"));
 const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
@@ -317,7 +315,6 @@ export function App() {
               <Route path="map" element={<E name="Session Map"><SessionMap /></E>} />
               <Route path="browser" element={<E name="Browser"><Browser /></E>} />
               <Route path="simulator" element={<E name="Simulator"><Simulator /></E>} />
-              <Route path="triage" element={<E name="Triage"><Triage /></E>} />
               <Route path="org" element={<E name="OrgScope"><OrgScope /></E>} />
               <Route path="org/:id" element={<E name="OrgScope"><OrgScope /></E>} />
               <Route path="org/:view/:id" element={<E name="OrgScope"><OrgScope /></E>} />
@@ -490,7 +487,6 @@ export function App() {
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
               <Route path="call-ring" element={<E name="CallRing"><CallRing /></E>} />
-              <Route path="apps/consent/:id" element={<E name="AppConsent"><AppConsent /></E>} />
               <Route path="agent-dock" element={<E name="AgentDock"><AgentDock /></E>} />
               <Route path="share-cursors" element={<E name="ShareCursors"><ShareCursors /></E>} />
             </Route>

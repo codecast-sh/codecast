@@ -8,7 +8,6 @@
 
 import { applyPause, applyResume, applyTaskUpdate, insertTask } from "./agentTasks";
 import type { Id } from "./_generated/dataModel";
-import { rolePeopleIdsOf } from "./orgPeople";
 import { ROLE_AGENDA_EVERY_MS, ROLE_AGENDA_PROMPT, ROLE_AGENDA_TITLE, isLiveTrigger, nextMorningAt } from "./lib/orgRoutine";
 
 type Ctx = { db: any; scheduler?: any };
@@ -33,7 +32,7 @@ async function firstMorning(ctx: Ctx, role: { host_user_id: Id<"users"> }, now: 
  *  what was done, for the caller's own words. */
 export async function syncRoleAgenda(ctx: Ctx, role: any, standing: { _id: any; user_id: Id<"users">; project_path?: string | null } | null, now = Date.now()): Promise<"armed" | "resumed" | "paused" | "kept" | "none"> {
   if (!standing) return "none";
-  const wanted = role.status === "active" && (await rolePeopleIdsOf(ctx, role)).length > 0;
+  const wanted = (role.reports_user_ids ?? []).length > 0 && role.status === "active";
   const found = await findRoleAgenda(ctx, role, standing);
   if (!found) {
     if (!wanted) return "none";

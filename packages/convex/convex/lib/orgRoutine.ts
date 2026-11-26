@@ -36,7 +36,6 @@ export const ROLE_CHECK_PROMPT = [
   `Check your area. Run \`cast brief\`. It names what moved since you last looked, not where it stands: your own lines and a session's pinned state were written before the move. Read each session that moved (\`cast read <id>\`) and write your lines from what it says now.`,
   `The brief lists the initiatives you own with their health as last said, and when. When what you read differs from that health, or it is older than a week, post the read (\`cast initiative update <in-N> --health on_track|at_risk|off_track "<what changed>"\`), so nobody plans against a stale word.`,
   `Connect what you read. The sessions under you write what they find for you rather than to each other, so when one session's finding changes another's next step, send it to that session yourself, and only to the sessions it changes.`,
-  `The people who report to you are part of your area. Each check, read what of it waits on them: \`cast brief\` lists their open tasks and the decisions sitting in their queue. Ask them for what only a person can do by chat DM (\`cast chat dm @handle\`), everything for one person in one message, and interrupt them only for what costs time now. You ask; you never direct their work beyond asking, and what they hand back is yours again.`,
   `Act on what is yours to act on. Put in front of the person what needs them, with your recommendation; the rest belongs in your brief. When nothing needs doing, say so in one line.`,
   ...ROLE_PLAYBOOK_LINES,
 ].join("\n");

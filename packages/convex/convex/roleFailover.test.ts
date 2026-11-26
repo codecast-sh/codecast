@@ -18,7 +18,6 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
 import { ROLE_FAILOVER_QUIET_MS, hostTrouble, performRoleFailoverSweep, pickFailoverHost } from "./roleFailover";
-import { performReparentSessionToDevice } from "./devices";
 import { moveBackRefusal, roleFailoverLine, roleMoveBackState } from "@codecast/shared/contracts/roleFailover";
 
 const MIN = 60_000;
@@ -63,7 +62,6 @@ async function world(opts: { macQuietMs: number; cloudHost?: boolean; queued?: b
     } as any);
     const anchor = await ctx.db.insert("anchors", { scope_type: "team", team_id: seed.team, bot_user_id: bot, host_user_id: seed.ashot, conversation_id: conv, name: "Agent Quality", status: "active", org_role_id: role._id, created_at: now });
     await ctx.db.patch(role._id, { anchor_id: anchor });
-    await ctx.db.patch(conv, { standing_role_id: role._id, anchor_id: anchor } as any);
     if (opts.queued !== false) {
       await ctx.db.insert("pending_messages", { conversation_id: conv, from_user_id: seed.ashot, owner_user_id: seed.jason, content: "wake: check the area", status: "pending", origin: "scheduler", created_at: now - 30 * MIN, retry_count: 0 } as any);
     }
@@ -212,17 +210,6 @@ test("keep here leaves the session where the move put it and clears the line", a
   expect(after.conv.owner_device_id).toBe("cloud-1");
   expect(after.role.failover).toBeUndefined();
   await expect(w.asAshot.mutation(anyApi.roleFailover.keepHere, { role_id: String(w.role._id) })).rejects.toThrow(/no failover/);
-});
-
-// Sprout (Nov 2026): after the sweep moved it, other moves took the session
-// elsewhere and the Moved line kept naming a host it no longer ran on.
-test("moving the session anywhere but the failover's host clears the line", async () => {
-  const w = await world({ macQuietMs: ROLE_FAILOVER_QUIET_MS + MIN });
-  expect((await failedOver(w)).role.failover).toMatchObject({ to: { device_id: "cloud-1" } });
-  await w.t.run((ctx: any) => performReparentSessionToDevice(ctx, w.seed.ashot, { session_id: String(w.conv), device_id: "cloud-1" }));
-  expect((await w.t.run((ctx: any) => ctx.db.get(w.role._id))).failover).toMatchObject({ to: { device_id: "cloud-1" } });
-  await w.t.run((ctx: any) => performReparentSessionToDevice(ctx, w.seed.ashot, { session_id: String(w.conv), device_id: "ashot-mac" }));
-  expect((await w.t.run((ctx: any) => ctx.db.get(w.role._id))).failover).toBeUndefined();
 });
 
 test("roleMoveBackState: only a host the viewer may use, and only once it is back", () => {

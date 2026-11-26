@@ -22,9 +22,7 @@ import { compactAge } from '@codecast/web/lib/threadState';
 import { ORG_STATE_META, standingLineOf, standingWaits } from '@codecast/web/components/org/orgMeta';
 import { ORG_STATE_ORDER, type OrgPerson, type OrgRole, type OrgSession, type OrgTree } from '@codecast/web/components/org/orgTypes';
 import { localTimeLine, memberPresenceVisual, presenceLine, type PresenceVisual } from '@codecast/web/components/presence/memberPresence';
-import { Text as RNText, TextInput } from '@/components/Themed';
-import { PROFILE_FOCUS_MAX, PROFILE_TITLE_MAX } from '@codecast/shared/contracts/personProfile';
-import { mayEditProfile } from '@codecast/web/store/orgProfile';
+import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { RoleFace } from '@/components/org/RoleFace';
@@ -87,9 +85,7 @@ export default function PersonScreen() {
   const avatarUrl = member ? memberAvatarUrl(member) : orgPerson?.image;
 
   const roles = useMemo(() => (tree && userId ? hostedRoles(tree, userId) : []), [tree, userId]);
-  const managers = useMemo(() => (tree && orgPerson ? managersOf(tree, orgPerson) : []), [tree, orgPerson]);
-  // The person or an admin edits the profile (orgPeople.setProfile).
-  const canEditProfile = !!orgPerson && !!tree && mayEditProfile(tree, orgPerson.user_id);
+  const reportsTo = useMemo(() => (tree && orgPerson ? reportsToOf(tree, orgPerson) : null), [tree, orgPerson]);
   // The org tree carries each person's sessions with their work state; where
   // the workspace has no tree (personal, org off) the inbox rows stand in.
   // The tree holds only their first eight, so the inbox rows fill in the rest.
@@ -191,21 +187,17 @@ export default function PersonScreen() {
           </RNView>
         )}
 
-        {orgPerson && (orgPerson.title || orgPerson.focus || orgPerson.labels?.length || canEditProfile) ? (
-          <Profile person={orgPerson} teamId={tree!.workspace.id} canEdit={!!canEditProfile} />
-        ) : null}
-
-        {managers.length > 0 && (
-          <Section title="Reports to" count={managers.length > 1 ? managers.length : undefined}>
-            {managers.map((m) => m.kind === 'role'
-              ? <RoleRow key={m.role._id} role={m.role} isMe={isMe} />
-              : <PersonRow key={m.person.user_id} person={m.person} />)}
-          </Section>
-        )}
-
-        {roles.length > 0 && (
-          <Section title="Roles" count={roles.length}>
+        {(roles.length > 0 || reportsTo) && (
+          <Section title="Roles" count={roles.length || undefined}>
             <Capped items={roles} limit={ROW_LIMIT} noun="roles" render={(r) => <RoleRow key={r._id} role={r} isMe={isMe} />} />
+            {reportsTo && (
+              <TouchableOpacity style={styles.row} activeOpacity={0.6} disabled={!reportsTo.route} onPress={() => reportsTo.route && router.push(reportsTo.route as never)}>
+                <RNView style={styles.iconSlot}><FontAwesome name="level-up" size={13} color={Theme.textDim} /></RNView>
+                <RNText style={styles.rowTitle} numberOfLines={1}>
+                  <RNText style={styles.dim}>Reports to </RNText>{reportsTo.label}
+                </RNText>
+              </TouchableOpacity>
+            )}
           </Section>
         )}
 
@@ -295,90 +287,11 @@ function hostedRoles(tree: OrgTree, userId: string): OrgRole[] {
   return tree.roles.filter((r) => r.host_user_id === userId && r.status !== 'retired');
 }
 
-type Manager = { kind: 'user'; person: OrgPerson } | { kind: 'role'; role: OrgRole };
-
-/** Everyone they report to that the chart holds, people and roles, all equal (org-people.md P3). */
-function managersOf(tree: OrgTree, person: OrgPerson): Manager[] {
-  const out: Manager[] = [];
-  for (const m of person.managers ?? []) {
-    if (m.kind === 'user') {
-      const p = tree.people.find((x) => x.user_id === m.user_id);
-      if (p) out.push({ kind: 'user', person: p });
-    } else {
-      const r = tree.roles.find((x) => x._id === m.role_id && x.status !== 'retired');
-      if (r) out.push({ kind: 'role', role: r });
-    }
-  }
-  return out;
-}
-
-/** What they do: title, focus and labels. The person (or an admin) edits the
- *  title and focus in place; the store paints the edit at once and dispatches
- *  orgPeople.setProfile. */
-function Profile({ person, teamId, canEdit }: { person: OrgPerson; teamId: string; canEdit: boolean }) {
-  const Theme = useTheme();
-  const setProfile = useInboxStore((s) => s.setOrgPersonProfile);
-  const [editing, setEditing] = useState(false);
-  const [title, setTitle] = useState('');
-  const [focus, setFocus] = useState('');
-  const start = () => { setTitle(person.title ?? ''); setFocus(person.focus ?? ''); setEditing(true); };
-  const save = () => { setProfile(teamId, person.user_id, { title, focus }); setEditing(false); };
-  if (editing) {
-    return (
-      <RNView style={styles.profile}>
-        <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Title" placeholderTextColor={Theme.textDim} maxLength={PROFILE_TITLE_MAX} autoFocus returnKeyType="next" testID="person-title-input" />
-        <TextInput style={styles.input} value={focus} onChangeText={setFocus} placeholder="What you look after, in one line" placeholderTextColor={Theme.textDim} maxLength={PROFILE_FOCUS_MAX} multiline blurOnSubmit returnKeyType="done" onSubmitEditing={save} testID="person-focus-input" />
-        <RNView style={styles.editActions}>
-          <TouchableOpacity style={styles.secondary} onPress={() => setEditing(false)}>
-            <RNText style={styles.secondaryText}>Cancel</RNText>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.secondary, { backgroundColor: Theme.violet, borderColor: Theme.violet }]} onPress={save} testID="person-profile-save">
-            <RNText style={[styles.secondaryText, { color: Theme.bg }]}>Save</RNText>
-          </TouchableOpacity>
-        </RNView>
-      </RNView>
-    );
-  }
-  const empty = !person.title && !person.focus;
-  return (
-    <TouchableOpacity style={styles.profile} activeOpacity={0.6} disabled={!canEdit} onPress={start} accessibilityLabel={canEdit ? 'Edit title and focus' : undefined} testID="person-profile">
-      <RNView style={styles.profileHead}>
-        <RNView style={styles.rowBody}>
-          {empty
-            ? (canEdit ? <RNText style={[styles.focus, { color: Theme.textDim }]}>Add a title and focus</RNText> : null)
-            : <>
-                {person.title ? <RNText style={styles.title}>{person.title}</RNText> : null}
-                {person.focus ? <RNText style={styles.focus}>{person.focus}</RNText> : null}
-              </>}
-        </RNView>
-        {canEdit && <Ionicons name="pencil" size={14} color={Theme.textDim} />}
-      </RNView>
-      {person.labels?.length ? (
-        <RNView style={[styles.metaLine, { marginTop: 6 }]}>
-          {person.labels.map((l) => (
-            <RNView key={l} style={[chipShell, chipTint(Theme.cyan)]}>
-              <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[chipText, { color: Theme.cyan }]}>{l}</RNText>
-            </RNView>
-          ))}
-        </RNView>
-      ) : null}
-    </TouchableOpacity>
-  );
-}
-
-function PersonRow({ person: p }: { person: OrgPerson }) {
-  const Theme = useTheme();
-  const router = useRouter();
-  return (
-    <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => router.push(`/person/${encodeURIComponent(p.user_id)}` as never)}>
-      <ChatAvatar author={{ id: p.user_id, name: p.name, avatarUrl: p.image }} size={30} />
-      <RNView style={styles.rowBody}>
-        <RNText style={styles.rowTitle} numberOfLines={1}>{p.name}</RNText>
-        {p.title || p.focus ? <RNText style={[styles.dim, { marginTop: 2 }]} numberOfLines={1}>{p.title ?? p.focus}</RNText> : null}
-      </RNView>
-      <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
-    </TouchableOpacity>
-  );
+function reportsToOf(tree: OrgTree, person: OrgPerson): { label: string; route: string | null } | null {
+  const id = person.reports_to_user_id;
+  if (!id) return null;
+  const boss = tree.people.find((p) => p.user_id === id);
+  return boss ? { label: boss.name, route: `/person/${encodeURIComponent(boss.user_id)}` } : null;
 }
 
 /** The tree's rows (they carry the finer work state) first, then the inbox rows it left out. */
@@ -529,10 +442,4 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   taskList: { },
   more: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: Spacing.lg, paddingVertical: 12 },
   moreText: { fontSize: 13, fontWeight: '600', color: Theme.accent },
-  profile: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.md, gap: Spacing.sm },
-  profileHead: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
-  title: { fontSize: 15, fontWeight: '700', color: Theme.text },
-  focus: { fontSize: 13, color: Theme.textMuted, marginTop: 2 },
-  input: { fontSize: 14, color: Theme.text, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, backgroundColor: Theme.bgAlt },
-  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: Spacing.sm },
 }));

@@ -1,11 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState } from "react";
 import Link from "next/link";
 import { Bot, X } from "lucide-react";
 import { toastWriteError } from "../../lib/dispatchBinding";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMeetingBots } from "../../hooks/useMeetingBots";
-import { MeetingCalendarList } from "./MeetingCalendarList";
 import { MEETING_BOT_FINAL, type MeetingBot, type MeetingBotStatus } from "../../store/meetingBotsSlice";
 
 // A Recall.ai bot sent to a meeting on another platform (convex meetingBots.ts).
@@ -82,49 +80,21 @@ function MeetingBotRow({ bot }: { bot: MeetingBot }) {
   );
 }
 
-/** Send a bot to a meeting link: its row paints at once (a stub the server
- *  row folds into), and a link the server refuses takes the row back and says
- *  the server's words. `onRefused` lets the caller put the link back. */
-export function sendBotToMeeting(url: string, onRefused?: () => void): void {
-  const clientKey = crypto.randomUUID();
-  const store = useInboxStore.getState();
-  store.sendMeetingBot(url, clientKey).catch((err: unknown) => {
-    store.discardMeetingBotStub(clientKey);
-    onRefused?.();
-    toastWriteError(err, "the bot could not be sent");
-  });
-}
-
-/** The Calls page's meeting section: the link field with the bots it sent,
- *  and the calendar's meetings. Opened as /calls?bot=1 (the palette and New
- *  menu's "Send a bot to a meeting") it takes the cursor. */
-export function MeetingBotsSection() {
-  return (
-    <section className="mt-3 border-t border-sol-border/20 pt-2.5" aria-label="Meetings">
-      <div className="flex items-center gap-1.5 text-mark font-medium uppercase tracking-wide text-sol-text-dim">
-        <Bot className="h-3 w-3" aria-hidden="true" />
-        Meetings
-      </div>
-      <MeetingBotField />
-      <MeetingCalendarList />
-    </section>
-  );
-}
-
 /** "Meeting link" with Send bot, and the bots it sent. */
 export function MeetingBotField() {
   const [link, setLink] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const asked = useSearchParams()?.get("bot") === "1";
-  useEffect(() => {
-    if (asked) inputRef.current?.focus();
-  }, [asked]);
   const bots = useMeetingBots();
   const send = () => {
     const url = link.trim();
     if (!url) return;
+    const clientKey = crypto.randomUUID();
+    const store = useInboxStore.getState();
     setLink("");
-    sendBotToMeeting(url, () => setLink((now) => now || url));
+    store.sendMeetingBot(url, clientKey).catch((err: unknown) => {
+      store.discardMeetingBotStub(clientKey);
+      setLink((now) => now || url);
+      toastWriteError(err, "the bot could not be sent");
+    });
   };
   return (
     <div className="mt-2.5">
@@ -136,14 +106,13 @@ export function MeetingBotField() {
         }}
       >
         <input
-          ref={inputRef}
           type="text"
           inputMode="url"
           autoComplete="off"
           spellCheck={false}
           value={link}
           onChange={(e) => setLink(e.target.value)}
-          placeholder="Zoom, Meet or Teams link"
+          placeholder="Meeting link"
           aria-label="Meeting link"
           className="min-w-0 flex-1 rounded-md border border-sol-border/40 bg-sol-bg px-2 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan/60 focus:outline-none"
         />

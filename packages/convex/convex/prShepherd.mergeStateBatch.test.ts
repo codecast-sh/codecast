@@ -72,42 +72,6 @@ describe("merge state refresh after a push to a base branch", () => {
     const scheduled = batches.flatMap((j) => (j.args[0] as any).pr_ids as string[]);
     expect(new Set(scheduled)).toEqual(new Set(ids.onMain as string[]));
     expect(scheduled).not.toContain(ids.elsewhere);
-    expect(batches.every((j) => (j.args[0] as any).base?.sha === "abc" && (j.args[0] as any).base?.branch === "main")).toBe(true);
-  });
-
-  // GitHub's branch head for main is `head`; every PR answers mergeable, 2 behind.
-  function stubGitHub(head: string) {
-    const calls: string[] = [];
-    globalThis.fetch = (async (input: any) => {
-      const url = String(input);
-      calls.push(url);
-      if (url.endsWith("/branches/main")) return new Response(JSON.stringify({ commit: { sha: head } }));
-      const pull = url.match(/\/pulls\/(\d+)$/);
-      if (pull) return new Response(JSON.stringify({
-        mergeable: true, mergeable_state: "clean", base: { ref: "main", sha: head }, head: { ref: `ana/pr-${pull[1]}`, sha: "h" }, draft: false, requested_reviewers: [],
-      }));
-      if (url.includes("/compare/")) return new Response(JSON.stringify({ behind_by: 2 }));
-      return new Response("{}", { status: 404 });
-    }) as typeof fetch;
-    return calls;
-  }
-
-  test("a sweep whose push is no longer the branch head stands down", async () => {
-    const { t, ids } = await setup(5);
-    const calls = stubGitHub("newer");
-    await t.action(internal.prShepherd.refreshMergeStates, { pr_ids: ids.onMain, attempt: 0, base: { branch: "main", sha: "older" } });
-    expect(calls.filter((u) => !u.endsWith("/branches/main"))).toHaveLength(0);
-    const rows = await t.run(async (ctx) => Promise.all(ids.onMain.map((id) => ctx.db.get(id))));
-    expect(rows.every((pr) => pr!.behind_by === undefined && pr!.updated_at === 0)).toBe(true);
-  });
-
-  test("a sweep for the current branch head refreshes every PR", async () => {
-    const { t, ids } = await setup(5);
-    const calls = stubGitHub("abc");
-    await t.action(internal.prShepherd.refreshMergeStates, { pr_ids: ids.onMain, attempt: 0, base: { branch: "main", sha: "abc" } });
-    expect(calls.filter((u) => u.endsWith("/branches/main"))).toHaveLength(1);
-    const rows = await t.run(async (ctx) => Promise.all(ids.onMain.map((id) => ctx.db.get(id))));
-    expect(rows.every((pr) => pr!.behind_by === 2)).toBe(true);
   });
 
   test("a batch writes the answers and re-asks only the PRs GitHub had not computed", async () => {

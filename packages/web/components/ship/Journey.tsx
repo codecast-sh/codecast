@@ -265,12 +265,11 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
         <div className="sj-now" data-kind={now.mine ? "you" : "gate"}>
           <i className="sj-wait" aria-hidden />
           <b>{now.mine ? "Your call" : gateWaitWords(now.holder, now.who)}</b>
-          {/* The decision under the bar carries the question; the bar says only where the run waits. */}
-          <span className="sj-what">{now.mine && run?.gate_decision_id ? `at ${now.stage}` : now.prompt ?? now.stage}</span>
+          <span className="sj-what">{now.prompt ?? now.stage}</span>
           {since(now.since)}
           {!now.mine && now.decisionId ? <Link className="sj-act" href={`/decisions/${run?.gate_decision_short_id ?? now.decisionId}`} data-journey-open-card>Open card</Link> : null}
           {children}
-          {now.mine && run?.gate_decision_id ? <div className="sj-gate"><RunGate run={run} className="w-full" embedded /></div> : null}
+          {now.mine && run?.gate_decision_id ? <div className="sj-gate"><RunGate run={run} className="w-full" /></div> : null}
         </div>
       );
     case "landed":

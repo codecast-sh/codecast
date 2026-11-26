@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link as LinkIcon, Link2, ArrowUpRight, AppWindow, Check, ChevronDown, ChevronUp, ChevronsDownUp, ChevronsUpDown, Columns2, MessageSquarePlus } from "lucide-react";
+import { Link as LinkIcon, Link2, ArrowUpRight, Check, ChevronDown, ChevronUp, ChevronsDownUp, ChevronsUpDown, Columns2, MessageSquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { usePageInfo } from "../hooks/usePageInfo";
@@ -30,9 +30,6 @@ import { HeightGrip } from "./HeightGrip";
 import { KeyCap } from "./KeyCap";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useInstallAsApp } from "../hooks/useInstalledApps";
-import { InstallHandoff } from "./installedApps/InstallAsApp";
-import { INSTALL_AS_APP } from "../lib/installedApps";
 
 const api = _api as any;
 
@@ -271,16 +268,12 @@ function Tool({ label, onClick, pressed, className = "", children }: {
 }
 
 /** A page's verbs: comment on it (where the viewer can reply in this thread),
- *  copy its share link, open it beside your work, open it in a tab, install
- *  it as a desktop app. */
-export function PublishedPageActions({ slug, title, notes }: {
+ *  copy its share link, open it beside your work, open it in a tab. */
+export function PublishedPageActions({ slug, notes }: {
   slug: string;
-  /** The page's title, for the install fallback when the app info has not come. */
-  title?: string;
   notes?: ReturnType<typeof usePageNotes>;
 }) {
   const [copied, setCopied] = useState(false);
-  const installApp = useInstallAsApp(slug);
   useWatchEffect(() => {
     if (!copied) return;
     const t = setTimeout(() => setCopied(false), 1400);
@@ -314,10 +307,6 @@ export function PublishedPageActions({ slug, title, notes }: {
       <Tool label="Open in a new tab" onClick={() => window.open(pageShareUrl(slug), "_blank", "noopener,noreferrer")}>
         <ArrowUpRight className="h-3.5 w-3.5" />
       </Tool>
-      <Tool label={INSTALL_AS_APP} onClick={installApp.install}>
-        <AppWindow className="h-3.5 w-3.5" />
-      </Tool>
-      <InstallHandoff slug={slug} title={title} act={installApp} />
     </>
   );
 }
@@ -680,7 +669,7 @@ function PublishedPageFrame({ slug, caption, height, decision, whole = false, fi
         setLoadedSrc(null);
         setCollapsed((v) => !v);
       }}
-      actions={<PublishedPageActions slug={slug} title={meta?.title} notes={notes} />}
+      actions={<PublishedPageActions slug={slug} notes={notes} />}
       expand={canToggle && !(whole && reported) && !fill ? { expanded: tall, onToggle: toggleExpand } : undefined}
       grip={
         <span className="page-embed__grip" onDoubleClick={() => { setDragged(null); setExpanded(false); }} title="Drag to resize, double-click to fit">

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -14,7 +14,6 @@ import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./us
 import { useMountEffect } from "./useMountEffect";
 import { conversationProjectRoot, knownCheckoutRoots } from "@codecast/convex/convex/projectPaths";
 import { useWatchEffect } from "./useWatchEffect";
-import { useWorkspaceCollection } from "./useWorkspaceCollection";
 const api = _api as any;
 
 // One folder per repository name, each doc path named by the checkout a
@@ -39,8 +38,6 @@ function dedupeProjectPaths(paths: string[], checkouts: Set<string>): string[] {
 // subscriptions PER TAB, and each re-ran on any conversation/author write —
 // the dominant webListPaginated invalidation storm (~hundreds/s fleet-wide).
 const BOOTSTRAP_PAGE_SIZE = 24;
-/** Doc bodies held in docDetails ahead of any open: the workspace's newest docs. */
-const BODY_PREFETCH_DOCS = 300;
 const RECONCILE_PAGE_SIZE = 24;
 // Full reconcile is a one-shot crawl, not a live subscription. The durable
 // throttle (syncMeta.backfilledAt, written by runReconcileCrawl on completion)
@@ -76,24 +73,15 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   //    that re-pushes the page on every doc write. The sync log's cargo carries
   //    later changes; docProjectPaths is left to the full reconcile so it
   //    reflects ALL docs, not just this page.
+  const [results, setResults] = useState<any[] | undefined>(undefined);
   const { ready } = useBootstrapCollection(
     "docs",
     api.docs.webListPaginated,
     wsArgs === "skip" ? "skip" : { ...(wsArgs as object), paginationOpts: { numItems: BOOTSTRAP_PAGE_SIZE, cursor: null } },
-    { select: (r: any) => r?.page, liveLoadingScope: "docs" },
-  );
-  // The bodies to hold: the workspace's newest docs from the store, so a doc
-  // opened from the list, a task, a plan or a decision paints at once.
-  const workspaceDocs = useWorkspaceCollection<any>("docs", (d) => `${d.updated_at ?? 0}`);
-  const results = useMemo(
-    () => workspaceDocs
-      .filter((d) => d?._id && !isStubDoc(String(d._id)))
-      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
-      .slice(0, BODY_PREFETCH_DOCS),
-    [workspaceDocs],
+    { select: (r: any) => r?.page, liveLoadingScope: "docs", onRows: setResults },
   );
 
-  // BODY PREFETCH for the newest docs: the list channels are thin (bodies
+  // BODY PREFETCH for the recent page: the list channels are thin (bodies
   // stripped server-side), so without this a doc's first open always spins on
   // the detail round trip. Backfill content into the persisted docDetails
   // cache for any recent doc whose cached body is missing or stale, so opening
@@ -115,14 +103,12 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
       rowById.set(row._id, row);
     }
     if (rowById.size === 0) return;
+    for (const [id, row] of rowById) attemptedRef.current.set(id, row.updated_at);
     let cancelled = false;
     (async () => {
       const ids = [...rowById.keys()];
       for (let i = 0; i < ids.length && !cancelled; i += 6) {
         const batch = ids.slice(i, i + 6);
-        // Marked as each batch goes out, so a rerun that cancels this crawl
-        // leaves the batches it never sent for the next pass.
-        for (const id of batch) attemptedRef.current.set(id, rowById.get(id).updated_at);
         try {
           const { bodies } = await convex.query(api.docs.webGetBodies, { ids: batch });
           if (cancelled) return;

@@ -619,7 +619,7 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
   // The code span keeps its look; the link wraps it.
   const mention = className ? null : filePathMention(text);
-  if (mention) return <FilePathLink path={mention.path} line={mention.line} column={mention.column}>{code}</FilePathLink>;
+  if (mention) return <FilePathLink path={mention.path} line={mention.line}>{code}</FilePathLink>;
   return code;
 }
 
@@ -776,7 +776,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
   // it here, where the conversation's working directory is in context.
   const fileRef = parseFilePathHref(href);
-  if (fileRef) return <FilePathLink path={fileRef.path} line={fileRef.line} column={fileRef.column}>{children}</FilePathLink>;
+  if (fileRef) return <FilePathLink path={fileRef.path} line={fileRef.line}>{children}</FilePathLink>;
   if (href?.startsWith("mention://")) {
     const name = decodeURIComponent(href.slice(10));
     return (
@@ -1244,9 +1244,8 @@ export function EntityIdPill({
               ? "bg-sol-orange/[0.08] text-sol-orange hover:bg-sol-orange/[0.16]"
             : deployV
               ? deployV.chrome
-            // A merged pull request is settled, so it dims like an answered decision; its live dot stays bright.
             : isPr
-              ? entity?.state === "merged" ? "bg-sol-green/[0.05] text-sol-green/60 hover:bg-sol-green/[0.12]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";

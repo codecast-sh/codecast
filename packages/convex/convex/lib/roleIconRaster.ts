@@ -238,18 +238,17 @@ function chunk(type: string, data: Uint8Array): Uint8Array {
   return out;
 }
 
-/** An 8 bit RGB PNG of float pixels (0..255), or RGBA when `channels` is 4. */
-export function encodePng(w: number, h: number, px: Float32Array, channels: 3 | 4 = 3): Uint8Array {
-  const row = w * channels;
-  const raw = new Uint8Array(h * (row + 1));
+/** An 8 bit RGB PNG of float pixels (0..255). */
+export function encodePng(w: number, h: number, rgb: Float32Array): Uint8Array {
+  const raw = new Uint8Array(h * (w * 3 + 1));
   for (let y = 0; y < h; y++) {
-    raw[y * (row + 1)] = 0;
-    for (let x = 0; x < row; x++) raw[y * (row + 1) + 1 + x] = Math.max(0, Math.min(255, Math.round(px[y * row + x])));
+    raw[y * (w * 3 + 1)] = 0;
+    for (let x = 0; x < w * 3; x++) raw[y * (w * 3 + 1) + 1 + x] = Math.max(0, Math.min(255, Math.round(rgb[y * w * 3 + x])));
   }
   const ihdr = new Uint8Array(13);
   const v = new DataView(ihdr.buffer);
   v.setUint32(0, w); v.setUint32(4, h);
-  ihdr[8] = 8; ihdr[9] = channels === 4 ? 6 : 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
   const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlibSync(raw, { level: 6 })), chunk("IEND", new Uint8Array(0))];
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;

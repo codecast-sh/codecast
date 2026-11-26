@@ -14,7 +14,7 @@ import {
   decompressPostHogEvent,
   fetchMetricValue,
   fetchRecordingEvents,
-  SNAPSHOT_PART_BYTES,
+  SNAPSHOT_FIRST_PART_BYTES,
   hogqlScalar,
   importRecording,
   insightPath,
@@ -304,7 +304,7 @@ describe("recordings", () => {
 
   test("a range over the byte budget is read again blob by blob, keeping the blobs that fit", async () => {
     const urls: string[] = [];
-    const big = (i: number) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i, pad: "x".repeat(5 * 1024 * 1024) }])];
+    const big = (i: number) => [JSON.stringify(["w", { ...CLICK, timestamp: CLICK.timestamp + i, pad: "x".repeat(13 * 1024 * 1024) }])];
     const read = await fetchRecordingEvents(conn, "rec-1", blobServer([big(0), big(1)], urls));
     expect(read.ok).toBe(true);
     if (!read.ok) return;
@@ -324,9 +324,8 @@ describe("recordings", () => {
     const huge = await fetchRecordingEvents(conn, "rec-1", blobServer([blob(0, 2048)], []), 0, 1024 * 1024);
     expect(huge.ok).toBe(false);
     expect(!huge.ok && huge.error).toMatch(/over 1 MB, too large to read/);
-    // Every part, first or later, reads at most one part's budget: past it the action that converts and stores it runs out of memory.
-    const over = await fetchRecordingEvents(conn, "rec-1", blobServer([blob(0, 1), blob(1, SNAPSHOT_PART_BYTES / 1024 + 1)], []), 1);
-    expect(!over.ok && over.error).toMatch(/over 8 MB, too large to read/);
+    // The first part of an import reads less than a later part: the action that holds it also converts and stores it.
+    expect(SNAPSHOT_FIRST_PART_BYTES).toBeLessThan(24 * 1024 * 1024);
   });
 });
 

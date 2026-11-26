@@ -10,7 +10,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AlertTriangle, ShieldCheck, Undo2 } from "lucide-react";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
-import { answerOpenToChange } from "@codecast/shared/contracts";
+import { advisoryAnswerOpen } from "@codecast/shared/contracts";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { answersForOthers, mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -95,12 +95,12 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
   // A decision a newer state of its line replaced waits on nobody: it reads as replaced, with no answers to press.
   const pending = decision.status === "pending" && !detail.superseded;
   const rec = ladderRecommendation(decision);
-  // An answer on record a person may still change (answerOpenToChange): the
-  // controls stay up with the answer marked, and a new pick goes to the agent.
-  const changeable = answerable && answerOpenToChange(decision);
   // Single, multi and rank answer on the option rows themselves; a form answers on its fields in the footer.
-  const answerInOptions = (pending || changeable) && answerable && (decision.kind ?? "single") !== "form";
-  const verdictBar = (answerInOptions || changeable) && !!cardAnswerIndexes(decision);
+  const answerInOptions = pending && answerable && (decision.kind ?? "single") !== "form";
+  // An advisory card's answer stays open (advisoryAnswerOpen): the agent went
+  // ahead on its default, so the bar stays up under the outcome to change course.
+  const changeCourse = answerable && advisoryAnswerOpen(decision);
+  const verdictBar = (answerInOptions || changeCourse) && !!cardAnswerIndexes(decision);
   const chosen = new Set<number>(chosenOptions(decision));
 
   const onAnswer = useCallback((input: DecisionAnswerInput) => {
@@ -170,7 +170,7 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
     && !!meId && String((run as { user_id?: string }).user_id ?? "") === meId;
   const banner: ReactNode = decision.status === "pending" && detail.superseded ? (
     <span className="inline-flex flex-wrap items-center gap-3">
-      <SupersededNote superseded={detail.superseded} runId={decision.workflow_run_id} />
+      <SupersededNote superseded={detail.superseded} />
       {reaskable && <ReaskButton at={decision.reask_at ?? detail.reask_at ?? 0} subject={decision.short_id ?? decision.question} onReask={() => reaskDecision(decision._id)} onRefused={() => useInboxStore.getState().reaskRefused(decision._id)} className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12px] text-sol-text hover:border-sol-text-dim disabled:opacity-60" />}
     </span>
   ) : closedWords && !act ? (
@@ -188,7 +188,7 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
   const answerSection = (!pending || !answerInOptions) && (!outcome || canReopen || !!detail.grant_offer) && !(closed && !canReopen && !detail.grant_offer);
 
   return {
-    meId, now, run, cardTask, doubt, pending, changeable, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, onReopen,
+    meId, now, run, cardTask, doubt, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, onReopen,
     holderLine, heldNote, answeredByLine, scope, outcome, canReopen, closed, closedWords, banner, answerSection,
   };
 }
@@ -216,12 +216,6 @@ export function DecisionAnswerPanel({ decision, detail, answerable, a, keys = tr
           {a.scope && <div className="mt-2 text-[12.5px] text-sol-text-muted" data-decision-approval-scope>{a.scope}{decision.gate_node_id !== CARD_GATE_NODE_ID ? ", not shipping it. Shipping asks again on its own card." : "."}</div>}
           {a.answeredByLine && <div className="mt-2 text-[12px] text-sol-text-dim">{a.answeredByLine}</div>}
         </>
-      )}
-      {a.changeable && decision.kind === "form" && (
-        <div className="mt-4" data-decision-change-form>
-          <h2 className="decision-kicker mb-3">Change your answer</h2>
-          <DecisionAnswerControls decision={decision} onAnswer={a.onAnswer} keys={keys} keyScope={keyScope} recommendation={a.rec} />
-        </div>
       )}
       {a.canReopen && (
         <Button variant="outline" size="xs" onClick={a.onReopen} className="mt-3">

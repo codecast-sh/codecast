@@ -21,9 +21,7 @@ import { mentionContextPosition, type MentionContext } from "./mentionContext";
 // yesterday would otherwise outrank one working this minute).
 
 export function score(label: string, q: string): number {
-  return lowerScore(label.toLowerCase(), q);
-}
-function lowerScore(l: string, q: string): number {
+  const l = label.toLowerCase();
   if (l === q) return 0;
   if (l.startsWith(q)) return 1;
   const idx = l.indexOf(q);
@@ -46,13 +44,6 @@ let normalizedQuery = "";
 let queryTokens: string[] = [];
 
 export function matchScore(text: string, query: string): number {
-  return matchScoreLower(text.toLowerCase(), query);
-}
-
-/** matchScore over text already lowered, for a caller that keeps the lowered
- *  text, and its words (`words`, called only when needed), per row across
- *  keystrokes rather than lowering and splitting a long text on every key. */
-export function matchScoreLower(lower: string, query: string, words?: () => string[]): number {
   if (query !== previousQuery) {
     previousQuery = query;
     normalizedQuery = query.trim().toLowerCase();
@@ -61,15 +52,13 @@ export function matchScoreLower(lower: string, query: string, words?: () => stri
   const q = normalizedQuery;
   if (!q) return 0;
   const tokens = queryTokens;
-  if (tokens.length <= 1) return lowerScore(lower, q);
+  if (tokens.length <= 1) return score(text, q);
+  const lower = text.toLowerCase();
   // A word absent from the whole text is absent from every word of it, so
   // most candidates are refused here, before the split that dominated a
   // palette keystroke over tens of thousands of tasks.
   for (const tok of tokens) if (!lower.includes(tok)) return Infinity;
-  return wordsScore(lower, words ? words() : textWords(lower), tokens);
-}
-
-function wordsScore(lower: string, words: string[], tokens: string[]): number {
+  const words = textWords(lower);
   let total = 0;
   for (const tok of tokens) {
     let best = Infinity;

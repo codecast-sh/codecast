@@ -145,9 +145,6 @@ export const getUserTeams = query({
           task_statuses: team.task_statuses,
           features: team.features,
           default_flow: team.default_flow,
-          // Installed apps policy (setAppsPolicy).
-          apps_install: team.apps_install,
-          apps_full_access: team.apps_full_access,
           // Managed policy (Team settings > Managed devices).
           policy: team.policy,
           role: m.role,
@@ -1584,23 +1581,6 @@ export const setDefaultFlow = mutation({
     if (!membership || membership.role !== "admin") throw new Error("Only admins can set the team's default flow");
     const slug = args.slug?.trim() || undefined;
     await ctx.db.patch(args.team_id, { default_flow: slug });
-    return { success: true };
-  },
-});
-
-/** The team's installed-apps policy (docs/architecture/installed-apps.md): may
- *  members install pages as desktop apps, and may those apps get full access.
- *  An admin's; a field left out keeps its value. */
-export const setAppsPolicy = mutation({
-  args: { team_id: v.id("teams"), install: v.optional(v.boolean()), full_access: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    if (!(await isTeamAdmin(ctx, userId, args.team_id))) throw new Error("Only admins can change the team's apps policy");
-    const patch: { apps_install?: boolean; apps_full_access?: boolean } = {};
-    if (args.install !== undefined) patch.apps_install = args.install;
-    if (args.full_access !== undefined) patch.apps_full_access = args.full_access;
-    if (Object.keys(patch).length) await ctx.db.patch(args.team_id, patch);
     return { success: true };
   },
 });

@@ -53,7 +53,6 @@ export const CURRENT_USER = (now: number) => ({
   team_id: TEAM_ID,
   active_team_id: TEAM_ID,
   status: "available",
-  voice_id_enabled: true,
 });
 
 // A settled team: every feature decided, so no screen offers to turn one on.

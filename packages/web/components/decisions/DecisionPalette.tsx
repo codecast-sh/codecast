@@ -45,7 +45,7 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
     if (step !== "escalate") return [];
     const st = useInboxStore.getState();
     const me = String(st.currentUser?._id ?? "");
-    const ids = new Set(rows.flatMap((d) => rosterEscalationTargets(d.holder?.kind === "user" ? d.holder.id : me, windowOrgTree(st), teamMembersOf(st), me)));
+    const ids = new Set(rows.flatMap((d) => rosterEscalationTargets(d.holder?.kind === "user" ? d.holder.id : me, windowOrgTree(st)?.people, teamMembersOf(st), me)));
     return people.filter((p) => ids.has(p.key));
   }, [step, rows, people]);
   const label = rows.length === 1 ? rows[0].question : `${counted(rows.length)} selected`;

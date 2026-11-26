@@ -409,7 +409,7 @@ export function FaceRow({
   const hasStrip = children != null && children !== false;
   const callIds = row.entries.filter(onTheCall).map((e) => e.id);
   const lastCallId = hasStrip ? callIds[callIds.length - 1] : undefined;
-  // THE STACK. On a call or a ring, everyone off it folds into one overlapped stack
+  // THE STACK. On a call, everyone off it folds into one overlapped stack
   // after the track: the call is what the row is about now. A press on the
   // stack spreads the team back out as ordinary faces (their cards carry
   // Add to call); the fold closes it again, and so does the next call.
@@ -420,13 +420,11 @@ export function FaceRow({
   // the call keeps their seat's room at all times, folded out of sight behind
   // one small circle after the strip; pointing at the circle fans them out
   // beside it as a small stack, and a click spreads them full size.
-  // A ring either way counts as the call: before the room is joined there is
-  // no room, and the team must already sit off to the side.
-  const callKey = callRoomOf(row) ?? (row.links.some((l) => l.kind === "ring") ? "ring" : null);
+  const callRoom = callRoomOf(row);
   const outsiders = row.entries.length - callIds.length;
-  const stackable = !!callKey && callIds.length > 0 && outsiders >= (density === "float" ? 1 : 2);
+  const stackable = !!callRoom && callIds.length > 0 && outsiders >= (density === "float" ? 1 : 2);
   const [spread, setSpread] = useState(false);
-  useLayoutEffect(() => setSpread(false), [callKey]);
+  useLayoutEffect(() => setSpread(false), [callRoom]);
   const stacked = stackable && !spread && density !== "float";
   const [peek, setPeek] = useState(false);
   const folds = stackable && density === "float";

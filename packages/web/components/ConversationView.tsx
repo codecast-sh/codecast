@@ -4,7 +4,6 @@ import { WebBranchFeed } from "./changes/WebBranchFeed";
 import { RunThroughFlow } from "./line/widgets/RunThroughFlow";
 import { ShipApprovalPrompt } from "./line/widgets/ShipApprovalPrompt";
 import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
-import { SessionFlowContext } from "./FlowContext";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
 import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
 import { firstUserPromptOf, forkFamilyOf } from "../hooks/useForkTree";
@@ -2365,9 +2364,6 @@ const ConversationViewInner = (
   const scopeConvId = conversation?._id ? String(conversation._id) : null;
   const scopeToken = getShareTokenScope(scopeConvId);
   const viaShare = !!scopeToken || conversation?.access_level === "shared";
-  // The owner shares this session with the viewer as a summary: the summary
-  // replaces the transcript, whatever rows this window still holds locally.
-  const summaryOnly = (conversation as any)?.content_access === "summary";
   const referenceScope = useMemo(
     () => (scopeConvId && viaShare ? { conversationId: scopeConvId, shareToken: scopeToken } : null),
     [scopeConvId, viaShare, scopeToken],
@@ -4575,6 +4571,24 @@ const ConversationViewInner = (
                 <PlanBadge plan={(conversation as any).active_plan} />
               </span>
             )}
+            {/* A workflow run in flight inside this session. The launch card
+                sits wherever the run was armed — often far above the tail —
+                so the header carries the standing signal, linking to the run's
+                live view. Server truth via the conversation's stamped run. */}
+            {(conversation as any)?.workflow_run_id && !(conversation as any)?.is_workflow_sub &&
+              ["pending", "running", "paused"].includes((conversation as any)?.workflow_run_status) && (
+              <span data-simple-hide className="contents">
+                <Link
+                  href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-meta flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
+                  title={`Workflow ${(conversation as any).workflow_run_status}${(conversation as any).workflow_run_name ? `: ${(conversation as any).workflow_run_name}` : ""} — open the live run`}
+                >
+                  <span className="w-1 h-1 rounded-full bg-sol-cyan animate-pulse motion-reduce:animate-none" />
+                  <Workflow className="w-2.5 h-2.5 flex-shrink-0" />
+                  <span className="truncate">{(conversation as any).workflow_run_name || "workflow"}</span>
+                </Link>
+              </span>
+            )}
                 </>}
         </>)}
         actions={conversation && (<>
@@ -5087,15 +5101,6 @@ const ConversationViewInner = (
           )}
           {subHeaderContent}
         </ContextRail>
-        {/* A session a flow made, or one that launched a run: the whole flow, this session's station marked. */}
-        {conversation && !guest && (
-          <SessionFlowContext
-            conversationId={conversation._id.toString()}
-            ownRunId={(conversation as any).workflow_run_id}
-            parentId={(conversation as any).parent_conversation_id}
-            className="mx-3 my-1.5"
-          />
-        )}
         {/* Unacked handoff strip. Lives INSIDE the header so headerHeight's
             ResizeObserver counts it and the sticky-message overlay (anchored at
             top: headerHeight) lands below instead of covering it. */}
@@ -5258,12 +5263,12 @@ const ConversationViewInner = (
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">
-        {conversation && !summaryOnly && timeline.length === 0 && leadNode && !leadPinned ? (
+        {conversation && timeline.length === 0 && leadNode && !leadPinned ? (
           <div className="flex-1">{leadNode}</div>
-        ) : (!conversation || summaryOnly || timeline.length === 0) ? (
+        ) : (!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${newSessionPage ? "justify-end pt-6 pb-5" : hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
-              summaryOnly ? (
+              (conversation as any).content_access === "summary" ? (
                 <SummaryOnlyState conversation={conversation as any} />
               ) : (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
                 <MessagesUnavailableState

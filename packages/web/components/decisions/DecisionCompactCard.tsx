@@ -25,8 +25,7 @@ import { RunFallbackLine } from "./RunFallbackLine";
 import { ChangeCardHeadline, ChangeCardView, SepRow, cardAnswerIndexes } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
-import { plainParagraphs } from "@codecast/shared/contracts/plainText";
-import { decisionWords } from "@codecast/shared/contracts/changeCard";
+import { stripMarkdown } from "../../lib/notificationText";
 import "./decisions.css";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { modernButton, modernPill } from "../ui/modernLook";
@@ -46,13 +45,10 @@ export function DecisionCompactCard({
   line = false,
   folded = false,
   askedOf,
-  embedded = false,
 }: {
   decision: SessionDecisionItem;
   /** The people it was asked of, when the viewer is not one of them. */
   askedOf?: string;
-  /** Drawn inside a surface that already frames it (a run's "Your call" band): no box of its own. */
-  embedded?: boolean;
   keys?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
@@ -69,8 +65,6 @@ export function DecisionCompactCard({
     ...askingSessionDeps(decision.conversation_id),
     (st) => decision.task_id ? st.tasks[decision.task_id]?.short_id : undefined,
     (st) => decision.stack_id ? st.decisionStacks[decision.stack_id]?.title : undefined,
-    // The attached document: the host keeps it for every open decision (useSyncOpenDecisionDetails).
-    (st) => (st as any).decisionDetails?.[decision._id]?.doc?.content as string | undefined,
   ]);
   const answerDecision = useInboxStore((st) => st.answerDecision);
   const adoptDecision = useInboxStore((st) => st.adoptDecision);
@@ -102,8 +96,6 @@ export function DecisionCompactCard({
       line={line}
       folded={folded}
       askedOf={askedOf}
-      docContent={(s as any).decisionDetails?.[decision._id]?.doc?.content}
-      embedded={embedded}
     />
   );
 }
@@ -137,14 +129,9 @@ export function DecisionCompactCardView({
   line = false,
   folded = false,
   askedOf,
-  docContent,
-  embedded = false,
 }: {
   decision: SessionDecisionItem;
   askedOf?: string;
-  /** The decision's attached document, when it has one: its words join the context. */
-  docContent?: string;
-  embedded?: boolean;
   session?: AskingSessionRow;
   task?: { short_id?: string };
   stack?: { _id: string; short_id?: string; title: string };
@@ -178,7 +165,6 @@ export function DecisionCompactCardView({
   // A card's Ship / Revise / Drop ride its one row as chips.
   const chipsInRow = answersHere && !!cardAnswerIndexes(decision);
   const asked = `asked ${formatTimeAgo(decision.created_at, now)}`;
-  const words = decisionWords(decision.context_md, docContent);
   const taskRef = task?.short_id ?? decision.card?.cause.task;
   // A change card draws the head every surface does (ChangeCardHeadline):
   // the change, then one dim line with its cause and this row's facts, so the
@@ -212,15 +198,13 @@ export function DecisionCompactCardView({
       // A change card the answer keys act on wears the same ring a focused
       // transcript card does (changeCard.css), and only it shows keycaps.
       data-keys-live={keys && decision.card ? "" : undefined}
-      data-embedded={embedded ? "" : undefined}
-      className={`decision-card ${embedded ? "" : "rounded-lg border bg-sol-card/40 "}transition-colors ${embedded ? "" : selected ? "border-sol-violet/60 bg-sol-violet/5" : keys && !line && !decision.card ? "border-sol-yellow/40" : "border-sol-border/70 hover:border-sol-border"}`}
+      className={`decision-card rounded-lg border bg-sol-card/40 transition-colors ${selected ? "border-sol-violet/60 bg-sol-violet/5" : keys && !line && !decision.card ? "border-sol-yellow/40" : "border-sol-border/70 hover:border-sol-border"}`}
     >
-      <div className={embedded ? "pt-1 pb-2" : "px-4 pt-3 pb-2"}>
+      <div className="px-4 pt-3 pb-2">
         {/* Each fact carries its own separator (SepRow), so a wrapped line
             never opens on a dot or an orphaned mark. The asking session's
             own dot says whether it is live; only a blocking ask adds one. */}
-        {/* Embedded, the host already says who asked and where the run waits, so only the way to the page stays (beside the question). */}
-        {!decision.card && !embedded && <div className="flex items-start gap-2">
+        {!decision.card && <div className="flex items-start gap-2">
           <SepRow
           className="flex-1 min-w-0 text-meta text-sol-text-dim"
           items={[
@@ -300,30 +284,38 @@ export function DecisionCompactCardView({
           </>
         ) : (
           <>
-            {embedded ? (
-              <div className="flex items-start gap-3">
-                <Link href={decisionHref(decision)} className="decision-question block flex-1 min-w-0 text-sol-text hover:text-sol-blue transition-colors">
-                  {decision.question}
-                </Link>
-                <span className="shrink-0 pt-1.5">{openLink}</span>
-              </div>
-            ) : (
-              <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
-                {decision.question}
-              </Link>
-            )}
+            <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
+              {decision.question}
+            </Link>
           </>
         )}
         <HandoffNote decision={decision} className="mt-2" />
         {/* The reasoning, inline. A decision cannot be made from its title
-            and its option labels alone, so what the asker wrote (the short
-            context and the attached document) reads here as a few plain
-            lines, and opens in place to the whole thing. Collapsed it is
-            stripped text, not parsed markdown: a queue of ten cards would
-            otherwise parse ten bodies nobody has opened. A body holding a
-            canvas is the exception, since the visual is what the reader came
-            for. A change card's own line says what the context would. */}
-        {words && !decision.card && <DecisionWordsPreview words={words} />}
+            and its option labels alone, so the context the asker wrote reads
+            here, clipped to a few lines with the way to open it. Collapsed it
+            renders as stripped text, not parsed markdown: a queue of ten
+            cards would otherwise parse ten bodies nobody has opened. A body
+            holding a canvas is the exception, since its stripped text is raw
+            HTML and the visual is what the reader came for. */}
+        {/* A change card's own line says what the context would: the
+            question, then the change, then the proof, once each. */}
+        {decision.context_md && !decision.card && (
+          <CollapsibleBody
+            className="mt-2"
+            collapsedHeight={112}
+            toggleClassName="mt-1"
+            expandLabel="Read more"
+            collapseLabel="Show less"
+          >
+            {(expanded) => (
+              <div className="decision-card-body" data-decision-context>
+                {expanded || hasCanvasFence(decision.context_md!)
+                  ? <MarkdownRenderer content={decision.context_md!} />
+                  : <p className="whitespace-pre-wrap">{stripMarkdown(decision.context_md!, { keepNewlines: true })}</p>}
+              </div>
+            )}
+          </CollapsibleBody>
+        )}
         {/* An attached report is the evidence the question rests on, so it
             renders here rather than living one click away on the document
             page. Clipped like the context: a page is taller than a card. */}
@@ -343,7 +335,7 @@ export function DecisionCompactCardView({
         )}
       </div>
       {pending && !chipsInRow && !folded && (
-        <div className={embedded ? "pb-3" : "px-4 pb-3"}>
+        <div className="px-4 pb-3">
           {kind === "single" ? (
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />
           ) : (
@@ -353,39 +345,12 @@ export function DecisionCompactCardView({
           )}
         </div>
       )}
-      {pending && <RunFallbackLine run={decision.run} className={embedded ? "pb-3" : "px-4 pb-3"} />}
+      {pending && <RunFallbackLine run={decision.run} className="px-4 pb-3" />}
       {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). */}
       {!folded && (
-        <div className={embedded ? "pb-3" : "px-4 pb-3"}><DecisionDiscussion decisionId={decision._id} compact /></div>
+        <div className="px-4 pb-3"><DecisionDiscussion decisionId={decision._id} compact /></div>
       )}
     </div>
-  );
-}
-
-// A preview drops what plain text cannot carry (a fenced block, a page alone on its line), so the way to the whole body
-// shows even when the plain lines fit.
-const DROPPED_IN_PREVIEW = /```|^\s*<?https?:\/\/\S+>?\s*$/m;
-
-/** What the decision says about itself: a few plain lines, then the whole body rendered in place. */
-function DecisionWordsPreview({ words }: { words: string }) {
-  const canvas = hasCanvasFence(words);
-  return (
-    <CollapsibleBody
-      className="mt-2"
-      collapsedHeight={96}
-      toggleClassName="decision-read-more mt-1.5"
-      expandLabel="Read the whole decision"
-      collapseLabel="Show less"
-      more={DROPPED_IN_PREVIEW.test(words)}
-    >
-      {(expanded) => (
-        <div className="decision-card-body" data-decision-context data-expanded={expanded ? "" : undefined}>
-          {expanded || canvas
-            ? <MarkdownRenderer content={words} />
-            : <p className="whitespace-pre-wrap">{plainParagraphs(words)}</p>}
-        </div>
-      )}
-    </CollapsibleBody>
   );
 }
 

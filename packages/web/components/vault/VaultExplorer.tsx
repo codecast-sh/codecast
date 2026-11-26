@@ -51,8 +51,6 @@ import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../ui/contex
 import { isBookmarked, type BookmarkInput } from "../../lib/vault/bookmarks";
 import { useVaultBookmarks } from "../../lib/vault/bookmarksHost";
 import { useVaultStore } from "../../store/vaultStore";
-import { GIT_STATE_COLOR, explorerGitDecorations, holdGitStatusFeed, useGitStatusStore } from "../../lib/code/git/status";
-import { PresenceDot } from "../code/agent/PresenceDot";
 
 export { noteDisplayName };
 export type { TreeNode };
@@ -155,21 +153,7 @@ export const VaultExplorer = memo(function VaultExplorer({
   const bookmarks = useVaultBookmarks();
 
   const showAllFiles = useVaultStore((s) => s.showAllFiles);
-  // Git status colors: one status map for the vault, refreshed on watcher
-  // events and saves (lib/code/git/status), never fetched per row.
-  const activeVaultId = useVaultStore((s) => s.activeVaultId);
-  const gitFiles = useGitStatusStore((s) => (activeVaultId ? s.byVault[activeVaultId]?.files : undefined));
-  const git = useMemo(() => explorerGitDecorations(gitFiles), [gitFiles]);
-  useWatchEffect(() => holdGitStatusFeed(), []);
-  // Files deleted since HEAD stay listed (struck through) until committed.
-  const withDeleted = useMemo(() => {
-    const ghosts = git.deleted.filter((p) => !files[p]);
-    if (!ghosts.length) return files;
-    const out = { ...files };
-    for (const p of ghosts) out[p] = { path: p, mtime: 0, size: 0 };
-    return out;
-  }, [files, git]);
-  const visible = useMemo(() => visibleVaultFiles(withDeleted, showAllFiles), [withDeleted, showAllFiles]);
+  const visible = useMemo(() => visibleVaultFiles(files, showAllFiles), [files, showAllFiles]);
   const tree = useMemo(() => buildVaultTree(visible, sortMode), [visible, sortMode]);
   const rows = useMemo(() => flattenTree(tree, expandedDirs), [tree, expandedDirs]);
 
@@ -248,9 +232,9 @@ export const VaultExplorer = memo(function VaultExplorer({
   const activate = useCallback(
     (row: FlatRow) => {
       if (row.node.dir) toggleDir(row.node.path);
-      else if (files[row.node.path]) onOpen(row.node.path);
+      else onOpen(row.node.path);
     },
-    [toggleDir, onOpen, files],
+    [toggleDir, onOpen],
   );
 
   const commitRename = useCallback(
@@ -353,11 +337,7 @@ export const VaultExplorer = memo(function VaultExplorer({
   // Notes, their attachments, and folders can be renamed or trashed. Code is
   // read-only — see the menu items below. So is anything listed only because
   // "show ignored files" is on: the daemon's write scope never widens.
-  // A file deleted since HEAD is listed but not on disk: nothing to open, move
-  // or bookmark, only its path to copy.
-  const menuGone = !!menuNode && !menuNode.dir && !files[menuNode.path];
   const menuEditable =
-    !menuGone &&
     !!menuNode &&
     !menuNode.ignored &&
     (menuNode.dir || isVaultMarkdownPath(menuNode.path) || isVaultAssetPath(menuNode.path));
@@ -390,8 +370,6 @@ export const VaultExplorer = memo(function VaultExplorer({
             const isFocused = vi.index === focusIndex;
             const isExpanded = node.dir && !!expandedDirs[node.path];
             const isRenaming = node.path === renameTarget;
-            const gitState = node.dir ? (isExpanded ? undefined : git.dirs.get(node.path)) : git.files.get(node.path);
-            const gone = !node.dir && gitState === "deleted" && !files[node.path];
             // Ignored rows read as present-but-secondary, the way an editor dims
             // gitignored files: still a row, still opens, visibly not a note.
             const rowClass = `w-full flex items-center gap-1.5 px-2 py-[3px] text-left truncate rounded-sm transition-colors ${
@@ -439,34 +417,15 @@ export const VaultExplorer = memo(function VaultExplorer({
                       setFocusIndex(vi.index);
                       activate(row);
                     }}
-                    aria-disabled={gone || undefined}
-                    className={gone ? `${rowClass} cursor-default` : rowClass}
+                    className={rowClass}
                     style={{ paddingLeft: 8 + depth * 14 }}
                   >
                     {chevron}
                     <span className="flex-shrink-0 opacity-70">{rowIcon(node, isExpanded)}</span>
-                    <span
-                      className={`truncate${gone ? " line-through" : ""}`}
-                      data-git-state={node.dir ? undefined : gitState}
-                      style={gitState && !node.dir ? { color: GIT_STATE_COLOR[gitState] } : undefined}
-                    >
-                      {node.dir ? node.name : noteDisplayName(node.name)}
-                    </span>
-                    {!node.dir && <span className="ml-auto pr-1 empty:hidden"><PresenceDot vaultId={activeVaultId} path={node.path} /></span>}
-                    {(gitState && node.dir) || (node.dir && node.noteCount > 0) ? (
-                      <span className="ml-auto flex items-center gap-1.5 pr-1">
-                        {node.dir && node.noteCount > 0 && (
-                          <span className="text-meta text-sol-text-dim tabular-nums">{node.noteCount}</span>
-                        )}
-                        {gitState && node.dir && (
-                          <span
-                            data-git-state={gitState}
-                            className="h-1.5 w-1.5 flex-shrink-0 rounded-full opacity-80"
-                            style={{ backgroundColor: GIT_STATE_COLOR[gitState] }}
-                          />
-                        )}
-                      </span>
-                    ) : null}
+                    <span className="truncate">{node.dir ? node.name : noteDisplayName(node.name)}</span>
+                    {node.dir && node.noteCount > 0 && (
+                      <span className="ml-auto pr-1 text-meta text-sol-text-dim tabular-nums">{node.noteCount}</span>
+                    )}
                   </button>
                 )}
               </div>
@@ -476,18 +435,7 @@ export const VaultExplorer = memo(function VaultExplorer({
       )}
 
       <ContextMenu state={menuState}>
-        {() =>
-          menuNode && menuGone ? (
-            <CtxItem
-              icon={ClipboardCopy}
-              onSelect={() => {
-                closeMenu();
-                void copyToClipboard(menuNode.path).catch(() => {});
-              }}
-            >
-              Copy path
-            </CtxItem>
-          ) : (
+        {() => (
           <>
             {menuNode && !menuNode.dir && (
               <>
@@ -602,8 +550,7 @@ export const VaultExplorer = memo(function VaultExplorer({
               </>
             )}
           </>
-          )
-        }
+        )}
       </ContextMenu>
     </div>
   );

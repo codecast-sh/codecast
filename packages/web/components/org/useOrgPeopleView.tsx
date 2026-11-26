@@ -18,7 +18,6 @@ import { ORG_STACK_VISIBLE, parentNodeId, parentRefOfNodeId, roleNodeId, session
 import { firstServerCursor, moveExpandedSession } from "./orgPager";
 import { roleDetailsOf, roleDetailsSig, sessionDetailsOf, sessionDetailsSig, sessionProjectsOf, sessionProjectsSig } from "./orgSessionDetail";
 import type { OrgParentRef, OrgSession, OrgTree } from "./orgTypes";
-import { drawnManager } from "../../store/orgTreeMoves";
 
 /** One org.sessionsUnder page per click on a cluster card. */
 export const ORG_PAGE = 8;
@@ -135,7 +134,8 @@ export function useOrgPeopleView(tree: OrgTree | null): OrgPeopleView {
     if (!tree) return null;
     if (subject.kind === "role") return tree.roles.find((r) => r._id === subject.id)?.reports_to ?? null;
     if (subject.kind === "person") {
-      return drawnManager(tree, tree.people.find((p) => p.user_id === subject.id));
+      const to = tree.people.find((p) => p.user_id === subject.id)?.reports_to_user_id;
+      return to ? { kind: "user", user_id: to } : null;
     }
     for (const p of tree.people) if (p.sessions.some((x) => x._id === subject.id)) return { kind: "user", user_id: p.user_id };
     for (const r of tree.roles) if (r.sessions.some((x) => x._id === subject.id)) return { kind: "role", role_id: r._id };

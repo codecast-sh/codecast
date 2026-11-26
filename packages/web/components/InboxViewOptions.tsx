@@ -1,4 +1,4 @@
-import { Archive, Bot, ChevronsDownUp, EyeOff, Rows3, SlidersHorizontal, Star, Users, type LucideIcon } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   DropdownMenu,
@@ -14,22 +14,11 @@ import {
 import { resolveCardBars, type CardBarsMode } from "../lib/uiPrefDefaults";
 export type { CardBarsMode };
 
-const CARD_BARS: { value: CardBarsMode; label: string; icon: LucideIcon }[] = [
-  { value: "strip", label: "One line", icon: ChevronsDownUp },
-  { value: "full", label: "A row each", icon: Rows3 },
-  { value: "hidden", label: "Hidden", icon: EyeOff },
+const CARD_BARS: { value: CardBarsMode; label: string }[] = [
+  { value: "strip", label: "Folded" },
+  { value: "full", label: "Full rows" },
+  { value: "hidden", label: "Hidden" },
 ];
-
-/** One menu row: icon, label, and an optional count at the right edge. */
-function OptionLabel({ icon: Icon, label, count }: { icon: LucideIcon; label: string; count?: number }) {
-  return (
-    <span className="flex flex-1 items-center gap-2">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
-      <span className="flex-1">{label}</span>
-      {count !== undefined && <span className="tabular-nums text-sol-text-dim">{count}</span>}
-    </span>
-  );
-}
 
 // How the session rail shows its list, behind one button at the end of the
 // rail header: whose sessions (mine or the team's), which extra rows
@@ -82,27 +71,29 @@ export function InboxViewOptions(props: {
         {hasList && <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Show</DropdownMenuLabel>}
         {p.showTeam && (
           <DropdownMenuCheckboxItem checked={p.teamScope} onCheckedChange={(on) => p.onTeamScope(!!on)} onSelect={(e) => e.preventDefault()}>
-            <OptionLabel icon={Users} label="Team's sessions" />
+            Team's sessions
           </DropdownMenuCheckboxItem>
         )}
         {p.subagentCount > 0 && (
           <DropdownMenuCheckboxItem checked={p.showSubagents} onCheckedChange={(on) => p.onShowSubagents(!!on)} onSelect={(e) => e.preventDefault()}>
-            <OptionLabel icon={Bot} label="Subagents" count={p.subagentCount} />
+            <span className="flex-1">Subagents</span>
+            <span className="tabular-nums text-sol-text-dim">{p.subagentCount}</span>
           </DropdownMenuCheckboxItem>
         )}
         {p.oldCount > 0 && (
           <DropdownMenuCheckboxItem checked={p.showOld} onCheckedChange={(on) => p.onShowOld(!!on)} onSelect={(e) => e.preventDefault()}>
-            <OptionLabel icon={Archive} label="Old sessions" count={p.oldCount} />
+            <span className="flex-1">Old sessions</span>
+            <span className="tabular-nums text-sol-text-dim">{p.oldCount}</span>
           </DropdownMenuCheckboxItem>
         )}
         {p.showCardBars && (
           <>
             {hasList && <DropdownMenuSeparator />}
-            <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Triggers and runs on cards</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Triggers and tasks on cards</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={p.cardBars} onValueChange={(v) => p.onCardBars(v as CardBarsMode)}>
               {CARD_BARS.map((option) => (
                 <DropdownMenuRadioItem key={option.value} value={option.value} onSelect={(e) => e.preventDefault()}>
-                  <OptionLabel icon={option.icon} label={option.label} />
+                  {option.label}
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
@@ -112,7 +103,7 @@ export function InboxViewOptions(props: {
           <>
             {(hasList || p.showCardBars) && <DropdownMenuSeparator />}
             <DropdownMenuCheckboxItem checked={p.favorites} onCheckedChange={(on) => p.onFavorites(!!on)}>
-              <OptionLabel icon={Star} label="Favorites only" />
+              Favorites only
             </DropdownMenuCheckboxItem>
           </>
         )}

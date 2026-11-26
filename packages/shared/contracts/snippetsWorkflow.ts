@@ -54,7 +54,7 @@ digraph my_flow {
 }
 \`\`\`
 
-A node with \`flow="<slug>"\` runs that segment in place: its steps join the graph under the node's name, its plain ends go on by the node's own edges, and \`<node>.exit\` in their conditions names which end it reached. A segment's stop ends the run in its words, unless the node routes \`outcome = failure\`. A flow says what it is on its graph line (\`graph [kind="segment", label="Review", description="...", takes="task,branch"]\`). The \`label\` is the flow's name wherever a person meets it, on the chip beside its sessions and decisions and on its runs: one or two plain words a teammate would say, such as "Change" or "Review", with what it does in \`description\`. A graph that declares a kind joins the pool, and the repo's own flows live in \`.codecast/flows/<slug>.cast\`.
+A node with \`flow="<slug>"\` runs that segment in place: its steps join the graph under the node's name, its plain ends go on by the node's own edges, and \`<node>.exit\` in their conditions names which end it reached. A segment's stop ends the run in its words, unless the node routes \`outcome = failure\`. A flow says what it is on its graph line (\`graph [kind="segment", label="Review", description="...", takes="task,branch"]\`); a graph that declares a kind joins the pool, and the repo's own flows live in \`.codecast/flows/<slug>.cast\`.
 
 \`\`\`bash
 cast flow show <flow>               # its steps, who does each, where each sends the work, and its slots

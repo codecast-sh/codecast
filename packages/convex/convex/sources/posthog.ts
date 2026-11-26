@@ -39,15 +39,16 @@ const QUERY_READ_MAX_BYTES = 4 * 1024 * 1024;
 /** A watch reads one number; its answer is small or wrong. */
 const VALUE_READ_MAX_BYTES = 1024 * 1024;
 const LIST_READ_MAX_BYTES = 2 * 1024 * 1024;
+/** Every snapshot blob of one recording together, compressed text as received. */
+const SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
 /**
- * One part of a recording, compressed text as received: the first part an
- * import reads and each later part the rest chain reads
- * (sources/replayRest.ts). The action that holds a part also holds its rrweb
- * events, the converted stream and the masked capture at once (a later part,
- * the stored stream and the carry too), and past about this much a dense
- * recording ran it out of its 64 MB, which kills the action without an error.
+ * The first part of a recording, read by the import a person or the bulk
+ * import waits on. Smaller than a later part's budget: that action also holds
+ * the rrweb events, the converted stream and the masked capture at once, and
+ * past about this much compressed text a dense recording ran it out of its
+ * 64 MB. Whatever is past it is read by the rest chain (sources/replayRest.ts).
  */
-export const SNAPSHOT_PART_BYTES = 8 * 1024 * 1024;
+export const SNAPSHOT_FIRST_PART_BYTES = 8 * 1024 * 1024;
 const SNAPSHOT_MAX_BLOBS = 60;
 /**
  * blob_v2 keys read in one call. PostHog refuses a wider range from a personal
@@ -553,7 +554,7 @@ export async function fetchRecordingEvents(
   recordingId: string,
   fetchImpl: FetchLike = fetch,
   from = 0,
-  maxBytes = SNAPSHOT_PART_BYTES,
+  maxBytes = SNAPSHOT_MAX_BYTES,
 ): Promise<{ ok: true; events: RrwebEvent[]; truncated: boolean; next_blob: number; blobs: number; realtime: boolean } | PostHogFailure> {
   const listed = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/snapshots`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
   if (!listed.ok) return listed;
@@ -711,7 +712,7 @@ export async function readPostHogRecording(conn: PostHogConn, recordingId: strin
   const meta = parseJson(await posthogRequest(conn, `/session_recordings/${recordingId}/`, { maxBytes: LIST_READ_MAX_BYTES }, fetchImpl));
   if (!meta.ok) throw new VendorCallError(meta);
   const row = recordingRow(meta.body);
-  const read = await fetchRecordingEvents(conn, recordingId, fetchImpl);
+  const read = await fetchRecordingEvents(conn, recordingId, fetchImpl, 0, SNAPSHOT_FIRST_PART_BYTES);
   if (!read.ok) throw new VendorCallError(read);
   return {
     events: read.events,

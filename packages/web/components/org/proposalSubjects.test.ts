@@ -744,19 +744,3 @@ describe("askNames with what a card has in hand", () => {
     expect(askNames(null, { projects: [{ id: "p", title: "Platform" }] })!.project!("Platform")).toBe("Platform");
   });
 });
-
-describe("a profile change (org-people.md P5)", () => {
-  const evidence = { window_days: 30, sessions: 41, commits: 120, tasks_closed: 9, decisions_answered: 6, calls_led: 2, projects: ["Agent Quality"] };
-  const profile = (id: string, seq: number) => change(id, seq, { kind: "person_profile", person: "Samvit Jain", user_id: SAM, name: "Samvit Jain", title: "Head of Agentic Quality", evidence, before: { title: "Agent Quality" } });
-
-  test("is its own card, faced by the person, with each field before and after and the evidence under it", () => {
-    const [card, ...rest] = cardsOf([profile("c1", 1)]);
-    expect(rest).toEqual([]);
-    expect(card).toMatchObject({ key: `person:${SAM}`, kind: "person", title: "Samvit Jain", face: { kind: "person", id: SAM } });
-    expect(card.sentence).toBe("Change Samvit Jain's title.");
-    const by = Object.fromEntries(card.rows.map((r) => [r.key, r]));
-    expect([by.title.op, by.title.before?.text, by.title.after?.text]).toEqual(["change", "Agent Quality", "Head of Agentic Quality"]);
-    expect(by.evidence.after?.text).toBe("41 sessions · 120 commits · 9 tasks closed · 6 decisions · 2 calls led, over 30 days");
-    expect(by.worked_on.after?.items).toEqual(["Agent Quality"]);
-  });
-});

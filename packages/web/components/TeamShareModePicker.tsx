@@ -12,7 +12,7 @@ import { ConsequentialSwitch } from "./consequential/ConsequentialSwitch";
 import { shareInFullLedger } from "./consequential/ledgers";
 import type { TeamShareMode } from "../lib/teamFeedRows";
 
-export const TEAM_SHARE_MODES: SegmentedOption<TeamShareMode>[] = [
+const MODES: SegmentedOption<TeamShareMode>[] = [
   {
     value: "private",
     label: "Hidden",
@@ -92,7 +92,7 @@ export function TeamShareModePicker({
         </span>
         {isUpdating && <span className="text-meta text-sol-text-dim">Saving…</span>}
       </div>
-      <SegmentedChoice label="What the team sees" options={TEAM_SHARE_MODES} value={mode} onPick={pick} disabled={isUpdating} />
+      <SegmentedChoice label="What the team sees" options={MODES} value={mode} onPick={pick} disabled={isUpdating} />
       <p className="text-xs leading-snug text-sol-text-muted">{MODE_HINT[mode]}</p>
       {gated && (
         <p className="text-meta leading-snug text-sol-text-dim">
@@ -141,19 +141,15 @@ export type SegmentedOption<T extends string> = { value: T; label: string; selec
 
 /** A row of mutually exclusive share choices, one icon and label each. The
  *  team level and the link access in the share popover both pick with it. */
-/** `compact`: the inline size for a composer's meta row, beside its switches;
- *  only the picked option is spelled out, the others are their icons. */
-export function SegmentedChoice<T extends string>({ label, options, value, onPick, disabled, compact }: {
+export function SegmentedChoice<T extends string>({ label, options, value, onPick, disabled }: {
   label: string;
   options: SegmentedOption<T>[];
-  /** Nothing is selected while undefined. */
-  value: T | undefined;
+  value: T;
   onPick: (value: T) => void;
   disabled?: boolean;
-  compact?: boolean;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className={compact ? "inline-flex gap-px rounded-full bg-sol-bg-alt/70 p-px" : "flex gap-0.5 rounded-lg bg-sol-bg-alt p-0.5"}>
+    <div role="radiogroup" aria-label={label} className="flex gap-0.5 rounded-lg bg-sol-bg-alt p-0.5">
       {options.map((m) => {
         const on = value === m.value;
         return (
@@ -162,18 +158,16 @@ export function SegmentedChoice<T extends string>({ label, options, value, onPic
             type="button"
             role="radio"
             aria-checked={on}
-            aria-label={m.label}
-            title={compact ? m.label : undefined}
             onClick={() => onPick(m.value)}
             disabled={disabled}
-            className={`${compact ? "rounded-full px-1.5 py-px text-meta gap-1" : "flex-1 rounded-md px-2 py-1.5 text-xs font-medium gap-1.5"} transition-colors flex items-center justify-center outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan disabled:cursor-wait ${
-              on ? `${m.selected} ${compact ? "" : "shadow-sm shadow-black/20"}` : `${compact ? "text-sol-text-dim" : "text-sol-text-muted"} hover:text-sol-text hover:bg-sol-bg/60`
+            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 outline-none focus-visible:ring-1 focus-visible:ring-sol-cyan disabled:cursor-wait ${
+              on ? `${m.selected} shadow-sm shadow-black/20` : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg/60"
             }`}
           >
-            <svg className={`${compact ? "w-3 h-3" : "w-3.5 h-3.5"} shrink-0`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d={m.icon} />
             </svg>
-            {(!compact || on) && m.label}
+            {m.label}
           </button>
         );
       })}

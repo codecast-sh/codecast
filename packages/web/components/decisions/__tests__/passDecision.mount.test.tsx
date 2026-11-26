@@ -35,7 +35,7 @@ beforeEach(() => {
   useInboxStore.setState({
     currentUser: { _id: "u1", name: "Me" },
     ...withTeamRoster([{ _id: "u1", name: "Me", role: "member" }, { _id: "u2", name: "Sam", role: "member" }, { _id: "u3", name: "Morgan", role: "admin" }, { _id: "b1", name: "Bot", role: "admin", is_bot: true }], { team: "t1", clientState: useInboxStore.getState().clientState }),
-    orgTree: { workspace: { kind: "team", id: "t1", name: "Acme" }, people: [{ user_id: "u1", managers: [{ kind: "user", user_id: "u3" }] }], roles: [], anchors: [] },
+    orgTree: { workspace: { kind: "team", id: "t1", name: "Acme" }, people: [{ user_id: "u1", reports_to_user_id: "u3" }], roles: [], anchors: [] },
     sessionDecisions: { d1: { _id: "d1", status: "pending", holder_key: "user:u1", holder: { kind: "user", id: "u1" } } },
     passDecision: (...args: any[]) => passed.push(args),
     escalateDecision: (...args: any[]) => escalated.push(args),

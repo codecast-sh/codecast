@@ -483,9 +483,6 @@ function redactionChunks(v: string): string[] {
  *  pieces too, a sign-in's session cookies (holdsSession) and the storage
  *  that may hold its token (storagePieces). A key or a file piece too long to
  *  match whole goes in as redactionChunks. Usernames and urls are not secret. */
-/** Bump whenever redactionValuesOf would return different values for the same secret: it is part of the redaction feed's version, so every daemon refetches instead of keeping values the old rules produced. */
-export const REDACTION_RULES_VERSION = 2;
-
 export function redactionValuesOf(kind: SecretKind, payload: SecretPayload): string[] {
   const out: string[] = [];
   const push = (v: string | undefined) => {
@@ -537,14 +534,12 @@ const DOTENV_VALUE_MIN = 8;
 const YAML_PAIR_RE = /^\s*(?:-\s+)?([\w.-]+)\s*:\s+(.+)$/;
 /** The value after a .netrc `password` or `account` keyword, wherever it sits on the line. */
 const NETRC_SECRET_RE = /(?:^|\s)(?:password|account)\s+(\S+)/g;
-/** A .netrc entry starts `machine <host>` or `default`. Only such a text gets NETRC_SECRET_RE: in prose it reads "a password manager" as the password `manager`. */
-const NETRC_ENTRY_RE = /^\s*(?:machine\s+\S+|default)(?:\s|$)/m;
 
 /**
  * The parts of a file secret a command prints on their own: each dotenv or
  * INI value (`grep KEY .env`), each YAML value that is one token or sits
  * under a credential name (`token: …` in a kubeconfig), each .netrc
- * password (in a file shaped like one), each JSON string value (`jq -r .private_key`) and each line that
+ * password, each JSON string value (`jq -r .private_key`) and each line that
  * is one token (a base64 line of a PEM). A value under a credential name
  * counts from SECRET_REDACTION_MIN, any dotenv value from DOTENV_VALUE_MIN,
  * anything else from FILE_PIECE_MIN. PEM armour and urls are the same in
@@ -569,7 +564,6 @@ function filePieces(content: string): string[] {
     } catch {}
   }
   for (const text of texts) {
-    const netrc = NETRC_ENTRY_RE.test(text);
     for (const line of text.split(/\r?\n/)) {
       const env = parseDotenvLine(line);
       if (env) {
@@ -583,7 +577,7 @@ function filePieces(content: string): string[] {
         else if (!/\s/.test(value)) keep(value);
         continue;
       }
-      if (netrc) for (const m of line.matchAll(NETRC_SECRET_RE)) keep(m[1]!, SECRET_REDACTION_MIN);
+      for (const m of line.matchAll(NETRC_SECRET_RE)) keep(m[1]!, SECRET_REDACTION_MIN);
       if (!/\s/.test(line.trim())) keep(line);
     }
   }

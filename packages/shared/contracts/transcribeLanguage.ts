@@ -9,13 +9,13 @@
 // into English show up in every language we transcribe.
 
 export const LIVE_TRANSCRIBE_MODEL = "gpt-live-transcribe";
-
-export * from "./asrEndpointer";
+/** The recognizer a huddle used before the live model. It closes turns on
+ *  server VAD by itself, and the mint that named it did not 400. */
+export const FALLBACK_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
 
 /**
- * The session body the mint posts. No turn detection: gpt-live-transcribe
- * answers 400 to any `turn_detection`, so the client closes turns itself
- * (asrEndpointer) and commits each one.
+ * The session body the mint posts and the live socket updates with.
+ * One shape, so the allowlist cannot drift between the two.
  */
 export function asrTranscriptionSession(model: string, languages: string[] = []) {
   const transcription: { model: string; languages?: string[] } = { model };
@@ -26,28 +26,9 @@ export function asrTranscriptionSession(model: string, languages: string[] = [])
       input: {
         format: { type: "audio/pcm" as const, rate: 24000 },
         transcription,
-      },
-    },
-  };
-}
-
-/**
- * The session a client from before client-side turn ends gets: the old
- * recognizer with server VAD, which completes lines on its own. A web build or
- * phone binary older than asrEndpointer waits for the server's speech_stopped
- * to commit, and gpt-live-transcribe sends none, so handing it the new session
- * would silence its captions. The mint gives this to any caller that does not
- * pass `client_turns`. Remove once no client older than client_turns is left
- * (gpt-4o-mini-transcribe itself shuts down 2027-02-26).
- */
-export const LEGACY_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe";
-export function legacyAsrTranscriptionSession() {
-  return {
-    type: "transcription" as const,
-    audio: {
-      input: {
-        format: { type: "audio/pcm" as const, rate: 24000 },
-        transcription: { model: LEGACY_TRANSCRIBE_MODEL },
+        // Full VAD object: type plus the three knobs the Realtime docs send.
+        // A body with only silence_duration_ms 400'd the live-model mint and
+        // left huddles on "ASR session mint failed (400)".
         turn_detection: {
           type: "server_vad" as const,
           threshold: 0.5,

@@ -48,9 +48,8 @@ const DropdownMenuSubTrigger = React.forwardRef<
     )}
     {...props}
   >
-    {/* One flex-1 slot for the row, so a trailing ml-auto element (keycaps) sits flush against the chevron instead of splitting the free space with it. */}
-    <span className="flex min-w-0 flex-1 items-center gap-[inherit]">{children}</span>
-    <ChevronRight className="modern:text-sol-text-dim" />
+    {children}
+    <ChevronRight className="ml-auto modern:text-sol-text-dim" />
   </DropdownMenuPrimitive.SubTrigger>
 ))
 DropdownMenuSubTrigger.displayName =

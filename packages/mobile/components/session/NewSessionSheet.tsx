@@ -13,7 +13,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore, type BucketItem, sortLabels } from '@codecast/web/store/inboxStore';
 import {
-  AGENT_MODEL_CONFIG, AGENT_PICKER_OPTIONS, compareMachineChips, featuredModelsFor, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
+  AGENT_MODEL_CONFIG, AGENT_PICKER_OPTIONS, compareMachineChips, featuredModelOptions, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
   type AgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
 import { defaultMachineId, intendedMachineId, listedMachines, savedDefaultProject } from '@codecast/web/lib/machinePicker';
@@ -395,7 +395,7 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
   // heartbeats (DeviceModelInventory), keyed by client id inside `clients` —
   // never a flat id list. The literal narrowing matches the keys the contract
   // declares; a future dynamic client extends both together.
-  const inventoryIds = agentId === "opencode" || agentId === "pi" || agentId === "antigravity"
+  const inventoryIds = agentId === "opencode" || agentId === "pi"
     ? selectedDevice?.model_inventory?.clients?.[agentId]
     : undefined;
   const rail = useMemo(() => {
@@ -407,7 +407,7 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
     // reflects what will actually launch. Default + the live featured head,
     // mirroring web's ModelEffortMenu — the curated aliases are dropped so the
     // same model can't appear twice under two keys.
-    const featured = featuredModelsFor(agentId, inventoryIds ?? []);
+    const featured = featuredModelOptions(inventoryIds ?? []);
     if (featured.length === 0) return base;
     return {
       models: [...base.models.filter((m) => m.key === "default"), ...featured],
@@ -556,6 +556,10 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
               cardStyle={modalStyles.promptCard}
               inputStyle={modalStyles.promptInput}
             />
+            <RecentScreenshots
+              attachedUris={images.selectedImages.map((img) => img.uri)}
+              onAttach={(shot) => images.attachImages([shot])}
+            />
           </RNView>
           {/* The viewer's pinned agents (users.pinned_agents, registry order)
               with the hosted assistant among them, wrapped so every one is in
@@ -660,12 +664,6 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
               </RNView>
             </RNView>
           </RNView>
-          {/* Today's screenshots, offered under the choices so they never
-              read as already attached to the prompt. */}
-          <RecentScreenshots
-            attachedUris={images.selectedImages.map((img) => img.uri)}
-            onAttach={(shot) => images.attachImages([shot])}
-          />
           </>)}
 
           {labels.length > 0 && (

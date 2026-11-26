@@ -51,7 +51,6 @@ async function mayChangeRow(ctx: Ctx, userId: Id<"users">, row: any): Promise<bo
     const roleId = row.before.parent?.org_role_id ?? row.after.parent?.org_role_id;
     return !roleId || access === "owner" || userCanAdminRole(ctx, userId, await ctx.db.get(roleId));
   }
-  if (row.subject.type === "person") return mayEditProfile(ctx, userId, row.workspace, await ctx.db.get(row.subject.id));
   const record = await ctx.db.get(row.subject.id);
   return !!record && record.workspace === row.workspace;
 }
@@ -106,14 +105,6 @@ export async function getEntry(ctx: Ctx, userId: Id<"users">, ref: string) {
   return { entry: await entryOf(ctx, userId, batch), rows: rows.filter((r) => r.workspace === batch.workspace).map(publicRow) };
 }
 
-/** A profile is the person's own or a team admin's to change (orgPeople.performSetProfile). */
-async function mayEditProfile(ctx: Ctx, userId: Id<"users">, workspace: string, m: any): Promise<boolean> {
-  if (!m || `team:${m.team_id}` !== workspace) return false;
-  if (String(m.user_id) === String(userId)) return true;
-  const mine: any = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", m.team_id)).first();
-  return mine?.role === "admin";
-}
-
 async function mayWrite(ctx: Ctx, userId: Id<"users">, workspace: string, write: OrgWrite, doc: any): Promise<boolean> {
   if (!doc) return false;
   if (write.table === "org_roles") return userCanAdminRole(ctx, userId, doc);
@@ -127,7 +118,6 @@ async function mayWrite(ctx: Ctx, userId: Id<"users">, workspace: string, write:
   }
   if (write.table === "anchors") return userCanAdminRole(ctx, userId, doc);
   if (write.table === "users") return !!doc.is_bot;
-  if (write.table === "team_memberships") return mayEditProfile(ctx, userId, workspace, doc);
   return doc.workspace === workspace;
 }
 
@@ -251,7 +241,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
     const standing = new Set<string>();
     for (const w of row.writes ?? []) {
       const current = await read(w.id);
-      const leaveAlone = (suffix: string, skipped: string) => preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:${suffix}`, subject: w.id === row.subject.id ? row.subject : { type: w.table === "conversations" ? "session" : w.table === "org_roles" ? "role" : w.table === "tasks" ? "task" : w.table === "plans" ? "plan" : w.table === "initiatives" ? "initiative" : w.table === "team_memberships" ? "person" : "project", id: w.id, label: current?.title ?? current?.name ?? row.subject.label }, skipped } });
+      const leaveAlone = (suffix: string, skipped: string) => preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:${suffix}`, subject: w.id === row.subject.id ? row.subject : { type: w.table === "conversations" ? "session" : w.table === "org_roles" ? "role" : w.table === "tasks" ? "task" : w.table === "plans" ? "plan" : w.table === "initiatives" ? "initiative" : "project", id: w.id, label: current?.title ?? current?.name ?? row.subject.label }, skipped } });
       if (!(await mayWrite(ctx, userId, row.workspace, w, current))) {
         preview.left_alone.push({ row: { ...publicRow(row), _id: `${row._id}:unavailable`, skipped: "a related record is no longer available in this workspace" } });
         continue;

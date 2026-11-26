@@ -44,7 +44,6 @@ import { LANE_COPY } from "./simple/lane";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { ModernDecisionDock } from "./conversation/ModernDecisionDock";
 import { registerDecisionOpener } from "../lib/decisionOpenRegistry";
-import { plainParagraphs } from "@codecast/shared/contracts/plainText";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -130,7 +129,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // agent in the wording.
   const hosted = useIsHostedConversation(item.conversationId);
   const modern = useIsModernStyle();
-  const dockCollapsed = useInboxStore((s) => s.clientState?.ui?.decision_dock_folded === item.key);
+  const dockCollapsed = useInboxStore((s) => s.clientState?.ui?.decision_dock_collapsed === true);
 
   const [size, setSize] = useState<Size>(() => {
     if (startSize) return startSize;
@@ -359,10 +358,9 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     onDone();
   }, [item.decisionId, answerDecision, onDone]);
 
-  // Where this ask sits among its own session's open asks, when there are
-  // several. The queue's position belongs to the queue's own stepper header,
-  // never to the card in the thread.
-  const place = asks && asks.length > 1 && threadIndex >= 0 ? { position: threadIndex + 1, total: asks.length } : null;
+  // Where this ask sits: in the queue being stepped, else among its own
+  // session's open asks when there are several.
+  const place = stepper ?? (asks && asks.length > 1 && threadIndex >= 0 ? { position: threadIndex + 1, total: asks.length } : null);
   const tier = queueTier(item);
   const session = item.session;
   const project = session?.project_path ? getProjectName(session.project_path) : undefined;
@@ -669,7 +667,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
             {whoIsAsking}
             {stepper ? (
               <DecisionPlace position={stepper.position} total={stepper.total} queue
-                onPrev={stepper.onPrev} onNext={stepper.total > 1 ? stepper.onSkip : undefined} />
+                onPrev={stepper.onPrev && stepper.total > 1 ? stepper.onPrev : undefined} onNext={stepper.total > 1 ? stepper.onSkip : undefined} />
             ) : place && (
               <DecisionPlace position={place.position} total={place.total}
                 onPrev={threadAsks ? () => stepThread(-1) : undefined} onNext={threadAsks ? () => stepThread(1) : undefined} />
@@ -742,11 +740,10 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // question itself is the pill's tooltip and one click away. The thread is
   // the main event, so the fold spends one thin row and nothing more.
   const foldTitle = [askingRole ? [`@${askingRole.handle} asks`, question].filter(Boolean).join(": ") : question || "Waiting on you", defaultLabel ? `proceeding with ${defaultLabel}` : null].filter(Boolean).join(" — ");
-  // Modern docks the ask itself (ModernDecisionDock): the question, the first lines of its reasoning, its options as Buttons, Expand for the sheet.
-  const excerptSource = item.contextMd || poll?.question.detail;
+  // Modern docks the ask itself (ModernDecisionDock): the question and its options as Buttons, Open for the sheet.
   if (modern) return (
     <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
-      <ModernDecisionDock question={question} excerpt={excerptSource ? plainParagraphs(excerptSource) : undefined} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_folded: v ? item.key : null })} />
+      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_collapsed: v })} />
     </div>
   );
   return (

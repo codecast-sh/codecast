@@ -12,8 +12,7 @@
 //
 // Access is the workspace key and nothing else: tasks, signals, events and
 // event groups by equality on `workspace`; sessions by the team-visibility
-// rule, through session_starts (and, for `waiting`, on the publisher's own
-// conversation rows); pull requests by team membership (their access rule).
+// rule, through session_starts; pull requests by team membership (their access rule).
 // pageData.ts re-checks that the publisher still holds the key before every
 // page.
 
@@ -27,11 +26,6 @@ import { sourceByRef } from "./ingestScope";
 import { cachedManifest } from "../sources/app";
 import { dashboard as dashboardData } from "@codecast/shared/artifacts";
 import { readSheetRange } from "@codecast/shared/artifacts/sheet";
-import { shouldShowInInbox, teamVisibleConvTeam } from "@codecast/shared/contracts";
-import { cliSessionClassifier } from "../cliSessionClassifier";
-import { pendingQueueDecisions } from "./decisionInbox";
-import { currentDecisions } from "./superseded";
-import { siteUrl } from "./siteUrl";
 
 const { sheetTable } = dashboardData;
 
@@ -652,96 +646,6 @@ async function sheetDoc(ctx: Db, scope: ReaderScope, ref: string): Promise<Doc<"
   return doc;
 }
 
-
-// ── waiting: what waits on the publisher ──
-//
-// For a person's own page (an installed "Needs you" app) the publisher is the
-// viewer, so this is their queue: sessions of theirs the inbox files under
-// Needs input, the decisions asked of them (from any session, a teammate's
-// handed-over card included), and tasks assigned to them that wait on review
-// or say they are blocked. A team page shows only what the team may see:
-// team-visible sessions and the decisions they asked, and tasks in the team
-// workspace. A personal page shows every session and decision of the
-// publisher's, and their personal tasks.
-
-/** Conversation rows one `waiting` page classifies; each costs a few reads (its managed row, maybe its last message). */
-const WAITING_SESSION_PAGE = 100;
-const WAITING_SESSIONS = "sessions:";
-const WAITING_COLUMNS = ["kind", "ref", "title", "detail", "since", "url"];
-const firstLine = (s: string | undefined, max: number) => (s ?? "").split("\n").find((l) => l.trim())?.trim().slice(0, max) ?? "";
-const sessionTitle = (c: Doc<"conversations">) => firstLine(c.title, 160) || firstLine(c.first_prompt, 160) || "Untitled session";
-
-/** Whether a conversation may show on this page: any the publisher reaches on a personal page, one team-visible to the page's team on a team page. */
-function conversationShows(scope: ReaderScope, conv: Doc<"conversations"> | null): boolean {
-  const team = teamOf(scope);
-  return !team || (!!conv && String(teamVisibleConvTeam(conv) ?? "") === String(team));
-}
-
-const waiting: ReaderDef = {
-  validate: validating(["days"], (raw) => {
-    const n = days(raw, 7, 30);
-    return {
-      args: { days: n },
-      text: `what waits on the publisher: their sessions that need input (active in the last ${n} days), open decisions asked of them, and tasks assigned to them in review or blocked; a team page leaves out private sessions`,
-    };
-  }),
-  // The first page reads decisions and tasks (a person's open asks are few);
-  // the rest page through the publisher's recently active conversations and
-  // classify each with the inbox's own rule (cliSessionClassifier).
-  async page(ctx, scope, args, cursor, now) {
-    const base = siteUrl();
-    if (cursor === null) {
-      const items: unknown[][] = [];
-      const pending = (await pendingQueueDecisions(ctx, scope.owner)).filter((d) => d.status === "pending");
-      for (const d of await currentDecisions(ctx, pending)) {
-        const conv: Doc<"conversations"> | null = await ctx.db.get(d.conversation_id);
-        if (!conversationShows(scope, conv)) continue;
-        const ref = d.short_id ?? String(d._id);
-        // A card handed over from a teammate's private session may be the publisher's to answer, but its session's title is not theirs to show.
-        const detail = conv && (String(conv.user_id) === String(scope.owner) || teamVisibleConvTeam(conv)) ? sessionTitle(conv) : "";
-        items.push(["decision", ref, firstLine(d.question, 200), detail, d.created_at, `${base}/decisions/${ref}`, String(d.conversation_id)]);
-      }
-      const assigned = [
-        ...(await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(scope.owner)).eq("status", "in_review")).collect()),
-        ...(await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(scope.owner)).eq("status", "in_progress")).collect()),
-        ...(await ctx.db.query("tasks").withIndex("by_assignee_status", (q: any) => q.eq("assignee", String(scope.owner)).eq("status", "open")).collect()),
-      ] as Doc<"tasks">[];
-      for (const t of assigned) {
-        if (t.workspace !== scope.workspace) continue;
-        const blocked = t.execution_status === "blocked" || t.execution_status === "needs_context";
-        if (t.status !== "in_review" && !blocked) continue;
-        const ref = t.short_id || String(t._id);
-        items.push(["task", ref, firstLine(t.title, 200), t.status === "in_review" ? "in review" : t.execution_status === "needs_context" ? "needs context" : "blocked", t.updated_at, `${base}/tasks/${ref}`, ""]);
-      }
-      return { items, cursor: WAITING_SESSIONS, scanned: pending.length + assigned.length };
-    }
-    const res = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q: any) => q.eq("user_id", scope.owner).gte("updated_at", now - (args.days as number) * DAY))
-      .paginate({ cursor: cursor.slice(WAITING_SESSIONS.length) || null, numItems: WAITING_SESSION_PAGE });
-    const classifier = cliSessionClassifier(ctx, now);
-    const items: unknown[][] = [];
-    for (const conv of res.page as Doc<"conversations">[]) {
-      if (!shouldShowInInbox(conv as any) || !conversationShows(scope, conv)) continue;
-      // Set aside by the person (dismissed, stashed, snoozed): not waiting on them now.
-      if (conv.inbox_dismissed_at || conv.inbox_stashed_at || (conv.inbox_snoozed_until ?? 0) > now) continue;
-      if ((await classifier.classify(conv)).work_state !== "needs_input") continue;
-      const ref = String(conv._id);
-      items.push(["session", ref.slice(0, 7), sessionTitle(conv), firstLine(conv.thread_state, 160), conv.updated_at, `${base}/conversation/${ref}`, ref]);
-    }
-    return { items, cursor: res.isDone ? null : WAITING_SESSIONS + res.continueCursor, scanned: res.page.length };
-  },
-  // A session holding an open decision is one ask, shown as the decision. Newest first.
-  fold(items) {
-    const asked = new Set(items.filter((i) => i[0] === "decision").map((i) => i[6]));
-    const rows = items
-      .filter((i) => i[0] !== "session" || !asked.has(i[6]))
-      .sort((a, b) => (b[4] as number) - (a[4] as number))
-      .map(([kind, ref, title, detail, since, url]) => [kind, ref, title, detail, new Date(since as number).toISOString(), url]);
-    return { columns: WAITING_COLUMNS, rows };
-  },
-};
-
 export const PAGE_READERS: Record<PageDataReader, ReaderDef> = {
   tasks,
   sessions,
@@ -754,7 +658,6 @@ export const PAGE_READERS: Record<PageDataReader, ReaderDef> = {
   hogql,
   connector,
   sheet,
-  waiting,
 };
 
 /** The full audit line for a query: what it reads and where. */

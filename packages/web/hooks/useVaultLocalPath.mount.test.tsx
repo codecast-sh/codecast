@@ -243,19 +243,3 @@ test("a teammate's path with no same-named checkout here says it does not exist"
   expect(useVaultStore.getState().opError).toBe(`${foreign} does not exist on this machine.`);
   expect(view.routes).toEqual([]);
 });
-
-test("a checkout inside a big registered vault opens as its own vault, not the parent's", async () => {
-  // /Users/ada/src/app is registered and holds a checkout the daemon names.
-  const repo: VaultInfo = { id: "inner", root: `${known.root}/scratch/repo`, name: "repo", added_at: 2 };
-  await update({ endpoint, connection: "connected", files: { "scratch/repo/a.ts": { path: "scratch/repo/a.ts", mtime: 1, size: 3 } } });
-  const view = await mount(`${repo.root}/a.ts`);
-  // The parent's scan lists the file, and still nothing opens before the daemon answers.
-  expect(requests).toHaveLength(1);
-  expect(view.routes).toEqual([]);
-  await answer(0, { vault: repo, rel: "a.ts", entry: { path: "a.ts", mtime: 1, size: 3 } });
-  expect(useVaultStore.getState().vaults.map((v) => v.id)).toEqual([known.id, repo.id]);
-  expect(useVaultStore.getState().activeVaultId).toBe(repo.id);
-  expect(view.routes).toEqual([]);
-  await update({ scannedAt: 3, files: { "a.ts": { path: "a.ts", mtime: 1, size: 3 } } });
-  expect(view.routes).toEqual(["/files?f=a.ts&l=23"]);
-});

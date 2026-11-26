@@ -468,6 +468,3 @@ export function runKinds(runs: readonly Pick<SessionLine, "title">[]): string {
   const plural = (w: string, n: number) => (n === 1 ? w : w.endsWith("y") ? `${w.slice(0, -1)}ies` : /(x|h|s)$/.test(w) ? `${w}es` : `${w}s`);
   return [...kinds].map(([k, n]) => `${n} ${plural(k, n)}`).join(" · ");
 }
-
-/** A deploy a milestone reached, as its chip draws it (components/priorities/parts DeployChip). */
-export type DeployInfo = { id: string; target: string; status: string; at: number };

@@ -88,7 +88,7 @@ export const sessionOriginSig = makeCollectionSig<any>(
 
 /** Role seats: what a role's standing agent's chat lines show (seatAuthorFor). */
 export const seatSig = makeCollectionSig<any>(
-  (a) => `${a.bot_user_id ?? ""}|${a.status}|${a.conversation_id ?? ""}|${a.team_name ?? ""}|${a.role ? `${a.role.short_id}|${a.role.name}|${a.role.handle}|${a.role.avatar ?? ""}|${a.role.given_name ?? ""}|${a.role.assistant?.reach ?? ""}` : ""}`,
+  (a) => `${a.bot_user_id ?? ""}|${a.status}|${a.team_name ?? ""}|${a.role ? `${a.role.short_id}|${a.role.name}|${a.role.handle}|${a.role.avatar ?? ""}|${a.role.given_name ?? ""}|${a.role.assistant?.reach ?? ""}` : ""}`,
 );
 
 /** Slack mirrors: everything the header pill and the settings dialog branch on. */

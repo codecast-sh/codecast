@@ -53,7 +53,6 @@ function fakeAudioEnv(opts: { ctxState?: "running" | "suspended"; enableResult?:
     },
     getProcessor: () => currentProcessor,
     setProcessor: async (proc: any) => {
-      await proc.init();
       currentProcessor = proc;
     },
     stopProcessor: async () => {
@@ -117,31 +116,19 @@ function fakeAudioEnv(opts: { ctxState?: "running" | "suspended"; enableResult?:
     KrispNoiseFilter: (kOpts) => {
       createdProcessors += 1;
       selectedQuality = kOpts?.quality;
-      // Mirrors @livekit/krisp-noise-filter 0.4.x: `onPublish` fires
-      // `this.setEnabled(true)` unawaited, and `restart()` swaps in a WASM node
-      // that is not ready while the processor still believes it is, so enabling
-      // that node throws WASM_OR_WORKER_NOT_READY.
-      let nodeReady = false;
       return {
         name: KRISP_PROCESSOR_NAME,
-        init: async () => {
-          nodeReady = true;
-        },
-        async restart() {
-          nodeReady = false;
-          enabled = false;
-        },
+        init: async () => {},
+        restart: async () => {},
         destroy: async () => {
           enabled = false;
         },
-        async onPublish(r: any) {
+        onPublish: async (r: any) => {
           publishedTo = r;
-          void this.setEnabled(true);
         },
         setEnabled: async (on: boolean) => {
           if (opts.throwOnEnable) throw new Error("server refused enc");
           if (opts.enableResult === false && on) return false;
-          if (on && !nodeReady) throw new Error("WASM_OR_WORKER_NOT_READY");
           enabled = on;
           return on;
         },
@@ -152,7 +139,6 @@ function fakeAudioEnv(opts: { ctxState?: "running" | "suspended"; enableResult?:
 
   return {
     room,
-    restartMic: () => currentProcessor?.restart(),
     appliedRaw,
     appliedTrack,
     stats: () => ({ resumed, stopped, enabled, publishedTo, createdProcessors, selectedQuality }),
@@ -190,41 +176,6 @@ describe("krisp noise cancellation", () => {
     expect(isKrispActiveOnRoom(env.room)).toBe(false);
     expect(env.stats().stopped).toBe(1);
     expect(env.appliedTrack.at(-1)).toEqual({ noiseSuppression: true, voiceIsolation: false });
-  });
-
-  test("a mic switch replaces the restarted processor instead of enabling its unready node", async () => {
-    const unhandled: unknown[] = [];
-    const onUnhandled = (err: unknown) => unhandled.push(err);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      const env = fakeAudioEnv();
-      expect(await syncRoomNoiseCancellation(env.room, true)).toBe(true);
-      await env.restartMic();
-      expect(isKrispActiveOnRoom(env.room)).toBe(false);
-
-      expect(await syncRoomNoiseCancellation(env.room, true)).toBe(true);
-      expect(isKrispActiveOnRoom(env.room)).toBe(true);
-      expect(env.stats()).toMatchObject({ createdProcessors: 2, stopped: 1, enabled: true });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
-  });
-
-  test("a server error inside Krisp's unawaited onPublish enable settles instead of rejecting", async () => {
-    const unhandled: unknown[] = [];
-    const onUnhandled = (err: unknown) => unhandled.push(err);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      const env = fakeAudioEnv({ throwOnEnable: true });
-      expect(await syncRoomNoiseCancellation(env.room, true)).toBe(false);
-      expect(env.appliedTrack.at(-1)).toEqual({ noiseSuppression: true, voiceIsolation: false });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(unhandled).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
   });
 
   test("falls back to browser noiseSuppression when a non-Cloud server refuses Krisp", async () => {

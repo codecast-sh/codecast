@@ -357,28 +357,6 @@ export const updatePRCommits = internalMutation({
   },
 });
 
-// A document holds at most 1 MiB. Each patch is capped at 50 KB when fetched,
-// but a 100-file PR's patches sum past that with its commits and checks, and
-// the whole files write was refused (13 times in 6h, 2026-11-23). Patches are
-// kept in GitHub's order while they fit the room the rest of the row leaves;
-// a file whose patch does not fit keeps its counts and goes without one, as
-// GitHub sends large files.
-const PR_ROW_BYTES = 1024 * 1024 - 64 * 1024;
-
-export function fitFilePatches<F extends { patch?: string }>(files: F[], rest: Record<string, unknown>): F[] {
-  const utf8 = new TextEncoder();
-  const size = (value: unknown) => utf8.encode(JSON.stringify(value)).length;
-  const bare = files.map(({ patch: _patch, ...file }) => file as F);
-  let room = PR_ROW_BYTES - size(rest) - size(bare);
-  return files.map((file, i) => {
-    if (file.patch === undefined) return file;
-    const bytes = size(file.patch) + 10;
-    if (bytes > room) return bare[i];
-    room -= bytes;
-    return file;
-  });
-}
-
 export const updatePRFiles = internalMutation({
   args: {
     pr_id: v.id("pull_requests"),
@@ -409,7 +387,7 @@ export const updatePRFiles = internalMutation({
     }
 
     const updates: any = {
-      files: fitFilePatches(args.files, { ...pr, files: undefined }),
+      files: args.files,
       additions: args.additions,
       deletions: args.deletions,
       changed_files: args.changed_files,
@@ -581,8 +559,6 @@ export const sessionCardPRs = query({
   },
 });
 
-const TIMELINE_READ_BUDGET = 8 * 1024 * 1024;
-
 export const getPRsForTimeline = query({
   args: {
     repository: v.optional(v.string()),
@@ -598,46 +574,15 @@ export const getPRsForTimeline = query({
     // Each team's newest `limit`, merged: reading every PR a team has ran out of
     // memory or time on large teams (~900 failures in 6h, 2026-11-10).
     const repository = args.repository ? normalizeRepository(args.repository) : undefined;
-    // A row with its patches reaches 1 MB: the rows go out as list rows (the
-    // store keeps files, commits and checks in pullRequestDetails, fed by the
-    // PR page), and reading stops at a budget under the 16 MiB read cap. Full
-    // rows overran the 8 MiB return limit ~1,200 times in 6h (2026-11-23).
-    let readBytes = 0;
-    const utf8 = new TextEncoder();
-    const teams = new Set(memberships.map((m) => String(m.team_id)));
-    const prs = new Map<string, Record<string, any>>();
-    // Every row read counts against the budget, kept or not. Returns whether it was kept.
-    const keep = (pr: Record<string, any>) => {
-      readBytes += utf8.encode(JSON.stringify(pr)).length;
-      if (!teams.has(String(pr.team_id))) return false;
-      const { files: _files, commits: _commits, checks: _checks, ...row } = pr;
-      prs.set(String(pr._id), row);
-      return true;
-    };
-    const overBudget = () => readBytes > TIMELINE_READ_BUDGET;
+    const prs = (await Promise.all(memberships.map((membership) => {
+      const newest = ctx.db
+        .query("pull_requests")
+        .withIndex("by_team_updated", (q: any) => q.eq("team_id", membership.team_id))
+        .order("desc");
+      return (repository ? newest.filter((q: any) => q.eq(q.field("repository"), repository)) : newest).take(limit);
+    }))).flat();
 
-    if (repository) {
-      // One repository reads only its own rows: its open PRs, then its newest
-      // by number. Filtering a team's newest by repository read every PR of
-      // the team's other repositories first, and those rows went uncounted:
-      // 1,598 rows and 100 MB per call, 128 failures in an hour (2026-11-25).
-      const open = ctx.db.query("pull_requests").withIndex("by_repository_state", (q: any) => q.eq("repository", repository).eq("state", "open"));
-      for await (const pr of open) { keep(pr); if (overBudget()) break; }
-      const newest = ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", repository)).order("desc");
-      let taken = 0;
-      if (!overBudget()) for await (const pr of newest) { if (keep(pr)) taken++; if (taken >= limit || overBudget()) break; }
-    } else {
-      for (const membership of memberships) {
-        const newest = ctx.db
-          .query("pull_requests")
-          .withIndex("by_team_updated", (q: any) => q.eq("team_id", membership.team_id))
-          .order("desc");
-        let taken = 0;
-        for await (const pr of newest) { keep(pr); if (++taken >= limit || overBudget()) break; }
-        if (overBudget()) break;
-      }
-    }
-
-    return [...prs.values()].sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
+    prs.sort((a, b) => b.updated_at - a.updated_at);
+    return prs.slice(0, limit);
   },
 });

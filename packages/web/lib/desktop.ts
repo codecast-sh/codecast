@@ -12,7 +12,6 @@ import type { GuestMedia } from "./calls/callMedia";
 import { whenInputQuiet } from "./inputQuiet";
 import type { MeetingDetectConfig, MeetingDetectMode, MeetingOffer } from "./desktopMeetings";
 import { followWindowIdle } from "./idleAnimationPause";
-import type { DesktopAppsBridge } from "./installedApps";
 
 declare global {
   interface Window {
@@ -34,8 +33,6 @@ declare global {
       // lib/osPermissions.ts for the vocabulary. All absent on older builds —
       // gate on them; readiness is then "unknown" and nothing nags.
       getOsPermissions?: () => Promise<Record<string, string>>;
-      // Main window between codecast.sh and local.codecast.sh (staff).
-      toggleEnvironment?: (path?: string) => Promise<boolean>;
       requestOsPermission?: (kind: string) => Promise<string>;
       openOsPermissionSettings?: (kind: string) => Promise<void>;
       // The grants that belong to the codecast computer helper, read through
@@ -70,10 +67,6 @@ declare global {
       // Machine-wide seconds since last user input (Electron powerMonitor).
       // Absent on older builds — gate on it.
       getSystemIdleSeconds: () => Promise<number>;
-      // Installed apps (docs/architecture/installed-apps.md "Desktop bridge
-      // for the web app"): pages installed as apps on this computer. Read it
-      // through desktopApps(). Absent on older builds and in a browser.
-      apps?: DesktopAppsBridge;
       // Detached tab windows: a dashboard tab broken out into its own OS
       // window. All absent on older builds — gate on them.
       isTabWindow?: boolean;
@@ -466,18 +459,6 @@ export function bridge<K extends keyof NonNullable<Window["__CODECAST_ELECTRON__
   const b = window.__CODECAST_ELECTRON__;
   const fn = b?.[method];
   return typeof fn === "function" ? fn.bind(b) as any : undefined;
-}
-
-/**
- * The installed-app host (window.__CODECAST_ELECTRON__.apps), or null outside
- * the desktop app. Whether "Install as app" opens the install sheet or hands
- * off to the desktop app is this question. A dev build can stand a fake in
- * (lib/installedAppsDevFake.ts) to drive the screens in a browser.
- */
-export function desktopApps(): DesktopAppsBridge | null {
-  if (typeof window === "undefined") return null;
-  // The fake's global is set only by the dev-only module src/main.tsx loads in a dev build.
-  return window.__CODECAST_ELECTRON__?.apps ?? (window as { __CODECAST_APPS_FAKE__?: DesktopAppsBridge }).__CODECAST_APPS_FAKE__ ?? null;
 }
 
 export function isDesktop(): boolean {

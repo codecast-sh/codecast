@@ -7,7 +7,6 @@
 #   2. reuse-window — widen refresh-token reuse window 10s -> 30 days
 #   3. ios-oauth — Chrome iOS GitHub sign-in (see convex-auth-ios-oauth.mjs)
 #   4. refresh-keep — a failed refresh keeps the refresh token (see convex-auth-refresh-keep.mjs)
-#   5. refresh-signout — no refresh token signs the library out too (see convex-auth-refresh.mjs)
 #
 # ---------------------------------------------------------------------------
 # Patch 1: OAuth callback "unexpected iss (issuer) response parameter value"
@@ -131,11 +130,3 @@ bun "$(dirname "$0")/convex-auth-ios-oauth.mjs"
 # convex-auth-refresh-keep.mjs (multi-line, idempotent).
 
 bun "$(dirname "$0")/convex-auth-refresh-keep.mjs"
-
-# ---------------------------------------------------------------------------
-# Patch 5: with no refresh token left, Convex signs the socket out but the
-# library still reports isAuthenticated, so the next sign-in never reaches
-# Convex (stuck on the login screen until the app is killed). The rewrite
-# lives in convex-auth-refresh.mjs and runs after patch 4.
-
-bun "$(dirname "$0")/convex-auth-refresh.mjs"

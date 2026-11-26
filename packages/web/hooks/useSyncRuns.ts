@@ -7,7 +7,6 @@
 import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
-import { useWorkflowRuns } from "./useSyncWorkflows";
 import { settledRun } from "../lib/line/runReport";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
@@ -84,13 +83,4 @@ export function useWorkspaceRuns(workspace?: string | null, opts: { all?: boolea
   const rows = useWorkspaceCollection<LineRun>("workflowRuns", lineRunSig, workspace || null);
   // A run as it went, not as a second runner's stale report left it (runReport settledRun).
   return useMemo(() => rows.filter((r) => all || !r.superseded).sort(newestFirst).map(settledRun), [rows, all]);
-}
-
-
-/** Feeder and reader: every run on one task, newest first (web and phone). */
-export function useTaskRuns<R extends { task_id?: unknown; created_at?: number } = any>(taskId: string | null | undefined): R[] {
-  useSyncRuns(taskId ? { task_id: taskId, limit: 20 } : {}, !!taskId);
-  const where = useMemo(() => (r: any) => !!taskId && r.task_id === taskId, [taskId]);
-  const rows = useWorkflowRuns(where) as R[];
-  return useMemo(() => [...rows].sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)), [rows]);
 }

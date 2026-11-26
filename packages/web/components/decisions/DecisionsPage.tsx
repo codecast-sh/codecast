@@ -9,7 +9,7 @@
 // the admins' area controls: Change areas and Share out (DecisionAreas).
 import { useCallback, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BookOpen, LayoutList, Newspaper, Rows3, StepForward } from "lucide-react";
+import { BookOpen, LayoutList, Rows3, StepForward } from "lucide-react";
 import { DetailSplitLayout } from "../DetailSplitLayout";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SegmentedToggle } from "../SegmentedToggle";
@@ -17,7 +17,6 @@ import { DecisionQueue } from "../DecisionQueue";
 import { DecisionQueueList } from "./DecisionQueueList";
 import { DecisionDocument } from "./DecisionDocument";
 import { DecisionList } from "./DecisionList";
-import { AnsweredFeed } from "./AnsweredFeed";
 import { TeamAreaControls } from "./DecisionAreas";
 import { LineDecision } from "../line/widgets/LineDecision";
 import { useDecisionView } from "../../hooks/useDecisionView";
@@ -55,27 +54,18 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
   const state = useDecisionView();
   const rows = useDecisionRows();
   useDecisionFeeds(rows.workspaceKey);
-  // Mine reads as a list unless the cards are asked for; Answered reads as a feed unless the list is.
-  const mode = params?.get("mode");
-  const cards = state.view.tab === "mine" && mode === "cards";
-  const feed = state.view.tab === "answered" && mode !== "list";
-  const setMode = useCallback((next: string | null) => {
+  const cards = state.view.tab === "mine" && params?.get("mode") === "cards";
+  const setCards = useCallback((on: boolean) => {
     const q = new URLSearchParams(params?.toString() ?? "");
-    if (next) q.set("mode", next); else q.delete("mode");
+    if (on) q.set("mode", "cards"); else q.delete("mode");
     router.replace(`/decisions${q.toString() ? `?${q}` : ""}`);
   }, [params, router]);
 
-  const viewControls: ReactNode = state.view.tab === "mine" ? (
+  const mineControls: ReactNode = state.view.tab === "mine" ? (
     <div>
       <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
-      <SegmentedToggle fullWidth value={cards ? "cards" : "list"} onChange={(v) => setMode(v === "cards" ? "cards" : null)}
+      <SegmentedToggle fullWidth value={cards ? "cards" : "list"} onChange={(v) => setCards(v === "cards")}
         items={[{ key: "list", label: "List", icon: LayoutList }, { key: "cards", label: "Cards", icon: Rows3 }]} />
-    </div>
-  ) : state.view.tab === "answered" ? (
-    <div>
-      <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
-      <SegmentedToggle fullWidth value={feed ? "feed" : "list"} onChange={(v) => setMode(v === "list" ? "list" : null)}
-        items={[{ key: "feed", label: "Feed", icon: Newspaper }, { key: "list", label: "List", icon: LayoutList }]} />
     </div>
   ) : undefined;
   const step = state.view.tab === "mine" ? (
@@ -102,8 +92,8 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
           <BookOpen className="w-3 h-3" /><span className="cq-header-collapse">Guide</span>
         </a>
       </>}
-      displayExtra={viewControls}
-      customContent={cards ? () => <div className="flex-1 overflow-y-auto"><DecisionQueueList /></div> : feed ? (items) => <AnsweredFeed rows={items} /> : undefined}
+      displayExtra={mineControls}
+      customContent={cards ? () => <div className="flex-1 overflow-y-auto"><DecisionQueueList /></div> : undefined}
     />
   );
 }

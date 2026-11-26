@@ -10,8 +10,7 @@ import { backfillProjectCountsPage, resetProjectCounts } from "./lib/projectTask
 import { performReparentSession } from "./sessionOwnership";
 import { rolesInBoundary } from "./lib/orgAccess";
 import { sessionWork } from "./lib/orgOwnership";
-import { ownsWork, roleManagers } from "@codecast/shared/contracts/orgLead";
-import { dropLegacyEntry, legacyLines, managersMap } from "./orgPeople";
+import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
 import { isOrphanOrSubagent } from "./inboxFilters";
@@ -433,16 +432,16 @@ export const stampStandingSeats = internalMutation({
       const standing: any = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
       if (!standing) continue;
       const { org_role_id } = standingReportsToFields(role);
-      // The seat's owners are the people the role reports to (sessionOwners.stampSeatOwners).
-      const bosses = roleManagers(role).flatMap((p: any) => (p.kind === "user" ? [String(p.user_id)] : [])).sort();
+      // The seat's owner is the person the role reports to (sessionOwners.stampSeatOwners).
+      const boss = role.reports_to?.kind === "user" ? String(role.reports_to.user_id) : null;
       const owners = (await listSessionOwnerIds(ctx, standing._id)).map(String);
-      const ownersRight = JSON.stringify([...owners].sort()) === JSON.stringify(bosses);
+      const ownersRight = boss ? owners.length === 1 && owners[0] === boss : owners.length === 0;
       if (String(standing.org_role_id ?? "") === String(org_role_id ?? "") && ownersRight) continue;
-      out.push({ role: role.handle, standing: standing.short_id ?? String(standing._id), from: `${standing.org_role_id ? String(standing.org_role_id) : "person"} owners=${owners.join(",") || "none"}`, to: `${org_role_id ? String(org_role_id) : "person"} owners=${bosses.join(",") || "none"}` });
+      out.push({ role: role.handle, standing: standing.short_id ?? String(standing._id), from: `${standing.org_role_id ? String(standing.org_role_id) : "person"} owners=${owners.join(",") || "none"}`, to: `${org_role_id ? String(org_role_id) : "person"} owner=${boss ?? "none"}` });
       if (!dryRun) {
         await ctx.db.patch(standing._id, { org_role_id });
         // Written as the boss's own row, so the backfill hands nobody a ping.
-        await stampSeatOwners(ctx, standing._id, role, (bosses[0] as any) ?? role.host_user_id);
+        await stampSeatOwners(ctx, standing._id, role.reports_to, role.reports_to?.kind === "user" ? role.reports_to.user_id : role.host_user_id);
       }
     }
     return { dryRun, roles: roles.length, stamped: out.length, changes: out };
@@ -761,46 +760,5 @@ export const closeEndedRunStations = internalMutation({
       await ctx.scheduler.runAfter(0, internal.migrations.closeEndedRunStations, { dryRun, cursor: page.continueCursor, numItems: args.numItems });
     }
     return { dryRun, scanned: page.page.length, closed, cursor: page.continueCursor, done: page.isDone };
-  },
-});
-
-// The people who report to a role move into each person's managers list, the
-// one home (docs/architecture/org-people.md P3): every id in a team role's
-// `reports_user_ids` joins that person's `team_memberships.managers` and
-// leaves the role's list, and every row's one-person `reports_to_user_id`
-// becomes its list. Personal roles keep their own list (no memberships).
-// Dry by default; reruns change nothing once drained.
-//   packages/convex/run.sh migrations:foldOrgManagers '{"dryRun":false}'
-export const foldOrgManagers = internalMutation({
-  args: { dryRun: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const dryRun = args.dryRun ?? true;
-    const out: Array<{ team: string; user: string; managers: string[] }> = [];
-    const teams = new Set<string>();
-    for (const role of (await ctx.db.query("org_roles").collect()) as any[]) {
-      if (role.team_id && (role.reports_user_ids ?? []).length) teams.add(String(role.team_id));
-    }
-    for (const m of (await ctx.db.query("team_memberships").collect()) as any[]) {
-      if (m.reports_to_user_id !== undefined) teams.add(String(m.team_id));
-    }
-    for (const teamId of teams) {
-      const memberships: any[] = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId as any)).collect();
-      const roles: any[] = await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId as any)).collect();
-      const live = new Set(roles.filter((r) => r.status !== "retired").map((r) => String(r._id)));
-      const current = managersMap(memberships, live);
-      // Only the entries that are reporting lines move, settled one at a time
-      // so none of them loops; one that would close a loop stays on the role,
-      // where it means goals only (orgPeople.legacyLines).
-      const lines = legacyLines(memberships, live, roles);
-      for (const m of memberships) {
-        const mine = lines.filter((l) => l.uid === String(m.user_id));
-        if (m.reports_to_user_id === undefined && !mine.length) continue;
-        const list = [...(current.get(String(m.user_id)) ?? []), ...mine.map((l) => ({ kind: "role" as const, role_id: l.role._id }))];
-        out.push({ team: teamId, user: String(m.user_id), managers: list.map((p) => (p.kind === "user" ? `user:${p.user_id}` : `role:${p.role_id}`)) });
-        if (!dryRun) await ctx.db.patch(m._id, { managers: list.length ? list : undefined, reports_to_user_id: undefined });
-      }
-      if (!dryRun) for (const l of lines) await dropLegacyEntry(ctx, l.role._id, l.uid as any);
-    }
-    return { dryRun, teams: teams.size, people: out.length, changes: out };
   },
 });

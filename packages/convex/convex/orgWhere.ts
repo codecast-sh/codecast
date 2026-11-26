@@ -11,7 +11,7 @@
 import { v } from "convex/values";
 import { query } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { isWholeWorkspaceRole, ownerOf, roleManagers } from "@codecast/shared/contracts/orgLead";
+import { isWholeWorkspaceRole, ownerOf } from "@codecast/shared/contracts/orgLead";
 import type { OrgChatRoom, OrgSeatHow, OrgWhere } from "@codecast/shared/contracts/orgWhere";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { computeOrgRoles, requireWorkspaceCaller } from "./org";
@@ -77,17 +77,13 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
     if (to?.kind === "user") return personName(await ctx.db.get(to.user_id));
     return "";
   };
-  // Everyone a role reports to, all equal (org-people.md P3), in one name.
-  const managersName = async (role: any): Promise<string> =>
-    (await Promise.all(roleManagers(role).map(reportsToName))).filter(Boolean).join(" and ");
-  // The chain follows the drawn line up; each step names every manager there.
   const chain: string[] = [];
   if (seatRoles.length === 1) {
     const seen = new Set<string>();
     let at = seatRoles[0];
     while (at && !seen.has(String(at._id))) {
       seen.add(String(at._id));
-      const name = await managersName(at);
+      const name = await reportsToName(at.reports_to);
       if (name) chain.push(name);
       at = at.reports_to?.kind === "role" ? byId.get(String(at.reports_to.role_id)) : null;
     }
@@ -107,25 +103,17 @@ export async function computeOrgWhere(ctx: { db: any }, userId: Id<"users">, tea
       : null,
     work: { task: ref(task), plan: ref(plan), project: ref(project) },
     seat: { how, handles: seatRoles.map((r) => r.handle) },
-    card: seatRoles.length === 1 ? await roleCardOf(ctx, seatRoles[0]._id, userId) : null,
+    card: seatRoles.length === 1 ? await roleCardOf(ctx, seatRoles[0]._id) : null,
     chain,
     roles: await Promise.all(roles.map(async (r) => ({
       handle: r.handle,
       name: r.name,
-      reports_to: await managersName(r),
+      reports_to: await reportsToName(r.reports_to),
       scope: [...r.scope_names.projects, ...r.scope_names.plans].map((s: any) => s.title).filter(Boolean),
       whole_workspace: isWholeWorkspaceRole(r),
       seat: seatIds.has(String(r._id)),
     }))),
-    people: org.people.map((p: any) => ({
-      name: p.name, handle: p.handle, role: p.role, is_me: p.is_me,
-      ...(p.title ? { title: p.title } : {}),
-      ...(p.focus ? { focus: p.focus } : {}),
-      ...(p.labels?.length ? { labels: p.labels } : {}),
-      ...(p.managers?.length ? { reports_to: p.managers.map((m: any) => m.kind === "role"
-        ? (byId.get(String(m.role_id)) ? `@${byId.get(String(m.role_id)).handle}` : "a role")
-        : org.people.find((x: any) => String(x.user_id) === String(m.user_id))?.name ?? "a teammate").join(", ") } : {}),
-    })),
+    people: org.people.map((p: any) => ({ name: p.name, handle: p.handle, role: p.role, is_me: p.is_me })),
     project_context,
     chat,
   };

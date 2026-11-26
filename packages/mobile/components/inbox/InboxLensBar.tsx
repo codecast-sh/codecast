@@ -19,7 +19,7 @@ import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 const SEGMENT: Partial<Record<InboxViewMode, string>> = {
   grouped: 'Status',
   priorities: 'Priorities',
-  recent: 'Updated',
+  recent: 'Recent',
   time: 'Created',
   bucket: 'Label',
   plan: 'Plan',

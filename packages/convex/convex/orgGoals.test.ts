@@ -41,13 +41,13 @@ describe("who reports to a role", () => {
     const ctx = ctxOf(db);
     const role = await performCreateRole(ctx, ME as any, { name: "Chief", handle: "head", team_id: TEAM });
     const joined = await performSetReports(ctx, MATE as any, { role_id: role.short_id, add: [MATE as any] });
-    expect(joined.reports).toEqual([MATE]);
+    expect(joined.reports_user_ids).toEqual([MATE]);
     await expect(performSetReports(ctx, MATE as any, { role_id: role.short_id, add: [ME as any] })).rejects.toThrow(/admin/);
     const both = await performSetReports(ctx, ME as any, { role_id: role.short_id, add: [ME as any] });
-    expect(both.reports.sort()).toEqual([ME, MATE].sort());
+    expect(both.reports_user_ids.sort()).toEqual([ME, MATE].sort());
     await expect(performSetReports(ctx, ME as any, { role_id: role.short_id, add: [OUTSIDER as any] })).rejects.toThrow(/not in this workspace/);
     const left = await performSetReports(ctx, MATE as any, { role_id: role.short_id, remove: [MATE as any] });
-    expect(left.reports).toEqual([ME]);
+    expect(left.reports_user_ids).toEqual([ME]);
   });
 
   test("the whole list from a surface becomes the difference against the stored row", async () => {
@@ -56,10 +56,10 @@ describe("who reports to a role", () => {
     const role = await performCreateRole(ctx, ME as any, { name: "Chief", handle: "head", team_id: TEAM });
     await performSetReports(ctx, ME as any, { role_id: role.short_id, add: [ME as any, MATE as any] });
     const after = await performSetReports(ctx, ME as any, { role_id: role.short_id, set: [MATE as any] });
-    expect(after.reports).toEqual([MATE]);
+    expect(after.reports_user_ids).toEqual([MATE]);
     // A member holding a stale list may still only change their own row.
     await expect(performSetReports(ctx, MATE as any, { role_id: role.short_id, set: [MATE as any, ME as any] })).rejects.toThrow(/admin/);
-    expect((await performSetReports(ctx, MATE as any, { role_id: role.short_id, set: [] })).reports).toEqual([]);
+    expect((await performSetReports(ctx, MATE as any, { role_id: role.short_id, set: [] })).reports_user_ids).toEqual([]);
   });
 });
 

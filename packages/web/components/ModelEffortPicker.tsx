@@ -6,6 +6,7 @@ import {
   modelAgentKey,
   cloudAgentProviderForLaunch,
   findModelOption,
+  isDynamicModelKey,
   dynamicModelOption,
   launchRailOptions,
   liveRailOptions,
@@ -225,8 +226,7 @@ export function ModelEffortRows({
     <div ref={rowsRef}>
       <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
       {models.map(modelRow)}
-      {/* A bare catalog (agy) lists every model above; search only helps a longer inventory. */}
-      {dynamic && all.length > models.filter((m) => m.key !== "default").length && (
+      {dynamic && all.length > 0 && (
         <>
           <input
             value={search}
@@ -350,7 +350,8 @@ export function useLaunchModel(conversationId: string) {
   const modelKey = modelFitsAgent(live?.model, agentType)
     ? modelOptionKey(live?.model, agentType)
     : "default";
-  const opt = findModelOption(agentType, modelKey);
+  const opt = cfg?.models.find((m) => m.key === modelKey)
+    ?? (isDynamicModelKey(modelKey) ? dynamicModelOption(modelKey) : undefined);
   // A cloud agent launch runs at its provider's effort, whatever one was picked before.
   const cloudLaunch = !!cloudAgentProviderForLaunch(agentType, modelKey);
   const pinLabel = defaultKey ? findModelOption(agentType, defaultKey)?.label ?? defaultKey : undefined;

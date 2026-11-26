@@ -2,7 +2,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { besideLeafId, leavesOf, seedLeafId } from "../../store/stageSplit";
-import { openBeside, openBrowserPane, openSessionInFocusedPane, paneSessionId, performStageDrop, stageRenderLayout } from "../stage";
+import { openBeside, openBrowserPane, paneSessionId, performStageDrop, stageRenderLayout } from "../stage";
 import { parseBrowserRoute } from "../browserPane";
 
 // performStageDrop is the one entry point every drag source funnels into;
@@ -280,57 +280,6 @@ describe("openBeside — the reused Option-click target", () => {
     const t = activeTab();
     expect(leavesOf(t.layout).map((l) => l.path)).toEqual(["/tasks", "/docs", "/plans"]);
     expect(t.path).toBe("/plans");
-  });
-});
-
-describe("openSessionInFocusedPane", () => {
-  // A conversation pane is pinned to its own id and never reads the store's
-  // current session, so the rail moving that pointer changed nothing on screen.
-  const A = "jx78fqbv9gb9kkj14ehq4fhcx98hqhjf";
-  const B = "jx7ct5p3n0j464man0t1fvqtrh8j2hra";
-  let restoreLocation: () => void;
-  beforeAll(() => {
-    restoreLocation = replaceGlobals({
-      window: {
-        innerWidth: 1400,
-        location: { pathname: `/conversation/${A}`, search: "" },
-        history: { pushState: () => {}, replaceState: () => {} },
-      },
-    });
-  });
-  afterAll(() => restoreLocation());
-
-  const split = (left: string, right: string) => {
-    useInboxStore.setState({ tabs: [tab({ path: left })], activeTabId: "t1" } as any);
-    state().stageInsertLeaf("root", "right", right);
-  };
-
-  it("re-points the focused conversation pane and leaves the other pane alone", () => {
-    split(`/inbox?s=${A}`, `/conversation/${A}`);
-    expect(openSessionInFocusedPane(B)).toBe(true);
-    const t = activeTab();
-    expect(leavesOf(t.layout!).map((l) => l.path)).toEqual([`/inbox?s=${A}`, `/conversation/${B}`]);
-    expect(t.path).toBe(`/conversation/${B}`);
-  });
-
-  it("focuses a pane already showing the session instead of doubling it", () => {
-    split(`/conversation/${B}`, `/conversation/${A}`);
-    expect(openSessionInFocusedPane(B)).toBe(true);
-    const t = activeTab();
-    expect(leavesOf(t.layout!).map((l) => l.path)).toEqual([`/conversation/${B}`, `/conversation/${A}`]);
-    expect(t.focusedLeafId).toBe(leavesOf(t.layout!)[0].id);
-  });
-
-  it("leaves a focused inbox pane to follow the store pointer itself", () => {
-    split(`/conversation/${A}`, `/inbox?s=${A}`);
-    expect(openSessionInFocusedPane(B)).toBe(false);
-    expect(leavesOf(activeTab().layout!).map((l) => l.path)).toEqual([`/conversation/${A}`, `/inbox?s=${A}`]);
-  });
-
-  it("does nothing on an unsplit tab", () => {
-    useInboxStore.setState({ tabs: [tab({ path: `/conversation/${A}` })], activeTabId: "t1" } as any);
-    expect(openSessionInFocusedPane(B)).toBe(false);
-    expect(activeTab().path).toBe(`/conversation/${A}`);
   });
 });
 

@@ -5,7 +5,7 @@
 // behind a disclosure (org-staffing.md S23), where it runs, and the channels
 // it follows. Pause and retire are the page header's menu. Every edit is a store action that paints in the same
 // tick and rides dispatch to the orgRoles mutation.
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import Link from "next/link";
 import { TriangleAlert, Hash, MessageSquare, X } from "lucide-react";
@@ -22,13 +22,11 @@ import { DAILY_CAP_KEYS } from "@codecast/shared/contracts/orgCapacity";
 import { useLineForks } from "../../../hooks/useLineForks";
 import { lineSettingsHref } from "../../../lib/lineSettings";
 import { flowHref } from "../../../lib/line/lineWorkspaceUrl";
-import { goalsOnlyFor, lineIntentEchoed, rolePeopleOnTree, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
+import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
-import { roleManagers } from "@codecast/shared/contracts/orgLead";
-import { roleManagerAllowed } from "../../../store/orgRoleManagers";
-import { ManagerChips, usePersonHref } from "../PersonProfile";
 import { GatedScopeEditor, InlineEdit } from "./ScopeEditors";
-import { type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
+import { parentName } from "../orgMeta";
+import { sameParent, type OrgParentRef, type OrgRole, type OrgTree } from "../orgTypes";
 import { type RoleCaps, type RoleCounters, type ScopeOverlap } from "./scopeTypes";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 import { isHeadOfPeopleRole } from "../orgStaffingTypes";
@@ -125,42 +123,35 @@ function SeatLimitNote({ standingId, deviceId, machineLabel }: { standingId: str
 
 /** Who reports to the role (R6): the people whose goals it keeps. A person
  *  adds or removes themself; an admin of the role anyone in the workspace.
- *  In a team the fact is each person's managers (org-people.md P3), so the
- *  edit paints on their rows in this tick and rides setRolePeople's dispatch
- *  to orgRoles.setReports; a personal role keeps its own list. */
+ *  The list is a role field, so the edit paints in this tick and rides
+ *  updateOrgRole's dispatch to orgRoles.setReports. */
 function ReportingPeople({ tree, role, canEdit, onUpdate }: { tree: OrgTree; role: OrgRole; canEdit: boolean; onUpdate: (fields: OrgUpdateRoleInput) => void }) {
-  const team = tree.workspace.kind === "team" ? tree.workspace.id : null;
-  const ids = team ? rolePeopleOnTree(tree, role._id).map((p) => p.user_id) : role.reports_user_ids ?? [];
+  const ids = role.reports_user_ids ?? [];
   const me = tree.people.find((p) => p.is_me);
   const people = ids.map((id) => tree.people.find((p) => p.user_id === id)).filter((p): p is OrgTree["people"][number] => !!p);
-  const bots = new Set(tree.anchors.map((a) => a.bot_user_id));
-  const addable = canEdit ? tree.people.filter((p) => !ids.includes(p.user_id) && !bots.has(p.user_id)) : [];
-  const set = (next: string[]) => (team ? useInboxStore.getState().setRolePeople(team, role._id, next) : onUpdate({ reports_user_ids: next }));
-  // Someone the role already reports up to cannot report to it: the role keeps
-  // their goals and they stay its manager, not its report (goalsOnlyFor).
-  const goalsOnly = (userId: string) => !!team && goalsOnlyFor(tree, role._id, userId);
+  const addable = canEdit ? tree.people.filter((p) => !ids.includes(p.user_id)) : [];
+  const set = (next: string[]) => onUpdate({ reports_user_ids: next });
   return (
-    <Section title="Its people">
-      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Nobody yet</p>}
+    <Section title="People whose focus it keeps" hint="The role keeps each person's priorities in its notes, reads their sessions against them every time it runs, and tells them when an important one stalls. It has no say over their work.">
+      {people.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It keeps nobody's focus yet.</p>}
       <ul className="flex flex-wrap gap-1.5" data-reporting-people={people.length}>
         {people.map((p) => (
           <li key={p.user_id} className="inline-flex items-center gap-1.5 h-7 pl-1 pr-1.5 rounded-full border text-[12px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)", color: "var(--sol-text)" }}>
             <Avatar name={p.name} image={p.image} size="sm" />{p.name}
-            {goalsOnly(p.user_id) && <span className="rounded px-1 text-meta" style={{ background: "color-mix(in srgb, var(--sol-yellow) 14%, transparent)", color: "var(--sol-yellow)" }} title="The role keeps their goals; it reports to them, so they are not its report" data-goals-only>goals only</span>}
             {(canEdit || p.is_me) && (
-              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={goalsOnly(p.user_id) ? `The role stops keeping ${p.name}'s goals` : `${p.name} stops reporting to it`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
+              <button type="button" onClick={() => set(ids.filter((id) => id !== p.user_id))} aria-label={`Stop keeping ${p.name}'s focus`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight" style={{ color: "var(--sol-text-dim)" }}><X className="w-3 h-3" /></button>
             )}
           </li>
         ))}
       </ul>
       <div className="mt-2.5 flex items-center gap-2 flex-wrap">
         {me && !ids.includes(me.user_id) && (
-          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self={goalsOnly(me.user_id) ? "goals" : "report"}>{goalsOnly(me.user_id) ? "Keep my goals" : "Report to it"}</button>
+          <button type="button" onClick={() => set([...ids, me.user_id])} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }} data-report-self>Add my focus</button>
         )}
         {addable.filter((p) => !p.is_me).length > 0 && (
           <SelectBox value="" onChange={(e) => { if (e.target.value) set([...ids, e.target.value]); }} className="text-[12px]" aria-label="Add a person">
             <option value="">Add a person</option>
-            {addable.filter((p) => !p.is_me).map((p) => <option key={p.user_id} value={p.user_id}>{goalsOnly(p.user_id) ? `${p.name} · goals only` : p.name}</option>)}
+            {addable.filter((p) => !p.is_me).map((p) => <option key={p.user_id} value={p.user_id}>{p.name}</option>)}
           </SelectBox>
         )}
       </div>
@@ -184,9 +175,10 @@ export type ScopeSettingsProps = {
   history?: React.ReactNode;
   /** `opts.leave_sessions` is the person's one edit on a scope that gains refs (R1). */
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
+  onReparent: (target: OrgParentRef) => void;
 };
 
-export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, history, onUpdate }: ScopeSettingsProps) {
+export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, standingId, counters, history, onUpdate, onReparent }: ScopeSettingsProps) {
   const caps: RoleCaps = role.caps ?? {};
   const [capsDraft, setCapsDraft] = useState<RoleCaps>(caps);
   // The server value moves under the tab (the CLI, another window,
@@ -242,13 +234,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   const projectName = (id: string) => role.scope_names.projects.find((p) => p.id === id)?.title ?? "a project";
   const planName = (id: string) => role.scope_names.plans.find((p) => p.id === id)?.title ?? "a plan";
 
-  // Every manager, all equal (org-people.md P3); the first is the line the chart draws.
-  const setManagers = useInboxStore((s) => s.setOrgRoleManagers);
-  const managers = useMemo(() => roleManagers<OrgParentRef>(role), [role]);
-  const allowed = useCallback((m: OrgParentRef) => roleManagerAllowed(tree, role._id, m), [tree, role._id]);
-  const mayEdit = useCallback(() => canEdit, [canEdit]);
-  const self = useMemo<OrgParentRef>(() => ({ kind: "role", role_id: role._id }), [role._id]);
-  const hrefOf = usePersonHref();
+  const targets = useMemo(() => {
+    const people = tree.people.map((p) => ({ key: `user:${p.user_id}`, label: p.name, ref: { kind: "user", user_id: p.user_id } as OrgParentRef }));
+    const roles = tree.roles
+      .filter((r) => r._id !== role._id && r.status !== "retired" && !orgRoleReparentMakesCycle(tree, role._id, { kind: "role", role_id: r._id }))
+      .map((r) => ({ key: `role:${r._id}`, label: `${r.name} (@${r.handle})`, ref: { kind: "role", role_id: r._id } as OrgParentRef }));
+    return [...people, ...roles];
+  }, [tree, role]);
+  const currentKey = role.reports_to.kind === "user" ? `user:${role.reports_to.user_id}` : `role:${role.reports_to.role_id}`;
 
   return (
     <div className="space-y-3 max-w-[760px]">
@@ -307,8 +300,20 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
       <SuccessionSection tree={tree} role={role} />
       <SplitRoleSection tree={tree} role={role} canEdit={canEdit} />
 
-      <Section title="Reports to" hint="Who it answers to, all equal. What it cannot settle itself goes to them, with its recommendation.">
-        <ManagerChips tree={tree} managers={managers} onChange={(next) => setManagers(role._id, next)} may={mayEdit} allowed={allowed} exclude={self} min={1} hrefOf={hrefOf} />
+      <Section title="Reports to" hint="Who it answers to. What it cannot settle itself goes to them, with its recommendation.">
+        <div className="flex items-center gap-2 flex-wrap">
+          {!canEdit && <span className="text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>}
+          {canEdit && (
+            <SelectBox
+              value={currentKey}
+              onChange={(e) => { const t = targets.find((x) => x.key === e.target.value); if (t && !sameParent(t.ref, role.reports_to)) onReparent(t.ref); }}
+              className="text-[12px]"
+              aria-label="Reports to"
+            >
+              {targets.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </SelectBox>
+          )}
+        </div>
       </Section>
 
       <ReportingPeople tree={tree} role={role} canEdit={canEdit} onUpdate={onUpdate} />

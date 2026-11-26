@@ -14,7 +14,6 @@ import {
   useSettingsUser,
   themeLabelOf,
 } from '@/components/settings/SettingsPages';
-import { voiceDetail } from '@/components/settings/VoicePage';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { LANE_COPY, meterWords } from '@codecast/web/components/simple/lane';
 import { usePlanMeter } from '@codecast/web/components/simple/usePlanFigures';
@@ -97,7 +96,6 @@ export default function SettingsScreen() {
           onPress={() => open('devices')}
         />
         <NavRow icon="shield" label="Vault" detail={vaultAsks ? `${vaultAsks} requested` : undefined} onPress={() => open('vault')} />
-        <NavRow icon="microphone" label="Voice" detail={voiceDetail(currentUser)} onPress={() => open('voice')} />
         <NavRow icon="adjust" label="Appearance" detail={themeLabelOf(storeTheme).label} onPress={() => open('appearance')} />
         <NavRow
           icon="lock"

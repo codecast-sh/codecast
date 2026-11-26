@@ -95,15 +95,3 @@ test("a session card wraps its title, says where it stands and its task, and, op
   expect(msgs).toEqual(["you: Is the tail fixed?", "agent: Yes, one frame now."]);
   await opened.done();
 });
-
-test("a role with several managers names the ones the chart does not draw, inside its booked height (org-people.md P3)", async () => {
-  const { useInboxStore } = await import("../../store/inboxStore");
-  const sam = ORG_FIXTURE.people.find((p) => !p.is_me)!;
-  useInboxStore.setState({ orgTree: ORG_FIXTURE as any, orgScope: "team:fixture-team" } as any);
-  const role = { ...ORG_FIXTURE.roles[0], also_reports_to: [{ kind: "user" as const, user_id: sam.user_id }] };
-  const card = await mount(h(RoleCard, { id: `role:${role._id}`, data: { role, collapsed: false, hidden: 0, overflow: 0 } } as any));
-  const frame = card.host.querySelector("[data-org-node]") as HTMLElement;
-  expect(frame.querySelector("[data-also-reports-to]")!.textContent).toBe(`also reports to ${sam.name}`);
-  expect(sum(blocks(frame))).toBe(roleCardRows(role, { open: null }).h - CARD.rolePad);
-  await card.done();
-});

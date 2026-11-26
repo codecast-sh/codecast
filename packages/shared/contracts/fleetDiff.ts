@@ -49,7 +49,6 @@
 // `CapabilityKind` is the wider library vocabulary; the kinds a machine
 // inventory can actually report are the narrower list `KIND_ORDER` ranks below.
 import type { CapabilityKind, ObservedScope } from "./capabilities";
-import { isMcpLoginClient, isRemoteMcpTransport, type McpLoginClient } from "./mcpLogin";
 
 /**
  * Marketplaces sit in the same grid as capabilities on purpose: a plugin that
@@ -172,17 +171,6 @@ export interface FleetDiffCell {
   /** Every scope that declares it on this machine, narrowest first — the
    *  answer to "why is this here?". Scopes stack, so there can be several. */
   scopes: ObservedScope[];
-  /** MCP servers reached over the network: each agent CLI on this machine that
-   *  declares it, which can sign in to it (shared/contracts/mcpLogin.ts). */
-  signIn?: McpSignIn[];
-}
-
-export interface McpSignIn {
-  client: McpLoginClient;
-  /** The project to run the sign-in in, for a server only a project declares. */
-  cwd?: string;
-  /** The client last found it asking for a sign-in. */
-  needed: boolean;
 }
 
 export type RowStatus =
@@ -424,22 +412,6 @@ interface NormalizedItem {
   enabled: boolean;
   installed?: boolean;
   pin?: Pin;
-  signIn?: McpSignIn;
-}
-
-/** The directory an MCP config sits in names its project: `<root>/.mcp.json`, `<root>/.codex/config.toml`. */
-function projectRootOf(source: string): string | undefined {
-  const dir = source.replace(/\/[^/]*$/, "");
-  if (!dir.startsWith("/")) return undefined;
-  return /\/\.[^/]+$/.test(dir) ? dir.replace(/\/[^/]*$/, "") : dir;
-}
-
-function signInOf(kind: FleetRowKind, raw: Record<string, unknown>, meta: Record<string, string> | undefined, scope: ObservedScope): McpSignIn | undefined {
-  if (kind !== "mcp" || !meta?.url || !isRemoteMcpTransport(meta.transport)) return undefined;
-  const client = raw.client === undefined ? "claude" : raw.client;
-  if (!isMcpLoginClient(client)) return undefined;
-  const cwd = scope === "user" ? undefined : typeof raw.source === "string" ? projectRootOf(raw.source) : undefined;
-  return { client, ...(cwd ? { cwd } : {}), needed: meta.auth === "needed" };
 }
 
 function normalizeItem(raw: unknown): NormalizedItem | undefined {
@@ -463,7 +435,6 @@ function normalizeItem(raw: unknown): NormalizedItem | undefined {
     enabled: raw.enabled !== false,
     installed: typeof raw.installed === "boolean" ? raw.installed : undefined,
     pin: pinOf(kind, meta),
-    signIn: signInOf(kind, raw, meta, scopeOf(raw.scope)),
   };
 }
 
@@ -522,7 +493,6 @@ interface Fold {
   pinRank: number;
   installed?: boolean;
   scopes: Set<ObservedScope>;
-  signIn?: Map<McpLoginClient, McpSignIn>;
 }
 
 /**
@@ -689,18 +659,6 @@ export function buildFleetDiff(reports: DeviceReport[]): FleetDiff {
         fold.pinRank = rank;
       }
       fold.scopes.add(item.scope);
-      if (item.signIn) {
-        // One entry per client: a user-scope declaration (no project needed)
-        // wins over a project one, and any declaration asking for a sign-in counts.
-        fold.signIn ??= new Map();
-        const prior = fold.signIn.get(item.signIn.client);
-        const cwd = prior && !prior.cwd ? undefined : item.signIn.cwd;
-        fold.signIn.set(item.signIn.client, {
-          client: item.signIn.client,
-          ...(cwd ? { cwd } : {}),
-          needed: (prior?.needed ?? false) || item.signIn.needed,
-        });
-      }
     }
   }
 
@@ -818,7 +776,6 @@ function buildRow(accumulator: RowAccumulator, devices: FleetDevice[], comparabl
       pinKind: fold.pin?.kind,
       installed: fold.installed,
       scopes: sortedScopes(fold.scopes),
-      ...(fold.signIn ? { signIn: [...fold.signIn.values()] } : {}),
     };
   });
 

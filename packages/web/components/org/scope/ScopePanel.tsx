@@ -20,8 +20,8 @@ import { useLineOpen } from "../lines/lineOpen";
 import { TaskListContent } from "../../../app/tasks/page";
 import type { ScopeRef } from "../../../hooks/useScopeQueries";
 import type { ScopeIds } from "../../../hooks/useScopeIds";
-import type { OrgRole, OrgTree } from "../orgTypes";
-import { rolePeopleOnTree, type OrgUpdateRoleInput } from "../../../store/orgSlice";
+import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
+import type { OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { ScopeFeed } from "./ScopeFeed";
 import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { TemplateSections } from "../TemplateSections";
@@ -36,7 +36,6 @@ import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeTriggersTab } from "./ScopeTriggersTab";
 import type { BriefPerson, RoleBrief, RoleCounters, ScopeSummary } from "./scopeTypes";
 import { PersonGoals } from "./PersonGoals";
-import { RoleReports } from "./RoleReports";
 import { OrgHistory } from "../history/OrgHistory";
 import type { PanelLayout } from "../../../hooks/usePanelLayout";
 import { SCOPE_WORK_VIEWS, scopeTabsFor, type ScopeTabKey, type ScopeWorkView } from "../../../lib/scopeTabs";
@@ -79,6 +78,7 @@ export type ScopePanelProps = {
   now: number;
   backHref: string;
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
+  onReparent: (target: OrgParentRef) => void;
 };
 
 export function ScopePanel(p: ScopePanelProps) {
@@ -161,7 +161,7 @@ export function ScopePanel(p: ScopePanelProps) {
           {tab === "decisions" && <ScopeDecisionsTab ids={p.scopeIds} roleId={role?._id ?? null} />}
           {tab === "triggers" && role && <ScopeTriggersTab standingConversationId={p.brief?.role.standing_conversation_id ?? null} />}
           {tab === "settings" && role && (
-            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} onUpdate={p.onUpdate} history={<RoleHistory roleId={role._id} />} />
+            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} onUpdate={p.onUpdate} onReparent={p.onReparent} history={<RoleHistory roleId={role._id} />} />
           )}
         </div>
       )}
@@ -183,14 +183,13 @@ function RoleHistory({ roleId }: { roleId: string }) {
  *  row, so the section says where goals go. */
 function viewerGoals(tree: OrgTree, role: OrgRole, people: BriefPerson[] | undefined): BriefPerson | null {
   const me = tree.people.find((x) => x.is_me);
-  const mine = tree.workspace.kind === "team" ? rolePeopleOnTree(tree, role._id).some((p) => p.user_id === me?.user_id) : (role.reports_user_ids ?? []).includes(me?.user_id ?? "");
-  if (!people || !me || !mine) return null;
+  if (!people || !me || !(role.reports_user_ids ?? []).includes(me.user_id)) return null;
   return people.find((x) => x.user_id === me.user_id)
     ?? { user_id: me.user_id, name: me.name, has_section: false, goals: [], sessions_changed: [], sessions_total: 0, stalled_high: 0 };
 }
 
 /** A role's Overview: what it is for (the charter, edited in place), the
- *  briefing, who reports to it, the viewer's goals, the role's own notes behind a fold, and what
+ *  briefing, the viewer's goals, the role's own notes behind a fold, and what
  *  happened in its area lately. */
 function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
   const { tree, role } = p;
@@ -220,7 +219,6 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
       </section>
 
       <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} />
-      <RoleReports tree={tree} role={role} now={p.now} label={BLOCK_LABEL} />
       <RolePlaybookSections narrative={p.brief?.narrative} routine={p.brief?.role.routine ?? null} now={p.now} />
 
       {me && (

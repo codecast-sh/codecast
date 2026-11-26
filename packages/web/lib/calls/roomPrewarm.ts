@@ -45,7 +45,6 @@
 import { ConnectionState, RemoteParticipant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
-import { getDesktopWindowRole, subscribeWindowRole, voiceHostElsewhere } from "../desktop";
 import { huddleRoomOptions, MIC_PUBLISH_OPTIONS } from "./livekitMedia";
 import { readJoinPrefs } from "./joinPrefs";
 import { roomRecordingOn } from "./roomRecordingFields";
@@ -129,34 +128,6 @@ export function bindPrewarmConvex(client: ConvexHandle) {
   unwatchRecording = useInboxStore.subscribe((s: any) => {
     if (warm && roomRecordingOn(s, warm.roomKey)) releasePrewarm();
   });
-  // The shell's role can arrive after a DM already warmed its room (a window
-  // booting before the first broadcast), so a role saying another window owns
-  // the calls lets go of whatever this one holds.
-  unwatchRole?.();
-  unwatchRole = subscribeWindowRole(() => {
-    if (warm && !prewarmBelongsHere()) releasePrewarm();
-  });
-}
-
-let unwatchRole: (() => void) | null = null;
-
-/**
- * Whether this WINDOW is one that joins rooms at all.
- *
- * On a desktop, LiveKit knows this person by one identity across every
- * window, and a second connection to a room under it evicts the first. With a
- * voice host, joins are sent there (`seatViaHost`) and a room warmed here can
- * never be handed over, so a prewarm here buys nothing and, in the room the
- * host is sitting in, kicks the host out of the call: clicking back into the
- * main window on a DM with the person you are talking to was enough. On an
- * older shell the same holds while another window hosts a connected call.
- * Read from the shell, never the seat rows: those arrive by query and are
- * empty in a window that has not heard back yet.
- */
-export function prewarmBelongsHere(): boolean {
-  if (voiceHostElsewhere()) return false;
-  const call = useInboxStore.getState().call;
-  return !(getDesktopWindowRole().anyInCall && !call.roomKey);
 }
 
 function clearIdleTimer() {
@@ -291,7 +262,7 @@ export function prewarmRoom(roomKey: string): void {
     armIdleTimer();
     return;
   }
-  if (!prewarmBelongsHere() || !prewarmAllowed(roomKey, useInboxStore.getState())) return;
+  if (!prewarmAllowed(roomKey, useInboxStore.getState())) return;
   // A NEW ROOM RELEASES THE LAST, before anything is awaited: one prewarmed
   // room at a time is what keeps a bar of faces from opening six connections.
   releasePrewarm();

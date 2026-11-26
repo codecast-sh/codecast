@@ -1,9 +1,8 @@
 import { usePathname } from "next/navigation";
 import { useSyncTasksWithArgs } from "./useSyncTasks";
-import { useSyncPlansWithArgs } from "./useSyncPlans";
 import { useWorkspaceArgs } from "./useWorkspaceArgs";
 
-// Keeps the task and plan stores warm while the user is anywhere BUT the tasks/projects
+// Keeps the task store warm while the user is anywhere BUT the tasks/projects
 // pages (which mount their own useSyncTasks and own the channel — hence the
 // skip, so we never run two cursor state machines for the same args).
 //
@@ -20,9 +19,4 @@ export function usePrefetch() {
   const isOnProjectsPage = pathname === "/projects" || pathname?.startsWith("/projects/");
 
   useSyncTasksWithArgs(isOnTasksPage || isOnProjectsPage ? "skip" : workspaceArgs);
-  // Plans the same way: a plan opened from the inbox lens, a hover card or the
-  // palette paints its row from the store instead of the page loader. One
-  // bootstrap read per workspace; the sync log keeps it fresh after that.
-  const isOnPlansPage = pathname === "/plans" || pathname?.startsWith("/plans/");
-  useSyncPlansWithArgs(isOnPlansPage ? "skip" : workspaceArgs);
 }

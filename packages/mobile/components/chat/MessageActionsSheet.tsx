@@ -6,7 +6,6 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar, type MobileChatMessage } from './MessageRow';
 import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
-import { reactorNames } from '@codecast/web/components/chat/chatTypes';
 
 // Long-press on a message. One sheet on BOTH platforms — ActionSheetIOS left
 // Android with a dead long-press, and a native sheet cannot carry the emoji
@@ -45,7 +44,6 @@ export function MessageActionsSheet({
     onAction(action);
   };
   const mine = new Set((message.reactions ?? []).filter((r) => r.mine).map((r) => r.emoji));
-  const reactors = (message.reactions ?? []).filter((r) => r.names?.length);
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
@@ -72,17 +70,6 @@ export function MessageActionsSheet({
               </TouchableOpacity>
             ))}
           </RNView>
-
-          {reactors.length > 0 && (
-            <RNView style={styles.reactors}>
-              {reactors.map((r) => (
-                <RNView key={r.emoji} style={styles.reactorRow}>
-                  <RNText style={styles.reactorEmoji}>{r.emoji}</RNText>
-                  <RNText style={styles.reactorNames}>{reactorNames(r.names!)}</RNText>
-                </RNView>
-              ))}
-            </RNView>
-          )}
 
           {canReply && (
             <SheetRow icon="comment-o" label="Reply in thread" onPress={() => act({ kind: 'reply' })} />
@@ -173,15 +160,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderColor: Theme.blue + '88',
   },
   emojiText: { fontSize: 24 },
-  reactors: {
-    paddingVertical: 6,
-    marginBottom: 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.border + '44',
-  },
-  reactorRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 5 },
-  reactorEmoji: { width: 34, fontSize: 17 },
-  reactorNames: { flex: 1, fontSize: 14.5, lineHeight: 20, color: Theme.textSecondary },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

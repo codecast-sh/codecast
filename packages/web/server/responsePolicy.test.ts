@@ -98,20 +98,6 @@ test("a guest meeting link and a call's public page tell search engines not to l
   expect((await app.request("/")).headers.get("X-Robots-Tag")).toBeNull();
 });
 
-test("the public repo browser tells search engines not to list it; marketing pages stay listable", async () => {
-  const app = new Hono().use("*", responsePolicy).get("*", c => c.html("<p>page</p>"));
-  for (const path of [
-    "/r/codecast-sh/codecast",
-    "/r/codecast-sh/codecast/blob/d8db0ac5f8ad6ca754cb0a1d7f02fd20276cf81e?path=bun.lock",
-    "/r/codecast-sh/codecast/commits/4314bb9ee6924f5ae8c15e9b0ed2be2720ff75ec?path=packages/web/app/tasks/page.tsx&author=ashot",
-  ]) {
-    expect((await app.request(path)).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
-  }
-  for (const path of ["/", "/blog", "/blog/agents-that-talk-to-each-other", "/documentation", "/documentation/t3-code", "/releases"]) {
-    expect((await app.request(path)).headers.get("X-Robots-Tag")).toBeNull();
-  }
-});
-
 test("the agent consent page cannot be framed: an enforced frame-ancestors 'none' and X-Frame-Options DENY", async () => {
   const app = new Hono().use("*", responsePolicy).get("*", c => c.html("<div>consent</div>"));
   const consent = await app.request("/oauth/authorize?client_id=x");

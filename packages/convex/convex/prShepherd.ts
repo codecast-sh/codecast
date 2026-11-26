@@ -733,50 +733,24 @@ export const refreshMergeState = internalAction({
 const MERGE_STATE_BATCH_SIZE = 100;
 const MERGE_STATE_BATCH_CONCURRENCY = 4;
 
-/**
- * The push a base-branch sweep answers to. A busy repository pushes to main
- * several times a minute (littlebird, 2026-11-24: ~9 push webhooks a minute,
- * most under 30s apart), and each sweep re-reads every open PR aimed at it and
- * rewrites its ~110 KB row because `behind_by` moved: 450 MB an hour of writes
- * that tripped the deployment's write limit and refused message deliveries, and
- * two GitHub calls per PR that ran the installation out of its rate limit. A
- * sweep whose push is no longer the branch head stands down, since the newer
- * push scheduled a sweep of its own.
- */
-export type SweepBase = { branch: string; sha: string };
-const sweepBaseValidator = v.object({ branch: v.string(), sha: v.string() });
-
 /** Schedule merge state refreshes for many pull requests at once. */
 export async function scheduleMergeStateRefreshes(
   ctx: { scheduler: any },
   prIds: Id<"pull_requests">[],
   delayMs: number,
-  base?: SweepBase,
 ): Promise<void> {
   for (let i = 0; i < prIds.length; i += MERGE_STATE_BATCH_SIZE) {
     await ctx.scheduler.runAfter(delayMs, internal.prShepherd.refreshMergeStates, {
       pr_ids: prIds.slice(i, i + MERGE_STATE_BATCH_SIZE),
       attempt: 0,
-      ...(base ? { base } : {}),
     });
   }
-}
-
-/** True when GitHub's head of `base.branch` is a later commit than the push this sweep was scheduled for. */
-async function basePushedSince(pr: PR, base: SweepBase, token: string): Promise<boolean> {
-  const response = await fetch(`${GITHUB_API_BASE}/repos/${pr.repository}/branches/${encodeURIComponent(base.branch)}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
-  }).catch(() => null);
-  if (!response?.ok) return false;
-  const head = (await response.json().catch(() => null))?.commit?.sha;
-  return typeof head === "string" && head !== base.sha;
 }
 
 export const refreshMergeStates = internalAction({
   args: {
     pr_ids: v.array(v.id("pull_requests")),
     attempt: v.number(),
-    base: v.optional(sweepBaseValidator),
   },
   handler: async (ctx, args): Promise<void> => {
     // Every PR in a batch shares a repository, so a token found for one PR
@@ -791,12 +765,6 @@ export const refreshMergeStates = internalAction({
       if (!tokens.has(key)) tokens.set(key, asked);
       return await asked;
     };
-
-    if (args.base && args.attempt === 0 && args.pr_ids.length > 0) {
-      const first: PR | null = await ctx.runQuery(internal.prShepherd.getPR, { pr_id: args.pr_ids[0] });
-      const token = first ? await tokenFor(first) : null;
-      if (first && token && (await basePushedSince(first, args.base, token))) return;
-    }
 
     const queue = [...args.pr_ids];
     const unanswered: Id<"pull_requests">[] = [];

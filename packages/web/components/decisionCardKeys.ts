@@ -60,9 +60,7 @@ export function useDecisionCardKeys(k: DecisionCardKeys): void {
       // interrupts, and raising it on the thread's own j would put its
       // answers one digit away from a reader who never opened it.
       // Stepping is the queue's: with nothing to step to, the arrows stay the page's.
-      // Back also reaches the decisions answered in this visit, so it lives while the stepper offers it.
-      if (action.kind === "skip" && !((stepper?.total ?? 0) > 1) && !(threadAsks && !stepper)) return;
-      if (action.kind === "prev" && !onPrev) return;
+      if ((action.kind === "skip" || action.kind === "prev") && !((stepper?.total ?? 0) > 1) && !(threadAsks && !stepper)) return;
       if (!stepper && !full && action.kind !== "commit-free-text" && action.kind !== "close-free-text") {
         if (action.kind !== "full" || !blocking) return;
       }

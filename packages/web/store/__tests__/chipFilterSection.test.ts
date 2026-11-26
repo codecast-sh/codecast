@@ -1,38 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import { chipFilterSection, type InboxSession } from "../inboxStore";
 
-const row = (id: string, extra: Partial<InboxSession> = {}) => ({ _id: id, ...extra }) as InboxSession;
+const row = (id: string) => ({ _id: id }) as InboxSession;
 
 describe("chipFilterSection", () => {
   // A project's main session rides its role's standing session, which works in
   // another project; its workers nest under it. The project chip used to drop
   // the standing card and everything under it, leaving the inbox empty.
   const lead = row("lead");
-  const main = row("main", { org_role_id: "role" } as Partial<InboxSession>);
+  const main = row("main");
   const worker = row("worker");
   const other = row("other");
-  const subs = new Map<string, InboxSession[]>([["lead", [main, row("elsewhere", { org_role_id: "role" } as Partial<InboxSession>)]], ["main", [worker]]]);
+  const subs = new Map<string, InboxSession[]>([["lead", [main, row("elsewhere")]], ["main", [worker]]]);
   const inProject = new Set(["main", "worker"]);
   const matches = (s: InboxSession) => inProject.has(s._id);
 
-  test("a matching role session under a dropped role card stands in its place", () => {
+  test("a matching row nested under a dropped card stands in its place", () => {
     expect(chipFilterSection([lead, other], subs, matches).map((s) => s._id)).toEqual(["main"]);
   });
 
   test("a matching card keeps its nested rows under it, not beside it", () => {
     expect(chipFilterSection([main], subs, matches).map((s) => s._id)).toEqual(["main"]);
-  });
-
-  // A plan lead in one repo spawned its workers in another. Under the workers'
-  // project chip every worker used to become its own loose card, the lead
-  // vanished, and the Sub-agents option stopped hiding them.
-  test("a card whose subagents match stays, and they stay nested under it", () => {
-    const planLead = row("planLead");
-    const kids = [row("w1"), row("w2"), row("w3")];
-    const nest = new Map<string, InboxSession[]>([["planLead", kids], ["w2", [row("deep")]]]);
-    const inRepo = (s: InboxSession) => s._id.startsWith("w");
-    expect(chipFilterSection([planLead, other], nest, inRepo).map((s) => s._id)).toEqual(["planLead"]);
-    expect(chipFilterSection([planLead], new Map([["planLead", [row("x", {})]], ["x", [row("w9")]]]), inRepo).map((s) => s._id)).toEqual(["planLead"]);
   });
 
   test("a cycle in the nesting ends the walk", () => {

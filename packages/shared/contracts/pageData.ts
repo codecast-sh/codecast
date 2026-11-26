@@ -5,8 +5,6 @@
 // (the runtime in convex/lib/castData.ts). One shape for the server, the
 // runtime and `cast publish data`.
 
-import { parsePageApp, type PageApp } from "./pageApp";
-
 export const PAGE_DATA_FILE = "cast-data.json";
 
 export const PAGE_DATA_READERS = [
@@ -21,7 +19,6 @@ export const PAGE_DATA_READERS = [
   "hogql",
   "connector",
   "sheet",
-  "waiting",
 ] as const;
 export type PageDataReader = (typeof PAGE_DATA_READERS)[number];
 
@@ -88,17 +85,11 @@ export interface NormalizedPageQuery {
  * refresh intervals and sizes. Each reader's own args are the registry's to
  * check (convex/lib/pageReaders.ts), because only the server knows them.
  */
-export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: string; queries: NormalizedPageQuery[]; state?: PageStateCollection[]; app?: PageApp } | { ok: false; error: string } {
+export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: string; queries: NormalizedPageQuery[]; state?: PageStateCollection[] } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: `${PAGE_DATA_FILE} must be a JSON object with "queries"` };
   const decl = raw as Record<string, unknown>;
-  let app: PageApp | undefined;
-  if (decl.app !== undefined) {
-    const parsed = parsePageApp(decl.app);
-    if (!parsed.ok) return parsed;
-    app = parsed.app;
-  }
-  const queries = decl.queries ?? (decl.state !== undefined || app ? {} : undefined);
-  if (!queries || typeof queries !== "object" || Array.isArray(queries)) return { ok: false, error: `${PAGE_DATA_FILE} needs a "queries" object keyed by query id, a "state" object, or an "app" object` };
+  const queries = decl.queries ?? (decl.state !== undefined ? {} : undefined);
+  if (!queries || typeof queries !== "object" || Array.isArray(queries)) return { ok: false, error: `${PAGE_DATA_FILE} needs a "queries" object keyed by query id, or a "state" object` };
   const entries = Object.entries(queries as Record<string, unknown>);
   if (entries.length > PAGE_DATA_LIMITS.queries) return { ok: false, error: `a page can declare at most ${PAGE_DATA_LIMITS.queries} queries (this one has ${entries.length})` };
   let workspace: string | undefined;
@@ -133,7 +124,7 @@ export function parsePageDataDeclaration(raw: unknown): { ok: true; workspace?: 
   }
   const state = parsePageStateDeclaration(decl.state);
   if (!state.ok) return state;
-  return { ok: true, ...(workspace ? { workspace } : {}), queries: out, ...(state.collections.length ? { state: state.collections } : {}), ...(app ? { app } : {}) };
+  return { ok: true, ...(workspace ? { workspace } : {}), queries: out, ...(state.collections.length ? { state: state.collections } : {}) };
 }
 
 /** A page that reads live data or state gets the data runtime: the two elements, the API, or a motion page's data-cast-data bindings. */

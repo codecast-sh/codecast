@@ -10,7 +10,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice" | "priority_classifier" | "voice_speakers" | "composer_suggestions";
+export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice" | "priority_classifier";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -141,22 +141,6 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     snippets: [],
   },
   {
-    key: "composer_suggestions",
-    name: "Suggested replies",
-    desc: "Suggested replies start on for every member who has not chosen for themselves; each person can still turn them off in their settings.",
-    short: "Suggested replies on for members",
-    snippets: [],
-    personal: true,
-  },
-  {
-    key: "voice_speakers",
-    name: "Voice note speakers",
-    desc: "A finished voice note is transcribed again with each line on its speaker, and teammates who turned on voice recognition are suggested by name. In development.",
-    short: "Voice notes say who spoke each line",
-    snippets: [],
-    inDevelopment: true,
-  },
-  {
     key: "member_spend",
     name: "Spend visible to all members",
     desc: "Every member sees each teammate's tokens and spend on activity charts; when off, only admins do.",
@@ -232,20 +216,6 @@ export function workspaceFeatureEnabled(
   if (activeTeamId) return teamFeatureEnabled(teams.find((t) => String(t?._id) === String(activeTeamId)), key);
   if (!TEAM_FEATURES.find((f) => f.key === key)?.personal) return false;
   return teams.some((t) => teamFeatureEnabled(t, key));
-}
-
-/**
- * A personal setting that a team feature sets the default for (suggested
- * replies): the person's own choice wins, and a person who never chose follows
- * the workspace's flag.
- */
-export function personalSettingOn(
-  own: boolean | null | undefined,
-  teams: Array<{ _id?: unknown; features?: TeamFeatures | null } | null | undefined>,
-  activeTeamId: string | null | undefined,
-  key: TeamFeatureKey,
-): boolean {
-  return typeof own === "boolean" ? own : workspaceFeatureEnabled(teams, activeTeamId, key);
 }
 
 /**

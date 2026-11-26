@@ -38,7 +38,7 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
   const holderKey = useInboxStore((s) => (s.sessionDecisions[decisionId] ?? s.decisionDetails[decisionId]?.decision)?.holder_key);
   const passDecision = useInboxStore((s) => s.passDecision);
   const escalateDecision = useInboxStore((s) => s.escalateDecision);
-  const orgTree = useInboxStore((s) => windowOrgTree(s));
+  const orgPeople = useInboxStore((s) => windowOrgTree(s)?.people);
   const members = useInboxStore(teamMembersOf);
 
   const options = useMemo(() => [
@@ -49,9 +49,9 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
   // Whom Escalate reaches, named on the panel before it is sent.
   const upTo = useMemo(() => {
     const owner = holderKey?.startsWith("user:") ? holderKey.slice(5) : String(meId ?? "");
-    const ids = rosterEscalationTargets(owner, orgTree, members, meId ? String(meId) : undefined);
+    const ids = rosterEscalationTargets(owner, orgPeople, members, meId ? String(meId) : undefined);
     return ids.map((id) => people.find((p) => p.key === id)?.label ?? "a teammate");
-  }, [holderKey, meId, orgTree, members, people]);
+  }, [holderKey, meId, orgPeople, members, people]);
 
   const setOpen = (next: boolean, at: Step = { kind: "pick" }) => {
     setStep(at);

@@ -32,7 +32,6 @@ export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/se
 import { create } from "zustand";
 import { decisionCommentStub, decisionCommentStubId, type DecisionCommentRow, type DecisionThreadItem } from "./decisionThreadTypes";
 import type { SideAnswerRow } from "@codecast/shared/contracts";
-import { assignedSpeaker, confirmedSpeaker, speakerLabel, wireSpeakers, withSpeaker, type SpeakerAssignment, type WireCallSpeaker } from "@codecast/shared/contracts";
 import { sideAnswerStub, sideAnswerStubId } from "./sideAnswerTypes";
 import { useSyncExternalStore, useRef } from "react";
 import {
@@ -95,7 +94,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
 import { adoptedByClose, cascadeTakesDownRow, closeAdoptionWindow, closeLeavesStanding } from "@codecast/shared/contracts/closeCascade";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, answerOpenToChange, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import {
   rowLiveDeadlines,
   projectInbox,
@@ -191,8 +190,6 @@ import { cascadeFromAnswer, permissionRuleKey } from "@codecast/shared/contracts
 import type { BrowserPaneOffer } from "@codecast/shared/contracts/browserPaneOffer";
 import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
-import { peopleAboveRole } from "@codecast/shared/contracts/orgLead";
-import type { OrgTree } from "../components/org/orgTypes";
 import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -269,7 +266,6 @@ import { pathOnMyMachines, savedDefaultProject, wakesOnUse, type MachineCandidat
 import type { DeviceNameSource } from "@codecast/shared/contracts";
 import { machineChipKey, projectAxisLabel, projectAxisNoun, projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
 import { pendingJoinRow } from "../lib/teamMachines";
-import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "./browserTabsView";
 import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
@@ -714,12 +710,6 @@ export type InboxSession = {
   // (TeamSessionSwitch). Team is folded into createSession as `team`;
   // Personal, or no pick, changes nothing.
   _team?: "mine" | "team";
-  // Local only: what the team sees of a new session, picked in the composer
-  // (Hidden / Summary / Full, the share popover's levels). Folded into
-  // createSession: Hidden as `private` (no folder rule can share it), Summary
-  // or Full as `team_visibility`. Ignored for a Team pick, which the team
-  // reads whole; no pick sends nothing, so the folder rule decides.
-  _visibility?: TeamShareMode;
   // Local-only "kept draft" marker for a deferred compose stub the user chose
   // to keep instead of abandoning. It is what makes a 0-message blank VISIBLE
   // in the inbox (placeInboxRows' engaged-blank gate) and immune to the
@@ -2296,11 +2286,10 @@ export type ClientUI = {
   // left unstamped, so it stays a per-device reading preference like the other
   // layout toggles.
   thread_state_collapsed?: boolean;
-  // The ask whose card docked above the composer (Modern) is folded to one
-  // row: the Needs you mark, the question and its place. Keyed by the ask, so
-  // a new one arrives open with its question, reasoning and options. Per-device
-  // like the other layout toggles.
-  decision_dock_folded?: string | null;
+  // Fold the decision docked above the composer (Modern) to one row: the
+  // Needs you mark, the question and its place. Per-device like the other
+  // layout toggles; a new ask arrives folded too, still edged in Needs you.
+  decision_dock_collapsed?: boolean;
   // The calls history list beside an open call (/calls/<id>). Folded away by
   // default, so a call reads as its own page; per-device like the other
   // layout toggles.
@@ -2413,10 +2402,6 @@ export type AppTab = {
    */
   layout?: StageNode;
   focusedLeafId?: string;
-  /** The conversation this tab's Files pane was last opened from (a path
-   *  link, a tool card, a diff's Edit: lib/filesPane openInEditor). The code
-   *  editor's agent link prefers it while it is still on the stage. */
-  editorOpenedFrom?: string;
 };
 
 /** How a leaf joins the stage: under a named id (a pane the shell keeps
@@ -2542,51 +2527,6 @@ export type ClientState = {
 };
 
 type Draft = InboxStoreState;
-
-/** A line of a call as transcripts.webGetCall sends it. */
-type CallDetailSegment = { seq: number; speaker_id: string; speaker_name: string; text: string; t0: number; t1: number; at?: number };
-/** voiceprints.myVoiceprint, as the store holds it. */
-type MyVoiceprint = { count: number; seconds: number; last_added_at: number | null };
-function clearVoiceSamples(mine: MyVoiceprint) {
-  mine.count = 0;
-  mine.seconds = 0;
-  mine.last_added_at = null;
-}
-/** The callDetails row a speaker correction writes, if this device holds it. */
-function callDetailRow(draft: Draft, transcriptId: string): { speakers?: WireCallSpeaker[]; segments?: CallDetailSegment[] } | undefined {
-  return ((draft as any).callDetails as Record<string, { speakers?: WireCallSpeaker[]; segments?: CallDetailSegment[] }> | undefined)?.[transcriptId];
-}
-
-// A decision handed to a person or a role, on the draft (convex passCore):
-// passDecision, and an escalation from a person who reports to a role.
-function passDecisionDraft(draft: Draft, decisionId: string, to: { kind: "user" | "role"; id: string }, note?: string) {
-  const row = draft.sessionDecisions[decisionId] ?? draft.decisionDetails[decisionId]?.decision;
-  if (!row || row.status !== "pending") return;
-  const now = Date.now();
-  const said = note?.trim();
-  const me = String(draft.currentUser?._id ?? "");
-  row.passed_to = { by: me, id: to.id, kind: to.kind, ...(said ? { note: said } : {}) };
-  row.escalated = null;
-  // Given to a person, it leaves every other queue and enters theirs.
-  if (to.kind === "user") row.in_queue = to.id === me;
-  row.holder = { kind: to.kind, id: to.id };
-  row.holder_key = `${to.kind}:${to.id}`;
-  if (to.kind === "user") row.asked_user_ids = [to.id];
-  else if (!(row.hops ?? []).some((h) => h.role_id === to.id)) row.hops = [...(row.hops ?? []), { role_id: to.id, at: now }];
-  row.updated_at = now;
-  const detail = draft.decisionDetails[decisionId];
-  if (!detail) return;
-  if (detail.decision !== row) detail.decision = { ...row };
-  if (to.kind === "user") {
-    const m = teamMembersOf(draft).find((u: any) => String(u._id) === to.id);
-    detail.asked_users = [{ _id: to.id, name: m?.name ?? m?.email ?? "a teammate" }];
-    return;
-  }
-  const r = draft.orgTree?.roles.find((x) => String(x._id) === to.id);
-  const role = r ? { _id: String(r._id), short_id: r.short_id, name: r.name, handle: r.handle, status: r.status } : null;
-  detail.holder_role = role;
-  if (!detail.ladder.some((h) => h.role_id === to.id)) detail.ladder = [...detail.ladder, { role_id: to.id, at: now, role }];
-}
 
 // -- Helpers --
 
@@ -4386,17 +4326,6 @@ export function viewerCommandsSession(
 
 let _lastParityCheckAt = 0;
 
-/** The placement placeInboxRows last computed for this view, however old, or
- *  null when it never ran. For a surface that only nudges an order by it (the
- *  palette's ranking) and should not pay for a fresh placement. */
-export function lastPlacedInbox(
-  state: Pick<PlaceInboxState, "clientState">,
-  opts: { focusedId?: string | null; scope?: "mine" | "team" } = {},
-): PlacedInbox | null {
-  const scope = opts.scope ?? state.clientState.ui?.inbox_scope ?? "mine";
-  return _placedMemo.get(`${scope}\x1f${opts.focusedId ?? ""}`)?.val ?? null;
-}
-
 export function placeInboxRows(
   state: PlaceInboxState,
   opts: { focusedId?: string | null; scope?: "mine" | "team"; now?: number; nowMono?: number } = {},
@@ -4992,30 +4921,22 @@ export function isUnsentConversation(s: { message_count?: number; last_user_mess
 }
 
 
-/** One placed section narrowed by the chip filter. A card the chip drops stays
- *  when a subagent or worker nested under it matches, so the match keeps
- *  nesting under its own card (and the Sub-agents option still decides whether
- *  it draws). A role's session never draws under its role's card, so a match
- *  there stands in the card's place instead: a project's session that rides
- *  its role's standing session (which works elsewhere) shows under the project
- *  chip rather than vanishing with that card. */
+/** One placed section narrowed by the chip filter. A row nested under a card
+ *  the chip drops stands in that card's place, its own nested rows still under
+ *  it: a project's session that rides its role's standing session (which works
+ *  elsewhere) shows under the project chip instead of vanishing with that card. */
 export function chipFilterSection(
   items: readonly InboxSession[],
   subsByParent: ReadonlyMap<string, readonly InboxSession[]>,
   matches: (s: InboxSession) => boolean,
 ): InboxSession[] {
-  const nestedMatch = (row: InboxSession, seen: Set<string>): boolean => {
-    if (seen.has(row._id)) return false;
-    seen.add(row._id);
-    return (subsByParent.get(row._id) ?? []).some((sub) => !isUnderRole(sub) && (matches(sub) || nestedMatch(sub, seen)));
-  };
   const out: InboxSession[] = [];
   const seen = new Set<string>();
   const visit = (row: InboxSession) => {
     if (seen.has(row._id)) return;
     seen.add(row._id);
-    if (matches(row) || nestedMatch(row, new Set())) { out.push(row); return; }
-    for (const sub of subsByParent.get(row._id) ?? []) if (isUnderRole(sub)) visit(sub);
+    if (matches(row)) { out.push(row); return; }
+    for (const sub of subsByParent.get(row._id) ?? []) visit(sub);
   };
   for (const s of items) visit(s);
   return out;
@@ -5576,7 +5497,6 @@ import { priorityPlaceReader, sortByPriority, type PriorityStanding } from "./pr
 import { splitHostedStops } from "../lib/hostedNotice";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
-import type { TeamShareMode } from "../lib/teamFeedRows";
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
 // a kept session that isn't in the cache — an old favorite the inbox window never
@@ -6272,8 +6192,6 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // The viewer's machines: the machine lens groups only these.
   machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
-  // Open browser tabs per session: the Browser view lists only those sessions.
-  browserTabs?: Record<string, BrowserTabRow>;
   // The priorities the Priorities view orders by (store/priorityOrder).
   priorities?: Record<string, PriorityRow>;
   // Loaded transcripts: the hosted stop rule's fallback splits "Couldn't finish" out of Needs You.
@@ -6337,13 +6255,6 @@ export function computeVisualOrder(state: {
     // A flat card still wears the bucket verdict (its badge reads from the same
     // placement), so a walk is the same membership in flat order.
     return opts.walk ? flat.filter(walkFilterOf(placed, opts.walk)) : flat;
-  }
-  // The Browser view: every session holding a tab, stashed rows and workers
-  // included, flat (GlobalSessionPanel's browserView).
-  if (mode === "browser") {
-    if (collapsed.browser) return [];
-    const rows = Object.values(state.sessions).filter((s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)));
-    return groupSessionsByBrowser(rows, browserTabsByConversation(state.browserTabs, Date.now()));
   }
   // Grouped and the lenses: the placed status sections over the SAME visible
   // set; the lens branches below regroup all of it, pinned rows included (each
@@ -6958,7 +6869,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   confirmSessionCommand: (requestId: string) => void;
   dismissSessionCommand: (requestId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; team_visibility?: "summary" | "full"; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -7127,7 +7038,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // in-place switches, reconfigure/create stamps for launches.
   setConversationModel: (id: string, opts: { model?: string | null; effort?: string | null }) => void;
   setStubTeam: (id: string, team: "mine" | "team") => void;
-  setStubVisibility: (id: string, visibility: TeamShareMode) => void;
   // Stamp per-session stable-context launch prefs on a NEW-session stub row
   // (local-only; folded into createSession by createSessionFromStub, same
   // lifecycle as the model/effort stamps). mode: "team" | "solo" | "off";
@@ -7152,7 +7062,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   mergeMessages: (convId: string, msgs: Message[], direction: "prepend" | "append", meta?: Partial<PaginationState>) => void;
   applyTailMessages: (convId: string, anchorTs: number, msgs: Message[], lastTimestamp: number | null) => void;
   setUserMessages: (convId: string, msgs: UserMessage[], source?: "cache") => void;
-  dropConversationContent: (convId: string) => void;
   addOptimisticMessage: (convId: string, content: string, images?: Array<OptimisticImage>, clientId?: string) => string;
   markOptimisticAsQueued: (convId: string, content: string) => void;
   markOptimisticAsFailed: (convId: string, clientId: string) => void;
@@ -7339,8 +7248,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   sessionThreads: { links: any[]; nodes: any[] } | null;
   // The hosted assistant's wallet (wallet.mine); null until it first syncs.
   wallet: import("@codecast/convex/convex/lib/wallet").WalletSummary | null;
-  /** The viewer's voice samples (voiceprints.myVoiceprint): counts only. */
-  myVoiceprint: MyVoiceprint | null;
   // Aggregate fleet CPU/memory samples over the last 2h.
   sessionMetricsAggregate: Array<{ collected_at: number; cpu: number; memory: number; pid_count: number }> | null;
   migrationCandidates: import("../lib/migrationPlan").MigrationCandidate[] | null;
@@ -7555,7 +7462,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updateTeamIcon: (teamId: string, fields: { icon?: string; icon_color?: string }) => Promise<unknown>;
   updateTeamTaskStatuses: (teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) => Promise<unknown>;
   setTeamDefaultFlow: (teamId: string, slug: string | null) => Promise<unknown>;
-  setTeamAppsPolicy: (teamId: string, fields: { install?: boolean; full_access?: boolean }) => Promise<unknown>;
   /** Who answers for the team (anchors.workspaceAgentRoleOf): a role id, or null for the Head of People. */
   setTeamWorkspaceAgent: (teamId: string, roleId: string | null) => Promise<unknown>;
   setTeamMemberRole: (teamId: string, userId: string, role: "member" | "admin") => Promise<unknown>;
@@ -7855,7 +7761,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean; sessions_read_dms?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -7899,22 +7805,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  (transcripts.setAgentFace). Rejects with the server's reason, and the
    *  toggle falls back with it. */
   setCallAgentFace: (transcriptId: string, target: string, face: boolean) => Promise<unknown>;
-  /** Say who voice `key` of a voice note is: a teammate, a typed name, or
-   *  unknown on purpose (transcripts.assignSpeaker). Every line of that voice
-   *  renames in this frame (resolveLineSpeaker over `callDetails[id].speakers`);
-   *  rejects with the server's reason and the speakers fall back with it. */
-  assignCallSpeaker: (transcriptId: string, key: string, assignment: SpeakerAssignment) => Promise<unknown>;
-  /** Confirm the person a voice match suggested for `key` (transcripts.confirmSpeaker). */
-  confirmCallSpeaker: (transcriptId: string, key: string) => Promise<unknown>;
-  /** Move line `seq` to voice `key`, an existing one or nextSpeakerKey(speakers)
-   *  for a new voice (transcripts.moveLineSpeaker). */
-  moveCallLineSpeaker: (transcriptId: string, seq: number, key: string) => Promise<unknown>;
-  /** The viewer's voice recognition switch, `currentUser.voice_id_enabled`
-   *  (voiceprints.setVoiceIdEnabled). Off deletes every sample, so the
-   *  myVoiceprint counts go to zero on the press too. */
-  setVoiceIdEnabled: (enabled: boolean) => Promise<unknown>;
-  /** Delete every sample of the viewer's voice (voiceprints.deleteMyVoiceprints). */
-  deleteMyVoiceprints: () => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -8382,7 +8272,7 @@ export const PER_DEVICE_UI_KEYS = new Set([
   "visual_style", "modern_style", "mobile_modern_style", "mobile_text_size",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
-  "trigger_prompt_height", "thread_state_collapsed", "decision_dock_folded", "calls_list_open", "people_view", "float_face_size",
+  "trigger_prompt_height", "thread_state_collapsed", "decision_dock_collapsed", "calls_list_open", "people_view", "float_face_size",
   "call_mic_device_id", "call_camera_device_id",
   "call_speaker_device_id",
 ]);
@@ -11086,7 +10976,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   sessionThreads: null,
   wallet: null,
-  myVoiceprint: null,
   sessionMetricsAggregate: null,
   migrationCandidates: null,
   migrationBatches: null,
@@ -11441,7 +11330,32 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (detail && row) detail.decision = { ...row };
   }),
   passDecision: action(function (this: Draft, decisionId: string, to: { kind: "user" | "role"; id: string }, note?: string) {
-    passDecisionDraft(this, decisionId, to, note);
+    const row = this.sessionDecisions[decisionId] ?? this.decisionDetails[decisionId]?.decision;
+    if (!row || row.status !== "pending") return;
+    const now = Date.now();
+    const said = note?.trim();
+    const me = String(this.currentUser?._id ?? "");
+    row.passed_to = { by: me, id: to.id, kind: to.kind, ...(said ? { note: said } : {}) };
+    row.escalated = null;
+    // Given to a person, it leaves every other queue and enters theirs.
+    if (to.kind === "user") row.in_queue = to.id === me;
+    row.holder = { kind: to.kind, id: to.id };
+    row.holder_key = `${to.kind}:${to.id}`;
+    if (to.kind === "user") row.asked_user_ids = [to.id];
+    else if (!(row.hops ?? []).some((h) => h.role_id === to.id)) row.hops = [...(row.hops ?? []), { role_id: to.id, at: now }];
+    row.updated_at = now;
+    const detail = this.decisionDetails[decisionId];
+    if (!detail) return;
+    if (detail.decision !== row) detail.decision = { ...row };
+    if (to.kind === "user") {
+      const m = teamMembersOf(this).find((u: any) => String(u._id) === to.id);
+      detail.asked_users = [{ _id: to.id, name: m?.name ?? m?.email ?? "a teammate" }];
+      return;
+    }
+    const r = this.orgTree?.roles.find((x) => String(x._id) === to.id);
+    const role = r ? { _id: String(r._id), short_id: r.short_id, name: r.name, handle: r.handle, status: r.status } : null;
+    detail.holder_role = role;
+    if (!detail.ladder.some((h) => h.role_id === to.id)) detail.ladder = [...detail.ladder, { role_id: to.id, at: now, role }];
   }),
   // Sent up (convex escalateCore) to whom the same rule picks from this roster; the echo settles it.
   escalateDecision: action(function (this: Draft, decisionId: string, note: string) {
@@ -11450,18 +11364,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!row || row.status !== "pending" || !said) return;
     const me = String(this.currentUser?._id ?? "");
     const owner = row.holder?.kind === "user" ? row.holder.id : me;
-    const tree = windowOrgTree({ orgTree: this.orgTree, orgScope: this.orgScope, clientState: this.clientState, currentUser: this.currentUser });
-    // A person whose one manager is a role escalates to that role (convex escalateCore).
-    const managers = tree?.people.find((p) => String(p.user_id) === owner)?.managers ?? [];
-    const sole = managers.length === 1 && managers[0].kind === "role" ? managers[0].role_id : null;
-    // Already the role's (it handed it up), it goes on to the people above
-    // it; a role with no standing session to hear it also falls through.
-    const heldByRole = row.holder?.kind === "role" && row.holder.id === sole;
-    if (sole && !heldByRole && tree?.roles.some((r) => r._id === sole && r.status === "active" && !!r.standing)) {
-      passDecisionDraft(this, decisionId, { kind: "role", id: sole }, said);
-      return;
-    }
-    const to = rosterEscalationTargets(owner, tree, teamMembersOf(this), me);
+    const to = rosterEscalationTargets(owner, windowOrgTree({ orgTree: this.orgTree, orgScope: this.orgScope, clientState: this.clientState, currentUser: this.currentUser })?.people, teamMembersOf(this), me);
     const now = Date.now();
     row.escalated = { at: now, by: me, note: said, to };
     if (to.length) {
@@ -12943,7 +12846,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // first_message/first_message_client_id ride the dispatch only: a hosted
   // conversation's start queues its first message server side, matched to
   // the optimistic bubble by its client id.
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; team_visibility?: "summary" | "full"; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } } & SessionStart) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; team?: boolean; first_message?: string; first_message_client_id?: string; project_id?: string; project_default?: boolean; new_project?: { title: string; client_key: string; description?: string; team_id?: string } } & SessionStart) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -13079,11 +12982,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
-      // What the team sees (Hidden locks it private from the first write,
-      // Summary or Full shares it at that level); Team asks for a team session
-      // and outranks it; no pick sends nothing, so the folder rule decides.
-      ...(fallback?.private || (cur?._visibility === "private" && cur?._team !== "team") ? { private: true } : {}),
-      ...(!fallback?.private && cur?._team !== "team" && (cur?._visibility === "summary" || cur?._visibility === "full") ? { team_visibility: cur._visibility } : {}),
+      ...(fallback?.private ? { private: true } : {}),
+      // Team asks for a team session; Personal changes nothing (the folder rule decides who sees it).
       ...(cur?._team === "team" && !fallback?.private ? { team: true } : {}),
       ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
@@ -14075,14 +13975,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  // The new-session composer's Personal | Team switch ("mine" is Personal)
-  // and what-the-team-sees picker: local until the first send folds them into
-  // createSession (createSessionFromStub).
+  // The new-session composer's Personal | Team switch ("mine" is Personal):
+  // local until the first send folds it into createSession
+  // (createSessionFromStub); only Team is sent.
   setStubTeam: sync(function (this: Draft, id: string, team: "mine" | "team") {
     for (const row of [this.sessions[id], this.conversations[id]] as any[]) if (row) row._team = team;
-  }),
-  setStubVisibility: sync(function (this: Draft, id: string, visibility: TeamShareMode) {
-    for (const row of [this.sessions[id], this.conversations[id]] as any[]) if (row) row._visibility = visibility;
   }),
 
   setStableContextPrefs: sync(function (this: Draft, id: string, prefs: { mode?: string | null; exclude?: string[] | null }) {
@@ -14178,15 +14075,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // =====================
   // MESSAGE MANAGEMENT
   // =====================
-
-  // The viewer may no longer read this transcript (its owner shares it as a
-  // summary): forget the messages cached while they could, here and in IDB.
-  dropConversationContent: sync(function (this: Draft, convId: string) {
-    if (!this.messages[convId] && !this.userMessages[convId] && !this.pagination[convId]) return;
-    delete this.messages[convId];
-    delete this.userMessages[convId];
-    delete this.pagination[convId];
-  }),
 
   setMessages: sync(function (this: Draft, convId: string, msgs: Message[], meta?: Partial<PaginationState>, source?: "cache") {
     msgs = dedupeReplayedMessages(msgs);
@@ -15494,14 +15382,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (team) team.default_flow = slug ?? undefined;
   }),
 
-  // Installed apps (docs/architecture/installed-apps.md): may members install pages, may installed apps get full access.
-  setTeamAppsPolicy: asyncAction(function (this: Draft, teamId: string, fields: { install?: boolean; full_access?: boolean }) {
-    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
-    if (!team) return;
-    if (fields.install !== undefined) team.apps_install = fields.install;
-    if (fields.full_access !== undefined) team.apps_full_access = fields.full_access;
-  }),
-
   // The root flag lives on the team's anchors rows; listAnchors echoes it.
   setTeamWorkspaceAgent: asyncAction(function (this: Draft, teamId: string, roleId: string | null) {
     const seats = Object.values((this as any).anchors ?? {}).filter((a: any) => a?.scope_type === "team" && String(a.team_id) === teamId && a.role) as any[];
@@ -16648,8 +16528,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setRoomLocked: action(function (this: Draft, roomKey: string, locked: boolean) {
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
     row.locked = locked;
-    // Opening the door makes a private huddle an ordinary one (calls.setRoomLocked).
-    if (!locked) row.private = false;
     return { roomKey, locked };
   }),
   pinToStage: action(function (this: Draft, roomKey: string, ref: string) {
@@ -16808,43 +16686,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
       else route.face = false;
     }
     return { transcriptId, target, face };
-  }),
-  // A voice note's speaker corrections (docs/architecture/speaker-attribution.md).
-  // Each assigns `speakers` or `segments` whole, built exactly as the server
-  // writes them (the shared speaker helpers), so the localFirst field lock
-  // retires on the echo; a refusal releases it and the server's value returns.
-  assignCallSpeaker: asyncAction(function (this: Draft, transcriptId: string, key: string, assignment: SpeakerAssignment) {
-    const call = callDetailRow(this, transcriptId);
-    const given: SpeakerAssignment = "name" in assignment ? { name: assignment.name.trim() } : assignment;
-    if (call?.speakers?.some((s) => s.key === key)) call.speakers = withSpeaker(wireSpeakers(call.speakers), assignedSpeaker(key, given));
-    return { transcriptId, key, assignment: given };
-  }),
-  confirmCallSpeaker: asyncAction(function (this: Draft, transcriptId: string, key: string) {
-    const call = callDetailRow(this, transcriptId);
-    const confirmed = confirmedSpeaker(call?.speakers?.find((s) => s.key === key));
-    if (call && confirmed) call.speakers = withSpeaker(wireSpeakers(call.speakers), confirmed);
-    return { transcriptId, key };
-  }),
-  moveCallLineSpeaker: asyncAction(function (this: Draft, transcriptId: string, seq: number, key: string) {
-    const call = callDetailRow(this, transcriptId);
-    // Only a diarized note has voices to move between (the server refuses the rest).
-    if (call?.speakers?.length && call.segments?.some((s) => s.seq === seq)) {
-      if (!call.speakers?.some((s) => s.key === key)) call.speakers = withSpeaker(wireSpeakers(call.speakers), assignedSpeaker(key, { clear: true }));
-      // Plain copies: the lock records the whole array, and draft values are revocable proxies.
-      const segments = JSON.parse(JSON.stringify(call.segments)) as CallDetailSegment[];
-      call.segments = segments.map((s) => (s.seq === seq ? { ...s, speaker_id: key, speaker_name: speakerLabel(key) } : s));
-    }
-    return { transcriptId, seq, key };
-  }),
-  // Settings › Voice: the switch lives on currentUser (localFirst), the
-  // sample counts in the myVoiceprint singleton (localFirst).
-  setVoiceIdEnabled: asyncAction(function (this: Draft, enabled: boolean) {
-    if (this.currentUser) (this.currentUser as any).voice_id_enabled = enabled;
-    if (this.myVoiceprint && !enabled) clearVoiceSamples(this.myVoiceprint);
-    return { enabled };
-  }),
-  deleteMyVoiceprints: asyncAction(function (this: Draft) {
-    if (this.myVoiceprint) clearVoiceSamples(this.myVoiceprint);
   }),
 
   // =====================
@@ -17005,10 +16846,9 @@ function adoptDecisionDraft(draft: Draft, decisionId: string): void {
 
 function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionAnswerInput): void {
   const row = draft.sessionDecisions[decisionId];
-  // Pending, or an answer on record a person is changing (answerOpenToChange):
-  // the new pick is one more message, naming the answer it replaces.
-  if (!row || (row.status !== "pending" && ("dismiss" in answer || !answerOpenToChange(row)))) return;
-  const replaced = row.status === "answered" ? decisionAnswerLabel(row, { answer_index: row.answer_index, answer_text: row.answer_text, answer_json: row.answer_json }) : undefined;
+  // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
+  // the agent went ahead on its default, so a new pick is one more message.
+  if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
   // A typed answer still waiting for its pause must not write the draft back.
   cancelDraftWrite(decisionDraftKey(decisionId));
   dropDraft(draft, decisionDraftKey(decisionId));
@@ -17018,9 +16858,6 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
     row.resolved_at = now;
     return;
   }
-  const answerText = decisionAnswerLabel(row, { answer_index: answer.index ?? (Array.isArray(answer.json) ? answer.json[0] : undefined), answer_text: answer.text, answer_json: answer.json });
-  // Picking the answer already on record changes nothing and tells the agent nothing.
-  if (replaced !== undefined && answerText === replaced) return;
   row.status = "answered";
   row.answer_index = answer.index ?? (Array.isArray(answer.json) ? answer.json[0] : undefined);
   row.answer_text = answer.text;
@@ -17034,12 +16871,13 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // The one-line label is the shared contract the server uses for its own
   // answers (decisionAnswerLabel), so a multi, rank or form answer reads
   // the same whichever path delivered it.
+  const answerText = decisionAnswerLabel(row, { answer_index: row.answer_index, answer_text: answer.text, answer_json: answer.json });
   // Wire format (shared contracts): "Decision: <answer>" plus a tag naming
   // the decision and its question, so the bubble can render the answer
   // against its ask and link back to the `cast decide` call.
   // A silent card (a staffing proposal's pointer, org-staffing.md S4) is
   // cleared by the answer and delivers nothing: the author is not woken.
-  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText, ...(replaced ? { detail: `This changes my earlier answer, which was: ${replaced}` } : {}) }) : undefined;
+  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
   const convId = row.conversation_id;
   // A Run on a `cast decide --run` card (commandRun.ts) is the server's to
   // deliver, with the command's output, once the machine has run it.
@@ -17072,13 +16910,10 @@ export function releaseHeldAnswer(decisionId: unknown, landed: boolean): void {
   if (landed) deliver?.();
 }
 
-/** Whom an escalation reaches, from the roster a client holds: every manager
- *  on the org tree (a role as the person above it), the members on the team
- *  roster. The rule is convex decisionHandoff.escalationTargets. */
-export function rosterEscalationTargets(ownerId: string, tree: Pick<OrgTree, "people" | "roles"> | null | undefined, members: ReadonlyArray<any> | null | undefined, byId?: string): string[] {
-  const managers = tree?.people.find((p) => String(p.user_id) === ownerId)?.managers ?? [];
-  const ids = [...new Set(managers.flatMap((m) => (m.kind === "user" ? [m.user_id] : peopleAboveRole(tree?.roles ?? [], m.role_id))))];
-  return escalationTargetIds(ownerId, ids, (members ?? []).map((m) => ({ user_id: String(m._id), role: m.role, is_bot: m.is_bot })), byId);
+/** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
+export function rosterEscalationTargets(ownerId: string, people: ReadonlyArray<{ user_id: string; reports_to_user_id?: string | null }> | null | undefined, members: ReadonlyArray<any> | null | undefined, byId?: string): string[] {
+  const managerId = (people ?? []).find((p) => String(p.user_id) === ownerId)?.reports_to_user_id;
+  return escalationTargetIds(ownerId, managerId, (members ?? []).map((m) => ({ user_id: String(m._id), role: m.role, is_bot: m.is_bot })), byId);
 }
 
 export const useInboxStore = survivingInboxStore ?? createInboxStore();
@@ -17436,26 +17271,6 @@ export function seedTeamInboxIdsFromCache(cachedSnapshot: unknown) {
   });
 }
 
-// What each deferred collection's read cost (ms) at the last boot, so the next
-// boot reads the cheap ones first. Row counts are a poor proxy: a few rows can
-// hold 400 KB, and an empty table still pays a transaction. localStorage
-// because it reads synchronously. A hint only; a missing or stale entry changes
-// the order, never what loads.
-const HYDRATION_COSTS_KEY = "codecast:hydration-costs";
-function readHydrationCosts(): Record<string, number> {
-  try {
-    const parsed = typeof localStorage === "undefined" ? null : JSON.parse(localStorage.getItem(HYDRATION_COSTS_KEY) ?? "null");
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function writeHydrationCosts(costs: Record<string, number>): void {
-  try {
-    if (typeof localStorage !== "undefined") localStorage.setItem(HYDRATION_COSTS_KEY, JSON.stringify(costs));
-  } catch {}
-}
-
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 async function hydrateInboxCacheFromIDB(): Promise<boolean> {
   if (!PERSISTENCE_AVAILABLE) return false;
@@ -17709,43 +17524,11 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // hydrate and persist. setTimeout fires (throttled) even when hidden.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     if (superseded()) return false;
-    // Each collection lands as soon as its own read finishes, cheapest first.
-    // IndexedDB serves reads in the order they were issued, so read as one batch
-    // a page over a two-row collection (the Flows page's pipelines) waited
-    // seconds behind the 50k-row tasks and signals reads it never draws.
-    // Arrivals in the same task are applied together, one store notify a burst.
-    const costs = readHydrationCosts();
-    const order = [...HYDRATION_DEFERRED_KEYS].sort((a, b) => (costs[a] ?? 0) - (costs[b] ?? 0));
-    // Reads finish in the order issued, so the gap since the previous one is this one's cost.
-    const seen: Record<string, number> = {};
-    let lastDone = performance.now();
-    let landed: Record<string, any> = {};
-    let landedKeys: string[] = [];
-    let flushQueued = false;
-    const flushLanded = () => {
-      flushQueued = false;
-      if (!landedKeys.length) return;
-      const [source, keys] = [landed, landedKeys];
-      landed = {};
-      landedKeys = [];
-      apply(source, keys);
-    };
-    await Promise.all(order.map((key) =>
-      loadCache([key], { pending: cached?.pending }).then((rows) => {
-        const now = performance.now();
-        // Averaged with the last boot's, so one read caught behind a long task does not reorder the next boot alone.
-        const cost = now - lastDone;
-        seen[key] = Math.round(costs[key] == null ? cost : (costs[key] + cost) / 2);
-        lastDone = now;
-        if (!rows || superseded()) return;
-        Object.assign(landed, rows);
-        landedKeys.push(key);
-        if (!flushQueued) { flushQueued = true; setTimeout(flushLanded, 0); }
-      }),
-    ));
-    flushLanded();
+    const deferred = await loadCache(HYDRATION_DEFERRED_KEYS, {
+      pending: cached?.pending,
+    });
     if (superseded()) return false;
-    writeHydrationCosts(seen);
+    apply(deferred, HYDRATION_DEFERRED_KEYS);
       // Re-enable IDB write-through only AFTER the deferred collections land.
       // If a live delta arrives while write-through is open but the store still
       // holds just the windowed payload (tasks' 300, sessions' ~30d), then

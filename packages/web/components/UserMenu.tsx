@@ -5,7 +5,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useCodecastSignOut } from "../hooks/useCodecastSignOut";
 import { setAppAddressBarOpen } from "../lib/appAddress";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { bridge, isDesktopShell } from "../lib/desktop";
+import { isDesktopShell } from "../lib/desktop";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
@@ -101,15 +101,10 @@ export function UserMenu() {
   ].filter(Boolean);
 
   const handleEnvSwitch = () => {
-    setOpen(false);
-    // The desktop shell owns which site its window loads: navigating to the
-    // other origin from here would leave the app for the system browser.
     const { pathname, search, hash } = window.location;
-    const shellToggle = bridge("toggleEnvironment");
-    if (shellToggle) { void shellToggle(`${pathname}${search}${hash}`); return; }
     const target = isLocal
       ? `https://codecast.sh${pathname}${search}${hash}`
-      : `https://local.codecast.sh${pathname}${search}${hash}`;
+      : `http://local.codecast.sh${pathname}${search}${hash}`;
     window.location.href = target;
   };
 

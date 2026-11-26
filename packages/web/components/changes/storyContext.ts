@@ -33,14 +33,12 @@ export function createFocusStore(initial: string | null = null): FocusStore {
   };
 }
 
-/** What every story on the page needs from the page: the cursor, how to pick
- *  one, which one is open and how to open or close one, and the area colors. */
+/** What every story on the page needs from the page: the cursor, which stories
+ *  wait behind a ship or are dimmed, how to pick one, and the area colors. */
 export type StoryContext = {
   focus: FocusStore;
-  /** The one open story (the URL's `story`): its card shows everything. */
-  opened: FocusStore;
-  /** Open a story, or close it when it is the open one. */
-  toggle: (storyKey: string) => void;
+  waiting: ReadonlySet<string>;
+  dimmed: ReadonlySet<string>;
   /** Give a story the focus (a click on it). Stable for the life of the page. */
   pick: (storyKey: string) => void;
   /** The color each area of the repository wears on this page (areaColor.assignAreaColors). */
@@ -60,24 +58,19 @@ export type StoryContext = {
 
 const idle = createFocusStore();
 
-export const StoryCtx = createContext<StoryContext>({ focus: idle, opened: idle, pick: idle.set, toggle: () => {} });
+export const StoryCtx = createContext<StoryContext>({ focus: idle, waiting: new Set(), dimmed: new Set(), pick: idle.set });
 
 export const useStoryCtx = () => useContext(StoryCtx);
 
 /** The page's area colors, for `areaColor(area, colors)`: one resolver, one map, everywhere an area is drawn. */
 export const useAreaColors = () => useContext(StoryCtx).areaColors;
 
-/** Whether `store` points at this story; re-renders only when that answer flips. */
-function useIsKey(store: FocusStore, key: string): boolean {
-  const snap = () => store.get() === key;
-  return useSyncExternalStore(store.subscribe, snap, snap);
+/** Whether this story holds the page's cursor; re-renders only when that answer flips. */
+export function useIsFocused(key: string): boolean {
+  const { focus } = useStoryCtx();
+  const snap = () => focus.get() === key;
+  return useSyncExternalStore(focus.subscribe, snap, snap);
 }
-
-/** Whether this story holds the page's cursor. */
-export const useIsFocused = (key: string) => useIsKey(useStoryCtx().focus, key);
-
-/** Whether this story is the open one. */
-export const useIsOpen = (key: string) => useIsKey(useStoryCtx().opened, key);
 
 /**
  * What every story element carries, on the day and in the week: its key for

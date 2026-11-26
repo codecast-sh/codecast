@@ -6,7 +6,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Check, ChevronRight, Hand, HelpCircle, Loader2, Minus, Pause, X } from "lucide-react";
-import { useSyncRuns, useTaskRuns } from "../../hooks/useSyncRuns";
+import { useSyncRuns } from "../../hooks/useSyncRuns";
 import { useWorkflowRuns } from "../../hooks/useSyncWorkflows";
 import { causeRunEntries, runOutcome, shortDay, type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState, type OutcomeOpts } from "../../lib/line/runReport";
 import { cn } from "../../lib/utils";
@@ -137,8 +137,15 @@ function StepRow({ step: s }: { step: ReportStep }) {
   );
 }
 
-/** Every run on one cause, newest first. */
-export const useCauseRuns = (taskId: string | null | undefined): ReportRun[] => useTaskRuns<ReportRun>(taskId);
+const newestFirst = (a: ReportRun, b: ReportRun) => b.created_at - a.created_at;
+
+/** Feeder and reader: every run on one cause, newest first. */
+export function useCauseRuns(taskId: string | null | undefined): ReportRun[] {
+  useSyncRuns(taskId ? { task_id: taskId, limit: 20 } : {}, !!taskId);
+  const where = useMemo(() => (r: any) => !!taskId && r.task_id === taskId, [taskId]);
+  const rows = useWorkflowRuns(where) as ReportRun[];
+  return useMemo(() => [...rows].sort(newestFirst), [rows]);
+}
 
 /** The runs on a cause, each its own row with its outcome, linked to its
  *  report. `current` marks the run the reader is on; `newest` is the cause's

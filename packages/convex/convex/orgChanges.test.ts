@@ -510,12 +510,10 @@ const ORG_STATE: Record<string, string[]> = {
   initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics", "why", "done_when", "milestones", "questions", "decisions", "sources"],
   session_owners: ["conversation_id", "user_id"],
   org_template_instances: ["phase", "role_id", "version", "pending_upgrade"],
-  team_memberships: ["role", "title", "focus", "labels", "about"],
 };
 const TOMBSTONE: Record<string, string> = { org_roles: "retired", projects: "done", agent_tasks: "cancelled", anchors: "decommissioned", initiatives: "cancelled" };
 // An owner row is the membership it records, so a redo that adds the owner back matches by conversation and person, not row id.
-// A membership is the person in the team, so a redo that seats a bot again matches by who and where.
-const stateKey = (table: string, row: any) => table === "session_owners" ? `session_owners:${row.conversation_id}:${row.user_id}` : table === "team_memberships" ? `team_memberships:${row.team_id}:${row.user_id}` : String(row._id);
+const stateKey = (table: string, row: any) => table === "session_owners" ? `session_owners:${row.conversation_id}:${row.user_id}` : String(row._id);
 function orgState(db: any): Map<string, { table: string; fields: Record<string, unknown> }> {
   const out = new Map();
   for (const [table, fields] of Object.entries(ORG_STATE)) for (const row of db._tables[table] ?? []) out.set(stateKey(table, row), { table, fields: Object.fromEntries(fields.map((k) => [k, row[k] ?? null])) });
@@ -535,7 +533,6 @@ const CASES: Case[] = [
   { kind: "move", setup: (f) => f.role(), change: { kind: "move", handle: "growth", reports_to: MATE } },
   { kind: "retire", setup: (f) => f.role(), change: { kind: "retire", handle: "growth" } },
   { kind: "file_session", setup: (f) => f.role(), change: { kind: "file_session", session: "jx70001", to: "@growth" } },
-  { kind: "person_profile", change: { kind: "person_profile", person: "Mate", title: "Designer", labels: ["design"], evidence: { window_days: 30, sessions: 3, commits: 0, tasks_closed: 1, decisions_answered: 0, calls_led: 0, projects: [] } } },
   { kind: "scope", setup: (f) => f.role(), change: { kind: "scope", handle: "growth", add: ["pr-1"], leave_sessions: true } },
   { kind: "budget", setup: (f) => f.role(), change: { kind: "budget", handle: "growth", caps: { hands_per_day: 8 } } },
   { kind: "trust", setup: (f) => f.role(), change: { kind: "trust", handle: "growth", trust: "understand" } },

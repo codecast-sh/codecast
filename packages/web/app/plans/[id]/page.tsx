@@ -3,6 +3,8 @@ import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShortId } from "../../../components/ShortId";
 import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import { useQuery } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import { AuthGuard } from "../../../components/AuthGuard";
@@ -34,7 +36,8 @@ import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
-import { usePlanDetail } from "../../../hooks/useSyncPlans";
+import { ingestPlanDetail } from "../../../hooks/useSyncPlans";
+import { useConvexSync } from "../../../hooks/useConvexSync";
 import {
   Clock,
   CheckCircle2,
@@ -46,6 +49,7 @@ import { toast } from "sonner";
 import { modernTab, modernTabList } from "../../../components/ui/modernLook";
 import { teamMembersOf } from "../../../lib/activeTeam";
 
+const api = _api as any;
 
 type PlanTab = "overview" | "orchestration" | "board" | "graph";
 
@@ -118,14 +122,14 @@ export default function PlanDetailPage() {
 
   // id can be transiently undefined while a tab pane mounts; skip until it
   // resolves (same guard as projects/[id]).
-  // The plan with its joins, from the store (fed while mounted, and read ahead
-  // for active plans by the sync host): a plan opened before paints whole.
-  const queryPlan = usePlanDetail(id);
+  const queryArgs = id ? (id.startsWith("pl-") ? { short_id: id } : { id }) : "skip";
+  const queryPlan = useQuery(api.plans.webGet, queryArgs);
   // The detail row seeds the store: every inline write below (title, status,
   // the charter) goes through updatePlan, which patches the store row and
   // no-ops when there is none. A deep link or a fresh tab has no plans
   // feeder mounted, so without this seed the first edit would wait a round
   // trip. NULL (an access verdict) seeds nothing.
+  useConvexSync(queryPlan, ingestPlanDetail);
   const webUpdate = useInboxStore((s) => s.updatePlan);
 
   // plan.tasks / plan.progress / plan.status are a server-query snapshot, so

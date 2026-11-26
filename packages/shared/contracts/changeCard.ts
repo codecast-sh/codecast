@@ -838,13 +838,3 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
 /** A gate's doc as a person reads it: without the runner's own `work_state:` line (bookkeeping, never the plan's words).
  *  The runner writes docs through it, and a page reads older docs through it. */
 export const gateDoc = (doc: string): string => doc.replace(/(^|\n)work_state:[^\n]*(?:\n|$)/g, "$1").trim();
-
-/** Everything a decision says about itself, as one markdown body: the short context the asker wrote, then its attached
- *  document (gateDoc), each once. Every card and page that previews or opens a decision reads it from here, so a
- *  decision whose words live only in its document never renders as a bare question. */
-export function decisionWords(contextMd: string | undefined | null, docContent: string | undefined | null): string {
-  const context = contextMd?.trim() ?? "";
-  const doc = gateDoc(docContent ?? "");
-  if (!doc || doc === context) return context;
-  return context ? `${context}\n\n${doc}` : doc;
-}

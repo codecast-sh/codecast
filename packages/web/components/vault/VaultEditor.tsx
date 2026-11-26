@@ -50,7 +50,13 @@ import {
   type CompletionResult,
 } from "@codemirror/autocomplete";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { bracketMatching, indentOnInput } from "@codemirror/language";
+import {
+  HighlightStyle,
+  bracketMatching,
+  indentOnInput,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { entityRefRoute, parseEntityRefHref } from "@codecast/shared/vault";
 import { useRouter } from "next/navigation";
@@ -60,8 +66,7 @@ import {
   wikiCompletionContext,
   type EntityCompletionItem,
 } from "../../lib/vault/entityCompletion";
-import { observeTheme } from "../../lib/solTheme";
-import { solEditorTheme } from "../../lib/code/theme";
+import { cssVar, isDarkTheme, observeTheme, withAlpha } from "../../lib/solTheme";
 import { detectLineSeparator, docChange } from "../../lib/vault/editorDoc";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { parseNote } from "../../lib/vault/parseNote";
@@ -81,6 +86,146 @@ const AUTOSAVE_MS = 800;
 const WORD_COUNT_MS = 400;
 
 type SaveStatus = "clean" | "dirty" | "saving" | "saved" | "stale" | "error";
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+
+/** A concrete color set read off the app's --sol-* tokens. CodeMirror styles
+ *  are injected as real CSS rules, so they can't reference the variables the
+ *  way a Tailwind class would — they need literal values, re-read whenever the
+ *  theme flips. */
+function solEditorTheme(): Extension {
+  const s = getComputedStyle(document.documentElement);
+  const bg = cssVar(s, "--sol-bg", "#fbf5e2");
+  const bgAlt = cssVar(s, "--sol-bg-alt", "#eee8d5");
+  const text = cssVar(s, "--sol-text", "#002b36");
+  const muted = cssVar(s, "--sol-text-muted", "#586e75");
+  const dim = cssVar(s, "--sol-text-dim", "#657b83");
+  const border = cssVar(s, "--sol-border", "#93a1a1");
+  const cyan = cssVar(s, "--sol-cyan", "#2aa198");
+  const blue = cssVar(s, "--sol-blue", "#268bd2");
+  const yellow = cssVar(s, "--sol-yellow", "#b58900");
+  const green = cssVar(s, "--sol-green", "#859900");
+  const violet = cssVar(s, "--sol-violet", "#6c71c4");
+  const magenta = cssVar(s, "--sol-magenta", "#d33682");
+  const selection = withAlpha(cyan, 0.22);
+
+  return [
+    EditorView.theme(
+      {
+        "&": {
+          color: text,
+          backgroundColor: "transparent",
+          fontSize: "13px",
+        },
+        "&.cm-focused": { outline: "none" },
+        ".cm-content": {
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          padding: "0",
+          lineHeight: "1.7",
+          caretColor: cyan,
+        },
+        ".cm-line": { padding: "0" },
+        ".cm-cursor, .cm-dropCursor": { borderLeftColor: cyan, borderLeftWidth: "2px" },
+        "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+          backgroundColor: selection,
+        },
+        ".cm-activeLine": { backgroundColor: withAlpha(bgAlt, 0.45) },
+        ".cm-selectionMatch": { backgroundColor: withAlpha(yellow, 0.2) },
+        ".cm-searchMatch": {
+          backgroundColor: withAlpha(yellow, 0.25),
+          outline: `1px solid ${withAlpha(yellow, 0.5)}`,
+        },
+        ".cm-searchMatch.cm-searchMatch-selected": { backgroundColor: withAlpha(cyan, 0.35) },
+        ".cm-matchingBracket, .cm-nonmatchingBracket": {
+          backgroundColor: withAlpha(cyan, 0.18),
+          outline: "none",
+        },
+        // Search panel: the app's own chrome, not CodeMirror's default grey box.
+        ".cm-panels": {
+          backgroundColor: bgAlt,
+          color: text,
+          border: "none",
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        },
+        ".cm-panels.cm-panels-top": { borderBottom: `1px solid ${withAlpha(border, 0.4)}` },
+        ".cm-panel.cm-search": { padding: "6px 8px", fontSize: "11px" },
+        ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": {
+          fontFamily: "inherit",
+          fontSize: "11px",
+        },
+        ".cm-panel.cm-search input[type=text]": {
+          backgroundColor: bg,
+          color: text,
+          border: `1px solid ${withAlpha(border, 0.4)}`,
+          borderRadius: "3px",
+          padding: "2px 6px",
+          outline: "none",
+        },
+        ".cm-panel.cm-search input[type=text]:focus": { borderColor: cyan },
+        ".cm-panel.cm-search button:not([name=close])": {
+          backgroundColor: "transparent",
+          backgroundImage: "none",
+          color: muted,
+          border: `1px solid ${withAlpha(border, 0.4)}`,
+          borderRadius: "3px",
+          padding: "2px 6px",
+          cursor: "pointer",
+        },
+        ".cm-panel.cm-search button:not([name=close]):hover": { color: text, borderColor: cyan },
+        ".cm-panel.cm-search [name=close]": { color: dim, fontSize: "14px", padding: "0 4px" },
+        // Wiki-link completions.
+        ".cm-tooltip.cm-tooltip-autocomplete": {
+          backgroundColor: bg,
+          border: `1px solid ${withAlpha(border, 0.5)}`,
+          borderRadius: "4px",
+          boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          fontSize: "12px",
+          maxHeight: "16em",
+        },
+        ".cm-tooltip.cm-tooltip-autocomplete > ul > li": { padding: "3px 8px", color: text },
+        ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+          backgroundColor: withAlpha(cyan, 0.18),
+          color: text,
+        },
+        ".cm-completionDetail": { color: dim, fontStyle: "normal", marginLeft: "8px" },
+        ".cm-completionIcon": { display: "none" },
+      },
+      { dark: isDarkTheme() },
+    ),
+    syntaxHighlighting(
+      HighlightStyle.define([
+        // Markdown's own punctuation (#, **, backticks, list bullets) fades back
+        // so the prose reads first — the one thing that makes a plain source
+        // editor feel like a note editor.
+        { tag: t.processingInstruction, color: dim },
+        { tag: t.contentSeparator, color: dim },
+        { tag: t.heading, color: text, fontWeight: "600" },
+        { tag: t.heading1, color: text, fontWeight: "700", fontSize: "1.15em" },
+        { tag: t.heading2, color: text, fontWeight: "700", fontSize: "1.07em" },
+        { tag: t.strong, color: text, fontWeight: "700" },
+        { tag: t.emphasis, color: text, fontStyle: "italic" },
+        { tag: t.strikethrough, color: muted, textDecoration: "line-through" },
+        { tag: [t.link, t.url], color: cyan },
+        { tag: t.monospace, color: green },
+        { tag: t.quote, color: muted, fontStyle: "italic" },
+        { tag: t.list, color: blue },
+        { tag: t.comment, color: dim, fontStyle: "italic" },
+        { tag: [t.keyword, t.moduleKeyword], color: green },
+        { tag: [t.string, t.special(t.string)], color: cyan },
+        { tag: [t.number, t.bool, t.null], color: magenta },
+        { tag: [t.typeName, t.className], color: yellow },
+        { tag: [t.function(t.variableName), t.labelName], color: blue },
+        { tag: [t.propertyName, t.attributeName], color: violet },
+        { tag: t.invalid, color: cssVar(s, "--sol-red", "#dc322f") },
+      ]),
+    ),
+  ];
+}
 
 // ---------------------------------------------------------------------------
 // [[wiki link]] completion

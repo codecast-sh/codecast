@@ -5,14 +5,13 @@ import { PLAN_STATUS_CONFIG } from "../lib/planStatus";
 import { useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { AvatarImg } from "../lib/avatarCache";
-import { useMutation } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { closeTaskWithGuard, createTaskAndAdopt } from "../lib/taskActions";
 import { mergeLiveTasks, computePlanProgress, findEntityInStore, lookup } from "../lib/liveEntities";
 import { Badge } from "./ui/badge";
 import { AppLoader } from "./AppLoader";
-import { usePlanDetail } from "../hooks/useSyncPlans";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
@@ -1025,7 +1024,8 @@ export function PlanExternalEvents({ planId }: { planId: string }) {
 }
 
 export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Where ✕ returns to (the list under this panel). */ closeHref?: string }) {
-  const queryPlan = usePlanDetail(planId);
+  const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
+  const queryPlan = useQuery(api.plans.webGet, queryArgs);
   const teamMembers = useInboxStore(teamMembersOf);
   const currentUser = useInboxStore((s) => s.currentUser);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");

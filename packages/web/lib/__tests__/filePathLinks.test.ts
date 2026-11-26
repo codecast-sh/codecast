@@ -74,7 +74,7 @@ describe("hrefs", () => {
     expect(parseFilePathHref("/Users/ashot/.codex/AGENTS.md:1042")).toEqual({
       path: "/Users/ashot/.codex/AGENTS.md", line: 1042,
     });
-    expect(parseFilePathHref("/home/ashot/project/main.ts:12:4")).toEqual({ path: "/home/ashot/project/main.ts", line: 12, column: 4 });
+    expect(parseFilePathHref("/home/ashot/project/main.ts:12:4")).toEqual({ path: "/home/ashot/project/main.ts", line: 12 });
     expect(parseFilePathHref("/tmp/report.md:12-20")).toEqual({ path: "/tmp/report.md", line: 12 });
     expect(parseFilePathHref("/Users/ashot/.codex/AGENTS.md")).toEqual({ path: "/Users/ashot/.codex/AGENTS.md" });
     expect(parseFilePathHref("file:///Users/alexandergreen/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md")).toEqual({
@@ -107,18 +107,6 @@ describe("hrefs", () => {
     expect(filePathHref("lib/x.ts", 12, null)).toBe("/files?path=lib%2Fx.ts&l=12");
     expect(parseFilePathHref("/files?path=lib%2Fx.ts&l=12")).toEqual({ path: "lib/x.ts", line: 12 });
     expect(parseFilePathHref("/files?f=notes%2Fa.md")).toBeNull();
-  });
-
-  test("line, column and a flashed range round-trip through the Files link", () => {
-    const ctx = { base: "/Users/ashot/src/codecast", home: "/Users/ashot" };
-    const href = filePathHref("lib/x.ts", 12, ctx, 4, 20);
-    expect(href).toBe("/files?path=%2FUsers%2Fashot%2Fsrc%2Fcodecast%2Flib%2Fx.ts&l=12%3A4-20");
-    expect(new URLSearchParams(href.split("?")[1]).get("l")).toBe("12:4-20");
-    expect(parseFilePathHref(href)).toEqual({ path: "/Users/ashot/src/codecast/lib/x.ts", line: 12, column: 4 });
-    expect(filePathHref("lib/x.ts", 12, null, undefined, 20)).toBe("/files?path=lib%2Fx.ts&l=12-20");
-    expect(parseFilePathHref("/files?path=lib%2Fx.ts&l=12-20")).toEqual({ path: "lib/x.ts", line: 12 });
-    // A range that ends before it starts flashes nothing.
-    expect(filePathHref("lib/x.ts", 12, null, 3, 5)).toBe("/files?path=lib%2Fx.ts&l=12%3A3");
   });
 
   test("with context a relative or ~ path becomes absolute", () => {

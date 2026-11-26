@@ -13,22 +13,19 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { readFileSync } = require("node:fs");
-const { join, posix } = require("node:path");
+const { join } = require("node:path");
 
 const HERE = __dirname;
 const pkg = JSON.parse(readFileSync(join(HERE, "package.json"), "utf8"));
 
 // `require("./x")` and `require("./x.js")` → "x.js"; a native addon and an ES
 // module keep their own extension (`require("./native/x.node")`,
-// `require("./appWindows.mjs")`). A require inside a folder resolves from that
-// folder (installedApps/host.js's `./engine` is "installedApps/engine.js",
-// macHost.js's `../appshim/install` is "appshim/install.js").
+// `require("./appWindows.mjs")`).
 function localRequires(file) {
   const src = readFileSync(join(HERE, file), "utf8");
   const out = new Set();
-  for (const m of src.matchAll(/require\(["'](\.\.?\/[^"']+)["']\)/g)) {
-    const rel = posix.normalize(posix.join(posix.dirname(file), m[1]));
-    out.add(/\.(js|mjs|node|json)$/.test(rel) ? rel : `${rel}.js`);
+  for (const m of src.matchAll(/require\(["']\.\/([^"']+)["']\)/g)) {
+    out.add(/\.(js|mjs|node)$/.test(m[1]) ? m[1] : `${m[1]}.js`);
   }
   return [...out].sort();
 }
@@ -41,7 +38,7 @@ function reachableRequires(entries) {
   while (queue.length) {
     const file = queue.shift();
     if (seen.has(file)) continue;
-    const deps = /\.(js|mjs)$/.test(file) ? localRequires(file) : [];
+    const deps = file.endsWith(".js") ? localRequires(file) : [];
     seen.set(file, deps);
     queue.push(...deps);
   }

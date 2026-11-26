@@ -30,11 +30,8 @@ import {
   type OrgSession,
   type OrgTree,
 } from "../components/org/orgTypes";
-import { applyPersonMove, goalsOnlyFor, managersOfPerson, orgRoleReparentMakesCycle, personMoveApplies, personMoveSatisfied, rolePeopleOnTree, type MovePersonIntent } from "./orgTreeMoves";
-import { applyPersonProfile, orgPersonDetailId, personProfileIntent, personProfileSatisfied, revertPersonProfile, shortProfileKeys, type OrgPersonDetail, type PersonProfileIntent, type PersonShortProfile } from "./orgProfile";
-import { cleanProfilePatch, type PersonProfile } from "@codecast/shared/contracts/personProfile";
-import { applyRoleManagers, revertRoleManagers, roleManagersIntent, roleManagersSatisfied, type RoleManagersIntent } from "./orgRoleManagers";
-export { drawnManager, goalsOnlyFor, managersAfterMove, orgPersonReparentMakesCycle, orgRoleReparentMakesCycle, rolePeopleOnTree } from "./orgTreeMoves";
+import { applyPersonMove, orgRoleReparentMakesCycle, personMoveApplies, personMoveSatisfied, type MovePersonIntent } from "./orgTreeMoves";
+export { orgPersonReparentMakesCycle, orgRoleReparentMakesCycle } from "./orgTreeMoves";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
 import { andList, changeSentence, describeOrgChange, isOrgChangeApprovable, isOrgChangeDecidable, proposalReplyText, ORG_VERDICT_REVISED, type OrgChangeReply, type OrgProposalReply, type OrgReplyVerdict, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { hasThreadState, answeredThreadStateFields, type ThreadStateFields } from "@codecast/shared/contracts";
@@ -53,10 +50,6 @@ export type OrgIntent =
   | { kind: "moveSession"; id: string; conversation_id: string; target: OrgParentRef; at: number }
   | { kind: "moveRole"; id: string; role_id: string; reports_to: OrgParentRef; at: number }
   | MovePersonIntent
-  /** A person's title, focus or labels (orgProfile.ts). */
-  | PersonProfileIntent
-  /** Every manager of a role, the drawn one first (orgRoleManagers.ts). */
-  | RoleManagersIntent
   | { kind: "follow"; id: string; role_short_id: string; channel_id: string; follow: boolean; at: number }
   /** A role's fields (pause and resume, caps, trust, name, charter, scope):
    *  `from` holds the prior value of every touched field, so a refusal
@@ -166,9 +159,6 @@ export type OrgSliceData = {
    *  a person has unfolded, fed by hooks/useSyncOrgLog. */
   orgLog: Record<string, OrgLogEntry>;
   orgLogRows: Record<string, OrgLogRow>;
-  /** The long version of each person opened (org-people.md P4), keyed by
-   *  orgPersonDetailId, fed by hooks/useSyncOrgPerson from orgPeople.person. */
-  orgPersonDetails: Record<string, OrgPersonDetail>;
   /** The change the chart is focused on: a ghost click or a change row click
    *  sets it, the pane and the ghosts read it. Ephemeral, never replicated. */
   orgFocusChangeId: string | null;
@@ -300,17 +290,7 @@ export type OrgSliceActions = DecisionAreasSliceActions & {
   /** Change a role's reports_to. Resolves to the reparent result (told counts). */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => Promise<ReparentResult | undefined>;
   /** Change who a team member reports to (null: nobody). Dispatch runs orgPeople.reparentPerson. */
-  /** Everyone a person reports to, people and roles, as a whole list (org-people.md P2, P3). */
-  reparentOrgPerson: (teamId: string, userId: string, managers: OrgParentRef[]) => void;
-  /** The people who report to a team role, as a whole list: each joins or leaves
-   *  the role in their own managers (the one home), under the role's rule
-   *  (orgRoles.performSetReports: an admin of the role, or a person for themself). */
-  setRolePeople: (teamId: string, roleId: string, userIds: string[]) => void;
-  /** A person's profile (org-people.md P4): the short fields paint on the
-   *  tree row, `about` on their detail row. Dispatch runs orgPeople.setProfile. */
-  setOrgPersonProfile: (teamId: string, userId: string, patch: PersonProfile) => void;
-  /** Everyone a role reports to, the drawn line first (org-people.md P3). Dispatch runs orgRoles.setManagers. */
-  setOrgRoleManagers: (roleId: string, managers: OrgParentRef[]) => void;
+  reparentOrgPerson: (teamId: string, userId: string, reportsTo: string | null) => void;
   createOrgRole: (input: OrgCreateRoleInput) => void;
   /** `opts.leave_sessions`: with a scope that gains refs, the sessions in it
    *  stay with their owner (R1). The dispatch's; it paints nothing. */
@@ -612,8 +592,6 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       return !role || sameParent(role.reports_to, intent.reports_to);
     }
     case "movePerson": return personMoveSatisfied(tree, intent);
-    case "personProfile": return personProfileSatisfied(tree, intent);
-    case "roleManagers": return roleManagersSatisfied(tree, intent);
     case "follow": {
       const role = tree.roles.find((r) => r.short_id === intent.role_short_id);
       if (!role) return true;
@@ -728,16 +706,10 @@ export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSessio
       if (!role || sameParent(role.reports_to, intent.reports_to)) return;
       if (orgRoleReparentMakesCycle(tree, intent.role_id, intent.reports_to)) return;
       role.reports_to = intent.reports_to;
-      // A move redraws one line and keeps the role's other managers (orgRoles.performReparentRoleCore).
-      const also = (role.also_reports_to ?? []).filter((p) => !sameParent(p, intent.reports_to));
-      if (also.length) role.also_reports_to = also;
-      else delete role.also_reports_to;
       role.updated_at = Math.max(role.updated_at, intent.at);
       return;
     }
     case "movePerson": return applyPersonMove(tree, intent);
-    case "personProfile": return applyPersonProfile(tree, intent);
-    case "roleManagers": return applyRoleManagers(tree, intent);
     case "follow": {
       const role = tree.roles.find((r) => r.short_id === intent.role_short_id);
       if (!role) return;
@@ -952,8 +924,6 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       return;
     }
     case "moveBack": return revertMoveBack(draft.orgTree, intent);
-    case "personProfile": return revertPersonProfile(draft.orgTree, intent);
-    case "roleManagers": return revertRoleManagers(draft.orgTree, intent);
     default:
       return;
   }
@@ -1005,8 +975,6 @@ export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expi
     case "moveSession": return `Moving the session ${tail}; it is back where it was.`;
     case "moveRole": return `Moving the role ${tail}; it is back where it was.`;
     case "movePerson": return `Moving the person ${tail}; they are back where they were.`;
-    case "personProfile": return `Changing the profile ${tail}; it is back as it was.`;
-    case "roleManagers": return `Changing whom the role reports to ${tail}; it is back as it was.`;
     case "follow": return `${intent.follow ? "Following" : "Unfollowing"} the channel ${tail}.`;
     case "undoChange": return `${intent.redo ? "Applying" : "Taking back"} "${intent.line}"${intent.redo ? " again" : ""} ${tail}; the record is as it was.`;
   }
@@ -1106,7 +1074,6 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "reparentOrgSession" && i.kind === "moveSession" && i.conversation_id === args[0]) ||
     (action === "reparentOrgRole" && i.kind === "moveRole" && i.role_id === args[0]) ||
     (action === "reparentOrgPerson" && i.kind === "movePerson" && i.user_id === args[1]) ||
-    (action === "setRolePeople" && i.kind === "movePerson" && i.via_role === args[1]) ||
     (action === "followOrgChannel" && i.kind === "follow" && i.role_short_id === args[0] && i.channel_id === args[1]) ||
     (action === "retireOrgRole" && i.kind === "retireRole" && i.role_id === args[0]));
   for (const i of drops) { state.dropOrgIntent(i.id); notices.push(orgIntentNoticeText(i, "refused")); }
@@ -1117,10 +1084,6 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "createOrgRole" && i.kind === "createRole" && i.stub.client_id === (args[0] as OrgCreateRoleInput | undefined)?.client_id) ||
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
     (action === "setProjectLead" && i.kind === "roleFields" && i.role_id === args[1] && sameValue(roleFieldKeys(i.fields), ["scope"])) ||
-    (action === "setRolePeople" && i.kind === "roleFields" && i.role_id === args[1] && sameValue(roleFieldKeys(i.fields), ["reports_user_ids"])) ||
-    // Only the fields the refused call carried: an edit of another field stays.
-    (action === "setOrgPersonProfile" && i.kind === "personProfile" && i.user_id === args[1] && sameValue(shortProfileKeys(i.fields), shortProfileKeys((args[2] as PersonShortProfile | undefined) ?? {}))) ||
-    (action === "setOrgRoleManagers" && i.kind === "roleManagers" && i.role_id === args[0]) ||
     (action === "setRoleLine" && i.kind === "line" && i.role_id === args[0] && i.slug === args[1]) ||
     ((action === "moveOrgRoleBack" || action === "keepOrgRoleHere") && i.kind === "moveBack" && i.role_id === args[0] && !!i.keep === (action === "keepOrgRoleHere")) ||
     ((action === "undoOrgChange" || action === "redoOrgChange") && i.kind === "undoChange" && i.batch === args[0] && i.redo === (action === "redoOrgChange")));
@@ -1212,8 +1175,6 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
     i.kind === "moveSession" ? `s:${i.conversation_id}`
     : i.kind === "moveRole" ? `r:${i.role_id}`
     : i.kind === "movePerson" ? `p:${i.user_id}`
-    : i.kind === "roleManagers" ? `rm:${i.role_id}`
-    : i.kind === "personProfile" ? `pf:${i.user_id}:${shortProfileKeys(i.fields).join(",")}`
     : i.kind === "follow" ? `f:${i.role_short_id}:${i.channel_id}`
     : i.kind === "decideChange" || i.kind === "noteChange" ? `c:${i.change_id}`
     : i.kind === "withdraw" ? `w:${i.proposal_id}`
@@ -1418,8 +1379,6 @@ export function createOrgSlice(): OrgSliceImpl {
 
     orgLogRows: {},
 
-    orgPersonDetails: {},
-
     orgFocusChangeId: null,
 
     orgIntentNotice: null,
@@ -1455,60 +1414,12 @@ export function createOrgSlice(): OrgSliceImpl {
       }
     }),
 
-    reparentOrgPerson: action(function (this: OrgDraft, _teamId: string, userId: string, managers: OrgParentRef[]) {
+    reparentOrgPerson: action(function (this: OrgDraft, _teamId: string, userId: string, reportsTo: string | null) {
       const tree = this.orgTree;
-      if (!tree || !personMoveApplies(tree, userId, managers)) return;
-      const intent: OrgIntent = { kind: "movePerson", id: intentId(), user_id: userId, managers, at: Date.now() };
+      if (!tree || !personMoveApplies(tree, userId, reportsTo)) return;
+      const intent: OrgIntent = { kind: "movePerson", id: intentId(), user_id: userId, reports_to_user_id: reportsTo, at: Date.now() };
       applyOrgIntent(tree, intent);
       pushIntent(this, intent);
-    }),
-
-    setRolePeople: action(function (this: OrgDraft, _teamId: string, roleId: string, userIds: string[]) {
-      const tree = this.orgTree;
-      const role = tree?.roles.find((r) => r._id === roleId);
-      if (!tree || !role) return;
-      const ref: OrgParentRef = { kind: "role", role_id: roleId };
-      const wanted = new Set(userIds);
-      // Goals only (the role reports up to them): the role's own list, a field of the role.
-      const goals = (role.reports_user_ids ?? []).filter((u) => wanted.has(u));
-      for (const u of userIds) if (!goals.includes(u) && !rolePeopleOnTree(tree, roleId).some((p) => p.user_id === u) && goalsOnlyFor(tree, roleId, u)) goals.push(u);
-      if (JSON.stringify(goals) !== JSON.stringify(role.reports_user_ids ?? [])) pushRoleFieldsIntent(this, roleId, { reports_user_ids: goals });
-      for (const p of tree.people) {
-        if (goals.includes(p.user_id)) continue;
-        const list = managersOfPerson(p);
-        const has = list.some((m) => sameParent(m, ref));
-        if (has === wanted.has(p.user_id)) continue;
-        const managers = has ? list.filter((m) => !sameParent(m, ref)) : [...list, ref];
-        if (!personMoveApplies(tree, p.user_id, managers)) continue;
-        const intent: OrgIntent = { kind: "movePerson", id: intentId(), user_id: p.user_id, managers, via_role: roleId, at: Date.now() };
-        applyOrgIntent(tree, intent);
-        pushIntent(this, intent);
-      }
-    }),
-
-    setOrgRoleManagers: action(function (this: OrgDraft, roleId: string, managers: OrgParentRef[]) {
-      const tree = this.orgTree;
-      const intent = tree ? roleManagersIntent(tree, intentId(), roleId, managers, Date.now()) : null;
-      if (!tree || !intent) return;
-      applyOrgIntent(tree, intent);
-      pushIntent(this, intent);
-    }),
-
-    setOrgPersonProfile: action(function (this: OrgDraft, teamId: string, userId: string, patch: PersonProfile) {
-      const cleaned = cleanProfilePatch(patch);
-      if (!cleaned.ok) return;
-      const { about, ...short } = cleaned.patch;
-      const tree = this.orgTree;
-      const intent = tree ? personProfileIntent(tree, intentId(), userId, short, Date.now(), this.orgTreeServer) : null;
-      if (tree && intent) {
-        applyOrgIntent(tree, intent);
-        pushIntent(this, intent);
-      }
-      if (about === undefined) return;
-      const key = orgPersonDetailId(teamId, userId);
-      const row = this.orgPersonDetails[key];
-      if (row) row.about = about;
-      else this.orgPersonDetails[key] = { _id: key, team_id: teamId, user_id: userId, about, areas: [], takes_decisions: true, profile_updated: null };
     }),
 
     reparentOrgRole: asyncAction(function (this: OrgDraft, roleId: string, reportsTo: OrgParentRef, _note?: string) {

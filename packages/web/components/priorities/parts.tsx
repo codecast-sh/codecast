@@ -8,8 +8,6 @@ import Link from "next/link";
 import { Check, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Reply, Rocket, Square, SquareCheck, Target, Workflow } from "lucide-react";
 import type { PriorityPlanRef, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
 import type { NextAction } from "@codecast/shared/contracts/priorityDerive";
-import type { DeployInfo } from "../../lib/priorityList";
-export type { DeployInfo };
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Button } from "../ui/button";
 import { useEntityResolution } from "../../lib/entityDisplay";
@@ -232,6 +230,7 @@ export function BranchChip({ name }: { name: string }) {
   );
 }
 
+export type DeployInfo = { id: string; target: string; status: string; at: number };
 
 /** A deploy: a filled pill, a rocket, where it went and how long ago. */
 export function DeployChip({ d, now }: { d: DeployInfo; now: number }) {

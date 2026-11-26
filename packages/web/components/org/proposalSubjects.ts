@@ -23,7 +23,7 @@ import { revisionWord } from "./staffingRevise";
 
 // ---------------------------------------------------------------- types
 
-export type SubjectKind = "goal" | "project" | "role" | "plan" | "task" | "projects" | "instance" | "session" | "person";
+export type SubjectKind = "goal" | "project" | "role" | "plan" | "task" | "projects" | "instance" | "session";
 export type SubjectStatus = "proposed" | "accepted" | "applied" | "skipped" | "failed" | "mixed";
 
 export type SubjectCard = {
@@ -140,7 +140,7 @@ export const fieldText = (v: FieldText | null): string | undefined => (v ? v.tex
 // ---------------------------------------------------------------- keys and status
 
 const HANDLE_KINDS = new Set(["role", "move", "retire", "scope", "budget", "trust", "routine", "adopt", "authority", "hire", "charter_edit", "role_edit"]);
-const KIND_ORDER: SubjectKind[] = ["goal", "project", "role", "plan", "task", "projects", "instance", "session", "person"];
+const KIND_ORDER: SubjectKind[] = ["goal", "project", "role", "plan", "task", "projects", "instance", "session"];
 type NamedRow = { id: string; title: string; short_id?: string };
 
 /**
@@ -161,7 +161,6 @@ export function subjectKeyOf(row: Pick<ProposalTreeRow, "change_id" | "node"> | 
     case "task_status": return `task:${change.task.trim().toLowerCase()}`;
     case "upgrade": return `instance:${change.instance.trim().toLowerCase()}`;
     case "file_session": return `session:${change.session.trim().toLowerCase()}`;
-    case "person_profile": return `person:${(change.user_id ?? change.person).trim().replace(/^@/, "").toLowerCase()}`;
     default: return `projects:${row?.change_id ?? ""}`;
   }
 }
@@ -325,7 +324,7 @@ export function recordGroupCards(changes: readonly OrgProposalChange[], names?: 
 // ---------------------------------------------------------------- the model
 
 const NOUN: Partial<Record<OrgChange["kind"], string>> = { role: "the role", initiative: "the goal", plan_status: "the plan", file: "the plan", task_status: "the task", project_status: "the project", upgrade: "the instance", file_session: "the session" };
-const THIS: Record<SubjectKind, string> = { goal: "this goal", project: "this project", role: "this role", plan: "this plan", task: "this task", projects: "these projects", instance: "this instance", session: "this session", person: "this person" };
+const THIS: Record<SubjectKind, string> = { goal: "this goal", project: "this project", role: "this role", plan: "this plan", task: "this task", projects: "these projects", instance: "this instance", session: "this session" };
 const PRIORITY_RANK: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3 };
 
 type Before = NonNullable<ChangeWordsCtx["before"]>;
@@ -515,11 +514,6 @@ export function proposalSubjects(changes: readonly OrgProposalChange[], live: Su
       }
       case "instance": return { kind: "unknown", id: (ch as { instance: string }).instance, name: (ch as { instance: string }).instance };
       case "session": { const f = ch as { session: string; title?: string }; return { kind: "unknown", id: f.session, name: f.title?.trim() || names.session?.(f.session) || f.session }; }
-      case "person": {
-        const f = ch as { user_id?: string; person: string; name?: string };
-        const person = tree?.people.find((p) => p.user_id === f.user_id);
-        return (person && tree ? partyFace(tree, { kind: "user", user_id: person.user_id }) : null) ?? { kind: "unknown", id: f.user_id ?? f.person, name: f.name?.trim() || f.person };
-      }
       case "projects": {
         const entries = ch.kind === "projects" ? ch.changes : [];
         const name = entries.length === 1 ? (entries[0].op === "create" ? entries[0].title : projectName(entries[0].from)) : plural(entries.length, "project");

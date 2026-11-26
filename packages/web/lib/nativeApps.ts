@@ -17,12 +17,6 @@ export const NATIVE_APP_LINKS: Record<NativeApp, string> = {
   ios: SITE_LINKS.appStore,
 };
 
-/** The desktop builds, for a choice of either (installing a page as an app from a browser). The web server redirects each to the current installer. */
-export const DESKTOP_DOWNLOADS = [
-  { os: "mac", label: "Mac", detail: "Apple silicon", href: NATIVE_APP_LINKS.mac },
-  { os: "windows", label: "Windows", detail: "64-bit", href: "https://codecast.sh/download/windows" },
-] as const;
-
 export const NATIVE_APP_COPY: Record<
   NativeApp,
   { name: string; requires: string; pitch: string; cta: string; nudge: string }

@@ -1,6 +1,6 @@
-// The screenshots taken in the last few minutes, offered at the foot of the new
-// session sheet: a screenshot is usually why a session starts. A tap on one
-// opens it full screen; its Add button under it attaches it.
+// The screenshots taken in the last day, under the new session sheet's
+// composer: a screenshot is usually why a session starts. A tap on one opens
+// it full screen; a tap on its lower half (the + badge) attaches it.
 //
 // Reads the library only when the person has already granted access (the
 // attach button asks for it); opening the sheet never prompts. A binary built
@@ -9,8 +9,7 @@ import { useEffect, useState } from 'react';
 import { Platform, StyleSheet, ScrollView, TouchableOpacity, View as RNView, Image } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
-import { Theme, themedStyles } from '@/constants/Theme';
-import { Text } from '@/components/Themed';
+import { themedStyles } from '@/constants/Theme';
 import { optionalNative } from '@/lib/optionalNative';
 import { ImageGallery } from '@/components/ImageGallery';
 
@@ -19,8 +18,7 @@ const MediaLibrary: typeof import('expo-media-library') | null = optionalNative(
   () => require('expo-media-library'),
 );
 
-// The screenshot that starts a session was just taken; older ones are other errands.
-const WINDOW_MS = 15 * 60 * 1000;
+const WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_SHOTS = 8;
 
 type Shot = { id: string; uri: string; mime: string };
@@ -72,13 +70,9 @@ export function RecentScreenshots({ attachedUris, onAttach }: {
   };
   return (
     <>
-      <RNView style={styles.header}>
-        <Feather name="image" size={12} color={Theme.textMuted0} />
-        <Text style={styles.headerText}>Recent screenshots</Text>
-      </RNView>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.row} contentContainerStyle={styles.rowContent}>
         {offered.map((shot, index) => (
-          <RNView key={shot.id} style={styles.tile}>
+          <RNView key={shot.id}>
             <TouchableOpacity
               activeOpacity={0.8}
               accessibilityRole="imagebutton"
@@ -88,15 +82,16 @@ export function RecentScreenshots({ attachedUris, onAttach }: {
               <Image source={{ uri: shot.uri }} style={styles.thumb} />
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.addBtn}
+              style={styles.attachZone}
               hitSlop={{ top: 4, left: 4, right: 4, bottom: 8 }}
               activeOpacity={0.6}
               accessibilityRole="button"
               accessibilityLabel="Attach screenshot"
               onPress={() => attach(shot)}
             >
-              <Feather name="plus" size={12} color={Theme.blue} />
-              <Text style={styles.addText}>Add</Text>
+              <RNView style={styles.badge}>
+                <Feather name="plus" size={18} color="#fff" />
+              </RNView>
             </TouchableOpacity>
           </RNView>
         ))}
@@ -113,48 +108,44 @@ export function RecentScreenshots({ attachedUris, onAttach }: {
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  headerText: {
-    fontSize: 12,
-    color: Theme.textMuted0,
-  },
   row: {
     flexGrow: 0,
+    marginTop: 8,
   },
   rowContent: {
-    gap: 10,
+    gap: 8,
     paddingRight: 8,
   },
-  tile: {
-    width: 64,
-    gap: 6,
-  },
   thumb: {
-    width: 64,
-    height: 114,
+    width: 56,
+    height: 100,
     borderRadius: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
     backgroundColor: Theme.bgAlt,
   },
-  addBtn: {
-    flexDirection: 'row',
+  // The bottom half of the thumb attaches; the top half opens it.
+  attachZone: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 50,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: 1,
-    borderColor: Theme.borderLight,
   },
-  addText: {
-    fontSize: 12,
-    color: Theme.blue,
+  badge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Theme.blue,
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
   },
 }));

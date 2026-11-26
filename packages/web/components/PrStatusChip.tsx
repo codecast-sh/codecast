@@ -182,85 +182,25 @@ export function LinkedPrChips({
           </PopoverTrigger>
           <PopoverContent align="end" className="w-[min(24rem,calc(100vw-1.5rem))] p-1" {...KEEP_OFF_CARD}>
             <div className="max-h-[min(22rem,60vh)] overflow-y-auto" data-linked-prs-list>
-              {/* "panel" so a merged row reads its reach live, as the chips beside the count do:
-                  the list mounts only while open, so the read is fresh, not a card's stale row. */}
-              {shown.map((pr) => (
-                <PrListRow key={pr.id} repository={pr.repository} number={pr.number} title={pr.title} onOpen={() => setOpen(false)} chip={<LinkedChip pr={pr} size="panel" plain />} />
-              ))}
+              {shown.map((pr) => {
+                const href = prPath({ repository: pr.repository, number: pr.number });
+                const row = "flex items-center gap-2 px-2 py-1 rounded min-w-0";
+                const body = (
+                  <>
+                    {/* "panel" so a merged row reads its reach live, as the chips beside the count do:
+                        the list mounts only while open, so the read is fresh, not a card's stale row. */}
+                    <LinkedChip pr={pr} size="panel" plain />
+                    <span className="min-w-0 flex-1 truncate text-[12.5px] text-sol-text-secondary">{pr.title ?? pr.repository}</span>
+                  </>
+                );
+                return href
+                  ? <Link key={pr.id} href={href} draggable={false} onClick={(e) => { e.stopPropagation(); setOpen(false); }} className={`${row} hover:bg-sol-bg-highlight`}>{body}</Link>
+                  : <div key={pr.id} className={row}>{body}</div>;
+              })}
             </div>
           </PopoverContent>
         </Popover>
       )}
     </span>
-  );
-}
-
-/** A row of the full list: the chip, then the title. */
-function PrListRow({ repository, number, title, chip, onOpen }: { repository: string; number: number; title?: string | null; chip: React.ReactNode; onOpen: () => void }) {
-  const href = prPath({ repository, number });
-  const row = "flex items-center gap-2 px-2 py-1 rounded min-w-0";
-  const body = (
-    <>
-      {chip}
-      <span className="min-w-0 flex-1 truncate text-[12.5px] text-sol-text-secondary">{title ?? repository}</span>
-    </>
-  );
-  return href
-    ? <Link href={href} draggable={false} onClick={(e) => { e.stopPropagation(); onOpen(); }} className={`${row} hover:bg-sol-bg-highlight`}>{body}</Link>
-    : <div className={row}>{body}</div>;
-}
-
-/**
- * The panel above the composer: every pull request the session touches, as
- * one stack. The lead (the shepherded one, else the most pressing link) shows
- * its chip; the rest sit behind it as card edges in their own colors, with a
- * count. Alone, the chip is the link; stacked, a press opens the whole list.
- */
-export function PrStack({ shepherd, prs }: { shepherd: PrStatus | null | undefined; prs: readonly LinkedPr[] }) {
-  const [open, setOpen] = useState(false);
-  const total = (shepherd ? 1 : 0) + prs.length;
-  if (!total) return null;
-  const lead = shepherd ? <PrStatusChip status={shepherd} size="panel" plain={total > 1} /> : <LinkedChip pr={prs[0]} size="panel" plain={total > 1} />;
-  if (total === 1) return <span className="shrink-0 inline-flex">{lead}</span>;
-  const behind = (shepherd ? prs : prs.slice(1)).slice(0, 2);
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-pr-stack={total}
-          aria-label={`${total} pull requests`}
-          title={`${total} pull requests`}
-          className="group/stack shrink-0 inline-flex items-center gap-1 rounded hover:brightness-110"
-        >
-          <span className="relative inline-flex">
-            {behind.map((pr, i) => {
-              const accent = LINKED_PR_LOOK[pr.state].accent;
-              const step = (behind.length - i) * 2;
-              return (
-                <span
-                  key={pr.id}
-                  aria-hidden
-                  className="absolute inset-0 rounded border transition-transform duration-150 ease-out"
-                  style={{ transform: `translate(${step}px, -${step}px)`, borderColor: accentSoft(accent, 30), background: "var(--sol-bg)", zIndex: i }}
-                />
-              );
-            })}
-            <span className="relative" style={{ zIndex: behind.length }}>{lead}</span>
-          </span>
-          <span className="pl-1 text-meta tabular-nums text-sol-text-dim group-hover/stack:text-sol-text-muted">+{total - 1}</span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-[min(24rem,calc(100vw-1.5rem))] p-1">
-        <div className="max-h-[min(22rem,60vh)] overflow-y-auto" data-pr-stack-list>
-          {shepherd && (
-            <PrListRow repository={shepherd.repository} number={shepherd.number} title={shepherd.title} onOpen={() => setOpen(false)} chip={<PrStatusChip status={shepherd} plain />} />
-          )}
-          {prs.map((pr) => (
-            <PrListRow key={pr.id} repository={pr.repository} number={pr.number} title={pr.title} onOpen={() => setOpen(false)} chip={<LinkedChip pr={pr} size="card" plain />} />
-          ))}
-        </div>
-      </PopoverContent>
-    </Popover>
   );
 }

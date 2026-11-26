@@ -9,7 +9,7 @@ import type { KeydownOptions } from "@platform/keys";
 // bubble, useEventListener or a React handler) can act on it underneath.
 // Pages need no check of their own for such an overlay.
 export { claimKeys } from "@platform/keys";
-import { isMac, type ShortcutAction } from "./registry";
+import type { ShortcutAction } from "./registry";
 
 // Focused regions that own their plain keys. Window key listeners outside the
 // dispatcher (GenericListView) honour the same selector.
@@ -80,24 +80,6 @@ export function keyBelongsElsewhere(target: EventTarget | null | undefined): boo
  *  menu (which asks the same ownership question) reaches them as well. */
 export const UNDO_CARD_CHORDS: ShortcutAction[] = ["ui.undo", "ui.redo", "ui.undoHistory"];
 
-/** What a focused code editor lets through. Off the Mac these actions sit on
- *  Ctrl chords vim uses (Ctrl-W windows, Ctrl-O jumps, Ctrl-T tags, Ctrl-P),
- *  so only the ones on chords vim leaves alone stay. Cmd-1..9 stay with the
- *  editor, which goes to that tab (lib/code/workspace/editorWorkspace.ts). */
-const CODE_EDITOR_APP_CHORDS: ShortcutAction[] = [
-  "ui.openSettings",
-  "vault.search",
-  "tab.prev",
-  "tab.next",
-  "terminal.toggle",
-  "anchor.toggle",
-  "nav.inbox",
-  "people.wall",
-  "code.reopenTab",
-  "code.splitRight",
-  ...(isMac ? (["vault.quickSwitch", "tab.new", "code.closeTab", "tab.close", "code.quickOpen"] as const) : []),
-];
-
 export const KEY_OWNERSHIP: Pick<KeydownOptions<ShortcutAction>, "inputLikeSelector" | "keyboardOwners"> = {
   // Some regions own their own single-letter keys and must not leak them to the
   // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
@@ -118,9 +100,5 @@ export const KEY_OWNERSHIP: Pick<KeydownOptions<ShortcutAction>, "inputLikeSelec
     // act on the page behind it. Its own chords stay allowed so the desktop
     // Edit menu's hand-back of them is not refused here.
     { selector: '[data-undo-timeline="interactive"]', allow: ["palette.toggle", ...UNDO_CARD_CHORDS] },
-    // The code editor (CodeMirror, often in vim mode) lives on Ctrl chords and
-    // Escape, and on the Cmd chords an editor claims (find, comment, undo,
-    // select next). Only app chords no editor binds reach the app from it.
-    { selector: "[data-code-editor]", allow: CODE_EDITOR_APP_CHORDS },
   ],
 };

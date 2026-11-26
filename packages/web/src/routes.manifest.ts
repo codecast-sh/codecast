@@ -158,7 +158,6 @@ const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const SessionMap = lazy(() => import("@/app/map/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Simulator = lazy(() => import("@/app/simulator/page"));
-const Triage = lazy(() => import("@/app/triage/page"));
 const Org = lazy(() => import("@/app/org/page"));
 const OrgScope = lazy(() => import("@/app/org/[id]/page"));
 const Chat = lazy(() => import("@/app/chat/page"));
@@ -278,7 +277,6 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
-const AppConsent = lazy(() => import("@/app/apps/consent/[id]/page"));
 const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
@@ -392,8 +390,6 @@ export const ROUTES: RouteEntry[] = [
   { path: "browser", component: cast(Browser), layout: "dashboardShell", tab: "/browser" },
   // A session's iOS simulator as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS.
   { path: "simulator", component: cast(Simulator), layout: "dashboardShell", tab: "/simulator" },
-  // The inbox in the triage model (lane, ask, shelf) and its lab.
-  { path: "triage", component: cast(Triage), layout: "dashboardShell", tab: "/triage" },
   // Full-bleed via pageLayout FULL_WIDTH_PATTERNS, like /chat: no fullWidth flag here.
   { path: "org", component: cast(Org), layout: "dashboardShell", tab: "/org", fullWidth: true },
   { path: "org/:id", component: cast(OrgScope), layout: "dashboardShell", tab: "/org/:id", fullWidth: true },
@@ -572,12 +568,6 @@ export const ROUTES: RouteEntry[] = [
   //    for the same reason: a ring must reach somebody who is in another app
   //    entirely, which a card inside an app window cannot do. --
   { path: "call-ring", component: cast(CallRing), layout: "palette" },
-
-  // -- The installed-app consent window (TransparentWindowLayout; the page
-  //    paints its own ground): install, a running app's permission request
-  //    and the re-ask after a new version, in a small window main opens over
-  //    the app asking (docs/architecture/installed-apps.md). --
-  { path: "apps/consent/:id", component: cast(AppConsent), layout: "palette" },
 
   // -- The agent dock (TransparentWindowLayout): the pill on the screen's
   //    edge with a dot per live agent and the card beside it. On by

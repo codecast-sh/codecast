@@ -126,61 +126,6 @@ const RECAP_TRANSCRIPT = (now: number) => [
   },
 ];
 
-/* ── A voice note recorded on one phone, its voices told apart ── */
-
-/** Alex's phone on the table with Maya and a guest from Northwind: three
- *  voices (spk:<n>). Alex is named by a person, Maya by a voice match not yet
- *  confirmed, and the guest is unknown. Opened by id (the phone's
- *  /recording/<id>), not listed, so the calls list shots stay as they are. */
-export const VOICE_NOTE_ID = cid("voicenote");
-const NOTE_AGO = 3 * HOUR;
-const NOTE_LINES: [number, number, string][] = [
-  [0, 2, "Thanks for coming in. We wanted to walk through how the webhook retries will work for Northwind."],
-  [2, 11, "Sure. Our worry is the overnight gap. Last month we missed a batch of payment events and found out a day later."],
-  [1, 22, "That's the case we built for. A failed delivery retries five times with backoff, about thirty seconds in all."],
-  [1, 31, "Anything still failing lands in a dead-letter queue, and support can replay it with one button."],
-  [2, 41, "Would we see those? Our on-call wants to know the same night."],
-  [0, 49, "You're on an SLA, so a dead-lettered webhook pages our on-call and we email yours."],
-  [2, 58, "That works. Can we get the replay button too, on our side?"],
-  [1, 66, "Not in the first version. I'll write it up as a follow-up and send you the ticket."],
-  [0, 74, "Great. We'll turn it on for your account next week."],
-];
-const noteSegments = () =>
-  NOTE_LINES.map(([n, s, text], i) => ({
-    seq: i + 1,
-    speaker_id: `spk:${n}`,
-    speaker_name: `Speaker ${n + 1}`,
-    text,
-    t0: s * 1000,
-    t1: ((NOTE_LINES[i + 1]?.[1] ?? s + 7) - 1) * 1000,
-  }));
-const noteDetail = (now: number) => ({
-  ...row(now),
-  _id: VOICE_NOTE_ID,
-  short_id: "cl-221",
-  room_key: "rec:acme-voice-note-1",
-  started_at: now - NOTE_AGO,
-  ended_at: now - NOTE_AGO + 82_000,
-  title: "Northwind webhook walkthrough",
-  participants: [],
-  summary: "Walked Northwind through webhook retries: five attempts with backoff, then a dead-letter queue that pages on-call for SLA customers. They asked for the replay button on their side; it is a follow-up.",
-  action_items: ["Maya: write up a customer-side replay button for Northwind", "Alex: turn retries on for Northwind next week"],
-  last_seq: NOTE_LINES.length,
-  share_token: null,
-  can_share_link: true,
-  recording_url: null,
-  routes: [],
-  sessions: [],
-  guests: [],
-  segments: noteSegments(),
-  speaker_names: { [PEOPLE.me._id]: PEOPLE.me.name, [PEOPLE.maya._id]: PEOPLE.maya.name },
-  speakers: [
-    { key: "spk:0", user_id: PEOPLE.me._id, source: "person" },
-    { key: "spk:1", user_id: PEOPLE.maya._id, source: "voice", score: 0.82 },
-    { key: "spk:2", source: "voice" },
-  ],
-});
-
 /* ── The live #eng huddle (the core's LIVE_ROOMS), joined from this window ── */
 
 export const LIVE_ID = cid("calllive");
@@ -249,16 +194,7 @@ export const CALLS_PART: AcmePart = {
   },
   answers: {
     "transcripts:webListCalls": () => [row(Date.now())],
-    "transcripts:webGetCall": (a) =>
-      a?.transcript_id === CALL_ID
-        ? detail(Date.now())
-        : a?.transcript_id === LIVE_ID
-          ? liveDetail(Date.now())
-          : a?.transcript_id === VOICE_NOTE_ID
-            ? noteDetail(Date.now())
-            : null,
-    // Settings › Voice: Alex has opted in and has samples from past recordings.
-    "voiceprints:myVoiceprint": () => ({ count: 6, seconds: 214, last_added_at: Date.now() - 2 * 86_400_000 }),
+    "transcripts:webGetCall": (a) => (a?.transcript_id === CALL_ID ? detail(Date.now()) : a?.transcript_id === LIVE_ID ? liveDetail(Date.now()) : null),
     "transcripts:webGetCallRef": callRef,
     "callChat:list": (a) => (a?.transcript_id === CALL_ID ? thread(Date.now()) : a?.room_key === HUDDLE_ROOM ? liveThread(Date.now()) : []),
     // The live huddle's words, its transcript and the session it hears (the core's captions, with the room's ids).

@@ -20,17 +20,14 @@ import type { PendingCloseAdvice } from "../lib/closeAdviceBar";
 
 let triggerNotices = 0;
 
-export function useTriggerKillNotice({ feed = true }: { feed?: boolean } = {}) {
+export function useTriggerKillNotice() {
   // The triggers a kill cancels and a restore re-arms are read off the store
   // at the moment of the click, fed by the shared trigger feeder (armed rows
   // plus a recent tail; useSyncTriggers). This hook mounts app-wide, and it
   // used to hold its own subscription to the complete trigger history:
   // thousands of rows per account, 1.5 GB read in 191 s of prod on
-  // 2026-11-12 (ct-92571). A transient surface that mounts over a host which
-  // already feeds them (the palette over the inbox panel) passes feed: false:
-  // each extra feeder's first answer re-verifies every armed trigger it lacks,
-  // a fetch and a store write apiece.
-  useSyncTriggers(feed);
+  // 2026-11-12 (ct-92571).
+  useSyncTriggers();
 
   // Toast the cancellation with a "Keep trigger" escape hatch (re-arm WITHOUT
   // restoring the session). The undo of the kill itself needs no client hook:

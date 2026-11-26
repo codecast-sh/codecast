@@ -9,22 +9,16 @@ import { LivePulse, useCallsOn, useLiveRooms } from '@/components/calls/LiveRoom
 import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 
-/** What waits in the app menu: the decisions on you and whether a huddle is
- *  live. The menu's rows show them, and the ☰ that opens it carries them. */
-export function useMenuSignals(): { waiting: number; live: boolean } {
-  const live = useLiveRooms(useCallsOn()).length > 0;
-  const waiting = useDecisionQueue().length;
-  return { waiting, live };
-}
-
 /** The app's places that are not tabs, as slide-out rows: the questions
- *  you own, calls, the week, plans, docs, triggers and the org. `onLeave`
- *  closes the panel the rows sit in. */
+ *  you own, calls, plans, docs, triggers and the org. `onLeave` closes the
+ *  panel the rows sit in. */
 export function Places({ onLeave }: { onLeave: () => void }) {
   const Theme = useTheme();
   const router = useRouter();
   const orgOn = useWorkspaceFeatureState('org');
-  const { waiting, live } = useMenuSignals();
+  const callsOn = useCallsOn();
+  const live = useLiveRooms(callsOn).length > 0;
+  const waiting = useDecisionQueue().length;
 
   const go = (route: string) => {
     void Haptics.selectionAsync();
@@ -36,7 +30,6 @@ export function Places({ onLeave }: { onLeave: () => void }) {
   const rows: Array<{ page: string; name: string; icon: keyof typeof Feather.glyphMap; route: string; count?: number; live?: boolean }> = [
     { page: '/decisions', name: 'Decisions', icon: 'help-circle', route: '/decisions', count: waiting || undefined },
     { page: '/calls', name: 'Calls', icon: 'phone', route: '/calls', live },
-    { page: '/week', name: 'Week', icon: 'calendar', route: '/week' },
     { page: '/plans', name: 'Plans', icon: 'map', route: '/(tabs)/tasks?segment=plans' },
     { page: '/docs', name: 'Docs', icon: 'file-text', route: '/(tabs)/tasks?segment=docs' },
     { page: '/triggers', name: 'Triggers', icon: 'clock', route: '/(tabs)/tasks?segment=routines' },

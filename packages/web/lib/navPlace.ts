@@ -246,9 +246,6 @@ export function placeKey(rawPath: string): string {
 /** Whether the crumbs above a page add anything to its title: none when the
  *  title is one of them (a page whose header already names its section, the
  *  way Ops does, draws its own trail). */
-export function crumbsForTitle(crumbs: PlaceCrumb[], title: string, backLabel?: string | null): PlaceCrumb[] {
-  if (crumbs.some((c) => c.label === title)) return [];
-  // The way back already names the place it goes: a lone crumb saying the
-  // same ("← Org | Org ›") says it twice.
-  return crumbs.length === 1 && backLabel && crumbs[0].label === backLabel ? [] : crumbs;
+export function crumbsForTitle(crumbs: PlaceCrumb[], title: string): PlaceCrumb[] {
+  return crumbs.some((c) => c.label === title) ? [] : crumbs;
 }

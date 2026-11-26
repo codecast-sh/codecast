@@ -11,7 +11,6 @@ import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { ObjectHeader, ObjectMissing } from "@/components/objects/ObjectParts";
-import { FlowContext } from "@/components/flow/FlowContext";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf, waitTone, type WaitTone } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
@@ -193,9 +192,6 @@ export default function TaskDetailScreen() {
             <RNText style={styles.title}>{task.title}</RNText>
           </TouchableOpacity>
         )}
-
-        {/* A task a flow run works: the whole flow, every station one tap away. */}
-        {task.workflow_run_id ? <FlowContext runId={task.workflow_run_id} style={{ marginBottom: Spacing.md }} /> : null}
 
         <RNView style={styles.badgeRow}>
           <TouchableOpacity style={[styles.badge, { borderColor: status.color + "40" }]} onPress={handleStatusPress}>

@@ -20,29 +20,6 @@ export type PathShareSummary = {
   manually_shared?: number;
 };
 
-/**
- * The key shareImpactForPaths answers a folder under. Convex refuses object
- * keys outside printable ASCII, so a folder like `~/work/代码工程` would fail
- * the whole answer; such a folder is keyed by its percent-encoding instead.
- * An absolute path never starts with "%", so readShareImpact can tell them apart.
- */
-export function shareImpactKey(path: string): string {
-  return /^[\x20-\x7e]*$/.test(path) && !path.startsWith("$") ? path : encodeURIComponent(path);
-}
-
-/** A shareImpactForPaths answer keyed by the folders' real paths again. */
-export function readShareImpact(answer: Record<string, PathShareSummary> | null | undefined): Record<string, PathShareSummary> {
-  const out: Record<string, PathShareSummary> = {};
-  for (const [key, summary] of Object.entries(answer ?? {})) {
-    let path = key;
-    if (key.startsWith("%")) {
-      try { path = decodeURIComponent(key); } catch { /* not ours: keep the key */ }
-    }
-    out[path] = summary;
-  }
-  return out;
-}
-
 /** A picker row's own numbers: a recent window, so a lower bound. */
 export type ProjectCounts = {
   path: string;

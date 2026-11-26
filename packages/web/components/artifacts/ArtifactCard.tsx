@@ -36,8 +36,6 @@ import { useState } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { PAGE_REACHES, permanentDeleteLedger, regulatedTeam } from "../consequential/deletionLedgers";
-import { useInstallAsApp } from "../../hooks/useInstalledApps";
-import { InstallAsAppItem, InstallHandoff } from "../installedApps/InstallAsApp";
 
 export type ArtifactRow = {
   slug: string;
@@ -191,7 +189,6 @@ export function ArtifactCard({
   };
 
   const ctxMenu = useContextMenu();
-  const installApp = useInstallAsApp(a.slug);
   const review = reviewing && team ? (
     <SwitchReview
       ledger={permanentDeleteLedger({
@@ -215,7 +212,6 @@ export function ArtifactCard({
       </CtxItem>
       <CtxItem icon={Copy} onSelect={copyLink}>Copy link</CtxItem>
       <ForwardCtxItem url={a.url} label="page" />
-      <InstallAsAppItem act={installApp} />
       {a.manage_url && (
         <>
           <CtxSeparator />
@@ -338,7 +334,6 @@ export function ArtifactCard({
         <div className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex-shrink-0">{kebab}</div>
         {cursorMenu}
         {review}
-        <InstallHandoff slug={a.slug} title={a.title} act={installApp} />
       </div>
     );
   }
@@ -366,7 +361,6 @@ export function ArtifactCard({
 
       {cursorMenu}
       {review}
-      <InstallHandoff slug={a.slug} title={a.title} act={installApp} />
 
       {/* Body */}
       <div className="flex flex-col gap-1.5 p-3">

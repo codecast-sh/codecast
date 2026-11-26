@@ -11,7 +11,6 @@ export function applyLiveRoomsPush(d: unknown): void {
   store.syncTable("callRooms", d.map((r: any) => ({
     _id: r.room_key,
     locked: !!r.locked,
-    private: !!r.private,
     transcribe_off: !!r.transcribe_off,
     transcribe_off_at: r.transcribe_off_at ?? null,
     words_public: !!r.words_public,
@@ -19,5 +18,5 @@ export function applyLiveRoomsPush(d: unknown): void {
     // whether a press could work (hooks/useRoomRecording, "one home").
     ...roomRecordingFields(r),
   })));
-  store.syncTable("liveRooms", d.map(({ locked: _l, private: _p, transcribe_off: _t, transcribe_off_at: _a, words_public: _w, recording: _r, recording_run: _run, recording_configured: _c, ...room }: any) => room));
+  store.syncTable("liveRooms", d.map(({ locked: _l, transcribe_off: _t, transcribe_off_at: _a, words_public: _w, recording: _r, recording_run: _run, recording_configured: _c, ...room }: any) => room));
 }

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useWatchEffect } from "./useWatchEffect";
 import { useMutation, useQueries } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { readShareImpact, startOfDay, type PathShareSummary } from "../lib/team/shareImpact";
+import { startOfDay, type PathShareSummary } from "../lib/team/shareImpact";
 
 // The server answers at most twelve folders per query.
 const BATCH = 12;
@@ -48,7 +48,7 @@ export function useShareSummaries(paths: string[]): {
   const summaries = useMemo(() => {
     const out: Record<string, PathShareSummary> = {};
     for (const value of Object.values(results)) {
-      if (value && !(value instanceof Error)) Object.assign(out, readShareImpact(value as Record<string, PathShareSummary>));
+      if (value && !(value instanceof Error)) Object.assign(out, value as Record<string, PathShareSummary>);
     }
     return out;
   }, [results]);

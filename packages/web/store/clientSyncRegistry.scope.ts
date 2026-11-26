@@ -51,7 +51,6 @@ export const DATA_SCOPE = {
   priorityDetails: "entity",
   handledDecisions: "viewer",
   decisionDetails: "entity",
-  planDetails: "entity",
   decisionThreads: "entity",
   decisionComments: "entity",
   sideAnswers: "entity",
@@ -162,7 +161,6 @@ export const DATA_SCOPE = {
   viewerRoles: "viewer",
   sessionThreads: "viewer",
   wallet: "viewer",
-  myVoiceprint: "viewer",
   // One snapshot for one workspace, stamped with it: read through windowOrgTree.
   orgTree: "workspace",
   // One snapshot for one workspace, stamped held_for: read through windowOrgHealth.
@@ -172,7 +170,6 @@ export const DATA_SCOPE = {
   orgProposalChanges: "entity",
   orgLog: "workspace",
   orgLogRows: "entity",
-  orgPersonDetails: "entity",
   commits: "entity",
   // Pull requests span teams by product design (a PR is read by repo and
   // number wherever the viewer can see it).
@@ -216,8 +213,6 @@ export const DATA_SCOPE = {
   // recording is the viewer's wherever it started.
   callRooms: "viewer",
   callStagePins: "entity",
-  // The viewer's own sessions' tabs, on every machine.
-  browserTabs: "viewer",
   roomKnocks: "viewer",
   guestsWaiting: "viewer",
   guestLinks: "entity",

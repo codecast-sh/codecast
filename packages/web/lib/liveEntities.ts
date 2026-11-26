@@ -623,11 +623,6 @@ export function findEntityInStore(
       // The workspace's recordings, as the Ops page last fed them. A moment
       // (`rp-12@1:23`) names the replay's row.
       return lookup(state.opsReplays, parseReplayRef(rawId)?.replay ?? rawId);
-    case "issue":
-      // The Ops issues (event groups) and metric watches, as the Ops page last fed them.
-      return lookup(state.opsGroups, rawId);
-    case "metric":
-      return lookup(state.opsWatches, rawId);
     case "deploy":
       // The line's deploys (lineDeploys), then the Deploys page's (teamDeploys), by `dp-N` or the Actions run that carries it.
       return (Object.values(state.lineDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))

@@ -499,16 +499,6 @@ describe("Modern asks: the one loud card", () => {
     expect(card.querySelector("[data-decision-proceeding]")).toBeNull();
   });
 
-  test("a docked decision shows the start of its reasoning, and Expand sits in its header, away from the answer field", () => {
-    const card = draw(
-      <ModernDecisionDock question="Ship the renderer behind a flag?" excerpt="The flag costs a day. Without it a bad render reaches everyone." options={[{ label: "Ship now", index: 0 }]} held={() => false} onAnswer={noop} text="" onText={noop} onAnswerText={noop} onOpen={noop} answerable />,
-      "modern",
-    ).querySelector("[data-cc-ask]")!;
-    expect(text(card.querySelector("button[data-decision-excerpt]"))).toBe("The flag costs a day. Without it a bad render reaches everyone.");
-    expect(card.querySelector("form [data-decision-open]")).toBeNull();
-    expect(card.firstElementChild!.querySelector("[data-decision-open]")).not.toBeNull();
-  });
-
   test("the option an agent is going ahead with says so in the sheet's words, so it does not read as an answer given", () => {
     const card = draw(
       <ModernDecisionDock question="Run all week or only while in use?" options={[{ label: "Always on", index: 0 }, { label: "Paused when idle", index: 1 }]} recommended={1} proceedingWith={1} proceedingLabel="Paused when idle" held={() => false} onAnswer={noop} text="" onText={noop} onAnswerText={noop} onOpen={noop} answerable />,

@@ -78,27 +78,3 @@ export const forTeam = query({
     return out;
   },
 });
-
-/**
- * The run a session works in, whatever role it plays there: the run it points at itself (the run's log, or a
- * person's session that launched it), else the run its parent log belongs to (a station the runner spawned under the
- * log, `parent_session`). Every surface that shows a session draws the whole flow around it from this one row.
- */
-export const ofSession = query({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv) return [];
-    let runId = conv.workflow_run_id;
-    if (!runId && conv.parent_conversation_id) {
-      const parent = await ctx.db.get(conv.parent_conversation_id);
-      if (parent?.is_workflow_primary && parent.workflow_run_id) runId = parent.workflow_run_id;
-    }
-    if (!runId) return [];
-    const run = await ctx.db.get(runId);
-    if (!run || !(await canReadRun(ctx, userId, run))) return [];
-    return [await enrichRun(ctx, await withAgentSessions(ctx, run))];
-  },
-});

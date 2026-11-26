@@ -14,13 +14,11 @@
     "prebuild:local": "npm run native",
     "start": "electron .",
     "dev": "CODECAST_URL=https://local.codecast.sh electron .",
-    "test": "node --test *.test.js installedApps/*.test.js appshim/*.test.js",
+    "test": "node --test *.test.js",
     "build": "NOTARIZE_KEYCHAIN_PROFILE=codecast electron-builder -m",
     "build:dir": "electron-builder -m --config.mac.target=dir",
     "build:local": "electron-builder -m --config.mac.target=dir --config.mac.identity=null",
-    "install:local": "npm run build:local && { pkill -f Codecast.app 2>/dev/null; sleep 1; } && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'",
-    "build:win": "scripts/build-win.sh",
-    "icon:win": "scripts/make-icon-ico.sh"
+    "install:local": "npm run build:local && { pkill -f Codecast.app 2>/dev/null; sleep 1; } && rm -rf /Applications/Codecast.app && cp -R dist/mac-arm64/Codecast.app /Applications/Codecast.app && xattr -cr /Applications/Codecast.app && echo 'Installed to /Applications'"
   },
   "dependencies": {
     "@platform/desktop": "file:../../platform/packages/desktop"
@@ -55,8 +53,6 @@
       "shortcutSettings.js",
       "updaterNet.js",
       "updatePolicy.js",
-      "winInstaller.js",
-      "smokeTest.js",
       "rendererLog.js",
       "preload.js",
       "native/notifications.node",
@@ -67,22 +63,7 @@
       "assets/trayAttention@2x.png",
       "assets/trayColor.png",
       "assets/trayColorAttention.png",
-      "trayIcon.js",
-      "installedApps/host.js",
-      "installedApps/registry.js",
-      "installedApps/consentWindow.js",
-      "installedApps/icons.js",
-      "installedApps/electronHost.js",
-      "installedApps/macHost.js",
-      "installedApps/engine.js",
-      "installedApps/protocol.js",
-      "installedApps/fullAccess.js",
-      "installedApps/tiers.json",
-      "installedApps/client.js",
-      "installedApps/appPreload.js",
-      "installedApps/agentAsk.js",
-      "installedApps/sourceOverrides.js",
-      "appshim/install.js"
+      "trayIcon.js"
     ],
     "asarUnpack": [
       "native/*.node"
@@ -90,7 +71,6 @@
     "directories": {
       "buildResources": "assets"
     },
-    "beforePack": "scripts/build-appshim.js",
     "afterSign": "notarize.js",
     "mac": {
       "target": [
@@ -110,41 +90,11 @@
         "NSMicrophoneUsageDescription": "Codecast uses the microphone for team huddles.",
         "NSCameraUsageDescription": "Codecast uses the camera for team huddles.",
         "NSAudioCaptureUsageDescription": "Codecast records system audio when you record a meeting or share your screen with sound."
-      },
-      "extraResources": [
-        {
-          "from": "appshim/build/CodecastAppShim",
-          "to": "appshim/CodecastAppShim"
-        }
-      ]
+      }
     },
     "dmg": {
       "title": "Codecast",
       "artifactName": "Codecast-${version}-arm64.${ext}"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.ico"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "artifactName": "Codecast-${version}-${arch}-setup.${ext}",
-      "shortcutName": "Codecast",
-      "uninstallDisplayName": "Codecast",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false,
-      "differentialPackage": false,
-      "include": "scripts/windows-installer.nsh"
     },
     "protocols": [
       {

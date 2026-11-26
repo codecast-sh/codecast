@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { groupSessionsForOrgLens, orgLensAvailable, type OrgLensSources } from "../orgLens";
-import { applyPersonMove, drawnManager, managersAfterMove, personMoveApplies } from "../orgTreeMoves";
+import { applyPersonMove, personMoveApplies } from "../orgTreeMoves";
 import type { InboxSession } from "../inboxStore";
 
 // By reports with people: a person who reports to the viewer is a group of
@@ -22,7 +22,7 @@ function sources(people: Array<{ user_id: string; reports_to_user_id?: string }>
 }
 
 describe("By reports with people", () => {
-  const src = sources([{ user_id: ME }, { user_id: LEAD, managers: [{ kind: "user", user_id: ME }] }, { user_id: IC, managers: [{ kind: "user", user_id: LEAD }] }, { user_id: OTHER }]);
+  const src = sources([{ user_id: ME }, { user_id: LEAD, reports_to_user_id: ME }, { user_id: IC, reports_to_user_id: LEAD }, { user_id: OTHER }]);
   const items = [
     row("s_lead", LEAD),
     row("s_ic", IC),
@@ -49,35 +49,18 @@ describe("By reports with people", () => {
   test("the lens is offered when only a person reports to the viewer", () => {
     const onlyPeople = { ...src, roles: [] };
     expect(orgLensAvailable("reports", [], onlyPeople)).toBe(true);
-    expect(orgLensAvailable("reports", [], { ...onlyPeople, people: onlyPeople.people.map(({ managers: _r, ...p }) => p) })).toBe(false);
+    expect(orgLensAvailable("reports", [], { ...onlyPeople, people: onlyPeople.people.map(({ reports_to_user_id: _r, ...p }) => p) })).toBe(false);
   });
 });
 
 describe("movePerson on the tree", () => {
   test("moves, clears, and refuses a loop", () => {
-    const tree = { people: [{ user_id: ME }, { user_id: LEAD, managers: [{ kind: "user", user_id: ME }] }, { user_id: IC }] as any[], roles: [] as any[] };
-    applyPersonMove(tree, { kind: "movePerson", id: "i1", user_id: IC, managers: [{ kind: "user", user_id: LEAD }], at: 1 });
-    expect(tree.people[2].managers).toEqual([{ kind: "user", user_id: LEAD }]);
-    expect(personMoveApplies(tree, ME, [{ kind: "user", user_id: IC }])).toBe(false);
-    applyPersonMove(tree, { kind: "movePerson", id: "i2", user_id: IC, managers: [], at: 2 });
-    expect("managers" in tree.people[2]).toBe(false);
-  });
-
-  test("moves under a role and refuses a loop through one (org-people.md P2)", () => {
-    const tree = { people: [{ user_id: ME }, { user_id: IC, managers: [{ kind: "user", user_id: ME }] }] as any[], roles: [{ _id: "r1", status: "active", reports_to: { kind: "user", user_id: IC } }] as any[] };
-    // The role reports to Ic, who reports to Me: neither can go under it.
-    expect(personMoveApplies(tree, IC, [{ kind: "role", role_id: "r1" }])).toBe(false);
-    expect(personMoveApplies(tree, ME, [{ kind: "role", role_id: "r1" }])).toBe(false);
-    delete tree.people[1].managers;
-    applyPersonMove(tree, { kind: "movePerson", id: "i3", user_id: ME, managers: [{ kind: "role", role_id: "r1" }], at: 3 });
-    expect(tree.people[0].managers).toEqual([{ kind: "role", role_id: "r1" }]);
-    // Equal co-managers: Ic takes Me on beside the role; the chart draws Me under the role, listed first.
-    applyPersonMove(tree, { kind: "movePerson", id: "i4", user_id: ME, managers: [{ kind: "role", role_id: "r1" }, { kind: "user", user_id: IC }], at: 4 });
-    expect(tree.people[0].managers).toEqual([{ kind: "role", role_id: "r1" }, { kind: "user", user_id: IC }]);
-    expect(drawnManager(tree as any, tree.people[0])).toEqual({ kind: "role", role_id: "r1" });
-    // Dragging Me from the role's line onto Ic's card moves that line and keeps the rest; the top means nobody.
-    expect(managersAfterMove(tree as any, ME, { kind: "user", user_id: IC })).toEqual([{ kind: "user", user_id: IC }]);
-    expect(managersAfterMove(tree as any, ME, null)).toEqual([]);
+    const tree = { people: [{ user_id: ME }, { user_id: LEAD, reports_to_user_id: ME }, { user_id: IC }] as any[] };
+    applyPersonMove(tree, { kind: "movePerson", id: "i1", user_id: IC, reports_to_user_id: LEAD, at: 1 });
+    expect(tree.people[2].reports_to_user_id).toBe(LEAD);
+    expect(personMoveApplies(tree, ME, IC)).toBe(false);
+    applyPersonMove(tree, { kind: "movePerson", id: "i2", user_id: IC, reports_to_user_id: null, at: 2 });
+    expect("reports_to_user_id" in tree.people[2]).toBe(false);
   });
 });
 

@@ -28,13 +28,19 @@ export function layerOpen(doc: Pick<Document, "querySelector"> = document): bool
 }
 
 /**
- * Whether Enter belongs to the focused control and not to the change around
- * it: a commit link, a session pill or the copy-link button inside a change
- * acts on Enter itself. On the change itself, Enter opens or closes it.
+ * Whether Enter belongs to the focused control and not to the story around
+ * it: a commit link, a session pill or "+149 more files" inside a story acts
+ * on Enter itself. The story's own control (its trigger, or the week's story
+ * button) is the one control whose Enter is the evidence key.
  */
 export function keepsOwnEnter(active: Element | null): boolean {
   const ctl = active?.closest("button, a, input, [role=menuitem]");
-  return !!ctl && !ctl.matches("[data-story-trigger]");
+  return !!ctl && !ctl.matches("[data-story-trigger]") && !ctl.matches("button[data-story-key]");
+}
+
+/** The commit page the focused control belongs to, when focus is in a commit row of an evidence drawer (`o` opens it, spec 3.3). */
+export function focusedCommitHref(active: Element | null): string | null {
+  return active?.closest<HTMLElement>("[data-commit-href]")?.dataset.commitHref ?? null;
 }
 
 export type EscapeStep = "clear-text" | "leave-field" | "close-story" | "clear-filters" | "close-filter" | null;
@@ -42,7 +48,7 @@ export type EscapeStep = "clear-text" | "leave-field" | "close-story" | "clear-f
 /**
  * What one Escape does. In the filter field it works on the field first: the
  * typed text goes, chips stay; a second press leaves the field. Anywhere else
- * it closes the open change, then clears every filter, then closes the
+ * it closes the open evidence, then clears every filter, then closes the
  * filter bar.
  */
 export function escapeStep(s: { inFilterField: boolean; q: string | undefined; story: string | undefined; filtered: boolean; filterOpen: boolean }): EscapeStep {

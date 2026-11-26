@@ -62,7 +62,6 @@ import {
   toMessageViews,
   type ChatMember,
   type HandleSets,
-  type ViewContext,
 } from "../lib/chatViews";
 import type { ChatMessageView } from "../components/chat/chatTypes";
 import { CHAT_PAGE_SIZE, ingestChatPage } from "../lib/ingestChatPage";
@@ -530,29 +529,18 @@ export function roleSeatsFrom(anchors: Record<string, any> | undefined, tree: Ro
   };
 }
 
-/** Each live agent member's standing session, by its bot user id. */
-export function standingSessionsFrom(anchors: Record<string, any> | undefined): (botUserId: string) => string | undefined {
-  const map = new Map<string, string>();
-  for (const a of Object.values(anchors ?? {}) as AnchorRow[]) {
-    if (a?.bot_user_id && a.conversation_id && a.status !== "decommissioned") map.set(String(a.bot_user_id), String(a.conversation_id));
-  }
-  return (id) => map.get(id);
-}
-
 /** Both lookups from the store as it is now, for code that runs outside a
  *  render (a palette callback, a toast). */
-export function chatAuthorLookupsNow(): ChatAuthorLookups {
+export function chatAuthorLookupsNow(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
   const s = useInboxStore.getState() as any;
-  return { sessionFor: sessionPersonasFrom(s.sessions, roleRowsOf(s), identityPrefsNow()), seatFor: roleSeatsFrom(s.anchors, roleRowsOf(s), identityPrefsNow()), standingFor: standingSessionsFrom(s.anchors) };
+  return { sessionFor: sessionPersonasFrom(s.sessions, roleRowsOf(s), identityPrefsNow()), seatFor: roleSeatsFrom(s.anchors, roleRowsOf(s), identityPrefsNow()) };
 }
 
 /** The live lookups every surface that names a chat line's author passes to
  *  lineAuthorFor. A surface that skips them names a role's agent by its bot
  *  user's title and a session's line by the session's title. Signature-gated:
  *  sessions heartbeat, and only a title, agent or identity change matters. */
-type ChatAuthorLookups = Required<Pick<ViewContext, "sessionFor" | "seatFor" | "standingFor">>;
-
-export function useChatAuthorLookups(): ChatAuthorLookups {
+export function useChatAuthorLookups(): { sessionFor: (sessionId: string) => SessionPersona | undefined; seatFor: (botUserId: string) => RoleSeat | undefined } {
   const st = useTrackedStore([(s: any) => sessionOriginSig(s.sessions), (s: any) => seatSig(s.anchors), (s: any) => roleRowsSig(s)]);
   const sessionsSig = sessionOriginSig(st.sessions);
   const seatsSig = seatSig((st as any).anchors);
@@ -563,9 +551,7 @@ export function useChatAuthorLookups(): ChatAuthorLookups {
   const sessionFor = useMemo(() => sessionPersonasFrom(st.sessions, roleRowsOf(st as never), prefs), [sessionsSig, rolesSig, prefs]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const seatFor = useMemo(() => roleSeatsFrom((st as any).anchors, roleRowsOf(st as never), prefs), [seatsSig, rolesSig, prefs]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const standingFor = useMemo(() => standingSessionsFrom((st as any).anchors), [seatsSig]);
-  return useMemo(() => ({ sessionFor, seatFor, standingFor }), [sessionFor, seatFor, standingFor]);
+  return useMemo(() => ({ sessionFor, seatFor }), [sessionFor, seatFor]);
 }
 
 export function useMessageViews(
@@ -576,7 +562,7 @@ export function useMessageViews(
   rollupSource: Record<string, ChatMessageRow>,
   summaries?: Record<string, any>,
 ): ChatMessageView[] {
-  const { sessionFor, seatFor, standingFor } = useChatAuthorLookups();
+  const { sessionFor, seatFor } = useChatAuthorLookups();
   return useMemo(() => {
     const rollups = threadRollups(Object.values(rollupSource));
     const byMessage = new Map<string, ChatReactionRow[]>();
@@ -595,13 +581,12 @@ export function useMessageViews(
       sendState: chatSendState,
       sessionFor,
       seatFor,
-      standingFor,
       reactionsFor: (messageId) => {
         const list = byMessage.get(messageId);
         return list ? foldReactions(list, viewerId, nameOf) : undefined;
       },
     });
-  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries, sessionFor, seatFor, standingFor]);
+  }, [rows, reactionRows, byId, viewerId, rollupSource, summaries, sessionFor, seatFor]);
 }
 
 /** One channel's timeline, ready to render. Roots only — replies live in the

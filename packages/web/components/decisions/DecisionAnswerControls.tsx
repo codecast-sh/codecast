@@ -150,11 +150,8 @@ function GenericAnswerControls({
   );
   // The marks after a label: a lead's recommendation, the default the agent
   // is already proceeding with on an advisory ask.
-  // On an answer on record being changed, the current answer is marked where it sits.
-  const onRecord = decision.status === "answered" && kind === "single" && !decision.answer_text ? chosenOptions(decision) : [];
   const tags = (i: number) => (
     <>
-      {onRecord.includes(i) && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-green/50 text-sol-green" data-decision-on-record>{ANSWER_WORDS.onRecord}</span>}
       {recommendation === i && <RecommendedMark count={recommenders.get(i)} />}
       {decision.default_option === i && !decision.blocking && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">{ANSWER_WORDS.proceeding}</span>}
     </>
@@ -178,7 +175,7 @@ function GenericAnswerControls({
             keys={keys}
             compact={compact}
             onPick={answerSingle}
-            tone={(n) => (onRecord.includes(n) ? "picked" : onRecord.length === 0 && n === primary && !held(n) ? "primary" : "plain")}
+            tone={(n) => (n === primary && !held(n) ? "primary" : "plain")}
             tags={tags}
             held={held}
             gated={gate.gated}
@@ -254,7 +251,7 @@ function GenericAnswerControls({
       </div>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, decision.status, decision.answer_index, decision.answer_json, decision.answer_text, picked, order, values, keys, recommendation, compact, answerSingle, held, gate, move, submit, togglePick, setValue]);
+  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, compact, answerSingle, held, gate, move, submit, togglePick, setValue]);
 
   return (
     <div>

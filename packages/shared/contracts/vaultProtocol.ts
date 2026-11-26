@@ -60,9 +60,8 @@ export interface VaultFileEntry {
   dir?: boolean;
   /** Present only when the scan was asked for ignored paths (`?ignored=1`):
    *  this entry is one the repo rules hide by default — build output, a
-   *  .gitignore name, a tool dot-directory. Never prefetched or indexed, and
-   *  not watched: it is a snapshot until the next scan. Writable only by a
-   *  request that opts in with `ignored=1`. */
+   *  .gitignore name, a tool dot-directory. Read-only, never prefetched or
+   *  indexed, and not watched: it is a snapshot until the next scan. */
   ignored?: boolean;
 }
 
@@ -82,25 +81,9 @@ export interface VaultScanResponse {
  *  This one route also accepts the bearer token as a `?token=` query param
  *  instead of the Authorization header, because an <img>/<video> src can set
  *  no headers at all. Reads only — PUT and /vault/op always require the header.
- *
- *  PUT /vault/file sends the raw body, written byte for byte (line endings and
- *  BOM untouched) with the file's mode bits kept. If-Match carries the
- *  last-seen ETag (or X-Vault-Base-Mtime the last-seen mtime); the compare and
- *  the write are one step per file, so of two PUTs carrying the same guard
- *  exactly one lands and the other gets 409 with the current body and its
- *  ETag / X-Vault-Mtime / X-Vault-Size headers, for the client to merge.
- *
- *  Writable paths (vaultScope.isVaultWritablePath): markdown and attachments,
- *  plus any file whose extension is not in VAULT_BINARY_EXTENSIONS. For a
- *  non-document path the body must be valid UTF-8 with no NUL byte, or the
- *  write is refused with 415 `{ error: "binary" }`. A path the repo rules hide
- *  (build output, a .gitignore name, a dot-file like `.env`) is writable only
- *  when the request carries `ignored=1`, on PUT and on /vault/op alike; the
- *  always-ignored set (.git, node_modules, ...) never is, in any letter case.
- *
- *  An existing file this process may not write (mode 0444, owned elsewhere)
- *  gets 403 `{ error: "read-only" }`; the client asks the person and resends
- *  with `force=1` to replace it anyway. */
+ *  PUT /vault/file sends the raw body; If-Match carries the last-seen ETag
+ *  (or X-Vault-Base-Mtime the last-seen mtime) — a mismatch returns 409 with
+ *  the current file body so the client can merge. */
 export interface VaultWriteResponse {
   path: string;
   mtime: number;
@@ -108,11 +91,7 @@ export interface VaultWriteResponse {
   etag: string;
 }
 
-/** POST /vault/op request. Deletes go to the OS trash, never unlink. Create,
- *  rename and delete take the same writable-path rule as PUT (and the same
- *  `ignored=1` opt-in in the query), and a file cannot be renamed to a path
- *  PUT would refuse; folders rename and trash whatever they hold. Create is
- *  exclusive: 409 `{ error: "exists" }` if anything already holds the path. */
+/** POST /vault/op request. Deletes go to the OS trash, never unlink. */
 export type VaultOpRequest =
   | { op: "mkdir"; path: string }
   | { op: "rename"; path: string; to: string }
@@ -202,54 +181,6 @@ export const VAULT_TEXT_FILENAMES = [
   "readme", "changelog", "todo", "codeowners", "version",
 ] as const;
 
-/**
- * Extensions that are binary by convention: compiled output, archives, media
- * the vault does not render, fonts, databases, office documents. A path here is
- * never written as source, whatever its bytes look like. It is a REFUSAL list,
- * not an allowlist: an extensionless script or a `.prisma` file nobody listed
- * is writable, and the body check (UTF-8, no NUL) catches binaries it misses.
- * The document set (markdown, attachments) is exempt: an attachment upload is
- * binary on purpose.
- */
-export const VAULT_BINARY_EXTENSIONS = [
-  // Executables, objects, libraries, bytecode
-  ".exe", ".dll", ".so", ".dylib", ".a", ".lib", ".o", ".obj", ".ko", ".elf",
-  ".class", ".jar", ".war", ".pyc", ".pyo", ".wasm", ".node", ".rlib", ".pdb",
-  ".msi", ".apk", ".aab", ".ipa",
-  // Archives and disk images
-  ".zip", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".lz4", ".7z", ".rar", ".tar",
-  ".iso", ".dmg", ".pkg", ".deb", ".rpm", ".crx", ".xpi",
-  // Images, audio and video outside the attachment set
-  ".bmp", ".ico", ".icns", ".tif", ".tiff", ".heic", ".heif", ".psd", ".raw",
-  ".cr2", ".nef", ".sketch", ".fig", ".xcf",
-  ".flac", ".ogg", ".oga", ".opus", ".aac", ".aiff", ".mid", ".midi",
-  ".mkv", ".avi", ".wmv", ".flv", ".m4v", ".mpg", ".mpeg",
-  // Fonts
-  ".ttf", ".otf", ".woff", ".woff2", ".eot",
-  // Databases and binary data
-  ".db", ".sqlite", ".sqlite3", ".mdb", ".parquet", ".avro", ".arrow", ".feather",
-  ".npy", ".npz", ".pkl", ".pickle", ".h5", ".hdf5", ".onnx", ".pt", ".pth",
-  ".safetensors", ".ckpt", ".tflite", ".lockb", ".bin", ".dat",
-  // Office and design documents
-  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp",
-  ".pages", ".numbers", ".car",
-] as const;
-
-const BINARY_EXTENSION_SET = new Set(VAULT_BINARY_EXTENSIONS.map((e) => e.toLowerCase()));
-
-/** The lower-cased basename of a vault path. */
-function baseNameOf(p: string): string {
-  return (p.split("/").pop() ?? "").toLowerCase();
-}
-
-/** True when the path's extension marks it binary (VAULT_BINARY_EXTENSIONS).
- *  A dot-file (".env") has no extension: its whole name is the name. */
-export function isVaultBinaryPath(p: string): boolean {
-  const name = baseNameOf(p);
-  const dot = name.lastIndexOf(".");
-  return dot > 0 && BINARY_EXTENSION_SET.has(name.slice(dot));
-}
-
 /** Directories never scanned or watched, matched on any path segment. */
 export const VAULT_IGNORED_SEGMENTS = [
   ".git", ".obsidian", ".trash", "node_modules", ".DS_Store",
@@ -287,18 +218,8 @@ export const VAULT_REPO_ALLOWED_DOT_DIRS = [
 
 /** True for a dot-directory we deliberately keep, whatever .gitignore says. */
 export function isAllowedProseDotDir(seg: string): boolean {
-  return ALLOWED_DOT_DIR_SET.has(seg.toLowerCase());
+  return (VAULT_REPO_ALLOWED_DOT_DIRS as readonly string[]).includes(seg);
 }
-
-// Segment rules match without case. macOS and Windows filesystems fold case, so
-// `.GIT/hooks/pre-commit` IS `.git/hooks/pre-commit` there, and a case-sensitive
-// match would let a write land in the one place it can run code. Folding on a
-// case-sensitive filesystem too costs nothing: a `.GIT` or `Node_Modules`
-// directory is never anyone's source.
-const lowerSet = (xs: readonly string[]) => new Set(xs.map((x) => x.toLowerCase()));
-const IGNORED_SEGMENT_SET = lowerSet(VAULT_IGNORED_SEGMENTS);
-const REPO_IGNORED_SEGMENT_SET = lowerSet(VAULT_REPO_IGNORED_SEGMENTS);
-const ALLOWED_DOT_DIR_SET = lowerSet(VAULT_REPO_ALLOWED_DOT_DIRS);
 
 /** Directories a repo keeps its prose in. First match wins; see
  *  vaultScope.probeProjectVault. */
@@ -316,7 +237,7 @@ export function isVaultAssetPath(p: string): boolean {
 
 /** True for a file the code viewer can render as text. */
 export function isVaultTextPath(p: string): boolean {
-  const name = baseNameOf(p);
+  const name = (p.split("/").pop() ?? "").toLowerCase();
   if ((VAULT_TEXT_FILENAMES as readonly string[]).includes(name)) return true;
   // A leading-dot name with no further dot (".gitignore", ".env") IS its own
   // extension — endsWith would match it anyway, but a bare ".foo" that isn't
@@ -327,27 +248,25 @@ export function isVaultTextPath(p: string): boolean {
 /**
  * What kind of thing a vault file is, for the ONE switch every surface makes:
  * markdown gets the full reading/editing experience, an asset renders inline,
- * a known binary extension is declared unpreviewable, and everything else
- * opens as text. An unlisted extension (".cast", a bare "noextension") is far
- * more often text than not, and the viewer still declines a body whose bytes
- * hold a NUL, so a binary with an odd name never decodes into garbage.
+ * text opens read-only in the code viewer, and everything else is honestly
+ * declared unpreviewable rather than decoded into garbage.
  */
 export type VaultFileKind = "markdown" | "asset" | "text" | "binary";
 
 export function vaultFileKind(p: string): VaultFileKind {
   if (isVaultMarkdownPath(p)) return "markdown";
   if (isVaultAssetPath(p)) return "asset";
-  if (isVaultBinaryPath(p)) return "binary";
-  return "text";
+  if (isVaultTextPath(p)) return "text";
+  return "binary";
 }
 
 export function isVaultIgnoredPath(p: string): boolean {
-  return p.split("/").some((seg) => IGNORED_SEGMENT_SET.has(seg.toLowerCase()));
+  return p.split("/").some((seg) => (VAULT_IGNORED_SEGMENTS as readonly string[]).includes(seg));
 }
 
 /** The repo-only half of the rule, on ONE path segment. Callers walk segments
  *  themselves; vaultScope.isVaultPathIgnored is the predicate to use. */
 export function isRepoIgnoredSegment(seg: string): boolean {
-  if (REPO_IGNORED_SEGMENT_SET.has(seg.toLowerCase())) return true;
-  return seg.startsWith(".") && !isAllowedProseDotDir(seg);
+  if ((VAULT_REPO_IGNORED_SEGMENTS as readonly string[]).includes(seg)) return true;
+  return seg.startsWith(".") && !(VAULT_REPO_ALLOWED_DOT_DIRS as readonly string[]).includes(seg);
 }

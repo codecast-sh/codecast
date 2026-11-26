@@ -49,14 +49,6 @@ test("result feed reports actual request, skipped outcome and missing identity w
   expect(await read()).toHaveLength(1);
 });
 
-test("a replayed stop queues no second row, so the result feed still answers for it", async () => {
-  const f = fixture();
-  await (sendEscapeToSession as any)._handler(f.ctx, { conversation_id: "conv", pressed_at: 50, request_id: "stop-1" });
-  await (sendEscapeToSession as any)._handler(f.ctx, { conversation_id: "conv", pressed_at: 50, request_id: "stop-1" });
-  expect(f.db._tables.daemon_commands).toHaveLength(1);
-  expect(await (results as any)._handler(f.ctx, { request_ids: ["stop-1"] })).toHaveLength(1);
-});
-
 test("a stop is routed to the owning device and its outcome reaches the result feed by request id", async () => {
   const f = fixture();
   await (sendEscapeToSession as any)._handler(f.ctx, { conversation_id: "conv", pressed_at: 50, request_id: "stop-1" });

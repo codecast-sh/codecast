@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
-import { escapeStep, keepsOwnEnter, layerOpen } from "../useChangesKeys";
+import { escapeStep, focusedCommitHref, keepsOwnEnter, layerOpen } from "../useChangesKeys";
 import { EMPTY_URL, hasFilters, toggleArea, type ChangesUrl } from "../useChangesUrlState";
 import { DAY, edition, story } from "./fixtures";
 import { pageSource } from "./pageSources";
@@ -15,24 +15,27 @@ const doc = (body: string) => new JSDOM(`<body>${body}</body>`).window.document;
 
 describe("Enter inside a story", () => {
   const page = doc(`
-    <article data-story-key="s1" data-story-trigger tabindex="0" id="trigger">
-      <h3 id="headline">Headline</h3>
-      <a href="/commit/acme/app/abc1234" id="commit">+12 -3 1 commit</a>
-      <a class="entity-ref" href="/conversation/jx7" id="pill"><span id="pill-text">jx7c6zk</span></a>
-      <button id="more">Copy link</button>
-      <p id="prose">A paragraph</p>
-    </article>
+    <div data-story-key="s1">
+      <button data-story-trigger id="trigger"><span id="headline">Headline</span></button>
+      <div class="chg-drawer">
+        <a href="/commit/acme/app/abc1234" id="commit">abc1234</a>
+        <a class="entity-ref" href="/conversation/jx7" id="pill"><span id="pill-text">jx7c6zk</span></a>
+        <button id="more">+149 more files</button>
+        <p id="prose">A paragraph</p>
+      </div>
+    </div>
+    <button data-story-key="w1" id="week-row"><span id="week-headline">A week story</span></button>
     <input id="filter" />
     <div role="menuitem" id="item">main</div>
   `);
   const at = (id: string) => page.getElementById(id);
 
-  test("a link, a pill or a button inside a change keeps its own Enter", () => {
+  test("a link, a pill or a button inside an open drawer keeps its own Enter", () => {
     for (const id of ["commit", "pill", "pill-text", "more"]) expect({ id, own: keepsOwnEnter(at(id)) }).toEqual({ id, own: true });
   });
 
-  test("on the change itself, Enter is the page's: it opens or closes the change", () => {
-    for (const id of ["trigger", "headline"]) expect({ id, own: keepsOwnEnter(at(id)) }).toEqual({ id, own: false });
+  test("the story's own control is the evidence key: its trigger, and the week's story button", () => {
+    for (const id of ["trigger", "headline", "week-row", "week-headline"]) expect({ id, own: keepsOwnEnter(at(id)) }).toEqual({ id, own: false });
   });
 
   test("controls outside the stories keep theirs; plain content and no focus do not", () => {
@@ -43,11 +46,33 @@ describe("Enter inside a story", () => {
     expect(keepsOwnEnter(null)).toBe(false);
   });
 
-  test("the page's Enter asks this rule before it opens or closes a change", () => {
+  test("the page's evidence key asks this rule before it opens or closes a drawer", () => {
     const page = pageSource("ChangesPage.tsx");
     const evidence = page.slice(page.indexOf("evidence: () => {"), page.indexOf("open: () =>"));
-    expect(evidence).toMatch(/if \(keepsOwnEnter\(document\.activeElement\)\) return false;/);
-    expect(evidence.indexOf("keepsOwnEnter")).toBeLessThan(evidence.indexOf("toggle("));
+    expect(evidence).toMatch(/if \(keepsOwnEnter\(active\)[^\n]*\) return false;/);
+    expect(evidence.indexOf("keepsOwnEnter")).toBeLessThan(evidence.indexOf("setUrl("));
+  });
+});
+
+describe("o on a commit row", () => {
+  const page = doc(`
+    <div data-story-key="s1">
+      <button data-story-trigger id="trigger">Headline</button>
+      <ul class="chg-drawer">
+        <li data-commit-href="/commit/acme/app/abc1234"><a href="/commit/acme/app/abc1234" id="sha">abc1234</a><a id="pr" href="/pr/4">#4</a></li>
+      </ul>
+    </div>
+  `);
+  test("opens the commit the focus sits on, its sha link or a link beside it (spec 3.3)", () => {
+    expect(focusedCommitHref(page.getElementById("sha"))).toBe("/commit/acme/app/abc1234");
+    expect(focusedCommitHref(page.getElementById("pr"))).toBe("/commit/acme/app/abc1234");
+  });
+  test("off a commit row it leaves `o` to the story", () => {
+    expect(focusedCommitHref(page.getElementById("trigger"))).toBeNull();
+    expect(focusedCommitHref(null)).toBeNull();
+    const src = pageSource("ChangesPage.tsx");
+    const open = src.slice(src.indexOf("open: () => {"), src.indexOf("waiting: () =>"));
+    expect(open.indexOf("focusedCommitHref(")).toBeLessThan(open.indexOf("openTarget("));
   });
 });
 
@@ -77,7 +102,7 @@ describe("Escape", () => {
     expect(escapeStep({ ...base, inFilterField: true, filtered: true, story: "s1", filterOpen: true })).toBe("leave-field");
   });
 
-  test("elsewhere it closes the open change, then clears filters, then closes the filter bar", () => {
+  test("elsewhere it closes the evidence, then clears filters, then closes the filter bar", () => {
     expect(escapeStep({ ...base, story: "s1", filtered: true, filterOpen: true, q: "sync" })).toBe("close-story");
     expect(escapeStep({ ...base, filtered: true, filterOpen: true, q: "sync" })).toBe("clear-filters");
     expect(escapeStep({ ...base, filterOpen: true })).toBe("close-filter");

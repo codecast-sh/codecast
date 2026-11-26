@@ -5,7 +5,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { Box, Pt } from "@codecast/shared/artifacts/board";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { PAGE_WHEEL_MESSAGE } from "../../../shared/render/pageTheme";
 
 /** screen = world * z + (x, y) */
 export type Cam = { x: number; y: number; z: number };
@@ -167,9 +166,7 @@ export function useBoardCamera(docId: string) {
     else glide(target);
   }, [glide, set]);
 
-  // Wheel: two-finger scroll pans, pinch (ctrl+wheel) and cmd+wheel zoom. Over the frame of a published page
-  // (data-board-wheel-frame) a scroll scrolls the page instead: the frame takes no pointer until entered, so the
-  // wheel is forwarded to it.
+  // Wheel: two-finger scroll pans, pinch (ctrl+wheel) and cmd+wheel zoom.
   // Bound natively with passive:false so the page never scrolls or zooms instead.
   useMountEffect(() => {
     const root = rootRef.current;
@@ -182,24 +179,12 @@ export function useBoardCamera(docId: string) {
       const r = root.getBoundingClientRect();
       const at = { x: e.clientX - r.left, y: e.clientY - r.top };
       const scale = e.deltaMode === 1 ? 16 : 1;
-      // Shift turns a vertical wheel horizontal, as a mouse wheel does on a page.
-      const dx = (e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX) * scale;
-      const dy = (e.shiftKey && !e.deltaX ? 0 : e.deltaY) * scale;
-      const frame = e.ctrlKey || e.metaKey ? null : (e.target as HTMLElement | null)?.closest?.("[data-board-wheel-frame]")?.querySelector("iframe");
-      const fr = frame?.getBoundingClientRect();
-      if (frame?.contentWindow && fr && frame.offsetWidth && e.clientX >= fr.left && e.clientX <= fr.right && e.clientY >= fr.top && e.clientY <= fr.bottom) {
-        const k = fr.width / frame.offsetWidth;
-        frame.contentWindow.postMessage({
-          type: PAGE_WHEEL_MESSAGE,
-          x: (e.clientX - fr.left) / k, y: (e.clientY - fr.top) / k,
-          dx, dy,
-        }, "*");
-        return;
-      }
       if (e.ctrlKey || e.metaKey) {
         set(zoomAround(cam.current, Math.exp(-e.deltaY * scale * 0.0075), at));
       } else {
-        set({ ...cam.current, x: cam.current.x - dx, y: cam.current.y - dy });
+        const dx = e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;
+        const dy = e.shiftKey && !e.deltaX ? 0 : e.deltaY;
+        set({ ...cam.current, x: cam.current.x - dx * scale, y: cam.current.y - dy * scale });
       }
     };
     root.addEventListener("wheel", onWheel, { passive: false });

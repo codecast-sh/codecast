@@ -646,7 +646,7 @@ export function MessageNavButton({
 
   if (!messages || total < MIN_RAIL) return null;
 
-  const MAX_BARS = 72;
+  const MAX_BARS = 24;
   const hasComments = topLevelComments.length > 0;
 
   return (
@@ -663,18 +663,13 @@ export function MessageNavButton({
         }}
         onMouseEnter={scheduleOpen}
         onMouseLeave={scheduleClose}
-        className={`flex flex-col ${total > 24 ? "gap-[2px]" : "gap-[3px]"} items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
+        className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
           open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"
         }`}
         title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${authorship.attributed ? ` (${authorship.authors.map((a) => `${a.count} ${a.label === "You" ? "yours" : `from ${a.label}`}`).join(", ")})` : ""}${machineTotal > 0 ? ` / ${machineTotal} ${hiddenRowsNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
       >
         {(() => {
-          const ticks = sampleTicks(
-            processed,
-            MAX_BARS,
-            activeIndex,
-            authorship.attributed ? (row) => authorship.byRow.get(row._id)?.key ?? "" : undefined,
-          );
+          const ticks = sampleTicks(processed, MAX_BARS, activeIndex);
           const here = ticks.findIndex((t) => t.active);
           return ticks.map(({ row: msg, active: isActive }, i) => {
             const hasComment = msg.commentCount > 0;
@@ -690,16 +685,13 @@ export function MessageNavButton({
                   isActive
                     ? "cc-rail-here"
                     : isNear
-                    ? `${hasComment ? "bg-sol-orange h-[2px]" : "bg-current h-px"} cc-rail-near`
+                    ? `${hasComment ? "bg-sol-cyan h-[2px]" : "bg-current h-px"} cc-rail-near`
                     : tone
-                    ? `w-3 ${hasComment ? "h-[2px]" : "h-[1.5px]"} opacity-55`
+                    ? `w-3 ${hasComment ? "h-[2px]" : "h-[1.5px]"} opacity-90`
                     : hasComment
-                    ? "bg-sol-orange w-3.5 h-[2px] opacity-50"
+                    ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
                     : isMachine
                     ? "bg-current w-2 h-px opacity-20"
-                    : authorship.attributed
-                    // Yours, beside other people's colored ticks.
-                    ? "bg-current w-3 h-[1.5px] opacity-75"
                     : "bg-current w-3 h-px opacity-35"
                 }`}
               />

@@ -32,15 +32,10 @@ export function ensureBookmarksStarted(): void {
   if (started) return;
   started = true;
 
-  // Started from a component's render (useVaultBookmarks), and the load
-  // writes the store at once: run it after the render, or every subscriber
-  // re-renders in the middle of another component's render.
-  queueMicrotask(() => {
-    const initial = useVaultStore.getState();
-    if (initial.activeVaultId && initial.bookmarksVaultId !== initial.activeVaultId) {
-      void initial.loadBookmarks();
-    }
-  });
+  const initial = useVaultStore.getState();
+  if (initial.activeVaultId && initial.bookmarksVaultId !== initial.activeVaultId) {
+    void initial.loadBookmarks();
+  }
 
   useVaultStore.subscribe((s, prev) => {
     if (s.activeVaultId !== prev.activeVaultId) {

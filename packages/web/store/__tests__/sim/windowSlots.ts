@@ -91,8 +91,6 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // The docs shots mode's offline Convex client: set only by lib/docsShots/install, which the sim never runs.
   "lib/docsShots/flag.ts:client": { shared: "the docs shots mode's offline Convex client; the sim never installs it, so it stays null" },
   "hooks/inboxWarm.ts:renderedMemo": { shared: "keyed on the placements ref and the view inputs it was built from; another window's state has its own refs, so it misses and rebuilds" },
-  "hooks/inboxWarm.ts:queueMemo": { shared: "keyed on the decision, session and resolution refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
-  "hooks/useDecisionQueue.ts:blockedSince": "window",
   "store/sessionOwnersSlice.ts:factsMemo": { shared: "an entry is used only while its owners read and runner are the very objects it was built from; another window's state holds its own objects, so it misses and rebuilds" },
   "store/workProjects.ts:memo": { shared: "keyed on the sessions, tasks and plans refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
   "store/viewNav.ts:pendingSource": "window",

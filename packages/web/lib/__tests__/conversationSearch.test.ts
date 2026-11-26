@@ -76,12 +76,9 @@ describe("planActivation", () => {
     // The grace clock starts when the message loads, not when the hit was asked for.
     expect(planActivation(hit(), view({ markCount: 0, elapsedMs: 50000, sinceLoadedMs: 10 }))).toEqual({ kind: "wait" });
   });
-  test("activates the requested mark, and never another hit's mark", () => {
+  test("activates the requested mark, clamped to what rendered", () => {
     expect(planActivation(hit({ localIndex: 1 }), view({ markCount: 2 }))).toEqual({ kind: "activate", markIndex: 1 });
-    // A hit past the marks drawn (a link destination the renderer leaves
-    // out) waits for late marks, then is skipped like any undrawn hit.
-    expect(planActivation(hit({ localIndex: 5 }), view({ markCount: 2, sinceLoadedMs: MOUNT_GRACE_MS - 1 }))).toEqual({ kind: "wait" });
-    expect(planActivation(hit({ localIndex: 5 }), view({ markCount: 2, sinceLoadedMs: MOUNT_GRACE_MS }))).toEqual({ kind: "dead" });
+    expect(planActivation(hit({ localIndex: 5 }), view({ markCount: 2 }))).toEqual({ kind: "activate", markIndex: 1 });
   });
 });
 

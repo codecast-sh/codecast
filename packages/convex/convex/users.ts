@@ -27,9 +27,8 @@ import { startedBefore } from "./pathStats";
 import { isStaff } from "./lib/staff";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
-import { shareImpactKey } from "@codecast/shared/team";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
-import { PRIVATE_LOCK, resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
+import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, WORK_STARTING_DAEMON_COMMANDS, isReservedDevice, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
@@ -1321,7 +1320,6 @@ export const updateNotificationPreferences = mutation({
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
-    sessions_read_dms: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -1334,9 +1332,6 @@ export const updateNotificationPreferences = mutation({
     }
     if (args.machine_wide_presence !== undefined) {
       updateData.machine_wide_presence = args.machine_wide_presence;
-    }
-    if (args.sessions_read_dms !== undefined) {
-      updateData.sessions_read_dms = args.sessions_read_dms;
     }
     if (args.notification_preferences !== undefined) {
       // MERGE, don't replace. A client that saves one toggle sends the object it
@@ -2870,7 +2865,7 @@ export async function upsertDirectoryMapping(
     const conv = await ctx.db.get(id);
     if (!conv || conv.user_id.toString() !== userId.toString()) continue;
     if (conv.team_visibility === "private" && conv.is_private !== false) continue;
-    await patchConversationVisibility(ctx, conv, PRIVATE_LOCK);
+    await patchConversationVisibility(ctx, conv, { is_private: true, team_visibility: "private" });
   }
 
   for (const rule of duplicates) {
@@ -3218,7 +3213,7 @@ export const shareImpactForPaths = query({
         .withIndex("by_user_path", (q) => q.eq("user_id", userId).eq("path", prefix))
         .first();
       if (!stats || stats.computed_at === 0) continue;
-      out[shareImpactKey(prefix)] = {
+      out[prefix] = {
         count: stats.count,
         first_started_at: stats.first_started_at ?? null,
         last_started_at: stats.last_started_at ?? null,

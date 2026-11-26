@@ -140,9 +140,6 @@ export type FaceCard =
       /** A private huddle (started private and still locked): only the people
        *  rung in see it, join it and read its record. */
       private: boolean;
-      /** My walkie burst holds the room: the people a Call press rings, so the
-       *  burst becomes a call they are asked to join. Absent on a call. */
-      callTo?: string[];
     }
   /** Somebody stepped in: the live card, with the join said in words for a
    *  few seconds. Same controls as `live`, so nothing disappears under the notice. */
@@ -520,20 +517,12 @@ function cardOf(
       hearing,
       joining: mode === "call" && input.call.phase === "connecting" && input.call.roomKey === room,
       private: !!input.roomPrivate,
-      ...(walkieHeld && mode === "burst" ? callTargets(others) : {}),
     };
   }
   const ringOut =
     input.rings.outgoing.find((r) => (r.status ?? "ringing") === "ringing") ?? input.rings.outgoing.find((r) => r.status !== "accepted");
   if (ringOut) return ringOutCard(ringOut, false);
   return { kind: "none" };
-}
-
-/** The people a burst's Call rings: the teammates it links, never an agent or
- *  a guest (neither can be rung). Nobody to ring offers no Call. */
-function callTargets(others: FaceEntry[]): { callTo?: string[] } {
-  const ids = others.filter((e) => !e.bot && !e.guest && !e.me).map((e) => e.id);
-  return ids.length ? { callTo: ids } : {};
 }
 
 function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number], hangUp: boolean): FaceCard {

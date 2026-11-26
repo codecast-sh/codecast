@@ -47,8 +47,7 @@ const item = (key: string, conversationId: string) => ({
   createdAt: 1,
 });
 
-let queue: Array<ReturnType<typeof item> & { decisionId?: string; shortId?: string }> = [item("a", CONV_A), item("b", CONV_B)];
-let lastStepper: any = null;
+let queue = [item("a", CONV_A), item("b", CONV_B)];
 
 // Only the hook is answered differently; DecisionStepperContext and the rest
 // of the module stay real, so anything importing it later is unaffected.
@@ -64,16 +63,10 @@ mock.module("../../hooks/useDecisionQueue", () => ({
 // conversation tree (and its Convex hooks) into the process for nothing. No
 // other test imports it — the one that names it reads it as source text.
 // It reports the item the stepper hands it, the one the thread's card shows.
-// The answered-decision view is a whole document page (markdown, prism); this test never opens it.
-mock.module("../decisions/DecisionDocument", () => ({
-  DecisionDocument: ({ id, nav }: { id: string; nav?: any }) => <div data-decision-doc={id}>{nav}</div>,
-}));
 mock.module("../../app/inbox/QueuePageClient", () => ({
-  InboxConversation: ({ sessionId }: { sessionId: string }) => {
-    const stepper = React.useContext(realQueueModule.DecisionStepperContext);
-    lastStepper = stepper;
-    return <div data-conv={sessionId} data-stepper-item={stepper?.item?.key} />;
-  },
+  InboxConversation: ({ sessionId }: { sessionId: string }) => (
+    <div data-conv={sessionId} data-stepper-item={React.useContext(realQueueModule.DecisionStepperContext)?.item?.key} />
+  ),
 }));
 
 const React = await import("react");
@@ -139,50 +132,6 @@ describe("a rail row picks the ask the thread's card shows", () => {
     expect(shown()).toBe("decide:19");
     await act(async () => root.render(<DecisionQueue key="5" initialConversationId={CONV_A} initialKey="decide:5" />));
     expect(shown()).toBe("decide:5");
-    await act(async () => root.unmount());
-    container.remove();
-  });
-});
-
-// Back from the stepper reaches the decisions answered in this visit: each
-// opens whole on its own page, where its answer can be changed, and forward
-// past the newest returns to the open queue.
-describe("Back reaches what was answered in this visit", () => {
-  test("answer one, go back to it, come forward to the queue", async () => {
-    const one = { ...item("decide:1", CONV_A), decisionId: "d1", shortId: "sd-1" };
-    const two = { ...item("decide:2", CONV_B), decisionId: "d2", shortId: "sd-2" };
-    queue = [one, two];
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const root = createRoot(container);
-    const doc = () => container.querySelector("[data-decision-doc]")?.getAttribute("data-decision-doc");
-    const conv = () => container.querySelector("[data-conv]")?.getAttribute("data-conv");
-    await act(async () => root.render(<DecisionQueue />));
-    expect(conv()).toBe(CONV_A);
-
-    // Answered: it leaves the queue, and the stepper moves on to the next.
-    await act(async () => lastStepper.onDone());
-    queue = [two];
-    await act(async () => root.render(<DecisionQueue />));
-    expect(conv()).toBe(CONV_B);
-    expect(lastStepper.onPrev).toBeDefined();
-
-    await act(async () => lastStepper.onPrev());
-    expect(doc()).toBe("sd-1");
-    expect(container.querySelector("[data-decision-queue-back]")?.getAttribute("data-decision-queue-back")).toBe("1/1");
-
-    await act(async () => { window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight" })); });
-    expect(doc()).toBeUndefined();
-    expect(conv()).toBe(CONV_B);
-
-    // The queue emptied: the answered ones are still one key away.
-    await act(async () => lastStepper.onDone());
-    queue = [];
-    await act(async () => root.render(<DecisionQueue />));
-    expect(container.querySelector("[data-decision-queue-review]")).not.toBeNull();
-    await act(async () => { window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowLeft" })); });
-    expect(doc()).toBe("sd-2");
-
     await act(async () => root.unmount());
     container.remove();
   });

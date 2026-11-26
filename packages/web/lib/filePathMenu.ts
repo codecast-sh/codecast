@@ -10,11 +10,8 @@ import type { FilePathContextValue } from "./filePathLinks";
 export interface FilePathMenuPayload {
   path: string;
   line?: number;
-  column?: number;
   href: string;
   ctx: FilePathContextValue | null;
-  /** The stage leaf the link sits in: its conversation links to the editor. */
-  fromLeaf?: string | null;
 }
 
 type Listener = (e: React.MouseEvent, payload: FilePathMenuPayload) => void;

@@ -132,7 +132,7 @@ export type NavigatorAuthor = {
 // The color each tone wears, in order, as a Solarized accent name: web reads
 // `var(--sol-<name>)`, the phone `Theme[<name>]`, so a person has one color on
 // both. Tone 0, the unmarked voice, has none.
-const AUTHOR_TONE_NAMES = ["cyan", "magenta", "green", "violet", "yellow"] as const;
+const AUTHOR_TONE_NAMES = ["orange", "magenta", "green", "violet", "yellow"] as const;
 export type AuthorToneName = (typeof AUTHOR_TONE_NAMES)[number];
 export function authorToneName(tone: number): AuthorToneName | null {
   return tone > 0 ? AUTHOR_TONE_NAMES[(tone - 1) % AUTHOR_TONE_NAMES.length] : null;
@@ -363,68 +363,21 @@ export function matchSnippet(text: string, query: string, radius: number = 40): 
 
 export type NavigatorTick<R> = { row: R; active: boolean };
 
-// The fewest ticks each author gets on a rail too short for every row, so a
-// person who wrote a few messages in a thread someone else dominates still
-// shows up on it.
-const TICKS_PER_AUTHOR = 4;
-
-// Sample up to `max` rows for the minimap. Below the cap every row gets a
-// tick. Above it, with `authorOf`, each author gets a share of the ticks by
-// how many rows they wrote, never fewer than TICKS_PER_AUTHOR (or all of
-// theirs), spread evenly over their own rows; without it, or with one author,
-// the ticks spread evenly over the whole list, first and last row included.
-// The active row lights the tick nearest it, so a row between two sampled
-// ones still shows where you are.
-export function sampleTicks<R>(
-  rows: R[],
-  max: number,
-  activeIndex: number = -1,
-  authorOf?: (row: R) => string,
-): NavigatorTick<R>[] {
-  const all = rows.map((_, i) => i);
-  const picked = rows.length <= max ? all : authorOf ? sampleByAuthor(rows, max, authorOf) : spread(all, max);
-  let lit = -1;
-  if (activeIndex >= 0) {
-    picked.forEach((i, k) => {
-      if (lit < 0 || Math.abs(i - activeIndex) < Math.abs(picked[lit] - activeIndex)) lit = k;
-    });
+// Sample up to `max` evenly spaced rows for the minimap. Below the cap every
+// row gets a tick; above it the ticks map onto the row list by rounding, so
+// the first and last rows always have one. The active row lights the tick
+// nearest it, so a row between two sampled ones still shows where you are.
+export function sampleTicks<R>(rows: R[], max: number, activeIndex: number = -1): NavigatorTick<R>[] {
+  const total = rows.length;
+  const displayCount = Math.min(total, max);
+  const scale = total <= max ? 1 : (displayCount - 1) / (total - 1);
+  const activeTick = activeIndex < 0 ? -1 : Math.round(activeIndex * scale);
+  const ticks: NavigatorTick<R>[] = [];
+  for (let i = 0; i < displayCount; i++) {
+    const mappedIndex = total <= max ? i : Math.round((i / (displayCount - 1)) * (total - 1));
+    ticks.push({ row: rows[mappedIndex], active: i === activeTick });
   }
-  return picked.map((i, k) => ({ row: rows[i], active: k === lit }));
-}
-
-// `n` of `indices`, evenly spaced, keeping the first and last.
-function spread(indices: number[], n: number): number[] {
-  if (n >= indices.length) return indices;
-  if (n <= 1) return indices.slice(0, n);
-  return Array.from({ length: n }, (_, k) => indices[Math.round((k / (n - 1)) * (indices.length - 1))]);
-}
-
-function sampleByAuthor<R>(rows: R[], max: number, authorOf: (row: R) => string): number[] {
-  const groups = new Map<string, number[]>();
-  rows.forEach((row, i) => {
-    const key = authorOf(row);
-    const list = groups.get(key);
-    if (list) list.push(i);
-    else groups.set(key, [i]);
-  });
-  const lists = [...groups.values()];
-  if (lists.length === 1 || lists.length > max) return spread(rows.map((_, i) => i), max);
-  const floor = Math.min(TICKS_PER_AUTHOR, Math.floor(max / lists.length));
-  const slots = lists.map((list) => Math.min(list.length, floor));
-  const sum = (ns: number[]) => ns.reduce((a, b) => a + b, 0);
-  // The ticks left over go by each author's share of the rows not yet
-  // ticked, largest remainders first.
-  const spare = max - sum(slots);
-  const left = lists.map((list, g) => list.length - slots[g]);
-  const exact = left.map((n) => (n * spare) / sum(left));
-  exact.forEach((x, g) => (slots[g] += Math.floor(x)));
-  let rest = max - sum(slots);
-  const byRemainder = exact.map((x, g) => [x - Math.floor(x), g]).sort((a, b) => b[0] - a[0]);
-  for (const [, g] of byRemainder) {
-    if (rest <= 0) break;
-    if (slots[g] < lists[g].length) { slots[g]++; rest--; }
-  }
-  return lists.flatMap((list, g) => spread(list, slots[g])).sort((a, b) => a - b);
+  return ticks;
 }
 
 // The bar under the tick minimap the active tick lands on, from the current

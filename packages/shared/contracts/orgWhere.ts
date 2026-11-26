@@ -4,7 +4,6 @@
 import { MESSAGING_POLICIES } from "./messagingPolicy";
 import { roleCardLines, type RoleCard } from "./machineMessages";
 import type { ProjectContext } from "./projectContext";
-import { personShortLine, type PersonLine } from "./personProfile";
 
 /** How the session came to sit under its role: it is the role's standing
  *  session, a person filed it under the role, the role owns the work it is
@@ -23,8 +22,7 @@ export type OrgWhere = {
   /** Above the seat's role, nearest first, ending at a person. */
   chain: string[];
   roles: Array<{ handle: string; name: string; reports_to: string; scope: string[]; whole_workspace: boolean; seat: boolean }>;
-  /** Each member with the short version of their profile (org-people.md P6). */
-  people: Array<PersonLine & { role: string; is_me: boolean }>;
+  people: Array<{ name: string; handle?: string; role: string; is_me: boolean }>;
   /** The session's project (session-projects.md SP6), rendered by projectContextBlock. */
   project_context?: ProjectContext | null;
   /** Team chat as it touches this session; null when the team has chat off. */
@@ -36,7 +34,6 @@ export type OrgWhere = {
 export type OrgChatRoom = { name: string; own: boolean; why: "default" | "member" | "role"; slack: boolean };
 
 export const ORG_WHERE_ROLES_MAX = 20;
-export const ORG_WHERE_PEOPLE_MAX = 20;
 const SCOPE_TITLES_MAX = 4;
 
 const refText = (kind: string, r: Ref | null) => (r ? `${kind} ${r.short_id ? `${r.short_id} ` : ""}${r.title}`.trim() : "");
@@ -78,11 +75,7 @@ export function orgWhereLines(w: OrgWhere): string[] {
   }
   if (w.roles.length > ORG_WHERE_ROLES_MAX) out.push(`  +${w.roles.length - ORG_WHERE_ROLES_MAX} more: cast org ls`);
   if (w.chat) out.push(...orgChatLines(w.chat));
-  if (w.people.length) {
-    out.push("", "People:");
-    for (const p of w.people.slice(0, ORG_WHERE_PEOPLE_MAX)) out.push(`  ${personShortLine(p)}`);
-    if (w.people.length > ORG_WHERE_PEOPLE_MAX) out.push(`  +${w.people.length - ORG_WHERE_PEOPLE_MAX} more: cast org people`);
-  }
+  if (w.people.length) out.push(`People: ${w.people.map((p) => `${p.name}${p.handle ? ` @${p.handle}` : ""}${p.role !== "member" || p.is_me ? ` (${[p.role !== "member" ? p.role : "", p.is_me ? "your person" : ""].filter(Boolean).join(", ")})` : ""}`).join(", ")}`);
   return out;
 }
 
@@ -105,7 +98,7 @@ export function orgChatLines(chat: NonNullable<OrgWhere["chat"]>): string[] {
 /** How a session uses where it sits. Read with the facts above it. */
 export const ORG_CONTEXT_GUIDANCE = `${MESSAGING_POLICIES.lead.guidance}
 
-cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org person @handle tells what a person owns and how to bring them something; cast org where shows this picture as it stands now.`;
+cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
 
 /** The block injected at session start. */
 export function orgContextBlock(w: OrgWhere): string {

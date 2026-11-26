@@ -97,7 +97,7 @@ export const ORG_TREE = (now: number) => {
         image: PEOPLE.me.image,
         role: "admin" as const,
         is_me: true,
-        managers: [{ kind: "user" as const, user_id: PEOPLE.sarah._id }],
+        reports_to_user_id: PEOPLE.sarah._id,
         presence: "online" as const,
         counts: counts({ needs_input: 2, working: 1 }),
         sessions: [
@@ -107,7 +107,7 @@ export const ORG_TREE = (now: number) => {
         ],
         total: 3,
       },
-      { user_id: PEOPLE.maya._id, name: PEOPLE.maya.name, image: PEOPLE.maya.image, role: "member" as const, is_me: false, managers: [{ kind: "user" as const, user_id: PEOPLE.sarah._id }], presence: "online" as const, counts: counts({}), sessions: [], total: 0 },
+      { user_id: PEOPLE.maya._id, name: PEOPLE.maya.name, image: PEOPLE.maya.image, role: "member" as const, is_me: false, reports_to_user_id: PEOPLE.sarah._id, presence: "online" as const, counts: counts({}), sessions: [], total: 0 },
     ],
     roles: [
       role({

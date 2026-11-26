@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Bot, Hash, Headphones, Lock, Users, X } from "lucide-react";
+import { ArrowRight, Hash, Headphones, Lock, Users, X } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ChatModalLegend } from "./ChatModalLegend";
@@ -28,8 +28,6 @@ import "./chat.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { teamMembersOf } from "../../lib/activeTeam";
-import { meetingLinkIn } from "@codecast/shared/contracts/meetingLinks";
-import { sendBotToMeeting } from "../calls/MeetingBotField";
 
 // New message / new huddle.
 //
@@ -62,10 +60,7 @@ type Member = ChatMember & {
 type Candidate =
   | { type: "person"; key: string; member: Member }
   | { type: "channel"; key: string; channel: ChatChannelView }
-  | { type: "group"; key: string; channel: ChatChannelView }
-  // A huddle field holding a Zoom, Meet, Teams, Webex or GoTo link: the
-  // meeting is elsewhere, so the offer is a codecast bot in it.
-  | { type: "meeting"; key: string; url: string; name: string };
+  | { type: "group"; key: string; channel: ChatChannelView };
 
 /** Search text a member answers to: name plus every handle. */
 function personText(m: Member): string {
@@ -129,8 +124,6 @@ export function NewMessageModal({
 
   const candidates = useMemo<Candidate[]>(() => {
     if (capReached) return [];
-    const meeting = huddle && chips.length === 0 ? meetingLinkIn(q) : null;
-    if (meeting) return [{ type: "meeting", key: `m:${meeting.url}`, url: meeting.url, name: meeting.name }];
     const needle = q.trim().toLowerCase();
     const people = (teamMembers ?? [])
       .filter((m) => isPerson(m) && String(m._id) !== String(viewer) && !chips.includes(String(m._id)))
@@ -161,7 +154,7 @@ export function NewMessageModal({
         .map((x): Candidate => ({ type: "channel", key: `c:${x.c.id}`, channel: x.c }));
     }
     return [...people, ...groups, ...channels];
-  }, [q, chips, teamMembers, viewer, rail, capReached, huddle]);
+  }, [q, chips, teamMembers, viewer, rail, capReached]);
 
   // The keyboard cursor follows the list, never dangles past it.
   useWatchEffect(() => {
@@ -187,12 +180,6 @@ export function NewMessageModal({
 
   const choose = (cand: Candidate | undefined) => {
     if (!cand) return;
-    if (cand.type === "meeting") {
-      onClose();
-      sendBotToMeeting(cand.url);
-      go("/calls");
-      return;
-    }
     if (cand.type === "person") {
       setChips((prev) => [...prev, String(cand.member._id)]);
       setQ("");
@@ -250,7 +237,7 @@ export function NewMessageModal({
   const headerFor = (i: number): string | null => {
     const t = candidates[i].type;
     if (i > 0 && candidates[i - 1].type === t) return null;
-    return t === "person" ? "People" : t === "group" ? "Group conversations" : t === "meeting" ? "Meeting" : "Channels";
+    return t === "person" ? "People" : t === "group" ? "Group conversations" : "Channels";
   };
 
   return (
@@ -300,10 +287,8 @@ export function NewMessageModal({
             placeholder={
               chips.length
                 ? "Add another"
-                : huddle
-                  ? rail.length
-                    ? "People, a channel, or a Zoom or Meet link"
-                    : "People, or a Zoom or Meet link"
+                : huddle && !rail.length
+                  ? "A person or several people"
                   : "A person, several people, or a channel"
             }
             onKeyDown={onInputKeyDown}
@@ -319,9 +304,7 @@ export function NewMessageModal({
           {candidates.map((cand, i) => {
             const header = headerFor(i);
             const row =
-              cand.type === "meeting" ? (
-                <MeetingRow url={cand.url} name={cand.name} />
-              ) : cand.type === "person" ? (
+              cand.type === "person" ? (
                 <PersonRow member={cand.member} now={now} />
               ) : cand.type === "group" ? (
                 <GroupRow channel={cand.channel} members={teamMembers} byId={byId} />
@@ -410,16 +393,6 @@ export function NewMessageModal({
         <ChatModalLegend enterLabel={enterStarts ? "start" : "pick"} />
       </div>
     </div>
-  );
-}
-
-function MeetingRow({ url, name }: { url: string; name: string }) {
-  return (
-    <>
-      <Bot className="w-4 h-4 shrink-0 text-sol-violet" aria-hidden="true" />
-      <span className="ch-nm-name truncate">Send a bot to this {name} meeting</span>
-      <span className="ch-nm-sub truncate">{url.replace(/^https:\/\//, "")}</span>
-    </>
   );
 }
 

@@ -432,126 +432,30 @@ describe("asrPipe: words while they are still being said", () => {
   });
 });
 
-describe("asrPipe: the endpointer closes turns and stamps them", () => {
-  // 24 kHz in the fake context: 2400 samples is 100 ms.
-  const loud = (ms: number) => frame((ms / 1000) * 24_000);
-  const quiet = (ms: number) => new Float32Array((ms / 1000) * 24_000);
-
-  function openAt(clockMs: number, events: Parameters<typeof openAsrPipe>[0]["events"]) {
-    let settle: (v: any) => void = () => {};
-    const minted = new Promise((r) => (settle = r));
-    const pipe = openAsrPipe({
-      convex: { action: () => minted as any },
-      roomKey: "dm:a:b",
-      track: TRACK,
-      clock: () => clockMs,
-      events,
-      languages: ["en"],
-    });
-    return {
-      pipe,
-      async connect(extra: Record<string, unknown> = { model: "gpt-live-transcribe" }) {
-        settle({ client_secret: "sk-test", ...extra });
-        await Promise.resolve();
-        await Promise.resolve();
-        return FakeWebSocket.live[0]!;
-      },
-      audio: () => FakeAudioContext.live[0]!,
-    };
-  }
-
-  test("a pause after speech commits, fires start/stop, and the line carries when it was said", async () => {
-    const log: string[] = [];
-    const lines: Array<{ text: string; t0: number; t1: number }> = [];
-    const h = openAt(5_000, {
-      onSpeechStart: () => log.push("start"),
-      onSpeechStop: () => log.push("stop"),
-      onUtterance: (u) => lines.push(u),
-    });
-    const ws = await h.connect();
-    ws.open();
-    h.audio().speak(quiet(1_000));
-    h.audio().speak(loud(400));
-    expect(h.pipe.speaking).toBe(true);
-    h.audio().speak(quiet(700));
-    expect(log).toEqual(["start", "stop"]);
-    expect(h.pipe.speaking).toBe(false);
-    expect(ws.types().filter((t) => t === "input_audio_buffer.commit")).toHaveLength(1);
-    ws.deliver({ type: "input_audio_buffer.committed", item_id: "i1" });
-    ws.deliver({ type: "conversation.item.input_audio_transcription.completed", item_id: "i1", transcript: "hello there" });
-    expect(lines).toEqual([{ text: "hello there", t0: 6_000, t1: 6_400 }]);
-    h.pipe.close();
-  });
-
-  test("a turn that closes before the socket opens commits in order, at the sample it closed", async () => {
-    const h = openAt(0, {});
-    h.audio().speak(quiet(200));
-    h.audio().speak(loud(400));
-    h.audio().speak(quiet(700));
-    const ws = await h.connect();
-    ws.open();
-    // The turn closed 600 ms after the voice stopped (at 1.2 s): the commit
-    // sits exactly there, and the 100 ms after it follows.
-    const sent = ws.sent.map((m) => JSON.parse(m));
-    const at = sent.findIndex((m) => m.type === "input_audio_buffer.commit");
-    const samples = (ms: typeof sent) => ms.reduce((a, m) => a + atob(m.audio).length / 2, 0);
-    expect(sent.filter((m) => m.type === "input_audio_buffer.commit")).toHaveLength(1);
-    expect(samples(sent.slice(0, at))).toBe(28_800);
-    expect(samples(sent.slice(at + 1))).toBe(2_400);
-    h.pipe.close();
-  });
-
-  const commits = (ws: FakeWebSocket) => ws.types().filter((t) => t === "input_audio_buffer.commit").length;
-  const settle = async () => {
-    for (let i = 0; i < 6; i++) await Promise.resolve();
-  };
-
-  test("finish waits for its own commit, not for the answer to an earlier turn", async () => {
+describe("asrPipe: gpt-live-transcribe needs an explicit commit", () => {
+  test("speech_stopped commits, and the completed line becomes an utterance", async () => {
     const heard: string[] = [];
-    const h = openAt(0, { onUtterance: (u) => heard.push(u.text) });
-    const ws = await h.connect();
+    const h = open({ onUtterance: (u) => heard.push(u.text) });
+    const ws = await h.connect("sk-test", { model: "gpt-live-transcribe" });
     ws.open();
-    h.audio().speak(quiet(200));
-    h.audio().speak(loud(400));
-    h.audio().speak(quiet(700));
-    h.audio().speak(loud(500));
-    let done = false;
-    const finishing = h.pipe.finish().then(() => (done = true));
-    await settle();
-    expect(commits(ws)).toBe(2);
-    ws.deliver({ type: "conversation.item.input_audio_transcription.completed", item_id: "a", transcript: "first" });
-    await new Promise((r) => setTimeout(r, 60));
-    expect(done).toBe(false);
-    ws.deliver({ type: "conversation.item.input_audio_transcription.completed", item_id: "b", transcript: "last words" });
-    await finishing;
-    expect(heard).toEqual(["first", "last words"]);
+    h.audio().speak(frame(100));
+    ws.deliver({ type: "input_audio_buffer.speech_started" });
+    ws.deliver({ type: "input_audio_buffer.speech_stopped" });
+    expect(ws.types()).toContain("input_audio_buffer.commit");
+    ws.deliver({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "hello there",
+    });
+    expect(heard).toEqual(["hello there"]);
   });
 
-  test("finish sends no empty commit when the last turn already committed everything", async () => {
-    const h = openAt(0, {});
+  test("an older mint that does not name the model still relies on VAD to close the turn", async () => {
+    const h = open();
     const ws = await h.connect();
     ws.open();
-    h.audio().speak(quiet(200));
-    h.audio().speak(loud(400));
-    // The turn closes exactly at the end of this buffer: nothing follows it.
-    h.audio().speak(quiet(600));
-    expect(commits(ws)).toBe(1);
-    const finishing = h.pipe.finish();
-    await settle();
-    expect(commits(ws)).toBe(1);
-    ws.deliver({ type: "conversation.item.input_audio_transcription.completed", item_id: "a", transcript: "done" });
-    await finishing;
-    expect(ws.closedByClient).toBe(true);
-  });
-
-  test("an older mint naming another model closes turns on server VAD: no client commit", async () => {
-    const h = openAt(0, {});
-    const ws = await h.connect({});
-    ws.open();
-    h.audio().speak(loud(400));
-    h.audio().speak(quiet(700));
+    ws.deliver({ type: "input_audio_buffer.speech_started" });
+    ws.deliver({ type: "input_audio_buffer.speech_stopped" });
     expect(ws.types()).not.toContain("input_audio_buffer.commit");
-    h.pipe.close();
   });
 });
 
@@ -575,89 +479,11 @@ describe("asrPipe: a language mint that OpenAI refuses still transcribes", () =>
     });
     for (let i = 0; i < 12; i++) await Promise.resolve();
     expect(calls).toEqual([
-      { room_key: "dm:a:b", languages: ["en"], client_turns: true },
-      { room_key: "dm:a:b", client_turns: true },
+      { room_key: "dm:a:b", languages: ["en"] },
+      { room_key: "dm:a:b" },
     ]);
     expect(FakeWebSocket.live.length).toBe(1);
     pipe.close();
-  });
-});
-
-describe("asrPipe: a server from before client_turns", () => {
-  test("an argument refusal is retried once without client_turns, and the pipe follows the model it gets", async () => {
-    const calls: Array<Record<string, unknown>> = [];
-    const pipe = openAsrPipe({
-      convex: {
-        action: async (_fn: unknown, args: Record<string, unknown>) => {
-          calls.push(args);
-          if ("client_turns" in args) {
-            throw new Error("ArgumentValidationError: Object contains extra field `client_turns` that is not in the validator.");
-          }
-          return { client_secret: "sk-test", model: "gpt-4o-mini-transcribe", languages: [] };
-        },
-      } as any,
-      roomKey: "dm:a:b",
-      track: TRACK,
-      clock: () => 0,
-      languages: ["en"],
-    });
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-    expect(calls).toEqual([
-      { room_key: "dm:a:b", languages: ["en"], client_turns: true },
-      { room_key: "dm:a:b", languages: ["en"] },
-    ]);
-    const ws = FakeWebSocket.live[0]!;
-    ws.open();
-    const ac = FakeAudioContext.live[0]!;
-    ac.speak(new Float32Array(4_800));
-    ac.speak(new Float32Array(9_600).fill(0.5));
-    ac.speak(new Float32Array(16_800));
-    // Server VAD closes the legacy model's turns: the pipe must not commit too.
-    expect(ws.types()).not.toContain("input_audio_buffer.commit");
-    pipe.close();
-  });
-});
-
-describe("asrPipe: a first mint that throws", () => {
-  async function mintCalls(first: () => Promise<any>) {
-    const calls: Array<Record<string, unknown>> = [];
-    const pipe = openAsrPipe({
-      convex: {
-        action: async (_fn: unknown, args: Record<string, unknown>) => {
-          calls.push(args);
-          if (calls.length === 1) return first();
-          return { client_secret: "sk-test", model: "gpt-live-transcribe", languages: ["en"] };
-        },
-      } as any,
-      roomKey: "dm:a:b",
-      track: TRACK,
-      clock: () => 0,
-      languages: ["en"],
-    });
-    for (let i = 0; i < 12; i++) await Promise.resolve();
-    pipe.close();
-    return calls;
-  }
-
-  test("a redacted Server Error is retried once without client_turns", async () => {
-    const calls = await mintCalls(() => Promise.reject(new Error("[Request ID: abc] Server Error")));
-    expect(calls).toEqual([
-      { room_key: "dm:a:b", languages: ["en"], client_turns: true },
-      { room_key: "dm:a:b", languages: ["en"] },
-    ]);
-    expect(FakeWebSocket.live.length).toBe(1);
-  });
-
-  test("a network failure is retried the same way", async () => {
-    const calls = await mintCalls(() => Promise.reject(new TypeError("Failed to fetch")));
-    expect(calls).toHaveLength(2);
-    expect(calls[1]).toEqual({ room_key: "dm:a:b", languages: ["en"] });
-  });
-
-  test("a returned error is the server's answer and is not retried without client_turns", async () => {
-    const calls = await mintCalls(async () => ({ error: "Not authorized for this room" }));
-    expect(calls).toEqual([{ room_key: "dm:a:b", languages: ["en"], client_turns: true }]);
-    expect(FakeWebSocket.live.length).toBe(0);
   });
 });
 

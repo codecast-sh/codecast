@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { modelOptionKey, findModelOption, modelFitsAgent, featuredModelsFor } from "./agentClients";
-import { isDynamicModelKey, dynamicModelOption, featuredModelOptions, agyBaseModelIds, agyModelTakesEffort } from "./modelOptions";
+import { modelOptionKey, findModelOption, modelFitsAgent } from "./agentClients";
+import { isDynamicModelKey, dynamicModelOption, featuredModelOptions } from "./modelOptions";
 
 // modelOptionKey is the inverse of the launch flag: the conversation row stores
 // the full model id, but the pickers, the Cmd+K menu, and — critically — the
@@ -143,36 +143,5 @@ describe("dynamic model options", () => {
 
   it("featuredModelOptions returns empty for an empty inventory (callers fall back)", () => {
     expect(featuredModelOptions([])).toEqual([]);
-  });
-});
-
-// Antigravity lists the account's own catalog (`agy models`). Rows are one
-// per model and effort; the picker takes base ids, keeps the listing's order,
-// and shows curated labels where a base id is in the static list.
-describe("antigravity's device model list", () => {
-  const STARTER = ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "gemini-3.8-flash-low", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"];
-  it("collapses effort rows to base ids and keeps lone rows whole", () => {
-    expect(agyBaseModelIds(STARTER)).toEqual(["gemini-3.8-flash", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]);
-  });
-  it("features the device's models in order, curated labels first", () => {
-    const opts = featuredModelsFor("antigravity", agyBaseModelIds(STARTER));
-    expect(opts.map((o) => o.key)).toEqual(["gemini-3.8-flash", "claude-sonnet-4-6", "claude-opus-4-6-thinking", "gpt-oss-120b-medium"]);
-    expect(opts[0].label).toBe("Gemini 3.8 Flash");
-    expect(opts[3].label).toBe("GPT OSS 120B Medium");
-  });
-  it("accepts any well-formed catalog id for antigravity only", () => {
-    expect(findModelOption("antigravity", "claude-opus-4-6-thinking")?.cliAlias).toBe("claude-opus-4-6-thinking");
-    expect(findModelOption("antigravity", "bad id; rm")).toBeUndefined();
-    expect(findModelOption("grok", "claude-opus-4-6-thinking")).toBeUndefined();
-    // A stamped model with its effort joined still maps to the curated key.
-    expect(modelOptionKey("gemini-4-neon-low", "antigravity")).toBe("gemini-4-neon");
-    // An open catalog never claims another agent's model.
-    expect(modelFitsAgent("claude-newt-6", "claude_code")).toBe(true);
-  });
-  it("sends --effort only to Gemini models", () => {
-    expect(agyModelTakesEffort("gemini-4-neon")).toBe(true);
-    expect(agyModelTakesEffort(undefined)).toBe(true);
-    expect(agyModelTakesEffort("claude-sonnet-4-6")).toBe(false);
-    expect(agyModelTakesEffort("gpt-oss-120b-medium")).toBe(false);
   });
 });

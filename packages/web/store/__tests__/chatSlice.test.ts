@@ -944,22 +944,6 @@ describe("rooms the viewer can no longer read", () => {
     expect(after.pending[`chatChannels:${GONE}`]).toBeUndefined();
   });
 
-  it("lifting a retired room back in leaves every other row readable after the sync commits", () => {
-    const s = useInboxStore.getState();
-    const general = { _id: CHANNEL, name: "general", team_id: TEAM, created_at: 1, updated_at: 1 };
-    const gone = { _id: GONE, name: "", kind: "dm", team_id: TEAM, created_at: 1, updated_at: 1 };
-    s.syncTable("chatChannels", [general, gone]);
-    s.retireChatChannel(GONE);
-    expect(useInboxStore.getState().pending[`chatChannels:${GONE}`]?.type).toBe("exclude");
-
-    // The push changes nothing but the tombstoned room, so the lift is its only write.
-    s.syncTable("chatChannels", [general, { ...gone, updated_at: 2 }]);
-    const after = useInboxStore.getState();
-    expect(after.chatChannels[GONE]?.updated_at).toBe(2);
-    // A row draft carried into the frozen collection is revoked once the sync ends.
-    expect(after.chatChannels[CHANNEL]?.name).toBe("general");
-  });
-
   it("does not prune when the push names no team", () => {
     const s = useInboxStore.getState();
     s.syncTable("chatChannels", [

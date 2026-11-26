@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Captions, ExternalLink, Sparkles, UserPlus } from "lucide-react";
+import { Captions, ChevronRight, ExternalLink, Sparkles, UserPlus } from "lucide-react";
 import { useMutation } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -7,7 +7,6 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   callAnchorKey,
   callPathRef,
-  hasVoiceSpeakers,
   humanizeConvexError,
   isMeetRoomKey,
   isRecRoomKey,
@@ -52,7 +51,6 @@ import {
 import "../chat/chat.css";
 import "./roomThread.css";
 import { CallTasks, makeCallTask, useCallTasks } from "./CallTasks";
-import { EarlierCalls } from "./EarlierCalls";
 import { taskForItem } from "../../lib/calls/followThrough";
 import { AgentFaceToggle, DensityControl, WorkingDots, type Density } from "./RoomThreadControls";
 
@@ -127,7 +125,6 @@ export const RoomThread = memo(function RoomThread({
   panel,
   selection,
   sinceAt,
-  people,
   focus,
   onOpenedSession,
   className,
@@ -147,8 +144,6 @@ export const RoomThread = memo(function RoomThread({
   selection?: RoomThreadSelection;
   /** When the viewer joined this huddle; the dividers' anchor before any transcript. */
   sinceAt?: number;
-  /** Who is seated now (the stage): the earlier calls listed above the thread are these people's. */
-  people?: ReadonlyArray<{ id: string; name?: string }>;
   /** A link landed on a place in this call: it opens, scrolls into view and flashes. */
   focus?: CallAnchor | null;
   /** The stage covers the app, so a session opened from its thread would
@@ -248,9 +243,7 @@ export const RoomThread = memo(function RoomThread({
   // flat turn list from the same server rows, and a pending row's client
   // clock would move the indices under a selection until the echo landed.
   const breakAts = useMemo(() => chatRows.filter((r) => !r.pending).map((r) => r.at), [chatRows]);
-  // A voice note whose lines carry voice keys reads as turns by speaker.
-  const voices = recording && hasVoiceSpeakers(segments);
-  const passages = useMemo(() => buildPassages(segments ?? [], breakAts, { recording: recording && !voices }), [segments, breakAts, recording, voices]);
+  const passages = useMemo(() => buildPassages(segments ?? [], breakAts, { recording }), [segments, breakAts, recording]);
   // Find (the page's header field, Cmd/Ctrl+F): the passages holding a match
   // open and show whatever the words control says, and the hook below
   // highlights and steps through the matches in the rendered thread.
@@ -284,15 +277,12 @@ export const RoomThread = memo(function RoomThread({
     r.transcript_id
       ? r.transcript_id === callId
       : !!r.pending || (sinceAnchor !== undefined && r.at >= sinceAnchor && (endedAt === undefined || r.at <= endedAt));
-  // The thread is this huddle's alone. A room outlives its huddles and its
-  // key names who opened it, not who was on each call (a 1:1 that rang a
-  // third person in keeps the 1:1's key), so another huddle's lines here
-  // would show one group's talk to another. Earlier calls are reached as
-  // calls, one row each, matched on the people (EarlierCalls). With nothing
-  // to anchor on, typed lines cannot be set apart and stay; an event row is
-  // always one huddle's log.
+  // An event row is one huddle's log: an agent that came and went in another
+  // huddle is not this one's. Typed and agent lines from earlier huddles in
+  // the room stay on the stage, folded under the divider below; the call
+  // page asks the server for this huddle's lines alone.
   const visibleRows = useMemo(
-    () => chatRows.filter((r) => ofThisCall(r) || (!r.event && sinceAnchor === undefined && !callId)),
+    () => chatRows.filter((r) => !r.event || ofThisCall(r)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chatRows, callId, sinceAnchor, endedAt],
   );
@@ -472,7 +462,7 @@ export const RoomThread = memo(function RoomThread({
   const isOpen = (p: Passage) =>
     hits.has(p.index) ||
     (activeIndex !== null && p.turns.some((t) => t.index === activeIndex)) ||
-    ((!recording || voices) && p.turns.length === 1) ||
+    (!recording && p.turns.length === 1) ||
     (overrides[p.index] ?? (density === "full" || (transcribing && p.index === newestIndex)));
   const toggle = (p: Passage) => {
     const opening = !isOpen(p);
@@ -527,14 +517,14 @@ export const RoomThread = memo(function RoomThread({
 
   // Event rows are the room's log, not its content: a room that has only
   // ever seen agents come and go is still empty.
-  const empty = passages.length === 0 && visibleRows.every((r) => r.event);
+  const empty = passages.length === 0 && chatRows.every((r) => r.event);
   // The pick on its way shows as a chip until its route lands among the real ones.
   const joining = adding && !("id" in adding && routes.some((r) => r.target === adding.id)) ? adding : null;
   const showChips = routes.length > 0 || !!joining;
   // Nothing to fold, open or hide until someone has spoken.
   const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
-  const showFind = canFind && (passages.length > 0 || visibleRows.some((r) => !r.event));
+  const showFind = canFind && (passages.length > 0 || chatRows.some((r) => !r.event));
   const showHead = showChips || canAdd || showDensity || showSwitch || showFind;
   // Only the density control: no band, no rule, it sits with the recap row.
   const quietHead = showHead && !showChips && !canAdd && !showSwitch;
@@ -558,6 +548,20 @@ export const RoomThread = memo(function RoomThread({
         : "Listening. Words show up here.");
   const listeningShort = scribeError ?? (soloMuted ? "Your mic is muted" : allMuted ? "Everyone is muted" : "Nothing said yet");
   const spokenHidden = density === "hidden" && passages.length > 0;
+  // Huddles in a room never overlap, so other huddles' lines sit before or
+  // after this one's: the leading run is "Earlier in this room", folded until
+  // asked for (it is another conversation), and a trailing run is "Later".
+  // With nothing to anchor on, there is nothing to set apart.
+  const isThisCalls = (i: TimelineItem) => i.kind === "passage" || ofThisCall(i.row);
+  let earlier = 0;
+  let laterAt = timeline.length;
+  if (sinceAnchor !== undefined) {
+    while (earlier < timeline.length && !isThisCalls(timeline[earlier])) earlier++;
+    while (laterAt > earlier && !isThisCalls(timeline[laterAt - 1])) laterAt--;
+    if (earlier === timeline.length) laterAt = timeline.length;
+  }
+  const [earlierOverride, setEarlierOverride] = useState<boolean | null>(null);
+  const earlierOpen = earlierOverride ?? false;
 
   return (
     <div
@@ -691,9 +695,6 @@ export const RoomThread = memo(function RoomThread({
         onTransitionEnd={onFoldSettled}
         className="rt-list min-h-0 flex-1 select-text overflow-y-auto"
       >
-        {people && (
-          <EarlierCalls people={people} exclude={callId} before={sinceAnchor} panel={panel} onOpen={onOpenedSession} />
-        )}
         {call?.summary ? (
           <RecapCard
             summary={call.summary}
@@ -817,7 +818,7 @@ export const RoomThread = memo(function RoomThread({
               isSelected={selection?.isSelected}
               onTurnClick={selection?.onTurnClick}
               onTurnHold={selection?.onTurnHold}
-              compact={!voices}
+              compact
               activeIndex={activeIndex}
               activeSeq={selection?.activeSeq}
               filmed={selection?.filmed}
@@ -826,10 +827,33 @@ export const RoomThread = memo(function RoomThread({
           </div>
         ) : (
           timeline.map((item, i) => {
-            const hidden = item.kind === "passage" && density === "hidden" && !hits.has(item.index);
-            if (hidden) return null;
+            const inEarlier = earlier > 0 && i < earlier;
+            // The earlier group's label is a fold: with the group closed
+            // the label stands alone and "This call" has nothing to divide.
+            const divider: React.ReactNode =
+              earlier > 0 && i === 0 ? (
+                <button
+                  type="button"
+                  className="rt-note rt-divider"
+                  aria-expanded={earlierOpen}
+                  onClick={() => setEarlierOverride(!earlierOpen)}
+                  title={earlierOpen ? "Fold what was typed here before this call" : "Show what was typed here before this call"}
+                >
+                  <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
+                  Earlier in this room · {earlier} line{earlier === 1 ? "" : "s"}
+                </button>
+              ) : earlier > 0 && i === earlier && earlierOpen ? (
+                <p className="rt-note rt-divider">This call</p>
+              ) : i === laterAt && laterAt < timeline.length ? (
+                <p className="rt-note rt-divider">Later in this room</p>
+              ) : null;
+            const hidden =
+              (inEarlier && !earlierOpen) || (item.kind === "passage" && density === "hidden" && !hits.has(item.index));
+            if (hidden && !divider) return null;
             let node: React.ReactNode = null;
-            if (item.kind === "passage") {
+            if (hidden) {
+              /* the divider alone */
+            } else if (item.kind === "passage") {
               node = (
                 <PassageBlock
                   passage={item}
@@ -838,7 +862,6 @@ export const RoomThread = memo(function RoomThread({
                   live={transcribing && item.index === newestIndex}
                   fresh={item.at > mountedAt.current}
                   recording={recording}
-                  voices={voices}
                   dayOf={anchorAt}
                   onToggle={onTogglePassage}
                   selection={selection}
@@ -877,7 +900,10 @@ export const RoomThread = memo(function RoomThread({
             }
             const key = item.kind === "passage" ? `p${item.index}` : item.row._id;
             return (
-<Fragment key={key}>{node}</Fragment>
+              <Fragment key={key}>
+                {divider}
+                {node}
+              </Fragment>
             );
           })
         )}

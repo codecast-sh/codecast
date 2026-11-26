@@ -10,13 +10,7 @@ const ANTIGRAVITY_MODEL: AgentModelConfig = {
   // `--model` and `--effort` are launch flags; the TUI's model menu is
   // interactive. The transcript names the model per response after that.
   midSession: false,
-  // Which models an account can run depends on its plan (a starter-quota
-  // account lists Gemini 3.8 Flash, Claude 4.6 and GPT-OSS; Pro adds Gemini 4
-  // Neon), and agy refuses a --model the account lacks ("not recognized as a
-  // known model"). So the picker lists the base ids of the device's own
-  // `agy models` (agyBaseModelIds), under the curated labels above where
-  // they match; the curated list stands in until a device reports.
-  dynamic: "bare",
+  dynamic: false,
 };
 
 export const ANTIGRAVITY_CLIENT: AgentClientDescriptor = {

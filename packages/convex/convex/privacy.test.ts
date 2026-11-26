@@ -280,9 +280,8 @@ describe("teamVisibleConvTeam — private sessions never hand their team to work
     expect(teamVisibleConvTeam({ team_id: "t1", is_private: false })).toBe("t1");
   });
 
-  test("auto_shared never shares a session made private", () => {
-    expect(teamVisibleConvTeam({ team_id: "t1", is_private: false, auto_shared: true })).toBe("t1");
-    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, auto_shared: true })).toBeUndefined();
+  test("auto_shared counts as team-visible", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, auto_shared: true })).toBe("t1");
   });
 
   test("a team_visibility override reveals an otherwise-private conversation", () => {

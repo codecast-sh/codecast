@@ -18,7 +18,6 @@ import {
   CommandList,
 } from "../ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { VaultHostTag } from "../../lib/vault/hosts/VaultHostTag";
 import {
   groupVaultChoices,
   shortenVaultRoot,
@@ -182,10 +181,7 @@ export function VaultPicker({
                     >
                       <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-dim" />
                       <span className="flex-1 min-w-0">
-                        <span className="flex items-center gap-1.5 min-w-0 text-[13px] text-sol-text">
-                          <span className="truncate">{choice.name}</span>
-                          <VaultHostTag vaultId={choice.id} className="flex-shrink-0 max-w-[50%]" />
-                        </span>
+                        <span className="block truncate text-[13px] text-sol-text">{choice.name}</span>
                         {/* One meta line: where on disk, how much, and who can
                             see what you sync from it. */}
                         <span className="flex items-center gap-1 min-w-0 text-meta text-sol-text-dim">

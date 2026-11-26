@@ -26,7 +26,7 @@ export const FlowExplorer = memo(function FlowExplorer({ flow, run = null, compa
   const [picked, setPicked] = useState<StepPick | null>(null);
   return (
     <>
-      <FlowDiagram flow={flow} run={run as any} compact={compact} foldWays picked={picked?.id ?? null} onPick={(p) => setPicked((cur) => (cur?.id === p.id ? null : p))} />
+      <FlowDiagram flow={flow} run={run as any} compact={compact} picked={picked?.id ?? null} onPick={(p) => setPicked((cur) => (cur?.id === p.id ? null : p))} />
       {picked ? <FlowStationPanel flow={flow} pick={picked} run={run} onClose={() => setPicked(null)} /> : null}
     </>
   );

@@ -235,7 +235,7 @@ export function ModernSessionCardView({
       />,
     );
   }
-  if (session.flow_run_id) chips.push(<ModernFlowChip key="flow" runId={session.flow_run_id} name={session.flow_name} className="shrink-[200]" />);
+  if (session.flow_run_id) chips.push(<ModernFlowChip key="flow" session={session} className="shrink-[200]" />);
   if (ship) {
     chips.push(shipLink
       ? <Link key="ship" href={shipLink} data-mc-chip="ship" title={ship.words} onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></Link>

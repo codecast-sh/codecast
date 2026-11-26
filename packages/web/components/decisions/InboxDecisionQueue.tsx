@@ -12,15 +12,8 @@ import { SectionHeader } from "../inbox/SectionHeader";
 import { askedOfViewer, isStackedAsk, type QueueItem } from "../../lib/decisionQueue";
 import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { ACTIVE_CARD_CLASS } from "../inbox/sessionCardTypes";
-import { ModernFlowChip, ModernProjectChip } from "../inbox/ModernCardParts";
-import { workProjectSig } from "../../lib/workProjectSig";
-import { useSyncWorkflowRun } from "../../hooks/useSyncWorkflows";
-import { gateRunLabel } from "../../lib/decisionLinks";
 import { PriorityRankChip } from "../inbox/PriorityRankChip";
 import { rankLabelOf, sortByPriority, type PriorityRankLabel, type PriorityStanding } from "../../store/priorityOrder";
-import { projectRootOf } from "../../lib/recentProjectPaths";
-import { compactAge } from "../../lib/threadState";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
 
 // The inbox panel's Decisions section IS the decision queue: one row per
 // decision waiting on the viewer, numbered in the order the stepper walks
@@ -40,22 +33,7 @@ const advisorySig = (d: SessionDecisionItem) => `${d.status}:${d.blocking ? 1 : 
 // it leads the inbox, so it must leave the sections under it on screen.
 const SHOWN_ASKS = 8;
 
-type Group = { conversationId: string; title: string; where?: Where; flow?: { runId: string; name?: string }; asks: { item: QueueItem; n: number }[]; session?: InboxSession };
-
-// Where the session runs: the folder (a managed worktree folds to the
-// repository it hangs off) and the repository's name, as the rail names it.
-type Where = { project: string; directory: string };
-const whereOf = (session?: InboxSession, recorded?: string): Where | undefined => {
-  const path = session?.git_root || session?.project_path || recorded;
-  if (!path) return undefined;
-  const directory = projectRootOf(path);
-  return { project: getProjectName(directory), directory };
-};
-
-// The flow that asked: the session's own flow when it works for one, else
-// the run a station's decision names.
-const flowOf = (session: InboxSession | undefined, runId: string | undefined) =>
-  session?.flow_run_id ? { runId: session.flow_run_id, name: session.flow_name ?? undefined } : runId ? { runId } : undefined;
+type Group = { conversationId: string; title: string; project?: string; asks: { item: QueueItem; n: number }[]; session?: InboxSession };
 
 const stepHref = (conversationId: string, key?: string) =>
   `/decisions?s=${conversationId}${key ? `&d=${encodeURIComponent(key)}` : ""}`;
@@ -92,7 +70,6 @@ export function InboxDecisionQueue({
   const numbered = useMemo(() => fullQueue.map((item, i) => ({ item, n: i + 1 })).filter(({ item }) => !matches || matches(item.conversationId)), [fullQueue, matches]);
   const queue = useMemo(() => numbered.map(({ item }) => item), [numbered]);
   const cursor = useDecisionQueueCursor();
-  const now = useCoarseNow(60_000);
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
   const showAgent = useInboxStore((s) => s.clientState.ui?.show_agent_icon !== false);
   const advisoryRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: advisoryWhere, sig: advisorySig });
@@ -106,8 +83,7 @@ export function InboxDecisionQueue({
         g = {
           conversationId: item.conversationId,
           title: item.session?.title || item.sessionTitle || "Session",
-          where: whereOf(item.session, item.projectPath),
-          flow: flowOf(item.session, item.runId),
+          project: item.session?.project_path ? getProjectName(item.session.project_path) : undefined,
           asks: [],
           session: item.session,
         };
@@ -139,7 +115,7 @@ export function InboxDecisionQueue({
       {shown.map((g) => {
         const lit = isLit(g);
         return (
-          <QueueCard key={g.conversationId} id={g.conversationId} lit={lit} row={g.session} title={g.title} where={g.where} flow={g.flow} href={stepHref(g.conversationId)} showAgent={showAgent} rank={rankOf(g.conversationId, g.session)}>
+          <QueueCard key={g.conversationId} id={g.conversationId} lit={lit} row={g.session} title={g.title} project={g.project} href={stepHref(g.conversationId)} showAgent={showAgent} rank={rankOf(g.conversationId, g.session)}>
             {g.asks.map(({ item, n }) => {
               const here = cursor ? item.key === cursor : lit && n === g.asks[0].n;
               return (
@@ -153,7 +129,6 @@ export function InboxDecisionQueue({
                   <span className={`w-5 shrink-0 text-center tabular-nums font-mono text-mark ${here ? "text-sol-cyan" : "text-sol-text-dim"}`}>{n}</span>
                   <span className="truncate">{item.source === "permission" ? `Permission: ${item.question}` : item.question}</span>
                   {item.heldByRole && <span className="shrink-0 text-meta text-sol-text-dim">lead</span>}
-                  <span className="ml-auto shrink-0 pl-1 tabular-nums text-meta text-sol-text-dim" title={`Asked ${new Date(item.createdAt).toLocaleString()}`} data-decision-queue-age>{compactAge(now - item.createdAt)}</span>
                 </Link>
               );
             })}
@@ -177,8 +152,7 @@ export function InboxDecisionQueue({
           lit={session._id === activeSessionId}
           row={session}
           title={session.title || "Session"}
-          where={whereOf(session)}
-          flow={flowOf(session, undefined)}
+          project={session.project_path ? getProjectName(session.project_path) : undefined}
           onSelect={(e) => onSelectSession(session, e)}
           showAgent={showAgent}
           rank={rankOf(session._id, session)}
@@ -203,13 +177,12 @@ export function InboxDecisionQueue({
 // frame and ground (data-session-id under the rail, data-mc for Modern), the
 // workspace tile leading the title, and the open card's treatment when it is
 // the session on screen or holds the decision the stepper is on.
-function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent, rank, children }: {
+function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, rank, children }: {
   id: string;
   lit: boolean;
   row?: InboxSession;
   title: string;
-  where?: Where;
-  flow?: { runId: string; name?: string };
+  project?: string;
   href?: string;
   onSelect?: (e: React.MouseEvent) => void;
   showAgent: boolean;
@@ -217,23 +190,15 @@ function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent
   rank?: PriorityRankLabel;
   children?: React.ReactNode;
 }) {
-  // The session card's own chips: the project it works in (its work project,
-  // else its repository), then the flow that asked.
-  const workProject = useInboxStore((s) => workProjectSig(s as any, id));
   const head = (
     <>
       <span className="flex h-5 w-5 shrink-0 items-center justify-center"><WorkspaceTile row={row ?? {}} size={20} showAgent={showAgent} /></span>
-      <span className="min-w-0 flex-1 truncate text-body font-medium text-sol-text">{title}</span>
+      <span className="min-w-0 truncate text-body font-medium text-sol-text">{title}</span>
+      {project && <span className="shrink-0 text-meta text-sol-text-dim">{project}</span>}
       {rank !== undefined && <PriorityRankChip rank={rank} />}
     </>
   );
-  const chips = (where || workProject || flow) && (
-    <span className="flex min-w-0 shrink items-center gap-1" data-decision-queue-chips>
-      {(where || workProject) && <ModernProjectChip project={where?.project ?? "unknown"} label={null} directory={where?.directory} workProject={workProject || undefined} className="shrink-[10] min-w-[3rem]" />}
-      {flow && <QueueFlowChip runId={flow.runId} name={flow.name} />}
-    </span>
-  );
-  const headClass = "flex min-w-0 flex-1 items-center gap-2 text-left no-underline";
+  const headClass = "flex w-full min-w-0 items-center gap-2 text-left no-underline";
   return (
     <div
       data-session-id={id}
@@ -241,24 +206,10 @@ function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent
       data-mc="card"
       className={`relative overflow-hidden py-2 pl-3 pr-3 transition-colors ${lit ? ACTIVE_CARD_CLASS : "hover:bg-sol-bg-alt/80"}`}
     >
-      <div className="flex min-w-0 items-center gap-2">
-        {href
-          ? <Link href={href} className={headClass}>{head}</Link>
-          : <button type="button" onClick={onSelect} className={headClass}>{head}</button>}
-        {chips}
-      </div>
+      {href
+        ? <Link href={href} className={headClass}>{head}</Link>
+        : <button type="button" onClick={onSelect} className={headClass}>{head}</button>}
       {children && <div className="mt-1">{children}</div>}
     </div>
   );
-}
-
-// A station's decision names its run, not its flow: the run row (fed per
-// card, as the gate chip on a decision card is) says which flow it is.
-function QueueFlowChip({ runId, name }: { runId: string; name?: string }) {
-  useSyncWorkflowRun(name ? undefined : runId);
-  const fromRun = useInboxStore((s) => {
-    const run = name ? undefined : (s as any).workflowRuns?.[runId];
-    return run ? gateRunLabel(run).workflow : undefined;
-  });
-  return <ModernFlowChip runId={runId} name={name ?? fromRun} className="shrink-0" />;
 }

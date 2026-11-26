@@ -19,7 +19,6 @@ import {
   walkieCallState,
 } from "../calls/walkie";
 import { runCallCommand } from "../calls/callManager";
-import { bindPrewarmConvex, prewarmBelongsHere, prewarmRoom, prewarmedRoomKey, releasePrewarm } from "../calls/roomPrewarm";
 import { expandCall, focusExistingHuddle } from "../calls/huddleWindow";
 import { deriveFaceRow, faceRowInputFrom, faceRowInputSig } from "../faces/faceRow";
 import { walkieDoorOpen } from "../calls/walkieDoor";
@@ -366,59 +365,5 @@ describe("the host carrying a command out", () => {
     await runCallCommand("joinCall", ["dm:c:d", { intent: "deliberate" }]);
     expect(s.shown).toBe(1);
     expect(useInboxStore.getState().call.roomKey).toBe("dm:a:b");
-  });
-});
-
-describe("a remote never warms a room under the host's identity", () => {
-  // One LiveKit identity per person across every window: a DM in the main
-  // window warming the room the host is talking in evicted the host, which is
-  // "clicking the main window hangs up the call".
-  function fakeConvex() {
-    const calls: string[] = [];
-    const never = new Promise<any>(() => {});
-    return {
-      calls,
-      client: {
-        mutation: (_fn: any, args: any) => {
-          calls.push(`mutation:${args?.room_key}`);
-          return Promise.resolve(null);
-        },
-        action: (_fn: any, args: any) => {
-          calls.push(`action:${args?.room_key}`);
-          return never;
-        },
-      },
-    };
-  }
-
-  afterEach(() => releasePrewarm());
-
-  it("does not connect from a window that is not the host", () => {
-    const s = shell({ host: false });
-    s.role({ ...ROLE, voiceWindow: true });
-    const c = fakeConvex();
-    bindPrewarmConvex(c.client);
-    prewarmRoom("dm:me:them");
-    expect(prewarmBelongsHere()).toBe(false);
-    expect(prewarmedRoomKey()).toBe(null);
-    expect(c.calls).toEqual([]);
-  });
-
-  it("does not connect while another window on an older shell holds the call", () => {
-    const s = shell({ host: false });
-    s.role({ ...ROLE, voiceWindow: false, anyInCall: true });
-    const c = fakeConvex();
-    bindPrewarmConvex(c.client);
-    prewarmRoom("dm:me:them");
-    expect(c.calls).toEqual([]);
-  });
-
-  it("still warms where this window is the one that joins", () => {
-    const s = shell({ host: false });
-    s.role({ ...ROLE, voiceWindow: false, anyInCall: false });
-    const c = fakeConvex();
-    bindPrewarmConvex(c.client);
-    prewarmRoom("dm:me:them");
-    expect(c.calls).toContain("action:dm:me:them");
   });
 });

@@ -9,7 +9,6 @@ import { pickStatedGoals, type AskModel, type GoalCandidate, type StatedGoals } 
 import { canReadCall } from "./transcripts";
 import { isRoomlessKey } from "@codecast/shared/contracts";
 import { ANALYSIS_CAPS, ANALYSIS_WINDOW_MS } from "./lib/orgAnalysisCaps";
-import { lineSpeakerNames } from "./lib/callSpeakers";
 import type { ProjectRef } from "./orgInit";
 
 // The org analysis's reads of what people said and the goals they stated
@@ -122,15 +121,8 @@ function speakerTurns(segments: Array<{ at: number; by: string; text: string }>)
   }
   return joined;
 }
-const segmentsOf = async (ctx: Ctx, t: any, take: number) => {
-  // A voice note's diarized lines are named through its speakers (lib/callSpeakers).
-  const nameOf = await lineSpeakerNames(ctx, t);
-  return ((await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).take(take)) as any[]).map((x) => ({
-    at: t.started_at + (x.t0 ?? 0),
-    by: (x.speaker_name ? nameOf(x) : "") || "?",
-    text: x.text ?? "",
-  }));
-};
+const segmentsOf = async (ctx: Ctx, t: any, take: number) =>
+  ((await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).take(take)) as any[]).map((x) => ({ at: t.started_at + (x.t0 ?? 0), by: x.speaker_name ?? "?", text: x.text ?? "" }));
 /** The window's calls the caller may read and in which something was said,
  *  newest first, up to the cap. The cap counts these, never the huddles that
  *  ended before words: Union had 30 such rows in a month, and counted against

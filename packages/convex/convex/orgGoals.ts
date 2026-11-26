@@ -12,7 +12,6 @@
 import { internal } from "./_generated/api";
 import { internalMutation } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { rolePeopleIdsOf } from "./orgPeople";
 import { goalSectionMatchesPerson, parseGoalSections, type GoalPriority } from "@codecast/shared/contracts/roleGoals";
 import { capacity } from "@codecast/shared/contracts/orgCapacity";
 import { utcDay } from "./lib/orgCaps";
@@ -99,10 +98,8 @@ export async function computeReportingPeople(
   scan: PeopleScan,
   since: number,
   now: number,
-  /** The role's people when the caller already read them (rolePeopleIdsOf). */
-  peopleIds?: string[],
 ): Promise<BriefPerson[]> {
-  const ids = (peopleIds ?? (await rolePeopleIdsOf(ctx, role))) as Id<"users">[];
+  const ids: Id<"users">[] = role.reports_user_ids ?? [];
   if (ids.length === 0) return [];
   const sections = parseGoalSections(brief?.content ?? "");
   const stallMs = capacity("goal_stall_days") * DAY_MS;
@@ -196,11 +193,11 @@ export async function noticeGoalStalls(ctx: Ctx, role: any, anchor: any | null, 
 
 /** Stamp when each goal in the brief was first seen, and forget goals that
  *  left it. Returns the role as it now stands. */
-export async function stampGoalsSeen(ctx: Ctx, role: any, briefContent: string, now: number, peopleIds?: string[]): Promise<any> {
+export async function stampGoalsSeen(ctx: Ctx, role: any, briefContent: string, now: number): Promise<any> {
   const before: Record<string, number> = role.goal_first_seen ?? {};
   const after: Record<string, number> = {};
   const sections = parseGoalSections(briefContent);
-  for (const uid of (peopleIds ?? (await rolePeopleIdsOf(ctx, role))) as Id<"users">[]) {
+  for (const uid of role.reports_user_ids ?? []) {
     const user = await ctx.db.get(uid);
     if (!user) continue;
     for (const g of sections.find((s) => goalSectionMatchesPerson(s.person, user))?.goals ?? []) {
@@ -219,14 +216,12 @@ export async function sweepGoalStalls(ctx: Ctx, now: number): Promise<{ roles: n
   let checked = 0;
   let notices = 0;
   for (const row of roles) {
-    if (!row.anchor_id) continue;
-    const ids = await rolePeopleIdsOf(ctx, row);
-    if (!ids.length) continue;
+    if (!row.reports_user_ids?.length || !row.anchor_id) continue;
     checked++;
     const brief = row.brief_doc_id ? await ctx.db.get(row.brief_doc_id) : null;
-    const role = await stampGoalsSeen(ctx, row, brief?.content ?? "", now, ids);
+    const role = await stampGoalsSeen(ctx, row, brief?.content ?? "", now);
     const anchor = await ctx.db.get(role.anchor_id);
-    const people = await computeReportingPeople(ctx, role.host_user_id, role, brief ? { content: brief.content ?? "" } : null, null, now, now, ids);
+    const people = await computeReportingPeople(ctx, role.host_user_id, role, brief ? { content: brief.content ?? "" } : null, null, now, now);
     notices += await noticeGoalStalls(ctx, role, anchor, people, now);
   }
   return { roles: checked, notices };

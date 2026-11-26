@@ -42,7 +42,6 @@ import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./do
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { clearPushTokenIfCurrent, reportPushFailures } from "./pushReceipts";
-import { sessionLabel } from "./lib/sessionLabel";
 import { projectNameOf, pushesStrippedFor, stripPushContent, type PushContent } from "./lib/pushPrivacy";
 
 export const sendPushNotification = internalAction({
@@ -500,6 +499,15 @@ export const markAllAsRead = mutation({
 // phone shows and the one the web bell renders are the same fold-up.
 export { IDLE_DIGEST_WINDOW_MS, summarizeIdleDigest };
 
+/** Display name for a session in the aggregate line. */
+function sessionLabelOf(conv: any): string {
+  return conv?.title?.trim() || conv?.project_path?.split("/").pop() || "Session";
+}
+
+/** The session a push is about, by name: its title, else its project folder. */
+function sessionPushTitle(conv: { title?: string; project_path?: string }): string {
+  return conv.title?.trim() || conv.project_path?.split("/").pop() || "Session";
+}
 
 export const createSessionNotification = mutation({
   args: {
@@ -536,7 +544,7 @@ export async function performDaemonSessionPush(
   // A daemon titles every permission push alike; the person needs to know
   // which session is asking.
   const title = args.type === "permission_request"
-    ? `${sessionLabel(conversation)} · needs permission`
+    ? `${sessionPushTitle(conversation)} · needs permission`
     : args.title;
   const delivered = await deliverSessionNotificationToParties(
     ctx, conversation, args.type, title, args.message,
@@ -938,7 +946,7 @@ export async function performNeedsInputCheck(
   // and escalatedAsks files it by this key.
   await ctx.db.patch(conv._id, { needs_input_notified_key: key });
 
-  const title = sessionLabel(conv);
+  const title = sessionPushTitle(conv);
   const message =
     (kind === "awaiting_input" ? auqQuestionPreview(lastMsg) : null) ??
     (lastMsg?.role === "assistant" ? notifPreview(lastMsg.content) : null) ??
@@ -1029,7 +1037,7 @@ export async function performIdleDigestFlush(
     // message count the session settled at, so a reply (which grows the count)
     // reads as answered.
     if (!String(conv.needs_input_notified_key ?? "").startsWith(`${conv.message_count || 0}:`)) continue;
-    titles.push(sessionLabel(conv));
+    titles.push(sessionLabelOf(conv));
   }
 
   if (titles.length === 0) {

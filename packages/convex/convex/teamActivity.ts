@@ -1,7 +1,7 @@
 import { internalMutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { canTeamMemberReadSummary, isTeamMember } from "./privacy";
+import { isTeamMember } from "./privacy";
 
 export const recordTeamActivity = internalMutation({
   args: {
@@ -48,9 +48,6 @@ export const recordTeamActivity = internalMutation({
   },
 });
 
-// Sessions one page of the feed may check (a read and a visibility check each).
-const SESSION_CHECKS_PER_CALL = 300;
-
 export const getTeamActivityFeed = query({
   args: {
     team_id: v.id("teams"),
@@ -83,9 +80,6 @@ export const getTeamActivityFeed = query({
     const maxScans = 8;
 
     const events: Array<any> = [];
-    // One read and one check per session, however many events it has.
-    const readableByConversation = new Map<string, boolean>();
-    let outOfBudget = false;
     let scanCursor = args.cursor;
     let exhausted = false;
 
@@ -108,34 +102,17 @@ export const getTeamActivityFeed = query({
       for (const event of batch) {
         if (args.event_type_filter && event.event_type !== args.event_type_filter) continue;
         if (args.actor_filter && event.actor_user_id.toString() !== args.actor_filter.toString()) continue;
-        // An event about a session carries its title, which the team may read
-        // only while the session is shared with it. Recorded for every session
-        // routed to the team, private ones included, so the read decides.
-        if (event.related_conversation_id && event.actor_user_id.toString() !== authUserId.toString()) {
-          const key = String(event.related_conversation_id);
-          let readable = readableByConversation.get(key);
-          if (readable === undefined) {
-            // A read budget: past it the page ends here and the cursor resumes,
-            // so many distinct private sessions cannot pass Convex's read limit.
-            if (readableByConversation.size >= SESSION_CHECKS_PER_CALL) { outOfBudget = true; break; }
-            const conv = await ctx.db.get(event.related_conversation_id);
-            readable = !!conv && (await canTeamMemberReadSummary(ctx, authUserId, conv));
-            readableByConversation.set(key, readable);
-          }
-          if (!readable) continue;
-        }
         events.push(event);
         if (events.length >= targetSize) break;
       }
 
-      if (outOfBudget) break;
       scanCursor = batch[batch.length - 1].timestamp;
       if (batch.length < batchSize) {
         exhausted = true;
       }
     }
 
-    const hasMore = events.length > limit || (outOfBudget && events.length > 0);
+    const hasMore = events.length > limit;
     const paginatedEvents = hasMore ? events.slice(0, limit) : events;
 
     const eventsWithActors = await Promise.all(

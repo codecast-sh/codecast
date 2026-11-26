@@ -84,18 +84,13 @@ export interface ResponsePolicyOptions {
 
 const HOUR_MS = 60 * 60 * 1000;
 
-/** Pages no search engine should list.
- *  - Guest meeting links (/meet/<token>) and a call's public page
- *    (/share/call/<token>). A shared doc or plan is its team's own writing; a
- *    call is mostly other people's speech, guests' included, and a guest never
- *    chose to publish it, so its link travels as a card and never as a search
- *    result carrying their names and words.
- *  - The public repo browser (/r/<owner>/<repo>/...). Its file blobs and commit
- *    lists are thin near-duplicates under one generic title; Google indexed
- *    tens of thousands of them in Oct 2026 and they dragged the whole site down
- *    in search. robots.txt keeps allowing /r/ so crawlers can see this header. */
+/** Pages no search engine should list: guest meeting links (/meet/<token>)
+ *  and a call's public page (/share/call/<token>). A shared doc or plan is
+ *  its team's own writing; a call is mostly other people's speech, guests'
+ *  included, and a guest never chose to publish it, so its link travels as a
+ *  card and never as a search result carrying their names and words. */
 export function isUnindexedPath(pathname: string): boolean {
-  return /^\/(meet|share\/call|r)(\/|$)/.test(pathname);
+  return /^\/(meet|share\/call)(\/|$)/.test(pathname);
 }
 
 export function createResponsePolicy(options: ResponsePolicyOptions = {}): MiddlewareHandler {

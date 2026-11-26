@@ -21,6 +21,7 @@ import {
 } from "react-resizable-panels";
 import {
   ArrowUpDown,
+  Cloud,
   CopyMinus,
   FilePlus2,
   FolderPlus,
@@ -35,6 +36,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
+import { isVaultMarkdownPath } from "@codecast/shared/contracts";
 import { AuthGuard } from "../../components/AuthGuard";
 import { LocalDaemonUnreachable } from "../../components/LocalDaemonUnreachable";
 import {
@@ -52,13 +54,12 @@ import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorer
 import { usePaneShortcutAction } from "../../shortcuts";
 import { VaultExplorer } from "../../components/vault/VaultExplorer";
 import { VaultNoteView } from "../../components/vault/VaultNoteView";
+import { VaultFileView } from "../../components/vault/VaultFileView";
 import { VaultRightPanel } from "../../components/vault/VaultRightPanel";
 import { VaultFindBar } from "../../components/vault/VaultFindBar";
 import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
 import { VaultPicker } from "../../components/vault/VaultPicker";
-import { VaultMachineBar } from "../../lib/vault/hosts/VaultMachineBar";
-import { hostOfVault } from "../../lib/vault/hosts/routes";
 import { EmptyVaultTeaching } from "../../components/vault/EmptyVaultTeaching";
 import { VaultScopeLine } from "../../components/vault/VaultScopeLine";
 import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useVaultScope";
@@ -76,8 +77,6 @@ import {
 } from "../../lib/vault/viewMode";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { lazyNamed } from "../../lib/lazyNamed";
-import { CodeWorkspace } from "../../components/code/workspace/CodeWorkspace";
-import { workspaceFor } from "../../store/codeStore";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
 const VaultGraphView = lazyNamed(() => import("../../components/vault/VaultGraphView"), "VaultGraphView");
@@ -133,6 +132,7 @@ function VaultContent() {
   // rather than vault-relative. Resolved below once the vault list is in.
   const localPath = searchParams.get("path");
   const targetLineRaw = searchParams.get("l");
+  const targetLine = targetLineRaw ? parseInt(targetLineRaw, 10) : undefined;
   const showGraph = searchParams.get("view") === "graph";
 
   // The side panel (backlinks / outline / tags) is closed by default and
@@ -264,8 +264,7 @@ function VaultContent() {
     if (connection === "idle") void connect(convex);
   }, [connection, connect, convex]);
 
-  // The raw `l` rides through, so a column or a flash range survives the rewrite.
-  useVaultLocalPath(localPath, targetLineRaw ?? undefined, router, searchParams.get("d"));
+  useVaultLocalPath(localPath, targetLine, router);
 
   // `line` rides along in the URL for search results: the note view doesn't
   // scroll to it yet, but the link already carries where the hit was.
@@ -316,52 +315,23 @@ function VaultContent() {
     return true;
   });
 
-  const [editModeBump, bumpEditMode] = useState(0);
+  const [, bumpEditMode] = useState(0);
   // Mode memory is per vault: scoping it here means a vault switch forgets the
   // previous vault's modes before any note of the new one is asked about.
   setVaultModeScope(activeVaultId);
+  const mode = vaultViewMode(activePath);
   // The mode memory is module state, not React state, so the bump is what makes
   // a change visible; both chords go through here.
   const applyMode = useCallback(
-    (next: (path: string) => VaultViewMode, path: string | null = activePath) => {
-      if (!path) return false;
-      next(path);
+    (next: (path: string) => VaultViewMode) => {
+      if (!activePath) return false;
+      next(activePath);
       bumpEditMode((n) => n + 1);
       return true;
     },
     [activePath],
   );
   const toggleEdit = useCallback(() => applyMode(toggleVaultEditMode), [applyMode]);
-
-  // The code workspace's hooks into the page: the address bar, the tree, and
-  // the notes view for a markdown tab in any group.
-  const navigateWorkspace = useCallback(
-    (path: string | null, opts?: { replace?: boolean }) => {
-      if (path) noteOpened(path);
-      const href = filesHref({ path });
-      if (opts?.replace) router.replace(href);
-      else router.push(href);
-    },
-    [router, noteOpened],
-  );
-  const toggleTreeFromWorkspace = useCallback((open?: boolean) => setTreeOpen((v) => open ?? !v), []);
-  const renderNote = useCallback(
-    (path: string, line: string | null) => {
-      const target = line ? parseInt(line, 10) : undefined;
-      return (
-        <VaultNoteView
-          path={path}
-          targetLine={target && target > 0 ? target : undefined}
-          mode={vaultViewMode(path)}
-          onToggleEdit={() => applyMode(toggleVaultEditMode, path)}
-          onNavigate={openNote}
-        />
-      );
-    },
-    // `editModeBump` re-renders the notes when a mode changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [applyMode, openNote, editModeBump],
-  );
 
   usePaneShortcutAction("vault.toggleEdit", () => {
     if (showGraph) return false;
@@ -425,12 +395,6 @@ function VaultContent() {
     // A ?path= deep link is choosing the note; the landing must not race it.
     if (!activeVault || activePath || localPath || showGraph || !scannedAt) return;
     if (landedVaults.current.has(activeVault.id)) return;
-    // A workspace with tabs open comes back as it was (CodeWorkspace puts its
-    // file in the URL); the landing note is for a first visit.
-    if (workspaceFor(activeVault.id).groups.some((g) => g.tabs.length)) {
-      landedVaults.current.add(activeVault.id);
-      return;
-    }
     const paths = Object.keys(useVaultStore.getState().files);
     if (!paths.length) return;
     landedVaults.current.add(activeVault.id);
@@ -617,13 +581,14 @@ function VaultContent() {
   );
 
   return (
-    // data-files-surface: the tree, the search pane and the workspace are one
-    // surface, so Cmd-W from the tree closes the active editor tab
-    // (CodeWorkspace's code.closeTab).
-    <div ref={rootRef} data-files-surface className="h-full flex flex-col">
-      <VaultMachineBar activePath={activePath} onNavigate={(href) => router.push(href)} />
-      {/* A host vault's reconnect shows on its machine chip above. */}
-      {connection === "cached" && !hostOfVault(activeVaultId) && (
+    <div ref={rootRef} className="h-full flex flex-col">
+      {isRemote && (
+        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+          <Cloud className="w-3 h-3" />
+          Read-only mirror from another machine — edits happen where the files live.
+        </div>
+      )}
+      {connection === "cached" && (
         <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <WifiOff className="w-3 h-3" />
           Showing cached copy — reconnecting to the local daemon…
@@ -712,7 +677,7 @@ function VaultContent() {
               onClick={() => setTreeOpen(true)}
               title="Show file tree"
               aria-label="Show file tree"
-              className="absolute top-1 left-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
+              className="absolute top-2 left-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
             >
               <PanelLeft className="w-4 h-4" />
             </button>
@@ -724,7 +689,7 @@ function VaultContent() {
               title={rightPanelOpen ? "Hide side panel" : "Show backlinks, outline and tags"}
               aria-label={rightPanelOpen ? "Hide side panel" : "Show side panel"}
               aria-pressed={rightPanelOpen}
-              className={`absolute top-1 right-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt ${
+              className={`absolute top-2 right-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt ${
                 rightPanelOpen ? "text-sol-text" : "text-sol-text-dim hover:text-sol-text"
               }`}
             >
@@ -745,25 +710,22 @@ function VaultContent() {
                 onClose={toggleGraph}
               />
             </Suspense>
-          ) : activeVaultId ? (
+          ) : activePath ? (
             <HoverPreviewProvider onNavigate={(p) => openNote(p)}>
               {findOpen && <VaultFindBar onClose={() => setFindOpen(false)} />}
-              {/* Tabs and split groups: markdown tabs open the notes view,
-                  text files the code editor. ?f= follows the focused tab. */}
-              {/* One instance per vault: every verb and the URL sync close
-                  over the vault they were made for. */}
-              <CodeWorkspace
-                key={activeVaultId}
-                vaultId={activeVaultId}
-                vaultRoot={activeVault?.root ?? null}
-                urlPath={activePath}
-                urlLine={targetLineRaw}
-                deepLinking={!!localPath}
-                treeOpen={treeOpen}
-                onNavigate={navigateWorkspace}
-                onToggleTree={toggleTreeFromWorkspace}
-                renderNote={renderNote}
-              />
+              {/* Markdown gets the full reading/live/source experience; every
+                  other file opens read-only. */}
+              {isVaultMarkdownPath(activePath) ? (
+                <VaultNoteView
+                  path={activePath}
+                  targetLine={targetLine}
+                  mode={mode}
+                  onToggleEdit={toggleEdit}
+                  onNavigate={openNote}
+                />
+              ) : (
+                <VaultFileView path={activePath} />
+              )}
             </HoverPreviewProvider>
           ) : (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-dim">

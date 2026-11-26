@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CAUSE_WINDOW, LINE_CARD_GATE_NODE, LINE_RUNS_PER_RUNNER, MAX_STARTS_PER_SWEEP, claimSlot, lineCandidates, lineLoadFor, lineQueueFor, planSweep, startPlanned, sweepCore } from "./orgLine";
+import { CAUSE_WINDOW, LINE_CARD_GATE_NODE, LINE_RUNS_PER_RUNNER, MAX_STARTS_PER_SWEEP, lineCandidates, lineQueueFor, planSweep, startPlanned, sweepCore } from "./orgLine";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
 import { HOST, MATE, ROLE, STANDING, NOW, TODAY, TEAM, task, fixtures } from "./orgLine.testkit";
@@ -211,33 +211,6 @@ describe("orgLine admission (LE6)", () => {
     // The laptop holds the role's folder (/srv/growth) inside the repository at /srv.
     const laptop = { _id: "devices_laptop", user_id: HOST, device_id: "dev-laptop", last_seen: NOW, git_plane: [{ root: "/srv", origin: "git@github.com:Acme/Growth.git", origin_ok: true }] };
     const host = (id: string, runs: number, over: Record<string, any> = {}) => ({ _id: `devices_${id}`, user_id: HOST, device_id: id, last_seen: NOW, line_slots: [{ root: `/home/ubuntu/${id}`, origin: ORIGIN, runs }], ...over });
-
-    test("a pass reads each pool machine's runs once for every key that names it, and counts its claims without reading again", async () => {
-      // Nov 21: `cast flow show` built a load per role folder and per flow agents, each reading every run on the
-      // same five machines and their tasks, and hit the 100 MB read cap at ~200 running runs.
-      const { ctx, tables } = fixtures({
-        role: caps(),
-        extra: { devices: [laptop, host("h1", 4), host("h2", 4)], workflow_runs: working(3, { runner_device: "h1", project_path: "/home/ubuntu/h1/growth" }) },
-      });
-      const role = tables.org_roles[0];
-      let runReads = 0;
-      const query = ctx.db.query.bind(ctx.db);
-      (ctx.db as any).query = (table: string) => (table === "workflow_runs" && runReads++, query(table));
-      const loads = new Map();
-      const first = await lineLoadFor(ctx, role, NOW, loads);
-      expect(first.pool?.slots.map((sl) => [sl.device, sl.working])).toEqual([["h1", 3], ["h2", 0]]);
-      const afterFirst = runReads;
-      const second = await lineLoadFor(ctx, role, NOW, loads, undefined, ["claude"]);
-      expect(second).not.toBe(first);
-      expect(second.pool?.slots.map((sl) => [sl.device, sl.working])).toEqual([["h1", 3], ["h2", 0]]);
-      expect(runReads).toBe(afterFirst);
-      // A claim lands on h2. The pass inserts no run while it plans, so the next key sees the claim through the
-      // shared count, reading neither machine again (a re-read per claim put `cast flow show` over the cap).
-      expect(claimSlot(second)?.device).toBe("h2");
-      const third = await lineLoadFor(ctx, role, NOW, loads, undefined, ["codex"]);
-      expect(third.pool?.slots.map((sl) => [sl.device, sl.working])).toEqual([["h1", 3], ["h2", 1]]);
-      expect(runReads).toBe(afterFirst);
-    });
 
     test("each run goes to the host with the most free slots, in that host's checkout, until the pool is full", async () => {
       const { ctx, tables } = fixtures({

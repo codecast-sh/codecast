@@ -80,17 +80,6 @@ describe("room flags local-first", () => {
     expect(row.transcribe_off).toBe(true);
   });
 
-  it("opening a private huddle makes it an ordinary one, as the server does", () => {
-    useInboxStore.getState().syncTable("callRooms", [{ ...serverFlags(true), private: true }]);
-    useInboxStore.getState().setRoomLocked(ROOM, false);
-    const row = (useInboxStore.getState() as any).callRooms[ROOM];
-    expect(row.locked).toBe(false);
-    expect(row.private).toBe(false);
-    // A stale push still saying private does not flap the door back.
-    useInboxStore.getState().syncTable("callRooms", [{ ...serverFlags(true), private: true }]);
-    expect((useInboxStore.getState() as any).callRooms[ROOM].private).toBe(false);
-  });
-
   it("paints a room the feed has not listed yet", () => {
     useInboxStore.getState().setRoomLocked("dm:bo:me", true);
     expect((useInboxStore.getState() as any).callRooms["dm:bo:me"].locked).toBe(true);

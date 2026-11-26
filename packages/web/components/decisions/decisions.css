@@ -165,9 +165,6 @@
 .decision-card .decision-card-body :where(pre) { margin: 0.4em 0; }
 .decision-card .decision-card-body > :first-child { margin-top: 0; }
 .decision-card .decision-card-body > :last-child { margin-bottom: 0; }
-/* The way to the whole body reads as a link: it is how the decision is read, not a footnote. */
-.decision-card .decision-read-more { color: var(--sol-blue); }
-.decision-card .decision-read-more:hover { color: var(--sol-text); }
 
 /* The call to action: the decision a task is held on. A tint and a warm edge,
    no shout — the card is already the only thing between the reader and the
@@ -209,24 +206,3 @@
   border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
 }
 .decision-doc.decision-doc-nav .cc-verdict-bar { top: var(--decision-nav-h); }
-
-/* The answered feed (AnsweredFeed): decisions read in a column, a day at a
-   time. The question keeps the document's serif at a feed's size, and a long
-   context folds under a fade until the reader opens it. */
-.decision-feed .decision-feed-day {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  padding: 1.25rem 0 0.6rem;
-  background: var(--sol-bg);
-}
-.decision-feed .decision-feed-day span { opacity: 0.7; }
-.decision-feed .decision-question { font-size: clamp(1.15rem, 1rem + 0.6vw, 1.4rem); }
-.decision-feed .decision-feed-folded {
-  max-height: 18rem;
-  overflow: hidden;
-  mask-image: linear-gradient(to bottom, #000 70%, transparent);
-}

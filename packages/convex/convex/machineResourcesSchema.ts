@@ -34,12 +34,5 @@ export const machineResourceTables = {
     // Sessions a person put at background priority on this machine. Handed to
     // the daemon with every report answer; it lowers each process they own.
     background_sessions: v.optional(v.array(v.string())),
-    // Each local session's isUnattendedConversation verdict and when it was read
-    // (machineResources.unattendedSessions). A conversation row changes with
-    // every message, so reading it in each report made the report collide with
-    // the session's own writes; the verdict's flags are set when a session starts.
-    session_attendance: v.optional(v.array(v.object({
-      session_id: v.string(), conversation_id: v.optional(v.id("conversations")), unattended: v.boolean(), at: v.number(),
-    }))),
   }).index("by_user", ["user_id"]).index("by_user_device", ["user_id", "device_id"]),
 };

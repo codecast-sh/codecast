@@ -18,14 +18,6 @@ export function jumpToReviewComment(comment: PendingComment, scroll: HTMLElement
     if (comment.messageId) jumpToMessage(comment.messageId);
     return;
   }
-  // A quote the code editor made (Cmd-L) points at a file, not a message:
-  // its source is the file at those lines.
-  const filePath = comment.filePath;
-  if (filePath && comment.messageId.startsWith("file:")) {
-    const { blockIndex, fileLine } = comment;
-    void import("./filesPane").then(({ openInEditor }) => openInEditor({ path: filePath, line: blockIndex, endLine: fileLine }));
-    return;
-  }
   state.setReviewTarget(comment.messageId, comment.blockIndex);
   const region = scroll && reviewRegion(scroll, comment.messageId);
   if (region) {

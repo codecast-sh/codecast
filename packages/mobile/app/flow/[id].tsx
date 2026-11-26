@@ -332,7 +332,7 @@ function RunSheet({ runId, onClose, onGo }: { runId: string | null; onClose: () 
       {runId ? (
         <ScrollView style={{ maxHeight: 560 }} testID="flow-run-sheet">
           <RNText style={styles.sheetTitle} numberOfLines={2}>{run?.task_title ?? run?.task_short_id ?? 'Run'}</RNText>
-          {run === null ? <RNText style={[styles.sheetSub, { marginTop: 8 }]}>This run is not available.</RNText> : <FlowRunCard runId={runId} onOpen={onGo} />}
+          {run === null ? <RNText style={[styles.sheetSub, { marginTop: 8 }]}>This run is not available.</RNText> : <FlowRunCard runId={runId} />}
           {run ? (
             <RNView style={[styles.card, { marginTop: 8 }]}>
               {decision ? (
@@ -344,7 +344,6 @@ function RunSheet({ runId, onClose, onGo }: { runId: string | null; onClose: () 
               {run.task_short_id ? (
                 <SheetRow icon="check-square" color={Theme.orange} label={`Open ${run.task_short_id}`} rule={!!run.primary_conversation_id || !!decision} onPress={() => onGo(`/task/${run.task_short_id}`)} testID="flow-run-task" />
               ) : null}
-              <SheetRow icon="git-branch" color={Theme.violet} label="Open the run" rule={!!run.task_short_id || !!run.primary_conversation_id || !!decision} onPress={() => onGo(`/run/${runId}`)} testID="flow-run-open" />
             </RNView>
           ) : null}
         </ScrollView>

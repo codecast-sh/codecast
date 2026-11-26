@@ -28,11 +28,6 @@ import { DOCS_SHOTS } from "../lib/docsShots/flag";
 // Before any box mounts, on the app and on share pages alike.
 holdTextareaTextNodes();
 
-// A dev build can stand a fake installed-app host in for the desktop bridge
-// (?appsFake=1), to drive the install sheet and Settings > Installed apps in a
-// browser. The branch and its chunk are gone from a production build.
-if (import.meta.env.DEV) void import("../lib/installedAppsDevFake");
-
 bootAfterHandoffGate(() => {
   // Share pages boot standalone: they hydrate server-rendered markup and never
   // need the store, the inbox, or auth. Everything else is the app.

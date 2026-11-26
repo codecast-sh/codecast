@@ -19,7 +19,7 @@ export const FILES_ROUTE = "/files";
 
 /** The query keys filesHref mints. One of them on a /vault URL marks an old
  *  Files link rather than the Vault. */
-const FILES_QUERY_KEYS = ["f", "path", "l", "view", "d"];
+const FILES_QUERY_KEYS = ["f", "path", "l", "view"];
 
 /** The /files URL an old `/vault?f=…` Files link stands for, query intact, or
  *  null when the path is not one (a bare /vault is the Vault page). */
@@ -48,44 +48,15 @@ export function isFilesPath(path: string): boolean {
  * vault a file belongs to; the machine that has the files does.
  */
 export function filesHref(
-  opts: {
-    path?: string | null;
-    /** A line, or a cursor spelling already in `l` form (`12:4`, `12-20`),
-     *  passed through as it came off a URL. */
-    line?: number | string;
-    column?: number;
-    /** The last line of a range the editor flashes on arrival. */
-    endLine?: number;
-    graph?: boolean;
-    localPath?: string | null;
-    /** The machine `localPath` was written on (a session's runner). A cloud
-     *  host's path opens that host's file through the forward
-     *  (useVaultLocalPath); this machine's id, or none, opens it here. */
-    device?: string | null;
-  } = {},
+  opts: { path?: string | null; line?: number; graph?: boolean; localPath?: string | null } = {},
 ): string {
   const params = new URLSearchParams();
   if (opts.localPath) params.set("path", opts.localPath);
   else if (opts.path) params.set("f", opts.path);
-  if (opts.localPath && opts.device) params.set("d", opts.device);
-  const at = typeof opts.line === "string" ? opts.line : cursorParam(opts.line, opts.column, opts.endLine);
-  if (at) params.set("l", at);
+  if (opts.line) params.set("l", String(opts.line));
   if (opts.graph) params.set("view", "graph");
   const query = params.toString();
   return query ? `${FILES_ROUTE}?${query}` : FILES_ROUTE;
-}
-
-/**
- * The `l` value: where the cursor lands and what flashes. `12` a line, `12:4`
- * a line and column, `12-20` lines 12 to 20 flashed with the cursor on 12,
- * `12:4-20` both. The editor reads it back with parseCursorTarget
- * (lib/code/editorHost); the notes view reads the leading line.
- */
-export function cursorParam(line?: number, column?: number, endLine?: number): string {
-  if (!line || line < 1) return "";
-  const col = column && column > 0 ? `:${column}` : "";
-  const end = endLine && endLine > line ? `-${endLine}` : "";
-  return `${line}${col}${end}`;
 }
 
 /** Where a `?path=` deep link lands: which vault, and the path inside it

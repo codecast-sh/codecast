@@ -205,7 +205,7 @@ function DeviceList({ kind, devices }: { kind: Kind; devices: MediaDeviceInfo[] 
             key={d.deviceId || i}
             type="button"
             onClick={() => void switchDevice(kind, d.deviceId)}
-            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sol-text/[0.06] ${
+            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-white/[0.06] ${
               on ? "text-sol-text" : "text-sol-text-muted"
             }`}
           >
@@ -266,7 +266,7 @@ export function DeviceChips({ footer }: { footer?: React.ReactNode }) {
         ),
       )}
       {open && (
-        <div className="absolute bottom-full left-1/2 z-10 mb-2 max-h-[min(420px,calc(100dvh-140px))] w-[min(280px,calc(100vw-24px))] -translate-x-1/2 space-y-2 overflow-y-auto rounded-xl bg-sol-bg-alt p-1.5 shadow-2xl ring-1 ring-sol-text/5">
+        <div className="absolute bottom-full left-1/2 z-10 mb-2 max-h-[min(420px,calc(100dvh-140px))] w-[min(280px,calc(100vw-24px))] -translate-x-1/2 space-y-2 overflow-y-auto rounded-xl bg-sol-bg-alt p-1.5 shadow-2xl ring-1 ring-white/5">
           <NameMyDevices lists={lists} refresh={refresh} />
           {CHIPS.find((c) => c.kind === open)!.menu.map((k) => (
             <DeviceList key={k} kind={k} devices={lists[k]} />
@@ -310,8 +310,8 @@ function Chip({
       title={`${KIND_WORD[kind]}: ${name}. Click to change.`}
       className={`flex items-center rounded-full px-1.5 py-0.5 text-meta transition-[color,background-color,opacity] duration-200 ${
         active
-          ? "bg-sol-text/10 text-sol-text"
-          : "text-sol-text-dim opacity-50 hover:bg-sol-text/[0.06] hover:text-sol-text-muted group-hover/ctl:opacity-100 group-focus-within/ctl:opacity-100"
+          ? "bg-white/10 text-sol-text"
+          : "text-sol-text-dim opacity-50 hover:bg-white/[0.06] hover:text-sol-text-muted group-hover/ctl:opacity-100 group-focus-within/ctl:opacity-100"
       }`}
     >
       <Icon className="h-3 w-3 shrink-0" />

@@ -1,8 +1,7 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useState } from "react";
-import { MessageSquareLock, Pin, Shield, SlidersHorizontal, SquareTerminal } from "lucide-react";
-import { SessionDmAccessSwitch } from "../../../components/settings/SessionDmAccess";
+import { Pin, Shield, SlidersHorizontal, SquareTerminal } from "lucide-react";
 import { AGENT_CLIENTS, CLAUDE_BACKEND_LABELS, DEFAULT_CLAUDE_BACKEND, asClaudeBackend, isHostedAgentType, type AgentClientId, type ClaudeBackend } from "@codecast/shared/contracts";
 import { usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
 import { NewSessionDefaultsSection } from "../../../components/settings/NewSessionDefaults";
@@ -112,12 +111,6 @@ export default function AgentsPage() {
           onChange={(v) => handleUpdate({ muse: v as MuseMode })}
           note="Yolo is on unless you pick Default: managed sessions run without a terminal to answer prompts."
         />
-      </SettingsSection>
-
-      <SettingsSection title="Direct messages" icon={MessageSquareLock}>
-        <SettingsRow label="Sessions read your DMs" description="Codecast and Slack DMs. Your own sessions only.">
-          <SessionDmAccessSwitch />
-        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection
