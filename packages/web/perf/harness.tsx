@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff" | "inbox-first-paint";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -38,7 +38,55 @@ const isViewport = (el: Element) => el.hasAttribute("data-sv-feed") || el.hasAtt
 const heightOf = (el: Element) => ((el as HTMLElement).style?.height === "0px" ? 0 : isViewport(el) ? VIEWPORT : ROW);
 // A virtualized feed is as tall as its spacer says.
 const scrollHeightOf = (el: Element) => el.hasAttribute("data-sv-feed") ? Math.max(VIEWPORT, Number.parseFloat(el.querySelector<HTMLElement>('div[style*="position: relative"][style*="height"]')?.style.height || "0")) : heightOf(el);
-const geometry = (name: string, value: (el: HTMLElement) => number) => ({ get(this: HTMLElement) { layoutReads.push(readSite(name)); return value(this); }, configurable: true });
+// Forced layouts: a read made after a DOM write in the same task, before the
+// browser has had a frame to lay the page out on its own. In a browser that
+// read lays the page out synchronously (a long frame's "forced" time). One
+// read pays for the layout and the reads after it find it computed, until the
+// next write dirties it again, so what is counted is each forced layout, named
+// by the read that forced it. A task boundary counts as a frame and a
+// ResizeObserver callback runs after the browser's own layout, so reads there
+// force nothing. A lower bound: every layout it names is forced in a browser.
+let forcedReads: string[] = [];
+let layoutDirty = false;
+let dirtyTimer: ReturnType<typeof setTimeout> | null = null;
+const markDirty = () => {
+  layoutDirty = true;
+  dirtyTimer ??= setTimeout(() => { dirtyTimer = null; layoutDirty = false; }, 0);
+};
+const recordRead = (name: string) => {
+  const site = readSite(name);
+  layoutReads.push(site);
+  if (layoutDirty) { forcedReads.push(site); layoutDirty = false; }
+};
+for (const [proto, methods] of [[w.Node.prototype, ["appendChild", "insertBefore", "removeChild", "replaceChild"]], [w.Element.prototype, ["setAttribute", "removeAttribute", "append", "prepend", "remove", "replaceChildren"]]] as const) {
+  for (const m of methods) {
+    const real = (proto as any)[m];
+    (proto as any)[m] = function (this: unknown, ...args: unknown[]) { markDirty(); return real.apply(this, args); };
+  }
+}
+// Writes that change layout through a setter: classes, text, inline style.
+for (const [proto, props] of [[w.Element.prototype, ["className", "innerHTML", "id"]], [w.Node.prototype, ["textContent", "nodeValue"]], [w.CharacterData.prototype, ["data"]], [w.HTMLElement.prototype, ["hidden", "innerText"]]] as const) {
+  for (const prop of props) {
+    const desc = Object.getOwnPropertyDescriptor(proto, prop);
+    if (!desc?.set) continue;
+    Object.defineProperty(proto, prop, { ...desc, set(this: unknown, v: unknown) { markDirty(); desc.set!.call(this, v); } });
+  }
+}
+for (const m of ["setProperty", "removeProperty"]) {
+  const proto = w.CSSStyleDeclaration.prototype;
+  const real = proto[m];
+  proto[m] = function (this: unknown, ...args: unknown[]) { markDirty(); return real.apply(this, args); };
+}
+for (const prop of Object.getOwnPropertyNames(w.CSSStyleDeclaration.prototype)) {
+  const desc = Object.getOwnPropertyDescriptor(w.CSSStyleDeclaration.prototype, prop);
+  if (!desc?.set || !desc.configurable) continue;
+  Object.defineProperty(w.CSSStyleDeclaration.prototype, prop, { ...desc, set(this: unknown, v: unknown) { markDirty(); desc.set!.call(this, v); } });
+}
+for (const m of ["add", "remove", "toggle", "replace"]) {
+  const real = w.DOMTokenList.prototype[m];
+  w.DOMTokenList.prototype[m] = function (this: unknown, ...args: unknown[]) { markDirty(); return real.apply(this, args); };
+}
+const geometry = (name: string, value: (el: HTMLElement) => number) => ({ get(this: HTMLElement) { recordRead(name); return value(this); }, configurable: true });
 Object.defineProperties(w.HTMLElement.prototype, {
   offsetHeight: geometry("offsetHeight", heightOf),
   offsetWidth: geometry("offsetWidth", () => 700),
@@ -60,7 +108,7 @@ Object.defineProperties(w.HTMLElement.prototype, {
   },
 });
 w.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-  layoutReads.push(readSite("getBoundingClientRect"));
+  recordRead("getBoundingClientRect");
   const h = heightOf(this);
   return { x: 0, y: 0, top: 0, left: 0, right: 700, bottom: h, width: 700, height: h, toJSON() {} };
 };
@@ -68,7 +116,7 @@ w.HTMLElement.prototype.scrollTo = function (this: HTMLElement, x: any, y?: numb
 w.HTMLElement.prototype.scrollIntoView = () => {};
 w.HTMLCanvasElement.prototype.getContext = () => ({ font: "", measureText: (t: string) => ({ width: t.length * 7 }) });
 const realComputedStyle = w.getComputedStyle.bind(w);
-const getComputedStyle = (el: Element, pseudo?: string) => { layoutReads.push(readSite("getComputedStyle")); return realComputedStyle(el, pseudo); };
+const getComputedStyle = (el: Element, pseudo?: string) => { recordRead("getComputedStyle"); return realComputedStyle(el, pseudo); };
 w.getComputedStyle = getComputedStyle;
 // Shadow roots made during a measured action are watched from the moment they
 // exist, so a viewer that draws (or redraws) inside one is counted.
@@ -111,6 +159,7 @@ class SizeObserver {
   observe(el: Element) {
     this.targets.add(el);
     queueMicrotask(() => {
+      if (this.targets.has(el) && el.isConnected) layoutDirty = false;
       if (this.targets.has(el) && el.isConnected) this.callback([{ target: el, contentRect: { height: heightOf(el), width: 700 }, contentBoxSize: [{ blockSize: heightOf(el), inlineSize: 700 }], borderBoxSize: [{ blockSize: heightOf(el), inlineSize: 700 }] } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
     });
   }
@@ -326,6 +375,7 @@ async function measure(action: () => Promise<void>): Promise<Report> {
   renderMs = 0;
   rendered = new Map();
   layoutReads = [];
+  forcedReads = [];
   convexAsked = { subscribe: [], query: [], mutation: [], action: [] };
   let storeWrites = 0;
   const storeKeys = new Set<string>();
@@ -348,13 +398,14 @@ async function measure(action: () => Promise<void>): Promise<Report> {
   mo.disconnect();
   unsub();
   const reads = layoutReads;
+  const forced = forcedReads;
   return {
     counts: {
-      commits, storeWrites, domMutations: mutations, layoutReads: reads.length,
+      commits, storeWrites, domMutations: mutations, layoutReads: reads.length, forcedLayoutReads: forced.length,
       convexSubscribes: convexAsked.subscribe.length, convexQueries: convexAsked.query.length,
       convexMutations: convexAsked.mutation.length, convexActions: convexAsked.action.length,
     },
-    detail: { renderMs: [renderMs.toFixed(2)], layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
+    detail: { renderMs: [renderMs.toFixed(2)], layoutReads: [...new Set(reads)], forcedLayoutReads: tally(forced), layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
   };
 }
 
@@ -453,6 +504,40 @@ async function setupInboxLoad(modern = false): Promise<Bench> {
     },
     reset: hide,
   };
+}
+
+// The inbox's first paint (ct-101552): the page opens on /inbox with the
+// session list beside the conversation it last showed, both drawn from the
+// cache (2,000 sessions, that conversation's 200 cached messages). A run
+// mounts the two from nothing, the work of the first React task after load.
+async function setupInboxFirstPaint(): Promise<Bench> {
+  // Chrome, where the freeze was seen, sizes the composer with CSS
+  // field-sizing, not Safari's measured fallback (components/composerLayout).
+  // Set before the composer's module loads, which reads it once.
+  (globalThis as any).CSS = { supports: (prop: string, value?: string) => prop === "field-sizing" && value === "content", escape: (v: string) => v };
+  const { SessionListPanel } = await import("../components/GlobalSessionPanel");
+  const { InboxConversation } = await import("../app/inbox/QueuePageClient");
+  if (!(await import("../components/composerLayout")).FIELD_SIZING_SUPPORTED) throw new Error("perf harness: the composer loaded before the field-sizing shim");
+  seedStore(2000);
+  const a = convId(3);
+  useInboxStore.getState().setMessages(a, messages(a, 200), { hasMoreAbove: true, initialized: true });
+  mount();
+  const page = (
+    <div style={{ display: "flex" }}>
+      <SessionListPanel activeSessionId={a} onSessionSelect={() => {}} />
+      <InboxConversation sessionId={a} isIdle autoFocusInput={false} />
+    </div>
+  );
+  const show = async () => {
+    await render(page);
+    await until(() => cards() > 0 && host.textContent!.includes(`Last line of answer 199 in ${a.slice(-6)}`), "the inbox and its conversation to paint");
+    await settle();
+  };
+  const hide = async () => { await act(async () => { root.render(null); }); await settle(); };
+  // Load every lazy piece once, as the app's bundle has by first paint.
+  await show();
+  await hide();
+  return { run: () => measure(show), reset: hide };
 }
 
 // A heartbeat through the path production heartbeats take: the liveness
@@ -570,6 +655,7 @@ const setups: Record<Workload, () => Promise<Bench>> = {
   "inbox-load-modern": () => setupInboxLoad(true),
   "inbox-heartbeat-modern": () => setupInboxHeartbeat(true),
   diff: setupDiff,
+  "inbox-first-paint": setupInboxFirstPaint,
 };
 
 /** Builds the workload's world, once per process. */
