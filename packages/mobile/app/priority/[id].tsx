@@ -11,7 +11,7 @@
 // step the rank, and Correct… writes a correction. Rename, drop, merge, set
 // aside and a session's move are web-only for now.
 import { useMemo, useRef, useState, type ComponentProps } from 'react';
-import { Alert, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText, TextInput } from '@/components/Themed';
@@ -25,7 +25,8 @@ import { asksPerson, bestSession, type NextAction } from '@codecast/shared/contr
 import type { PriorityHistory, PriorityPlanRef } from '@codecast/shared/contracts/priorities';
 import { ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
-import { milestoneBox, nextWords, ownerWords, sessionLabel, standing, startCompose, VERB } from '@/lib/priorityScreen';
+import { correctionDraft, milestoneBox, nextWords, ownerWords, sessionLabel, standing, startCompose, VERB } from '@/lib/priorityScreen';
+import { appAlert } from '@/lib/popups';
 import { lookup } from '@codecast/web/lib/liveEntities';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
@@ -36,7 +37,7 @@ import { openCompose } from '@/lib/compose';
 const api = _api as any;
 
 /** The owner's writes; a refusal puts the paint back and says the server's reason. */
-const writes = priorityWrites((message) => Alert.alert("Couldn't save that", message));
+const writes = priorityWrites((message) => appAlert("Couldn't save that", message));
 
 type Row = PriorityView;
 
@@ -279,14 +280,17 @@ function DayStrip({ model }: { model: PriorityModel }) {
 function OwnerControls({ row }: { row: Row }) {
   const Theme = useTheme();
   const [correcting, setCorrecting] = useState(false);
-  // Uncontrolled: what was typed is read on Save, so typing re-renders nothing.
-  const text = useRef('');
+  // Uncontrolled: what was typed is read on Save, so typing re-renders nothing; Cancel empties it.
+  const draft = useRef(correctionDraft()).current;
   const ranked = row.status === 'active' && row.rank != null;
+  const close = () => {
+    draft.cancel();
+    setCorrecting(false);
+  };
   const save = () => {
-    const body = text.current.trim();
+    const body = draft.take();
     if (!body) return;
     writes.correct(row.short_id, body, null);
-    text.current = '';
     setCorrecting(false);
   };
   const chip = (label: string, icon: ComponentProps<typeof Feather>['name'], onPress: () => void, testID: string, disabled = false) => (
@@ -300,7 +304,7 @@ function OwnerControls({ row }: { row: Row }) {
       <RNView style={styles.controls}>
         {ranked && chip('Move up', 'arrow-up', () => writes.move(row.short_id, 'up'), 'priority-move-up', row.rank === 1)}
         {ranked && chip('Move down', 'arrow-down', () => writes.move(row.short_id, 'down'), 'priority-move-down')}
-        {chip('Correct…', 'edit-3', () => setCorrecting((c) => !c), 'priority-correct')}
+        {chip('Correct…', 'edit-3', () => (correcting ? close() : setCorrecting(true)), 'priority-correct')}
       </RNView>
       {correcting && (
         <RNView style={styles.card} testID="priority-correct-box">
@@ -309,13 +313,13 @@ function OwnerControls({ row }: { row: Row }) {
             multiline
             placeholder="What did it get wrong?"
             placeholderTextColor={Theme.textDim}
-            onChangeText={(t) => { text.current = t; }}
+            onChangeText={draft.type}
             style={styles.correctInput}
             testID="priority-correct-text"
           />
           <RNText style={styles.lineMeta}>The next pass keeps this.</RNText>
           <RNView style={styles.controls}>
-            <TouchableOpacity onPress={() => setCorrecting(false)} style={styles.control} accessibilityRole="button">
+            <TouchableOpacity onPress={close} style={styles.control} accessibilityRole="button" testID="priority-correct-cancel">
               <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.controlText}>Cancel</RNText>
             </TouchableOpacity>
             <TouchableOpacity onPress={save} style={[styles.control, { backgroundColor: Theme.text }]} accessibilityRole="button" testID="priority-correct-save">

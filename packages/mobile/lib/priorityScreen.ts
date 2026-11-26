@@ -68,3 +68,22 @@ export function milestoneBox(row: Pick<PriorityRow, 'mine'>, m: Pick<MilestoneMo
   if (!row.mine) return { kind: 'mark', label: m.done ? 'Done' : 'Open' };
   return { kind: 'toggle', writes: !m.done, label: m.done ? `Mark ${m.step.title} not done` : `Mark ${m.step.title} done` };
 }
+
+/**
+ * What the person typed into Correct…, read once on Save. Cancel (or closing
+ * the box) empties it, so a cancelled correction is never saved by a later
+ * Save on an empty box.
+ */
+export function correctionDraft() {
+  let text = '';
+  return {
+    type(t: string) { text = t; },
+    cancel() { text = ''; },
+    /** The trimmed text to save, null when there is none; either way the draft is empty after. */
+    take(): string | null {
+      const body = text.trim();
+      text = '';
+      return body || null;
+    },
+  };
+}

@@ -3,7 +3,7 @@
 // same models the screen builds (web lib/priorityList buildModels).
 import { describe, expect, it } from 'bun:test';
 import { buildModels, lastDays } from '@codecast/web/lib/priorityList';
-import { milestoneBox, nextWords, ownerWords, standing, startCompose } from './priorityScreen';
+import { correctionDraft, milestoneBox, nextWords, ownerWords, standing, startCompose } from './priorityScreen';
 import { linkedCreateArgs, openCompose, useCompose } from './compose';
 import { milestoneStartHref } from '@codecast/web/lib/priorities';
 import { parseComposeLink } from '@codecast/web/lib/composeLink';
@@ -24,6 +24,17 @@ const row = (over: Record<string, unknown> = {}) => ({
 const model = (r: any) => buildModels([r], undefined, () => undefined, lastDays(10, NOW), NOW)[0];
 
 describe('the phone priority screen', () => {
+  it('Correct…: a cancelled correction is never saved by a later Save on an empty box', () => {
+    const draft = correctionDraft();
+    draft.type('Calibration belongs elsewhere');
+    draft.cancel();
+    expect(draft.take()).toBeNull();
+    // What was typed after reopening is what saves, once.
+    draft.type('  Notes are polish  ');
+    expect(draft.take()).toBe('Notes are polish');
+    expect(draft.take()).toBeNull();
+  });
+
   it('says the rank once with who placed it, and names a teammate who placed it only once', () => {
     expect(standing(row())).toBe('#7 · ranked by AI');
     expect(ownerWords(row())).toBe('You');
