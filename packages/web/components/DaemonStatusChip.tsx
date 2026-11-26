@@ -9,7 +9,7 @@ import { beating } from "../lib/hostWake";
 import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
 import { useLocalDeviceId } from "../hooks/useLocalDeviceId";
 import { useSyncDevices } from "../hooks/useSyncDevices";
-import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
+import { describeCommandTarget, describeDaemonHealth, type CommandTarget, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { useAppOffline } from "../hooks/useAppOffline";
 import { useInboxStore } from "../store/inboxStore";
 import { deviceDisplayName, isRemoteHost } from "@codecast/shared/contracts";
@@ -31,10 +31,13 @@ import { SessionHostWakeChip, SessionRunLimitChip } from "./HostWakeStatus";
 // name or the word "daemon": the header has no room for a sentence, and the
 // panel says both. Its width holds steady through a copy too: the check
 // replaces the dot, not the text.
-function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealthCopy; machine?: string; quiet?: boolean }) {
+function DaemonHealthPill({ view, machine, where, quiet = false }: { view: DaemonHealthCopy; machine?: string; where: CommandTarget; quiet?: boolean }) {
   const [copied, setCopied] = useState(false);
   const color = `var(${view.colorVar})`;
   const label = machine ? `${machine}: ${view.label}` : view.label;
+  // Copy lands on this browser's machine, so the command row says which
+  // machine the command is for, in the row itself.
+  const target = describeCommandTarget(machine, where);
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -50,8 +53,11 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
         <p className="text-xs leading-snug text-sol-text-dim">{view.detail}</p>
       </StatusPanelSection>
       <StatusPanelSection className="p-0">
-        <button type="button" onClick={handleClick} className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sol-bg-alt/60">
-          <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-meta text-sol-text">{view.command}</code>
+        <button type="button" onClick={handleClick} aria-label={target ? `Copy ${view.command}. ${target}` : `Copy ${view.command}`} className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sol-bg-alt/60">
+          <span className="flex min-w-0 flex-col items-start gap-1">
+            <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-meta text-sol-text">{view.command}</code>
+            {target && <span className="truncate text-meta text-sol-text-muted">{target}</span>}
+          </span>
           <span className="ml-auto shrink-0 text-meta text-sol-text-dim group-hover:text-sol-text">{copied ? "Copied" : "Copy"}</span>
         </button>
       </StatusPanelSection>
@@ -107,7 +113,7 @@ export function DaemonStatusChip() {
 
   // The pill only while a message is late right now; the hour record gets the
   // quiet glyph. Same line blocksDelivery draws for the delivery note.
-  return <DaemonHealthPill view={view} machine={health.device} quiet={!blocksDelivery(health)} />;
+  return <DaemonHealthPill view={view} machine={health.device} where="here" quiet={!blocksDelivery(health)} />;
 }
 
 export function SessionDaemonChip({ conversationId }: { conversationId?: string | null }) {
@@ -142,7 +148,9 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
   const view = describeDaemonHealth(health);
   if (!view) return limitChip;
 
-  return <>{limitChip}<DaemonHealthPill view={view} machine={ownerName} /></>;
+  // The chip renders only when the owner is not this browser's machine, or
+  // when this browser's machine is unknown (its daemon did not answer).
+  return <>{limitChip}<DaemonHealthPill view={view} machine={ownerName} where={localDeviceId ? "elsewhere" : "unknown"} /></>;
 }
 
 /**
