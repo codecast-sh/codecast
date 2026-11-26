@@ -448,6 +448,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
     feeds: ["priorities.list"],
   },
+  // The rank of each of the viewer's active priorities in every workspace
+  // they hold (convex priorityRanks.mine): what the inbox's Priorities view
+  // labels a session by when the priority it serves is in another workspace
+  // than the active one, whose ranks it reads off `priorities` (store/priorityOrder).
+  // A snapshot: mine returns the complete set.
+  priorityRanks: {
+    persistence: { kind: "collection", key: "priorityRanks" },
+    hydration: { phase: "deferred" },
+    feeds: ["priorityRanks.mine"],
+  },
   // What only convex priorities.show returns for a priority a page or a
   // reference opened, keyed by the priority's _id (lib/priorityDetail): the
   // owner's corrections, sessions whose milestone is gone, links and plan
@@ -2491,6 +2501,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   workflowRuns: "shared",
   weeklyCards: "shared",
   priorities: "shared",
+  priorityRanks: "shared",
   priorityDetails: "local",
   signals: "shared",
   lineLabels: "shared",

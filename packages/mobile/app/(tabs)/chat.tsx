@@ -19,13 +19,7 @@ import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
 import { showActionSheet } from '@/lib/popups';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
-
-const TEAM_ICON_EMOJI: Record<string, string> = {
-  rocket: '🚀', flame: '🔥', zap: '⚡', star: '⭐', diamond: '💎', crown: '👑',
-  shield: '🛡️', sword: '⚔️', anchor: '⚓', compass: '🧭', mountain: '⛰️', tree: '🌲',
-  sun: '☀️', moon: '🌙', cloud: '☁️', bolt: '🔩', atom: '⚛️', dna: '🧬',
-  hexagon: '⬡', triangle: '🔺', cube: '🧊', sphere: '🔵', infinity: '♾️', omega: 'Ω',
-};
+import { TEAM_ICON_EMOJI } from '@/lib/teamIconEmoji';
 
 // The Chat tab: the team talking, top level. Live huddles at the top so a
 // running call is the first thing on the screen, then channels, direct

@@ -1,7 +1,7 @@
 // The inbox's Priorities view (web's): the status sections stay, each sorted
-// by the viewer's priority a session serves, and every row says its rank. The
-// priorities are fed only while the view is up, which resolveInboxViewMode
-// allows only in a workspace with them on.
+// by the viewer's priority a session serves, and a ranked row says its rank.
+// The priorities and ranks are fed only while the view is up, which
+// resolveInboxViewMode allows only in a workspace with them on.
 import { useMemo } from 'react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore, type InboxSession, type InboxViewMode } from '@codecast/web/store/inboxStore';
@@ -16,12 +16,10 @@ export function useInboxPriorityView(viewMode: InboxViewMode): PriorityInboxView
   const workspaceKey = useActiveWorkspaceKey();
   // The generated api's type stops short of priorities here, as on the priority screen.
   useSyncCollection('priorities', (api as any).priorities.list, on && workspaceKey ? { workspace: workspaceKey } : 'skip', { select: listRows });
+  // The viewer's ranks in every workspace, for sessions serving a priority outside the active one.
+  useSyncCollection('priorityRanks', (api as any).priorityRanks.mine, on ? {} : 'skip');
   const sig = useInboxStore((s) => (on ? priorityInboxSig(s) : ''));
-  return useMemo(() => {
-    if (!sig) return null;
-    const st = useInboxStore.getState();
-    return priorityInboxView(st.priorities, st.currentUser?._id, st.sessions);
-  }, [sig]);
+  return useMemo(() => (sig ? priorityInboxView(useInboxStore.getState()) : null), [sig]);
 }
 
 const sorted = (view: PriorityInboxView | null, rows: InboxSession[]) => (view ? view.sort(rows) : rows);

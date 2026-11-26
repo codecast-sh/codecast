@@ -650,7 +650,7 @@ export function SessionCardView({
           </button>
         )}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
-          {priorityRank !== undefined && <PriorityRankChip rank={priorityRank} />}
+          {priorityRank && <PriorityRankChip rank={priorityRank} />}
           {author && <CardAuthor author={author} prefs={chrome.prefs} />}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
           <SessionProjectChip

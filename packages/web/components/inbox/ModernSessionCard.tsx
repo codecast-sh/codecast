@@ -219,7 +219,7 @@ export function ModernSessionCardView({
     : null;
   const shipLink = ship ? shipHref(ship) : null;
   const chips: React.ReactNode[] = [];
-  if (priorityRank !== undefined) chips.push(<PriorityRankChip key="priority" rank={priorityRank} />);
+  if (priorityRank) chips.push(<PriorityRankChip key="priority" rank={priorityRank} />);
   if (!nested) {
     chips.push(
       <ModernProjectChip
@@ -339,7 +339,7 @@ export function ModernSessionCardView({
           <span className="flex shrink-0 items-center gap-1.5">
             {line.reason && <span data-mc-compact-reason className={`hidden max-w-[9rem] truncate text-meta ${meta.text}`}>{line.reason}</span>}
             {/* The Priorities view's rank, on the one line a compact card keeps (its third line, where the chip sits otherwise, is hidden there). */}
-            {priorityRank !== undefined && <span data-mc-compact-rank className="hidden"><PriorityRankChip rank={priorityRank} /></span>}
+            {priorityRank && <span data-mc-compact-rank className="hidden"><PriorityRankChip rank={priorityRank} /></span>}
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFavorite && (
               <button type="button" data-mc-fav aria-label="Unfavorite" title="Favorite; press to remove" onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }} className="flex items-center text-sol-yellow hover:opacity-70">

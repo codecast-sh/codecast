@@ -82,8 +82,8 @@ export type SessionCardViewProps = {
   answeredBy?: string | null;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
-  /** The Priorities view only: the rank of the viewer's priority this session serves, "elsewhere" for one in
-   *  another workspace, null for "None" (store/priorityOrder rankLabelOf). Absent in every other view. */
+  /** The Priorities view only: the rank of the viewer's priority this session serves and its workspace when
+   *  not the active one, null for none (no chip) (store/priorityOrder rankLabelOf). Absent in every other view. */
   priorityRank?: PriorityRankLabel;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
   /** The declared status the row's section header already says (Needs you
