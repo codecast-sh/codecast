@@ -25,7 +25,7 @@ export function behindLine(ms: number | null | undefined): string | null {
 
 /** When a pass runs, said plainly: "now", "in 40m", "in 2h". */
 export function whenLabel(at: number | null | undefined, now = Date.now()): string {
-  if (at == null) return "at the next sweep";
+  if (at == null) return "after your next pin, answer or task close";
   const ms = at - now;
   if (ms <= 60_000) return "now";
   return ms < 3_600_000 ? `in ${Math.ceil(ms / 60_000)}m` : `in ${Math.round(ms / 3_600_000)}h`;

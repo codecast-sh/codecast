@@ -168,6 +168,8 @@ import {
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
 import { inheritLink, sessionEvidence } from "./lib/priorityLinks";
+import { sessionActivity } from "./lib/priorityPassSchedule";
+import { parseServesHint } from "@codecast/shared/contracts/priorities";
 export { generateShareToken, isNonEmptyMessage };
 
 // Single relevance-ranked search-index lookup shared by every message-search
@@ -12468,6 +12470,7 @@ export async function performSetThreadState(
   text: string,
   status: ThreadStateStatus,
   result?: string | null,
+  serves?: string,
 ): Promise<{ at: number; resurfaced: boolean }> {
   const at = Date.now();
   await ctx.db.patch(conv._id, {
@@ -12481,9 +12484,11 @@ export async function performSetThreadState(
     thread_state_result_at: result ? at : undefined,
   });
   // The pin keeps only the latest; this keeps the trail the priorities pass reads,
-  // one row per change (an agent re-pinning the same words adds nothing).
-  if (text !== conv.thread_state || status !== conv.thread_state_status) {
-    await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status });
+  // one row per change (an agent re-pinning the same words adds nothing, unless
+  // it names what the session serves), and each change asks for the owner's pass.
+  if (text !== conv.thread_state || status !== conv.thread_state_status || serves) {
+    await ctx.db.insert("thread_state_events", { conversation_id: conv._id, user_id: conv.user_id, at, text, status, ...(serves ? { serves } : {}) });
+    await sessionActivity(ctx, conv);
   }
   // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
   if (status === "done") await sessionEvidence(ctx, conv, at);
@@ -12532,6 +12537,8 @@ export const setThreadState = mutation({
     // common truth for a state written mid-session.
     status: v.optional(v.string()),
     result: v.optional(v.string()),
+    // `cast state --serves pri-N/sK`: a hint the priorities pass reads, never a link.
+    serves: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -12539,6 +12546,8 @@ export const setThreadState = mutation({
       ? await getAuthenticatedUserId(ctx, args.api_token)
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    const serves = args.serves === undefined ? undefined : parseServesHint(args.serves);
+    if (serves === null) throw new Error(`"${args.serves}" is not a priority or milestone (pri-N or pri-N/sK, like pri-3/s2)`);
 
     const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
       c.user_id?.toString() === userId.toString() ||
@@ -12561,7 +12570,7 @@ export const setThreadState = mutation({
     }
 
     const status = parseThreadStateStatus(args.status) ?? "working";
-    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result));
+    const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
     return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced };
   },
 });

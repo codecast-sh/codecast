@@ -327,11 +327,11 @@ describe("sweep", () => {
 
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).toEqual([{ user_id: w.ana, workspace: w.team }]);
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.other })).toEqual([]);
-    // The cron fans out one sweep per flagged team; each team's sweep schedules its pairs' passes.
+    // The cron fans out one sweep per flagged team; each team's sweep schedules its pairs' passes, through each pair's schedule.
     expect(await w.t.action(pass.sweep, {})).toBe(1);
     expect((await jobs(w, "sweepTeam")).map((j: any) => j.args[0])).toEqual([{ team_id: w.acme }]);
     expect(await w.t.action(pass.sweepTeam, { team_id: w.acme })).toBe(1);
-    expect((await jobs(w, "runPass")).map((j: any) => j.args[0])).toEqual([{ user_id: w.ana, workspace: w.team }]);
+    expect((await jobs(w, "priorityPassSchedule:fire")).map((j: any) => ({ user_id: j.args[0].user_id, workspace: j.args[0].workspace }))).toEqual([{ user_id: w.ana, workspace: w.team }]);
   });
 
   test("the cron reads the teams a page at a time and reaches flagged teams past the first page", async () => {

@@ -32,6 +32,7 @@ import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/prior
 import { stepDone } from "./priorityPass";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
+import { passActivity } from "./priorityPassSchedule";
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -167,8 +168,9 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
  * setTaskStatus): every milestone naming it, among the priorities of its
  * owner and of the people whose sessions link it, in the task's workspace
  * (the only workspace whose pass can name it, wherever those sessions are).
+ * Each of those people's pass there is asked for (lib/priorityPassSchedule).
  */
-export async function taskStatusChanged(ctx: Ctx, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">): Promise<void> {
+export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">): Promise<void> {
   const workspace = task.workspace;
   if (!workspace) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
@@ -178,6 +180,7 @@ export async function taskStatusChanged(ctx: Ctx, task: Pick<Doc<"tasks">, "_id"
   const sessions = await sessionsOf(ctx, [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)]);
   const places = [task.user_id, ...sessions.map((c) => c.user_id)].map((user) => ({ user, workspace }));
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
+  for (const { user } of places) await passActivity(ctx, user, workspace);
 }
 
 /**

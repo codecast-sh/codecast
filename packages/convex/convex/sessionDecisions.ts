@@ -61,6 +61,7 @@ import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { approvalCardRefusal, approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 import { sessionEvidence } from "./lib/priorityLinks";
+import { sessionActivity } from "./lib/priorityPassSchedule";
 
 export const optionValidator = v.object({
   label: v.string(),
@@ -851,8 +852,12 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await settleCardApproval(ctx as any, row as any, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
-  // An answer is evidence for the milestone its session is mapped to (lib/priorityLinks).
-  if (verdict.status === "answered") await sessionEvidence(ctx, await ctx.db.get(row.conversation_id), now);
+  // An answer is evidence for the milestone its session is mapped to (lib/priorityLinks), and asks for its owner's pass.
+  if (verdict.status === "answered") {
+    const conv = await ctx.db.get(row.conversation_id);
+    await sessionEvidence(ctx, conv, now);
+    if (conv) await sessionActivity(ctx, conv);
+  }
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).

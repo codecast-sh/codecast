@@ -9,6 +9,15 @@
 // drop; a priority's set aside, done and merge; a session's move and "not
 // this". The person's corrections are read by every later pass.
 
+/**
+ * A `cast state --serves` hint, "pri-N" or "pri-N/sK" (any case), normalized;
+ * null when it is neither. The pass reads it as a hint and nothing links by it.
+ */
+export function parseServesHint(raw: string): string | null {
+  const ref = raw.trim().toLowerCase();
+  return /^pri-\d+(\/s\d+)?$/.test(ref) ? ref : null;
+}
+
 export type PriorityStatus = "active" | "done" | "quiet" | "set_aside" | "merged";
 export const PRIORITY_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside", "merged"];
 
@@ -201,7 +210,7 @@ export type PriorityList = {
   teammates_truncated: boolean;
   /** How far the viewer's pass here lags now (now − its cursor); null before its first run or with no workspace named. */
   behind_by_ms: number | null;
-  /** When the next pass here runs: now while one runs, else the next scheduled sweep; null with no workspace named. */
+  /** When the next pass here runs: now while one runs, else the one the viewer's activity scheduled; null when none is pending or no workspace is named. */
   next_pass_at: number | null;
 };
 

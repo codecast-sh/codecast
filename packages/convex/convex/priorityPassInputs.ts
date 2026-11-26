@@ -348,7 +348,7 @@ export const passInputs = internalQuery({
     // the sessions they touched: the read stops at the SESSIONS_READ-th session
     // (or ACTIVITY_SCAN rows) and the cursor moves to just before the first
     // session it left out. Each session keeps its newest pin events only.
-    const touched = new Map<string, { conv: Doc<"conversations">; last: number; typed: PassSession["typed"]; pin_events: PassSession["pin_events"] }>();
+    const touched = new Map<string, { conv: Doc<"conversations">; last: number; typed: PassSession["typed"]; pin_events: PassSession["pin_events"]; serves?: string }>();
     const sendRows = ctx.db.query("user_sends").withIndex("by_user_timestamp", (q: any) => q.eq("user_id", args.user_id).gt("timestamp", since).lte("timestamp", until))[Symbol.asyncIterator]();
     const pinRows = ctx.db.query("thread_state_events").withIndex("by_user_at", (q: any) => q.eq("user_id", args.user_id).gt("at", since).lte("at", until))[Symbol.asyncIterator]();
     let send = await sendRows.next();
@@ -371,6 +371,8 @@ export const passInputs = internalQuery({
           else {
             t.pin_events.push({ at, text: row.text });
             if (t.pin_events.length > PRIORITY_PASS_CAPS.pin_events) t.pin_events.shift();
+            // The newest `serves` hint read stands.
+            if (row.serves) t.serves = row.serves;
           }
           touched.set(key, t);
         }
@@ -399,6 +401,7 @@ export const passInputs = internalQuery({
         pin_events: t.pin_events,
         typed: t.typed,
         ...(await personLinks(conv, shortId)),
+        ...(t.serves ? { serves: t.serves } : {}),
       });
     }
 

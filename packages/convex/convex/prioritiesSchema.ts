@@ -1,5 +1,5 @@
 // Priorities (shared/contracts/priorities.ts): what one person is driving at,
-// inferred from their own sessions by a pass that runs every few hours, the
+// inferred from their own sessions by a pass that runs after their activity, the
 // pass's own record of each run, and the trail of pinned states it reads.
 //
 // A priority carries `workspace` (the access key) and never spans
@@ -113,6 +113,18 @@ export const priorityTables = {
     catch_up: v.optional(v.boolean()),
   }).index("by_user_workspace_started", ["user_id", "workspace", "started_at"]),
 
+  // The one pending pass of a (person, workspace) that their activity asked
+  // for (lib/priorityPassSchedule.ts). `token` names the job that owns it (a
+  // fire holding another stands down) and is cleared when the pass starts;
+  // `since` is when the burst it waits on began.
+  priority_pass_schedules: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    due_at: v.number(),
+    since: v.optional(v.number()),
+    token: v.optional(v.number()),
+  }).index("by_user_workspace", ["user_id", "workspace"]),
+
   // What the person told the pass about one of their priorities (or one of
   // its milestones), in their words. Every later pass in its workspace reads
   // it until the person deletes it; the first that succeeds after reading it
@@ -150,6 +162,8 @@ export const priorityTables = {
     at: v.number(),
     text: v.string(),
     status: threadStateStatus,
+    /** `cast state --serves pri-N/sK`: the agent's word on what the session serves. The pass reads it as a hint; nothing links by it. */
+    serves: v.optional(v.string()),
   })
     .index("by_conversation_at", ["conversation_id", "at"])
     .index("by_user_at", ["user_id", "at"])

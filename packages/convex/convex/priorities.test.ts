@@ -10,7 +10,6 @@ import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorities";
-import { nextSweepAt } from "./priorityPassSweep";
 import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
 import type { Id } from "./_generated/dataModel";
 
@@ -159,11 +158,17 @@ describe("reads", () => {
     };
     const before = await meta();
     expect(before.behind_by_ms).toBeNull();
-    expect(before.next_pass_at).toBe(nextSweepAt(Date.now()));
+    // Nothing asked for a pass yet: none is pending.
+    expect(before.next_pass_at).toBeNull();
     await t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: ada, workspace: ws, started_at: NOW - 9 * 3_600_000, finished_at: NOW - 9 * 3_600_000, status: "ok", cursor_at: NOW - 8 * 3_600_000, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     expect(Math.floor((await meta()).behind_by_ms! / 3_600_000)).toBe(8);
+    // Activity schedules one: the list says when it runs.
+    const due = await t.mutation((internal as any).priorityPassSchedule.request, { user_id: ada, workspace: ws });
+    expect(due).toBeGreaterThan(Date.now());
+    expect((await meta()).next_pass_at).toBe(due);
     await t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: ada, workspace: ws, started_at: Date.now(), finished_at: Date.now(), status: "running", cursor_at: NOW - 8 * 3_600_000, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     expect((await meta()).next_pass_at!).toBeLessThanOrEqual(Date.now());
+    await t.run(async (ctx) => { for (const j of await ctx.db.system.query("_scheduled_functions").collect()) if (j.state.kind === "pending") await ctx.scheduler.cancel(j._id); });
   });
 
   test("turning the feature on starts that team's sweep at once", async () => {

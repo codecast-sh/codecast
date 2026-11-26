@@ -1,8 +1,9 @@
 // The priorities pass, run (lib/priorityPass.ts is its pure core): for one
 // person in one workspace, read what they touched since the last pass
 // (priorityPassInputs.ts), ask the model once, and write the plan. reserve
-// holds the pair, runPass asks, applyPlan writes atomically. A cron sweeps
-// every few hours (priorityPassSweep.ts); `cast priorities run` calls runNow.
+// holds the pair, runPass asks, applyPlan writes atomically. The person's
+// activity schedules it (priorityPassSchedule.ts), a daily sweep catches what
+// no hook saw (priorityPassSweep.ts); `cast priorities run` calls runNow.
 //
 // A run that reads more than one prompt holds moves the cursor to the last
 // session it read and chains another run for the rest. A run that finds
@@ -24,7 +25,7 @@ import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
-/** Runs one pass chains for work that did not fit, the first included: the rest waits for the next sweep. */
+/** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
 export const MAX_CHAINED_RUNS = 6;
 const CHAIN_DELAY_MS = 2_000;
 /** After this many failed runs in a row on one cursor, the last one steps the cursor past what failed. */
@@ -152,16 +153,19 @@ export const reserve = internalMutation({
 
 type Gate = { on: boolean; cursor_at: number; budgeted: boolean };
 
-/** Whether the priorities feature is on where the pass would write (a team key only for a member, a personal key only for its own person), the cursor, and whether the workspace pays for model calls. */
+/** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
+export async function passOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
+  const ws = parseWorkspaceKey(workspace);
+  if (!ws) return false;
+  if (ws.type === "team") return (await isTeamMember(ctx, userId, ws.teamId)) && (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities"));
+  return String(ws.userId) === String(userId) && (await workspaceHasFeature(ctx, { user_id: userId }, "priorities"));
+}
+
+/** Whether the pass may write here (passOn), the cursor, and whether the workspace pays for model calls. */
 export const passGate = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string() },
   handler: async (ctx, args): Promise<Gate> => {
-    const ws = parseWorkspaceKey(args.workspace);
-    const on = !ws
-      ? false
-      : ws.type === "team"
-        ? (await isTeamMember(ctx, args.user_id, ws.teamId)) && (await workspaceHasFeature(ctx, { team_id: ws.teamId }, "priorities"))
-        : String(ws.userId) === String(args.user_id) && (await workspaceHasFeature(ctx, { user_id: args.user_id }, "priorities"));
+    const on = await passOn(ctx, args.user_id, args.workspace);
     const budget = await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first();
     return { on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0 };
   },

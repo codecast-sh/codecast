@@ -23,6 +23,7 @@ import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from
 import { hasOkRun, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorityPassRun";
 import { inWorkspace } from "./priorityPassInputs";
 import { passTiming } from "./priorityPassSweep";
+import { passActivity } from "./lib/priorityPassSchedule";
 import { getOwnerMembership } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
@@ -818,8 +819,8 @@ async function doSessionNotThis(ctx: Ctx, viewer: Id<"users">, sessionRef: strin
 
 const MAX_CORRECTION = 2_000;
 
-/** The person tells the pass what it got wrong about a priority (or one of its milestones); every later pass reads it until deleted. */
-async function doCorrect(ctx: Ctx, viewer: Id<"users">, shortId: string, text: string, stepKey: string | undefined): Promise<Result<PriorityCorrection>> {
+/** The person tells the pass what it got wrong about a priority (or one of its milestones); every later pass reads it until deleted, and the next one is asked for now. */
+async function doCorrect(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, text: string, stepKey: string | undefined): Promise<Result<PriorityCorrection>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const body = text.trim();
@@ -836,6 +837,7 @@ async function doCorrect(ctx: Ctx, viewer: Id<"users">, shortId: string, text: s
     snapshot: { short_id: p.short_id, title: p.title, summary: p.summary, status: p.status, steps: p.steps },
   };
   const id = await ctx.db.insert("priority_corrections", row);
+  await passActivity(ctx, viewer, p.workspace);
   return correctionOut({ _id: id, _creationTime: 0, ...row });
 }
 

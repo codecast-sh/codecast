@@ -25,6 +25,7 @@ import {
   THREAD_STATE_STATUS_LABEL,
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
+import { parseServesHint } from "@codecast/shared/contracts/priorities";
 import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
 import { commandGroup } from "./commandGroups.js";
 
@@ -179,8 +180,9 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       "Who acts next: working (default) | blocked | done | dormant; files the session under Needs You / Done / Sleeping when the turn ends",
     )
     .option("--for <session>", "Target another session (default: the current one)")
+    .option("--serves <pri-N/sK>", "The priority or milestone this session serves: a hint the priorities pass weighs, never a link")
     .option("--json", "Machine-readable output")
-    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string }) => {
+    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string; serves?: string }) => {
       const args = rawArgs ?? [];
 
       const intent = parseStateArgs(args, options.for);
@@ -198,6 +200,15 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       const askLabel = intent.mode === "set" ? doneAskLabel(status, intent.text) : null;
       if (askLabel) {
         console.error(doneWithAskRefusal(askLabel));
+        process.exit(1);
+      }
+      const serves = options.serves === undefined ? undefined : parseServesHint(options.serves);
+      if (serves === null) {
+        console.error(`"${options.serves}" is not a priority or milestone: --serves pri-N or pri-N/sK, like pri-3/s2`);
+        process.exit(1);
+      }
+      if (intent.mode !== "set" && serves !== undefined) {
+        console.error(`--serves goes with a state to pin: cast state --serves ${serves} "<text>"`);
         process.exit(1);
       }
       const session = intent.session || deps.detectCurrentSessionId();
@@ -234,7 +245,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       // station's edges route on it.
       const stationResult = intent.mode === "set" ? threadStateResult(intent.text) : null;
       // Setting the pin is safe to repeat, so a gateway 5xx or a timeout is retried before it is reported.
-      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined }, { retries: 2 });
+      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined, serves }, { retries: 2 });
       // Keep the reminder hook's local stamp in step with the write — but only
       // for THIS session. `--for` writes to somebody else's thread, and their
       // agent's reminder is keyed to their own machine's stamp, not ours.

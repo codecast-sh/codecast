@@ -86,6 +86,8 @@ export type PassSession = {
   placed?: { priority: string; step_key: string | null };
   /** Priorities the person said it is not part of. */
   not_for?: string[];
+  /** What its agent last said it serves (`cast state --serves`, "pri-N" or "pri-N/sK"): a hint, never a link. */
+  serves?: string;
 };
 
 export type PassPriority = {
@@ -260,6 +262,7 @@ function sessionBlock(s: PassSession): string {
   if (s.prs.length) lines.push(`Pull requests: ${s.prs.map((p) => `${p.ref} (${p.merged ? "merged" : "open"})`).join("; ")}`);
   if (s.placed) lines.push(`Placed by the person on ${s.placed.priority}${s.placed.step_key ? `/${s.placed.step_key}` : ""}: it stays there.`);
   if (s.not_for?.length) lines.push(`Not part of ${s.not_for.join(", ")} (the person said).`);
+  if (s.serves) lines.push(`Its agent says it serves ${s.serves}: a hint to weigh against the rest, not a placement.`);
   const pins = s.pin_events.slice(-c.pin_events);
   if (pins.length) lines.push(`Pinned states since the last pass:\n${pins.map((p) => `- ${when(p.at)} · ${clip(p.text, c.pin_chars)}`).join("\n")}`);
   const typed = newestWithin(s.typed, c.typed_message_chars, c.typed_session_chars);
