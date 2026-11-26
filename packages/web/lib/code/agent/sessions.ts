@@ -7,9 +7,14 @@
 //   2. the conversation beside the Files pane on the stage,
 //   3. the most recently active session whose project or worktree holds the
 //      vault root,
+//   each only on the vault's machine (sessionOnMachine),
 //   4. none.
 
 import { SESSION_BLAME_HUES } from "../../repoView";
+import { directConversationId } from "../../desktopHandoff";
+import { inboxTabSessionId } from "../../pathLabel";
+import { isFilesPath } from "../../vault/vaultHref";
+import { leavesOf, type StageNode } from "../../../store/stageSplit";
 
 /** The fields of a session row the editor reads. A structural subset of the
  *  inbox store's InboxSession, so tests build rows by hand. */
@@ -20,6 +25,8 @@ export interface AgentSessionRow {
   agent_type: string;
   project_path?: string;
   git_root?: string;
+  /** The machine running the session; unset until routing assigns one. */
+  owner_device_id?: string | null;
   updated_at: number;
   user_id?: string;
   owned_by_me?: boolean;
@@ -54,15 +61,29 @@ export function sessionRoots(s: Pick<AgentSessionRow, "project_path" | "git_root
   return [s.project_path, s.git_root].filter((p): p is string => !!p);
 }
 
+/** A home directory or the filesystem root: a session started there holds
+ *  every repo on the machine and works in none of them in particular. */
+export function isBroadRoot(path: string): boolean {
+  const p = trimSlash(path);
+  return p === "/" || /^\/(Users|home)\/[^/]+$/.test(p) || p === "/root";
+}
+
+/** The folders that say where a session works: its roots, less a home
+ *  directory. Folder linking and name hints read these; an absolute path in a
+ *  tool call names its file whatever the session's folder. */
+export function workRoots(s: Pick<AgentSessionRow, "project_path" | "git_root">): string[] {
+  return sessionRoots(s).filter((r) => !isBroadRoot(r));
+}
+
 /** The session works in a folder that holds `root` (the vault): edits it makes
  *  land in the files this editor shows. */
 export function sessionCoversRoot(s: Pick<AgentSessionRow, "project_path" | "git_root">, root: string): boolean {
-  return sessionRoots(s).some((r) => pathWithin(root, r));
+  return workRoots(s).some((r) => pathWithin(root, r));
 }
 
 /** The session writes in a folder holding `absPath`. */
 export function sessionCoversFile(s: Pick<AgentSessionRow, "project_path" | "git_root">, absPath: string): boolean {
-  return sessionRoots(s).some((r) => pathWithin(absPath, r));
+  return workRoots(s).some((r) => pathWithin(absPath, r));
 }
 
 /** A session this viewer may steer: their own, never a teammate's row that
@@ -75,57 +96,66 @@ export function steerable(s: AgentSessionRow, viewerId: string | null): boolean 
   return !!s._id;
 }
 
-/** Sessions for the picker: steerable, working in this folder, most recently
- *  active first. */
-export function candidateSessions<T extends AgentSessionRow>(rows: Iterable<T>, root: string | null, viewerId: string | null, limit = 12): T[] {
+/** The session runs on `machine` (the vault's), or has no machine yet and
+ *  routes on its next send. A session on another machine with the same paths
+ *  reads and edits its own checkout, never the file on screen; with the
+ *  vault's machine unknown, only an unrouted session qualifies. */
+export function sessionOnMachine(s: Pick<AgentSessionRow, "owner_device_id">, machine: string | null): boolean {
+  return !s.owner_device_id || (!!machine && s.owner_device_id === machine);
+}
+
+/** Sessions for the picker: steerable, working in this folder on the vault's
+ *  machine, most recently active first. */
+export function candidateSessions<T extends AgentSessionRow>(rows: Iterable<T>, root: string | null, machine: string | null, viewerId: string | null, limit = 12): T[] {
   if (!root) return [];
   const out: T[] = [];
-  for (const s of rows) if (s && steerable(s, viewerId) && sessionCoversRoot(s, root)) out.push(s);
+  for (const s of rows) if (s && steerable(s, viewerId) && sessionOnMachine(s, machine) && sessionCoversRoot(s, root)) out.push(s);
   out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   return out.slice(0, limit);
 }
 
-/** The session a stage pane shows, from its path: /conversation/<id>,
- *  /inbox?s=<id>, or the bare inbox showing the focused conversation. */
+/** The session a stage pane shows, from its path: a conversation pane
+ *  (/conversation/<id>, the stage's own rule), an inbox deep link
+ *  (/inbox?s=<id>), or the bare inbox showing the focused conversation. */
 export function sessionOfPanePath(path: string, currentSessionId: string | null): string | null {
-  const [pathname, query = ""] = path.split("?");
-  const conv = /^\/conversation\/([A-Za-z0-9_-]+)$/.exec(pathname);
-  if (conv) return conv[1];
-  if (pathname === "/inbox" || pathname.startsWith("/inbox/")) {
-    const s = new URLSearchParams(query).get("s");
-    return s || currentSessionId;
-  }
-  return null;
+  const direct = directConversationId(path) ?? inboxTabSessionId(path);
+  if (direct) return direct;
+  const pathname = path.split("?")[0];
+  return pathname === "/inbox" || pathname.startsWith("/inbox/") ? currentSessionId : null;
 }
-
-const isFilesPath = (path: string) => /^\/(files|vault)(\/|\?|$)/.test(path);
 
 interface StageTabLike {
   id: string;
   path: string;
   layout?: unknown;
+  /** The conversation the editor on this tab was opened from (AppTab). */
+  editorOpenedFrom?: string;
 }
 
-function leafPaths(node: unknown): string[] {
-  if (!node || typeof node !== "object") return [];
-  const n = node as { type?: string; path?: string; children?: unknown[] };
-  if (n.type === "leaf") return typeof n.path === "string" ? [n.path] : [];
-  return (n.children ?? []).flatMap(leafPaths);
-}
-
-/** The conversation sharing a stage with a Files pane: the active tab's when it
- *  holds one, else any tab's. Null when Files is alone on its tab. */
-export function besideSessionId(tabs: readonly StageTabLike[], activeTabId: string | null, currentSessionId: string | null): string | null {
-  const ordered = [...tabs].sort((a, b) => Number(b.id === activeTabId) - Number(a.id === activeTabId));
+/** The conversation sharing a stage with this editor's Files pane. When the
+ *  active tab holds a Files pane, that pane is this editor's and only its tab
+ *  counts: Files alone there links nothing. Otherwise (the editor drawn off
+ *  the active tab) another tab's conversation counts only when `covers` says
+ *  its session works in this vault's folder, so a Files pane for another repo
+ *  never lends its conversation. On a tab with several conversations, the one
+ *  the Files pane was opened from (`editorOpenedFrom`, lib/filesPane) while it
+ *  is still there, else the first. */
+export function besideSessionId(tabs: readonly StageTabLike[], activeTabId: string | null, currentSessionId: string | null, covers: (sessionId: string) => boolean = () => true): string | null {
+  const filesPaths = (tab: StageTabLike) => (tab.layout ? leavesOf(tab.layout as StageNode).map((l) => l.path) : [tab.path]);
+  const active = tabs.find((t) => t.id === activeTabId);
+  const ordered = active && filesPaths(active).some(isFilesPath) ? [active] : tabs;
   for (const tab of ordered) {
-    const paths = leafPaths(tab.layout);
+    const paths = filesPaths(tab);
     if (paths.length < 2 || !paths.some(isFilesPath)) continue;
-    for (const p of paths) {
-      if (isFilesPath(p)) continue;
-      // Only the focused conversation of THIS window is the bare inbox's.
-      const id = sessionOfPanePath(p, tab.id === activeTabId ? currentSessionId : null);
-      if (id) return id;
-    }
+    const mine = tab === active;
+    // Only the focused conversation of THIS window is the bare inbox's.
+    const ids = paths
+      .filter((p) => !isFilesPath(p))
+      .map((p) => sessionOfPanePath(p, mine ? currentSessionId : null))
+      .filter((x): x is string => !!x && (mine || covers(x)));
+    const opener = tab.editorOpenedFrom;
+    if (opener && ids.includes(opener)) return opener;
+    if (ids[0]) return ids[0];
   }
   return null;
 }
@@ -137,11 +167,16 @@ export function resolveLink(opts: {
   candidates: readonly AgentSessionRow[];
   /** Whether a session id still names a row the viewer can steer. */
   exists: (id: string) => boolean;
+  /** The link in force now. A folder link holds while its session is still a
+   *  candidate, so two sessions active in one repo never trade places under
+   *  the person; it re-ranks only when that session leaves the folder. */
+  current?: AgentLink;
 }): AgentLink {
-  const { override, besideId, candidates, exists } = opts;
+  const { override, besideId, candidates, exists, current } = opts;
   if (override === "none") return { sessionId: null, source: "none" };
   if (override && exists(override)) return { sessionId: override, source: "picked" };
   if (besideId && exists(besideId)) return { sessionId: besideId, source: "beside" };
+  if (current?.source === "folder" && current.sessionId && candidates.some((c) => c._id === current.sessionId)) return current;
   const first = candidates[0];
   return first ? { sessionId: first._id, source: "folder" } : { sessionId: null, source: "none" };
 }

@@ -144,9 +144,36 @@ packages/web/app/settings/editor/ Settings > Editor (vim, vimrc report, LSP serv
   session.
 - **Send to the agent.** Cmd-L quotes the selection (`path:L10-20` plus code)
   into the linked session's composer as a pending quote
-  (`addReviewComment`). Cmd-K asks for an instruction inline and sends it to
+  (`addReviewComment`); a press on that quote in the composer's tray opens
+  the file at those lines. Cmd-K asks for an instruction inline and sends it to
   the linked session with the range; the agent's edit then streams into the
   buffer.
+- **Which session.** A session the person picks for the folder wins, then the
+  conversation beside this editor's Files pane (the one it was opened from,
+  `AppTab.editorOpenedFrom`, while it is on stage; when the active tab holds
+  Files only that tab counts, and a conversation on another tab counts only
+  if its session works in this vault's folder), then the most recently active session whose
+  `project_path` or `git_root` holds the vault root. A folder link holds while
+  its session still works there, so two sessions in one repo never trade
+  places under the person. Cmd-K pins its target when the box opens; only the
+  box's own picker changes it. Every candidate, pick and beside session must
+  run on the vault's machine (`owner_device_id`: this window's daemon for a
+  local vault, the host for a host vault, the source Mac for a mirror) or not
+  be routed yet; the same path on another Mac is a different checkout, so it
+  is neither linked nor named as a writer. Client session rows carry no `worktree_path` or
+  `recent_files` (both are stripped from the inbox projection), so a session
+  is matched by its project and checkout root, and an edit is attributed from
+  the session's latest tool calls and the paths in its activity line while it
+  is working. A bare file name in the activity line ("Editing index.ts") is a
+  weak hint: ignored for a session whose transcript names a file, never used
+  for presence dots, and used to name the writer of a change only when no
+  other open tab in the vault shares the name. An edit no working session
+  names takes a neutral color, never a guessed name.
+- **Sent marker.** After a Cmd-K send the range says "sent to <session>"
+  until the file changes under it or the turn that read the message ends:
+  keyed by the message's client id, it waits for the message to reach the
+  transcript before a turn end counts, so an instruction queued behind a
+  running turn keeps its marker past that turn.
 - **Agent edits, live.** When a session writes an open file, the changed
   ranges flash in that session's color and stay marked until the person moves
   on; the tab shows which session is editing the file now.

@@ -60,11 +60,41 @@ describe("writerFor", () => {
     expect(writerFor(index([row("s1")], msgs), "/r/app/x.ts")).toBe("s1");
   });
 
-  it("an activity line names a basename only inside the session's folder", () => {
+  it("a bare basename in an activity line counts only when the caller says it is unambiguous, inside the session's folder", () => {
     const rows = [row("s1", { activity: { text: "Editing `chat.ts`", tool: "Edit", at: NOW - 1000 } })];
     const idx = index(rows, {});
-    expect(writerFor(idx, "/r/app/src/chat.ts")).toBe("s1");
-    expect(writerFor(idx, "/elsewhere/chat.ts")).toBeNull();
+    const unique = () => true;
+    expect(writerFor(idx, "/r/app/src/chat.ts", unique)).toBe("s1");
+    expect(writerFor(idx, "/elsewhere/chat.ts", unique)).toBeNull();
+    // Presence passes no `weak`: a basename never draws a dot.
+    expect(writerFor(idx, "/r/app/src/chat.ts")).toBeNull();
+  });
+
+  it("a session in a home directory gives no name hint, but its absolute tool calls still count", () => {
+    const rows = [row("s1", { project_path: "/Users/ada", activity: { text: "Editing chat.ts", tool: "Edit", at: NOW - 1000 } })];
+    expect(writerFor(index(rows, {}), "/Users/ada/src/app/chat.ts", () => true)).toBeNull();
+    expect(writerFor(index(rows, { s1: [edit("/Users/ada/src/app/chat.ts")] }), "/Users/ada/src/app/chat.ts")).toBe("s1");
+  });
+
+  it("two same-named files under one root: a bare name picks neither unless it is unambiguous", () => {
+    const rows = [row("s1", { project_path: "/r", activity: { text: "Editing index.ts", tool: "Edit", at: NOW - 1000 } })];
+    const idx = index(rows, {});
+    const ambiguous = () => false;
+    for (const p of ["/r/src/a/index.ts", "/r/src/b/index.ts", "/r/lib/c/index.ts"]) expect(writerFor(idx, p, ambiguous)).toBeNull();
+  });
+
+  it("a path in the activity line resolves against the session's project and names that file only", () => {
+    const rows = [row("s1", { project_path: "/r", activity: { text: "Editing src/a/index.ts", tool: "Edit", at: NOW - 1000 } })];
+    const idx = index(rows, {});
+    expect(writerFor(idx, "/r/src/a/index.ts")).toBe("s1");
+    expect(writerFor(idx, "/r/src/b/index.ts", () => true)).toBeNull();
+  });
+
+  it("a session whose transcript names one file says nothing about another of the same basename", () => {
+    const rows = [row("s1", { project_path: "/r", activity: { text: "Editing index.ts", tool: "Edit", at: NOW - 1000 } })];
+    const idx = index(rows, { s1: [edit("/r/src/a/index.ts")] });
+    expect(writerFor(idx, "/r/src/a/index.ts")).toBe("s1");
+    expect(writerFor(idx, "/r/src/b/index.ts", () => true)).toBeNull();
   });
 
   it("a strong conflict is not rescued by a weak hint", () => {

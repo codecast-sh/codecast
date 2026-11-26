@@ -5,13 +5,17 @@
 // Evidence, strongest first:
 //   - a recent tool call in the session's loaded transcript that names the
 //     file's absolute path (Edit/Write/MultiEdit input, a patch header),
-//   - the session row's activity line ("editing chat.ts"), which names only
-//     the file's basename, so it counts only for a session whose folder holds
-//     the file.
+//   - a path in the session row's activity line ("editing src/chat.ts"),
+//     resolved against the session's folders,
+//   - a bare basename in that line ("editing chat.ts"): a weak hint, kept only
+//     for a session with no stronger evidence, and accepted only when the
+//     caller knows the name is unambiguous (writerFor's `weak`). Presence
+//     never takes it; attribution of a change takes it when no other open
+//     buffer in the vault shares the name.
 // Either way the session must be working now (the inbox's work state).
 
 import { SESSION_ACTIVITY_FRESH_MS } from "@codecast/shared/contracts";
-import { pathWithin, sessionRoots, type AgentSessionRow } from "./sessions";
+import { pathWithin, workRoots, type AgentSessionRow } from "./sessions";
 
 export interface ToolCallLike {
   name?: string;
@@ -82,6 +86,12 @@ export function emptyEditIndex(): EditIndex {
   return { full: new Map(), base: new Map() };
 }
 
+function addFull(index: EditIndex, path: string, sessionId: string) {
+  const set = index.full.get(path) ?? new Set<string>();
+  set.add(sessionId);
+  index.full.set(path, set);
+}
+
 export function buildEditIndex(opts: {
   rows: Iterable<AgentSessionRow>;
   isWorking: (row: AgentSessionRow) => boolean;
@@ -94,6 +104,7 @@ export function buildEditIndex(opts: {
   for (const row of rows) {
     if (!row || !isWorking(row)) continue;
     const msgs = messagesOf(row._id);
+    let strong = false;
     if (msgs?.length) {
       let seen = 0;
       for (let i = msgs.length - 1; i >= 0 && seen < window.calls; i--) {
@@ -103,35 +114,52 @@ export function buildEditIndex(opts: {
         for (let j = calls.length - 1; j >= 0 && seen < window.calls; j--) {
           seen++;
           for (const p of writtenPaths(calls[j])) {
-            const set = index.full.get(p) ?? new Set<string>();
-            set.add(row._id);
-            index.full.set(p, set);
+            addFull(index, p, row._id);
+            strong = true;
           }
         }
       }
     }
     const act = row.activity;
     if (act?.text && WRITE_TOOL.test(act.tool || act.text) && now - act.at <= Math.min(window.maxAgeMs, SESSION_ACTIVITY_FRESH_MS)) {
-      const roots = sessionRoots(row);
-      for (const word of act.text.split(/\s+/)) {
-        const name = basename(word.replace(/[`'",:;()]+$/g, "").replace(/^[`'"(]+/, ""));
+      const roots = workRoots(row);
+      const names: string[] = [];
+      let resolved = false;
+      for (const raw of act.text.split(/\s+/)) {
+        const word = raw.replace(/[`'",:;()]+$/g, "").replace(/^[`'"(]+/, "");
+        const name = basename(word);
         if (!name || !name.includes(".")) continue;
-        const list = index.base.get(name) ?? [];
-        if (!list.some((e) => e.sessionId === row._id)) list.push({ sessionId: row._id, roots });
-        index.base.set(name, list);
+        if (word.includes("/")) {
+          // An agent writes paths relative to where it runs: its project.
+          const cwd = row.project_path ?? row.git_root;
+          const abs = word.startsWith("/") ? word : cwd ? `${cwd.replace(/\/+$/, "")}/${word.replace(/^\.\//, "")}` : null;
+          if (abs) addFull(index, abs, row._id);
+          resolved = true;
+        } else names.push(name);
+      }
+      // A session that named a file outright says nothing by a bare name.
+      if (!strong && !resolved) {
+        for (const name of names) {
+          const list = index.base.get(name) ?? [];
+          if (!list.some((e) => e.sessionId === row._id)) list.push({ sessionId: row._id, roots });
+          index.base.set(name, list);
+        }
       }
     }
   }
   return index;
 }
 
-/** The one session the index names for a file, or null (none, or several). */
-export function writerFor(index: EditIndex, absPath: string): string | null {
+/** The one session the index names for a file, or null (none, or several).
+ *  A bare-basename hint counts only when `weak` says the name is unambiguous
+ *  for this file (no other file the person has open shares it). */
+export function writerFor(index: EditIndex, absPath: string, weak?: (basename: string) => boolean): string | null {
   const strong = index.full.get(absPath);
   if (strong?.size === 1) return [...strong][0];
   if (strong && strong.size > 1) return null;
-  const weak = (index.base.get(basename(absPath)) ?? []).filter((e) => e.roots.some((r) => pathWithin(absPath, r)));
-  return weak.length === 1 ? weak[0].sessionId : null;
+  if (!weak?.(basename(absPath))) return null;
+  const hint = (index.base.get(basename(absPath)) ?? []).filter((e) => e.roots.some((r) => pathWithin(absPath, r)));
+  return hint.length === 1 ? hint[0].sessionId : null;
 }
 
 /** A string naming everything in the index, to tell a real change from a
