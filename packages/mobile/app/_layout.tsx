@@ -317,6 +317,7 @@ function RootLayoutNav() {
                     <Stack.Screen name="project/[id]" options={{ title: 'Project' }} />
                     <Stack.Screen name="goal/[id]" options={{ title: 'Goal' }} />
                     <Stack.Screen name="priority/[id]" options={{ title: 'Priority' }} />
+                    <Stack.Screen name="priorities" options={{ title: 'Priorities' }} />
                     <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
                     <Stack.Screen name="org/index" options={{ title: 'Org' }} />
                     {/* A role's page is the session screen on its standing

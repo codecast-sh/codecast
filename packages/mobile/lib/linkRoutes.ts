@@ -87,7 +87,7 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   project: '/project',
   initiative: '/goal',
   // A priority (`pri-N`) has a screen of its own (app/priority); the web's
-  // /priorities list is not one priority and has no route here.
+  // /priorities list is a page (PAGE_ROUTES), not one priority.
   priority: '/priority',
 };
 
@@ -148,6 +148,7 @@ const PAGE_ROUTES: Record<string, string> = {
   '/decisions': '/decisions',
   '/questions': '/decisions',
   '/calls': '/calls',
+  '/priorities': '/priorities',
   // The team's deploy targets, each with its live deploy and any dev push on top (a dev push's notice links here).
   '/deploys': '/deploys',
   '/plans': '/(tabs)/tasks?segment=plans',

@@ -21,18 +21,15 @@ import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { linkedSessionIds, usePriorityLiveStates } from '@codecast/web/hooks/usePriorityModels';
 import { LIST_DAYS, STATE_WORD, ago, buildModels, lastDays, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
-import { asksPerson, bestSession, type NextAction } from '@codecast/shared/contracts/priorityDerive';
+import { asksPerson, bestSession } from '@codecast/shared/contracts/priorityDerive';
 import type { PriorityHistory, PriorityPlanRef } from '@codecast/shared/contracts/priorities';
 import { ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
-import { correctionDraft, milestoneBox, nextWords, ownerWords, sessionLabel, standing, startCompose, VERB } from '@/lib/priorityScreen';
+import { correctionDraft, milestoneBox, nextWords, ownerWords, sessionLabel, standing } from '@/lib/priorityScreen';
+import { AnswerOutline, PrimaryAction, usePriorityActs } from '@/components/priorities/PriorityButtons';
 import { appAlert } from '@/lib/popups';
-import { lookup } from '@codecast/web/lib/liveEntities';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import type { PriorityView } from '@codecast/web/lib/priorityDetail';
-import { mobileEntityRoute } from '@/lib/linkRoutes';
-import { openCompose } from '@/lib/compose';
 
 const api = _api as any;
 
@@ -87,19 +84,11 @@ function PriorityBody({ row }: { row: Row }) {
   const model = useMemo(() => buildModels([row], history, live, days, now)[0], [row, history, live, days, now]);
   const [summaryOpen, setSummaryOpen] = useState(false);
 
-  const openSession = (s: SessionLine) => {
-    const route = mobileEntityRoute('session', s.conversation_id);
-    if (route) router.push(route as never);
-  };
+  const { openSession, act } = usePriorityActs();
   const openMilestone = (m: MilestoneModel) => {
     if (m.tasks[0]) return router.push(`/task/${m.tasks[0]}` as never);
     const s = bestSession(m.sessions) ?? m.sessions[0];
     if (s) openSession(s);
-  };
-  // Web's Start: the same brief, and the session linked to the milestone at creation.
-  const start = (m: MilestoneModel) => {
-    const { seed, start: link, task } = startCompose(row, m, (id) => lookup(useInboxStore.getState().tasks, id));
-    openCompose(seed, [], link, task);
   };
 
   const action = model.action;
@@ -128,7 +117,7 @@ function PriorityBody({ row }: { row: Row }) {
       <ObjectHeader type="priority" shortId={row.short_id} title={row.title} />
       <ScrollView style={objectStyles.container} contentContainerStyle={objectStyles.content} testID={`priority-screen-${row.short_id}`}>
         <RNView style={styles.titleRow}>
-          <Feather name="crosshair" size={18} color={Theme.orange} style={styles.titleIcon} />
+          <Feather name="target" size={18} color={Theme.orange} style={styles.titleIcon} />
           <RNText style={[objectStyles.title, styles.title]}>{row.title}</RNText>
         </RNView>
         <RNView style={styles.meta}>
@@ -156,7 +145,7 @@ function PriorityBody({ row }: { row: Row }) {
             <RNView style={styles.card}>
               <RNText style={styles.nextTitle}>{next.title}</RNText>
               <RNView style={styles.nextRow}>
-                <PrimaryAction action={action} onPress={() => (action.kind === 'start' ? start(action.milestone) : openSession(action.session!))} />
+                <PrimaryAction action={action} onPress={() => act(row, action)} />
                 {next.session && <RNText style={styles.inSession} numberOfLines={2}>{next.session}</RNText>}
               </RNView>
             </RNView>
@@ -333,35 +322,6 @@ function OwnerControls({ row }: { row: Row }) {
 }
 
 
-/** The priority's one action. Answer wears its own look (a dark fill and a reply glyph) so it reads in grayscale. */
-function PrimaryAction({ action, onPress }: { action: NextAction<MilestoneModel>; onPress: () => void }) {
-  const Theme = useTheme();
-  const answer = action.kind === 'answer';
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.75}
-      accessibilityRole="button"
-      testID={`priority-action-${action.kind}`}
-      style={[styles.primary, { backgroundColor: answer ? Theme.text : Theme.accent }]}
-    >
-      {answer && <Feather name="corner-up-left" size={14} color={Theme.bg} />}
-      <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.primaryText, { color: Theme.bg }]}>{VERB[action.kind]}</RNText>
-    </TouchableOpacity>
-  );
-}
-
-/** A session that asks, but is not the priority's action: an outlined Answer. */
-function AnswerOutline({ onPress }: { onPress: () => void }) {
-  const Theme = useTheme();
-  return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.7} accessibilityRole="button" style={[styles.outline, { borderColor: Theme.text }]}>
-      <Feather name="corner-up-left" size={13} color={Theme.text} />
-      <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.outlineText, { color: Theme.text }]}>Answer</RNText>
-    </TouchableOpacity>
-  );
-}
-
 function Milestones({ label, list, model, onOpen, onSession, testID }: {
   label: string;
   list: MilestoneModel[];
@@ -446,10 +406,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   nextTitle: { fontSize: 15, fontWeight: '600', color: Theme.text, lineHeight: 21 },
   nextRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   inSession: { flex: 1, fontSize: 12.5, color: Theme.textMuted },
-  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 44, minWidth: 96, paddingHorizontal: 16, borderRadius: 10 },
-  primaryText: { fontSize: 14, fontWeight: '700' },
-  outline: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1 },
-  outlineText: { fontSize: 13, fontWeight: '600' },
   disclosure: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, alignSelf: 'flex-start' },
   disclosureText: { fontSize: 12, fontWeight: '600', color: Theme.textMuted0, textTransform: 'uppercase', letterSpacing: 0.5 },
   line: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52, paddingHorizontal: Spacing.md, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.bgHighlight },

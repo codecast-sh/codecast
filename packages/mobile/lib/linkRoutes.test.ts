@@ -309,9 +309,10 @@ describe('priority links', () => {
     expect(entityTypeFromId('pri-60')).toBe('priority');
   });
 
-  test('the priorities list is not a priority', () => {
-    expect(mobileRouteForUrl('https://codecast.sh/priorities') ?? '').not.toMatch(/^\/priority\//);
-    expect(mobileRouteForUrl('/priorities/') ?? '').not.toMatch(/^\/priority\//);
+  test('the priorities list opens the phone list, not a priority', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/priorities')).toBe('/priorities');
+    expect(mobileRouteForUrl('/priorities/')).toBe('/priorities');
+    expect(mobileNotificationRoute({ link: '/priorities' })).toBe('/priorities');
   });
 });
 
