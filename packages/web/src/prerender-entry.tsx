@@ -68,9 +68,14 @@ export { SEO_ROUTES, SITE_URL, seoFor, cardHeading, cardImagePath } from "@/lib/
 export { buildBlogFeed, BLOG_FEED_PATH } from "@/lib/blogFeed";
 export { CODECAST_MONO_MARK } from "@codecast/shared/render/codecastMark";
 
-// One client for all renders; nothing subscribes during renderToString, so no
-// WebSocket is ever opened.
+// One client for all renders. A page that reads a query during renderToString
+// opens the client's socket, so the prerender closes it when it is done
+// (closePrerenderClient); an open socket would keep the build from exiting.
 const convex = new ConvexReactClient(CONVEX_URL);
+
+export function closePrerenderClient(): Promise<void> {
+  return convex.close();
+}
 
 /**
  * A crawler is a settled, logged-out visitor. Without this override,

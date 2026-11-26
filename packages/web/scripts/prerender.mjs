@@ -107,6 +107,10 @@ function stripShellMeta(shell) {
     .replace(/<meta name="twitter:[^"]*"[^>]*\/>\s*/g, "");
 }
 
+// The SSR entry's Convex client, closed once the prerender ends either way:
+// its socket and reconnect timer would otherwise keep the build running.
+let closeClient;
+
 async function main() {
   // 1. SSR build, unless scripts/build.mjs ran it beside the client build.
   if (!process.argv.includes("--ssr-built")) {
@@ -118,6 +122,7 @@ async function main() {
   }
 
   const entryMod = await import(pathToFileURL(join(WEB_ROOT, "dist-ssr", "prerender-entry.mjs")).href);
+  closeClient = entryMod.closePrerenderClient;
   const { render, SEO_ROUTES, SITE_URL, buildBlogFeed, BLOG_FEED_PATH, cardHeading, cardImagePath, CODECAST_MONO_MARK } = entryMod;
 
   const shellRaw = readFileSync(join(DIST, "index.html"), "utf-8");
@@ -219,7 +224,9 @@ If you are a coding agent (or assisting a developer) and want to set up Codecast
   if (failed > 0) console.error(`WARNING: ${failed} route(s) failed to prerender — fix before the next deploy`);
 }
 
-main().catch((err) => {
-  console.error("prerender step FAILED entirely (site still works; crawlers get the SPA shell):", err);
-  process.exitCode = 0;
-});
+main()
+  .catch((err) => {
+    console.error("prerender step FAILED entirely (site still works; crawlers get the SPA shell):", err);
+    process.exitCode = 0;
+  })
+  .finally(() => closeClient?.());
