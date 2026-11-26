@@ -22,7 +22,7 @@ import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { passOn } from "./lib/priorityPassSchedule";
 import { askRerun } from "./lib/priorityClassifierHook";
-import { recomputeStepDone } from "./lib/priorityLinks";
+import { recomputeStepDone, replayDonePin } from "./lib/priorityLinks";
 import { PRIORITY_PASS_MODEL, holdPersonSteps, mergePriorities, parsePriorityPassOutput, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
 
@@ -254,6 +254,8 @@ export function sessionMover(ctx: { db: any }) {
     if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
     if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
     await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key, priority_set_by: to ? set_by : undefined });
+    // A done pin that named this milestone before the session was on it counts now.
+    if (to && step_key && (to !== conv.priority_id || step_key !== conv.priority_step_key)) await replayDonePin(ctx, conv, to, step_key);
   };
   const recount = async (userId: Id<"users">) => {
     for (const [id, delta] of moved) {

@@ -24,6 +24,10 @@ describe("servesHint", () => {
     expect(servesHint({ serves_mismatch: { serves: "pri-3/s2", milestone: "pri-4/s1" } })).toBe("--serves pri-3/s2 doesn't match this session's milestone pri-4/s1; nothing closed");
   });
 
+  test("a done pin naming a milestone from a session on none yet is kept, and says so", () => {
+    expect(servesHint({ serves_unlinked: { serves: "pri-3/s2" } })).toBe("this session isn't on pri-3 yet; the pin is kept and counts once it's linked");
+  });
+
   test("nothing to say when the server names no milestone (not done, --serves given, or linked to none)", () => {
     expect(servesHint({})).toBeNull();
     expect(servesHint({ milestone: null })).toBeNull();

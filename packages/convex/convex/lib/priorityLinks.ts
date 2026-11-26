@@ -230,6 +230,24 @@ export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, s
   await recomputeStepDone(ctx, conv.priority_id, conv.priority_step_key, at);
 }
 
+/** The most of a session's newest pins read for one that named a milestone it was just linked to. */
+const PINS_READ = 20;
+
+/**
+ * A session just mapped to a milestone: its newest done pin that named that
+ * milestone (`--serves pri-N/sK`, pinned before the link) counts now, at the
+ * pin's own time, as it would have had the link been there.
+ */
+export async function replayDonePin(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, stepKey: string | undefined): Promise<void> {
+  if (!stepKey || !personDriven(conv)) return;
+  const p: Priority | null = await ctx.db.get(priorityId);
+  if (!p) return;
+  const serves = `${p.short_id}/${stepKey}`;
+  const pins: Array<Doc<"thread_state_events">> = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).order("desc").take(PINS_READ);
+  const pin = pins.find((e) => e.status === "done" && e.serves === serves);
+  if (pin) await recomputeStepDone(ctx, priorityId, stepKey, pin.at);
+}
+
 /**
  * The open milestone a session is mapped to, for a done pin that did not
  * name one (`cast state` prints how to: re-pin with --serves). Null when it
@@ -285,6 +303,7 @@ export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"prioriti
   if ((await sessionVisibility(ctx).workspaceOf(conv)) !== priority.workspace) return false;
   await ctx.db.patch(conv._id, { priority_id: priority._id, priority_step_key: stepKey, priority_set_by: set_by });
   await moveSessionCount(ctx, conv.priority_id, priority._id);
+  await replayDonePin(ctx, conv, priority._id, stepKey);
   return true;
 }
 

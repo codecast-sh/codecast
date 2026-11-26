@@ -12,7 +12,7 @@ import { patchTask } from "./lib/taskWrite";
 import { patchPullRequest } from "./prShepherd";
 import { spawnSessionCore } from "./spawn";
 import { setTaskStatus } from "./orgInit";
-import { linkFromPlan, linkFromStart, linkFromTask } from "./lib/priorityLinks";
+import { linkFromPlan, linkFromStart, linkFromTask, linkSession } from "./lib/priorityLinks";
 import { TASK, SOURCE, ADA, apply, engineCtx, sameIssue } from "./issueSync.testkit";
 import type { Id } from "./_generated/dataModel";
 
@@ -313,6 +313,30 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     await new Promise((r) => setTimeout(r, 5));
     await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped again", status: "done", serves: "pri-1/s3" });
     expect((await stepOf(t, p1, "s3")).done_at).toBe(pinnedAt);
+  });
+
+  test("a done pin naming a milestone from a session on none is kept, and counts at its own time once the pass or a link puts the session there", async () => {
+    const { t, ada, p1, cFree } = await world();
+    const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    expect(res.serves_unlinked).toEqual({ serves: "pri-1/s3" });
+    const pinnedAt = (await convOf(t, cFree)).thread_state_at;
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+    await new Promise((r) => setTimeout(r, 5));
+    // The pass maps it to pri-1/s3: the pin counts, at the pin's time.
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [], sessions: [{ session: "jx7free", priority: "pri-1", step_key: "s3" }], unmap: [], notes: [], rewritten: [] },
+    });
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: pinnedAt, done_set_by: "evidence" });
+
+    // A link the same way: a second session's pin on s4, then a link onto s4.
+    const other = await t.run((ctx: any) => ctx.db.insert("conversations", {
+      user_id: ada, agent_type: "claude_code", session_id: "sess-jx7late", short_id: "jx7late", title: "late", started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
+    }));
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7late", text: "Done", status: "done", serves: "pri-1/s4" });
+    const at = (await convOf(t, other)).thread_state_at;
+    expect(await t.run(async (ctx: any) => linkSession(ctx, await ctx.db.get(other), p1, "s4"))).toBe(true);
+    expect(await stepOf(t, p1, "s4")).toMatchObject({ done: true, done_at: at });
   });
 
   test("a done pin naming another milestone, or from a worker, closes nothing", async () => {

@@ -12582,7 +12582,12 @@ export const setThreadState = mutation({
     // One that names another milestone than the session's closes none either: the CLI says so.
     const mapped = status === "done" && serves ? await mappedMilestone(ctx, conv) : null;
     const serves_mismatch = mapped && mapped !== serves ? { serves, milestone: mapped } : null;
-    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced, ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}) };
+    // One from a session on no milestone yet is kept: it counts once a link or the pass puts the session there (lib/priorityLinks replayDonePin).
+    const serves_unlinked = status === "done" && serves && !mapped ? { serves } : null;
+    return {
+      ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced,
+      ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}), ...(serves_unlinked ? { serves_unlinked } : {}),
+    };
   },
 });
 
