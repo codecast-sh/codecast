@@ -130,16 +130,50 @@ describe("a close takes down only what goes down with the lead", () => {
     expect((await s.row(other)).inbox_adopted_at).toBe(7);
   });
 
-  test("any path that brings the lead back releases them: a message waking it", async () => {
+  test("any path that brings the lead back releases them: a person writing to it", async () => {
     const s = await withKids();
     await s.send("closeSession", [String(s.ids.conv)]);
     expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeGreaterThan(0);
     await s.t.run(async (ctx) => {
       // The db the mutation builders hand every handler (functions.ts) carries this wrapper.
       const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
-      await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" });
+      await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", human: true });
     });
     expect((await s.row(s.ids.conv)).inbox_dismissed_at).toBeUndefined();
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();
+  });
+
+  test("closing the woken lead again replaces its close: the first close's adoptions end", async () => {
+    const s = await withKids();
+    await s.send("closeSession", [String(s.ids.conv)]);
+    const first = (await s.row(s.kids.spawned)).inbox_adopted_at;
+    expect(first).toBeGreaterThan(0);
+    await s.t.run(async (ctx) => {
+      const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
+      await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" });
+      // The woken turn is running; the person presses Close again, which sets it aside under a new stamp.
+      const t2 = first + 1000;
+      await db.patch(s.ids.conv, { inbox_stashed_at: t2, inbox_stash_hidden: true, inbox_closed_at: t2 });
+    });
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();
+  });
+
+  test("a trigger waking it keeps them: the lead is still out of sight (closeWakeFields)", async () => {
+    const s = await withKids();
+    await s.send("closeSession", [String(s.ids.conv)]);
+    const adopted = (await s.row(s.kids.spawned)).inbox_adopted_at;
+    await s.t.run(async (ctx) => {
+      const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
+      await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" });
+    });
+    expect((await s.row(s.ids.conv)).inbox_stash_hidden).toBe(true);
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(adopted);
+    // A person stashing the still-hidden lead anew keeps them too,
+    const db = (ctx: any) => makeAdoptionReleaseDb(ctx.db, ctx.db);
+    await s.t.run(async (ctx) => { await db(ctx).patch(s.ids.conv, { inbox_stashed_at: Date.now() + 5, inbox_stash_hidden: true }); });
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(adopted);
+    // and bringing it back from that stash releases them.
+    await s.t.run(async (ctx) => { await db(ctx).patch(s.ids.conv, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined }); });
     expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();
   });
 

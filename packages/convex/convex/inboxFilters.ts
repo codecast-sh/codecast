@@ -68,10 +68,10 @@ export function classifyRetirement(conv: ConversationDoc): RetirementState | nul
 // tore the agent down, and a straggling write must not resurrect it.
 export async function restoreToInbox(
   ctx: { db: { patch: (id: any, patch: Record<string, unknown>) => Promise<void> } },
-  conv: Pick<ConversationDoc, "_id" | "inbox_stashed_at" | "inbox_dismissed_at" | "inbox_killed_at">,
+  conv: Pick<ConversationDoc, "_id" | "inbox_stashed_at" | "inbox_dismissed_at" | "inbox_killed_at"> & { inbox_stash_hidden?: boolean },
 ): Promise<boolean> {
   if (conv.inbox_killed_at || !(conv.inbox_stashed_at || conv.inbox_dismissed_at)) return false;
-  await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
+  await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined, ...(conv.inbox_stash_hidden ? { inbox_stash_hidden: undefined } : {}) });
   return true;
 }
 

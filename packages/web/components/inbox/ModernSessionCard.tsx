@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket, Lock, Users } from "lucide-react";
-import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden } from "@codecast/shared/contracts";
 import { shipHref } from "../../lib/ship/sessionShip";
+import { closedBackWords } from "../../lib/sessionClose";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
 import { sessionCardSummary } from "../../lib/sessionSummary";
@@ -166,6 +167,7 @@ export function ModernSessionCardView({
     draft: liveness.draft,
     hosted,
     stashHidden: isStashed && isStashHidden(session),
+    closedBack: isStashed && isClosedHidden(session) ? closedBackWords(session) : undefined,
   });
 
   const [thumbZoom, setThumbZoom] = useState(false);

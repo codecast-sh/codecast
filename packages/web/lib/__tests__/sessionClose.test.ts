@@ -3,8 +3,8 @@ import { IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
 import { closeFactsOf, closeKindOf, closeSetsAside, closeTakesDownOf, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
-// A role always hides through its wakes (closeHidesThroughWakes), so the facts follow unless a test says otherwise.
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, hidesThroughWakes: !!f.role, triggers: 0, waitingOnRun: false, takesDown: 0, ...f });
+// A role never comes back on done (closeReturnsOnDone), so the facts follow unless a test says otherwise.
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, returnsOnDone: !f.role, triggers: 0, waitingOnRun: false, takesDown: 0, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
@@ -13,7 +13,8 @@ describe("what Close does to a session", () => {
       const f = facts({ inFlight, role: true, triggers: 2, waitingOnRun: true });
       expect(closeKindOf(f)).toBe("aside");
       expect(closeSetsAside(f)).toBe(true);
-      expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
+      expect(closeTooltip(f)).toBe("Close: hides it, back when it needs you");
+      expect(closeTooltip(facts({ inFlight }))).toBe("Close: hides it, back when it's done or needs you");
     }
   });
 
@@ -28,33 +29,34 @@ describe("what Close does to a session", () => {
 
   test("a fresh /loop and a usage-limit park are set aside with their own words", () => {
     expect(closeSetsAside(facts({ inFlight: "loop" }))).toBe(true);
-    expect(closeTooltip(facts({ inFlight: "loop" }))).toBe("Close: hides it, keeps its loop running");
+    expect(closeTooltip(facts({ inFlight: "loop" }))).toBe("Close: hides it, keeps its loop, back when it's done or needs you");
     expect(closeSetsAside(facts({ inFlight: "limit" }))).toBe(true);
-    expect(closeTooltip(facts({ inFlight: "limit" }))).toBe("Close: hides it, picks up when its limit resets");
+    expect(closeTooltip(facts({ inFlight: "limit" }))).toBe("Close: hides it, still parked on its limit");
+    expect(closeTooltip(facts({ inFlight: "background" }))).toBe("Close: hides it, keeps its background work, back when it's done or needs you");
   });
 
   test("a role's own session or one with armed triggers stops and keeps them", () => {
-    expect(closeTooltip(facts({ triggers: 3 }))).toBe("Close: stops it, keeps its 3 triggers, comes back when one fires");
-    expect(closeTooltip(facts({ triggers: 1 }))).toBe("Close: stops it, keeps its trigger, comes back when it fires");
-    expect(closeTooltip(facts({ role: true }))).toBe("Close: stops it, comes back on its next message");
+    expect(closeTooltip(facts({ triggers: 3 }))).toBe("Close: stops it, runs its 3 triggers out of sight, back when it's done or needs you");
+    expect(closeTooltip(facts({ triggers: 1 }))).toBe("Close: stops it, runs its trigger out of sight, back when it's done or needs you");
+    expect(closeTooltip(facts({ role: true }))).toBe("Close: stops it, back when it needs you");
     expect(closeSetsAside(facts({ role: true, triggers: 2 }))).toBe(false);
   });
 
-  test("a role, or a session a standing trigger wakes, stays out through its own wakes", () => {
-    expect(closeTooltip(facts({ role: true, triggers: 4 }))).toBe("Close: stops it, runs its 4 triggers out of sight, back on its next message");
-    expect(closeTooltip(facts({ hidesThroughWakes: true, triggers: 1 }))).toBe("Close: stops it, runs its trigger out of sight, back on its next message");
+  test("a role, or a session a standing trigger wakes, comes back only when it asks", () => {
+    expect(closeTooltip(facts({ role: true, triggers: 4 }))).toBe("Close: stops it, runs its 4 triggers out of sight, back when it needs you");
+    expect(closeTooltip(facts({ returnsOnDone: false, triggers: 1 }))).toBe("Close: stops it, runs its trigger out of sight, back when it needs you");
     const settled = { message_count: 12, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000 };
-    expect(closeFactsOf({ ...settled, armed_trigger_kind: "standing" } as any, 1, NOW).hidesThroughWakes).toBe(true);
-    expect(closeFactsOf({ ...settled, standing_role_id: "r1" } as any, 0, NOW).hidesThroughWakes).toBe(true);
-    expect(closeFactsOf({ ...settled, persistent: true } as any, 0, NOW).hidesThroughWakes).toBe(true);
-    // A one-off trigger is an ordinary session's: it comes back when it fires.
+    expect(closeFactsOf({ ...settled, armed_trigger_kind: "standing" } as any, 1, NOW).returnsOnDone).toBe(false);
+    expect(closeFactsOf({ ...settled, standing_role_id: "r1" } as any, 0, NOW).returnsOnDone).toBe(false);
+    expect(closeFactsOf({ ...settled, persistent: true } as any, 0, NOW).returnsOnDone).toBe(false);
+    // A one-off trigger is an ordinary session's: it comes back when a run finishes.
     const once = closeFactsOf({ ...settled, armed_trigger_kind: "once" } as any, 1, NOW);
-    expect(once.hidesThroughWakes).toBe(false);
-    expect(closeTooltip(once)).toBe("Close: stops it, keeps its trigger, comes back when it fires");
+    expect(once.returnsOnDone).toBe(true);
+    expect(closeTooltip(once)).toBe("Close: stops it, runs its trigger out of sight, back when it's done or needs you");
   });
 
-  test("a session waiting on a codecast flow run stops and comes back when the run reports", () => {
-    expect(closeTooltip(facts({ waitingOnRun: true }))).toBe("Close: stops it, comes back when its run reports");
+  test("a session waiting on a codecast flow run stops and comes back when the run finishes", () => {
+    expect(closeTooltip(facts({ waitingOnRun: true }))).toBe("Close: stops it, its run goes on, back when it's done or needs you");
   });
 
   test("an ordinary finished session stops and leaves the list", () => {
@@ -65,11 +67,11 @@ describe("what Close does to a session", () => {
   test("a stop that takes the agents under it down names them, with the count", () => {
     expect(closeTooltip(facts({ takesDown: 4 }))).toBe("Close: stops it and the 4 agents under it, clears them from the list");
     expect(closeTooltip(facts({ takesDown: 1 }))).toBe("Close: stops it and the agent under it, clears them from the list");
-    expect(closeTooltip(facts({ takesDown: 2, triggers: 3 }))).toBe("Close: stops it and the 2 agents under it, keeps its 3 triggers, comes back when one fires");
-    expect(closeTooltip(facts({ takesDown: 2, role: true }))).toBe("Close: stops it and the 2 agents under it, comes back on its next message");
-    expect(closeTooltip(facts({ takesDown: 2, waitingOnRun: true }))).toBe("Close: stops it and the 2 agents under it, comes back when its run reports");
+    expect(closeTooltip(facts({ takesDown: 2, triggers: 3 }))).toBe("Close: stops it and the 2 agents under it, runs its 3 triggers out of sight, back when it's done or needs you");
+    expect(closeTooltip(facts({ takesDown: 2, role: true }))).toBe("Close: stops it and the 2 agents under it, back when it needs you");
+    expect(closeTooltip(facts({ takesDown: 2, waitingOnRun: true }))).toBe("Close: stops it and the 2 agents under it, its run goes on, back when it's done or needs you");
     // A close set aside stops nothing, so it names nothing.
-    expect(closeTooltip(facts({ takesDown: 2, inFlight: "live" }))).toBe("Close: hides it, lets it finish");
+    expect(closeTooltip(facts({ takesDown: 2, inFlight: "live" }))).toBe("Close: hides it, back when it's done or needs you");
   });
 
   test("no tooltip names the old gestures", () => {
@@ -122,7 +124,7 @@ describe("the facts of a row", () => {
     for (const lead of ["idle", "spawner", "worker"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, false]);
     const f = closeFactsOf(settled, 0, NOW, false, true);
     expect(f.inFlight).toBe("nested");
-    expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
+    expect(closeTooltip(f)).toBe("Close: hides it, back when it's done or needs you");
   });
 
   test("triggers count the roster and the row's own armed flag, never a /loop", () => {
@@ -154,7 +156,7 @@ describe("the facts of a row", () => {
     const bg = { ...settled, agent_status: "waiting", open_tasks: [{ id: "b1", kind: "background", command: "bun run build" }], open_tasks_at: NOW - 30_000 };
     const f = closeFactsOf(bg, 0, NOW);
     expect(f.inFlight).toBe("background");
-    expect(closeTooltip(f)).toBe("Close: hides it, lets its background work finish");
+    expect(closeTooltip(f)).toBe("Close: hides it, keeps its background work, back when it's done or needs you");
     // A report its daemon no longer heartbeats for vouches for nothing.
     expect(closeFactsOf({ ...bg, last_heartbeat: NOW - 3_600_000 }, 0, NOW).inFlight).toBeNull();
     expect(nestedInFlightOf([{ ...bg, session_id: "agent-a0a0a06267", parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);

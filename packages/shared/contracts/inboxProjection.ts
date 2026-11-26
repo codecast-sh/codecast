@@ -6,11 +6,11 @@
 // PURE isomorphic code: no Node or DOM APIs, no BigInt, so the Convex runtime,
 // the daemon, the browser and React Native all run the same bytes.
 import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, HEARTBEAT_ALIVE_MS, trustedAgentStatus } from "./agentStatus";
-import { isMachineDeliveredMessage } from "./machineMessages";
+import { isMachineDeliveredMessage, isSessionMessage } from "./machineMessages";
 import type { LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
-import { closeHidesThroughWakes, isClosedSession, type ClosedFields } from "./closedSession";
+import { closeWakeFields, type ClosedFields } from "./closedSession";
 import type { WorkState } from "./workState";
 import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf, underOwnersModel, type OwnersModelRow, waitReachedPeople, agentAnswersRow } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
@@ -881,25 +881,35 @@ export function isStashHidden(
   return !!row.inbox_stashed_at && !!row.inbox_stash_hidden;
 }
 
+/** A send that wakes a session without anyone looking at it: a trigger firing,
+ *  a quiet handover, or another session's message (`cast send`, a codecast
+ *  notice in a session wrapper) that no person typed. Every other send counts
+ *  as someone acting and shows the session. */
+export function isMachineWake(m: { origin?: string | null; quiet?: boolean | null; human?: boolean | null; content?: string | null }): boolean {
+  return m.origin === "scheduler" || !!m.quiet || (m.human !== true && isSessionMessage(m.content));
+}
+
 /** The hide fields a send into a session writes (pendingMessages
  *  enqueuePendingMessage and its risk-resend twin in executionBindings). A
  *  dismissal and a kill always clear. A plain stash clears; a hidden one
- *  survives a machine wake (a trigger firing) or a quiet send. A close whose
- *  session hides through wakes (closeHidesThroughWakes: a role, an anchor, a
- *  standing trigger's home) becomes a hidden stash on such a wake: the agent
- *  runs, out of sight, until it asks for the person. */
+ *  survives a machine wake (isMachineWake). A closed session becomes a hidden
+ *  stash on such a wake, stamped with its close (isClosedHidden): the agent
+ *  runs out of sight until its turn pins blocked, or done when it is an
+ *  ordinary session (closeReturnsOnDone; conversations performSetThreadState). */
 export function wakeHideFields(
-  row: ClosedFields & Parameters<typeof closeHidesThroughWakes>[0] & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
-  wake: { machine: boolean; now: number },
-): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true } {
+  row: ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
+  wake: { machine: boolean },
+): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true | undefined } {
   const out: ReturnType<typeof wakeHideFields> = {};
   if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
   if (row.inbox_killed_at) out.inbox_killed_at = undefined;
-  if (wake.machine && isClosedSession(row) && closeHidesThroughWakes(row)) {
-    out.inbox_stashed_at = wake.now;
+  const closed = wake.machine ? closeWakeFields(row) : null;
+  if (closed) {
+    out.inbox_stashed_at = closed.inbox_stashed_at;
     out.inbox_stash_hidden = true;
   } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
     out.inbox_stashed_at = undefined;
+    if (row.inbox_stash_hidden) out.inbox_stash_hidden = undefined;
   }
   return out;
 }

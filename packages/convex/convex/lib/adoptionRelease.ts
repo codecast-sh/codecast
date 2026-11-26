@@ -28,12 +28,21 @@ export async function releaseCloseAdoptions(db: any, leadId: any, stamp: number 
 // write that ends it releases: a kill's second write (applyHideTransition's
 // kill stamp) and any later dismissal of a lead closed long ago find the row
 // no longer in that close, so they read nothing.
+// A machine wake turning the close into its hidden stash (closeWakeFields,
+// the stash stamped with the close) keeps it: the lead is still out of sight.
+// A stash cleared ends it too, even one a person re-stamped over the close
+// (releasing finds only the adoptions the close's own stamp made).
 function endsClose(before: any, fields: any): boolean {
   const closedAt = before.inbox_closed_at;
   if (closedAt == null || before.inbox_killed_at) return false;
+  if ("inbox_stashed_at" in fields && fields.inbox_stashed_at == null && before.inbox_stashed_at != null) return true;
   if (before.inbox_dismissed_at !== closedAt && before.inbox_stashed_at !== closedAt) return false;
-  if ("inbox_dismissed_at" in fields && fields.inbox_dismissed_at !== before.inbox_dismissed_at) return true;
-  return !!fields.inbox_killed_at && !before.inbox_killed_at;
+  if (!!fields.inbox_killed_at && !before.inbox_killed_at) return true;
+  // A new close over it (Close pressed again once a wake ran it) replaces it.
+  if ("inbox_closed_at" in fields && fields.inbox_closed_at !== closedAt) return true;
+  const stashAfter = "inbox_stashed_at" in fields ? fields.inbox_stashed_at : before.inbox_stashed_at;
+  if (stashAfter === closedAt) return false;
+  return "inbox_dismissed_at" in fields && fields.inbox_dismissed_at !== before.inbox_dismissed_at;
 }
 
 export function makeAdoptionReleaseDb(db: any, rawDb: any): any {
@@ -48,7 +57,7 @@ export function makeAdoptionReleaseDb(db: any, rawDb: any): any {
     replace: (...args: any[]) => db.replace(...args),
     delete: (...args: any[]) => db.delete(...args),
     async patch(id: any, fields: any) {
-      const touches = !!fields && ("inbox_dismissed_at" in fields || !!fields.inbox_killed_at) && !!rawDb.normalizeId("conversations", String(id));
+      const touches = !!fields && ("inbox_dismissed_at" in fields || "inbox_stashed_at" in fields || !!fields.inbox_killed_at) && !!rawDb.normalizeId("conversations", String(id));
       const before = touches ? await rawDb.get(id) : null;
       const res = await db.patch(id, fields);
       if (before && endsClose(before, fields)) await releaseCloseAdoptions(db, before._id, before.inbox_closed_at);

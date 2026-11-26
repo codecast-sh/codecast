@@ -70,6 +70,7 @@ export type SessionData = {
   model?: string | null;
   inbox_stashed_at?: number | null;
   inbox_stash_hidden?: boolean | null;
+  inbox_closed_at?: number | null;
   inbox_dismissed_at?: number | null;
   // Newest image in the session (server-denormalized) — the row thumbnail
   // when the inbox_image_thumbs pref is on.

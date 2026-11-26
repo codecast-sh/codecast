@@ -1,3 +1,4 @@
+import { formatSessionMessage } from "@codecast/shared/contracts";
 import { describe, expect, test } from "bun:test";
 import type { Id } from "./_generated/dataModel";
 import { makeFakeDb } from "./testDb";
@@ -1413,22 +1414,26 @@ describe("conversation-global ordered delivery", () => {
     expect(replacementClaim.permit.conversationSequence).toBe("2");
   });
 
-  // A flow run hands its subject work quietly (flows.md FL4); a resend of that delivery must not pull a subject that
-  // stashed and hid itself mid-run back into the inbox, which the send itself did not do.
-  test("a risk resend keeps the send's quiet: a hidden stash survives a quiet handover's resend, and an ordinary one clears it", async () => {
-    for (const quiet of [true, false]) {
+  // A resend follows the send's hide rule (wakeHideFields): a quiet handover or another session's message leaves a
+  // hidden stash or a close out of sight, as the send itself did; an ordinary or a person's send shows the session.
+  test("a risk resend keeps the send's hide rule: quiet and session messages stay out, ordinary and personal sends show it", async () => {
+    const report = formatSessionMessage("jx7work", "Report: CI is green");
+    const hiddenStash = { inbox_stashed_at: 50, inbox_stash_hidden: true }, closed = { inbox_dismissed_at: 40, inbox_closed_at: 40 };
+    for (const [send, hide, stays] of [
+      [{ content: "fix what Check found", quiet: true }, hiddenStash, 50], [{ content: "fix what Check found" }, hiddenStash, undefined],
+      [{ content: report }, closed, 40], [{ content: report, human: true }, closed, undefined],
+    ] as const) {
       const db = makeFakeDb(tables());
       const ctx = await initializeAndReady(db);
-      const originalId = await enqueuePendingMessage(ctx, await db.get(CONVERSATION), USER, { content: "fix what Check found", client_id: "handover", quiet });
-      expect(((await db.get(originalId)) as any).quiet).toBe(quiet || undefined);
+      const originalId = await enqueuePendingMessage(ctx, await db.get(CONVERSATION), USER, { ...send, client_id: "handover" } as any);
       const claimed = await claimDelivery(ctx, originalId);
       const started = await startDeliveryInDb(ctx, USER, { ...fence(claimed.permit), now: 21 });
       await markDeliveryAmbiguousInDb(ctx, USER, { ...fence(started), failureCode: "ACK_LOST", failureMessage: "the turn may have landed", now: 22 });
-      await db.patch(CONVERSATION, { inbox_stashed_at: 50, inbox_stash_hidden: true });
+      await db.patch(CONVERSATION, hide);
 
       const resent = await abandonAmbiguousAndResendInDb(ctx, USER, { ...fence(started), newClientId: "handover-again", resolutionEvidence: "user accepted duplicate-effect risk", now: 23 });
-      expect(((await db.get(resent.messageId)) as any).quiet).toBe(quiet || undefined);
-      expect(((await db.get(CONVERSATION)) as any).inbox_stashed_at).toBe(quiet ? 50 : undefined);
+      expect(((await db.get(resent.messageId)) as any).quiet).toBe((send as any).quiet || undefined);
+      expect(((await db.get(CONVERSATION)) as any).inbox_stashed_at).toBe(stays);
     }
   });
 });

@@ -21,7 +21,7 @@ const READERS: Array<[file: string, guard: string]> = [
   ["accountSwitch.ts", "conv.inbox_killed_at != null || isClosedSession(conv)"],
   ["castMachines.ts", "!conv || conv.inbox_killed_at || isClosedSession(conv)"],
   ["lib/paneRefusal.ts", "!unattended || conv.inbox_killed_at || isClosedSession(conv)"],
-  ["lib/sessionTell.ts", "const hold = line.hold || isClosedSession(conversation);"],
+  ["lib/sessionTell.ts", "const hold = line.hold || isClosedSession(conversation) || isClosedHidden(conversation);"],
   ["conversations.ts", "if (c.inbox_killed_at || isClosedSession(c)) continue;"],
   ["conversations.ts", "c.inbox_killed_at || isClosedSession(c) || !pooledAt"],
   ["conversations.ts", "if (isClosedSession(conv)) return;"],

@@ -94,7 +94,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
 import { adoptedByClose, cascadeTakesDownRow, closeAdoptionWindow, closeLeavesStanding } from "@codecast/shared/contracts/closeCascade";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, closeHidesThroughWakes, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import {
   rowLiveDeadlines,
   projectInbox,
@@ -9939,20 +9939,21 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const merge = (mode: "stash" | "kill", list: string[]) => {
     const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
     for (const id of list) {
-      // A role's or a standing trigger's set-aside is a hidden stash: its own
-      // wakes leave it out (closeHidesThroughWakes, as the server decides).
-      const row = draft.sessions[id] ?? draft.conversations[id];
-      const r = hideSessionInDraft(draft, id, mode, now, mode === "stash" && !!row && closeHidesThroughWakes(row), mode === "kill");
+      const r = hideSessionInDraft(draft, id, mode, now, false, mode === "kill");
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
       Object.assign(merged.writes, r.writes);
-      if (mode === "kill") {
-        for (const sid of r.hidden) {
-          if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
-          if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
-          // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
-          if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
-        }
+      // Both are the close: the stamp a set-aside shares with its stash is what
+      // lets a done pin bring it back (isClosedHidden), as the server writes it.
+      // A set-aside is a hidden stash, so its machine wakes leave it out (as
+      // dispatch applyPatches writes it); only the row closed, while its
+      // cascade is stashed plainly, as the server stashes it.
+      const aside = mode === "stash" ? { inbox_closed_at: now, inbox_stash_hidden: true } : { inbox_closed_at: now };
+      for (const sid of mode === "kill" ? r.hidden : [id]) {
+        if (draft.sessions[sid]) Object.assign(draft.sessions[sid], aside);
+        if (draft.conversations[sid]) Object.assign(draft.conversations[sid], aside);
+        // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
+        if (r.writes[sid]) Object.assign(r.writes[sid], aside);
       }
     }
     announceHide(draft, mode, merged);
@@ -12034,6 +12035,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (this.sessions[sid]) {
         this.sessions[sid].inbox_dismissed_at = null;
         this.sessions[sid].inbox_stashed_at = null;
+        // The hidden flag goes with the stash, so a later plain stash is plain.
+        if (this.sessions[sid].inbox_stash_hidden) this.sessions[sid].inbox_stash_hidden = null;
         this.sessions[sid].inbox_snoozed_until = null;
         this.sessions[sid].inbox_killed_at = null;
       }
@@ -12041,6 +12044,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (conv) {
         conv.inbox_dismissed_at = null;
         conv.inbox_stashed_at = null;
+        if (conv.inbox_stash_hidden) conv.inbox_stash_hidden = null;
         conv.inbox_snoozed_until = null;
         conv.inbox_killed_at = null;
       }

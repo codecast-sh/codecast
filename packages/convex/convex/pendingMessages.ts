@@ -19,12 +19,12 @@ import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conve
 import { checkConversationAccess, standsWithRunner } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
 import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, listSessionPartyIds, syncPrimaryOwnerCache } from "./sessionOwners";
-import { clearViewerTriageOnSend, isTeamOwnedConversation } from "./lib/viewerTriage";
+import { clearViewerTriageOnSend, hideViewerClosesOnWake, isTeamOwnedConversation } from "./lib/viewerTriage";
 import { recordTeamAnswer } from "./lib/teamSessionAnswer";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { composerChannel, insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, wakeHideFields, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
+import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isMachineWake, wakeHideFields, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./lib/ownerDevice";
 import {
@@ -634,21 +634,15 @@ export async function enqueuePendingMessage(
   await wakeHostedConversation(ctx, conversation,
     fields.wake_cause ?? (fields.origin === "scheduler" ? "routine" : "message"));
 
-  // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
-  // stashed, and killed flags all clear ("I messaged it, show it to me").
-  // A scheduler injection (a trigger firing) inherits all of that, with one
-  // exception: a stash the user marked HIDDEN (`cast stash --hide`, "Stash and
-  // hide") survives machine wakes — that is the state a user puts a looping
-  // session into when they want it working out of sight. A plain stash pops
-  // back on the wake: something happened to the session, show it. Dismissed
-  // and killed always clear, so a scheduled follow-up on a session the user
-  // closed out does come back (and a killed one is resurrected for delivery) —
-  // that revival is deliberate and is surfaced by the schedule strip in the
-  // conversation header. The exception is a closed role, anchor or standing
-  // trigger's home (closeHidesThroughWakes): its machine wake turns the close
-  // into a hidden stash, so its own schedule does not keep putting it back.
-  // Shared with the risk-resend twin (executionBindings): wakeHideFields.
-  const machineWake = fields.origin === "scheduler";
+  // Wake-up rules (wakeHideFields, shared with the risk-resend twin in
+  // executionBindings). A send someone made resurfaces the session: dismissed,
+  // stashed and killed flags all clear ("I messaged it, show it to me"), and a
+  // killed one is resurrected for delivery. A machine wake (isMachineWake: a
+  // trigger firing, a quiet send, another session's message) is the
+  // exception for two hides: a stash the user marked HIDDEN (`cast stash
+  // --hide`) survives it, and a closed session becomes a hidden stash that the
+  // agent's own pin brings back (performSetThreadState). A plain stash and a
+  // dismissal that is no close still clear.
   // The pinned thread state (`cast state`) is the agent's declaration of who
   // acts next. A message from a person IS that person acting, so the
   // declaration has been answered and comes down with the send: a "Complete"
@@ -659,12 +653,13 @@ export async function enqueuePendingMessage(
   // pin standing — nobody answered anything. The web store clears the same
   // four fields on its draft so the panel drops before this lands.
   const answersThreadState = fields.human === true && hasThreadState(conversation);
+  const hideWake = isMachineWake(fields);
   await ctx.db.patch(conversation._id, {
     updated_at: Date.now(),
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
-    ...wakeHideFields(conversation, { machine: machineWake || !!fields.quiet, now: Date.now() }),
-    ...(!machineWake && !fields.quiet && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
+    ...wakeHideFields(conversation, { machine: hideWake }),
+    ...(fields.origin !== "scheduler" && !fields.quiet && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? answeredThreadStateFields() : {}),
     // New input opens a new turn, which owes its own report (workerSettle.ts).
     ...(conversation.reported_to_parent_at ? { reported_to_parent_at: undefined } : {}),
@@ -672,6 +667,8 @@ export async function enqueuePendingMessage(
   // "I messaged it, show it to me": a nested session through its parent, or
   // adopted on its own when that parent is never listed (a flow station).
   if (fields.human === true) await bringNestedThreadToInbox(ctx, conversation);
+  // Each person's own Close of a team session follows the row's rule.
+  if (hideWake) await hideViewerClosesOnWake(ctx, conversation);
   // A person writing in a team session (every send passes here): it comes back
   // for them the way the row's own stamps clear above, the rest of the team's
   // needs-input alerts clear, and the row says who answered.

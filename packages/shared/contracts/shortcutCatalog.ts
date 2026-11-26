@@ -223,9 +223,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // the editor whenever there is text to delete. Stash sets the session aside
   // with the agent still running; dismiss retires it AND kills the agent.
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
-  // Stash and hide: the stash survives trigger wakes (a plain stash pops back
+  // Stash and hide: the stash survives machine wakes (a plain stash pops back
   // on one). One modifier up from stash, same as dormant sits above defer.
-  { key: 'ctrl+alt+backspace', action: 'session.stashHide', skipInputCheck: 'whenEmpty', description: 'Stash and hide (stays out through trigger wakes)' },
+  { key: 'ctrl+alt+backspace', action: 'session.stashHide', skipInputCheck: 'whenEmpty', description: 'Stash and hide (stays out through wakes)' },
   { key: 'ctrl+shift+backspace', action: 'session.close', skipInputCheck: 'whenEmpty', description: 'Close session (sets it aside if it is mid-turn)' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
   // Dormant joins the backspace triage family one modifier up from defer, its

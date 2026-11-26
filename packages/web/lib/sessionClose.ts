@@ -9,7 +9,7 @@
 // rows the client holds; the server gathers the same facts from its database
 // (convex lib/closeAside) and asks the same function. Imports by relative path
 // only: the phone bundles this file (Metro maps `@/` to the mobile package).
-import { closeHidesThroughWakes, closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
+import { closeReturnsOnDone, closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
 import { cascadeTakesDownRow, type HoldFacts } from "@codecast/shared/contracts/closeCascade";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
@@ -19,9 +19,10 @@ export type CloseFacts = {
   inFlight: InFlightReason | "nested" | null;
   /** A role's own session or a standing anchor. */
   role: boolean;
-  /** Its close stays hidden through its own wakes (shared closeHidesThroughWakes):
-   *  a role, an anchor, or a standing trigger's home. */
-  hidesThroughWakes: boolean;
+  /** A closed session stays out through machine wakes and comes back when its
+   *  agent pins blocked (Needs you); an ordinary one also when it pins done
+   *  (shared closeReturnsOnDone), a role, an anchor or a standing trigger's home not. */
+  returnsOnDone: boolean;
   /** Armed triggers that inject into it. */
   triggers: number;
   /** A codecast flow run it started, with station sessions of its own, that
@@ -48,20 +49,29 @@ export function closeKindOf(f: CloseFacts): CloseKind {
 /** Close sets it aside (the agent keeps running) instead of stopping it. */
 export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 
+// What brings a closed session back: its agent pinning done (an ordinary
+// session) or blocked (isClosedHidden, performSetThreadState), or a person
+// writing to it.
+const closedBack = (returnsOnDone: boolean) => (returnsOnDone ? "back when it's done or needs you" : "back when it needs you");
+
+/** The words a closed session a machine woke shows for what brings it back. */
+export const closedBackWords = (row: Parameters<typeof closeReturnsOnDone>[0]) => closedBack(closeReturnsOnDone(row));
+
 export function closeTooltip(f: CloseFacts): string {
   const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
+  const back = closedBack(f.returnsOnDone);
   switch (closeKindOf(f)) {
-    case "aside": return "Close: hides it, lets it finish";
+    case "aside": return `Close: hides it, ${back}`;
     case "awaiting": return "Close: hides it; it still waits on you";
-    case "keeps_background": return "Close: hides it, lets its background work finish";
-    case "keeps_loop": return "Close: hides it, keeps its loop running";
-    case "keeps_limit": return "Close: hides it, picks up when its limit resets";
+    case "keeps_background": return `Close: hides it, keeps its background work, ${back}`;
+    case "keeps_loop": return `Close: hides it, keeps its loop, ${back}`;
+    // Its resume (a "continue" send, when recovery is on) is an ordinary send
+    // and shows it; with recovery off, it waits for the person.
+    case "keeps_limit": return "Close: hides it, still parked on its limit";
     case "keeps_triggers":
-      // Its own triggers run it out of sight; any other message still brings it back.
-      if (f.hidesThroughWakes && f.triggers > 0) return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, back on its next message`;
-      if (f.triggers === 0) return `Close: stops ${them}, comes back on its next message`;
-      return `Close: stops ${them}, keeps its ${f.triggers === 1 ? "trigger, comes back when it fires" : `${f.triggers} triggers, comes back when one fires`}`;
-    case "waits_on_run": return `Close: stops ${them}, comes back when its run reports`;
+      if (f.triggers === 0) return `Close: stops ${them}, ${back}`;
+      return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, ${back}`;
+    case "waits_on_run": return `Close: stops ${them}, its run goes on, ${back}`;
     case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} from the list`;
   }
 }
@@ -153,7 +163,7 @@ export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, 
   return {
     inFlight: closeInFlightReason(facts) ?? (nestedInFlight ? "nested" : null),
     role: !!row.persistent || !!row.standing_role_id,
-    hidesThroughWakes: closeHidesThroughWakes(row),
+    returnsOnDone: closeReturnsOnDone(row),
     triggers: Math.max(armedTriggers, rowArmed),
     waitingOnRun: runLiveOf(row) && !facts.inProcessRun,
     takesDown,

@@ -3099,10 +3099,12 @@ program
     "Moves the session to the Stashed bucket: out of the active inbox, agent\n" +
     "alive and resumable. Use it to tidy finished or parked workers out of the\n" +
     "human's view without killing them. A stashed session returns to the inbox\n" +
-    "when a trigger fires into it (something happened, so show it), when a settle\n" +
+    "when a trigger fires into it or another session writes to it (something\n" +
+    "happened, so show it), when a settle\n" +
     "is declared --status blocked, a run completes --needs-attention, or it\n" +
     "stalls (permission prompt, open question, dead process). Pass --hide to\n" +
-    "keep it out of sight through trigger wakes: only the asks bring it back.\n" +
+    "keep it out through trigger wakes and other sessions' messages: only the\n" +
+    "asks bring it back.\n" +
     "An empty never-used session is cleaned up entirely. Reverse with cast\n" +
     "restore.\n\n" +
     "Examples:\n" +
@@ -3111,7 +3113,7 @@ program
     "  cast stash               # current session (tidy yourself away when done)"
   )
   .argument("[session]", "Session short ID (default: current session)")
-  .option("--hide", "Stash and stay hidden: trigger wakes don't bring the session back, only asks do")
+  .option("--hide", "Stash and stay hidden: trigger wakes and session messages don't bring it back, only asks do")
   .action(async (session: string | undefined, opts: { hide?: boolean }) => {
     const target = session || detectCurrentSessionId();
     if (!target) {
@@ -3122,7 +3124,7 @@ program
     const grouped = result.cascaded_children
       ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
       : "";
-    const wake = opts.hide ? "stays hidden through trigger wakes" : "returns on the next trigger wake";
+    const wake = opts.hide ? "stays hidden through trigger wakes and session messages" : "returns on the next trigger wake or session message";
     if (result.outcome === "viewer_hide") {
       // A teammate's session: out of YOUR board only; the runner still sees it.
       console.log(`${c.green}ok${c.reset} hid ${c.cyan}${result.short_id}${c.reset}${c.dim}: a teammate's session, hidden from your team board only; their inbox and the agent are untouched (cast restore ${result.short_id} to bring back)${c.reset}`);

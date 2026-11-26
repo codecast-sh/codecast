@@ -12,8 +12,10 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   AGENT_MODEL_CONFIG,
   agentSupportsExecutionTransport,
+  isMachineWake,
   wakeHideFields,
 } from "@codecast/shared/contracts";
+import { hideViewerClosesOnWake } from "./lib/viewerTriage";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { insertRiskResendPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
@@ -2087,19 +2089,21 @@ export async function abandonAmbiguousAndResendInDb(
     imageStorageIds: message.image_storage_ids,
     clientId: fence.newClientId,
     origin: message.origin,
+    // Who sent it decides whether it shows a hidden session (isMachineWake).
+    human: message.human,
     createdAt: fence.now,
     delivery: allocation,
     quiet: message.quiet,
     resendOfDeliveryId: fence.deliveryId,
   });
   // The same hide rule as the send it resends (enqueuePendingMessage): wakeHideFields.
-  const machineWake = message.origin === "scheduler";
   await ctx.db.patch(fence.conversationId, {
     updated_at: fence.now,
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
-    ...wakeHideFields(conversation, { machine: machineWake || !!message.quiet, now: fence.now }),
+    ...wakeHideFields(conversation, { machine: isMachineWake(message) }),
   });
+  if (isMachineWake(message)) await hideViewerClosesOnWake(ctx, conversation);
   return {
     originalDeliveryId: fence.deliveryId,
     messageId,

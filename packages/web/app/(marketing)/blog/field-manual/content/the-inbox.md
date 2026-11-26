@@ -16,7 +16,7 @@ The inbox renders these sections top to bottom, and the order is the point: your
 - **Working**: the agent is producing right now. Leave it alone.
 - **Dormant** (blue): parked on a wake a machine owns, such as a scheduled check or a background watcher.
 
-Below those sit three collapsed buckets that are nobody's move: **Snoozed**, **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath). On a busy day they hold hundreds of sessions, none of them in your way.
+Below those sit three collapsed buckets that are nobody's move: **Snoozed**, **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath, and moves to Stashed once a trigger or another session wakes it). On a busy day they hold hundreds of sessions, none of them in your way.
 
 ![The inbox after a lead session spawned two workers: under 'Retry failed webhooks' in Working, two indented child rows, 'Webhook API half' on a cloud host and 'Dashboard retry UI', each with its own agent icon and message count](/blog/field-manual/inbox-workers.webp "Workers a session spawns nest under it in the same section (here a Codex worker on a cloud host and a Cursor worker), so a fan-out reads as one line of work instead of three cards.")
 
@@ -68,9 +68,9 @@ The parking verbs, lightest first:
 
 - **Defer**: not now. The card drops down the stack and comes back on its next activity.
 - **Dormant**: parked; a machine wakes it (a schedule, a watcher, another session).
-- **Stash**: out of the inbox, and the agent keeps running. It comes back on its own when a scheduled run fires into it, when the agent says it is blocked, or when it stalls on a prompt, a question or a dead process.
-- **Stash and hide**: a stash that stays out through scheduled wakes. Only a real ask brings it back. Made for a recurring loop you have reviewed and want quiet.
-- **Close**: done looking at it. A finished session stops and files under Closed; one still working keeps running and files under Stashed. Its schedules and queued messages stay, so the next one to fire, or a new message, brings it back. A role's session, or one a repeating schedule wakes, is the exception: like Stash and hide, its own wakes run it out of sight, and it comes back when it declares it is blocked, a run completes asking for attention, or a message reaches it. The card's tooltip says which will happen.
+- **Stash**: out of the inbox, and the agent keeps running. It comes back on its own when a scheduled run fires into it, another session writes to it, the agent says it is blocked, or when it stalls on a prompt, a question or a dead process.
+- **Stash and hide**: a stash that stays out through scheduled wakes and other sessions' messages. Only a real ask brings it back. Made for a recurring loop you have reviewed and want quiet.
+- **Close**: done looking at it. A finished session stops and files under Closed; one still working keeps running and files under Stashed. Its schedules and queued messages stay, and like Stash and hide, they and other sessions' messages run it out of sight, under Stashed. It comes back when its agent declares it is done or blocked, a run completes asking for attention, it stalls, or you write to it. A role's session, or one a repeating schedule wakes, does not come back on done, since its routine runs end done. The card's tooltip says which will happen.
 - **Kill**: in the right-click menu, the command palette and the selection bar, and the square stop button on a card already in Stashed or Closed. Tears the agent down and cancels anything scheduled into it, asking first when there is something to cancel, and files it under Closed. The transcript stays readable and the session restartable.
 
 Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of your personal labels; a session carries at most one, and teammates never see yours). Dragging a card into Needs You, Done or Dormant is the same verdict as the menu item. Working is not a drop target: nobody can declare that an agent is producing. Every action lands in the undo history (`Ctrl/Cmd+Z`); undoing a kill brings the card back, but the agent stays stopped until you restart it.
@@ -85,9 +85,9 @@ Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of
 | Snooze | Right-click ("Snooze…") | `Alt+Z` | | Dormant until the time you pick; "Move to Needs You now" wakes it early |
 | Stash | Triage bar, right-click | `Ctrl+Backspace` | Long-press | Out of the inbox; agent keeps running |
 | Stash and hide | Triage bar "more", right-click | `Ctrl+Alt+Backspace` | | Stays out until an ask |
-| Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept; a role's own wakes leave it out |
+| Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept; back when it's done or needs you (a role or repeating trigger: needs you only) |
 | Kill | Right-click, command palette, selection bar; the stop button on a stashed or closed card | | Long-press | Agent stopped, schedules cancelled (asks first when there are some), filed under Closed |
-| Restore | Right-click on a stashed or closed card | | | Back in the inbox (a closed or killed agent stays stopped) |
+| Restore | Right-click on a stashed or closed card | | | Back in the inbox (Restore starts no agent; a stopped one runs again on its next message) |
 | Pin | Triage bar "more", right-click | `Ctrl+Shift+P`; jump to pinned with `Ctrl+P` (Mac) | Long-press | Top of the list, state kept underneath |
 | Label | Triage bar "more", right-click | `Ctrl+L` | Long-press, "Label…" | Files under a personal label |
 | Mark unread | Right-click | `Ctrl+Shift+U` | Long-press | Card keeps its dot until you next open it |

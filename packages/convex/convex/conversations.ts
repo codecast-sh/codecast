@@ -26,7 +26,7 @@ import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
-import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
+import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId, pinHideFields, closeReturnsOnDone } from "@codecast/shared/contracts";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { isHotRow, splitRows } from "@codecast/shared/contracts/inboxSplit";
@@ -88,7 +88,7 @@ import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, is
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, ownerRowsForUser, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
-import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
+import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession, resurfaceViewerTriageOnPin } from "./lib/viewerTriage";
 import { inboxMemoGet, inboxOwnersOf, ownersModelOnMemo, userMembershipsMemo, withInboxOwners } from "./lib/inboxOwners";
 import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
@@ -12469,17 +12469,19 @@ export async function performSetThreadState(
   // cleared the same way (agentTasks.completeTaskRun). If the session is
   // still stashed when the agent declares blocked, nobody is watching by
   // definition (a human send un-stashes at enqueue), so the machine woke it
-  // and the human must now be shown. `done` / `dormant` / `working` never
-  // resurface anything: stash fails quiet except for asks. Killed rows are
-  // exempt — kill tore the agent down; a straggling write must not resurrect.
-  let resurfaced = false;
-  if (status === "blocked" && (conv.inbox_stashed_at || conv.inbox_dismissed_at) && !conv.inbox_killed_at) {
-    await ctx.db.patch(conv._id, {
-      inbox_stashed_at: undefined,
-      inbox_dismissed_at: undefined,
-    });
-    resurfaced = true;
-  }
+  // and the human must now be shown. A closed ordinary session a machine woke
+  // (isClosedHidden) comes back on `done` too: it delivered something. A
+  // role's, anchor's or standing trigger's home does not (closeReturnsOnDone),
+  // since its routine runs end done. Otherwise `done` / `dormant` / `working`
+  // never resurface anything: stash fails quiet except for asks. Killed rows
+  // are exempt — kill tore the agent down; a straggling write must not resurrect.
+  // A team session's hides are each person's own: the same rule brings it
+  // back for each of them (resurfaceViewerTriageOnPin).
+  const returnsOnDone = closeReturnsOnDone(conv);
+  const back = pinHideFields(conv, status, returnsOnDone);
+  if (back) await ctx.db.patch(conv._id, back);
+  const viewersBack = !conv.inbox_killed_at && await resurfaceViewerTriageOnPin(ctx, conv, status, returnsOnDone);
+  const resurfaced = !!back || viewersBack;
   // The pin is the strip's title, and a blocked / done declaration can move
   // the row between Lock Screen statuses: those refresh at once, a reworded
   // working line rides the next routine push.

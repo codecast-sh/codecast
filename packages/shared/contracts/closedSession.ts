@@ -1,7 +1,8 @@
 // A CLOSED session: the person's Close (web/phone), which stops an agent that
 // has nothing in flight without retiring it. Close writes inbox_closed_at equal
-// to the inbox_dismissed_at it stamps, and nothing else. The equality is the
-// marker: every un-hide clears inbox_dismissed_at and every other dismissal
+// to the inbox_dismissed_at it stamps (a set-aside close, and a closed session
+// a machine woke, write it equal to the stash stamp instead: isClosedHidden).
+// The equality is the marker: every un-hide clears inbox_dismissed_at and every other dismissal
 // writes a new stamp, so neither needs to know this field exists, and a stale
 // inbox_closed_at left behind is inert. A kill (inbox_killed_at) is not a close.
 export type ClosedFields = {
@@ -14,19 +15,50 @@ export function isClosedSession(row: ClosedFields): boolean {
   return row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_dismissed_at && !row.inbox_killed_at;
 }
 
-/** A session whose Close follows the "Stash and hide" rules: a role's own
- *  session, a standing anchor, or one a standing trigger wakes. Its own
- *  machine wakes (a trigger firing, a quiet send) run it out of sight as a
- *  hidden stash instead of bringing it back; it returns when it pins blocked,
- *  a trigger run completes --needs-attention, or any other message reaches it
- *  (a person's, another session's). A close of any other session comes back
- *  on its next wake. */
-export function closeHidesThroughWakes(row: {
+/** A closed session a machine wake (a trigger, a quiet send, another session's
+ *  message) has run out of sight: a hidden stash stamped with the close's own
+ *  stamp. A set-aside close (one in flight) writes the same shape. A person's
+ *  own "Stash and hide" stamps the stash anew, so it never reads as one. */
+export function isClosedHidden(row: ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null }): boolean {
+  return !!row.inbox_stash_hidden && row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_stashed_at && !row.inbox_killed_at;
+}
+
+/** Whether a closed session comes back when its woken turn pins done. Every
+ *  closed session comes back when it pins blocked, a trigger run completes
+ *  --needs-attention, or a person writes. An ordinary one also comes back on
+ *  done: it delivered something. A role's own session, a standing anchor or a
+ *  standing trigger's home does not, since its routine runs end done. */
+export function closeReturnsOnDone(row: {
   persistent?: boolean | null;
   standing_role_id?: unknown;
   armed_trigger_kind?: string | null;
 }): boolean {
-  return !!row.persistent || !!row.standing_role_id || row.armed_trigger_kind === "standing";
+  return !row.persistent && !row.standing_role_id && row.armed_trigger_kind !== "standing";
+}
+
+type HideFields = ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null };
+
+/** What a machine wake writes over a closed session (or one person's close of
+ *  a team session): the close becomes a hidden stash stamped with the close,
+ *  so the agent runs out of sight (isClosedHidden), and the close, its undo
+ *  and its adoptions keep their stamp. Null when it is no close. */
+export function closeWakeFields(row: HideFields): { inbox_dismissed_at: undefined; inbox_stashed_at: number; inbox_stash_hidden: true } | null {
+  if (!isClosedSession(row)) return null;
+  // A person's own stash over the close wins and follows the stash rules.
+  if (row.inbox_stashed_at && row.inbox_stashed_at !== row.inbox_closed_at) return null;
+  return { inbox_dismissed_at: undefined, inbox_stashed_at: row.inbox_closed_at!, inbox_stash_hidden: true };
+}
+
+/** What a pinned thread state writes over a hidden session (performSetThreadState,
+ *  on the row and on each person's own triage of a team session). `blocked`
+ *  brings back any stash or dismissal; `done` brings back a closed session a
+ *  machine woke (isClosedHidden) when it returns on done (closeReturnsOnDone).
+ *  Null when the pin brings nothing back. */
+export function pinHideFields(row: HideFields, status: string, returnsOnDone: boolean): { inbox_stashed_at: undefined; inbox_stash_hidden: undefined; inbox_dismissed_at?: undefined } | null {
+  if (row.inbox_killed_at) return null;
+  if (status === "blocked" && (row.inbox_stashed_at || row.inbox_dismissed_at)) return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined, inbox_dismissed_at: undefined };
+  if (status === "done" && returnsOnDone && isClosedHidden(row)) return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined };
+  return null;
 }
 
 /** A patch (or a row) that IS a close: the two stamps written together. */

@@ -590,7 +590,7 @@ export function SessionMenuItems({
             shortcut="session.stashHide"
             onSelect={() => useInboxStore.getState().stashSession(id, { hidden: true })}
           >
-            Stash and hide — stays out through trigger wakes
+            Stash and hide — stays out through wakes
           </CtxItem>
         </>
       )}

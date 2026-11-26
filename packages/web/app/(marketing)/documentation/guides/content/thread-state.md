@@ -36,7 +36,7 @@ WhoActsNextFigure
 The status the agent pins decides the inbox section. A turn that says nothing files under Needs You, so you open it and find out.
 ```
 
-- **Needs you** is the one status that asks for you. It brings a stashed session back to the inbox, so agents use it only when they truly can't continue without you. A question that can wait goes to your [decision queue](/documentation/decisions) instead.
+- **Needs you** is the status that asks for you. It brings a stashed session back to the inbox, so agents use it only when they truly can't continue without you. **Complete** brings back one you closed too, unless it is a role's or a repeating trigger's. A question that can wait goes to your [decision queue](/documentation/decisions) instead.
 - **Complete** and **Dormant** cover only the turn that set them. A dormant note says what will wake the session: a schedule, a background job, a reply from another session.
 - When you send the session a message, the note comes down, because you have answered it. The agent pins a fresh one when its turn ends. A message from another session or a scheduled wake leaves the note standing.
 
