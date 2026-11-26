@@ -573,6 +573,12 @@ describe("DOM mode runs only while the page is attended", () => {
     idleTimer().fn();
     expect(dom.state.running).toBe(false);
     win.document.dispatchEvent(new win.Event("pointermove") as unknown as Event);
+    win.document.dispatchEvent(new win.Event("pointermove") as unknown as Event);
+    // Not inside the handler: the snapshot waits for one timer per burst (ct-101961).
+    expect(dom.state.starts).toBe(1);
+    const wakes = timers.filter((t) => t.ms === 0);
+    expect(wakes.length).toBe(1);
+    wakes[0].fn();
     expect(dom.state.starts).toBe(2);
     expect(dom.state.running).toBe(true);
     // The segment before the sleep is still held, and the new one opens on its snapshot.

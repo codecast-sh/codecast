@@ -689,9 +689,17 @@ export function startReplay(options: ReplayOptions): ReplayRecorder {
     domRecording?.stop();
     domRecording = null;
   }
+  // Waking takes a full snapshot (rrweb walks the whole page), so an input
+  // never wakes it inside its own handler: one timer per burst restarts it
+  // once the event has been handled, and the handler itself only stamps.
+  let domWakeTimer: unknown = null;
   const noteInput = () => {
     lastInputAt = now();
-    if (!domRecording && domStart && visible()) domWake();
+    if (domRecording || !domStart || domWakeTimer !== null || !visible()) return;
+    domWakeTimer = setTimer(() => {
+      domWakeTimer = null;
+      if (visible()) domWake();
+    }, 0);
   };
 
   // Back to a ring that starts on a fresh snapshot, since events after a gap
