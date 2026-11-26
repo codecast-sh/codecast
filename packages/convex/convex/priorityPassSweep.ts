@@ -76,8 +76,8 @@ export const flaggedTeams = internalQuery({
  * in their personal workspace; those with a typed message or a pin there since
  * the cursor, or more activity since then than the probe reads (the pass moves
  * the cursor past what is not its own), or with a priority that holds a
- * session since gone from the workspace or needs a rewrite. At most
- * SWEEP_MAX_PAIRS.
+ * session since gone from the workspace or needs a rewrite, or a correction
+ * no pass has read. At most SWEEP_MAX_PAIRS.
  */
 export const sweepCandidates = internalQuery({
   args: { team_id: v.id("teams"), now: v.optional(v.number()) },
@@ -130,7 +130,7 @@ export const sweepCandidates = internalQuery({
     const start = quiet.length ? Math.floor(now / SWEEP_EVERY_MS) % quiet.length : 0;
     for (const pair of [...quiet.slice(start), ...quiet.slice(0, start)]) {
       if (out.length >= SWEEP_MAX_PAIRS) break;
-      if (await needsRewrite(ctx, pair) || (strayBudget.left > 0 && (await holdsStray(ctx, vis, pair, now, strayBudget)))) out.push(pair);
+      if (await needsRewrite(ctx, pair) || (await correctionPending(ctx, pair)) || (strayBudget.left > 0 && (await holdsStray(ctx, vis, pair, now, strayBudget)))) out.push(pair);
     }
     return out;
   },
@@ -141,6 +141,14 @@ async function needsRewrite(ctx: { db: any }, pair: Pair): Promise<boolean> {
   return !!(await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_rewrite", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("needs_rewrite", true))
+    .first());
+}
+
+/** Whether the person wrote a correction in the pair's workspace that no pass has read: one indexed read. */
+async function correctionPending(ctx: { db: any }, pair: Pair): Promise<boolean> {
+  return !!(await ctx.db
+    .query("priority_corrections")
+    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("status", "pending"))
     .first());
 }
 

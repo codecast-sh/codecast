@@ -161,8 +161,10 @@ async function correctionsOf(ctx: Ctx, viewer: Id<"users">, p: Priority, limit =
 
 const correctionOut = (c: Doc<"priority_corrections">): PriorityCorrection => ({ _id: c._id, step_key: c.step_key ?? null, text: c.text, status: c.status, created_at: c.created_at });
 
+/** Whether the owner has a correction on it no pass has read: one indexed read. */
 async function correctionPending(ctx: Ctx, viewer: Id<"users">, p: Priority): Promise<boolean> {
-  return (await correctionsOf(ctx, viewer, p)).some((c) => c.status === "pending");
+  if (!isOwner(viewer, p)) return false;
+  return !!(await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).first());
 }
 
 /**
@@ -662,7 +664,7 @@ async function doCorrect(ctx: Ctx, viewer: Id<"users">, shortId: string, text: s
   }
   const row = {
     user_id: viewer, workspace: p.workspace, priority_id: p._id, ...(step_key ? { step_key } : {}), text: body, status: "pending" as const, created_at: Date.now(),
-    // Frozen as the person saw it: with the text, the eval case (priorityCorrections exportCases).
+    // Frozen as the person saw it: with the text, the eval case (exportCases).
     snapshot: { short_id: p.short_id, title: p.title, summary: p.summary, status: p.status, steps: p.steps },
   };
   const id = await ctx.db.insert("priority_corrections", row);
@@ -740,7 +742,7 @@ export const pinLine = query({
       if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
     }
     if (!(await featureCheck(ctx)(p.workspace))) return null;
-    const step = p.steps.find((s) => s.key === conv.priority_step_key);
+    const step = p.steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
     return {
       short_id: p.short_id,
       title: p.title,
@@ -1000,14 +1002,17 @@ export const run = mutation({
   handler: async (ctx, args) => orThrow(await runFor(ctx, await authed(ctx), args.workspace)),
 });
 
-/** The most correction cases one export returns, oldest first from `since`. */
+/** The most correction cases one export returns, oldest applied first from `since`. */
 const EXPORT_CASES = 200;
 
 /**
- * Every correction written after `since`, oldest first, as an eval case: the
- * priority as the person saw it when they wrote it (`snapshot`), their words,
- * and the priority as it stands now (what the passes since made of it). Staff
- * read it through packages/convex/run.sh; packages/evals/scripts/
+ * Every correction a pass applied after `since` (its applied_at), oldest
+ * first, as an eval case: the priority as the person saw it when they wrote
+ * it (`before`, the snapshot), their words, the window the pass that applied
+ * it read (`window`: replay it with priorityPassEval evalPass, window_start to
+ * window.to), and the priority as it stands now (`after`). A correction no
+ * pass has read yet is not a case: its after is its before. Staff read it
+ * through packages/convex/run.sh; packages/evals/scripts/
  * priority-corrections-export.ts freezes each case under EVALS_HOME. Real
  * content: never written into the repo.
  */
@@ -1016,13 +1021,13 @@ export const exportCases = internalQuery({
   handler: async (ctx, args) => {
     const rows: Doc<"priority_corrections">[] = await ctx.db
       .query("priority_corrections")
-      .withIndex("by_created", (q: any) => q.gt("created_at", args.since ?? 0))
+      .withIndex("by_applied", (q: any) => q.gt("applied_at", args.since ?? 0))
       .take(EXPORT_CASES);
     const out = [];
     for (const c of rows) {
       const now: Priority | null = await ctx.db.get(c.priority_id);
       out.push({
-        id: c._id, user_id: c.user_id, workspace: c.workspace, created_at: c.created_at, status: c.status, applied_at: c.applied_at ?? null,
+        id: c._id, user_id: c.user_id, workspace: c.workspace, created_at: c.created_at, applied_at: c.applied_at!, window: c.applied_window ?? null,
         step_key: c.step_key ?? null, text: c.text, before: c.snapshot,
         after: now ? { short_id: now.short_id, title: now.title, summary: now.summary, status: now.status, steps: now.steps } : null,
       });

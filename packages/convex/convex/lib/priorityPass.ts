@@ -503,8 +503,10 @@ export type PriorityTarget = string;
 export type MergePlan = {
   creates: Array<{ ref: PriorityTarget; first_seen_at: number } & PriorityWrite>;
   /** Patches to existing priorities: only the fields that change. */
-  updates: Array<{ short_id: string; patch: Partial<PriorityWrite> }>;
-  merges: Array<{ short_id: string; merged_into: PriorityTarget }>;
+  /** `seen_steps`: the step keys the input showed, so applyPlan keeps any step added since (a person's merge while the model read). */
+  updates: Array<{ short_id: string; patch: Partial<PriorityWrite>; seen_steps: string[] }>;
+  /** `step_keys`: the absorbed priority's step keys and the survivor's keys they became, so its corrections follow. */
+  merges: Array<{ short_id: string; merged_into: PriorityTarget; step_keys: Record<string, string> }>;
   /** Conversations to point at a priority and step. */
   sessions: Array<{ session: string; priority: PriorityTarget; step_key: string | null }>;
   /** Conversations to clear: mapped before, unassigned now. */
@@ -525,6 +527,48 @@ function similarity(a: string, b: string): number {
 }
 /** Two step titles are the same step at this word overlap (Jaccard). */
 export const STEP_TITLE_MATCH = 0.5;
+
+/** Words that say nothing about which piece of work a title names. */
+const STOPWORDS = new Set(["the", "an", "to", "of", "for", "and", "or", "in", "on", "with", "at", "by", "from", "into", "is", "it", "its", "be", "as", "up", "out", "all", "new"]);
+const contentWords = (s: string) => new Set([...words(s)].filter((w) => !STOPWORDS.has(w)));
+
+/**
+ * Whether a new step's title repeats one the person dropped: the same title
+ * once case and punctuation are ignored, or, without stopwords, every word of
+ * the shorter title is in the longer and they share at least half their words
+ * ("Update docs" repeats "Docs"; "Write the tests" does not repeat "Write the
+ * docs", nor "Eval harness: judge" "Eval harness: grader"). Plain words, no
+ * stemming or synonyms: a paraphrase ("Migrate auth" for "Auth migration")
+ * gets through, and the prompt's "never propose it again" is the first line
+ * of defence against those.
+ */
+export function repeatsDropped(dropped: string, title: string): boolean {
+  const norm = (t: string) => [...words(t)].join(" ");
+  if (norm(dropped) && norm(dropped) === norm(title)) return true;
+  const a = contentWords(dropped), b = contentWords(title);
+  if (!a.size || !b.size) return false;
+  const [small, big] = a.size <= b.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const w of small) if (big.has(w)) shared++;
+  return shared === small.size && shared / (a.size + b.size - shared) >= STEP_TITLE_MATCH;
+}
+
+/**
+ * `proposed` less every step whose key is new to `current` and whose title
+ * repeats one of `current`'s dropped steps (repeatsDropped), each noted. A
+ * step already on the row is never judged by its title: a drop takes away
+ * only what it names.
+ */
+export function withoutDroppedRepeats(current: PriorityStep[], proposed: PriorityStep[], notes: string[], target: string): PriorityStep[] {
+  const dropped = current.filter((s) => s.dropped);
+  if (!dropped.length) return proposed;
+  return proposed.filter((s) => {
+    if (current.some((c) => c.key === s.key)) return true;
+    const d = dropped.find((x) => repeatsDropped(x.title, s.title));
+    if (d) notes.push(`${target}: left out new step "${s.title}", it repeats "${d.title}", which the person dropped`);
+    return !d;
+  });
+}
 
 /**
  * Which existing step each proposed step continues, so keys and the person's
@@ -613,20 +657,17 @@ export function withPersonFields(step: PriorityStep, was: PriorityStep): Priorit
 /**
  * The steps a write may leave on a priority whose steps are `current` now:
  * `proposed`, with every person-set field of the step holding the same key
- * laid back over it, none that recreates a dropped step under a near-identical
- * title (STEP_TITLE_MATCH), and every step the person set something on that
- * `proposed` lost, kept. applyPlan runs it against the row as it stands when
- * it writes, so a setting made while the model was reading holds too.
+ * laid back over it, none new to the row that repeats a step the person
+ * dropped (withoutDroppedRepeats), and every step the person set something on
+ * that `proposed` lost, kept. applyPlan runs it against the row as it stands
+ * when it writes, so a setting made while the model was reading holds too.
  */
-export function holdPersonSteps(current: PriorityStep[], proposed: PriorityStep[]): PriorityStep[] {
+export function holdPersonSteps(current: PriorityStep[], proposed: PriorityStep[], notes: string[] = [], target = ""): PriorityStep[] {
   const held = current.filter(isPersonHeld);
-  const dropped = held.filter((s) => s.dropped);
-  const out: PriorityStep[] = [];
-  for (const s of proposed) {
+  const out = withoutDroppedRepeats(current, proposed, notes, target).map((s) => {
     const was = held.find((h) => h.key === s.key);
-    if (!was && dropped.some((d) => similarity(d.title, s.title) >= STEP_TITLE_MATCH)) continue;
-    out.push(was ? withPersonFields(s, was) : s);
-  }
+    return was ? withPersonFields(s, was) : s;
+  });
   for (const h of held) if (!out.some((s) => s.key === h.key)) out.push(h);
   return out;
 }
@@ -643,10 +684,12 @@ const keyNumber = (key: string | null | undefined) => {
  * ("pri-2/s1" -> "s5") so that priority's sessions keep their step. New keys
  * come after every key the survivor's steps and sessions still hold. What the
  * person set on a matched step (tier, title, done) stands; a proposed step
- * that matches one they dropped is left out; every step they set anything on
- * is kept, matched or not.
+ * that matches one they dropped, or that is new and repeats one
+ * (withoutDroppedRepeats, as applyPlan judges it), is left out; every step
+ * they set anything on is kept, matched or not. `keys` gives each proposed
+ * step's key, or null when it was left out.
  */
-function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed: PassPriority[], proposed: PriorityProposal["steps"], taskStatus: Map<string, string>, now: number, notes: string[]): { steps: PriorityStep[]; remap: Map<string, string> } {
+function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed: PassPriority[], proposed: PriorityProposal["steps"], taskStatus: Map<string, string>, now: number, notes: string[]): { steps: PriorityStep[]; remap: Map<string, string>; keys: Array<string | null> } {
   const own = prior?.steps ?? [];
   const ownerOf = new Map<PriorityStep, string>();
   const needsRewrite = new Set([prior, ...absorbed].filter((p) => p?.needs_rewrite).map((p) => (p === prior ? target : p!.short_id)));
@@ -663,14 +706,17 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
     return key;
   };
   const steps: PriorityStep[] = [];
+  const keys: Array<string | null> = [];
   for (const [i, s] of proposed.entries()) {
     const was = matched[i];
     if (was?.dropped) {
       notes.push(`${target}: left out "${s.title}", the person dropped that step`);
+      keys.push(null);
       continue;
     }
     const step: PriorityStep = { key: keyOf(was), title: s.title, tier: s.tier, tier_set_by: "pass", refs: s.refs, done: false };
     steps.push(was ? withPersonFields(withDone(step, s.done_judged ?? was.done, was, taskStatus, now), was) : withDone(step, s.done_judged, null, taskStatus, now));
+    keys.push(step.key);
   }
   for (const s of pool) {
     if (!isPersonHeld(s) || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
@@ -680,7 +726,8 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
   }
   // A matched dropped step stays a tombstone, under its own key.
   for (const s of pool) if (s.dropped && matched.includes(s) && !needsRewrite.has(ownerOf.get(s) ?? target)) steps.push({ ...s, key: keyOf(s) });
-  return { steps, remap };
+  const kept = withoutDroppedRepeats(own, steps, notes, target);
+  return { steps: kept, remap, keys: keys.map((k) => (k && kept.some((s) => s.key === k) ? k : null)) };
 }
 
 /** The pure apply step of a pass: what the Convex mutation writes. */
@@ -698,6 +745,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     prior: PassPriority | null;
     proposal: PriorityProposal | null;
     absorbed: PassPriority[];
+    /** An absorbed priority's "pri-N/sK" to the live step key it became here. */
     remap: Map<string, string>;
     stepKeyFor: (ref: string | undefined) => string | null;
     order: number;
@@ -718,17 +766,26 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       if (gone.status_set_by === "person") { plan.notes.push(`${m}: not merged into ${target}, the person marked it done`); continue; }
       absorbed.push(gone);
       mergedAway.add(m);
-      plan.merges.push({ short_id: m, merged_into: target });
     }
-    const { steps, remap } = carrySteps(target, prior, absorbed, prop.steps, taskStatus, now, plan.notes);
+    const { steps, remap: carried, keys } = carrySteps(target, prior, absorbed, prop.steps, taskStatus, now, plan.notes);
+    const live = (key: string | null | undefined): string | null => (key && steps.some((s) => s.key === key && !s.dropped) ? key : null);
+    const remap = new Map([...carried].filter(([, to]) => live(to)));
+    for (const a of absorbed) {
+      const step_keys: Record<string, string> = {};
+      for (const st of a.steps) {
+        const to = remap.get(`${a.short_id}/${st.key}`);
+        if (to) step_keys[st.key] = to;
+      }
+      plan.merges.push({ short_id: a.short_id, merged_into: target, step_keys });
+    }
 
-    // A step key the reply used (or a step title) names the step a session serves.
+    // A step key the reply used (or a step title) names the step a session serves; never one left out or dropped.
     const stepKeyFor = (ref: string | undefined): string | null => {
       if (!ref) return null;
       const i = prop.steps.findIndex((s) => s.key === ref || s.title.toLowerCase() === ref.toLowerCase());
-      if (i >= 0) return steps[i].key;
+      if (i >= 0) return live(keys[i]);
       const bare = ref.startsWith(`${target}/`) ? ref.slice(target.length + 1) : ref;
-      return steps.find((s) => s.key === bare)?.key ?? remap.get(ref) ?? null;
+      return live(bare) ?? remap.get(ref) ?? null;
     };
 
     // Status: the person's set-aside or done stands; "done" needs a finished critical path.
@@ -845,7 +902,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       }
       if (JSON.stringify(w[k]) !== JSON.stringify((r.prior as unknown as PriorityWrite)[k])) (patch as any)[k] = w[k];
     }
-    if (r.proposal || Object.keys(patch).length) plan.updates.push({ short_id: r.prior.short_id, patch });
+    if (r.proposal || Object.keys(patch).length) plan.updates.push({ short_id: r.prior.short_id, patch, seen_steps: r.prior.steps.map((s) => s.key) });
     if (r.proposal && r.prior.needs_rewrite && (r.proposal.title !== r.prior.title || r.proposal.summary !== r.prior.summary)) plan.rewritten.push(r.prior.short_id);
   }
 
