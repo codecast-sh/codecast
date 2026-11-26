@@ -35,10 +35,12 @@ export function useSyncCapabilityStateWithArgs(wsArgs: WorkspaceArgs) {
     lastSeen.current = undefined;
   }
 
-  const result = useQueryNoThrow(
+  const query = useQueryNoThrow(
     api.capabilityState.webList,
     wsArgs === "skip" ? "skip" : { ...(cursor !== undefined ? { since: cursor } : {}) },
-  ).data;
+  );
+  const result = query.data;
+  const failed = query.error !== undefined;
 
   const data = useMemo(() => {
     if (result === undefined) return undefined;
@@ -62,12 +64,13 @@ export function useSyncCapabilityStateWithArgs(wsArgs: WorkspaceArgs) {
     ),
   );
 
-  // The header chip: loading only while the FIRST answer is pending.
+  // The header chip: loading only while the FIRST answer is pending. A failed
+  // query is not pending: the light must not spin on an error.
   useWatchEffect(() => {
-    useInboxStore.getState().setLiveLoading("capabilityState", wsArgs !== "skip" && result === undefined);
+    useInboxStore.getState().setLiveLoading("capabilityState", wsArgs !== "skip" && result === undefined && !failed);
     return () => useInboxStore.getState().setLiveLoading("capabilityState", false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mirrors useSyncTasks: re-run on resolution flips only
-  }, [result === undefined, wsArgs === "skip"]);
+  }, [result === undefined, wsArgs === "skip", failed]);
 
   // Advance the cursor within this session only — trims the reactive payload,
   // never persisted, resets on load.

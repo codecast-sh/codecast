@@ -521,9 +521,13 @@ export function useSyncInboxSessions() {
   // navigation. Kept in `liveLoading` (not `syncProgress`) so the chip tracks
   // this fast first payload, never the minutes-long background reconcile crawl.
   // A failed subscription is not a cold open still loading: the chip must not
-  // spin on a server error the cache already covers.
+  // spin on a server error the cache already covers. A window that stops
+  // feeding (demoted to follower, host feeders remounting) owes nothing, so
+  // the flag clears on unmount: on an empty account it would otherwise hold
+  // the light on Syncing, then Sync is slow, for the life of the page.
   useWatchEffect(() => {
     useInboxStore.getState().setLiveLoading("sessions", inboxSessions === undefined && !inboxError);
+    return () => useInboxStore.getState().setLiveLoading("sessions", false);
   }, [inboxSessions, inboxError]);
 
   // BACKGROUND RECONCILE — backfill every inbox session beyond the live window.
