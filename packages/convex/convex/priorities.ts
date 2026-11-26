@@ -24,6 +24,7 @@ import { hasOkRun, runBlocker, sessionMover, SESSION_COUNT_CAP } from "./priorit
 import { inWorkspace } from "./priorityPassInputs";
 import { passTiming } from "./priorityPassSweep";
 import { getOwnerMembership } from "./privacy";
+import { isSessionOwner } from "./sessionOwners";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
@@ -48,9 +49,11 @@ const OWN_SCAN_READ = 1_000;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
 /** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many a step shows. */
-const LINK_MAPPED_READ = 30;
-const LINK_TASK_SESSIONS = 4;
+const LINK_MAPPED_READ = 10;
+const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
+/** A linked session's last activity, to the 10 minutes: a heartbeat or a streamed message re-runs the list but leaves its answer as it was. */
+const LINK_ACTIVE_ROUND_MS = 10 * 60_000;
 /** The most of today's unassigned sessions a history names. */
 const LOOSE_SESSIONS = 30;
 const MAX_HISTORY_DAYS = 30;
@@ -233,6 +236,10 @@ type LinkReads = {
   task: (shortId: string) => Promise<Doc<"tasks"> | null>;
   plan: (id: string) => Promise<LinkPlan | null>;
   listed: (c: Doc<"conversations">) => Promise<boolean>;
+  /** The viewer's own session (theirs, or one they co-own): only these can ask the viewer anything. */
+  mine: (c: Doc<"conversations">) => Promise<boolean>;
+  /** The milestone keys of a priority's pending corrections ("" for one on the priority itself). */
+  pending: (p: Priority) => Promise<Set<string>>;
 };
 
 /** The reads links make, each once per list call. A plan answers only when the viewer may read it. */
@@ -245,6 +252,12 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     };
   };
   const listed = memo((id) => convs(id).then((c) => (c ? r.listed(c) : false)));
+  const mine = memo(async (id) => {
+    const c = await convs(id);
+    if (!c) return false;
+    const viewer = String(r.viewer);
+    return String(c.user_id) === viewer || String(c.owner_user_id ?? "") === viewer || isSessionOwner(ctx, c._id, r.viewer);
+  });
   const convs = memo(async (ref): Promise<Doc<"conversations"> | null> => {
     const id = ctx.db.normalizeId("conversations", ref);
     return id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
@@ -259,6 +272,11 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
       return { id: String(plan._id), short_id: plan.short_id, title: plan.title, status: plan.status, done: plan.progress?.done ?? 0, total: plan.progress?.total ?? size, size, current: plan.current_session_id ? String(plan.current_session_id) : null };
     }),
     listed: (c) => listed(String(c._id)),
+    mine: (c) => mine(String(c._id)),
+    pending: async (p) => {
+      const rows = await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).take(50);
+      return new Set(rows.map((c: any) => c.step_key ?? ""));
+    },
   };
 }
 
@@ -267,9 +285,13 @@ const planRef = ({ short_id, title, done, total, size }: PlanFacts): PriorityPla
 /**
  * Each step's links as a list row carries them, and the priority's plan: the
  * sessions working it (the pass mapped it among the newest LINK_MAPPED_READ, a
- * step ref names it, it works one of the step's tasks, or it is the step's own
- * plan's current session), each listed to the viewer, best first; and the
- * plans its tasks belong to, by the attribution rules (priorityDerive).
+ * step ref names it, it is one of the newest LINK_TASK_SESSIONS of a task of
+ * the step, or it is the step's own plan's current session), each listed to
+ * the viewer, best first; the plans its tasks belong to, by the attribution
+ * rules (priorityDerive); whether every task it names is done ("Looks
+ * done?"); and whether a correction on it waits for a pass. Only for the
+ * viewer's own active priorities (listFor). A session that is not the
+ * viewer's never asks them anything: its needs-you reads idle.
  */
 async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: PriorityStep[], now: number): Promise<{ links: PriorityMilestoneLinks[]; plan: PriorityPlanRef | null }> {
   const bySteps = new Map<string, Map<string, { c: Doc<"conversations">; why: PriorityLinkWhy[] }>>(steps.map((s) => [s.key, new Map()]));
@@ -281,19 +303,25 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     if (!had) into.set(id, { c, why: [why] });
     else if (!had.why.includes(why)) had.why.push(why);
   };
-  for (const c of await r.sessionsOf(p, Math.max(LINK_MAPPED_READ, listRead(r.viewer, p)))) if (c.priority_step_key) await add(c.priority_step_key, c, "mapped");
+  // The row's own read covers this window (listRead), so it slices that read rather than reading more.
+  for (const c of (await r.sessionsOf(p, Math.max(LINK_MAPPED_READ, listRead(r.viewer, p)))).slice(0, LINK_MAPPED_READ)) if (c.priority_step_key) await add(c.priority_step_key, c, "mapped");
   const taskPlans = new Map<string, Array<string | null>>();
+  const tasksDone = new Map<string, boolean>();
   for (const s of steps) {
     const plans: Array<string | null> = [];
+    let allDone = true;
     for (const ref of s.refs) {
       if (ref.kind === "session") await add(s.key, await reads.conv(ref.id), "linked");
       if (ref.kind !== "task") continue;
       const task = await reads.task(ref.id);
+      allDone &&= task?.status === "done";
       plans.push(task?.plan_id ? String(task.plan_id) : null);
       for (const cid of (task?.conversation_ids ?? []).slice(-LINK_TASK_SESSIONS)) await add(s.key, await reads.conv(String(cid)), `via ${ref.id}`);
     }
     taskPlans.set(s.key, plans);
+    tasksDone.set(s.key, plans.length > 0 && allDone);
   }
+  const pending = await reads.pending(p);
   const facts = new Map<string, LinkPlan>();
   for (const id of new Set([...taskPlans.values()].flat())) {
     const f = id ? await reads.plan(id) : null;
@@ -306,21 +334,30 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     const own = attribution.steps.get(s.key);
     const bound = current(own?.plan);
     if (bound) await add(s.key, await reads.conv(bound), "via plan");
-    const sessions: PriorityLinkedSession[] = orderSessions([...bySteps.get(s.key)!.values()].map(({ c, why }) => ({
-      short_id: c.short_id ?? String(c._id),
-      conversation_id: String(c._id),
-      title: c.title ?? "",
-      state: linkedSessionState(c, now),
-      workflow: isWorkflowSession(c as any),
-      why,
-      last_active_at: c.updated_at,
-    })));
+    const sessions: PriorityLinkedSession[] = [];
+    for (const { c, why } of bySteps.get(s.key)!.values()) {
+      const mine = await reads.mine(c);
+      const state = linkedSessionState(c, now);
+      sessions.push({
+        short_id: c.short_id ?? String(c._id),
+        conversation_id: String(c._id),
+        title: c.title ?? "",
+        state: state === "needs_you" && !mine ? "idle" : state,
+        mine,
+        workflow: isWorkflowSession(c as any),
+        why,
+        last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,
+      });
+    }
+    const ordered = orderSessions(sessions);
     links.push({
       key: s.key,
-      sessions: sessions.slice(0, LINK_STEP_SESSIONS),
-      sessions_more: Math.max(0, sessions.length - LINK_STEP_SESSIONS),
+      sessions: ordered.slice(0, LINK_STEP_SESSIONS),
+      sessions_more: Math.max(0, ordered.length - LINK_STEP_SESSIONS),
       plan: own?.plan ? planRef(own.plan) : null,
       part_of: (own?.part_of ?? []).map(planRef),
+      looks_done: !s.done && !!tasksDone.get(s.key),
+      correction_pending: pending.has(s.key),
     });
   }
   return { links, plan: attribution.priority ? planRef(attribution.priority) : null };

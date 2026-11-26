@@ -181,7 +181,7 @@ describe("reads", () => {
     expect(p.other_sessions).toEqual([]);
   });
 
-  test("a list row carries each step's sessions (state, workflow, why) and the plans its tasks attribute to", async () => {
+  test("the viewer's own active row carries each step's sessions (state, mine, workflow, why), its plans, Looks done and pending corrections; nobody else's does", async () => {
     const { t, as, ada, bea, acme, ws, p1, c1 } = await world();
     await t.run(async (ctx) => {
       const plan = (short_id: string, size: number, status = "active") => ctx.db.insert("plans", {
@@ -194,43 +194,61 @@ describe("reads", () => {
         user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
         started_at: NOW, updated_at: NOW - 3_600_000, message_count: 3, is_private: false, team_visibility: "full", status: "active", ...fields,
       } as any);
-      const asks = await conv("jx7ask1", { thread_state_status: "blocked", thread_state_at: NOW, last_turn_at: NOW - 1000 });
-      const run = await conv("jx7run1", { title: "Review · ct-901 tidy", is_subagent: true, parent_conversation_id: c1, inbox_killed_at: NOW });
-      const parked = await conv("jx7prk1", { thread_state_status: "dormant", thread_state_at: NOW, last_turn_at: NOW - 1000 });
+      const blocked = { thread_state_status: "blocked", thread_state_at: NOW, last_turn_at: NOW - 1000 };
       const hidden = await conv("jx7hid1", { is_private: true, team_visibility: "private" });
-      const task = (short_id: string, plan_id: Id<"plans"> | undefined, conversation_ids: Id<"conversations">[]) => ctx.db.insert("tasks", {
-        user_id: ada, team_id: acme, workspace: ws, short_id, title: `Task ${short_id}`, status: "open", plan_id, conversation_ids, created_at: NOW, updated_at: NOW,
+      const asks = await conv("jx7ask1", blocked);
+      const run = await conv("jx7run1", { title: "Review · ct-901 tidy", is_subagent: true, parent_conversation_id: c1, inbox_killed_at: NOW });
+      await conv("jx7prk1", { thread_state_status: "dormant", thread_state_at: NOW, last_turn_at: NOW - 1000 });
+      // Bea's session works Ada's task and asks Bea something: not Ada's to answer.
+      const beas = await conv("jx7bea1", { ...blocked, user_id: bea });
+      const task = (short_id: string, plan_id: Id<"plans"> | undefined, conversation_ids: Id<"conversations">[], status = "open") => ctx.db.insert("tasks", {
+        user_id: ada, team_id: acme, workspace: ws, short_id, title: `Task ${short_id}`, status, plan_id, conversation_ids, created_at: NOW, updated_at: NOW,
       } as any);
-      await task("ct-901", small, [asks, run, hidden]);
-      await task("ct-902", small, []);
-      await task("ct-903", big, []);
+      // A task's newest two sessions only: the private one is older.
+      await task("ct-901", small, [hidden, asks, run]);
+      await task("ct-902", small, [beas]);
+      await task("ct-903", big, [], "done");
       const p = await ctx.db.get(p1);
       await ctx.db.patch(p1, { steps: [
         { ...p!.steps[0], refs: [{ kind: "task", id: "ct-901" }] },
         { ...p!.steps[1], refs: [{ kind: "task", id: "ct-902" }, { kind: "session", id: "jx7prk1" }] },
         { ...p!.steps[2], refs: [{ kind: "task", id: "ct-903" }] },
       ] } as any);
-      void parked;
+      await ctx.db.insert("priority_corrections", {
+        user_id: ada, workspace: ws, priority_id: p1, step_key: "s2", text: "Session mapping is wrong", status: "pending", created_at: NOW,
+        snapshot: { short_id: "pri-1", title: "Priority pri-1", summary: "", status: "active", steps: [] },
+      } as any);
     });
     const [row] = await rowsOf(as(ada), { workspace: ws });
     const links = Object.fromEntries(row.links.map((l: any) => [l.key, l]));
-    // s1: the session asking via its task first, the private mapped one, the closed workflow run last.
-    expect(links.s1.sessions.map((s: any) => [s.short_id, s.state, s.workflow, s.why])).toEqual([
-      ["jx7ask1", "needs_you", false, ["via ct-901"]],
-      ["jx7pvt3", "idle", false, ["mapped"]],
-      ["jx7hid1", "idle", false, ["via ct-901"]],
-      ["jx7run1", "killed", true, ["via ct-901"]],
+    // s1: the session asking via its task first, the mapped one, the closed workflow run last.
+    expect(links.s1.sessions.map((s: any) => [s.short_id, s.state, s.mine, s.workflow, s.why])).toEqual([
+      ["jx7ask1", "needs_you", true, false, ["via ct-901"]],
+      ["jx7pvt3", "idle", true, false, ["mapped"]],
+      ["jx7run1", "killed", true, true, ["via ct-901"]],
     ]);
-    expect(links.s2.sessions.map((s: any) => [s.short_id, s.state, s.why])).toEqual([["jx7prk1", "dormant", ["linked"]], ["jx7one1", "idle", ["mapped"]]]);
+    // s2: Bea's blocked session reads idle and not Ada's.
+    expect(links.s2.sessions.map((s: any) => [s.short_id, s.state, s.mine, s.why])).toEqual([
+      ["jx7prk1", "dormant", true, ["linked"]],
+      ["jx7one1", "idle", true, ["mapped"]],
+      ["jx7bea1", "idle", false, ["via ct-902"]],
+    ]);
+    // Last activity to the 10 minutes, so a heartbeat leaves the answer as it was.
+    for (const l of row.links) for (const s of l.sessions) expect(s.last_active_at % 600_000).toBe(0);
     // pl-1075 holds tasks from two of three task-bearing steps: the priority's plan; the 140-task pl-619 only "part of".
     expect(row.plan).toMatchObject({ short_id: "pl-1075", done: 2, total: 37 });
     expect(links.s1.plan).toBeNull();
     expect(links.s3.plan).toBeNull();
     expect(links.s3.part_of.map((p: any) => p.short_id)).toEqual(["pl-619"]);
-    // A teammate sees only the sessions listed to them.
+    // s3 is open with its one task done; s1's task is open.
+    expect([links.s1.looks_done, links.s3.looks_done]).toEqual([false, true]);
+    expect([links.s1.correction_pending, links.s2.correction_pending]).toEqual([false, true]);
+    expect(row.correction_pending).toBe(true);
+    // A teammate's rows, and the viewer's past ones, carry no links.
     const [theirs] = await rowsOf(as(bea), { workspace: ws });
-    const s1 = theirs.links.find((l: any) => l.key === "s1");
-    expect(s1.sessions.map((s: any) => s.short_id)).toEqual(["jx7ask1", "jx7run1"]);
+    expect(theirs.links).toBeUndefined();
+    const past = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-4");
+    expect(past.links).toBeUndefined();
   });
 
   test("history names today's sessions no priority holds, for the No priority share", async () => {

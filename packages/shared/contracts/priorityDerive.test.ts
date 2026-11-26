@@ -64,6 +64,12 @@ describe("nextActionOf", () => {
     expect(a?.session?.id).toBe("new");
   });
 
+  test("someone else's session never asks the viewer: no Answer for it", () => {
+    const theirs = { ...s("needs_you", 9, false, "theirs"), mine: false };
+    const a = nextActionOf([m("s1", [theirs, s("dormant", 1, false, "mine")])]);
+    expect([a?.kind, a?.session?.id]).toEqual(["resume", "mine"]);
+  });
+
   test("a done milestone's ask is not the priority's action", () => {
     expect(nextActionOf([m("s1", [s("needs_you", 1)], "critical", true), m("s2", [s("dormant", 1)])])?.kind).toBe("resume");
   });

@@ -200,6 +200,8 @@ export function DeployChip({ d, now }: { d: DeployInfo; now: number }) {
     <Link href="/deploys" onClick={stop} data-chip="deploy" title={`${d.target} · ${d.status}`} className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-sol-text/[0.07] px-2 text-meta text-sol-text hover:bg-sol-text/[0.12]">
       <Rocket className={cn("size-3", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-muted")} aria-hidden />
       <span>{d.target}</span>
+      {/* Not live: the state in words, so it reads in grayscale. */}
+      {d.status !== "live" && <span data-deploy-state className="text-sol-text-muted">{d.status}</span>}
       <span className="tabular-nums text-sol-text-dim">{ago(d.at, now)}</span>
     </Link>
   );

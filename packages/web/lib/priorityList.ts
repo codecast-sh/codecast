@@ -59,6 +59,8 @@ export const STATE_WORD: Record<PrioritySessionState, string> = {
   needs_you: "Needs you", working: "Working", dormant: "Dormant", idle: "Idle", done: "Done", killed: "Closed",
 };
 
+const demote = (s: Pick<PriorityLinkedSession, "mine">, state: PrioritySessionState): PrioritySessionState => (state === "needs_you" && s.mine === false ? "idle" : state);
+
 /** A linked session as the list draws it: the inbox's live state over the server's, where it opens, and today's typing. */
 export type SessionLine = PriorityLinkedSession & { href: string; today: number };
 
@@ -71,6 +73,10 @@ export type MilestoneModel = {
   sessions: SessionLine[];
   /** Linked sessions the row did not carry. */
   more: number;
+  /** Still open, every task it names done (the server's looks_done). */
+  looksDone: boolean;
+  /** A correction on it waits for the next pass. */
+  correctionPending: boolean;
   plan: PriorityPlanRef | null;
   partOf: PriorityPlanRef[];
   tasks: string[];
@@ -142,11 +148,13 @@ export function buildModels(
   const daySet = new Set(days);
   return rows.map((row) => {
     const links = new Map((row.links ?? []).map((l) => [l.key, l]));
-    const milestones = row.steps.map((step): MilestoneModel => {
+    // Reads never return a dropped milestone; a row cached before that rule is held to it here.
+    const milestones = row.steps.filter((step) => !step.dropped).map((step): MilestoneModel => {
       const l = links.get(step.key);
       const sessions = orderSessions((l?.sessions ?? []).map((s) => ({
         ...s,
-        state: live(s.conversation_id) ?? s.state,
+        // Another's session never asks the viewer anything, whatever the inbox says of it.
+        state: demote(s, live(s.conversation_id) ?? s.state),
         href: `/conversation/${s.conversation_id}`,
         today: typedToday(s.short_id),
       })));
@@ -157,6 +165,8 @@ export function buildModels(
         step,
         sessions,
         more: l?.sessions_more ?? 0,
+        looksDone: !!l?.looks_done && !step.done,
+        correctionPending: !!l?.correction_pending,
         plan: l?.plan ?? null,
         partOf: l?.part_of ?? [],
         tasks: step.refs.filter((r) => r.kind === "task").map((r) => r.id),
@@ -181,7 +191,8 @@ export function buildModels(
       landed10: critical.filter((t) => daySet.has(localDayKey(t))).length,
       lastLandedDays: last == null ? null : Math.round((startOfDay(now) - startOfDay(last)) / DAY),
       stalledDays: stalled ? quiet : null,
-      action: row.status === "active" ? nextActionOf(milestones) : null,
+      // A teammate's priority offers no action: starting, resuming and answering its work is theirs to do.
+      action: row.mine && row.status === "active" ? nextActionOf(milestones) : null,
       rail: row.status === "active" ? railOf(milestones) : null,
     };
   });

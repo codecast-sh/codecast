@@ -65,19 +65,22 @@ export function attributePlans(
 
 // ── Sessions and the next action ────────────────────────────────────────
 
-export type ActionSession = { state: PrioritySessionState; workflow: boolean; last_active_at: number };
+/** `mine` false: someone else's session, which never asks the viewer anything. */
+export type ActionSession = { state: PrioritySessionState; workflow: boolean; last_active_at: number; mine?: boolean };
 export type ActionMilestone<S extends ActionSession = ActionSession> = { key: string; tier: "critical" | "polish"; done: boolean; sessions: S[] };
 
 /** Finished or closed: never the session a line leads with. */
 export const isClosedSession = (s: Pick<ActionSession, "state">) => s.state === "done" || s.state === "killed";
-export const asksPerson = (s: Pick<ActionSession, "state">) => s.state === "needs_you";
+export const asksPerson = (s: Pick<ActionSession, "state" | "mine">) => s.state === "needs_you" && s.mine !== false;
 
 const STATE_RANK: Record<PrioritySessionState, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, done: 4, killed: 5 };
 
 /** Sessions a person drives before workflow runs, closed runs last; then needs you > working > dormant > idle, then the most recent. */
 export function orderSessions<S extends ActionSession>(list: readonly S[]): S[] {
   const tier = (s: S) => (s.workflow ? (isClosedSession(s) ? 2 : 1) : 0);
-  return [...list].sort((a, b) => tier(a) - tier(b) || STATE_RANK[a.state] - STATE_RANK[b.state] || b.last_active_at - a.last_active_at);
+  // Someone else's ask ranks as idle: it is not the viewer's to answer.
+  const rank = (s: S) => (s.state === "needs_you" && !asksPerson(s) ? STATE_RANK.idle : STATE_RANK[s.state]);
+  return [...list].sort((a, b) => tier(a) - tier(b) || rank(a) - rank(b) || b.last_active_at - a.last_active_at);
 }
 
 /** The session a line leads with: the best that is not closed. */

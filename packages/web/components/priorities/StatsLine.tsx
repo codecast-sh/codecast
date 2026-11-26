@@ -24,7 +24,7 @@ export type TodayView = { segments: TodaySegment[]; parts: TodayShare[]; total: 
 
 function Parts({ parts }: { parts: TodayShare[] }) {
   return (
-    <span data-today-parts className="truncate text-meta tabular-nums text-sol-text-muted">
+    <span data-today-parts className="shrink-0 whitespace-nowrap text-meta tabular-nums text-sol-text-muted">
       {parts.map((x, i) => <span key={x.label}>{i > 0 && " · "}<span className={cn(x.label.startsWith("#") && "font-medium text-sol-text")}>{x.label}</span> {x.pct}%</span>)}
     </span>
   );
@@ -47,7 +47,8 @@ export function StatsLine({ days, landed, todayIndex, today, loose, now, layout 
   const peak = Math.max(1, ...perDay);
   return (
     <section data-stats className="mb-2 border-b border-sol-border/60 pb-1">
-      <div className={cn("flex w-full items-center gap-2.5", wide ? "min-h-9" : "min-h-11")}>
+      {/* Wraps rather than clips: every share, "none" included, stays whole on a narrow list. */}
+      <div className={cn("flex w-full flex-wrap items-center gap-x-2 gap-y-1", wide ? "min-h-9" : "min-h-11")}>
         <span className="text-[17px] font-semibold tabular-nums text-sol-text">{critical}</span>
         <span className="shrink-0 text-ui text-sol-text">{wide ? "critical landed · 10d" : "landed"}</span>
         {wide && (
@@ -62,10 +63,9 @@ export function StatsLine({ days, landed, todayIndex, today, loose, now, layout 
               {wide ? `Today · ${today.topPct}% of messages on top 3` : `${today.topPct}% top 3 today`}
             </span>
             {wide && (
-              <span className="flex min-w-0 items-center gap-2">
+              <span className="flex shrink-0 items-center gap-2">
                 <TodayBar today={today} loose={loose} now={now} />
-                {/* Under 44rem the words wait in the full band; the bar stays. */}
-                <span className="hidden min-w-0 [@container(min-width:44rem)]:inline-flex"><Parts parts={today.parts} /></span>
+                <Parts parts={today.parts} />
               </span>
             )}
           </>
@@ -123,7 +123,7 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
   return (
     <Popover open={noneOpen} onOpenChange={setNoneOpen}>
       <PopoverAnchor asChild>
-        <span data-today-bar className={cn("relative flex shrink-0 gap-px", full ? "h-3 w-full" : "h-[10px] w-[110px]")}>
+        <span data-today-bar className={cn("relative flex shrink-0 gap-px", full ? "h-3 w-full" : "h-[10px] w-[72px]")}>
           {today.segments.map((s) => (
             <span
               key={s.key}
