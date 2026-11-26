@@ -6,10 +6,12 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { serverErrorText } from "../lib/errorCause";
-import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
+import { listMeta, listRows, paintedRow, priorDoneOf, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
 import { priorityWrites } from "../lib/priorityWrites";
 import { resolveInboxViewMode, useInboxStore } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
+import { gestureToast, pushUndo, type UndoOutcome } from "../store/undoStack";
+import { quoted } from "../store/undo/labels";
 import { useSyncCollection } from "./useSyncCollection";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
@@ -50,9 +52,54 @@ export function usePriorities(): PriorityRow[] {
   return useMemo(() => withLiveRanks(rows), [rows]);
 }
 
-const WRITES = priorityWrites((message) => toast.error(message));
+const BASE = priorityWrites((message) => toast.error(message));
 
-/** The store's priority actions (lib/priorityWrites), each put back when the server refuses it, the reason shown as a toast. */
+/**
+ * Checking off a milestone or a priority takes it out of sight while Hide
+ * done is on, so each check-off records an undo: its receipt's Undo, and ⌘Z,
+ * put back exactly what the press replaced (priorities.undoStepDone and
+ * undoDone), so a milestone the pass held is the pass's again and a priority
+ * keeps its rank. A redo presses it again. The entry is hand-written because
+ * the server's echo stamps its own done_at, which the generic undo would read
+ * as a change made since.
+ */
+function doneUndoable(label: string, isDone: () => boolean, press: () => void, undo: () => void): void {
+  // A check-off the server refused is open again already: nothing to take back.
+  const step = (want: boolean, write: () => void): UndoOutcome => {
+    if (isDone() !== want) return { ok: false, reason: "already" };
+    write();
+    return { ok: true, applied: 1, skipped: 0 };
+  };
+  gestureToast(label, () => {
+    press();
+    pushUndo({ label, undo: () => step(true, undo), redo: () => step(false, press) });
+  });
+}
+
+const held = (id: string) => paintedRow(useInboxStore.getState() as any, id);
+
+const WRITES: PriorityWrites = {
+  ...BASE,
+  setStepDone: (id, key, done) => {
+    const step = done ? held(id)?.steps.find((s) => s.key === key) : undefined;
+    if (!step || step.done) return BASE.setStepDone(id, key, done);
+    const setBy = step.done_set_by === "pass" || step.done_set_by === "person" ? step.done_set_by : null;
+    doneUndoable(
+      `Marked ${quoted(step.title, "milestone")} done`,
+      () => !!held(id)?.steps.find((s) => s.key === key)?.done,
+      () => BASE.setStepDone(id, key, true),
+      () => BASE.undoStepDone(id, key, setBy),
+    );
+  },
+  markDone: (id) => {
+    const row = held(id);
+    const prior = row ? priorDoneOf(row) : null;
+    if (!row || !prior) return BASE.markDone(id);
+    doneUndoable(`Marked ${quoted(row.title, "priority")} done`, () => held(id)?.status === "done", () => BASE.markDone(id), () => BASE.undoDone(id, prior));
+  },
+};
+
+/** The store's priority actions (lib/priorityWrites), each put back when the server refuses it, the reason shown as a toast; a check-off also records its undo. */
 export function usePriorityWrites(): PriorityWrites {
   return WRITES;
 }

@@ -78,6 +78,32 @@ describe("priority controls ride dispatch", () => {
     expect([done.status, done.status_set_by]).toEqual(["done", "person"]);
   });
 
+  test("undoing a check-off puts back what it replaced: a milestone the pass held is the pass's again, a priority keeps its place", async () => {
+    const { t, ada, p1, p2 } = await world();
+    await dispatch(t, ada, "setPriorityStepDone", ["pri-1", "s1", true]);
+    await dispatch(t, ada, "undoPriorityStepDone", ["pri-1", "s1", null]);
+    let one = await t.run(async (ctx: any) => ctx.db.get(p1));
+    expect(one.steps[0]).toEqual(step("s1", "critical"));
+    // Once it is no longer the person's done there is nothing to take back.
+    await expect(dispatch(t, ada, "undoPriorityStepDone", ["pri-1", "s1", null])).rejects.toThrow("Step s1 is no longer marked done by you");
+    // A milestone the person had held open goes back to theirs.
+    await dispatch(t, ada, "setPriorityStepDone", ["pri-1", "s1", false]);
+    await dispatch(t, ada, "setPriorityStepDone", ["pri-1", "s1", true]);
+    await dispatch(t, ada, "undoPriorityStepDone", ["pri-1", "s1", "person"]);
+    one = await t.run(async (ctx: any) => ctx.db.get(p1));
+    expect([one.steps[0].done, one.steps[0].done_set_by, one.steps[0].done_at]).toEqual([false, "person", undefined]);
+
+    // pri-2 placed first by the person, marked done, then undone: first again, its place kept.
+    await dispatch(t, ada, "movePriority", ["pri-2", 1]);
+    const placed = await t.run(async (ctx: any) => ctx.db.get(p2));
+    await dispatch(t, ada, "markPriorityDone", ["pri-2"]);
+    const row = await dispatch(t, ada, "undoPriorityDone", ["pri-2", { status: "active", person_pos: placed.person_pos }]);
+    const two = await t.run(async (ctx: any) => ctx.db.get(p2));
+    expect([two.status, two.status_set_by, two.done_at, two.person_pos, two.ai_rank]).toEqual(["active", undefined, undefined, placed.person_pos, undefined]);
+    expect(row).toMatchObject({ short_id: "pri-2", status: "active", rank: 1 });
+    await expect(dispatch(t, ada, "undoPriorityDone", ["pri-2", { status: "active" }])).rejects.toThrow("pri-2 is no longer marked done by you");
+  });
+
   test("a session's move and not-this, a correction and its delete land as the owner's", async () => {
     const { t, ada, acme, p1, p2 } = await world();
     const conv = await t.run(async (ctx: any) => ctx.db.insert("conversations", {

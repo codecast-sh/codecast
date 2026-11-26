@@ -21,8 +21,13 @@ await seedViewer();
 
 // What a refusal tells the person (the writes report it as a toast).
 const toasts: string[] = [];
+// The Undo on a check-off's receipt, by the receipt's line.
+const undoButtons = new Map<string, () => void>();
 const realSonner = { ...(await import("sonner")) };
-const fakeToast = Object.assign((m: unknown) => { toasts.push(String(m)); }, realSonner.toast, { error: (m: unknown) => { toasts.push(String(m)); } });
+const fakeToast = Object.assign((m: unknown, o?: { action?: { label: string; onClick: () => void } }) => {
+  toasts.push(String(m));
+  if (o?.action?.label === "Undo") undoButtons.set(String(m), o.action.onClick);
+}, realSonner.toast, { error: (m: unknown) => { toasts.push(String(m)); } });
 mock.module("sonner", () => ({ ...realSonner, toast: fakeToast }));
 afterAll(() => mock.module("sonner", () => realSonner));
 
@@ -79,9 +84,9 @@ afterAll(() => (useInboxStore.getState() as any)._clearRuntimeBindings?.());
 
 const FILTERS = { ...readFilters(new URLSearchParams()), mine: false, hideDone: false };
 /** The list as /priorities draws it, read from the store so each paint shows. */
-function Live({ layout = "wide" }: { layout?: "wide" | "phone" }) {
+function Live({ layout = "wide", filters = FILTERS }: { layout?: "wide" | "phone"; filters?: typeof FILTERS }) {
   const live = usePriorities();
-  return <PrioritiesView rows={live} history={{ days, lanes: [] } as any} now={NOW} layout={layout} filters={FILTERS} onFilters={() => {}} compact={false} onCompact={() => {}} />;
+  return <PrioritiesView rows={live} history={{ days, lanes: [] } as any} now={NOW} layout={layout} filters={filters} onFilters={() => {}} compact={false} onCompact={() => {}} />;
 }
 const mount = (node: React.ReactNode) => mountSurface(<MemoryRouter initialEntries={["/priorities"]}>{node}</MemoryRouter>);
 
@@ -175,6 +180,34 @@ test("Mark done, Set aside and Restore paint the row's status and ride their ove
     await choose(priorityMenu("pri-5"), '[data-act="restore"]');
     expect(block("pri-5").getAttribute("data-status")).toBe("active");
     expect(await dispatched("restorePriority")).toEqual([["pri-5"]]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("with Hide done on, a check-off leaves the list, and its receipt's Undo (or ⌘Z) brings it back as it was", async () => {
+  const { performUndo } = await import("../../store/undoStack");
+  const page = await mount(<Live filters={{ ...FILTERS, hideDone: true }} />);
+  try {
+    // A milestone: gone from the list, then back open and the pass's again.
+    await press(line("pri-2", "s1").querySelector('[data-milestone-toggle="s1"]')!);
+    expect(line("pri-2", "s1")).toBeNull();
+    const undoStep = undoButtons.get("Marked “Auto-deploy from main” done");
+    expect(undoStep).toBeDefined();
+    await act(async () => undoStep!());
+    expect(line("pri-2", "s1")).not.toBeNull();
+    expect(stored("pri-2").steps[0]).toMatchObject({ done: false });
+    expect(stored("pri-2").steps[0].done_set_by).toBeUndefined();
+    expect(await dispatched("undoPriorityStepDone")).toEqual([["pri-2", "s1", null]]);
+
+    // A priority: gone from the list, then back at #1 by ⌘Z.
+    await choose(priorityMenu("pri-1"), '[data-act="mark-done"]');
+    expect(block("pri-1")).toBeNull();
+    expect(toasts).toContain("Marked “Cam's eval requests flow” done");
+    await act(async () => { performUndo(); });
+    expect(ranks().slice(0, 3)).toEqual(["pri-1#1", "pri-2#2", "pri-3#3"]);
+    expect([stored("pri-1").status, stored("pri-1").status_set_by]).toEqual(["active", "pass"]);
+    expect(await dispatched("undoPriorityDone")).toEqual([["pri-1", { status: "active", ai_rank: 1 }]]);
   } finally {
     await page.unmount();
   }
@@ -532,7 +565,8 @@ test("a refused write takes back only what it painted, keeps a server push that 
     expect(block("pri-3").querySelector("[data-progress]")?.textContent).toBe("0/1");
     expect(stored("pri-2").title).toBe("One ship flow, renamed by the pass");
     expect(block("pri-2").textContent).toContain("One ship flow, renamed by the pass");
-    expect(toasts).toEqual(["pri-3 is Sam's priority; only they can change it"]);
+    // The check-off's receipt, then why the server refused it.
+    expect(toasts).toEqual(["Marked “Deploy drops the eval job” done", "pri-3 is Sam's priority; only they can change it"]);
   } finally {
     await page.unmount();
   }
@@ -560,7 +594,10 @@ test("Looks done? is the owner's button: it marks the milestone done through set
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
     await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 changed under you")); });
     await page.waitFor(() => stored("pri-3").steps[0].done === false && toasts.length > 0);
-    expect(toasts).toEqual(["pri-3 changed under you"]);
+    expect(toasts).toEqual(["Marked “Deploy drops the eval job” done", "pri-3 changed under you"]);
+    // Its Undo finds it open already and sends nothing.
+    await act(async () => undoButtons.get("Marked “Deploy drops the eval job” done")!());
+    expect(calls.some(([a]) => a === "undoPriorityStepDone")).toBe(false);
   } finally {
     await page.unmount();
   }

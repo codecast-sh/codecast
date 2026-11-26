@@ -3,7 +3,7 @@
 // after, the paints the store's priority actions make and the restore when
 // the server refuses one, and the pass's timing. What the list page derives
 // from them lives in lib/priorityList.
-import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorDone, PriorityCorrection, PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySetBy, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import type { PriorityDetailRow } from "./priorityDetail";
 import { effectivePriorityOrder, lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -170,6 +170,17 @@ export function paintStepDone(row: PriorityRow, stepKey: string, done: boolean, 
   row.counts = criticalCounts(row.steps);
 }
 
+/** The undo of the person's done on a milestone: open again, its done state back with whoever held it (null: the pass). */
+export function paintUndoStepDone(row: PriorityRow, stepKey: string, setBy: PrioritySetBy | null): void {
+  const step = row.steps.find((s) => s.key === stepKey);
+  if (!step) return;
+  step.done = false;
+  delete step.done_at;
+  if (setBy) step.done_set_by = setBy;
+  else delete step.done_set_by;
+  row.counts = criticalCounts(row.steps);
+}
+
 export function paintRename(row: PriorityRow, stepKey: string, title: string): void {
   const step = row.steps.find((s) => s.key === stepKey);
   const next = title.trim();
@@ -194,6 +205,26 @@ export function paintPriorityDone(row: PriorityRow, now: number): void {
   row.status_set_by = "person";
   row.person_pos = null;
   row.ai_rank = null;
+}
+
+/** The undo of the person's Mark done: the status and place it had (convex priorityWrite doUndoPriorityDone). */
+export function paintUndoPriorityDone(row: PriorityRow, prior: PriorDone): void {
+  row.status = prior.status;
+  row.status_set_by = prior.status_set_by ?? "pass";
+  row.person_pos = prior.person_pos ?? null;
+  row.ai_rank = prior.ai_rank ?? null;
+  row.done_at = null;
+}
+
+/** What Mark done replaces on `row`, for its undo; null for a row it cannot take back (already done). */
+export function priorDoneOf(row: Pick<PriorityRow, "status" | "status_set_by" | "person_pos" | "ai_rank">): PriorDone | null {
+  if (row.status !== "active" && row.status !== "quiet" && row.status !== "set_aside") return null;
+  return {
+    status: row.status,
+    ...(row.status_set_by === "person" ? { status_set_by: "person" as const } : {}),
+    ...(row.person_pos != null ? { person_pos: row.person_pos } : {}),
+    ...(row.ai_rank != null ? { ai_rank: row.ai_rank } : {}),
+  };
 }
 
 const keyNumber = (key: string) => Number(/^s(\d+)$/.exec(key)?.[1] ?? 0);
@@ -385,6 +416,9 @@ export type PriorityWrites = {
   renameStep: (shortId: string, stepKey: string, title: string) => void;
   dropStep: (shortId: string, stepKey: string) => void;
   markDone: (shortId: string) => void;
+  /** The undo of the person's own done: the milestone open again with whoever held its done state before (null: the pass), the priority back at its prior status and place. */
+  undoStepDone: (shortId: string, stepKey: string, setBy: PrioritySetBy | null) => void;
+  undoDone: (shortId: string, prior: PriorDone) => void;
   merge: (shortId: string, into: string) => void;
   /** A session (its short id) from the priority it shows on to a priority and a milestone of it, or none. */
   moveSession: (session: string, from: string, to: string, stepKey: string | null) => void;

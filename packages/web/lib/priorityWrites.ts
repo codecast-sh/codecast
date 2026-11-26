@@ -60,6 +60,8 @@ export function priorityWrites(onError: (message: string) => void): PriorityWrit
     renameStep: (id, key, title) => run(() => st().renamePriorityStep(id, key, title)),
     dropStep: (id, key) => run(() => st().dropPriorityStep(id, key)),
     markDone: (id) => run(() => st().markPriorityDone(id)),
+    undoStepDone: (id, key, setBy) => run(() => st().undoPriorityStepDone(id, key, setBy)),
+    undoDone: (id, prior) => run(() => st().undoPriorityDone(id, prior)),
     merge: (id, into) => run(() => st().mergePriority(id, into)),
     moveSession: (session, from, to, key) => run(() => st().movePrioritySession(session, from, to, key)),
     sessionNotThis: (session, from) => run(() => st().prioritySessionNotThis(session, from)),
