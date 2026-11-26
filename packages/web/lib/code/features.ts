@@ -39,6 +39,11 @@ export interface EditorFeatureContext {
 export interface EditorFeatureOptions {
   /** Reads the vault through the daemon; skipped where isRealVault is false. */
   needsVault?: boolean;
+  /** What an async feature holds its slot with until it lands, decided
+   *  synchronously from what is already known (a gutter of the width the real
+   *  one will have). The file paints with its final layout, and the columns
+   *  never shift the text as features arrive one by one. */
+  placeholder?: (ctx: EditorFeatureContext) => Extension | null | undefined;
 }
 
 export type EditorFeatureFactory = (
@@ -48,6 +53,7 @@ export type EditorFeatureFactory = (
 interface Feature {
   factory: EditorFeatureFactory;
   needsVault: boolean;
+  placeholder?: EditorFeatureOptions["placeholder"];
   compartment: Compartment;
   version: number;
 }
@@ -85,7 +91,7 @@ export function featureBase(ctx: EditorFeatureContext): Extension {
  *  at once, the rest when they are next shown. */
 export function registerEditorFeature(id: string, factory: EditorFeatureFactory, opts: EditorFeatureOptions = {}): () => void {
   const previous = features.get(id);
-  const feature: Feature = { factory, needsVault: !!opts.needsVault, compartment: previous?.compartment ?? new Compartment(), version: ++versions };
+  const feature: Feature = { factory, needsVault: !!opts.needsVault, placeholder: opts.placeholder, compartment: previous?.compartment ?? new Compartment(), version: ++versions };
   features.set(id, feature);
   for (const view of hosts) syncEditorFeatures(view);
   return () => {
@@ -148,6 +154,16 @@ export function syncEditorFeatures(view: EditorView): void {
       continue;
     }
     if (result instanceof Promise) {
+      // Not marked applied: the real extension replaces it in the same slot.
+      if (feature.placeholder && feature.compartment.get(view.state) === undefined) {
+        let held: Extension | null | undefined = null;
+        try {
+          held = feature.placeholder(ctx);
+        } catch (e) {
+          console.error(`editor feature ${id} placeholder failed`, e);
+        }
+        if (held) effects.push(StateEffect.appendConfig.of(feature.compartment.of(held)));
+      }
       const version = feature.version;
       const running = pending.get(ctx) ?? new Map<string, number>();
       pending.set(ctx, running);
@@ -171,6 +187,13 @@ export function syncEditorFeatures(view: EditorView): void {
         (e) => {
           settle();
           console.error(`editor feature ${id} failed`, e);
+          // Give back a column its placeholder held; the next show retries.
+          if (!feature.placeholder || features.get(id) !== feature) return;
+          for (const v of new Set([...(view.dom.isConnected ? [view] : []), ...hosts])) {
+            if (v.state.facet(featureContext) === ctx && v.state.field(appliedFeatures, false)?.[id] === undefined && feature.compartment.get(v.state) !== undefined) {
+              v.dispatch({ effects: feature.compartment.reconfigure([]) });
+            }
+          }
         },
       );
     } else {

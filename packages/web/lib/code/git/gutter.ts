@@ -25,6 +25,7 @@ import type { Chunk } from "@codemirror/merge";
 import { bufferKey, codeBuffers, savedDocField, textToDoc, decodeFileText } from "../buffers";
 import type { MergeKit } from "../merge";
 import { EDITOR_FONT } from "../theme";
+import { GIT_GUTTER_COLUMN } from "../gutterSlots";
 import { holdGitStatusFeed, requestGitStatusRefresh } from "./status";
 import {
   GIT_DIFF_CONFIG,
@@ -718,7 +719,7 @@ const gitGutter = gutter({
 });
 
 const gitTheme = EditorView.theme({
-  ".cm-git-gutter": { width: "8px", cursor: "default" },
+  ".cm-git-gutter": { ...GIT_GUTTER_COLUMN, cursor: "default" },
   ".cm-git-gutter .cm-gutterElement": { position: "relative" },
   ".cm-git-gutter .cm-git-line": { cursor: "pointer" },
   ".cm-git-line::before": { content: '""', position: "absolute", left: "2px", top: "0", bottom: "0", width: "3px", borderRadius: "1px" },

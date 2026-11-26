@@ -17,7 +17,8 @@ import { registerCodeCommands } from "./commands";
 import { fetchVimrcText } from "./daemonClient";
 import type { VaultEndpoint } from "../vault/client";
 import { whenIdle } from "./idle";
-import { liveStatusItem, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type StatusItemView } from "./features";
+import { liveStatusItem, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "./features";
+import { editorOptionOverrides, type CodeEditorOptions } from "./setup";
 import type { VimConfigReport, VimMode } from "./vim/types";
 
 type VimModule = typeof import("./vim");
@@ -52,6 +53,35 @@ const storage = {
     }
   },
 };
+
+// The core options (line numbers, wrap) the vimrc set per language last time,
+// held while the engine loads so a `set nonumber` file paints without numbers
+// instead of dropping them a second later.
+const CORE_KEY = "codecast:code-vim-core:v1";
+let coreByLanguage: Record<string, Partial<CodeEditorOptions>> | null = null;
+
+function rememberedCore(): Record<string, Partial<CodeEditorOptions>> {
+  if (coreByLanguage) return coreByLanguage;
+  try {
+    coreByLanguage = JSON.parse(storage.get(CORE_KEY) ?? "{}") as Record<string, Partial<CodeEditorOptions>>;
+  } catch {
+    coreByLanguage = {};
+  }
+  return coreByLanguage;
+}
+
+function rememberCore(languageId: string, core: Partial<CodeEditorOptions>): void {
+  const all = rememberedCore();
+  if (JSON.stringify(all[languageId]) === JSON.stringify(core)) return;
+  coreByLanguage = { ...all, [languageId]: core };
+  storage.set(CORE_KEY, JSON.stringify(coreByLanguage));
+}
+
+function vimPlaceholder(ctx: EditorFeatureContext) {
+  if (!vimAlways.has(ctx.vaultId) && !vimWanted()) return null;
+  const core = rememberedCore()[ctx.languageId];
+  return core ? editorOptionOverrides.of(core) : null;
+}
 
 let engine: Promise<VimModule> | null = null;
 let loaded: VimModule | null = null;
@@ -199,13 +229,15 @@ export function registerVimFeature(): void {
     const vim = await loadVim();
     // No config (the daemon is out of reach, nothing cached): vim with its defaults.
     const report = await vim.ensureVimConfig(readVimrc).catch(() => null);
+    const seed = vimOptionsFromSettings(explicitEditorSettings());
+    rememberCore(ctx.languageId, vim.vimCoreOverrides(report, ctx.languageId, seed));
     return [
       vim.createVimExtension(),
       // The person's Settings > Editor choices go in under the runtime layer,
       // so they beat the vimrc and a `:set` typed later beats them.
-      vim.vimOptionsExtension(report, ctx.languageId, vimOptionsFromSettings(explicitEditorSettings())),
+      vim.vimOptionsExtension(report, ctx.languageId, seed),
     ];
-  });
+  }, { placeholder: vimPlaceholder });
 
   // Rebuilt when the mode or a choice vim seeds changes, and only then.
   const signature = () => `${editorSetting("vimMode")}|${JSON.stringify(vimOptionsFromSettings(explicitEditorSettings()))}`;

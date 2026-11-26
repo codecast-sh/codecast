@@ -4,7 +4,7 @@
 // take, so the palette's "Diff vs HEAD" and `:Gdiffsplit` are one code path.
 
 import type { ComponentType } from "react";
-import { Columns2, FileSearch, GitCompare, Search, Settings2, SquareTerminal, UserSquare2 } from "lucide-react";
+import { Columns2, FileSearch, GitCompare, Link2, MessageSquareCode, Quote, Search, Settings2, SquarePlus, SquareTerminal, UserSquare2 } from "lucide-react";
 import { runCodeCommand, type CodeCommandId } from "./code/commands";
 import type { ShortcutAction } from "../shortcuts/registry";
 import { useInboxStore } from "../store/inboxStore";
@@ -16,6 +16,9 @@ export interface EditorPaletteCommand {
   keywords: string;
   icon: ComponentType<{ className?: string }>;
   shortcut?: ShortcutAction;
+  /** A key the editor itself claims (not an app shortcut), as an Electron
+   *  accelerator ("CommandOrControl+L"). */
+  editorKey?: string;
   args?: Record<string, unknown>;
 }
 
@@ -24,6 +27,10 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   { id: "search.project", label: "Search in project", keywords: "grep find text ripgrep", icon: Search, shortcut: "vault.search" },
   { id: "git.diffHead", label: "Diff vs HEAD", keywords: "git changes review compare", icon: GitCompare },
   { id: "blame.toggle", label: "Toggle session blame", keywords: "git blame who wrote", icon: UserSquare2 },
+  { id: "agent.quoteSelection", label: "Quote selection to session", keywords: "agent ask send composer cmd-l", icon: Quote, editorKey: "CommandOrControl+L" },
+  { id: "agent.inlineInstruction", label: "Instruct session here", keywords: "agent edit change prompt cmd-k inline", icon: MessageSquareCode, editorKey: "CommandOrControl+K" },
+  { id: "agent.pickSession", label: "Link session", keywords: "agent conversation folder linked choose", icon: Link2 },
+  { id: "agent.newSession", label: "New session here", keywords: "agent start conversation folder", icon: SquarePlus },
   { id: "split.right", label: "Split editor right", keywords: "split group side", icon: Columns2, shortcut: "code.splitRight" },
   { id: "vim.toggle", label: "Toggle vim", keywords: "vim mode keys modal", icon: SquareTerminal },
   { id: "settings.open", label: "Editor settings", keywords: "preferences vimrc options language servers", icon: Settings2 },

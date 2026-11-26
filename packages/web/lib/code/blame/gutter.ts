@@ -14,10 +14,10 @@ import { useVaultStore } from "../../../store/vaultStore";
 import { bufferKey, codeBuffers, savedDocField } from "../buffers";
 import { featureContext } from "../features";
 import { lineChanges, loadMergeKit } from "../merge";
-import { EDITOR_FONT } from "../theme";
+import { BLAME_GUTTER_COLUMN } from "../gutterSlots";
 import { ensureGitStatus, useGitStatusStore } from "../git/status";
-import { blameAvailability, blameErrorReason, blameKey, forgetBlame, loadBlame } from "./data";
-import { closeBlameHover, hoverBlameRun, leaveBlameHover, pinBlameRun } from "./hover";
+import { NOT_CONNECTED, blameAvailability, blameFailure, blameKey, forgetBlame, loadBlame } from "./data";
+import { closeBlameHover, hoverBlameRun, hoverStays, leaveBlameHover, pinBlameRun } from "./hover";
 import { openBlameSession } from "./actions";
 import {
   NEUTRAL_HUE,
@@ -47,6 +47,13 @@ export interface BlameValue {
   key: string | null;
   /** Why blame is unavailable, for the toggle's tooltip. */
   reason?: string;
+  /** The failure may pass (the daemon away, a timeout): the runner asks
+   *  again on its own, and the toggle stays usable. */
+  transient?: boolean;
+  /** A refetch failed for a passing reason while hunks stay drawn. */
+  retry?: string;
+  /** When the runs (and their ages) were last built. */
+  derivedAt: number;
   hunks: readonly CodeBlameHunk[];
   placed: readonly PlacedHunk[];
   edits: readonly LineSpan[];
@@ -67,6 +74,7 @@ const EMPTY: BlameValue = {
   hues: new Map(),
   markers: RangeSet.empty,
   stale: false,
+  derivedAt: 0,
 };
 
 // ── markers ─────────────────────────────────────────────────────────────────
@@ -109,14 +117,28 @@ function bar(kind: RunKind, hue: string): BlameMarker {
   return m;
 }
 
-/** The gutter's markers: a bar on every line of a run, the label on its first. */
+/** Who a run reads as in the gutter: two runs back to back with the same one
+ *  share the first's label (two commits of one session, one session's lines
+ *  split around an edit that was since undone). */
+function runOwner(run: BlameRun): string {
+  const s = run.hunk?.session;
+  if (s) return `s:${s.conversation_id ?? s.id}`;
+  if (run.kind === "commit") return `a:${run.hunk?.author ?? run.hunk?.sha ?? ""}`;
+  return run.kind;
+}
+
+/** The gutter's markers: a bar on every line of a run, the label on the
+ *  first line of a run whose owner differs from the run right above. */
 export function buildMarkers(runs: readonly BlameRun[], hues: ReadonlyMap<string, string>, doc: Text, now: number): RangeSet<GutterMarker> {
   const b = new RangeSetBuilder<GutterMarker>();
+  let prev: BlameRun | null = null;
   for (const run of runs) {
     const hue = hueOf(run.hunk, hues);
     const body = bar(run.kind, hue);
     let line = doc.line(run.fromLine);
-    b.add(line.from, line.from, new BlameMarker(run.kind, hue, runLabel(run.kind, run.hunk, now)));
+    const continues = prev !== null && prev.toLine + 1 === run.fromLine && prev.kind === run.kind && runOwner(prev) === runOwner(run);
+    prev = run;
+    b.add(line.from, line.from, continues ? body : new BlameMarker(run.kind, hue, runLabel(run.kind, run.hunk, now)));
     for (let n = run.fromLine + 1; n <= run.toLine; n++) {
       line = doc.line(n);
       b.add(line.from, line.from, body);
@@ -129,7 +151,7 @@ export function buildMarkers(runs: readonly BlameRun[], hues: ReadonlyMap<string
  *  after typing pauses. Exported for the frame-budget measurement. */
 export function deriveBlame(value: BlameValue, doc: Text, now = Date.now()): BlameValue {
   const runs = blameRuns(value.placed, value.edits, doc);
-  return { ...value, runs, markers: buildMarkers(runs, value.hues, doc, now), stale: false };
+  return { ...value, runs, markers: buildMarkers(runs, value.hues, doc, now), stale: false, derivedAt: now };
 }
 
 /** Markers after an edit, without a rebuild: lines deleted lose theirs, the
@@ -153,9 +175,13 @@ function patchMarkers(markers: RangeSet<GutterMarker>, changes: ChangeSet, touch
 // ── state ───────────────────────────────────────────────────────────────────
 
 const setLoading = StateEffect.define<string>();
-const setUnavailable = StateEffect.define<{ key: string | null; reason: string }>();
+const setUnavailable = StateEffect.define<{ key: string | null; reason: string; transient?: boolean }>();
 const setData = StateEffect.define<{ key: string; hunks: readonly CodeBlameHunk[]; placed: PlacedHunk[]; edits: LineSpan[] }>();
-const rederive = StateEffect.define<null>();
+/** Build the runs again: after typing settles, or (forced) to refresh ages. */
+const rederive = StateEffect.define<{ force: boolean }>();
+
+/** Exported for the frame-budget measurement. */
+export const blameDataEffect = setData;
 
 export const blameField = StateField.define<BlameValue>({
   create: () => EMPTY,
@@ -175,13 +201,20 @@ export const blameField = StateField.define<BlameValue>({
       // A new version on its way: what is drawn stays (mapped through the
       // edits since) until it lands, so a save never blinks the gutter.
       if (e.is(setLoading)) next = next.status === "ready" ? { ...next, key: e.value } : { ...EMPTY, status: "loading", key: e.value };
-      else if (e.is(setUnavailable)) next = { ...EMPTY, status: "unavailable", key: e.value.key, reason: e.value.reason };
+      else if (e.is(setUnavailable)) {
+        // A passing failure keeps what is drawn; the key clears so the next
+        // kick asks again.
+        next =
+          e.value.transient && next.status === "ready"
+            ? { ...next, key: null, retry: e.value.reason }
+            : { ...EMPTY, status: "unavailable", key: e.value.key, reason: e.value.reason, transient: e.value.transient };
+      }
       else if (e.is(setData)) {
         next = deriveBlame(
           { ...EMPTY, status: "ready", key: e.value.key, hunks: e.value.hunks, placed: e.value.placed, edits: e.value.edits, hues: sessionHues(e.value.hunks) },
           tr.state.doc,
         );
-      } else if (e.is(rederive) && next.stale) next = deriveBlame(next, tr.state.doc);
+      } else if (e.is(rederive) && (next.stale || (e.value.force && next.status === "ready"))) next = deriveBlame(next, tr.state.doc);
     }
     return next;
   },
@@ -233,11 +266,21 @@ const blameOptions = Facet.define<BlameOptions, BlameOptions>({
 
 const REFETCH_MS = 400;
 const SETTLE_MS = 250;
+/** A passing failure asks again after 5s, doubling to a minute. */
+const RETRY_MS = 5_000;
+const RETRY_MAX_MS = 60_000;
+/** Ages ("3h") read again when the editor regains focus after this long. */
+const AGE_REFRESH_MS = 10 * 60_000;
 
 const runner = ViewPlugin.fromClass(
   class {
     private refetchTimer: ReturnType<typeof setTimeout> | null = null;
     private settleTimer: ReturnType<typeof setTimeout> | null = null;
+    private retryTimer: ReturnType<typeof setTimeout> | null = null;
+    private failures = 0;
+    /** One git status read at a time, so a daemon that is down is asked on
+     *  the retry clock, never in a loop. */
+    private awaitingStatus = false;
     private readonly offGit: () => void;
     private readonly offVault: () => void;
     private destroyed = false;
@@ -265,6 +308,10 @@ const runner = ViewPlugin.fromClass(
         closeBlameHover(this.view);
         if (u.state.field(blameField).stale) this.settleSoon();
       }
+      if (u.focusChanged && u.view.hasFocus) {
+        const v = u.state.field(blameField);
+        if (v.status === "ready" && Date.now() - v.derivedAt > AGE_REFRESH_MS) this.dispatchSoon(rederive.of({ force: true }));
+      }
     }
 
     private dispatchSoon(effects: StateEffect<unknown>) {
@@ -285,8 +332,19 @@ const runner = ViewPlugin.fromClass(
       if (this.settleTimer) clearTimeout(this.settleTimer);
       this.settleTimer = setTimeout(() => {
         this.settleTimer = null;
-        if (!this.destroyed && this.view.state.field(blameField).stale) this.view.dispatch({ effects: rederive.of(null) });
+        if (!this.destroyed && this.view.state.field(blameField).stale) this.view.dispatch({ effects: rederive.of({ force: false }) });
       }, SETTLE_MS);
+    }
+
+    /** A failure that may pass: say so, and ask again on a backing-off clock. */
+    private failSoftly(key: string | null, reason: string) {
+      this.dispatchSoon(setUnavailable.of({ key, reason, transient: true }));
+      if (this.retryTimer) clearTimeout(this.retryTimer);
+      const delay = Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** this.failures++);
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        this.kick(true);
+      }, delay);
     }
 
     /** Fetch for the file's current version unless the field already holds it. */
@@ -295,8 +353,24 @@ const runner = ViewPlugin.fromClass(
       if (!ctx || this.destroyed) return;
       const avail = blameAvailability(ctx.vaultId);
       if (avail.ok === "pending") {
-        void ensureGitStatus(ctx.vaultId).then(() => this.kick(fresh), () => this.dispatchSoon(setUnavailable.of({ key: null, reason: "Files are not connected" })));
+        if (this.awaitingStatus) return;
+        this.awaitingStatus = true;
+        // A status read that fails resolves empty: the daemon is away. The
+        // git status subscription kicks when a status does arrive.
+        const failed = () => {
+          this.awaitingStatus = false;
+          if (!this.destroyed) this.failSoftly(null, NOT_CONNECTED);
+        };
+        void ensureGitStatus(ctx.vaultId).then((st) => {
+          if (!st) return failed();
+          this.awaitingStatus = false;
+          this.kick(fresh);
+        }, failed);
         return;
+      }
+      if (this.retryTimer) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
       }
       if (avail.ok === false) {
         const v = this.view.state.field(blameField);
@@ -313,7 +387,10 @@ const runner = ViewPlugin.fromClass(
       loadBlame(key, ctx.vaultId, ctx.path).then(
         (res) => void this.land(key, res),
         (e: unknown) => {
-          if (this.current(key)) this.dispatchSoon(setUnavailable.of({ key, reason: blameErrorReason(e) }));
+          if (!this.current(key)) return;
+          const { reason, transient } = blameFailure(e);
+          if (transient) this.failSoftly(null, reason);
+          else this.dispatchSoon(setUnavailable.of({ key, reason }));
         },
       );
     }
@@ -332,6 +409,7 @@ const runner = ViewPlugin.fromClass(
       if (!this.current(key)) return;
       const placed = await placeOnBuffer(() => this.view.state, res.hunks).catch(() => null);
       if (!placed || !this.current(key)) return;
+      this.failures = 0;
       // Synchronously after placing: the document is the one placed against.
       this.view.dispatch({ effects: setData.of({ key, hunks: res.hunks, ...placed }) });
     }
@@ -340,6 +418,7 @@ const runner = ViewPlugin.fromClass(
       this.destroyed = true;
       if (this.refetchTimer) clearTimeout(this.refetchTimer);
       if (this.settleTimer) clearTimeout(this.settleTimer);
+      if (this.retryTimer) clearTimeout(this.retryTimer);
       this.offGit();
       this.offVault();
       this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
@@ -350,14 +429,18 @@ const runner = ViewPlugin.fromClass(
 
 // ── gutter ──────────────────────────────────────────────────────────────────
 
-function hoverTarget(view: EditorView, lineFrom: number, event: Event) {
+function runAt(view: EditorView, lineFrom: number): BlameRun | null {
   const value = view.state.field(blameField, false);
   if (!value || value.status !== "ready") return null;
-  const run = runAtLine(value.runs, view.state.doc.lineAt(lineFrom).number);
+  return runAtLine(value.runs, view.state.doc.lineAt(lineFrom).number);
+}
+
+/** The card's target: reads the cell's box, so only when the run changes. */
+function hoverTarget(view: EditorView, run: BlameRun, event: Event) {
   const cell = (event.target as HTMLElement | null)?.closest?.(".cm-gutterElement");
-  if (!run || !cell) return null;
+  if (!cell) return null;
   const r = cell.getBoundingClientRect();
-  return { view, run, hue: hueOf(run.hunk, value.hues), rect: { left: r.left, top: r.top, width: r.width, height: r.height } };
+  return { view, run, hue: hueOf(run.hunk, view.state.field(blameField).hues), rect: { left: r.left, top: r.top, width: r.width, height: r.height } };
 }
 
 const blameGutter = gutter({
@@ -365,7 +448,9 @@ const blameGutter = gutter({
   markers: (view) => view.state.field(blameField, false)?.markers ?? RangeSet.empty,
   domEventHandlers: {
     mousemove(view, line, event) {
-      const t = hoverTarget(view, line.from, event);
+      const run = runAt(view, line.from);
+      if (run && hoverStays(view, run)) return false;
+      const t = run && hoverTarget(view, run, event);
       if (t) hoverBlameRun(t);
       else leaveBlameHover();
       return false;
@@ -376,7 +461,8 @@ const blameGutter = gutter({
     },
     mousedown(view, line, event) {
       if ((event as MouseEvent).button !== 0) return false;
-      const t = hoverTarget(view, line.from, event);
+      const run = runAt(view, line.from);
+      const t = run && hoverTarget(view, run, event);
       if (!t) return false;
       // The bar's primary action is the card's: the conversation, beside.
       if (!openBlameSession(t.run.hunk?.session)) pinBlameRun(t);
@@ -448,7 +534,7 @@ const HATCH = "repeating-linear-gradient(-45deg, var(--blame-hue) 0 1.5px, trans
 const blameTheme = EditorView.theme({
   // A fixed column: labels truncate inside it, so nothing moves as lines
   // with longer or shorter names scroll past.
-  ".cm-blame-gutter": { width: "26ch", minWidth: "26ch", maxWidth: "26ch", fontFamily: EDITOR_FONT, fontSize: "11px", cursor: "default" },
+  ".cm-blame-gutter": { ...BLAME_GUTTER_COLUMN, cursor: "default" },
   ".cm-blame-gutter .cm-gutterElement": { position: "relative", overflow: "hidden", padding: "0" },
   ".cm-blame-line": { cursor: "pointer" },
   ".cm-blame-cell": {
