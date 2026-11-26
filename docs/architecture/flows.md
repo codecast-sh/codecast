@@ -289,18 +289,23 @@ checkout, a credential the session committed in the worktree refuses the
 refreeze, naming the file; a branch's commits are the session's own push. The
 refreeze pushes nothing (the PR station pushes the branch as it always has). On
 a branch, task or pull request run the worktree must be on the change's branch,
-and when origin moved off the tip it had at the last freeze, the run's own
-commits are replayed onto origin's new tip, locally: what the worktree added
-since the last freeze, and every earlier carry origin did not hold then. Nothing
-else is replayed, so a commit a force-push took off origin stays off, and a fix
-the session rebuilt and force-pushed elsewhere replaces its earlier commits. A
+and when origin moved off the tip it had at the last freeze, everything the
+branch here holds over that old tip (earlier carries, the session's commits
+here, a commit unpushed at the run's start, this round's) is replayed onto
+origin's new tip, locally. Nothing origin held then is replayed, so a commit a
+force-push took off origin stays off. A branch here that no longer sits on that
+old tip (rebased onto newer work) refuses, since the run cannot tell its own
+commits from origin's; with no old tip recorded, only what the worktree added
+since the last freeze is replayed. A
 change frozen from a checkout carries the edits on top of each later freeze
 (`frozen_tip`, its files in `carried`, apart from `paths`). The worktree is
 read once more before the reset; a write made while the refreeze ran is carried
 on a second pass, and a worktree still changing after that is left as it is.
 The branch moves only once the carry is on the new tip; a conflict moves
-nothing. What differed already at the brief is the run's own stations'
-writing, and the reset puts it back (ct-99118). A session that pins blocked asks a person, for the
+nothing. A failed reset (another git holding the worktree's index) puts the
+branch and the held files back, leaving `change.json` as it was. What differed
+already at the brief is the run's own stations' writing, and the reset puts it
+back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run
 waits for that person rather than stopping: the run's row says so
 (`waiting_on_session.blocked`, its note the pin), and the Ship bar reads
