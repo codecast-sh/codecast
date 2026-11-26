@@ -65,12 +65,14 @@ describe("a change run never sends a target a person sends", () => {
     }
   });
 
-  // Codecast's backend is the target its [line.deploy] names: a person sends it. mobile goes after it.
+  // A backend a person sends ([line.deploy]): mobile goes after it.
   test("codecast's own targets: mobile behind a person-sent backend is still waiting at minute 61, not stuck", async () => {
     const repo = path.resolve(import.meta.dir, "../../../..");
     const plan = deployDuties(await checkoutTargets(repo), ["packages/shared/contracts/example.ts"], { held: lineHeld(loadLineProfile(repo).profile.deploy) });
     const backend = plan.duties.find((d) => d.target === "backend");
-    if (backend?.action !== "wait") return; // codecast's config moved on: the run sends backend itself, and the same cast deploy orders mobile.
+    // Codecast's backend is now sent by Merge before the merge (how "merge", awaitDeploy.test.ts covers it); this
+    // test is about a person-sent backend, so it holds only while one is declared.
+    if (backend?.action !== "wait" || backend.how !== "others") return;
     let tick = 0;
     const lines: string[] = [];
     const r = await awaitDeploy({ sha: "1a2b3c4d5e6f7a8b9c0d", base: "main", plan, intervalMs: 60_000, once: false }, {

@@ -197,7 +197,7 @@
       ".claude/agents/implementer.md": "952adc7a9e5ec50d",
       ".claude/agents/reviewer.md": "ed6462a9e2f2f8d9",
       ".claude/settings.json": "d3b7568f317c3f0f",
-      ".claude/skills/codecast-orchestrate/SKILL.md": "91d4368a002561b1",
+      ".claude/skills/codecast-orchestrate/SKILL.md": "3f6b8f63be04d5ce",
       ".codecast/orchestration/scripts/agent-complete.sh": "02834fb294e9cb68",
       ".codecast/orchestration/scripts/reground.sh": "0032a90b8d285b09"
     }

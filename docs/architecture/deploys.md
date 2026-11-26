@@ -324,8 +324,8 @@ The targets are published per repository to `deploy_targets` (workspace key
 of the repository's team) by every line profile publish and by `cast line
 deploy targets --publish`, with the machine and checkout that published
 them: where a deploy of a `here` target runs. A change that lands
-`.codecast/line.toml`, `deploy.toml`, `workspace.toml` or `.codecast/line/`
-is republished by its run's Deploy station (`workflow/republishLanded.ts`):
+`.codecast/line.toml`, `deploy.toml`, `workspace.toml` or a file in the
+line's own folder is republished by its run's Deploy station (`workflow/republishLanded.ts`):
 once the run's checkout holds the merged commit with `.codecast` clean,
 within ten minutes, it runs `cast line profile --publish` there (`cast line
 deploy targets --publish` for a repository with no profile), and its last
