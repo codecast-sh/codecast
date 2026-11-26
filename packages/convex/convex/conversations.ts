@@ -12576,11 +12576,13 @@ export const setThreadState = mutation({
     }
 
     const status = parseThreadStateStatus(args.status) ?? "working";
-    const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
+    // Only the session's runner speaks for its milestone: a co-owner's pin names none, closes none and is told of none.
+    const runner = String(conv.user_id) === String(userId);
+    const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), runner ? serves : undefined);
     // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
     // Milestone replies only where priorities is on: where the session's priority is, or, on none yet, where the session could count.
     const held = conv.priority_id ? ((await ctx.db.get(conv.priority_id as Id<"priorities">)) as Doc<"priorities"> | null) : null;
-    const priorities = status === "done" && (held ? await prioritiesOn(ctx, held.workspace) : await prioritiesPossibleFor(ctx, conv));
+    const priorities = runner && status === "done" && (held ? await prioritiesOn(ctx, held.workspace) : await prioritiesPossibleFor(ctx, conv));
     const milestone = priorities && !serves ? await unnamedMilestone(ctx, conv) : null;
     // One that names another milestone than the session's closes none either: the CLI says so.
     const mapped = priorities && serves ? await mappedMilestone(ctx, conv) : null;
