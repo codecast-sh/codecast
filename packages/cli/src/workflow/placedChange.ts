@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import { spawnSync } from "../proc.js";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
 import type { FrozenChange } from "./flowChangeFile.js";
+import type { RunHands } from "../lineTrialBranch.js";
 
 /** The words that keep a run on the asking machine, whatever default is set. */
 const HERE = new Set(["here", "local", "this"]);
@@ -66,7 +67,7 @@ export type CastRun = (args: string[], cwd: string) => Promise<{ code: number; o
  * run's worktree made on it (or an earlier one moved to its tip), and change.json written to the run's directory.
  * Throws with why, which the run fails with.
  */
-export async function preparePlacedChange(projectPath: string, runDir: string, placed: FrozenChange, cast: CastRun, runId?: string): Promise<FrozenChange> {
+export async function preparePlacedChange(projectPath: string, runDir: string, placed: FrozenChange, cast: CastRun, runId?: string, opts: { task?: string; hands?: RunHands } = {}): Promise<FrozenChange> {
   if (!fs.existsSync(projectPath)) throw new Error(`The run's checkout ${projectPath} is not on this machine`);
   const { fetchBranch, UnpushedCommitsError } = await import("./flowChange.js");
   const { writeFrozenChange, acquireFailureWords } = await loadHelpers();
@@ -74,7 +75,7 @@ export async function preparePlacedChange(projectPath: string, runDir: string, p
   // checked out, and after that every difference between the old tip and the new one reads as uncommitted there.
   const earlierPath = (await cast(["ws", "path", placed.worktree], projectPath)).out.trim();
   const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-  // One on another branch (an earlier run's) keeps its work on that branch instead (putChangeInWorktree).
+  // One on another branch (an earlier run's) keeps it there and is released (putChangeInWorktree).
   if (earlier && spawnSync("git", ["-C", earlier, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf-8" }).stdout.trim() === placed.branch) {
     const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
     if (dirty) throw new Error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`);
@@ -87,12 +88,11 @@ export async function preparePlacedChange(projectPath: string, runDir: string, p
     throw new Error(`Could not fetch ${placed.branch} from origin into ${projectPath}: ${err instanceof Error ? err.message.trim().split("\n").pop() : err}`);
   }
   const change: FrozenChange = { ...placed, tip, pushed: true, ...(runId ? { run: runId } : {}) };
-  const ws = await cast(["ws", "acquire", change.worktree, "--branch", change.branch, "--skip-pool", "--json"], projectPath);
-  if (ws.code !== 0) throw new Error(acquireFailureWords(change.worktree, ws.out, ws.err));
-  if (earlier) {
-    const { putChangeInWorktree } = await import("./flowChange.js");
-    await putChangeInWorktree(earlier, change, change.worktree);
-  }
+  const { putChangeInWorktree } = await import("./flowChange.js");
+  await putChangeInWorktree(projectPath, change.worktree, earlier, change, opts.task ?? change.worktree, async () => {
+    const ws = await cast(["ws", "acquire", change.worktree, "--branch", change.branch, "--skip-pool", "--json"], projectPath);
+    if (ws.code !== 0) throw new Error(acquireFailureWords(change.worktree, ws.out, ws.err));
+  }, opts.hands);
   writeFrozenChange(runDir, change);
   return change;
 }

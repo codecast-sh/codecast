@@ -22666,7 +22666,9 @@ workflow
         return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? "" };
       };
       try {
-        const change = await preparePlacedChange(projectPath, lineRunDir(projectPath, run.placed_change.worktree), run.placed_change, castRun, runId);
+        const { runHandsVia } = await import("./lineTrialBranch.js");
+        const hands = runHandsVia((route, body) => cliPost(route, body, { throwOnError: true }));
+        const change = await preparePlacedChange(projectPath, lineRunDir(projectPath, run.placed_change.worktree), run.placed_change, castRun, runId, { task: run.task_short_id ?? undefined, hands });
         console.log(`On ${change.branch} at ${change.tip.slice(0, 10)}, fetched from origin into worktree ${change.worktree}`);
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);

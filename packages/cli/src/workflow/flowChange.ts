@@ -310,31 +310,27 @@ export async function fetchBranch(root: string, branch: string): Promise<string>
 }
 
 /**
- * Put a change frozen for a run into the run's worktree `tree`, one an earlier run of the same flow and task made
- * (runner.ts runSlug names it per flow and task, not per branch), so its files follow the change's tip. On the change's
- * branch it is reset there: the freeze moved the branch under it. On another branch (a second run on the task with a
- * new branch: ct-101654's worktree held -ledger for -checks, Nov 26), the reset took the change's tip onto that other
- * branch, and the refreeze then refused the mismatch and stopped the run (refreezeSessionChange). So the worktree goes
- * onto the change's branch first, keeping the old branch's work as lineTrialBranch.ts freeBranch does: what it left
- * uncommitted is committed onto it, and nothing else moves it. Anything still at work in the tree refuses
- * (clearTree), and so does a switch git will not make; each says what to do, and nothing has moved.
+ * Put a change frozen for a run into the run's workspace `slug`, which an earlier run of the same flow and task may have
+ * made (runner.ts runSlug names it per flow and task, not per branch; `earlier` is its tree). `acquire` makes or reuses
+ * the workspace on the change's branch (`cast ws acquire --branch`), the one place that puts a workspace on a branch
+ * and records it. An earlier tree on the change's branch is reused and reset to the tip, since the freeze moved the
+ * branch under it. One on another branch (a second run on the task with a new branch: ct-101654's held -ledger for
+ * -checks, Nov 26) is released first, as lineTrialBranch.ts freeBranch sets an earlier run's branch aside: what it left
+ * uncommitted is committed onto that branch, which nothing else moves, and acquire then makes the workspace afresh on
+ * the change's branch. Reset in place, the other branch took the change's tip, the workspace's record kept naming it
+ * (so the next acquire failed its contract), and the refreeze refused the mismatch and stopped the run. Anything still
+ * at work in the earlier tree refuses (clearTree), saying what to do, before anything of it moves.
  */
-export async function putChangeInWorktree(tree: string, change: Pick<FrozenChange, "branch" | "tip">, task: string, hands?: RunHands): Promise<void> {
-  const on = await gitTry(tree, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
-  if (on !== change.branch) {
-    const { clearTree } = await import("../lineTrialBranch.js");
-    await clearTree(tree, hands);
-    if (await git(tree, ["status", "--porcelain"])) {
-      if (!on) throw new Error(`The run's worktree ${tree} is on no branch and holds uncommitted work, so it cannot go onto the change's branch ${change.branch}: commit that work to a branch or clear it, then run this change again`);
-      await git(tree, ["add", "-A"]);
-      await git(tree, ["commit", "-q", "--no-verify", "-m", `Left uncommitted by an earlier run on ${task}`]);
-    }
-    await git(tree, ["switch", "-q", change.branch]).catch((err: Error) => {
-      const why = err.message.split("\n").find((l) => /error|fatal/i.test(l))?.trim() || err.message.split("\n")[0];
-      throw new Error(`The run's worktree ${tree} is on ${on ?? "no branch"}, not the change's branch ${change.branch}, and git would not switch it (${why}). ${on ? `${on} keeps all its work. ` : ""}Free ${change.branch} or clear the worktree, then run this change again`);
-    });
+export async function putChangeInWorktree(repo: string, slug: string, earlier: string | null, change: Pick<FrozenChange, "branch" | "tip">, task: string, acquire: () => Promise<void>, hands?: RunHands): Promise<void> {
+  const on = earlier ? await gitTry(earlier, ["symbolic-ref", "--quiet", "--short", "HEAD"]) : null;
+  if (earlier && on !== change.branch) {
+    if (!on) throw new Error(`The run's worktree ${earlier} is on no branch, so it cannot go onto the change's branch ${change.branch}: keep what it holds on a branch, release it (cast ws destroy ${slug}), then run this change again`);
+    const { freeBranch } = await import("../lineTrialBranch.js");
+    const freed = await freeBranch(repo, slug, on, task, hands);
+    if (freed?.committed) console.error(`Committed what an earlier run left uncommitted in ${earlier} onto ${on} as ${(await git(repo, ["rev-parse", on])).slice(0, 10)}, and released that worktree for ${change.branch}`);
   }
-  await git(tree, ["reset", "--quiet", "--hard", change.tip]);
+  await acquire();
+  if (earlier && on === change.branch) await git(earlier, ["reset", "--quiet", "--hard", change.tip]);
 }
 
 /** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */

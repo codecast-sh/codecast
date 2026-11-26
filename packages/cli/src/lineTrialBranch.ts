@@ -115,7 +115,7 @@ export function runHandsVia(post: (route: string, body: Record<string, unknown>)
  * which outlive the hands that asked for them. Anything still running in the
  * tree after that refuses too.
  */
-export async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promise<void> {
+async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000): Promise<void> {
   let busy = processesIn(tree);
   if (!busy.length) return;
   const owners = ownersOf(busy.map((p) => p.pid));
@@ -147,7 +147,7 @@ export async function clearTree(tree: string, hands?: RunHands, waitMs = 15_000)
  * worktree, and whether it held uncommitted work. Refused while anything still
  * works in the worktree (clearTree).
  */
-async function freeBranch(repo: string, slug: string, branch: string, task: string, hands?: RunHands): Promise<{ committed: boolean } | null> {
+export async function freeBranch(repo: string, slug: string, branch: string, task: string, hands?: RunHands): Promise<{ committed: boolean } | null> {
   const tree = worktreeOf(repo, branch);
   if (!tree) return null;
   await clearTree(tree, hands);
