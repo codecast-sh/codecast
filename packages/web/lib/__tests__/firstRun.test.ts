@@ -36,4 +36,13 @@ describe("firstRun", () => {
     expect(firstRun({ ...base, sessions })).toBe("yes");
     expect(firstRun({ ...base, sessions, pendingSessionCreates: { "stub-1": Promise.resolve(REAL_ID) } })).toBe("no");
   });
+
+  test("a machine that checked in once but is offline now, with nothing synced, is still a first run", () => {
+    const connected = { _id: "u_me", cli_version: "1.2.0" };
+    expect(firstRun({ ...base, currentUser: connected, machineRoster: [{ online: false, is_remote: false }] })).toBe("yes");
+    expect(firstRun({ ...base, currentUser: connected, machineRoster: [{ online: false, is_remote: false }, { online: true, is_remote: true }] })).toBe("yes");
+    expect(firstRun({ ...base, currentUser: connected, machineRoster: [{ online: true, is_remote: false }] })).toBe("no");
+    expect(firstRun({ ...base, currentUser: connected, machineRoster: [] })).toBe("no");
+    expect(firstRun({ ...base, currentUser: connected, machineRoster: [{ online: false }], sessions: { [REAL_ID]: {} } })).toBe("no");
+  });
 });
