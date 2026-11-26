@@ -1,13 +1,36 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { asJobLog, ciSteps, planJobs, runnerEnv, scopeFlags, selectTests, stepFailures, walksOwnTree, withoutAgentClients } from "./local";
+import {
+  asJobLog,
+  CAST_CHECK_REPLACES,
+  DEFAULT_DROPS,
+  localJobs,
+  planJobs,
+  REACHED_STEPS,
+  RUNNER_SETUP,
+  runnerEnv,
+  selectTests,
+  stepFailures,
+  suiteWideBy,
+  sweepTmux,
+  typecheckFailures,
+  unmodeledSteps,
+  walksOwnTree,
+  namedFiles,
+  withoutAgentClients,
+} from "./local";
+
+// Planning reads the import graph of every test file in the tree: seconds, more on a loaded machine.
+setDefaultTimeout(60_000);
 
 const ROOT = join(import.meta.dir, "..", "..");
+const CI_YML = Bun.YAML.parse(readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8")) as any;
 const plan = (changed: string[], full = false) =>
   Object.fromEntries(planJobs(changed, { base: "BASE", full, temp: "/tmp/x" }).map((p) => [p.job, p]));
 const argvs = (p: { steps: Array<{ argv: string[] }> }) => p.steps.map((s) => s.argv);
+const allFiles = (p: { steps: Array<{ argv: string[] }> }) => p.steps.flatMap((s) => s.argv);
 
 describe("selectTests", () => {
   // Each test's imports with their distance. deep.ts sits two imports under a.test.ts.
@@ -17,22 +40,14 @@ describe("selectTests", () => {
     "packages/web/scan.test.ts": { "packages/web/scan.test.ts": 0 },
     "packages/mobile/scan.test.ts": { "packages/mobile/scan.test.ts": 0 },
   };
-  const walks = (t: string) => t.endsWith("scan.test.ts");
-  const select = (g: typeof graph, changed: string[]) => selectTests(Object.keys(g), changed, (t) => new Map(Object.entries(g[t])), walks);
-  const pick = (changed: string[]) => select(graph, changed);
+  const scan = `const root = path.resolve(import.meta.dir, ".."); fs.readdirSync(root)`;
+  const select = (g: typeof graph, changed: string[], source: (t: string) => string = (t) => (t.endsWith("scan.test.ts") ? scan : "")) =>
+    selectTests(Object.keys(g), changed, (t) => new Map(Object.entries(g[t])), source);
+  const pick = (changed: string[]) => select(graph, changed).picked;
 
   test("a test runs when something it imports changed, through any number of files", () => {
     expect(pick(["packages/web/deep.ts"])).toEqual(["packages/web/a.test.ts", "packages/web/scan.test.ts"]);
     expect(pick(["packages/web/b.ts"])).toEqual(["packages/web/b.test.ts", "packages/web/scan.test.ts"]);
-  });
-
-  test("a changed hub runs only the tests that import it directly", () => {
-    // hub.ts: a.test.ts imports it, the other ten reach it two imports down.
-    const many: typeof graph = { "packages/web/a.test.ts": { "packages/web/a.test.ts": 0, "packages/web/hub.ts": 1 } };
-    for (let i = 0; i < 10; i++) many[`packages/web/t${i}.test.ts`] = { [`packages/web/t${i}.test.ts`]: 0, "packages/web/mid.ts": 1, "packages/web/hub.ts": 2 };
-    expect(select(many, ["packages/web/hub.ts"])).toEqual(["packages/web/a.test.ts"]);
-    // mid.ts is a hub too, and all ten import it directly.
-    expect(select(many, ["packages/web/hub.ts", "packages/web/mid.ts"]).length).toBe(11);
   });
 
   test("a changed test runs itself", () => {
@@ -44,10 +59,61 @@ describe("selectTests", () => {
     expect(pick(["docs/x.md"])).toEqual([]);
   });
 
+  test("a changed hub runs only the tests that import it directly, and says how many it reached", () => {
+    // hub.ts: a.test.ts imports it, the other ten reach it two imports down.
+    const many: typeof graph = { "packages/web/a.test.ts": { "packages/web/a.test.ts": 0, "packages/web/hub.ts": 1 } };
+    for (let i = 0; i < 10; i++) many[`packages/web/t${i}.test.ts`] = { [`packages/web/t${i}.test.ts`]: 0, "packages/web/mid.ts": 1, "packages/web/hub.ts": 2 };
+    expect(select(many, ["packages/web/hub.ts"], () => "")).toEqual({ picked: ["packages/web/a.test.ts"], reached: 11 });
+    // mid.ts is a hub too, and all ten import it directly.
+    expect(select(many, ["packages/web/hub.ts", "packages/web/mid.ts"], () => "").picked.length).toBe(11);
+  });
+
   test("a source scan is a directory walk from the file's own place", () => {
-    expect(walksOwnTree(`const root = path.resolve(import.meta.dir, ".."); fs.readdirSync(root)`)).toBe(true);
+    expect(walksOwnTree(scan)).toBe(true);
     expect(walksOwnTree(`fs.readdirSync(mkdtempSync(join(tmpdir(), "x")))`)).toBe(false);
     expect(walksOwnTree(`readFileSync(join(import.meta.dir, "golden.json"))`)).toBe(false);
+  });
+
+  // The review's misses on PR #227's tree: each test reads its subject off disk and imports nothing of it.
+  test.each([
+    ["packages/web/components/conversationScroll.test.ts", "packages/web/components/ConversationView.tsx"],
+    ["packages/web/plugins/handoffBoot.test.ts", "packages/web/lib/desktopHandoff.ts"],
+    ["packages/web/components/DashboardLayout.createModals.test.ts", "packages/web/components/DashboardLayout.tsx"],
+  ])("%s runs when %s, the file it reads, changes", (testFile, changed) => {
+    const source = readFileSync(join(ROOT, testFile), "utf8");
+    expect(namedFiles(source, [changed, "packages/web/lib/other.ts"])).toEqual([changed]);
+    expect(plan([changed])["test-web"].steps.some((s) => s.argv.includes(`./${testFile.slice("packages/web/".length)}`))).toBe(true);
+  });
+
+  test("a file is named by its name or a path ending in it, and only by a test that reads files", () => {
+    const reads = (literal: string) => `readFileSync(join(import.meta.dir, ${literal}), "utf8")`;
+    expect(namedFiles(reads(`"../lib/x.ts"`), ["packages/web/lib/x.ts"])).toEqual(["packages/web/lib/x.ts"]);
+    expect(namedFiles(reads(`"other/x.ts"`), ["packages/web/lib/x.ts"])).toEqual([]);
+    expect(namedFiles(`const name = "x.ts";`, ["packages/web/lib/x.ts"])).toEqual([]);
+  });
+});
+
+describe("a config change runs a suite whole", () => {
+  test.each([
+    ["bun.lock", "packages/web"],
+    ["package.json", "packages/cli"],
+    ["tsconfig.base.json", "packages/convex"],
+    ["packages/web/package.json", "packages/web"],
+    ["packages/web/store/__tests__/sim/tsconfig.json", "packages/web"],
+    ["packages/cli/bunfig.toml", "packages/cli"],
+    ["packages/cli/src/test-helpers/isolatedTmuxServer.ts", "packages/cli"],
+  ])("%s runs %s whole", (file, dir) => {
+    expect(suiteWideBy(dir, [file], new Set(["packages/cli/src/test-helpers/isolatedTmuxServer.ts"]))).toBe(file);
+  });
+
+  test("another package's manifest leaves a suite to its reached files", () => {
+    expect(suiteWideBy("packages/web", ["packages/cli/package.json", "packages/web/lib/x.ts"], new Set())).toBeNull();
+  });
+
+  test("a changed preload file runs every cli test", () => {
+    const p = plan(["packages/cli/src/test-helpers/gitIdentity.ts"]);
+    expect(p["test-cli"].wide).toEqual(["packages/cli (packages/cli/src/test-helpers/gitIdentity.ts)"]);
+    expect(p["test-cli"].narrowed).toEqual([]);
   });
 });
 
@@ -74,21 +140,24 @@ describe("planJobs", () => {
     expect(p["test-web"].skip).toBeDefined();
   });
 
-  test("by default typecheck asks cast check about the change and build waits for --full", () => {
+  test("by default typecheck asks cast check about the change, build waits for --full, cli runs a runner's four workers", () => {
     const p = plan(["packages/cli/src/index.ts"]);
-    expect(argvs(p.typecheck)).toEqual([["cast", "check", "--changed-since", "BASE"]]);
-    expect(p.build.skip).toBe("--full only");
-    expect(p["test-cli"].steps.every((s) => s.argv.includes("--parallel"))).toBe(true);
+    expect(argvs(p.typecheck)).toEqual([["cast", "check", "--changed-since", "BASE", "--json"]]);
+    expect(p.build.skip).toBe("--full only: Build");
+    const cli = p["test-cli"].steps.filter((s) => s.cwd === join(ROOT, "packages/cli"));
+    expect(cli.length).toBeGreaterThan(0);
+    expect(cli.every((s) => s.argv.includes("--parallel=4"))).toBe(true);
   });
 
   test("--full runs each gated job's ci.yml steps, typecheck still through cast check", () => {
-    const p = plan(["packages/web/lib/x.ts"], true);
-    expect(argvs(p.typecheck)).toEqual([["cast", "check", "cli", "web", "sim", "convex", "evals", "playground"]]);
+    const p = plan(["packages/web/lib/x.ts", "packages/cli/src/x.ts"], true);
+    expect(argvs(p.typecheck)).toEqual([["cast", "check", "cli", "web", "sim", "convex", "evals", "playground", "--json"]]);
     const web = p["test-web"].steps;
     expect(web.map((s) => s.name)).toEqual(["Unit tests (web package)", "Perf budgets (web)"]);
     expect(web[0].argv.at(-1)).toContain("bun test --isolate --shard=$shard/4");
     expect(web[0].cwd).toBe(join(ROOT, "packages/web"));
     expect(web[0].env?.SIM_OUT).toBe("/tmp/x/sim");
+    expect(p["test-cli"].steps[0].argv.at(-1)).toContain("bun test src/ --parallel=4 --bail=5");
     expect(p.build.steps.map((s) => s.name)).toEqual(["Build"]);
   });
 
@@ -98,16 +167,37 @@ describe("planJobs", () => {
   });
 
   test("every ci.yml job reads locally: no step condition or expression without a local value", () => {
-    const flags = scopeFlags([]);
-    for (const job of ["ci-contract", "test-always", "build", "lint", "test-convex", "test-web", "test-cli", "test-platform", "test-shared", "test-mobile", "test-electron"]) {
-      expect(ciSteps(job, flags, "/tmp/x").length).toBeGreaterThan(0);
-    }
+    const jobs = Object.keys(CI_YML.jobs).filter((job) => !["code_paths", "verify", "computer-macos"].includes(job));
+    expect(localJobs()).toEqual(jobs);
+    const p = plan(["scripts/new-thing.ts"], true);
+    for (const job of jobs) expect(p[job].steps.length).toBeGreaterThan(0);
+  });
+});
+
+describe("every ci.yml step a default run leaves out is named", () => {
+  test("each step of a reached-test or typecheck job is modeled or dropped with a reason", () => {
+    expect(unmodeledSteps()).toEqual([]);
+  });
+
+  test("a step ci.yml gains in such a job is caught", () => {
+    const grown = structuredClone(CI_YML);
+    grown.jobs["test-web"].steps.push({ name: "Bundle size budget", run: "bun run size" });
+    grown.jobs.typecheck.steps.push({ name: "Typecheck mobile", run: "bun run typecheck --filter=mobile" });
+    expect(unmodeledSteps(grown)).toEqual(["typecheck › Typecheck mobile", "test-web › Bundle size budget"]);
+  });
+
+  test("no entry names a step ci.yml no longer has", () => {
+    const steps = (job: string) => (CI_YML.jobs[job]?.steps ?? []).map((s: any) => s.name);
+    for (const table of [REACHED_STEPS, DEFAULT_DROPS]) for (const [job, named] of Object.entries(table)) for (const name of Object.keys(named)) expect(steps(job)).toContain(name);
+    for (const name of CAST_CHECK_REPLACES) expect(steps("typecheck")).toContain(name);
+    const all = Object.values<any>(CI_YML.jobs).flatMap((j) => j.steps.map((s: any) => s.name));
+    for (const name of Object.keys(RUNNER_SETUP)) expect(all).toContain(name);
   });
 });
 
 describe("failures", () => {
   const output = [
-    "bun test v1.3.14 (0d9b296a)",
+    "bun test v1.4.4 (38afee6c8)",
     "",
     "lib/popups.test.ts:",
     "79 |   expect(hits).toEqual([]);",
@@ -142,9 +232,21 @@ describe("failures", () => {
     expect(failures.length).toBe(1);
     expect(failures[0].excerpt).toContain("something broke");
   });
+
+  test("a type error is the change's, mobile's labeled local only; a project cast check could not check is the station's", () => {
+    const { failing, unjudged } = typecheckFailures([
+      { project: "web", errors: 0, diagnostics: "\n" },
+      { project: "mobile", errors: 1, diagnostics: "../web/components/priorities/parts.tsx(7,18): error TS2307: Cannot find module 'next/link'.\n" },
+      { project: "sim", error: "ENOENT: no such file or directory, stat 'capacity.lock'" },
+    ]);
+    expect(failing).toMatchObject([
+      { job: "typecheck", file: "packages/web/components/priorities/parts.tsx", line: 7, test: "local only (CI doesn't typecheck mobile): packages/web/components/priorities/parts.tsx: TS2307 Cannot find module 'next/link'." },
+    ]);
+    expect(unjudged).toMatchObject([{ job: "ci-station", test: "typecheck: sim", assertion: "ENOENT: no such file or directory, stat 'capacity.lock'" }]);
+  });
 });
 
-describe("withoutAgentClients", () => {
+describe("a runner's environment", () => {
   test("a PATH directory holding an agent client is replaced by one holding everything else", () => {
     const root = mkdtempSync(join(tmpdir(), "ci-local-test-"));
     const [tools, plain] = [join(root, "tools"), join(root, "plain")];
@@ -157,9 +259,35 @@ describe("withoutAgentClients", () => {
     expect(existsSync(join(shadow, "claude")) || existsSync(join(shadow, "codex"))).toBe(false);
     rmSync(root, { recursive: true, force: true });
   });
-});
 
-test("a step's environment drops what an agent session set, as a runner has none of it", () => {
-  const env = runnerEnv({ HOME: "/h", PATH: "/no/such/dir", CODECAST_LAUNCH_TOKEN: "t", CLAUDE_CODE_SESSION_ID: "s", TMUX: "/tmp/x" }, "/tmp/unused");
-  expect(env).toEqual({ HOME: "/h", PATH: "/no/such/dir", CI: "true" });
+  test("a step's environment drops what an agent session set and gives tmux the run's own directory", () => {
+    const run = mkdtempSync(join(tmpdir(), "ci-local-test-"));
+    const env = runnerEnv({ HOME: "/h", PATH: "/no/such/dir", CODECAST_LAUNCH_TOKEN: "t", CLAUDE_CODE_SESSION_ID: "s", TMUX: "/tmp/x", TMUX_TMPDIR: "/tmp" }, run);
+    expect(env).toEqual({ HOME: "/h", PATH: "/no/such/dir", CI: "true", TMUX_TMPDIR: join(run, "tmux") });
+    rmSync(run, { recursive: true, force: true });
+  });
+
+  // Never against the person's own server: both servers here live in temporary directories.
+  test.skipIf(!Bun.which("tmux"))("a bare `tmux kill-server` in a step reaches the run's server and no other; the sweep kills the run's", () => {
+    const root = mkdtempSync("/tmp/cl-");
+    const person = { PATH: process.env.PATH, TMUX_TMPDIR: join(root, "person") };
+    mkdirSync(person.TMUX_TMPDIR, { mode: 0o700 });
+    const step = runnerEnv({ PATH: process.env.PATH }, join(root, "run"));
+    const tmux = (env: Record<string, string | undefined>, ...args: string[]) => Bun.spawnSync(["tmux", ...args], { env, stdout: "ignore", stderr: "ignore" }).exitCode;
+    try {
+      expect(tmux(person, "new-session", "-d", "-s", "p", "sleep 30")).toBe(0);
+      expect(tmux(step, "new-session", "-d", "-s", "r", "sleep 30")).toBe(0);
+      expect(tmux(step, "kill-server")).toBe(0);
+      expect(tmux(step, "has-session", "-t", "r")).not.toBe(0);
+      expect(tmux(person, "has-session", "-t", "p")).toBe(0);
+      expect(tmux(step, "new-session", "-d", "-s", "r2", "sleep 30")).toBe(0);
+      expect(sweepTmux(step.TMUX_TMPDIR!, new Set(), step)).toBeGreaterThan(0);
+      expect(tmux(step, "has-session", "-t", "r2")).not.toBe(0);
+      expect(tmux(person, "has-session", "-t", "p")).toBe(0);
+    } finally {
+      tmux(person, "kill-server");
+      tmux(step, "kill-server");
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

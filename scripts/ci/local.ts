@@ -5,35 +5,40 @@
 // The changed paths are the diff from the merge base with origin/main (or
 // --base), uncommitted and untracked files included. changed-path-scope.ts
 // classifies them exactly as ci.yml classifies a pull request, so the same
-// jobs gate on. By default each gated job runs its cheap part:
-// - ci-contract, test-always, lint, test-electron, test-platform: their ci.yml
-//   steps, as CI runs them.
-// - typecheck: `cast check --changed-since <base>`, never a bare tsc.
-// - each package test job: the test files that are changed, that import a
-//   changed file (test-reach.ts's import graph; only directly, for a hub
-//   file), or that walk their own package's tree off disk while that package
-//   changed, from the package's directory with the job's flags. test-always
-//   already ran the job's guards, ratchets and crossing tests.
-// - build: only with --full.
-// --full runs every gated job's ci.yml steps instead (typecheck still through
-// cast check).
+// jobs gate on. Each gated job runs its ci.yml steps, except:
+// - typecheck: `cast check --changed-since <base>` (by name with --full),
+//   never a bare tsc. It also checks mobile, which CI does not.
+// - a package test step (REACHED_STEPS) runs, by default, the suite's test
+//   files that are changed; that import a changed file (test-reach.ts's import
+//   graph; only directly, for a hub file); that read a changed file by name;
+//   or that walk their own package's tree while that package changed. A
+//   changed lockfile, manifest, tsconfig, bunfig or test preload runs the
+//   whole suite. test-always already ran each suite's guards, ratchets and
+//   crossing tests. Where the hub rule left tests out, the run says so.
+// - the steps in DEFAULT_DROPS run only with --full; RUNNER_SETUP never runs.
 //
 // Steps run as on a runner: on the bun CI pins (fetched once with bunx), with
-// CI=true, and with no agent client on PATH and no agent session's variables
-// (cast check keeps the person's own environment). Jobs run one after another: the
-// laptop runs out of memory running them at once. Within a job a one-process
-// suite is cut into up to four shards that run together, as CI shards web.
-// Each step's output goes to a log file rather than a pipe (quiet-watchdog.sh
-// says why), and is read the way the change flow's CI station reads a red
-// job's log (shared/contracts/ciFailures.ts). The run ends with one line per
-// job and exits 1 on any failure; --json <path> writes {green, failing, jobs}.
-// --list prints the plan without running it.
+// CI=true, no agent client on PATH, no agent session's variables, and a tmux
+// of the run's own (TMUX_TMPDIR), so ci.yml's bare `tmux kill-server` never
+// reaches the person's. cast check keeps the person's environment. Jobs run
+// one after another: the laptop runs out of memory running them at once.
+// Within a job a one-process suite is cut into up to four shards that run
+// together, as CI shards web. Each step's output goes to a log file rather
+// than a pipe (quiet-watchdog.sh says why) and is read the way the change
+// flow's CI station reads a red job's log (shared/contracts/ciFailures.ts).
+//
+// The run ends with one line per job. Exit 0 green, 1 a test or type failure,
+// 2 no verdict: a step hung or timed out, or cast check could not answer
+// (those are failures of job `ci-station`). --json <path> writes
+// {green, head_sha, dirty, failing, narrowed, jobs}; a station that runs this
+// before the pull request writes it under its own file name, never ci.json,
+// which is the CI station's verdict on GitHub's CI. --list prints the plan.
 //
 //   bun scripts/ci/local.ts [--base <ref>] [--full] [--json <path>] [--list]
 
-import { closeSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { LOCAL_AGENT_CLIENTS } from "../../packages/shared/contracts/agentClients";
 import { parseFailures, type CiFailure } from "../../packages/shared/contracts/ciFailures";
 import { alwaysRunFiles, SUITES } from "./always-run-tests";
@@ -41,34 +46,65 @@ import { ADVISORY_JOBS, classifyChangedPaths, computerScope, injectionScope } fr
 import { importClosure, jobTestFiles } from "./test-reach";
 
 const ROOT = join(import.meta.dir, "..", "..");
-const WORKFLOW = Bun.YAML.parse(readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8")) as any;
+export const WORKFLOW = Bun.YAML.parse(readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8")) as any;
+/** `cast check`'s programs by name (.codecast/check.toml). */
+const CHECK_PROJECTS = (Bun.TOML.parse(readFileSync(join(ROOT, ".codecast/check.toml"), "utf8")) as any).projects as Record<string, string>;
 
-/** Steps that set up a runner, not the code: a laptop has its own tmux and needs no Linux sandbox switch. */
-const RUNNER_SETUP = /^(Install tmux|Allow the Electron sandbox)/;
-/** CI's typecheck job runs a bare tsc per package; here typecheck goes through `cast check`, whose programs are the same. */
+/** Steps that set up a runner, not the code: neither mode runs them. */
+export const RUNNER_SETUP: Record<string, string> = {
+  "Install tmux": "a laptop has its own tmux",
+  "Install tmux (e2e tests need a real tmux server)": "a laptop has its own tmux",
+  "Allow the Electron sandbox, and a display for it": "Linux runner setup (AppArmor, xvfb); macOS needs neither",
+};
+/** The ci.yml steps a default run replaces with one suite's reached test files, by job, step and suite directory. */
+export const REACHED_STEPS: Record<string, Record<string, string>> = {
+  "test-convex": { "Unit tests (convex package)": "packages/convex" },
+  "test-web": { "Unit tests (web package)": "packages/web" },
+  "test-cli": { "Unit tests (cli package)": "packages/cli", "Unit tests (evals package)": "packages/evals" },
+  "test-shared": { "Unit tests (shared package)": "packages/shared" },
+  "test-mobile": { "Unit and guard tests (mobile package)": "packages/mobile" },
+};
+/** The ci.yml steps only --full runs, with why the default run leaves them out. */
+export const DEFAULT_DROPS: Record<string, Record<string, string>> = {
+  build: { Build: "builds every bundle: minutes, and a break shows in typecheck first" },
+  "test-web": { "Perf budgets (web)": "exact render and store counts; minutes, and only perf work moves them" },
+  "test-cli": {
+    "E2E messaging pipeline (real tmux + fake-claude shim)": "the cli step already ran messaging.e2e when the change reaches it; three attempts absorb runner flake",
+    "Injection suites (captured frames; real-client cells skip without agent binaries)": "the cli step already ran the inject suites the change reaches; three attempts absorb runner flake",
+  },
+};
+/** CI's typecheck steps, which cast check stands in for in both modes: they run a bare tsc per package. */
+export const CAST_CHECK_REPLACES = ["Typecheck (cli + web + sim + convex + evals + playground)"];
 const TYPECHECK_PROJECTS = ["cli", "web", "sim", "convex", "evals", "playground"];
-/** `cast check` exits where it has no verdict: a watcher that died or answered stale is restarted with --fresh; a pass that outlived the wait keeps running, so the same ask picks it up. */
+/** `cast check` exits with no verdict: a watcher that died or answered stale (restart with --fresh), or a pass that outlived the wait (ask again). */
 const CHECK_RESTART = new Set([70, 75]);
 const CHECK_STILL_RUNNING = 124;
 /** Files per `bun test` process: an isolated file's global lives until its process exits. */
 const CHUNK = 300;
-/**
- * A suite that runs in one process (every one but --parallel's) is cut into up to this many shards that
- * run at once, as CI cuts test-web into shards: one process uses one core. Jobs still run one at a time.
- */
+/** Shards of a one-process suite that run at once. */
 const SHARDS = 4;
 /** Below this many files a second process costs more than it saves. */
 const MIN_SHARD = 50;
 /** Output standing still this long is a hung run, as in quiet-watchdog.sh. */
 const QUIET_MS = 240_000;
+/** CI's runners have four cores, so ci.yml's `--parallel` means four workers there. */
+const RUNNER_CORES = 4;
+/**
+ * A changed file this share of a suite's tests reach is a hub (a schema, the store, a shared contract): by
+ * default only the tests that import it directly run for it, and --full runs the rest. Without this a change
+ * to one hub selects most of the suite (1,118 of web's 1,564 files for PR #227).
+ */
+export const HUB_SHARE = 0.25;
 
 /**
- * `typecheck` marks cast check's step: it waits on its own watcher and says when it has no verdict, so no quiet
- * watchdog stops it. Consecutive `shard` steps run at once.
+ * `typecheck` marks cast check's step: it answers for its own waiting, so no quiet watchdog stops it.
+ * Consecutive `shard` steps run at once.
  */
 export type Step = { name: string; cwd: string; argv: string[]; env?: Record<string, string>; typecheck?: boolean; shard?: boolean; timeoutMs?: number };
-export type Plan = { job: string; skip?: string; steps: Step[]; files?: number };
-export type JobResult = { job: string; status: "pass" | "fail" | "skipped"; seconds: number; reason?: string };
+/** `selected` of the `total` tests a change reaches in a suite ran: the hub rule left the rest to --full. */
+export type Narrowed = { suite: string; selected: number; total: number };
+export type Plan = { job: string; skip?: string; steps: Step[]; files?: number; narrowed: Narrowed[]; wide: string[] };
+export type JobResult = { job: string; status: "pass" | "fail" | "no verdict" | "skipped"; seconds: number; reason?: string };
 
 function git(args: string[]): string {
   const r = Bun.spawnSync(["git", ...args], { cwd: ROOT });
@@ -87,42 +123,103 @@ export function scopeFlags(changed: string[]): Record<string, boolean> {
   return { ...classifyChangedPaths(changed).flags, run_test_injection: injectionScope(changed), run_test_computer: computerScope(changed) };
 }
 
+// ── which tests a change reaches ────────────────────────────────────────────
+
 const WALKS_TREE = /\b(readdirSync|readdir|Bun\.Glob|new Glob|globSync|scanSync)\b/;
 const OWN_DIR = /import\.meta\.(dir|dirname|url)\b|__dirname|process\.cwd\(\)/;
+const READS_FILE = /\b(readFileSync|readFile|Bun\.file)\b/;
+const PATH_LITERAL = /["'`]([^"'`\n$]*\.[A-Za-z]{1,5})["'`]/g;
 
 /** A test that lists files under its own directory (a source scan): no import says which change can break it. */
 export function walksOwnTree(text: string): boolean {
   return WALKS_TREE.test(text) && OWN_DIR.test(text);
 }
 
+/** The changed files a disk-reading test names in a string literal: the file's name, or a path ending in it. */
+export function namedFiles(text: string, changed: string[]): string[] {
+  if (!READS_FILE.test(text)) return [];
+  const named = new Set<string>();
+  for (const [, literal] of text.matchAll(PATH_LITERAL)) {
+    const tail = literal.replace(/^(\.\.?\/)+/, "");
+    for (const file of changed) if (file === tail || file.endsWith(`/${tail}`)) named.add(file);
+  }
+  return [...named];
+}
+
 const packageOf = (file: string) => file.split("/").slice(0, 2).join("/");
 
 /**
- * A changed file this share of a suite's tests reach is a hub (a schema, the store, a shared contract): by
- * default only the tests that import it directly run for it, and --full runs the rest. Without this a change
- * to one hub selects most of the suite (1,118 of web's 1,564 files for PR #227).
+ * The tests (repo-relative) a change reaches: changed, importing a changed file (directly, for a hub), naming
+ * one they read, or scanning a package that changed. `closureOf` gives each file a test imports with its
+ * import distance; `reached` counts what the change reaches without the hub rule.
  */
-export const HUB_SHARE = 0.25;
-
-/**
- * The tests (repo-relative) a change reaches: changed, importing a changed file (directly, for a hub), or
- * scanning a package that changed. `closureOf` gives each file a test imports with its import distance.
- */
-export function selectTests(tests: string[], changed: string[], closureOf: (test: string) => Map<string, number>, walks: (test: string) => boolean): string[] {
+export function selectTests(tests: string[], changed: string[], closureOf: (test: string) => Map<string, number>, sourceOf: (test: string) => string): { picked: string[]; reached: number } {
   const files = new Set(changed);
   const packages = new Set(changed.map(packageOf));
   const closures = tests.map((test) => [...closureOf(test)].filter(([file, hops]) => hops > 0 && files.has(file)));
   const reach = new Map<string, number>();
   for (const closure of closures) for (const [file] of closure) reach.set(file, (reach.get(file) ?? 0) + 1);
   const hub = (file: string) => reach.get(file)! > HUB_SHARE * tests.length;
-  return tests.filter((test, i) => {
-    if (files.has(test) || (packages.has(packageOf(test)) && walks(test))) return true;
-    return closures[i].some(([file, hops]) => hops === 1 || !hub(file));
+  const picked: string[] = [];
+  let reached = 0;
+  tests.forEach((test, i) => {
+    const source = () => sourceOf(test);
+    const direct = files.has(test) || (packages.has(packageOf(test)) && walksOwnTree(source())) || namedFiles(source(), changed).length > 0;
+    if (direct || closures[i].some(([file, hops]) => hops === 1 || !hub(file))) picked.push(test);
+    if (direct || closures[i].length > 0) reached++;
   });
+  return { picked, reached };
+}
+
+const CONFIG_FILE = /(^|\/)(package\.json|tsconfig[^/]*\.json|bunfig\.toml)$/;
+
+/**
+ * Why a change runs a suite whole: the lockfile, a manifest, tsconfig or bunfig at the root or in the suite's
+ * package, or a file the suite's test preload imports. null when nothing like that changed.
+ */
+export function suiteWideBy(dir: string, changed: string[], preload: Set<string>): string | null {
+  return changed.find((file) => file === "bun.lock" || (CONFIG_FILE.test(file) && (!file.includes("/") || file.startsWith(`${dir}/`))) || preload.has(file)) ?? null;
+}
+
+/** Every file a suite's bunfig test preload imports, repo-relative. */
+function preloadClosure(dir: string): Set<string> {
+  const bunfig = join(ROOT, dir, "bunfig.toml");
+  if (!existsSync(bunfig)) return new Set();
+  const preload = (Bun.TOML.parse(readFileSync(bunfig, "utf8")) as any).test?.preload ?? [];
+  return new Set([preload].flat().flatMap((file: string) => [...importClosure(join(ROOT, dir, file)).keys()].map((f) => relative(ROOT, f))));
 }
 
 const repoClosure = (test: string) => new Map([...importClosure(join(ROOT, test))].map(([file, hops]) => [relative(ROOT, file), hops]));
-const repoWalks = (test: string) => walksOwnTree(readFileSync(join(ROOT, test), "utf8"));
+const sources = new Map<string, string>();
+const repoSource = (test: string) => sources.get(test) ?? sources.set(test, readFileSync(join(ROOT, test), "utf8")).get(test)!;
+
+/** One suite's reached test files, one `bun test` per chunk, from its package directory with its job's flags. */
+function reachedSteps(job: string, dir: string, changed: string[]): { steps: Step[]; narrowed?: Narrowed; wide?: string } {
+  const suite = SUITES.find((s) => s.job === job && s.dir === dir);
+  if (!suite) throw new Error(`no suite in always-run-tests.ts for ${job} in ${dir}`);
+  const roots = suite.roots.map((root) => `${join(suite.dir, root)}/`);
+  const always = new Set(alwaysRunFiles(suite).map((file) => join(suite.dir, file)));
+  const tests = jobTestFiles(job)
+    .map((file) => relative(ROOT, file))
+    .filter((file) => roots.some((root) => file.startsWith(root)) && !always.has(file));
+  const wide = suiteWideBy(dir, changed, preloadClosure(dir));
+  const chosen = wide ? { picked: tests, reached: tests.length } : selectTests(tests, changed, repoClosure, repoSource);
+  const picked = chosen.picked.map((file) => `./${relative(suite.dir, file)}`);
+  const flags = suite.flags;
+  const shard = !flags.some((flag) => flag.startsWith("--parallel"));
+  const size = shard ? Math.min(CHUNK, Math.ceil(picked.length / Math.min(SHARDS, Math.ceil(picked.length / MIN_SHARD)))) : CHUNK;
+  const steps: Step[] = [];
+  for (let i = 0; i < picked.length; i += size) {
+    const files = picked.slice(i, i + size);
+    const part = picked.length > size ? ` part ${i / size + 1}` : "";
+    const what = wide ? `${files.length} of all ${tests.length} files (${wide} changed)` : `${files.length} reached files`;
+    steps.push({ name: `bun test ${[...flags, ""].join(" ")}in ${suite.dir}: ${what}${part}`, cwd: join(ROOT, suite.dir), argv: ["bun", "test", ...flags, ...files], shard });
+  }
+  const narrowed = chosen.picked.length < chosen.reached ? { suite: dir, selected: chosen.picked.length, total: chosen.reached } : undefined;
+  return { steps, narrowed, wide: wide ?? undefined };
+}
+
+// ── ci.yml, read as a laptop runs it ────────────────────────────────────────
 
 /** A gated job's flag, read from its `if:` in ci.yml; null for an ungated job. */
 function jobGate(job: string): string | null {
@@ -143,54 +240,46 @@ function stepRuns(cond: unknown, flags: Record<string, boolean>, where: string):
   throw new Error(`ci.yml ${where}: no local reading of its if: ${cond}`);
 }
 
-/** A job's run steps as ci.yml writes them, under GitHub's default bash, without the runner's own setup. */
-export function ciSteps(job: string, flags: Record<string, boolean>, temp: string): Step[] {
-  const steps: Step[] = [];
-  for (const step of WORKFLOW.jobs[job].steps) {
-    const where = `${job} › ${step.name ?? step.uses}`;
-    if (!step.run || RUNNER_SETUP.test(step.name ?? "") || !stepRuns(step.if, flags, where)) continue;
-    const expand = (text: string) => {
-      const out = text.replaceAll("${{ runner.temp }}", temp);
-      const left = /\$\{\{[^}]*\}\}/.exec(out);
-      if (left) throw new Error(`ci.yml ${where}: no local value for ${left[0]}`);
-      return out;
-    };
-    // macOS draws Electron without a virtual display.
-    const run = process.platform === "linux" ? expand(step.run) : expand(step.run).replace(/^xvfb-run -a /m, "");
-    const env = Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, expand(String(value))]));
-    steps.push({ name: step.name, cwd: join(ROOT, step["working-directory"] ?? "."), argv: ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run], env });
-  }
-  return steps;
+/** One ci.yml step under GitHub's default bash, with `${{ runner.temp }}` at the run's own directory. */
+function ciStep(job: string, step: any, temp: string): Step {
+  const expand = (text: string) => {
+    const out = text.replaceAll("${{ runner.temp }}", temp);
+    const left = /\$\{\{[^}]*\}\}/.exec(out);
+    if (left) throw new Error(`ci.yml ${job} › ${step.name}: no local value for ${left[0]}`);
+    return out;
+  };
+  // macOS draws Electron without a virtual display; a runner's `--parallel` is four workers.
+  let run = expand(step.run).replace(/--parallel(?=\s|$)/g, `--parallel=${RUNNER_CORES}`);
+  if (process.platform !== "linux") run = run.replace(/^xvfb-run -a /m, "");
+  const env = Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, expand(String(value))]));
+  return { name: step.name, cwd: join(ROOT, step["working-directory"] ?? "."), argv: ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run], env };
 }
 
-/** The reached test files of a package job, one `bun test` per chunk, from each package directory with its job's flags. */
-function reachedSteps(job: string, changed: string[]): Step[] {
-  const steps: Step[] = [];
-  for (const suite of SUITES.filter((s) => s.job === job)) {
-    const roots = suite.roots.map((root) => `${join(suite.dir, root)}/`);
-    const always = new Set(alwaysRunFiles(suite).map((file) => join(suite.dir, file)));
-    const tests = jobTestFiles(job)
-      .map((file) => relative(ROOT, file))
-      .filter((file) => roots.some((root) => file.startsWith(root)) && !always.has(file));
-    const picked = selectTests(tests, changed, repoClosure, repoWalks).map((file) => `./${relative(suite.dir, file)}`);
-    const shard = !suite.flags.includes("--parallel");
-    const shards = Math.min(SHARDS, Math.ceil(picked.length / MIN_SHARD));
-    const size = shard ? Math.min(CHUNK, Math.ceil(picked.length / shards)) : CHUNK;
-    for (let i = 0; i < picked.length; i += size) {
-      const files = picked.slice(i, i + size);
-      const part = picked.length > size ? ` part ${i / size + 1}` : "";
-      const name = `bun test ${suite.flags.join(" ")} in ${suite.dir}: ${files.length} reached files${part}`.replace("  ", " ");
-      steps.push({ name, cwd: join(ROOT, suite.dir), argv: ["bun", "test", ...suite.flags, ...files], shard });
+/** The jobs a run plans: ci.yml's, without the classifier, the verdict and the advisory lanes. */
+export function localJobs(workflow = WORKFLOW): string[] {
+  return Object.keys(workflow.jobs).filter((job) => job !== "code_paths" && job !== "verify" && !ADVISORY_JOBS.includes(job));
+}
+
+/**
+ * The run steps of a job that runs reached tests (or cast check) which this file neither models nor drops:
+ * each needs an entry in REACHED_STEPS or DEFAULT_DROPS before a default run can leave it out knowingly.
+ */
+export function unmodeledSteps(workflow = WORKFLOW): string[] {
+  const out: string[] = [];
+  for (const job of localJobs(workflow)) {
+    const modeled = job === "typecheck" ? CAST_CHECK_REPLACES : REACHED_STEPS[job] ? Object.keys(REACHED_STEPS[job]) : null;
+    if (!modeled) continue;
+    for (const step of workflow.jobs[job].steps) {
+      if (step.run && !RUNNER_SETUP[step.name] && !modeled.includes(step.name) && !DEFAULT_DROPS[job]?.[step.name]) out.push(`${job} › ${step.name}`);
     }
   }
-  return steps;
+  return out;
 }
 
 /** What each CI job runs here for these changed paths, in ci.yml's order. */
 export function planJobs(changed: string[], o: { base: string; full: boolean; temp: string }): Plan[] {
   const flags = scopeFlags(changed);
-  const jobs = Object.keys(WORKFLOW.jobs).filter((job) => job !== "code_paths" && job !== "verify" && !ADVISORY_JOBS.includes(job));
-  return jobs.map((job) => {
+  return localJobs().map((job) => {
     const plan = planJob(job, changed, flags, o);
     // A step gets its job's timeout-minutes, as CI gives the whole job.
     const timeoutMs = Number(WORKFLOW.jobs[job]["timeout-minutes"]) * 60_000 || undefined;
@@ -199,21 +288,37 @@ export function planJobs(changed: string[], o: { base: string; full: boolean; te
 }
 
 function planJob(job: string, changed: string[], flags: Record<string, boolean>, o: { base: string; full: boolean; temp: string }): Plan {
+  const plan: Plan = { job, steps: [], narrowed: [], wide: [] };
   const gate = jobGate(job);
-  if (gate && !flags[gate]) return { job, skip: "nothing it gates on changed", steps: [] };
+  if (gate && !flags[gate]) return { ...plan, skip: "nothing it gates on changed" };
   if (job === "typecheck") {
-    const argv = o.full ? ["cast", "check", ...TYPECHECK_PROJECTS] : ["cast", "check", "--changed-since", o.base];
-    return { job, steps: [{ name: argv.join(" "), cwd: ROOT, argv, typecheck: true }] };
+    const argv = ["cast", "check", ...(o.full ? TYPECHECK_PROJECTS : ["--changed-since", o.base]), "--json"];
+    return { ...plan, steps: [{ name: argv.join(" "), cwd: ROOT, argv, typecheck: true }] };
   }
-  if (o.full) return { job, steps: ciSteps(job, flags, o.temp) };
-  if (job === "build") return { job, skip: "--full only", steps: [] };
-  if (SUITES.some((suite) => suite.job === job)) {
-    const steps = reachedSteps(job, changed);
-    const files = steps.reduce((n, step) => n + step.argv.filter((arg) => arg.startsWith("./")).length, 0);
-    return steps.length ? { job, steps, files } : { job, skip: "no test file reaches a changed file", steps: [] };
+  const dropped: string[] = [];
+  for (const step of WORKFLOW.jobs[job].steps) {
+    if (!step.run || RUNNER_SETUP[step.name] || !stepRuns(step.if, flags, `${job} › ${step.name}`)) continue;
+    const suite = o.full ? undefined : REACHED_STEPS[job]?.[step.name];
+    if (suite) {
+      const reached = reachedSteps(job, suite, changed);
+      plan.steps.push(...reached.steps);
+      if (reached.narrowed) plan.narrowed.push(reached.narrowed);
+      if (reached.wide) plan.wide.push(`${suite} (${reached.wide})`);
+    } else if (!o.full && DEFAULT_DROPS[job]?.[step.name]) {
+      dropped.push(step.name);
+    } else {
+      plan.steps.push(ciStep(job, step, o.temp));
+    }
   }
-  return { job, steps: ciSteps(job, flags, o.temp) };
+  plan.files = plan.steps.reduce((n, step) => n + step.argv.filter((arg) => arg.startsWith("./")).length, 0) || undefined;
+  if (plan.steps.length === 0) {
+    const reasons = [REACHED_STEPS[job] && !o.full ? "no test file reaches a changed file" : "", dropped.length ? `--full only: ${dropped.join(", ")}` : ""];
+    plan.skip = reasons.filter(Boolean).join("; ");
+  }
+  return plan;
 }
+
+// ── reading a step's output ─────────────────────────────────────────────────
 
 const STAMP = "2000-01-01T00:00:00.0000000Z ";
 
@@ -240,6 +345,40 @@ export function stepFailures(job: string, step: Pick<Step, "name" | "cwd">, outp
     file: failure.file?.startsWith(`${ROOT}/`) ? relative(ROOT, failure.file) : failure.file,
   }));
 }
+
+/** A step this run could not judge: a hang, a timeout, a typecheck with no answer. It is the station's, not the change's. */
+export function unjudged(job: string, what: string, why: string, output: string): CiFailure {
+  return { job: "ci-station", test: `${job}: ${what}`, assertion: why, file: null, line: null, excerpt: output.split("\n").slice(-40).join("\n").slice(-4000) };
+}
+
+const TSC_ERROR = /^(\S+?\.[cm]?[jt]sx?)\((\d+),\d+\): error (TS\d+): (.*)$/;
+
+/**
+ * `cast check --json`'s answer per project: a type error is the change's (mobile's labeled local only, since
+ * CI does not typecheck mobile), a project it could not check is the station's.
+ */
+export function typecheckFailures(results: Array<{ project: string; errors?: number; diagnostics?: string; error?: string }>): { failing: CiFailure[]; unjudged: CiFailure[] } {
+  const failing: CiFailure[] = [];
+  const station: CiFailure[] = [];
+  for (const r of results) {
+    if (r.error !== undefined) {
+      station.push(unjudged("typecheck", r.project, r.error, r.error));
+      continue;
+    }
+    if (!r.errors) continue;
+    const dir = CHECK_PROJECTS[r.project] ? dirname(CHECK_PROJECTS[r.project]) : ".";
+    const label = r.project === "mobile" ? "local only (CI doesn't typecheck mobile): " : "";
+    const lines = (r.diagnostics ?? "").split("\n").map((line) => TSC_ERROR.exec(line.trim())).filter((m) => m !== null);
+    for (const [text, file, line, code, message] of lines) {
+      const path = relative(ROOT, join(ROOT, dir, file));
+      failing.push({ job: "typecheck", test: `${label}${path}: ${code} ${message}`, assertion: `${code}: ${message}`, file: path, line: Number(line), excerpt: text });
+    }
+    if (lines.length === 0) failing.push({ job: "typecheck", test: `${label}${r.project}: ${r.errors} errors`, assertion: null, file: null, line: null, excerpt: r.diagnostics ?? "" });
+  }
+  return { failing, unjudged: station };
+}
+
+// ── running steps as a runner would ─────────────────────────────────────────
 
 /**
  * PATH as a runner has it. CI installs no agent client, so the tests that drive a real one (the injection
@@ -273,26 +412,90 @@ export function withoutAgentClients(path: string, into: string): string {
  */
 const SESSION_ENV = /^(CLAUDE|CODECAST|CODEX|AI_AGENT|TMUX)/;
 
-/** The environment of a step as a runner gives it: CI=true, no session variables, PATH without agent clients. */
-export function runnerEnv(env: Record<string, string | undefined>, into: string): Record<string, string | undefined> {
+/**
+ * The environment of a step as a runner gives it: CI=true, no session variables, PATH without agent clients,
+ * and TMUX_TMPDIR in the run's own directory, so a bare `tmux` (ci.yml's `tmux kill-server`) finds the run's
+ * server and never the person's.
+ */
+export function runnerEnv(env: Record<string, string | undefined>, runDir: string): Record<string, string | undefined> {
   const out = Object.fromEntries(Object.entries(env).filter(([key]) => !SESSION_ENV.test(key)));
-  return { ...out, CI: "true", PATH: withoutAgentClients(env.PATH ?? "", into) };
+  const tmux = join(runDir, "tmux");
+  mkdirSync(tmux, { recursive: true, mode: 0o700 });
+  return { ...out, CI: "true", PATH: withoutAgentClients(env.PATH ?? "", join(runDir, "path")), TMUX_TMPDIR: tmux };
 }
 
+/** Every process under these, children first found. */
+function descendants(roots: number[]): number[] {
+  const table = Bun.spawnSync(["ps", "-Ao", "pid=,ppid="]).stdout.toString();
+  const children = new Map<number, number[]>();
+  for (const line of table.split("\n")) {
+    const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+    if (pid && ppid) children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+  }
+  const out: number[] = [];
+  const queue = [...roots];
+  while (queue.length) for (const child of children.get(queue.shift()!) ?? []) out.push(child), queue.push(child);
+  return out;
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Stop a process and everything under it: TERM, then KILL whatever is left after five seconds. */
+async function stopTree(pid: number): Promise<void> {
+  const all = [pid, ...descendants([pid])];
+  for (const p of all) try { process.kill(p, "SIGTERM"); } catch {}
+  for (let i = 0; i < 50 && all.some(alive); i++) await Bun.sleep(100);
+  for (const p of all.filter(alive)) try { process.kill(p, "SIGKILL"); } catch {}
+}
+
+/** Where the cli suite's preload puts each test process's private tmux server (isolatedTmuxServer.ts). */
+// Steps run without CODECAST_DIR (runnerEnv), so it is HOME's.
+const TEST_TMUX_BASES = [join(process.env.HOME || homedir(), ".codecast", "test-tmux"), "/tmp/codecast-test-tmux"];
+const uid = process.getuid?.() ?? 0;
+const killServer = (socket: string, env: Record<string, string | undefined>) =>
+  Bun.spawnSync(["tmux", "-S", socket, "kill-server"], { env, stdout: "ignore", stderr: "ignore", timeout: 5000 });
+
+/**
+ * Kill the run's tmux servers: every one under its TMUX_TMPDIR, and each test process's private server
+ * (`run-<pid>` under isolatedTmuxServer.ts's bases) that appeared during the run and whose process is gone,
+ * the way that file's sweepDeadServers reaps a killed run's.
+ */
+export function sweepTmux(runTmux: string, before: Set<string>, env: Record<string, string | undefined>): number {
+  let killed = 0;
+  const sockets = join(runTmux, `tmux-${uid}`);
+  for (const name of existsSync(sockets) ? readdirSync(sockets) : []) killServer(join(sockets, name), env), killed++;
+  for (const base of TEST_TMUX_BASES) {
+    for (const name of existsSync(base) ? readdirSync(base) : []) {
+      const pid = Number(/^run-(\d+)(?:-|$)/.exec(name)?.[1]);
+      if (!pid || before.has(join(base, name)) || alive(pid)) continue;
+      killServer(join(base, name, `tmux-${uid}`, "default"), env);
+      rmSync(join(base, name), { recursive: true, force: true });
+      killed++;
+    }
+  }
+  return killed;
+}
+
+/** The private-server directories that exist before the run starts: never the run's to sweep. */
+const testTmuxDirs = () => new Set(TEST_TMUX_BASES.flatMap((base) => (existsSync(base) ? readdirSync(base).map((name) => join(base, name)) : [])));
+
 const live = new Set<Bun.Subprocess>();
-/** The environment steps run in, with CI's bun first on PATH once ciBun() found it. cast check keeps the person's own. */
+/** The person's environment, with CI's bun first on PATH once ciBun() found it: what cast check runs in. */
 const ownEnv: Record<string, string | undefined> = { ...process.env };
 let stepEnv: Record<string, string | undefined> = ownEnv;
 
-function stop(proc: Bun.Subprocess) {
-  Bun.spawnSync(["pkill", "-TERM", "-P", String(proc.pid)]);
-  proc.kill();
-}
-
-/** One step, its output written to its own log file. */
-async function runStep(step: Step, log: string): Promise<{ code: number; output: string }> {
+/** One step, its output written to its own log file (cast check's JSON answer to a second one). */
+async function runStep(step: Step, log: string): Promise<{ code: number; output: string; stdout: string; stopped: string | null }> {
   const fd = openSync(log, "w");
-  const proc = Bun.spawn(step.argv, { cwd: step.cwd, env: { ...(step.typecheck ? ownEnv : stepEnv), ...step.env }, stdin: "ignore", stdout: fd, stderr: fd });
+  const out = step.typecheck ? openSync(`${log}.json`, "w") : fd;
+  const proc = Bun.spawn(step.argv, { cwd: step.cwd, env: { ...(step.typecheck ? ownEnv : stepEnv), ...step.env }, stdin: "ignore", stdout: out, stderr: fd });
   live.add(proc);
   const began = Date.now();
   let size = 0;
@@ -304,37 +507,48 @@ async function runStep(step: Step, log: string): Promise<{ code: number; output:
     if (stopped) return;
     if (!step.typecheck && Date.now() - still > QUIET_MS) stopped = `no output for ${QUIET_MS / 1000}s: stopped as hung`;
     else if (step.timeoutMs && Date.now() - began > step.timeoutMs) stopped = `ran past the job's ${step.timeoutMs / 60_000} minute timeout: stopped`;
-    if (stopped) stop(proc);
+    if (stopped) void stopTree(proc.pid);
   }, 5000);
-  let code = await proc.exited;
+  const code = await proc.exited;
   live.delete(proc);
   clearInterval(watch);
-  if (stopped) {
-    writeSync(fd, `\nerror: ${stopped}\n`);
-    code = 124;
-  }
+  if (stopped) writeSync(fd, `\nerror: ${stopped}\n`);
   closeSync(fd);
-  return { code, output: readFileSync(log, "utf8") };
+  if (out !== fd) closeSync(out);
+  return { code, output: readFileSync(log, "utf8"), stdout: step.typecheck ? readFileSync(`${log}.json`, "utf8") : "", stopped };
 }
+
+type Verdict = { failing: CiFailure[]; unjudged: CiFailure[] };
 
 /** A step to its verdict: cast check is asked again while it has none. */
-async function judgeStep(job: string, step: Step, log: string): Promise<CiFailure[]> {
-  let { code, output } = await runStep(step, log);
-  for (let ask = 0; step.typecheck && code === CHECK_STILL_RUNNING && ask < 2; ask++) {
+async function judgeStep(job: string, step: Step, log: string): Promise<Verdict> {
+  let r = await runStep(step, log);
+  if (r.stopped) return { failing: [], unjudged: [unjudged(job, step.name, r.stopped, r.output)] };
+  if (!step.typecheck) return { failing: r.code === 0 ? [] : stepFailures(job, step, r.output, r.code), unjudged: [] };
+  for (let ask = 0; r.code === CHECK_STILL_RUNNING && ask < 2; ask++) {
     console.log(`  ${job}: the pass outlived cast check's wait, asking again`);
-    ({ code, output } = await runStep(step, log));
+    r = await runStep(step, log);
   }
-  if (step.typecheck && CHECK_RESTART.has(code)) {
-    console.log(`  ${job}: no verdict (exit ${code}), asking again with --fresh`);
-    ({ code, output } = await runStep({ ...step, argv: [...step.argv, "--fresh"] }, log));
+  if (CHECK_RESTART.has(r.code)) {
+    console.log(`  ${job}: no verdict (exit ${r.code}), asking again with --fresh`);
+    r = await runStep({ ...step, argv: [...step.argv, "--fresh"] }, log);
   }
-  return code === 0 ? [] : stepFailures(job, step, output, code);
+  let results: any[] = [];
+  try {
+    results = JSON.parse(r.stdout);
+  } catch {}
+  const verdict = typecheckFailures(Array.isArray(results) ? results : []);
+  if (r.code !== 0 && verdict.failing.length === 0 && verdict.unjudged.length === 0) {
+    const why = r.code === 1 ? "cast check failed without naming an error" : `cast check exited ${r.code} with no verdict`;
+    verdict.unjudged.push(unjudged(job, step.name, why, r.output));
+  }
+  return verdict;
 }
 
-async function runPlan(plan: Plan, logDir: string): Promise<{ result: JobResult; failing: CiFailure[] }> {
-  if (plan.skip) return { result: { job: plan.job, status: "skipped", seconds: 0, reason: plan.skip }, failing: [] };
+async function runPlan(plan: Plan, logDir: string): Promise<{ result: JobResult } & Verdict> {
+  if (plan.skip) return { result: { job: plan.job, status: "skipped", seconds: 0, reason: plan.skip }, failing: [], unjudged: [] };
   const started = performance.now();
-  const failing: CiFailure[] = [];
+  const verdict: Verdict = { failing: [], unjudged: [] };
   for (let i = 0; i < plan.steps.length; ) {
     let end = i + 1;
     if (plan.steps[i].shard) while (end < plan.steps.length && end - i < SHARDS && plan.steps[end].shard && plan.steps[end].cwd === plan.steps[i].cwd) end++;
@@ -342,20 +556,24 @@ async function runPlan(plan: Plan, logDir: string): Promise<{ result: JobResult;
       console.log(`  ${plan.job}: ${step.name}`);
       return judgeStep(plan.job, step, join(logDir, `${plan.job}.${i + k + 1}.log`));
     });
-    for (const failures of await Promise.all(batch)) failing.push(...failures);
+    for (const v of await Promise.all(batch)) verdict.failing.push(...v.failing), verdict.unjudged.push(...v.unjudged);
     i = end;
   }
   const seconds = Math.round((performance.now() - started) / 1000);
-  const reason = failing.length ? `${failing.length} failing, logs ${join(logDir, `${plan.job}.*.log`)}` : plan.files ? `${plan.files} reached test files` : undefined;
-  return { result: { job: plan.job, status: failing.length ? "fail" : "pass", seconds, reason }, failing };
+  const logs = `logs ${join(logDir, `${plan.job}.*.log`)}`;
+  const status = verdict.failing.length ? "fail" : verdict.unjudged.length ? "no verdict" : "pass";
+  const counts = [verdict.failing.length && `${verdict.failing.length} failing`, verdict.unjudged.length && `${verdict.unjudged.length} not judged`].filter(Boolean).join(", ");
+  const reason = counts ? `${counts}, ${logs}` : plan.files ? `${plan.files} test files${plan.wide.length ? `, whole suite: ${plan.wide.join(", ")}` : ""}` : undefined;
+  return { result: { job: plan.job, status, seconds, reason }, ...verdict };
 }
 
 /**
- * The directory holding the bun CI pins (setup-bun's default), fetched once into bun's cache by `bunx`, or null
- * when this bun is that one or it cannot be fetched. Every step runs on it: the suites behave differently across
- * bun versions (bun 1.3.14 under --isolate hands later web files the first file's mocked modules).
+ * The bun CI pins (setup-bun's default), fetched once into bun's cache by `bunx` and linked as `bun` into this
+ * run's directory. Every step runs on it: suites behave differently across bun versions (bun 1.3.14 under
+ * --isolate hands later web files the first file's mocked modules). dir is null when this bun is that one or
+ * it cannot be fetched.
  */
-function ciBun(): { version: string; dir: string | null } | null {
+function ciBun(runDir: string): { version: string; dir: string | null } | null {
   const action = readFileSync(join(ROOT, ".github/actions/setup-bun/action.yml"), "utf8");
   const version = /bun-version:[\s\S]*?default:\s*"([^"]+)"/.exec(action)?.[1];
   if (!version) return null;
@@ -364,11 +582,19 @@ function ciBun(): { version: string; dir: string | null } | null {
   const binary = probe.stdout.toString().trim().split("\n").at(-1);
   if (probe.exitCode !== 0 || !binary?.startsWith("/")) return { version, dir: null };
   // bunx installs it as bun.exe; PATH needs it named bun.
-  const dir = join(tmpdir(), `ci-local-bun-${version}`);
+  const dir = join(runDir, "bun");
   mkdirSync(dir, { recursive: true });
-  rmSync(join(dir, "bun"), { force: true });
   symlinkSync(binary, join(dir, "bun"));
   return { version, dir };
+}
+
+/** The node major ci.yml's setup-node steps pin, when it differs from this machine's. */
+function nodeMismatch(): string | null {
+  const pins = new Set<string>();
+  for (const job of Object.values<any>(WORKFLOW.jobs)) for (const step of job.steps) if (String(step.uses ?? "").startsWith("actions/setup-node")) pins.add(String(step.with?.["node-version"]));
+  const local = Bun.spawnSync(["node", "--version"]).stdout.toString().trim().replace(/^v/, "");
+  const differ = [...pins].filter((pin) => local.split(".")[0] !== pin.split(".")[0]);
+  return differ.length ? `CI runs node ${differ.join(", ")} for test-mobile and test-electron; this is node ${local || "(none)"}` : null;
 }
 
 function argValue(args: string[], name: string): string | undefined {
@@ -380,32 +606,19 @@ function argValue(args: string[], name: string): string | undefined {
 }
 
 if (import.meta.main) {
-  // Stopping the run stops the tests it started.
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.on(signal, () => {
-      for (const proc of live) stop(proc);
-      process.exit(130);
-    });
-  }
   const args = process.argv.slice(2);
   const full = args.includes("--full");
+  const list = args.includes("--list");
   const json = argValue(args, "--json");
   const base = argValue(args, "--base") ?? git(["merge-base", "origin/main", "HEAD"]).trim();
   const started = performance.now();
   const changed = changedPaths(base);
   const scope = classifyChangedPaths(changed);
-  const list = args.includes("--list");
   const logDir = list ? join(tmpdir(), "ci-local") : mkdtempSync(join(tmpdir(), "ci-local-"));
   const plans = planJobs(changed, { base, full, temp: logDir });
+  const narrowed = plans.flatMap((plan) => plan.narrowed);
   console.log(`${changed.length} paths changed since ${base.slice(0, 9)}${scope.forcedBy.length ? `; every job runs, unclassified: ${scope.forcedBy.slice(0, 5).join(", ")}` : ""}`);
-  const pinned = list ? null : ciBun();
-  if (pinned?.dir) {
-    ownEnv.PATH = `${pinned.dir}:${process.env.PATH}`;
-    console.log(`steps run on bun ${pinned.version}, as CI does (this is bun ${Bun.version})`);
-  } else if (pinned && pinned.version !== Bun.version) {
-    console.log(`warning: CI runs bun ${pinned.version}, which could not be fetched; steps run on bun ${Bun.version}`);
-  }
-  if (!list) stepEnv = runnerEnv(ownEnv, join(logDir, "path"));
+  for (const n of narrowed) console.log(`narrowed: ${n.suite} runs ${n.selected} of the ${n.total} test files the change reaches (hub files' deeper importers wait for --full)`);
 
   if (list) {
     for (const plan of plans) {
@@ -415,24 +628,55 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  const pinned = ciBun(logDir);
+  if (pinned?.dir) {
+    ownEnv.PATH = `${pinned.dir}:${process.env.PATH}`;
+    console.log(`steps run on bun ${pinned.version}, as CI does (this is bun ${Bun.version})`);
+  } else if (pinned && pinned.version !== Bun.version) {
+    console.log(`warning: CI runs bun ${pinned.version}, which could not be fetched; steps run on bun ${Bun.version}`);
+  }
+  const node = nodeMismatch();
+  if (node) console.log(`note: ${node}`);
+  stepEnv = runnerEnv(ownEnv, logDir);
+  const before = testTmuxDirs();
+  const sweep = () => sweepTmux(stepEnv.TMUX_TMPDIR!, before, stepEnv);
+
+  // Stopping the run stops everything it started, its tmux servers included.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, async () => {
+      await Promise.all([...live].map((proc) => stopTree(proc.pid)));
+      sweep();
+      process.exit(130);
+    });
+  }
+
   const results: JobResult[] = [];
   const failing: CiFailure[] = [];
+  const station: CiFailure[] = [];
   for (const plan of plans) {
     if (!plan.skip) console.log(`${plan.job}...`);
     const run = await runPlan(plan, logDir);
     results.push(run.result);
     failing.push(...run.failing);
+    station.push(...run.unjudged);
   }
+  sweep();
 
-  for (const f of failing) {
-    const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}${f.test ? ` ${f.test}` : ""}` : (f.assertion ?? "a step failed without naming a test");
-    console.log(`\n${f.job} ✗ ${where}`);
+  for (const f of [...failing, ...station]) {
+    const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}${f.test ? ` ${f.test}` : ""}` : (f.test ?? f.assertion ?? "a step failed without naming a test");
+    console.log(`\n${f.job} ✗ ${where}${f.job === "ci-station" && f.assertion ? `: ${f.assertion}` : ""}`);
     console.log(f.excerpt.split("\n").slice(-12).map((line) => `    ${line}`).join("\n"));
   }
-  const green = failing.length === 0;
-  if (json) writeFileSync(json, `${JSON.stringify({ green, failing, jobs: results }, null, 2)}\n`);
+  const green = failing.length === 0 && station.length === 0;
+  if (json) {
+    const head_sha = git(["rev-parse", "HEAD"]).trim();
+    const dirty = git(["status", "--porcelain"]).trim().length > 0;
+    writeFileSync(json, `${JSON.stringify({ green, head_sha, dirty, failing: [...failing, ...station], narrowed, jobs: results }, null, 2)}\n`);
+  }
   console.log("");
-  for (const r of results) console.log(`${r.job.padEnd(14)} ${r.status.padEnd(8)} ${String(r.seconds).padStart(4)}s${r.reason ? `  ${r.reason}` : ""}`);
-  console.log(`${green ? "green" : "red"} in ${Math.round((performance.now() - started) / 1000)}s; logs in ${logDir}`);
-  process.exit(green ? 0 : 1);
+  for (const r of results) console.log(`${r.job.padEnd(14)} ${r.status.padEnd(10)} ${String(r.seconds).padStart(4)}s${r.reason ? `  ${r.reason}` : ""}`);
+  for (const n of narrowed) console.log(`narrowed: ${n.suite} ran ${n.selected} of ${n.total} reached test files; --full runs the rest`);
+  const verdict = failing.length ? "red" : station.length ? "no verdict" : "green";
+  console.log(`${verdict} in ${Math.round((performance.now() - started) / 1000)}s; logs in ${logDir}`);
+  process.exit(failing.length ? 1 : station.length ? 2 : 0);
 }
