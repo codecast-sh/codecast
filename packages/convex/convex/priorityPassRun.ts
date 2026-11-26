@@ -415,14 +415,14 @@ export const applyPlan = internalMutation({
       }
     }
 
-    const mergedInto = new Map<Id<"priorities">, Id<"priorities">>();
+    const mergedInto = new Map<Id<"priorities">, { into: Id<"priorities">; intoRow: Doc<"priorities">; step_keys: Record<string, string> }>();
     for (const m of plan.merges) {
       const row = await mine(m.short_id);
       const into = await resolve(m.merged_into);
       const intoRow: Doc<"priorities"> | null = into ? await ctx.db.get(into) : null;
       if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || intoRow.status === "merged") continue;
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, ai_rank: undefined, updated_at: now });
-      mergedInto.set(row._id, into);
+      mergedInto.set(row._id, { into, intoRow, step_keys: m.step_keys ?? {} });
       counts.merged++;
       // Every one of its corrections follows it, onto the step their step became (step-less when that is unknown).
       await moveCorrections(ctx, row._id, into, (key) => {
@@ -465,12 +465,15 @@ export const applyPlan = internalMutation({
     await letGoStrays(ctx, vis, move, args, strays ?? [], new Set(plan.rewritten));
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown;
     // one the person placed (or a link or the classifier mapped) keeps that there, and one they said is not part of the survivor lets go.
-    for (const [from, into] of mergedInto) {
+    for (const [from, { into, intoRow, step_keys }] of mergedInto) {
+      // The survivor's milestones after this write; a session's milestone follows the merge's map when it is live there.
+      const live = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
       const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
       for (const conv of left) {
         if (!(await inWorkspace(vis, conv, args.user_id, args.workspace))) continue;
         const not = (conv.priority_not ?? []).some((id) => String(id) === String(into));
-        await move(conv, not ? undefined : into, undefined, conv.priority_set_by);
+        const to = conv.priority_step_key ? step_keys[conv.priority_step_key] : undefined;
+        await move(conv, not ? undefined : into, to && live.has(to) ? to : undefined, conv.priority_set_by);
       }
     }
 

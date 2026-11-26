@@ -193,6 +193,25 @@ describe("a milestone holding a session the person placed survives the pass", ()
   });
 });
 
+describe("a pass merge keeps a placed session's milestone", () => {
+  test("the person places a session on pri-2/s1 \"Ship the auth rewrite\"; the pass merges pri-2 into pri-1 without repeating it; the session lands on the survivor's carried milestone", async () => {
+    const w = await seeded();
+    await w.send(w.ana, w.oldConv, late(), "auth rewrite");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Auth", steps: [{ title: "Ship the auth rewrite", tier: "critical", refs: [] }], sessions: [] })], unassigned: [] });
+    await run(w);
+    await as(w, w.ana).mutation(pri.moveSession, { session: "jx7old", short_id: "pri-2", step_key: "s1" });
+
+    await w.send(w.ana, w.teamConv, late(), "grader and auth together");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps, merges: ["pri-2"] })], unassigned: [] });
+    await run(w);
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged" });
+    const survivor = await byShort(w, "pri-1");
+    const carried = survivor.steps.find((s: any) => s.title === "Ship the auth rewrite" && !s.dropped);
+    expect(carried).toBeDefined();
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: survivor._id, priority_step_key: carried.key, priority_set_by: "person" });
+  });
+});
+
 describe("session overrides survive the next pass", () => {
   test("a session the person moved stays; one they said is not this never goes back there", async () => {
     const w = await seeded();

@@ -716,10 +716,10 @@ const keyNumber = (key: string | null | undefined) => {
  */
 function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed: PassPriority[], proposed: PriorityProposal["steps"], taskStatus: Map<string, string>, now: number, notes: string[]): { steps: PriorityStep[]; remap: Map<string, string>; keys: Array<string | null> } {
   const own = prior?.steps ?? [];
-  // A step a session the person placed, or a known link, sits on stays, as a step the person set something on does.
-  const anchored = new Set((prior?.sessions ?? []).filter((s) => s.step_key && (s.by_person || s.linked_by === "link")).map((s) => s.step_key!));
+  // A step a session the person placed, or a known link, sits on stays, as a step the person set something on does: the survivor's own, and an absorbed priority's ("pri-N/sK").
+  const anchored = new Set([prior, ...absorbed].flatMap((p) => (p?.sessions ?? []).filter((s) => s.step_key && (s.by_person || s.linked_by === "link")).map((s) => `${p === prior ? "" : p!.short_id}/${s.step_key}`)));
   const ownerOf = new Map<PriorityStep, string>();
-  const holds = (s: PriorityStep) => isPersonHeld(s) || (!s.dropped && !ownerOf.has(s) && anchored.has(s.key));
+  const holds = (s: PriorityStep) => isPersonHeld(s) || (!s.dropped && anchored.has(`${ownerOf.get(s) ?? ""}/${s.key}`));
   const needsRewrite = new Set([prior, ...absorbed].filter((p) => p?.needs_rewrite).map((p) => (p === prior ? target : p!.short_id)));
   for (const p of absorbed) for (const s of p.steps) ownerOf.set(s, p.short_id);
   const pool = [...own, ...ownerOf.keys()];
