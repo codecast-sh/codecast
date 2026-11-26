@@ -95,7 +95,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "hooks/useDecisionQueue.ts:blockedSince": "window",
   "store/sessionOwnersSlice.ts:factsMemo": { shared: "an entry is used only while its owners read and runner are the very objects it was built from; another window's state holds its own objects, so it misses and rebuilds" },
   "store/priorityOrder.ts:labels": { shared: "interns a frozen-by-convention { rank, workspace } label per value pair, read from nothing but its key; every window would build the identical object" },
-  "store/workProjects.ts:memo": { shared:"keyed on the sessions, tasks and plans refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
+  "store/workProjects.ts:memo": { shared: "keyed on the sessions, tasks and plans refs it was built from; another window's state has its own refs, so it misses and rebuilds" },
   "store/viewNav.ts:pendingSource": "window",
   "store/viewNav.ts:appliedNavCount": "window",
   // Whether this window opened fresh onto the feed home: read from its own address once.

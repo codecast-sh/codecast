@@ -2870,10 +2870,8 @@ function SessionListPanelImpl({
             className="flex-1 min-w-0 pl-3 py-1.5 flex items-center text-left"
           >
             <span data-sv-hidden-label className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
-              {/* The count wears the section headers' markup (SectionHeader) and
-                  counts what the bucket draws, as the live sections do
-                  (sectionHeaderCount): subagents folded under a card add none. */}
-              {label}{items.length > 0 ? ` (${showSubagents ? items.length : topLevel.length})` : null}
+              {/* The count wears the section headers' markup (SectionHeader). */}
+              {label}{items.length > 0 ? ` (${items.length})` : null}
             </span>
             {liveCount > 0 && (
               <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium">
