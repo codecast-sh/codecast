@@ -186,9 +186,11 @@ function FaceCardBody({
       </Who>
 
       {/* The conversation with them and a reply box, above the ways to
-          reach them. Your own card and an agent's have neither. */}
-      {!isSelf && !member.is_bot && (
-        <FaceMessages memberId={memberId} name={displayName} focus={readFocus} onLeave={onClose} />
+          reach them. Your own card has neither. An agent's shows what it
+          said where it spoke, so the line its count stood for is on screen
+          once the press clears the count (ct-102115); it has no DM to write. */}
+      {!isSelf && (
+        <FaceMessages memberId={memberId} name={displayName} focus={readFocus} onLeave={onClose} canDm={!member.is_bot} />
       )}
 
       {/* Where they are, and the one gesture that goes there with them. */}

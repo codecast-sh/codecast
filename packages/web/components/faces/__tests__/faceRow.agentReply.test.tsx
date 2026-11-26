@@ -8,7 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { FIXTURE_TEAM } from "../../../test-helpers/teamRoster";
 import { stampRoster } from "../../../lib/activeTeam";
-import { bar, entry, faceChat, mount, openedChat, rowOf, useInboxStore } from "./faceRowHarness";
+import { FaceRow, ME, bar, entry, faceChat, mount, openedChat, rowOf, useInboxStore } from "./faceRowHarness";
 
 const AGENT = "u-esc";
 const TEAM = "chatchannels:team";
@@ -49,6 +49,20 @@ describe("an agent's face with a new-reply count (ct-102115)", () => {
 
       await h.click(h.circle(AGENT));
       expect({ countCleared: h.q(".face-unread") === null, replyReached: replyReached() }).toEqual({ countCleared: true, replyReached: true });
+    } finally {
+      off();
+      faceChat.__resetFaceChat();
+    }
+  });
+
+  test("off the header, the count badge opens the chat line it counted, not the agent's DM", async () => {
+    const off = seedAgentReply();
+    try {
+      openedChat.length = 0;
+      const h = await mount(<FaceRow row={rowOf([entry(AGENT, "Escalations lead", { bot: true })])} density="float" viewerId={ME} />);
+      await h.click(h.q(".face-unread")!);
+      expect(openedChat).toEqual([`/chat/${TEAM}?m=e1`]);
+      expect(h.q(".face-unread")).toBeNull();
     } finally {
       off();
       faceChat.__resetFaceChat();
