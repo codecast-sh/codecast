@@ -24,7 +24,7 @@ function world(count: number) {
   // id(0) co-owned by ME and MATE, id(2) a child its parent owns, and one private to MATE.
   const byId = (k: string) => conversations.find((c) => c._id === k);
   if (byId(id(0))) byId(id(0)).owner_user_id = ME;
-  if (byId(id(2))) byId(id(2)).spawned_by_conversation_id = PARENT;
+  if (byId(id(2))) byId(id(2)).parent_conversation_id = PARENT;
   conversations.push({ _id: "x".repeat(32), short_id: "jxpriv", session_id: "sx", user_id: MATE, team_id: TEAM, is_private: true, status: "active", title: "Private", message_count: 3 });
   return makeFakeDb({
     users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: MATE, name: "Mate", email: "mate@x.ai" }, { _id: OUTSIDER, name: "Out" }],

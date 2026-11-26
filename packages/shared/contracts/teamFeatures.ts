@@ -124,7 +124,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
   {
     key: "session_owners",
     name: "Session owners",
-    desc: "Your inbox is the sessions you own. A session's owners are people, one role, or the session that started it; an agent owner answers it until you take it over. In development.",
+    desc: "Your inbox is the sessions you own. A session's owners are people, one role, or the session it works for; an agent owner answers it until you take it over. In development.",
     short: "Your inbox is the sessions you own",
     // Staff turn it on for a team (after its backfill and count, docs/architecture/session-owners.md).
     inDevelopment: true,

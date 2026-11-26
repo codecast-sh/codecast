@@ -108,7 +108,7 @@ export function useSessionOwners(conversationId: string): SessionOwnersView {
           : { role_id: roleId, handle: "role", name: "Role" };
   const parentId = facts ? (facts.parent_conversation_id ? String(facts.parent_conversation_id) : null) : home?.owner_session_id ? String(home.owner_session_id) : null;
   const parentTitle = parentId
-    ? (read?.parent_session?.conversation_id === parentId ? read.parent_session.title : null) ?? s.sessions?.[parentId]?.title ?? s.conversations?.[parentId]?.title ?? "Session that started it"
+    ? (read?.parent_session?.conversation_id === parentId ? read.parent_session.title : null) ?? s.sessions?.[parentId]?.title ?? s.conversations?.[parentId]?.title ?? "Session it works for"
     : null;
   const parent = parentId ? { id: parentId, title: parentTitle!, seatRoleId: seatRoleOf(s, parentId) } : null;
   const runnerId = home?.user_id ? String(home.user_id) : null;

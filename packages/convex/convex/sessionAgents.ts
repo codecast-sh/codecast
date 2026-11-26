@@ -1,9 +1,10 @@
-// The agents working for a session: the sub-agents nested under it and the
-// sessions it spawned (agent-team members included). Under the owners model
-// (team feature session_owners) they are owned by the session that started
-// them, not by a person, so they stay out of every inbox; the conversation's
-// agents band lists them from here, with each one's state and the people who
-// own it, so a person can add themselves to one.
+// The agents working for a session: the workers nested under it
+// (parent_conversation_id). A session it only spawned (a plain `cast spawn`, an
+// agent-team teammate) is its peer, not its worker, and is not listed. Under
+// the owners model (team feature session_owners) a worker is owned by the
+// session it is nested under, not by a person, so it stays out of every inbox;
+// the conversation's agents band lists it from here, with its state and the
+// people who own it, so a person can add themselves to one.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { query } from "./functions";
@@ -34,12 +35,9 @@ export type SessionAgent = {
 export async function performListSessionAgents(ctx: { db: any }, viewerId: Id<"users">, conversationId: Id<"conversations">): Promise<SessionAgent[] | null> {
   const parent = await ctx.db.get(conversationId);
   if (!parent || (await checkConversationAccess(ctx as any, viewerId, parent)) === "denied") return null;
-  const [nested, spawned] = await Promise.all([
-    ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conversationId)).order("desc").take(SESSION_AGENTS_CAP),
-    ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conversationId)).order("desc").take(SESSION_AGENTS_CAP),
-  ]);
+  const nested = await ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conversationId)).order("desc").take(SESSION_AGENTS_CAP);
   const byId = new Map<string, any>();
-  for (const c of [...nested, ...spawned]) {
+  for (const c of nested) {
     if (c.inbox_killed_at || isRunLog(c) || c.parent_message_uuid === "plan-handoff") continue;
     byId.set(String(c._id), c);
   }

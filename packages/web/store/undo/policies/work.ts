@@ -881,18 +881,28 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // carries the change that puts it back (args[2]), built from the owners it
   // started from: undo replays that, and its own inverse is the change again.
   // A take-over or a released parent has none: nothing puts a parent back.
+  // An adopt is undone by its old parent again, else a detach, and the
+  // viewer's row back (lib/adoptDrop), when the viewer runs it and so may still edit.
   applySessionOwners: {
     spec: {
       label: (ctx) => {
-        const change = ctx.args[1] as { take_over?: boolean; add?: string[]; remove?: string[] } | undefined;
+        const change = ctx.args[1] as { take_over?: boolean; add?: string[]; remove?: string[]; adopt_parent?: string } | undefined;
         const title = sessionTitle(ctx.before, ctx.args[0] as string);
         const me = String(ctx.before?.currentUser?._id ?? "");
         if (change?.take_over) return `Took over ${title}`;
+        if (change?.adopt_parent) return `Made ${title} a worker of ${sessionTitle(ctx.before, change.adopt_parent)}`;
         if (me && change?.remove?.length === 1 && change.remove[0] === me && !change.add?.length) return `Left ${title}`;
         if (me && change?.add?.length === 1 && change.add[0] === me && !change.remove?.length) return `Added you to ${title}`;
         return `Changed the owners of ${title}`;
       },
-      inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
+      // Several changes (an adopt's undo by someone who does not run it: rejoin,
+      // then put it back) are sent in order as one entry.
+      inverse: (ctx) => {
+        const back = ctx.args[2] as unknown;
+        if (!back) return null;
+        const steps = Array.isArray(back) ? back : [back];
+        return steps.length ? steps.map((step, i) => call("applySessionOwners", ctx.args[0], step, i === steps.length - 1 ? ctx.args[1] : null)) : null;
+      },
     },
   },
   reparentOrgRole: org((ctx) => `Moved ${roleName(ctx.before, ctx.args[0] as string)} in the org`),

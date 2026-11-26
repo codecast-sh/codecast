@@ -220,41 +220,40 @@ export function CardStatusSignals({
   );
 }
 
-/** The links out of a card: the session that spawned this one (or that it
- *  continues, for a handoff), and the session implementing its plan. */
+/** The links out of a card: the session it continues (a handoff), and the
+ *  session implementing its plan. A session that only spawned it is a peer,
+ *  so it gets no link. */
 export function CardParentLinks({
   session,
-  spawnedById,
-  spawnedIsHandoff,
+  handoffFromId,
   spawnedByTitle,
   onOpenParent,
   onNavigateToSession,
 }: {
   session: InboxSession;
-  spawnedById: string | null;
-  spawnedIsHandoff: boolean;
+  handoffFromId: string | null;
   spawnedByTitle: string | null;
   onOpenParent?: (id: string) => void;
   onNavigateToSession?: (id: string) => void;
 }) {
   return (
     <>
-        {spawnedById && (
-          // Click-through to the session that spawned this one (its agent-team
-          // lead) — same affordance shape as the implementation-session row.
+        {handoffFromId && (
+          // Click-through to the session this one continues — same affordance
+          // shape as the implementation-session row.
           <div
             data-sv-spawned
             className="mt-1 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
             onClick={(e) => {
               e.stopPropagation();
-              onOpenParent?.(spawnedById);
+              onOpenParent?.(handoffFromId);
             }}
-            title={spawnedIsHandoff ? "View the session this one continues" : "View the session that spawned this one"}
+            title="View the session this one continues"
           >
             <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
             </svg>
-            <span className="flex-shrink-0">{spawnedIsHandoff ? "handed off from" : "spawned by"}</span>
+            <span className="flex-shrink-0">handed off from</span>
             <span className="truncate underline underline-offset-2">
               {cleanTitle(spawnedByTitle || "parent session")}
             </span>
