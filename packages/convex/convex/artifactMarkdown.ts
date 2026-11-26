@@ -243,6 +243,7 @@ const MD_THEME_BOOT = `<script>(function(){
   try{t=new URLSearchParams(location.search).get("theme");}catch(e){}
   if(t!=="dark"&&t!=="light"){try{t=localStorage.getItem("cc-md-theme");}catch(e){t=null;}}
   if(t==="dark"||t==="light"){d.setAttribute("data-theme",t);if(framed)d.setAttribute("data-theme-host","");}
+  if(framed&&/[?&]embed=1(&|$)/.test(location.search))d.setAttribute("data-embed","");
 })();</script>`;
 
 const SUN = `<svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>`;
@@ -363,6 +364,12 @@ ${MD_THEME_BOOT}
     :root:not([data-theme]) .md-theme .sun { opacity: 1; transform: none; color: #b58900; }
     :root:not([data-theme]) .md-theme .moon { opacity: 0; transform: rotate(90deg) scale(.5); }
   }
+  /* Framed by a codecast embed, the frame is the sheet: the document fills it
+     as one surface, with no page around it and no outline of its own. */
+  :root[data-embed], :root[data-embed] body { background: var(--md-bg); }
+  :root[data-embed] body { min-height: 0; padding: 0; }
+  :root[data-embed] main { max-width: 44rem; border: 0; border-radius: 0; box-shadow: none; animation: none;
+    padding: clamp(28px, 5.5vw, 56px) clamp(24px, 6vw, 56px) clamp(36px, 6vw, 64px); }
   /* A codecast window framing the page owns its theme. */
   :root[data-theme-host] .md-theme { display: none; }
   @media (prefers-reduced-motion: reduce) { main { animation: none; } .md-theme svg { transition: none; } }
