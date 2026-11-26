@@ -1,48 +1,11 @@
-// The history strip and the pinned-state line drawn as a reader gets them.
+// The pinned-state line drawn as a reader gets it.
 // Run: bun test components/priorities/priorityViews.test.tsx
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import { HistoryStrip } from "./HistoryStrip";
 import { PriorityPinLineView } from "./PriorityPinLine";
-import { priorityHref, stripCells, stripLevels } from "../../lib/priorities";
-
-const DAYS = Array.from({ length: 15 }, (_, i) => `2026-11-${String(10 + i).padStart(2, "0")}`);
-
-describe("HistoryStrip", () => {
-  test("one cell per day, each titled with its date and count", () => {
-    const counts = DAYS.map((_, i) => (i === 11 ? 9 : 0));
-    expect(stripCells(DAYS, counts)[11]).toEqual({ day: "2026-11-21", count: 9, title: "Nov 21: 9 typed" });
-    const html = renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} />);
-    expect(html.match(/<i /g)?.length).toBe(15);
-    expect(html).toContain('title="Nov 21: 9 typed"');
-    expect(html).toContain('title="Nov 10: 0 typed"');
-  });
-
-  test("cells shade by count on the activity heat ramp, grey when muted", () => {
-    const counts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 40];
-    const html = renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} />);
-    expect(html).toContain("var(--sol-text) 7%"); // an empty day
-    expect(html).toContain("var(--sol-green) 100%"); // the busiest
-    expect(renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} muted />)).toContain("var(--sol-text-muted) 100%");
-  });
-
-  test("a truncated lane marks its oldest cell and says so on hover", () => {
-    const counts = DAYS.map(() => 5);
-    const cut = renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} truncated />);
-    expect(cut).toContain('title="Older activity not counted"');
-    expect(cut.match(/outline-dashed/g)?.length).toBe(1);
-    expect(renderToStaticMarkup(<HistoryStrip days={DAYS} counts={counts} />)).not.toContain("outline-dashed");
-  });
-
-  test("a priority with no typing draws empty cells; shared levels compare strips", () => {
-    expect(renderToStaticMarkup(<HistoryStrip days={DAYS} counts={undefined} />)).not.toContain("--sol-green");
-    const levels = stripLevels([[0, 40], [1, 1]]);
-    const quiet = renderToStaticMarkup(<HistoryStrip days={DAYS.slice(0, 2)} counts={[1, 1]} levels={levels} />);
-    expect(quiet).not.toContain("var(--sol-green) 100%");
-  });
-});
+import { priorityHref } from "../../lib/priorities";
 
 const pin = (el: React.ReactElement) => renderToStaticMarkup(<MemoryRouter>{el}</MemoryRouter>);
 

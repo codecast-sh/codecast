@@ -126,6 +126,10 @@ export type PriorityRow = {
   sessions: PrioritySession[];
   /** The owner wrote a correction no pass has read yet (always false for a teammate). */
   correction_pending: boolean;
+  /** A list's links per step (priorityDerive), on the viewer's own active rows only; absent elsewhere and from a server that predates them. */
+  links?: PriorityMilestoneLinks[];
+  /** The plan holding tasks from at least half the task-bearing steps (attributePlans); absent as above. */
+  plan?: PriorityPlanRef | null;
 };
 
 /** A correction the person wrote on a priority or one of its milestones: every later pass reads it until it is deleted. */
@@ -137,6 +141,41 @@ export type PriorityCorrection = {
   /** "applied" once a pass that read it succeeded. */
   status: "pending" | "applied";
   created_at: number;
+};
+
+/**
+ * A session's state on the list, in the inbox's words. The server reads it
+ * off the conversation alone (no liveness), so it never says "working"; a
+ * client holding the session's inbox row lays the inbox's own verdict over it.
+ */
+export type PrioritySessionState = "needs_you" | "working" | "dormant" | "idle" | "done" | "killed";
+
+/** Why a session counts as working a step: the pass mapped it, a step ref names it, a task of the step ("via ct-12"), or the step's plan. */
+export type PriorityLinkWhy = "mapped" | "linked" | `via ${string}`;
+
+export type PriorityLinkedSession = {
+  short_id: string;
+  conversation_id: string;
+  title: string;
+  state: PrioritySessionState;
+  /** A step a workflow run spawned, not a session a person drives. */
+  workflow: boolean;
+  why: PriorityLinkWhy[];
+  last_active_at: number;
+};
+
+export type PriorityPlanRef = { short_id: string; title: string; done: number; total: number; size: number };
+
+/** One step's links as a list row carries them. */
+export type PriorityMilestoneLinks = {
+  key: string;
+  /** Best first (priorityDerive orderSessions), at most a handful. */
+  sessions: PriorityLinkedSession[];
+  /** Linked sessions past those shown. */
+  sessions_more: number;
+  /** Its own plan (never the priority's), and the big plans it is part of. */
+  plan: PriorityPlanRef | null;
+  part_of: PriorityPlanRef[];
 };
 
 /** A list answer: the rows, what it left out, and when the viewer's pass in the listed workspace runs. */
@@ -180,4 +219,8 @@ export type PriorityHistory = {
   lanes: PriorityHistoryLane[];
   /** Per session short id, the same daily counts: only sessions a priority lane above holds, and the reader can open. */
   sessions?: Record<string, number[]>;
+  /** The viewer's sessions typed into today that no priority holds (the unassigned lane's today), newest first. */
+  unassigned_today?: PriorityLooseSession[];
 };
+
+export type PriorityLooseSession = { short_id: string; conversation_id: string; title: string; last_active_at: number; count: number };

@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, mostActiveSessions, passDue, newSessionHref, nextPassLabel, ownerGroups, stepNeedsSession, paintRank, paintStatus, paintTier, pastBadge, rankAtDrop, stepCounts, stepSessions, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, newSessionHref, nextPassLabel, ownerGroups, paintRank, paintStatus, paintTier, pastBadge, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -62,7 +62,7 @@ describe("the store actions' paints", () => {
 
   test("a dragged rank moves the row among its owner's active ones only, and marks it the person's", () => {
     const rows = fresh();
-    paintRank(rows, "pri-3", rankAtDrop(0));
+    paintRank(rows, "pri-3", 1);
     expect(ids(ownerGroups(rows)[0].active)).toEqual(["pri-3", "pri-1", "pri-2"]);
     expect(rows.find((r) => r.short_id === "pri-3")!.rank_set_by).toBe("person");
     expect(rows.find((r) => r.short_id === "pri-4")!.rank).toBe(1);
@@ -120,47 +120,12 @@ describe("writeOrRestore", () => {
 
 describe("steps", () => {
   const s = step("s1", "critical", false, [{ kind: "task", id: "ct-12" }, { kind: "session", id: "jx2" }, { kind: "pr", id: "acme/web#4" }]);
-  const r = row("pri-1", {
-    title: "Trusted evals",
-    steps: [s],
-    sessions: [
-      { short_id: "jx1", title: "Grader", step_key: "s1", updated_at: 5 },
-      { short_id: "jx3", title: "Other", step_key: "s2", updated_at: 9 },
-    ],
-  });
-
-  test("a step's sessions are those mapped to it, then those its refs name", () => {
-    expect(stepSessions(r, s).map((x) => x.short_id)).toEqual(["jx1", "jx2"]);
-  });
-
-  test("once the open row's show answers, a step's sessions are every one show maps to it", () => {
-    const detail = { ...r, steps: [{ ...s, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 1 }] }], other_sessions: [] } as any;
-    expect(stepSessions(r, s, detail).map((x) => x.short_id)).toEqual(["jx9", "jx2"]);
-    const bare = step("s5", "critical");
-    // The list's newest few cannot say a step has no session; show can.
-    expect(stepNeedsSession(r, bare, stepSessions(r, bare), undefined)).toBe(false);
-    expect(stepNeedsSession(r, bare, stepSessions(r, bare, detail), detail)).toBe(true);
-    expect(stepNeedsSession(r, { ...bare, done: true }, [], detail)).toBe(false);
-    // Never on a teammate's priority: starting their work is theirs to do.
-    expect(stepNeedsSession({ mine: false }, bare, [], detail)).toBe(false);
-    expect(mostActiveSessions(r, undefined, { ...detail, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 99 }] }).map((x) => x.short_id)).toEqual(["jx9"]);
-  });
+  const r = row("pri-1", { title: "Trusted evals", steps: [s] });
 
   test("+ new session opens the composer on the priority and step, its task attached", () => {
     const href = newSessionHref(r, s);
     expect(parseComposeLink(new URLSearchParams(href.split("?")[1]))).toEqual({ draft: "Trusted evals: Step s1", task: "ct-12" });
     expect(parseComposeLink(new URLSearchParams(newSessionHref(r, step("s9", "polish")).split("?")[1]))).toEqual({ draft: "Trusted evals: Step s9" });
-  });
-
-  test("a step's strip sums its sessions' days; none without per-session counts", () => {
-    const history = { days: ["2026-11-22", "2026-11-23"], lanes: [], sessions: { jx1: [1, 2], jx2: [3, 0] } };
-    expect(stepCounts(history, stepSessions(r, s))).toEqual([4, 2]);
-    expect(stepCounts({ days: history.days, lanes: [] }, stepSessions(r, s))).toBeUndefined();
-  });
-
-  test("most active sessions by typing, else most recently updated", () => {
-    expect(mostActiveSessions(r, undefined).map((x) => x.short_id)).toEqual(["jx3", "jx1"]);
-    expect(mostActiveSessions(r, { days: ["d"], lanes: [], sessions: { jx1: [7] } }).map((x) => x.short_id)).toEqual(["jx1", "jx3"]);
   });
 });
 

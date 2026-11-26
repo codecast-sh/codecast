@@ -194,6 +194,7 @@
     "./changes": "./changes/index.ts",
     "./contracts/mods": "./contracts/mods.ts",
     "./contracts/priorities": "./contracts/priorities.ts",
+    "./contracts/priorityDerive": "./contracts/priorityDerive.ts",
     "./contracts/internalHost": "./contracts/internalHost.ts",
     "./contracts/secrets": "./contracts/secrets.ts",
     "./contracts/deliveryHold": "./contracts/deliveryHold.ts",
