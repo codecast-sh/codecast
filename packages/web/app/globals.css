@@ -3105,7 +3105,15 @@ diffs-container {
   content: "↳";
   color: var(--sol-cyan);
   font-weight: 700;
+}
+/* The quote mark and the reply arrow share one fixed slot, so the quote and
+   the note start at the same x in proportional fonts too. */
+.cc-review-tray-quote > .cc-comment-quote-mark,
+.cc-review-tray-note::before {
+  display: inline-block;
+  width: 1em;
   margin-right: 0.35rem;
+  text-align: center;
 }
 .cc-review-tray-x {
   flex: none;
