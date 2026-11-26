@@ -28,6 +28,12 @@
 //              owners file beside the judges file (`<path-prefix> <user id> <name>`), else the pull request's
 //              author; a mechanism, an engineer or that owner.
 //
+//   landing    a run that lands with no pull request (one commit squashed onto main's tip, pushed for CI, then main
+//              fast-forwarded to it) reports each push (orgLineMerge.recordRunLanding). The same rule reads the change from
+//              GitHub's comparison of the default branch with that commit and posts the same status on it; the run, never a
+//              pull request number, keys its press, approvals and cards. A commit carried onto a newer main is the first one
+//              through a recorded rebase. A commit no run reported is not evaluated at all: nothing posts on it.
+//
 // Nothing posts for a repository until an admin opts it in (setGate), "shadow" first, under its own context.
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
@@ -282,15 +288,59 @@ export function parseEngineers(text: string): Array<{ user_id: string; name: str
 export async function readPull(repository: string, prNumber: number, token: string, judgesPath: string): Promise<PullRead> {
   const pr = await fetchPRFiles(repository, prNumber, token);
   if (pr.state !== "open" || !pr.head_sha) return { open: false };
-  const head = pr.head_sha;
-  const main = pr.default_branch ?? pr.base_ref ?? "main";
-  const changed = pr.paths.flatMap(pathsOf);
+  return readChange(repository, token, judgesPath, {
+    head: pr.head_sha, main: pr.default_branch ?? pr.base_ref ?? "main", files: pr.paths, complete: pr.complete && pr.paths.length < PR_FILES_CAP,
+    title: pr.title ?? "", author_login: pr.author_login ?? null, messages: () => prMessages(repository, token, prNumber),
+  });
+}
+
+/** GitHub lists at most this many files in a comparison. */
+const COMPARE_FILES_CAP = 300;
+
+/**
+ * The same for a run's landing commit, with no pull request: the change is the comparison of the default branch with
+ * the commit (its files, merge base and commit messages), titled by the run. Not open when GitHub does not have the
+ * commit yet (a rebase is recorded before its push) or the default branch already holds it (it landed).
+ */
+export async function readLanding(repository: string, sha: string, token: string, judgesPath: string, title: string): Promise<PullRead> {
+  let main = "main";
+  try {
+    const repo = await rest(`${GITHUB}/repos/${repository}`, token);
+    main = repo.json?.default_branch ?? main;
+    const compare = await rest(`${GITHUB}/repos/${repository}/compare/${encodeURIComponent(main)}...${sha}`, token);
+    if (compare.status === 404 || !compare.json) return { open: false };
+    if (!compare.json.ahead_by) return { open: false };
+    const commits: any[] = compare.json.commits ?? [];
+    const files: PRPath[] = compare.json.files ?? [];
+    const merge_base: string | undefined = compare.json.merge_base_commit?.sha;
+    return readChange(repository, token, judgesPath, {
+      head: sha, main, files, complete: files.length < COMPARE_FILES_CAP && commits.length === compare.json.ahead_by, merge_base, title,
+      author_login: commits.at(-1)?.author?.login ?? null, messages: async () => commits.map((c) => String(c.commit?.message ?? "")),
+    });
+  } catch (error) {
+    return { open: true, head_sha: sha, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})`, people: { title, author_login: null, area_owner: null, engineers: null } };
+  }
+}
+
+/**
+ * What the rule reads for a change, once its files are known: main's judges, owners and engineers files, the judged
+ * paths and both diff keys against the merge base, and the commits' Requested-by and revert lines. Never throws past
+ * the head: a failure is unreadable.
+ */
+async function readChange(repository: string, token: string, judgesPath: string, c: {
+  head: string; main: string; files: PRPath[]; complete: boolean; title: string; author_login: string | null;
+  /** Known already (a landing's comparison); else read from GitHub's comparison with main. */
+  merge_base?: string;
+  messages: () => Promise<string[]>;
+}): Promise<PullRead> {
+  const { head, main } = c;
+  const changed = c.files.flatMap(pathsOf);
   const beside = (name: string) => `${judgesPath.includes("/") ? judgesPath.slice(0, judgesPath.lastIndexOf("/") + 1) : ""}${name}`;
   const onMain = async (path: string) => {
     const r = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(path)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
     return r.status === 404 ? null : r.text ?? "";
   };
-  const people: PullPeople = { title: pr.title ?? "", author_login: pr.author_login ?? null, area_owner: null, engineers: null };
+  const people: PullPeople = { title: c.title, author_login: c.author_login, area_owner: null, engineers: null };
   try {
     const [ownersText, engineersText] = await Promise.all([onMain(beside("owners.txt")), onMain(beside("engineers.txt"))]);
     const owners = ownersText === null ? [] : parseOwners(ownersText);
@@ -299,9 +349,8 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const judgesText = await onMain(judgesPath);
     if (judgesText === null) return { open: true, head_sha: head, unreadable: `${judgesPath} on ${main}`, people };
     const judges = parseJudges(judgesText);
-    if (!pr.complete || pr.paths.length >= PR_FILES_CAP) return { open: true, head_sha: head, unreadable: "every file (over 3,000, or GitHub cut the list short)", judges, people };
-    const compare = await rest(`${GITHUB}/repos/${repository}/compare/${encodeURIComponent(main)}...${head}`, token);
-    const mb: string | undefined = compare.json?.merge_base_commit?.sha;
+    if (!c.complete) return { open: true, head_sha: head, unreadable: "every file (over 3,000, or GitHub cut the list short)", judges, people };
+    const mb = c.merge_base ?? (await rest(`${GITHUB}/repos/${repository}/compare/${encodeURIComponent(main)}...${head}`, token)).json?.merge_base_commit?.sha;
     if (!mb) return { open: true, head_sha: head, unreadable: `the merge base with ${main}`, judges, people };
     // A `name#key` entry judges a file of that name only when its key's value changed: read both sides to decide.
     const byKey = changed.filter((p) => !isJudged(p, judges) && keyEntriesFor(p, judges).length);
@@ -310,13 +359,13 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const judged = judgedPaths(changed, judges, keyHits);
     // The area is the judged files' when there are any.
     if (judged.length) people.area_owner = ownerOf(judged, owners) ?? people.area_owner;
-    const rebuilt = pathDiffsOf(await withSides(repository, token, pr.paths, mb, head, (p) => judged.includes(p)), (p) => judged.includes(p));
+    const rebuilt = pathDiffsOf(await withSides(repository, token, c.files, mb, head, (p) => judged.includes(p)), (p) => judged.includes(p));
     if ("unreadable" in rebuilt) return { open: true, head_sha: head, unreadable: `${rebuilt.unreadable}'s diff`, judges, people };
     const key = await diffKey(rebuilt.diffs);
-    const whole_key = await wholeKey(repository, token, pr.paths, mb, head);
-    const messages = await prMessages(repository, token, prNumber);
+    const whole_key = await wholeKey(repository, token, c.files, mb, head);
+    const messages = await c.messages();
     const asker = requestedBy(messages);
-    // The Captain's exemption is for a pull request of reverts only: one other commit and it is judged like any.
+    // The Captain's exemption is for a change of reverts only: one other commit and it is judged like any.
     return {
       open: true, head_sha: head, judged, key, ...(whole_key ? { whole_key } : {}), judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people,
       base_sha: mb, paths: changed, default_branch: main, mechanism_path: beside(MECHANISM_FILE),
@@ -336,20 +385,28 @@ export function statusesRefusal(permissions: Record<string, string> | undefined)
 
 export type Evaluation = { opted: false } | { opted: true; open: false } | ({ opted: true; open: true; head_sha: string; context: string; posted: boolean; unchanged?: boolean; reason?: string } & ApprovalVerdict);
 
-async function evaluateCore(ctx: any, args: { repository: string; pr_number: number; post: boolean }): Promise<Evaluation & { token?: string }> {
+/** What an evaluation is about: a pull request, or a run's landing commit (no pull request). */
+type Subject = { pr_number: number } | { run_id: Id<"workflow_runs"> };
+
+async function evaluateCore(ctx: any, args: { repository: string; post: boolean } & Subject): Promise<Evaluation & { token?: string }> {
   const repository = normalizeRepository(args.repository);
   const gate: any = await ctx.runQuery(internal.changeApprovals.gateFor, { repository });
   if (!gate) return { opted: false };
+  // A landing is read at the sha its run holds now, while the run can still land it.
+  const landing: { sha: string; title: string } | null = "run_id" in args ? await ctx.runQuery(internal.changeApprovals.landingOf, { repository, run_id: args.run_id }) : null;
+  if ("run_id" in args && !landing) return { opted: true, open: false };
+  const subject: Subject = "run_id" in args ? { run_id: args.run_id } : { pr_number: args.pr_number };
   const minted: { token: string; permissions?: Record<string, string> } = await ctx.runAction(internal.githubApp.getInstallationToken, { installation_id: gate.installation_id });
-  const read = await readPull(repository, args.pr_number, minted.token, gate.judges_path);
+  const read = landing ? await readLanding(repository, landing.sha, minted.token, gate.judges_path, landing.title) : await readPull(repository, (subject as { pr_number: number }).pr_number, minted.token, gate.judges_path);
   if (!read.open) return { opted: true, open: false };
-  // No codecast run behind it: the automatic review reads this head, once (lib/automaticReviewHold.ts).
-  const automatic = "unreadable" in read ? undefined : await automaticReviewFor(ctx, {
-    repository, pr_number: args.pr_number, head_sha: read.head_sha, base_sha: read.base_sha, paths: read.paths,
+  // No codecast run behind it: the automatic review reads this head, once (lib/automaticReviewHold.ts). A landing
+  // always has its run.
+  const automatic = "unreadable" in read || !("pr_number" in subject) ? undefined : await automaticReviewFor(ctx, {
+    repository, pr_number: subject.pr_number, head_sha: read.head_sha, base_sha: read.base_sha, paths: read.paths,
     default_branch: read.default_branch, mechanism_path: read.mechanism_path, token: minted.token,
   });
   const verdict: ApprovalVerdict & { context: string } = await ctx.runMutation(internal.changeApprovals.settle, {
-    repository, pr_number: args.pr_number, head_sha: read.head_sha,
+    repository, ...subject, head_sha: read.head_sha,
     ...(automatic ? { automatic } : {}),
     ...("unreadable" in read ? { unreadable: read.unreadable } : {
       judged: read.judged, key: read.key, ...(read.whole_key ? { whole_key: read.whole_key } : {}),
@@ -369,7 +426,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   if (!args.post) return { ...done, posted: false };
   const refusal = statusesRefusal(minted.permissions);
   const unposted = async (reason: string) => {
-    await ctx.runMutation(internal.changeApprovals.noteUnposted, { repository, pr_number: args.pr_number, head_sha: read.head_sha, reason: fit(reason) });
+    await ctx.runMutation(internal.changeApprovals.noteUnposted, { repository, ...subject, head_sha: read.head_sha, reason: fit(reason) });
     return { ...done, posted: false, reason };
   };
   if (refusal) return unposted(refusal);
@@ -393,6 +450,41 @@ export const evaluate = internalAction({
     return out;
   },
 });
+
+/**
+ * Work a run's landing commit's status out and, with `post`, post it on the commit from the app. `sha` is the one the
+ * trigger saw: when the run has moved on to another, the evaluation scheduled for that one posts instead.
+ */
+export const evaluateLanding = internalAction({
+  args: { repository: v.string(), run_id: v.id("workflow_runs"), sha: v.optional(v.string()), post: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<Evaluation> => {
+    const { token: _token, ...out } = await evaluateCore(ctx, { repository: args.repository, run_id: args.run_id, post: args.post ?? true }) as any;
+    return out;
+  },
+});
+
+/**
+ * The landing an evaluation reads: the run's current landing sha in this repository and the title its card shows (the
+ * task's, else the flow's), or null when there is nothing to land any more (the run finished or failed, or its merge
+ * landed that sha).
+ */
+export const landingOf = internalQuery({
+  args: { repository: v.string(), run_id: v.id("workflow_runs") },
+  handler: async (ctx, args): Promise<{ sha: string; title: string } | null> => {
+    const run: any = await ctx.db.get(args.run_id);
+    const landing = run?.landing;
+    if (!landing || normalizeRepository(landing.repository) !== normalizeRepository(args.repository)) return null;
+    if (run.status === "completed" || run.status === "failed" || run.merge?.sha === landing.sha) return null;
+    return { sha: landing.sha, title: await landingTitle(ctx, run) };
+  },
+});
+
+async function landingTitle(ctx: { db: any }, run: any): Promise<string> {
+  const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task?.title) return String(task.title);
+  const workflow: any = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  return String(workflow?.name ?? "");
+}
 
 /** How many open pull requests one sweep reads per repository, and how far apart their reads start. */
 const SWEEP_PRS = 100;
@@ -477,14 +569,17 @@ export function mechanismOf(run: any, head: string): boolean | null {
 }
 
 /**
- * The records half of a status: the run behind the pull request and its review's answer, a Ship press tied to the
- * judged diff of the first head the run pushed, the approvals for this diff (a card approves only the diff it was
- * stamped with), and the verdict, stored on the pull request's rows.
+ * The records half of a status: the run behind the change and its review's answer, a Ship press tied to the judged
+ * diff of the first head the run pushed, the approvals for this diff (a card approves only the diff it was stamped
+ * with), and the verdict, stored on the pull request's rows. A landing (`run_id`, no pull request) is the same rule
+ * keyed by its run: the press ties to the first landing sha or a recorded rebase of it, approvals are the run's, and
+ * the verdict is stored on the run's landing.
  */
 export const settle = internalMutation({
   args: {
     repository: v.string(),
-    pr_number: v.number(),
+    pr_number: v.optional(v.number()),
+    run_id: v.optional(v.id("workflow_runs")),
     head_sha: v.string(),
     unreadable: v.optional(v.string()),
     judged: v.optional(v.array(v.string())),
@@ -510,14 +605,27 @@ export const settle = internalMutation({
       const row = await ctx.db.get(gate.installation_row);
       if (row) await ctx.db.patch(row._id, { approval_gate: (row.approval_gate ?? []).map((g) => (normalizeRepository(g.repository) === repository ? { ...g, ...(args.judges ? { judges: args.judges } : {}), ...(readEngineers ? { engineers: readEngineers } : {}) } : g)) });
     }
-    const run: any = await ctx.db.query("workflow_runs").withIndex("by_pr", (q) => q.eq("pr.repository", repository).eq("pr.number", args.pr_number)).order("desc").first();
+    const landing = args.run_id !== undefined;
+    if (landing === (args.pr_number !== undefined)) throw new Error("settle names a pull request or a run's landing, one of them");
+    const run: any = landing
+      ? await ctx.db.get(args.run_id!)
+      : await ctx.db.query("workflow_runs").withIndex("by_pr", (q) => q.eq("pr.repository", repository).eq("pr.number", args.pr_number!)).order("desc").first();
+    const context = approvalContext(gate.mode);
+    if (landing && (!run?.landing || normalizeRepository(run.landing.repository) !== repository)) throw new Error(`run ${args.run_id} has no landing in ${repository}`);
+    // The run moved on to another landing commit while this one was read: that one's evaluation settles it.
+    if (landing && run.landing.sha !== args.head_sha) return { state: "pending", description: fit(`replaced by ${run.landing.sha.slice(0, 10)}`), context };
+    const name = landing ? `${repository}@${args.head_sha.slice(0, 10)}` : `${repository}#${args.pr_number}`;
+    const byPr = landing ? {} : { pr_number: args.pr_number! };
     const key = args.key;
     const judged = args.judged ?? [];
+    // The first head the run pushed: a Ship press and an engineer's pre-build yes bind to its judged diff. A landing
+    // commit carried onto a newer main by a recorded rebase is still that head.
+    const firstHead = (head: string) => (landing ? coveredHeads(run, runAttempt(run), run.landing.first_sha).has(head) : run?.pr?.first_head_sha === head);
 
     if (run && key !== undefined) {
       const press: any = run.pressed_approval_id ? await ctx.db.get(run.pressed_approval_id) : null;
-      if (press && !press.revoked_at && press.judged_key === undefined && run.pr?.first_head_sha === args.head_sha && judged.every((p) => press.files.includes(p))) {
-        await ctx.db.patch(press._id, { pr_number: args.pr_number, judged_key: key, head_sha: args.head_sha });
+      if (press && !press.revoked_at && press.judged_key === undefined && firstHead(args.head_sha) && judged.every((p) => press.files.includes(p))) {
+        await ctx.db.patch(press._id, { ...byPr, judged_key: key, head_sha: args.head_sha });
       }
     }
 
@@ -526,11 +634,11 @@ export const settle = internalMutation({
     const engineers = args.people?.engineers ?? gate.engineers ?? [];
     const camAsked = !!run && isCam(await askerOf(ctx, run));
     const engineerYes = camAsked ? await preBuildYes(ctx, run, engineers) : null;
-    if (engineerYes && key !== undefined && run.pr?.first_head_sha === args.head_sha) {
+    if (engineerYes && key !== undefined && firstHead(args.head_sha)) {
       const tied = await ctx.db.query("change_approvals").withIndex("by_run", (q) => q.eq("workflow_run_id", run._id)).collect();
       if (!tied.some((a) => a.source === "engineer_yes" && String(a.decision_id) === String(engineerYes.decision_id))) {
         await ctx.db.insert("change_approvals", {
-          repository, pr_number: args.pr_number, judged_key: key, files: judged, user_id: engineerYes.user_id, source: "engineer_yes",
+          repository, ...byPr, judged_key: key, files: judged, user_id: engineerYes.user_id, source: "engineer_yes",
           workflow_run_id: run._id, ...(run.task_id ? { task_id: run.task_id } : {}), decision_id: engineerYes.decision_id, head_sha: args.head_sha, created_at: Date.now(),
         });
       }
@@ -543,12 +651,13 @@ export const settle = internalMutation({
     // Whole keys are namespaced (`whole:`, `head:`) apart from judged-diff keys: when every changed file is judged the two
     // patch ids are equal, and a yes to the judged files must never read as a yes to the change whole.
     const wholeKey = args.whole_key ? `whole:${args.whole_key}` : `head:${args.head_sha}`;
-    const keyed = async (k: string | undefined): Promise<Doc<"change_approvals">[]> => (k === undefined ? [] : (await ctx.db
-      .query("change_approvals")
-      .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
-      .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at));
+    // A landing's approvals are its run's; a pull request's, its number's.
+    const keyed = async (k: string | undefined): Promise<Doc<"change_approvals">[]> => (k === undefined ? [] : (await (landing
+      ? ctx.db.query("change_approvals").withIndex("by_run_key", (q) => q.eq("workflow_run_id", run._id).eq("judged_key", k))
+      : ctx.db.query("change_approvals").withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
+    ).collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at));
     // With no run behind the pull request, only codecast's own approval card counts (lib/automaticReviewHold.ts).
-    const countable = async (rows: Doc<"change_approvals">[]) => (run ? rows : countedWithoutRun(ctx, repository, args.pr_number, rows));
+    const countable = async (rows: Doc<"change_approvals">[]) => (run ? rows : countedWithoutRun(ctx, repository, args.pr_number!, rows));
     const approvals = await countable(await keyed(key));
     const wholeRow = (await countable(await keyed(wholeKey))).find((a) => a.source === "card");
     const pressRow = approvals.find((a) => a.source === "ship_press");
@@ -559,9 +668,9 @@ export const settle = internalMutation({
     const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) }
       : judgedCardRow ? { who: await nameOf(ctx, judgedCardRow.user_id), ref: await refOf(judgedCardRow) }
       : yesRow ? { who: await nameOf(ctx, yesRow.user_id), ref: `${await refOf(yesRow)} before the build` } : null;
-    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
+    const rows = landing ? [] : await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number!)).collect();
     const pr = rows[0] ?? null;
-    const before = pr?.approval;
+    const before = landing ? run.landing.approval : pr?.approval;
     // A card codecast asked and then took back (or that is gone) asks nothing now: its key no longer stands, so the
     // question is asked again. A card someone answered keeps it.
     const heldCard: any = before?.card_id ? await ctx.db.get(before.card_id) : null;
@@ -605,54 +714,59 @@ export const settle = internalMutation({
 
     // A review that finished without a mechanism answer is asked again, once per head, while it can still answer.
     const askedReview = run && runState === "live" && mechanism === null && before?.review_asked !== args.head_sha
-      && (await askReviewForMechanism(ctx, run, args.head_sha, `${repository}#${args.pr_number}`, runAttempt(run)));
+      && (await askReviewForMechanism(ctx, run, args.head_sha, name, runAttempt(run)));
     // The one card a person is asked, per judged diff and question; the one it replaces is taken back first.
     const reason: CardReason | null = cardReason(facts);
     // A card about the judged files binds to their diff; any other reads the change whole.
     const cardKey = reason === "judged" && key !== undefined ? key : wholeKey;
     const stale = cardStale(beforeKey, { diffs: reason ? [cardKey] : [key, wholeKey].filter((k): k is string => !!k), reason, success: verdict.state === "success" });
-    if (stale && before?.card_id) await withdrawApprovalCard(ctx, before.card_id, now, "The pull request's judged diff or what it waits on changed; a new card asks if anything is needed.");
+    if (stale && before?.card_id) await withdrawApprovalCard(ctx, before.card_id, now, `${landing ? "The landing's" : "The pull request's"} judged diff or what it waits on changed; a new card asks if anything is needed.`);
     const posted = reason ? await postApprovalCard(ctx, {
-      repository, pr_number: args.pr_number, head_sha: args.head_sha, key: cardKey, judged, reason, to: to[reason], run, pr,
+      repository, ...byPr, head_sha: args.head_sha, key: cardKey, judged, reason, to: to[reason], run, pr,
       title: args.people?.title ?? pr?.title ?? "", before_key: beforeKey, now,
       // The automatic review's own words are what the card shows, its reason or why it gave none.
       ...(auto ? { words: `${auto.failed ? "The automatic review could not answer" : `The automatic review of this head (${auto.mechanism ? "a mechanism" : "not a mechanism"})`}: ${auto.reason}` } : {}),
       ...(held ? { held } : {}),
     }) : null;
 
-    for (const row of rows) {
-      await patchPullRequest(ctx, row._id, {
-        approval: {
-          head_sha: args.head_sha, state: verdict.state, description: verdict.description,
-          // Both keys as approvals bind to them: the run's own card stamps them (lib/changeApprovalRows approvalStampFor).
-          ...(key !== undefined ? { judged_key: key, judged_files: judged, whole_key: wholeKey } : {}),
-          ...(run ? { run_id: run._id } : {}),
-          ...(typeof mechanism === "boolean" ? { mechanism } : {}),
-          ...(captainRevert ? { captain_revert: true } : {}),
-          ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : beforeKey && !stale ? { card_key: beforeKey, ...(before?.card_id ? { card_id: before.card_id } : {}) } : {}),
-          ...(askedReview ? { review_asked: args.head_sha } : before?.review_asked ? { review_asked: before.review_asked } : {}),
-          ...(before?.engineer_told ? { engineer_told: true } : {}),
-          // An answer is stored only over its own head's claim (or nothing): an older head's late answer never
-          // overwrites a newer head's record, though its hold still holds.
-          ...(answer && (!before?.automatic || before.automatic.head_sha === args.head_sha) ? { automatic: answer } : before?.automatic ? { automatic: before.automatic } : {}),
-          ...(held ? { held } : {}),
-        },
-      });
-    }
+    const record = {
+      head_sha: args.head_sha, state: verdict.state, description: verdict.description,
+      // Both keys as approvals bind to them: the run's own card stamps them (lib/changeApprovalRows approvalStampFor).
+      ...(key !== undefined ? { judged_key: key, judged_files: judged, whole_key: wholeKey } : {}),
+      ...(run ? { run_id: run._id } : {}),
+      ...(typeof mechanism === "boolean" ? { mechanism } : {}),
+      ...(captainRevert ? { captain_revert: true } : {}),
+      ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : beforeKey && !stale ? { card_key: beforeKey, ...(before?.card_id ? { card_id: before.card_id } : {}) } : {}),
+      ...(askedReview ? { review_asked: args.head_sha } : before?.review_asked ? { review_asked: before.review_asked } : {}),
+      ...(before?.engineer_told ? { engineer_told: true } : {}),
+      // An answer is stored only over its own head's claim (or nothing): an older head's late answer never
+      // overwrites a newer head's record, though its hold still holds.
+      ...(answer && (!before?.automatic || before.automatic.head_sha === args.head_sha) ? { automatic: answer } : before?.automatic ? { automatic: before.automatic } : {}),
+      ...(held ? { held } : {}),
+    };
+    if (landing) await ctx.db.patch(run._id, { landing: { ...run.landing, approval: record } });
+    for (const row of rows) await patchPullRequest(ctx, row._id, { approval: record });
     // A hold an older head's answer set reaches the pull request's head now, not at the next sweep.
-    if (newHold && pr?.head_sha && pr.head_sha !== args.head_sha) await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluate, { repository, pr_number: args.pr_number, post: true });
-    return { ...verdict, context: approvalContext(gate.mode) };
+    if (newHold && pr?.head_sha && pr.head_sha !== args.head_sha) await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluate, { repository, pr_number: args.pr_number!, post: true });
+    return { ...verdict, context };
   },
 });
 
 /** The person who installed codecast's app for the repository: a personal install's owner, else who installed it. */
 const installerOf = (installation: any): Id<"users"> | undefined => installation?.scope_user_id ?? installation?.installed_by_user_id ?? undefined;
 
-/** The status was worked out and could not be posted: the pull request says why. */
+/** The status was worked out and could not be posted: the pull request (or the run's landing) says why. */
 export const noteUnposted = internalMutation({
-  args: { repository: v.string(), pr_number: v.number(), head_sha: v.string(), reason: v.string() },
+  args: { repository: v.string(), pr_number: v.optional(v.number()), run_id: v.optional(v.id("workflow_runs")), head_sha: v.string(), reason: v.string() },
   handler: async (ctx, args) => {
-    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", args.repository).eq("number", args.pr_number)).collect();
+    if (args.run_id) {
+      const run = await ctx.db.get(args.run_id);
+      const a = run?.landing?.approval;
+      if (run?.landing && a?.head_sha === args.head_sha) await ctx.db.patch(run._id, { landing: { ...run.landing, approval: { ...a, state: "unposted", description: args.reason } } });
+      return;
+    }
+    if (args.pr_number === undefined) return;
+    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", args.repository).eq("number", args.pr_number!)).collect();
     for (const pr of rows) {
       if (pr.approval?.head_sha !== args.head_sha) continue;
       await patchPullRequest(ctx, pr._id, { approval: { ...pr.approval, state: "unposted", description: args.reason } });

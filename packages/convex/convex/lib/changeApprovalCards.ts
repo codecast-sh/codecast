@@ -206,13 +206,21 @@ export async function withdrawApprovalCard(ctx: { db: any; scheduler: any }, car
   if (row?.status === "pending") await withdrawCore(ctx as any, row, now, undefined, why);
 }
 
+/** How a card and a notice name the change: a pull request by its number, a landing commit by its sha. */
+export function changeName(repository: string, prNumber: number | undefined, head: string): { name: string; url: string } {
+  return prNumber !== undefined
+    ? { name: `${repository}#${prNumber}`, url: `https://github.com/${repository}/pull/${prNumber}` }
+    : { name: `${repository}@${head.slice(0, 10)}`, url: `https://github.com/${repository}/commit/${head}` };
+}
+
 /**
  * Posts the one approval card a pending status owes `to`, unless one was already posted for this judged diff and
  * question (`card_key`). Returns the key and card, or null when no card was posted (no such person, already asked, or
  * no session of theirs in the repository's team to ask from, when they are notified and the next evaluation asks again).
  */
 export async function postApprovalCard(ctx: { db: any }, a: {
-  repository: string; pr_number: number; head_sha: string; /** The diff its yes approves (changeApprovals.settle). */ key: string; judged: string[];
+  /** The pull request it is about; absent for a run's landing commit, which `head_sha` and the run name. */
+  repository: string; pr_number?: number; head_sha: string; /** The diff its yes approves (changeApprovals.settle). */ key: string; judged: string[];
   reason: CardReason; to: Person; run: any | null; pr: Doc<"pull_requests"> | null; title: string; before_key?: string; now: number;
   /** The review's words when no run holds them (codecast's automatic review). */
   words?: string;
@@ -224,7 +232,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   const card_key = cardKeyOf(a.key, a.reason);
   if (!a.to.user_id || a.before_key === card_key) return null;
   // With no pull request row to remember the card on, the open card it would repeat is found among its person's own.
-  if (!a.pr) {
+  if (!a.pr && a.pr_number !== undefined) {
     const open: any[] = await ctx.db.query("session_decisions").withIndex("by_holder_status", (q: any) => q.eq("holder_key", `user:${a.to.user_id}`).eq("status", "pending")).take(200);
     if (open.some((d) => d.approval_card && d.approval?.repository === a.repository && d.approval?.pr_number === a.pr_number && cardKeyOf(d.approval.judged_key, d.approval.reason) === card_key)) return null;
   }
@@ -243,7 +251,8 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     // No card_key is kept for a notification: the next evaluation posts the card once they have a session. They are
     // told once a head, read or not, whatever else they have, and whatever their notification switches say: only
     // they can act on it.
-    const entity = `${a.repository}#${a.pr_number}@${a.head_sha}`;
+    const change = changeName(a.repository, a.pr_number, a.head_sha);
+    const entity = `${change.name}@${a.head_sha}`;
     for (const id of asked) {
       const notices: any[] = await ctx.db.query("notifications").withIndex("by_recipient_entity", (q: any) => q.eq("recipient_user_id", id).eq("entity_id", entity)).take(5);
       if (notices.some((n) => n.type === "card_waiting")) return null;
@@ -251,19 +260,20 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     await emitNotification(ctx as any, {
       always: true,
       event_type: "card_waiting", actor_name: "Codecast", entity_type: "code", entity_id: entity,
-      message: `${a.repository}#${a.pr_number} waits for your approval: ${WHY[a.reason]}`,
-      link: `https://github.com/${a.repository}/pull/${a.pr_number}`, recipient_ids: asked,
+      message: `${change.name} waits for your approval: ${WHY[a.reason]}`,
+      link: change.url, recipient_ids: asked,
     });
     return null;
   }
+  const change = changeName(a.repository, a.pr_number, a.head_sha);
   const review = a.words ?? await reviewWords(ctx, a.run);
   const files = a.judged.length ? a.judged.map((f) => `- \`${f}\``).join("\n") : "_(no judged files)_";
   const context_md = [
     WHY[a.reason],
     a.held ? `**Held:** ${a.held}.` : null,
-    `**Judged files** in ${a.repository}#${a.pr_number} at \`${a.head_sha.slice(0, 10)}\`:\n${files}`,
+    `**Judged files** in ${change.name}${a.pr_number !== undefined ? ` at \`${a.head_sha.slice(0, 10)}\`` : ""}:\n${files}`,
     review ? `**The review**\n\n${review}` : null,
-    `https://github.com/${a.repository}/pull/${a.pr_number}`,
+    change.url,
   ].filter(Boolean).join("\n\n");
   const short_id = await nextShortId(ctx.db as any, "sd");
   const card_id: Id<"session_decisions"> = await ctx.db.insert("session_decisions", {
@@ -271,7 +281,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     session_id: conversation.session_id,
     user_id: conversation.user_id,
     short_id,
-    question: `Approve merging ${a.repository}#${a.pr_number}${a.title ? `: ${a.title}` : ""}?`.slice(0, 300),
+    question: `Approve ${a.pr_number !== undefined ? "merging" : "landing"} ${change.name}${a.title ? `: ${a.title}` : ""}?`.slice(0, 300),
     context_md,
     kind: "single",
     category: "review",
@@ -291,7 +301,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     hops: [],
     ...(a.run?.task_id ? { task_id: a.run.task_id } : {}),
     ...(a.pr?.team_id ? { team_id: a.pr.team_id } : {}),
-    approval: { repository: a.repository, pr_number: a.pr_number, judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason, asked, ...(a.held ? { held: true } : {}) },
+    approval: { repository: a.repository, ...(a.pr_number !== undefined ? { pr_number: a.pr_number } : { sha: a.head_sha }), judged_key: a.key, files: a.judged, ...(a.run ? { run_id: a.run._id } : {}), reason: a.reason, asked, ...(a.held ? { held: true } : {}) },
     approval_card: true,
     created_at: a.now,
     session_title: conversation.title,

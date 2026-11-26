@@ -4,7 +4,7 @@ import schema from "./schema";
 import { resumeFailedRunCore } from "./failedRunResume";
 import { landAgainCore, reaskRunCore } from "./workflow_runs";
 import { restartRunFresh } from "./lineTrial";
-import { MERGE_AUTHORITY_ID, checkMergeCore, clearForMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, mergeProofCore, recordCiVerdictCore, recordMergeCore, recordReviewVerdictCore, recordRunPrCore, recordStationRebaseCore } from "./orgLineMerge";
+import { MERGE_AUTHORITY_ID, checkMergeCore, clearForMergeCore, mergeAllowance, performSetLineMerge, prUrlFromEvidence, mergeProofCore, recordCiVerdictCore, recordMergeCore, recordReviewVerdictCore, recordRunLandingCore, recordRunPrCore, recordStationRebaseCore } from "./orgLineMerge";
 import { lineOfRole } from "./orgRoles";
 
 // The line's merge step on the server (the-line.md L12): the allowance read
@@ -465,6 +465,32 @@ describe("a merge no role is behind", () => {
     s.ctx.scheduler.runAfter = async (_ms: number, _fn: unknown, args: unknown) => { posts.push(args); };
     await recordStationRebaseCore(s.ctx, HOST as any, { run_id: "workflow_runs_1", from: HEAD, to: "c".repeat(40) }, NOW + 2);
     expect(posts).toEqual([{ repository: "union-ai/union-mobile", pr_number: 12, post: true }]);
+  });
+
+  test("a landing with no pull request: the first sha stays, each push and a rebase from it move the sha, and every one re-posts the status on that commit", async () => {
+    const s = solo();
+    s.tables.github_app_installations = [{ _id: "inst1", installation_id: 42, account_login: "union-ai", approval_gate: [{ repository: "union-ai/union-mobile", judges_path: "outreach/line/change/judges.txt", mode: "required" }] }];
+    const posts: any[] = [];
+    s.ctx.scheduler.runAfter = async (_ms: number, _fn: unknown, args: unknown) => { posts.push(args); };
+    const SQUASH = "a1".repeat(20), CARRIED = "c3".repeat(20);
+    const land = (sha: string, user = HOST, repository = "Union-AI/Union-Mobile") => recordRunLandingCore(s.ctx, user as any, { run_id: "workflow_runs_1", repository, sha }, NOW + 3);
+    expect(await land(SQUASH)).toEqual({ first_sha: SQUASH });
+    expect(s.run().landing).toEqual({ repository: "union-ai/union-mobile", first_sha: SQUASH, sha: SQUASH, at: NOW + 3 });
+    // The carry onto a newer main is recorded as a rebase before its push: the landing moves to it at once.
+    await recordStationRebaseCore(s.ctx, HOST as any, { run_id: "workflow_runs_1", from: SQUASH, to: CARRIED }, NOW + 4);
+    expect(s.run().landing).toMatchObject({ first_sha: SQUASH, sha: CARRIED, at: NOW + 4 });
+    expect(await land(CARRIED)).toEqual({ first_sha: SQUASH });
+    const evaluation = (sha: string) => ({ repository: "union-ai/union-mobile", run_id: "workflow_runs_1", sha, post: true });
+    expect(posts).toEqual([evaluation(SQUASH), evaluation(CARRIED), evaluation(CARRIED)]);
+    // A rebase of some other commit leaves the landing where it is; nothing here reads a pull request number.
+    await recordStationRebaseCore(s.ctx, HOST as any, { run_id: "workflow_runs_1", from: "9".repeat(40), to: "8".repeat(40) }, NOW + 5);
+    expect(s.run().landing.sha).toBe(CARRIED);
+    expect(s.run().pr).toBeUndefined();
+    // Only the run's own runner, from its running script station, with a real sha.
+    await expect(land(SQUASH, "users_someone")).rejects.toThrow("Only the run's own runner");
+    await expect(land("main")).rejects.toThrow("is not a commit sha");
+    Object.assign(s.run(), { current_node_id: "review__review", node_statuses: [{ node_id: "review__review", status: "running", started_at: NOW + 1, session_id: "jx7revw" }] });
+    await expect(land(SQUASH)).rejects.toThrow("is not a running script station");
   });
 
   test("a change that edits CI clears only once a person answered Ship on this run's own card in this attempt", async () => {

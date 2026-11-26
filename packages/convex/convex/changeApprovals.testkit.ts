@@ -92,6 +92,7 @@ export function actionCtx(db: any) {
       const name = getFunctionName(ref);
       if (name === "changeApprovals:gateFor") return (await import("./lib/changeApprovalRows")).gateOf({ db }, args.repository);
       if (name === "changeApprovals:openNumbers") return [];
+      if (name === "changeApprovals:landingOf") return ((await import("./changeApprovals")).landingOf as any)._handler({ db }, args);
       if (name === "vendorCoverage:refusalFor") return ((await import("./vendorCoverage")).refusalFor as any)._handler({ db }, args);
       throw new Error(`unexpected query ${name}`);
     },

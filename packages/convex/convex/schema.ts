@@ -135,6 +135,34 @@ const changeReleaseValidator = v.object({
   deploy: v.optional(v.string()),
 });
 
+// The `approval` status codecast last worked out for a change's head (changeApprovals.ts): on a pull request's row,
+// and on a run's landing commit (workflow_runs.landing.approval).
+const changeApprovalRecordValidator = v.object({
+  head_sha: v.string(),
+  state: v.union(v.literal("success"), v.literal("pending"), v.literal("unposted")),
+  description: v.string(),
+  judged_key: v.optional(v.string()),
+  judged_files: v.optional(v.array(v.string())),
+  // The key of the pull request's whole diff, which a card that read the change whole approves.
+  whole_key: v.optional(v.string()),
+  run_id: v.optional(v.id("workflow_runs")),
+  // The review's mechanism answer as it counted, and whether this is a Release Captain's revert.
+  mechanism: v.optional(v.boolean()),
+  captain_revert: v.optional(v.boolean()),
+  // The approval card codecast posted, keyed by the judged diff and the question, so a re-post never posts twice;
+  // the head whose missing mechanism answer was asked of the review; an engineer told of a merged Captain revert.
+  card_key: v.optional(v.string()),
+  card_id: v.optional(v.id("session_decisions")),
+  review_asked: v.optional(v.string()),
+  engineer_told: v.optional(v.boolean()),
+  // With no codecast run behind it: what codecast's automatic review said about a head (lib/automaticReview.ts),
+  // kept so each head is read once.
+  automatic: v.optional(automaticReviewValidator),
+  // An automatic review called a head of this pull request a mechanism: every head is a person's to read
+  // until a person approves it on a card (changeApprovalRows clearHold). Set by any such answer, whatever its head.
+  held: v.optional(v.string()),
+});
+
 // The entity kinds that can participate in entity-conversation links.
 const linkableEntityTypeValidator = v.union(
   v.literal("task"),
@@ -4087,31 +4115,7 @@ export default defineSchema({
     // The `approval` status codecast last worked out for the head (changeApprovals.ts): its state and words, the
     // judged diff's key and files, the run behind the pull request, and the first head that run pushed.
     // "unposted": worked out, but the app could not post it (the reason is the description).
-    approval: v.optional(v.object({
-      head_sha: v.string(),
-      state: v.union(v.literal("success"), v.literal("pending"), v.literal("unposted")),
-      description: v.string(),
-      judged_key: v.optional(v.string()),
-      judged_files: v.optional(v.array(v.string())),
-      // The key of the pull request's whole diff, which a card that read the change whole approves.
-      whole_key: v.optional(v.string()),
-      run_id: v.optional(v.id("workflow_runs")),
-      // The review's mechanism answer as it counted, and whether this is a Release Captain's revert.
-      mechanism: v.optional(v.boolean()),
-      captain_revert: v.optional(v.boolean()),
-      // The approval card codecast posted, keyed by the judged diff and the question, so a re-post never posts twice;
-      // the head whose missing mechanism answer was asked of the review; an engineer told of a merged Captain revert.
-      card_key: v.optional(v.string()),
-      card_id: v.optional(v.id("session_decisions")),
-      review_asked: v.optional(v.string()),
-      engineer_told: v.optional(v.boolean()),
-      // With no codecast run behind it: what codecast's automatic review said about a head (lib/automaticReview.ts),
-      // kept so each head is read once.
-      automatic: v.optional(automaticReviewValidator),
-      // An automatic review called a head of this pull request a mechanism: every head is a person's to read
-      // until a person approves it on a card (changeApprovalRows clearHold). Set by any such answer, whatever its head.
-      held: v.optional(v.string()),
-    })),
+    approval: v.optional(changeApprovalRecordValidator),
   })
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
@@ -4150,6 +4154,8 @@ export default defineSchema({
   })
     .index("by_pr_key", ["repository", "pr_number", "judged_key"])
     .index("by_run", ["workflow_run_id"])
+    // A landing's approvals: keyed by its run and the diff key, never a pull request number.
+    .index("by_run_key", ["workflow_run_id", "judged_key"])
     .index("by_conversation", ["conversation_id", "created_at"]),
 
   // A change guide a model wrote for a pull request whose author wrote none
@@ -5649,8 +5655,9 @@ export default defineSchema({
     // whole_key: the run's card also approves the whole diff it showed, which covers a mechanism.
     // `asked`: the people an approval card asked when codecast posted it (changeApprovalCards.postApprovalCard), the only
     // ones whose answer counts: a pass or an escalation rewrites asked_user_ids, never this. `held`: posted while the pull
-    // request was held, so its approval clears the hold (changeApprovalRows mayClearHold).
-    approval: v.optional(v.object({ repository: v.string(), pr_number: v.number(), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()), asked: v.optional(v.array(v.id("users"))), held: v.optional(v.boolean()) })),
+    // request was held, so its approval clears the hold (changeApprovalRows mayClearHold). A landing's card names its run and
+    // `sha` and no pr_number.
+    approval: v.optional(v.object({ repository: v.string(), pr_number: v.optional(v.number()), sha: v.optional(v.string()), judged_key: v.string(), whole_key: v.optional(v.string()), files: v.array(v.string()), run_id: v.optional(v.id("workflow_runs")), reason: v.optional(v.string()), asked: v.optional(v.array(v.id("users"))), held: v.optional(v.boolean()) })),
     // An approval card codecast itself posted for a pull request's status (changeApprovals.ts): silent, one person's,
     // and settled by settleCardApproval from `approval` above.
     approval_card: v.optional(v.boolean()),
@@ -9283,6 +9290,10 @@ export default defineSchema({
     // The pull request the run's PR station opened (orgLineMerge.recordRunPr) and the first head it pushed: a Ship
     // press is tied to the judged diff at that head (changeApprovals.ts).
     pr: v.optional(v.object({ repository: v.string(), number: v.number(), first_head_sha: v.string(), head_sha: v.string(), at: v.number() })),
+    // The landing commit the run pushed for CI and fast-forwards main to, with no pull request (orgLineMerge.recordRunLanding):
+    // the first sha it pushed, which a Ship press is tied to, and the sha now, moved by each re-push and by a recorded
+    // rebase from it (a carry onto a newer main). `approval` is the status codecast last worked out for `sha`.
+    landing: v.optional(v.object({ repository: v.string(), first_sha: v.string(), sha: v.string(), at: v.number(), approval: v.optional(changeApprovalRecordValidator) })),
     // The Ship press that started the run, when a person's press in codecast did (changeApprovals.recordPress).
     pressed_approval_id: v.optional(v.id("change_approvals")),
     // The Merge station's own rebases of a reviewed head, pushed to be tested again (orgLineMerge.recordStationRebase):
@@ -9358,7 +9369,9 @@ export default defineSchema({
     // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
     .index("by_resume_queued", ["resume_queued.since"])
     // The run behind a pull request (changeApprovals.ts).
-    .index("by_pr", ["pr.repository", "pr.number"]),
+    .index("by_pr", ["pr.repository", "pr.number"])
+    // The run behind a landing commit.
+    .index("by_landing", ["landing.repository", "landing.sha"]),
 
   client_state: defineTable({
     user_id: v.id("users"),

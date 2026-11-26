@@ -104,6 +104,38 @@ describe("cast flow record-pr and record-rebase", () => {
   });
 });
 
+describe("cast flow record-landing", () => {
+  test("Union's land script records each push of its landing commit and the rebase before it, naming the run, and a failed report only prints", async () => {
+    const squashed = "e".repeat(40);
+    const carried = "f".repeat(40);
+    // The lines backend/scripts/line.ts runs: the rebase before the push of a replacing commit, the landing after each push.
+    const lines = [
+      ["node", "cast", "flow", "record-landing", "--head", squashed, "--repository", "Acme-AI/Acme-Mobile", "--run", "run_9"],
+      ["node", "cast", "flow", "record-rebase", "--from", squashed, "--to", carried, "--run", "run_9"],
+      ["node", "cast", "flow", "record-landing", "--head", carried, "--repository", "Acme-AI/Acme-Mobile", "--run", "run_9"],
+    ];
+    const logged: string[] = [];
+    const error = console.error;
+    console.error = (l: string) => { logged.push(l); };
+    try {
+      await withRunId(undefined, async () => {
+        const { program, posts } = cast({});
+        for (const line of lines) await program.parseAsync(line);
+        expect(posts).toEqual([
+          { path: "/cli/workflow-runs/landing", body: { run_id: "run_9", repository: "Acme-AI/Acme-Mobile", sha: squashed } },
+          { path: "/cli/workflow-runs/rebase", body: { run_id: "run_9", from: squashed, to: carried } },
+          { path: "/cli/workflow-runs/landing", body: { run_id: "run_9", repository: "Acme-AI/Acme-Mobile", sha: carried } },
+        ]);
+        const refused = cast({}, async (path) => { throw new Error(`${path} answered 502`); });
+        await refused.program.parseAsync(lines[0]);
+        expect(logged).toEqual(["the landing commit was not recorded on the run: /cli/workflow-runs/landing answered 502"]);
+      });
+    } finally {
+      console.error = error;
+    }
+  });
+});
+
 describe("a waiting station's progress", () => {
   test("a post the server answers with a 502 is logged, and the wait goes on", async () => {
     const asked: Array<{ throwOnError?: boolean }> = [];

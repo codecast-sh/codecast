@@ -127,9 +127,30 @@ export async function repostOnJudgesPush(ctx: { db: any; scheduler: any }, repos
   return true;
 }
 
-/** Re-post the status of the pull request a run opened, when it has one. */
-export async function scheduleRunApprovalPost(ctx: { db: any; scheduler: any }, run: { pr?: { repository: string; number: number } | null }): Promise<boolean> {
+/** Work a run's landing commit's status out again and post it, when its repository is opted in. */
+export async function scheduleLandingPost(ctx: { db: any; scheduler: any }, run: { _id: Id<"workflow_runs">; landing?: { repository: string; sha: string } | null }): Promise<boolean> {
+  if (!run.landing || !(await gateOf(ctx, run.landing.repository))) return false;
+  await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluateLanding, { repository: normalizeRepository(run.landing.repository), run_id: run._id, sha: run.landing.sha, post: true });
+  return true;
+}
+
+/** Re-post the status of what a run lands: its landing commit, else the pull request it opened. */
+export async function scheduleRunApprovalPost(ctx: { db: any; scheduler: any }, run: { _id: Id<"workflow_runs">; landing?: { repository: string; sha: string } | null; pr?: { repository: string; number: number } | null }): Promise<boolean> {
+  if (run.landing) return scheduleLandingPost(ctx, run);
   return run.pr ? scheduleApprovalPost(ctx, run.pr.repository, run.pr.number) : false;
+}
+
+/**
+ * What an approval card carries: the change it approves (a pull request by its number, or a run's landing commit by its
+ * run and sha, never both), the diff key its yes binds to, and the judged files it listed.
+ */
+export type ApprovalStamp = { repository: string; pr_number?: number; sha?: string; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[]; held?: boolean };
+
+/** Work the status out again for what a card was about: the landing of its run, else its pull request. */
+async function repostFor(ctx: { db: any; scheduler: any }, a: ApprovalStamp): Promise<void> {
+  if (a.pr_number !== undefined) { await scheduleApprovalPost(ctx, a.repository, a.pr_number); return; }
+  const run: any = a.run_id ? await ctx.db.get(a.run_id) : null;
+  if (run) await scheduleLandingPost(ctx, run);
 }
 
 /**
@@ -151,11 +172,16 @@ export async function claimPress(ctx: { db: any }, runId: Id<"workflow_runs">, c
 }
 
 /**
- * What a card a run asks carries for its Ship to approve: the run's pull request and the judged diff as codecast
- * last worked it out for that head. Absent until the run's PR station reported its pull request.
+ * What a card a run asks carries for its Ship to approve: the run's landing commit (or pull request) and the judged
+ * diff as codecast last worked it out for that sha. Absent until the run reported one.
  */
-export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_runs"> | undefined): Promise<{ approval: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[] } } | {}> {
+export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_runs"> | undefined): Promise<{ approval: ApprovalStamp } | {}> {
   const run: any = runId ? await ctx.db.get(runId) : null;
+  if (run?.landing) {
+    const a = run.landing.approval;
+    if (!a?.judged_key || a.head_sha !== run.landing.sha) return {};
+    return { approval: { repository: run.landing.repository, run_id: run._id, sha: run.landing.sha, judged_key: a.judged_key, ...(a.whole_key ? { whole_key: a.whole_key } : {}), files: a.judged_files ?? [] } };
+  }
   if (!run?.pr) return {};
   const pr: any = await ctx.db
     .query("pull_requests")
@@ -175,7 +201,7 @@ export async function approvalStampFor(ctx: { db: any }, runId: Id<"workflow_run
  */
 export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
+  row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: ApprovalStamp; approval_card?: boolean; trial?: boolean },
   verdict: { status: string; answer_index?: number },
   by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
@@ -197,7 +223,8 @@ export async function settleCardApproval(
     if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
       await ctx.db.insert("change_approvals", {
         repository: a.repository,
-        pr_number: a.pr_number,
+        ...(a.pr_number !== undefined ? { pr_number: a.pr_number } : {}),
+        ...(a.sha ? { head_sha: a.sha } : {}),
         judged_key: key,
         files: a.files,
         user_id: by.user_id,
@@ -228,10 +255,10 @@ export async function prAuthor(ctx: { db: any }, repository: string, prNumber: n
  * Whether an answer may approve where the author must not: a person's own (no session answering for them, `via`), one
  * the card asked, and not the pull request's author.
  */
-async function mayClearHold(ctx: { db: any }, card: { asked?: Id<"users">[]; held?: boolean; repository: string; pr_number: number }, by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> }): Promise<boolean> {
+async function mayClearHold(ctx: { db: any }, card: { asked?: Id<"users">[]; held?: boolean; repository: string; pr_number?: number }, by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> }): Promise<boolean> {
   if (by.kind !== "user" || !by.user_id || by.via) return false;
   // Only a card posted while the pull request was held, showing the hold, releases it.
-  if (!card.held) return false;
+  if (!card.held || card.pr_number === undefined) return false;
   // The people the card asked when codecast posted it: a pass or an escalation adds no one. A run's own card has none.
   if (!(card.asked ?? []).some((id) => String(id) === String(by.user_id))) return false;
   return String(await prAuthor(ctx, card.repository, card.pr_number)) !== String(by.user_id);
@@ -246,7 +273,7 @@ async function mayClearHold(ctx: { db: any }, card: { asked?: Id<"users">[]; hel
  */
 export async function approvalCardRefusal(
   ctx: { db: any },
-  row: { approval_card?: boolean; status?: string; options: Array<{ label: string }>; asked_user_ids?: Id<"users">[]; approval?: { repository: string; pr_number: number; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[] } },
+  row: { approval_card?: boolean; status?: string; options: Array<{ label: string }>; asked_user_ids?: Id<"users">[]; approval?: ApprovalStamp },
   by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   verdict?: { status: string; answer_index?: number },
 ): Promise<string | null> {
@@ -265,7 +292,7 @@ export async function approvalCardRefusal(
   if (!asked.includes(String(by.user_id))) return `Only ${who} answers this approval card: it asks them, not you.`;
   const approving = verdict?.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
   const barred = !row.approval.run_id || row.approval.reason === "held";
-  if (approving && barred && String(await prAuthor(ctx, row.approval.repository, row.approval.pr_number)) === String(by.user_id)) {
+  if (approving && barred && row.approval.pr_number !== undefined && String(await prAuthor(ctx, row.approval.repository, row.approval.pr_number)) === String(by.user_id)) {
     const others = names.length > 1 ? `; ${who} can, besides you` : "";
     return `You opened this pull request, so your approval of it does not count${others}.`;
   }
@@ -353,7 +380,7 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
  */
 async function settleApprovalCard(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; asked_user_ids?: Id<"users">[]; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string; asked?: Id<"users">[]; held?: boolean } },
+  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; asked_user_ids?: Id<"users">[]; approval: ApprovalStamp },
   verdict: { status: string; answer_index?: number },
   by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
@@ -363,10 +390,10 @@ async function settleApprovalCard(
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
     const asked = (a.asked ?? row.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id));
     const authorBarred = !a.run_id || a.reason === "held";
-    if (by.via || !asked || (authorBarred && String(await prAuthor(ctx, a.repository, a.pr_number)) === String(by.user_id))) return;
-    if (await mayClearHold(ctx, { asked: a.asked, held: a.held, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number);
+    if (by.via || !asked || (authorBarred && a.pr_number !== undefined && String(await prAuthor(ctx, a.repository, a.pr_number)) === String(by.user_id))) return;
+    if (await mayClearHold(ctx, { asked: a.asked, held: a.held, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number!);
     await ctx.db.insert("change_approvals", {
-      repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
+      repository: a.repository, ...(a.pr_number !== undefined ? { pr_number: a.pr_number } : {}), ...(a.sha ? { head_sha: a.sha } : {}), judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
       conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),
       decision_id: row._id, created_at: now,
     });
@@ -376,7 +403,7 @@ async function settleApprovalCard(
       : await ctx.db.query("change_approvals").withIndex("by_pr_key", (q: any) => q.eq("repository", a.repository).eq("pr_number", a.pr_number).eq("judged_key", a.judged_key)).collect();
     for (const h of held) if (!h.revoked_at) await ctx.db.patch(h._id, { revoked_at: now });
   }
-  await scheduleApprovalPost(ctx, a.repository, a.pr_number);
+  await repostFor(ctx, a);
 }
 
 /**

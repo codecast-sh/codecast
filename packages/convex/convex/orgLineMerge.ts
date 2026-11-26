@@ -349,20 +349,52 @@ export async function recordReviewVerdictCore(ctx: any, userId: Id<"users">, arg
  * itself before it trusts one (workflow/rebaseRecord.ts verifyRebaseChain); this record says only who claimed it.
  */
 export async function recordStationRebaseCore(ctx: any, userId: Id<"users">, args: { run_id: string; from: string; to: string }, now = Date.now()): Promise<{ attempt: number }> {
-  const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
-  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner records its rebase");
   if (!SHA.test(args.from) || !SHA.test(args.to) || args.from === args.to) throw new Error("a rebase names two different commit shas");
+  const run = await runningScriptStation(ctx, userId, args.run_id, "its rebase");
+  const attempt = runAttempt(run);
+  const station_rebases = [...(run.station_rebases ?? []), { from: args.from, to: args.to, at: now, attempt }].slice(-10);
+  // A rebase of the landing commit (the squash, a carry onto a newer main) moves the landing to the commit about to be pushed.
+  const landing = run.landing?.sha === args.from ? { ...run.landing, sha: args.to, at: now } : undefined;
+  await ctx.db.patch(run._id, { station_rebases, ...(landing ? { landing } : {}), updated_at: now });
+  // The push's own status may have been worked out before this link was stored, and the review covers `to` only through it.
+  await scheduleRunApprovalPost(ctx, { ...run, station_rebases, ...(landing ? { landing } : {}) });
+  return { attempt };
+}
+
+/** Only the run's own runner, from the script station running now: what a station's own report must come from. */
+async function runningScriptStation(ctx: any, userId: Id<"users">, runId: string, what: string): Promise<any> {
+  const run = await ctx.db.get(runId as Id<"workflow_runs">);
+  if (!run || String(run.user_id) !== String(userId)) throw new Error(`Only the run's own runner records ${what}`);
   const station = (run.node_statuses ?? []).find((s: any) => s.node_id === run.current_node_id);
   const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
   if (run.status !== "running" || station?.status !== "running" || station.session_id || node?.type !== "command") {
-    throw new Error(`${run.current_node_id} is not a running script station: only a station's own script records its rebase`);
+    throw new Error(`${run.current_node_id} is not a running script station: only a station's own script records ${what}`);
   }
-  const attempt = runAttempt(run);
-  await ctx.db.patch(run._id, { station_rebases: [...(run.station_rebases ?? []), { from: args.from, to: args.to, at: now, attempt }].slice(-10), updated_at: now });
-  // The push's own status may have been worked out before this link was stored, and the review covers `to` only through it.
-  await scheduleRunApprovalPost(ctx, run);
-  return { attempt };
+  return run;
 }
+
+/**
+ * `cast flow record-landing`: a station of the run pushed the change as one landing commit (to a branch, for CI), and
+ * main is fast-forwarded to exactly that commit, with no pull request. The first sha it reports is what a Ship press is
+ * tied to (changeApprovals.ts); each re-push (the commit carried onto a newer main, recorded as a rebase first) moves
+ * only `sha`. Every report works the approval status out again for the sha.
+ */
+export async function recordRunLandingCore(ctx: any, userId: Id<"users">, args: { run_id: string; repository: string; sha: string }, now = Date.now()): Promise<{ first_sha: string }> {
+  const run = await runningScriptStation(ctx, userId, args.run_id, "its landing commit");
+  if (!SHA.test(args.sha)) throw new Error(`${args.sha} is not a commit sha`);
+  const repository = parseOwnerRepo(args.repository);
+  if (!repository) throw new Error("A landing's repository is owner/name");
+  const same = run.landing?.repository === repository;
+  const landing = { ...(same ? run.landing : {}), repository, first_sha: same ? run.landing.first_sha : args.sha, sha: args.sha, at: now };
+  await ctx.db.patch(run._id, { landing, updated_at: now });
+  await scheduleRunApprovalPost(ctx, { ...run, landing });
+  return { first_sha: landing.first_sha };
+}
+
+export const recordRunLanding = mutation({
+  args: { api_token: v.string(), run_id: v.string(), repository: v.string(), sha: v.string() },
+  handler: async (ctx, { api_token, ...args }) => recordRunLandingCore(ctx, await requireToken(ctx, api_token), args),
+});
 
 /**
  * The PR station opened (or found) the run's pull request and pushed a head: the run's own runner, from the script
@@ -370,16 +402,10 @@ export async function recordStationRebaseCore(ctx: any, userId: Id<"users">, arg
  * (changeApprovals.ts); a later round moves only `head_sha`. Every report re-posts the approval status.
  */
 export async function recordRunPrCore(ctx: any, userId: Id<"users">, args: { run_id: string; repository: string; number: number; head_sha: string }, now = Date.now()): Promise<{ first_head_sha: string }> {
-  const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
-  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner records its pull request");
+  const run = await runningScriptStation(ctx, userId, args.run_id, "the run's pull request");
   if (!SHA.test(args.head_sha)) throw new Error(`${args.head_sha} is not a commit sha`);
   const repository = parseOwnerRepo(args.repository);
   if (!repository || !Number.isInteger(args.number) || args.number < 1) throw new Error("A pull request is owner/name and a number");
-  const station = (run.node_statuses ?? []).find((s: any) => s.node_id === run.current_node_id);
-  const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
-  if (run.status !== "running" || station?.status !== "running" || station.session_id || node?.type !== "command") {
-    throw new Error(`${run.current_node_id} is not a running script station: only the PR station's own script records the run's pull request`);
-  }
   const same = run.pr && run.pr.repository === repository && run.pr.number === args.number;
   const first_head_sha = same ? run.pr.first_head_sha : args.head_sha;
   await ctx.db.patch(run._id, { pr: { repository, number: args.number, first_head_sha, head_sha: args.head_sha, at: now }, updated_at: now });

@@ -4,10 +4,10 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
+import { decide, evaluate, evaluateLanding, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
 import { actionCtx, gh, github, HEAD, installation, LAND_PATCH, MB, prRow, REPO, useMockedGitHub } from "./changeApprovals.testkit";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
-import { changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
+import { approvalStampFor, changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
 import { answerCore, withdrawCore } from "./sessionDecisions";
@@ -655,4 +655,122 @@ test("Ship's list: the pull request's judged diff and the checkout's uncommitted
     { path: "outreach/line/change/gate.sh", writers: ["c_third"] },
     { path: "outreach/line/change/land.cast", writers: ["c_other"] },
   ]);
+});
+
+describe("a landing commit, with no pull request", () => {
+  const SQUASH = "5".repeat(40);
+  const CARRIED = "6".repeat(40);
+  const JUDGED = "outreach/line/change/land.cast";
+  const reviewed = (mechanism: boolean, head = SQUASH) => ({ node_statuses: [{ node_id: "review", status: "completed", session_id: "rev", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: head, mechanism, at: 3, attempt: 1 } });
+  const landingRun = (over: Record<string, any> = {}) => ({
+    _id: "run1", user_id: "host", team_id: "team1", status: "running", created_at: 1, task_id: "t1", primary_conversation_id: "c_log",
+    landing: { repository: REPO, first_sha: SQUASH, sha: SQUASH, at: 1 }, ...reviewed(false), ...over,
+  });
+  const users = [{ _id: "u_jason", name: "Jason Benn" }, { _id: "u_ashot", name: "Ashot" }, { _id: "host", name: "Host" }];
+  const world = (tables: Record<string, any[]> = {}) => {
+    const scheduled: Array<{ name: string; args: any }> = [];
+    const db = makeFakeDb(structuredClone({
+      github_app_installations: [installation], pull_requests: [], change_approvals: [], users, team_memberships: users.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id })),
+      conversations: [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }], anchors: [], session_decisions: [], decision_inbox: [], task_comments: [], pending_messages: [], counters: [],
+      tasks: [{ _id: "t1", title: "Edit land", user_id: "host" }], workflow_runs: [landingRun()], ...tables,
+    }));
+    const ctx = { db, scheduler: { runAfter: async (_ms: number, ref: any, args: any) => { scheduled.push({ name: getFunctionName(ref), args }); } } };
+    return { db, ctx, scheduled, run: () => db._tables.workflow_runs[0] };
+  };
+  const people = { title: "Edit land", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [{ user_id: "u_jason", name: "Jason" }] };
+  const args = { repository: REPO, run_id: "run1", head_sha: SQUASH, judged: [JUDGED], key: "k1", whole_key: "w1", people };
+  const cards = (db: any) => db._tables.session_decisions.filter((d: any) => d.approval_card);
+
+  /** GitHub as a landing reads it: the repository's default branch and main's comparison with the commit. */
+  function landingGitHub(sha: string, over: Record<string, any> = {}) {
+    github();
+    const files = [{ filename: JUDGED, status: "modified", patch: LAND_PATCH, additions: 1, deletions: 1 }];
+    gh.routes.unshift(
+      { method: "GET", match: new RegExp(`/repos/${REPO}$`), reply: () => ({ json: { default_branch: "main" } }) },
+      { method: "GET", match: new RegExp(`/compare/main\\.\\.\\.${sha}$`), reply: () => ({ json: { ahead_by: 1, merge_base_commit: { sha: MB }, files, commits: [{ commit: { message: "Edit land\n\nRequested-by: Samvit" }, author: { login: "x" } }], ...over } }) },
+    );
+  }
+
+  test("the status is worked out from main's comparison with the commit and posted on it, and stored on the run's landing", async () => {
+    landingGitHub(SQUASH);
+    const w = world();
+    const { ctx } = actionCtx(w.db);
+    const out: any = await (evaluateLanding as any)._handler(ctx, { repository: REPO, run_id: "run1", sha: SQUASH });
+    expect(out).toMatchObject({ state: "pending", description: `needs Samvit: edits ${JUDGED}`, posted: true, context: "approval (shadow)", head_sha: SQUASH });
+    const post = gh.calls.find((c) => c.method === "POST" && /statuses/.test(c.url))!;
+    expect(post.url).toEndWith(`/repos/${REPO}/statuses/${SQUASH}`);
+    // Nothing on the landing path reads a pull request.
+    expect(gh.calls.some((c) => /\/pulls/.test(c.url))).toBe(false);
+    expect(w.run().landing.approval).toMatchObject({ head_sha: SQUASH, state: "pending", judged_files: [JUDGED], run_id: "run1" });
+    expect(w.run().landing.approval.whole_key).toMatch(/^whole:[0-9a-f]{40}$/);
+  });
+
+  test("nothing is posted for a commit GitHub does not have yet, one main already holds, or a run that can no longer land it", async () => {
+    const posts = () => gh.calls.filter((c) => c.method === "POST" && /statuses/.test(c.url)).length;
+    landingGitHub(SQUASH);
+    gh.routes.unshift({ method: "GET", match: new RegExp(`/compare/main\\.\\.\\.${SQUASH}$`), reply: () => ({ status: 404 }) });
+    expect(await (evaluateLanding as any)._handler(actionCtx(world().db).ctx, { repository: REPO, run_id: "run1" })).toEqual({ opted: true, open: false });
+    gh.routes.shift();
+    gh.routes.unshift({ method: "GET", match: new RegExp(`/compare/main\\.\\.\\.${SQUASH}$`), reply: () => ({ json: { ahead_by: 0, status: "identical", files: [], commits: [] } }) });
+    expect(await (evaluateLanding as any)._handler(actionCtx(world().db).ctx, { repository: REPO, run_id: "run1" })).toEqual({ opted: true, open: false });
+    for (const over of [{ status: "completed" }, { status: "failed" }, { merge: { sha: SQUASH, branch: "b", into: "main", at: 2 } }]) {
+      expect(await (evaluateLanding as any)._handler(actionCtx(world({ workflow_runs: [landingRun(over)] }).db).ctx, { repository: REPO, run_id: "run1" })).toEqual({ opted: true, open: false });
+    }
+    expect(posts()).toBe(0);
+  });
+
+  test("a Ship press ties to the first landing commit's judged diff, and still does on the commit carried onto a newer main", async () => {
+    const press = { _id: "p1", repository: REPO, workflow_run_id: "run1", source: "ship_press", files: [JUDGED], user_id: "u_jason", created_at: 1 };
+    const carried = landingRun({ pressed_approval_id: "p1", landing: { repository: REPO, first_sha: SQUASH, sha: CARRIED, at: 2 }, station_rebases: [{ from: SQUASH, to: CARRIED, at: 2, attempt: 1 }] });
+    const w = world({ workflow_runs: [carried], change_approvals: [press] });
+    expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: CARRIED })).toMatchObject({ state: "success", description: "approved by Jason Benn (Ship press)" });
+    const tied = w.db._tables.change_approvals[0];
+    expect(tied).toMatchObject({ judged_key: "k1", head_sha: CARRIED });
+    expect(tied.pr_number).toBeUndefined();
+    expect(w.run().landing.approval).toMatchObject({ head_sha: CARRIED, state: "success", judged_key: "k1", whole_key: "whole:w1" });
+    // An unrelated commit (no recorded rebase from the first) ties nothing.
+    const unrelated = world({ workflow_runs: [{ ...carried, station_rebases: [] }], change_approvals: [press] });
+    expect(await (settle as any)._handler(unrelated.ctx, { ...args, head_sha: CARRIED })).toMatchObject({ state: "pending" });
+    expect(unrelated.db._tables.change_approvals[0].judged_key).toBeUndefined();
+  });
+
+  test("a mechanism asks a person on a card about the landing; their Approve merge is the run's, keyed by its diff, and nobody else's run counts", async () => {
+    const w = world({ workflow_runs: [landingRun(reviewed(true))], change_approvals: [
+      // Another run's approval of the very same whole diff approves nothing here.
+      { _id: "other", repository: REPO, workflow_run_id: "run2", judged_key: "whole:w1", source: "card", files: [JUDGED], user_id: "u_ashot", created_at: 1 },
+    ] });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    const [card] = cards(w.db);
+    expect(card.question).toBe(`Approve landing ${REPO}@${SQUASH.slice(0, 10)}: Edit land?`);
+    expect(card.approval).toMatchObject({ repository: REPO, sha: SQUASH, run_id: "run1", judged_key: "whole:w1", reason: "mechanism", asked: ["u_ashot"] });
+    expect(card.approval.pr_number).toBeUndefined();
+    expect(card.context_md).toContain(`https://github.com/${REPO}/commit/${SQUASH}`);
+    expect(w.run().landing.approval).toMatchObject({ card_id: card._id, card_key: "whole:w1:mechanism" });
+    await settleCardApproval(w.ctx as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_ashot" as any }, 50);
+    const approval = w.db._tables.change_approvals.find((a: any) => a.decision_id === card._id);
+    expect(approval).toMatchObject({ workflow_run_id: "run1", judged_key: "whole:w1", head_sha: SQUASH, source: "card" });
+    expect(approval.pr_number).toBeUndefined();
+    expect(w.scheduled).toContainEqual({ name: "changeApprovals:evaluateLanding", args: { repository: REPO, run_id: "run1", sha: SQUASH, post: true } });
+    expect(await (settle as any)._handler(w.ctx, args)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
+  });
+
+  test("the run's own card stamps the landing it shows, and its Ship approves both keys for that run", async () => {
+    const w = world();
+    await (settle as any)._handler(w.ctx, args);
+    const stamp: any = await approvalStampFor(w.ctx as any, "run1" as any);
+    expect(stamp).toEqual({ approval: { repository: REPO, run_id: "run1", sha: SQUASH, judged_key: "k1", whole_key: "whole:w1", files: [JUDGED] } });
+    const own = { _id: "sd_own", workflow_run_id: "run1", options: [{ label: "Ship" }, { label: "Revise" }], conversation_id: "c_log", ...stamp };
+    await settleCardApproval(w.ctx as any, own as any, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "host" as any }, 60);
+    expect(w.db._tables.change_approvals.map((a: any) => [a.judged_key, a.workflow_run_id, a.head_sha, a.pr_number])).toEqual([["k1", "run1", SQUASH, undefined], ["whole:w1", "run1", SQUASH, undefined]]);
+    // A carry moves the landing on: the stamp follows only once the new commit's status is worked out.
+    w.run().landing = { ...w.run().landing, sha: CARRIED };
+    expect(await approvalStampFor(w.ctx as any, "run1" as any)).toEqual({});
+  });
+
+  test("a settle for a commit the run has since replaced changes nothing and says so", async () => {
+    const w = world({ workflow_runs: [landingRun({ landing: { repository: REPO, first_sha: SQUASH, sha: CARRIED, at: 2 } })] });
+    expect(await (settle as any)._handler(w.ctx, args)).toEqual({ state: "pending", description: `replaced by ${CARRIED.slice(0, 10)}`, context: "approval (shadow)" });
+    expect(w.run().landing.approval).toBeUndefined();
+    await expect((settle as any)._handler(w.ctx, { ...args, pr_number: 7 })).rejects.toThrow("one of them");
+  });
 });
