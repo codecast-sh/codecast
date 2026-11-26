@@ -31,6 +31,7 @@ import * as path from "node:path";
 import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import { BRIEF_TREE, branchChangePaths, heldDir, type FrozenChange } from "./flowChangeFile.js";
+import { readRebaseChain } from "./rebaseRecord.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
@@ -543,26 +544,51 @@ async function carryOntoFreeze(root: string, before: FrozenChange, change: Froze
 }
 
 /**
+ * Every head the run's own stations put on origin's branch since it started, so origin held each: the PR station's
+ * push and what it stands for (pr.json `head_sha`, `local_sha`, the round's `rebases`), and the rebases Merge and the
+ * PR station pushed (rebase.json's chain).
+ */
+function pushedHeads(runDir: string, branch: string): string[] {
+  const read = (file: string): Record<string, any> | null => { try { return JSON.parse(fs.readFileSync(path.join(runDir, file), "utf-8")); } catch { return null; } };
+  const pr = read("pr.json");
+  const mine = pr?.branch === branch ? pr : null;
+  const links = [...((mine?.rebases ?? []) as Array<{ from?: unknown; to?: unknown }>), ...readRebaseChain(runDir)];
+  const heads = [mine?.head_sha, mine?.local_sha, ...links.flatMap((r) => [r.from, r.to])];
+  return [...new Set(heads.filter((h): h is string => typeof h === "string" && !!h))];
+}
+
+/**
  * Where a named branch stands now: the branch here (`head`) with what the run's worktree added since the last freeze
  * on it (`top`: the session's commits there and its carried edits). The session may also fix it from another
- * machine, its commit reaching this checkout only through origin. When origin moved off the tip it had at the last
- * freeze (`remote_tip`), origin's new tip is the change's, with everything the branch here holds over that old tip
- * replayed onto it here: earlier carries, the session's earlier commits here, a commit unpushed at the run's start,
- * and this round's. Nothing origin held then is replayed, so a commit a force-push took off origin stays off. A branch
- * here that no longer sits on that old tip (rebased onto newer work) cannot tell its own commits from origin's, and
- * refuses; with no old tip recorded, only what the worktree added since the last freeze is replayed. Nothing is
- * pushed: the PR station pushes the branch. A worktree rewritten off the last freeze is the change as it stands. A
- * conflict refuses, and nothing moves.
+ * machine, its commit reaching this checkout only through origin. When origin moved since the last freeze, origin's
+ * new tip is the change's, with the run's own unpushed work replayed onto it here: what the branch here holds over
+ * the newest commit origin is known to have held, whether it held it at the last freeze (`remote_tip`) or got it from
+ * the run's own stations' pushes (pushedHeads). Nothing origin held is replayed, so a commit a force-push took off
+ * origin stays off, and a carry the PR station already pushed is not applied twice. Origin grown on the change's last
+ * tip takes only what the worktree added since. A branch here that sits on none of those heads (rebased onto newer
+ * work) cannot tell its own commits from origin's, and refuses; with none recorded at all, origin held nothing of the
+ * branch, and all the branch here adds over their common commit is the run's own. Nothing is pushed: the PR station
+ * pushes the branch. A worktree rewritten off the last freeze is the change as it stands. A conflict refuses, and
+ * nothing moves.
  */
-async function branchCarry(root: string, before: FrozenChange, head: string, top: string): Promise<{ tip: string; remote_tip?: string }> {
+async function branchCarry(root: string, runDir: string, before: FrozenChange, head: string, top: string): Promise<{ tip: string; remote_tip?: string }> {
   const remote = await originTip(root, before.branch);
   const seen = remote ? { remote_tip: remote } : {};
   const moved = !!remote && remote !== (before.remote_tip ?? "") && remote !== before.tip;
   if (!moved || (await isAncestor(root, remote, top)) || !(await isAncestor(root, before.tip, head))) return { tip: top, ...seen };
-  // With no origin tip recorded at the last freeze, nothing says what origin held then: only what the worktree added
-  // since that freeze is surely the run's own.
-  const from = !before.remote_tip ? before.tip : (await isAncestor(root, before.remote_tip, before.tip)) ? before.remote_tip : null;
-  if (!from) throw new Error(`Origin's ${before.branch} moved to ${remote.slice(0, 10)} since the last freeze, and the branch here no longer sits on what origin held then (${before.remote_tip!.slice(0, 10)}): it was rebased, so the run cannot tell its own commits from origin's. Nothing moved: bring the two together (push the branch from here, or rebase it onto origin's), then end the turn again`);
+  const held = [...new Set([...(before.remote_tip ? [before.remote_tip] : []), ...pushedHeads(runDir, before.branch)])];
+  let from: string | null = null;
+  if (await isAncestor(root, before.tip, remote)) from = before.tip;
+  else if (!held.length) from = (await gitTry(root, ["merge-base", remote, before.tip])) ?? before.tip;
+  else {
+    let nearest = Infinity;
+    for (const h of held) {
+      if (!(await isAncestor(root, h, before.tip))) continue;
+      const ahead = Number(await git(root, ["rev-list", "--count", `${h}..${before.tip}`]));
+      if (ahead < nearest) [from, nearest] = [h, ahead];
+    }
+  }
+  if (!from) throw new Error(`Origin's ${before.branch} moved to ${remote.slice(0, 10)} since the last freeze, and the branch here sits on nothing origin is known to have held (${held.map((h) => h.slice(0, 10)).join(", ")}): it was rebased, so the run cannot tell its own commits from origin's. Nothing moved: bring the two together (push the branch from here, or rebase it onto origin's), then end the turn again`);
   return { tip: from === top ? remote : await replayCarry(root, from, top, remote, `origin's ${before.branch} at ${remote.slice(0, 10)}`), ...seen };
 }
 
@@ -653,7 +679,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
       // pushing), here or from elsewhere. The reset moves the branch here, so the worktree must be on it.
       const on = worktreePath ? await gitTry(worktreePath, ["symbolic-ref", "--quiet", "--short", "HEAD"]) : before.branch;
       if (on !== before.branch) throw new Error(`The run's worktree ${worktreePath} is ${on ? `on ${on}` : "on no branch"}, not the change's branch ${before.branch}, so it is left as it is`);
-      change = { ...before, ...(await branchCarry(root, before, head, top)) };
+      change = { ...before, ...(await branchCarry(root, runDir, before, head, top)) };
     }
     // A write while the refreeze ran would be lost to the reset: read the worktree once more first.
     if (worktreePath && (await freezeWorktree(worktreePath)).tree !== seen) {
@@ -668,12 +694,13 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
     // back is what the run's own stations wrote there before the brief; what the carry held out waits in the run's directory.
     if (worktreePath) {
       if (carry) setHeldAside(worktreePath, runDir, carry);
-      // A reset that fails (another git holds the worktree's index) leaves the run as it was: the branch where the
-      // worktree had it (a checkout's freeze has already moved it), the held files back in place, change.json unwritten.
+      // A reset that fails puts back what the run controls: the branch where the worktree had it (a checkout's freeze
+      // has already moved it), the held files, change.json unwritten. Files it got partway through may be reset.
       await git(worktreePath, ["reset", "--quiet", "--hard", change.tip]).catch(async (err: Error) => {
-        if (rebuilt) await git(root, ["update-ref", `refs/heads/${before.branch}`, head]);
+        await git(root, ["update-ref", `refs/heads/${before.branch}`, head]);
         if (carry) restoreHeld(worktreePath, runDir, carry);
-        throw new Error(`Could not reset the run's worktree to the change (${err.message.split("\n")[0]}), so nothing moved`);
+        const kept = top !== head ? ` The session's edits are kept in commit ${top.slice(0, 10)}: \`git -C ${worktreePath} checkout ${top.slice(0, 10)} -- .\` puts them back.` : "";
+        throw new Error(`Could not reset the run's worktree to the change (${err.message.split("\n").find((l) => /error|fatal/i.test(l))?.trim() || err.message.split("\n")[0]}). The worktree may be partly reset; the branch is back at ${head.slice(0, 10)} and the change as it was.${kept}`);
       });
     }
     writeFrozenChange(runDir, change);

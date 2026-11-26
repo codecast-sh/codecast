@@ -289,21 +289,24 @@ checkout, a credential the session committed in the worktree refuses the
 refreeze, naming the file; a branch's commits are the session's own push. The
 refreeze pushes nothing (the PR station pushes the branch as it always has). On
 a branch, task or pull request run the worktree must be on the change's branch,
-and when origin moved off the tip it had at the last freeze, everything the
-branch here holds over that old tip (earlier carries, the session's commits
-here, a commit unpushed at the run's start, this round's) is replayed onto
-origin's new tip, locally. Nothing origin held then is replayed, so a commit a
-force-push took off origin stays off. A branch here that no longer sits on that
-old tip (rebased onto newer work) refuses, since the run cannot tell its own
-commits from origin's; with no old tip recorded, only what the worktree added
-since the last freeze is replayed. A
+and when origin moved since the last freeze, its new tip is the change's, with
+the run's own unpushed work replayed onto it locally: what the branch here holds
+over the newest commit origin is known to have held, at the last freeze
+(`remote_tip`) or from the run's own stations' pushes (`pr.json`'s heads and
+rebases, `rebase.json`'s chain). Origin grown on the change's last tip takes
+only what the worktree added since. Nothing origin held is replayed, so a commit
+a force-push took off origin stays off and a carry the PR station already
+pushed is not applied twice. A branch here that sits on none of those heads
+(rebased onto newer work) refuses; with none recorded at all, all the branch
+here adds over its common commit with origin is the run's own. A
 change frozen from a checkout carries the edits on top of each later freeze
 (`frozen_tip`, its files in `carried`, apart from `paths`). The worktree is
 read once more before the reset; a write made while the refreeze ran is carried
 on a second pass, and a worktree still changing after that is left as it is.
 The branch moves only once the carry is on the new tip; a conflict moves
-nothing. A failed reset (another git holding the worktree's index) puts the
-branch and the held files back, leaving `change.json` as it was. What differed
+nothing. A failed reset puts the branch and the held files back and leaves
+`change.json` as it was; it says the worktree may be partly reset and names the
+commit holding the session's edits. What differed
 already at the brief is the run's own stations' writing, and the reset puts it
 back (ct-99118). A session that pins blocked asks a person, for the
 run or for anything else it holds (its own card, a CI outage), so the run

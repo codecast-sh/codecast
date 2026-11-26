@@ -58,7 +58,8 @@ function prWorld() {
   const worktree = path.join(dir, "run-wt");
   git(root, "worktree", "add", "-q", worktree, "fix");
   const runDir = path.join(root, ".git", "run-pr");
-  const change: FrozenChange = { source: "pr", session: "jx7pppp", conversation: "jx7pppppppppppppppppppppppppppp1", base: first, tip: first, branch: "fix", worktree: "run-wt", paths: [], shared: [], held: [] };
+  // Origin holds the branch at the run's start, so the run records its tip there, as `cast flow run --pr` does.
+  const change: FrozenChange = { source: "pr", session: "jx7pppp", conversation: "jx7pppppppppppppppppppppppppppp1", base: first, tip: first, remote_tip: first, branch: "fix", worktree: "run-wt", paths: [], shared: [], held: [] };
   writeFrozenChange(runDir, change);
   const push = () => {
     write(seed, "a.ts", "export const a = 3;\n");

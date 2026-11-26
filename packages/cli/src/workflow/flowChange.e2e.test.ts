@@ -11,7 +11,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { freezeCheckoutChange, freezeSessionChange, frozenChangeContext, NoSessionChange, previewCheckoutChange, previewSessionChange, refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
 import { behindWords, heldDir, heldWords, readFrozenChange } from "./flowChangeFile";
+import { defaultExec, type Exec } from "../lineMerge";
 import { parseWorkflowSource } from "./parser";
+import { prStation, rebasePr } from "./prStation";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -443,9 +445,160 @@ describe("a named branch's fix comes back to the run", () => {
     // Then a fix is pushed from elsewhere on origin's old branch.
     push("a.txt", "fixed there\n", "fix there");
     await snapshotRunTree(worktree, runDir);
-    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/no longer sits on what origin held then/);
+    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/sits on nothing origin is known to have held/);
     expect(git(here, "rev-parse", "feat")).toBe(first.tip);
     expect(readFrozenChange(runDir)?.tip).toBe(first.tip);
+  }, 180_000);
+
+  /** The change flow's PR station, run for real against origin, with a `gh` that knows one open pull request. */
+  function prPush(here: string, runDir: string, branch = "feat") {
+    const bin = path.join(sandbox, "fake-gh-bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '[{"number":41,"url":"https://github.com/acme/app/pull/41"}]'\n`, { mode: 0o755 });
+    const exec: Exec = (cmd, args, cwd, extra) => defaultExec(cmd, args, cwd, { PATH: `${bin}:${process.env.PATH}`, ...ENV, ...extra });
+    const r = prStation({ cwd: here, dir: runDir, branch, base: "main", exec });
+    if (!r.ok) throw new Error(r.reason);
+    return { head: r.pr.head_sha, exec };
+  }
+
+  test("the PR station pushes a carry between two refreezes; a fix pushed on top of it from elsewhere comes back with no false conflict (ct-99118)", async () => {
+    const { origin, here, there, worktree, runDir, start } = originWorld("pr-push");
+    start();
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "a.txt", "carried\n");
+    const first = (await refreezeSessionChange(here, runDir, worktree)).change;
+    expect(prPush(here, runDir).head).toBe(first.tip);
+    expect(git(origin, "rev-parse", "feat")).toBe(first.tip);
+    // The session's next fix, pushed from elsewhere on top of what the PR station pushed, edits the same lines.
+    git(there, "pull", "--quiet", "--ff-only");
+    write(there, "a.txt", "fixed there on top\n");
+    git(there, "commit", "--quiet", "-am", "fix there");
+    git(there, "push", "--quiet", "origin", "feat");
+    const theirs = git(there, "rev-parse", "HEAD");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "b.txt", "carried again\n");
+    const second = (await refreezeSessionChange(here, runDir, worktree)).change;
+    expect(git(here, "rev-parse", `${second.tip}^`)).toBe(theirs);
+    expect([git(here, "show", `${second.tip}:a.txt`), git(here, "show", `${second.tip}:b.txt`)]).toEqual(["fixed there on top", "carried again"]);
+    // The next round's push goes up as a fast forward.
+    expect(prPush(here, runDir).head).toBe(second.tip);
+  }, 180_000);
+
+  test("a commit unpushed at the run's start that the PR station pushed, then force-pushed away elsewhere, stays away (ct-99118)", async () => {
+    const { here, there, worktree, runDir, start } = originWorld("pr-unpushed");
+    const r0 = git(here, "rev-parse", "feat");
+    write(worktree, "secret.txt", "oops\n");
+    git(worktree, "add", "secret.txt");
+    git(worktree, "commit", "--quiet", "-m", "u with secret");
+    start();
+    prPush(here, runDir);
+    git(there, "fetch", "--quiet", "origin");
+    git(there, "reset", "--quiet", "--hard", r0);
+    write(there, "clean.txt", "clean\n");
+    git(there, "add", "clean.txt");
+    git(there, "commit", "--quiet", "-m", "clean rebuild");
+    git(there, "push", "--quiet", "--force", "origin", "feat");
+    const rebuilt = git(there, "rev-parse", "HEAD");
+    await snapshotRunTree(worktree, runDir);
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(change.tip).toBe(rebuilt);
+    expect(git(here, "ls-tree", "--name-only", change.tip, "--", "secret.txt")).toBe("");
+  }, 180_000);
+
+  test("an earlier carry the PR station pushed, then force-pushed away elsewhere, stays away (ct-99118)", async () => {
+    const { here, there, worktree, runDir, start } = originWorld("pr-carry-away");
+    const r0 = start();
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "debug.txt", "debug\n");
+    await refreezeSessionChange(here, runDir, worktree);
+    prPush(here, runDir);
+    git(there, "fetch", "--quiet", "origin");
+    git(there, "reset", "--quiet", "--hard", r0);
+    write(there, "clean.txt", "clean\n");
+    git(there, "add", "clean.txt");
+    git(there, "commit", "--quiet", "-m", "clean rebuild");
+    git(there, "push", "--quiet", "--force", "origin", "feat");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "z.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "ls-tree", "--name-only", change.tip, "--", "debug.txt")).toBe("");
+    expect(git(here, "show", `${change.tip}:z.txt`)).toBe("left here");
+  }, 180_000);
+
+  test("a branch local-only at the last freeze keeps its carry when the branch is then pushed from another clone (ct-99118)", async () => {
+    const { origin, here, worktree, runDir } = originWorld("solo", "loc");
+    git(worktree, "checkout", "--quiet", "-b", "solo");
+    write(worktree, "u.txt", "u\n");
+    git(worktree, "add", "u.txt");
+    git(worktree, "commit", "--quiet", "-m", "u");
+    const u = git(here, "rev-parse", "solo");
+    writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: u, tip: u, branch: "solo", worktree: "run-wt-solo", paths: [], shared: [], held: [] } as any);
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "c1.txt", "carried round 1\n");
+    const first = (await refreezeSessionChange(here, runDir, worktree)).change;
+    expect(first.remote_tip).toBeUndefined();
+    const other = path.join(sandbox, "other-solo");
+    execFileSync("git", ["clone", "--quiet", here, other], { env: { ...process.env, ...ENV } });
+    git(other, "checkout", "--quiet", "-b", "solo", u);
+    write(other, "f.txt", "f\n");
+    git(other, "add", "f.txt");
+    git(other, "commit", "--quiet", "-m", "f");
+    git(other, "push", "--quiet", origin, "solo");
+    await snapshotRunTree(worktree, runDir);
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect([git(here, "show", `${change.tip}:c1.txt`), git(here, "show", `${change.tip}:f.txt`)]).toEqual(["carried round 1", "f"]);
+    expect(fs.existsSync(path.join(worktree, "c1.txt"))).toBe(true);
+  }, 180_000);
+
+  test("the run's own onto-main rebase, pushed by the PR station, is not replayed onto its rebased copy (ct-99118)", async () => {
+    const { origin, here, there, worktree, runDir, start } = originWorld("pr-rebase");
+    write(worktree, "a.txt", "b\n");
+    git(worktree, "commit", "--quiet", "-am", "u1");
+    write(worktree, "a.txt", "c\n");
+    git(worktree, "commit", "--quiet", "-am", "u2");
+    start();
+    const { exec } = prPush(here, runDir);
+    // Main moves, and the PR station rebases origin's branch onto it and pushes; the branch here lags.
+    git(there, "fetch", "--quiet", "origin");
+    git(there, "checkout", "--quiet", "-B", "m", "origin/main");
+    write(there, "m.txt", "m\n");
+    git(there, "add", "m.txt");
+    git(there, "commit", "--quiet", "-m", "main moves");
+    git(there, "push", "--quiet", "origin", "HEAD:main");
+    const rebased = await rebasePr({ cwd: here, dir: runDir, base: "main", runId: "run-1", post: async () => ({}), exec });
+    if (!rebased.ok) throw new Error(rebased.reason);
+    expect(git(origin, "rev-parse", "feat")).toBe(rebased.pr.head_sha);
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "z.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(here, "rev-parse", `${change.tip}^`)).toBe(rebased.pr.head_sha);
+    expect([git(here, "show", `${change.tip}:a.txt`), git(here, "show", `${change.tip}:m.txt`), git(here, "show", `${change.tip}:z.txt`)]).toEqual(["c", "m", "left here"]);
+  }, 180_000);
+
+  test("a reset that fails partway says the worktree may be partly reset, and keeps the session's edits in a commit (ct-99118)", async () => {
+    const { here, there, worktree, runDir, start } = originWorld("partial");
+    write(worktree, "ro/k.txt", "k\n");
+    git(worktree, "add", "ro/k.txt");
+    git(worktree, "commit", "--quiet", "-m", "ro");
+    git(worktree, "push", "--quiet", "origin", "feat");
+    git(there, "pull", "--quiet", "--ff-only");
+    const tip = start();
+    write(there, "a.txt", "theirs a\n");
+    write(there, "ro/k.txt", "k2\n");
+    git(there, "commit", "--quiet", "-am", "theirs");
+    git(there, "push", "--quiet", "origin", "feat");
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "b.txt", "mine\n");
+    fs.chmodSync(path.join(worktree, "ro"), 0o555);
+    let said = "";
+    try { await refreezeSessionChange(here, runDir, worktree); } catch (err) { said = (err as Error).message; }
+    fs.chmodSync(path.join(worktree, "ro"), 0o755);
+    expect(said).toContain("The worktree may be partly reset");
+    expect(said).not.toContain("nothing moved");
+    expect(git(here, "rev-parse", "feat")).toBe(tip);
+    expect(readFrozenChange(runDir)?.tip).toBe(tip);
+    const kept = /kept in commit (\w+)/.exec(said)![1];
+    expect(git(here, "show", `${kept}:b.txt`)).toBe("mine");
   }, 180_000);
 
   test("a run worktree taken off the change's branch refuses and is left as it is (ct-99118)", async () => {
