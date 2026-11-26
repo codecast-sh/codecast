@@ -106,6 +106,7 @@ async function castFlow(cwd: string, args: string[], defaultFlow: string | null 
       throw new Error(`not asked: ${route}`);
     },
     callingSession: () => undefined,
+    subjectSession: async () => undefined,
     realCwd: () => cwd,
     readWorkspace: async (team) => ({ kind: "team", teamId: team ?? "active" }),
     directoryTeam: async () => { mappedReads++; return mapped ? "dir" : null; },

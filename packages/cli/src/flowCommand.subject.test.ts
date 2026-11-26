@@ -12,33 +12,35 @@ describe("callingSubject", () => {
   test("the calling session, named by its agent session id, resolves to its conversation", async () => {
     const asked: any[] = [];
     const subject = await callingSubject({
-      callingSession: () => "0b6f1c2e-agent-session",
       cliPost: async (route, body) => { asked.push({ route, body }); return { sessions: [{ id: FULL }] }; },
-    });
+    }, "0b6f1c2e-agent-session");
     expect(subject).toEqual({ session: "jx756fb", conversation: FULL });
     expect(asked[0]).toMatchObject({ route: "/cli/inbox", body: { session_ids: ["0b6f1c2e-agent-session"] } });
   });
 
   test("a plain shell has none", async () => {
-    expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => { throw new Error("not asked"); } })).toBeUndefined();
+    expect(await callingSubject({ cliPost: async () => { throw new Error("not asked"); } }, undefined)).toBeUndefined();
   });
 
   test("a plain shell running a task's change takes the session the task's change came from (a run started over ssh)", async () => {
     const asked: any[] = [];
     const subject = await callingSubject({
-      callingSession: () => undefined,
       cliPost: async (route, body) => { asked.push({ route, body }); return { short_id: "ct-9", change_session: { short_id: "jx756fb", conversation_id: FULL } }; },
-    }, "ct-9");
+    }, undefined, "ct-9");
     expect(subject).toEqual({ session: "jx756fb", conversation: FULL });
     expect(asked).toEqual([{ route: "/cli/work/get", body: { short_id: "ct-9" } }]);
   });
 
   test("a task no session worked leaves a plain shell with none", async () => {
-    expect(await callingSubject({ callingSession: () => undefined, cliPost: async () => ({ short_id: "ct-9", change_session: null }) }, "ct-9")).toBeUndefined();
+    expect(await callingSubject({ cliPost: async () => ({ short_id: "ct-9", change_session: null }) }, undefined, "ct-9")).toBeUndefined();
   });
 
   test("a session the server cannot read has none", async () => {
-    expect(await callingSubject({ callingSession: () => "x", cliPost: async () => ({ sessions: [] }) })).toBeUndefined();
+    expect(await callingSubject({ cliPost: async () => ({ sessions: [] }) }, "x")).toBeUndefined();
+  });
+
+  test("--no-subject leaves a run with none, not even the session the task's change came from", async () => {
+    expect(await callingSubject({ cliPost: async () => { throw new Error("not asked"); } }, false, "ct-9")).toBeUndefined();
   });
 });
 

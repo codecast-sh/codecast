@@ -324,6 +324,18 @@ subject's row with `include_killed` (`/cli/inbox`), so a killed subject is
 still read, and sent the brief all the same: the send restarts it, and the
 run's log says so. Only a subject the run cannot read stops the station.
 
+The subject is the session that asked for the run, and a Task-tool subagent is
+not one. Its Bash runs inside its parent's Claude process with its parent's
+session id, so the CLI tells the two apart by the transcript that holds the
+call (`subagentCaller.ts`: the newest Bash call naming the command's words, in
+the session's own transcript or a subagent's). A subagent's run adopts no
+session: with nothing named it refuses, a task named alone takes no session's
+edits, and only `--session <id>` names one. `--no-subject` gives a named change
+(a task, branch, pull request or checkout) no subject even from the session
+itself. Either way `cast workflow run` is passed `--no-subject`, so the run has
+no spawner either. A subagent's `cast task start` likewise binds no session
+(ct-101911).
+
 Between its own stations the run does not need the session, so it parks it
 (`subjectPark.ts`). Before every other station, and every minute while one runs
 (Deploy's wait can last days), the runner reads the subject; once it has

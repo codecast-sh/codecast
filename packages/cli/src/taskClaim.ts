@@ -17,8 +17,9 @@ import { STALE_TASK_WORDS, TASK_EFFORTS } from "@codecast/shared/tasks";
 // `ownSessionId` (the agent's own exported id, then the process walk), which
 // is the same witness that stamps source:"agent" on create.
 
-export function buildTaskStartBody(shortId: string, sessionId: string | null, opts: { take?: boolean } = {}): Record<string, any> {
-  const body: Record<string, any> = { short_id: shortId, status: "in_progress", ...taskClaimant(sessionId) };
+/** `unclaimed`: the start is nobody's (a subagent's, whose parent session never asked): the task moves, its assignee and binding stay. */
+export function buildTaskStartBody(shortId: string, sessionId: string | null, opts: { take?: boolean; unclaimed?: boolean } = {}): Record<string, any> {
+  const body: Record<string, any> = { short_id: shortId, status: "in_progress", ...(opts.unclaimed ? {} : taskClaimant(sessionId)) };
   if (opts.take) body.take = true;
   return body;
 }

@@ -22,6 +22,10 @@ describe("buildTaskStartBody", () => {
     expect(buildTaskStartBody("ct-1", "sess-1", { take: true })).toMatchObject({ take: true });
     expect("take" in buildTaskStartBody("ct-1", "sess-1")).toBe(false);
   });
+
+  test("a subagent's start is nobody's: no session is bound and no assignee set (ct-101911)", () => {
+    expect(buildTaskStartBody("ct-1", null, { unclaimed: true })).toEqual({ short_id: "ct-1", status: "in_progress" });
+  });
 });
 
 describe("task start names the sessions it took ownership from", () => {
