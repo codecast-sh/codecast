@@ -10,7 +10,10 @@
 //
 // Holding the checkout's merge lock (mergeScratch.ts), and from its first
 // before-merge step the repository's lease across machines (land/repoLease.ts),
-// it rebases the head onto the default branch in a worktree of its own, sends
+// it rebases the head onto the default branch in a worktree of its own (a
+// conflict only in files .codecast/generated.toml lists is resolved here: the
+// default branch's side, then their generators, generatedFiles.ts, and the
+// result goes back to CI as a recorded rebase), sends
 // it back to CI when the default branch changed the same files since CI and a
 // model judges the two diffs interact, runs the before-merge deploy steps that
 // the default branch's own line profile names (codecast: convex, from a tree
@@ -30,13 +33,14 @@ import * as fs from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { defaultExec, landedSha, mergePullRequest, undoneChanges, type Exec, type Wait } from "../lineMerge.js";
+import { defaultExec, landedSha, mergePullRequest, sleepSync, undoneChanges, type Exec, type Wait } from "../lineMerge.js";
 import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
-import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink } from "./rebaseRecord";
+import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
+import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
 export type MergeStationResult = { code: 0 | 1 | 2 | 3; line: string };
 
@@ -69,6 +73,9 @@ type Outcome = { step: ShipDeployStep; ok: boolean; sha: string; output?: string
 const INTERACTION_MODEL = "claude-sonnet-5-5";
 const DIFF_CAP = 40_000;
 const ROUNDS = 3;
+/** How many times the station tries to make its worktree, and the pause between tries. */
+const TREE_ATTEMPTS = 3;
+const TREE_RETRY_MS = 10_000;
 /** A file whose change means the tree's installed dependencies are stale. */
 const DEPENDENCY_FILE = /(^|\/)(package\.json|bun\.lockb?|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
 
@@ -150,8 +157,13 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     if (fetch.status !== 0) return refuse(`git fetch origin ${into} ${branch} failed: ${tail(fetch.stderr)}`);
     const pushed = git(args.cwd, "rev-parse", `origin/${branch}`).stdout.trim();
     if (pushed !== head) return { code: 3, line: `origin/${branch} is at ${short(pushed) || "nothing"}, but CI tested ${short(head)}; test the new head` };
-    const unbound = verifyRebaseChain(exec, args.cwd, into, proof.rebases ?? [], reviewed, head);
+    const regenerated: RegeneratedRebase[] = [];
+    const unbound = verifyRebaseChain(exec, args.cwd, into, proof.rebases ?? [], reviewed, head, regenerated);
     if (unbound) return refuse(unbound);
+    for (const r of regenerated) {
+      const why = await proveRegenerated(args, exec, r);
+      if (why) return refuse(`the recorded rebase of ${short(r.link.from)} into ${short(r.link.to)} differs from the plain rebase in ${r.files.join(", ")}, but ${why}; it must be reviewed again`);
+    }
   } else if (reviewed !== head && !chainBetween(proof.rebases ?? [], reviewed, head)) {
     return refuse(`the reviewer read ${short(reviewed)}, not the head that merged (${short(head)})`);
   }
@@ -200,8 +212,14 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   const lostLease = (before: string) => `the lease on ${args.repository}'s deploys was lost before ${before}`;
   try {
     if (!args.scratch) await sweepScratchTrees(repo);
-    try { tree = await (args.scratch ?? acquiredTree)(repo, already ?? head); } catch (err) {
-      return refuse(`could not make a worktree to rebase in: ${message(err)}`);
+    // Making a worktree can be refused for a moment (another acquire holds the machine's port reservations, or a
+    // crashed one's lock is being cleared): tried again a bounded number of times, each refusal in the output.
+    for (let attempt = 1; !tree; attempt++) {
+      try { tree = await (args.scratch ?? acquiredTree)(repo, already ?? head); } catch (err) {
+        if (attempt >= TREE_ATTEMPTS) return refuse(`could not make a worktree to rebase in after ${TREE_ATTEMPTS} tries: ${message(err)}`);
+        log(`could not make a worktree to rebase in (try ${attempt} of ${TREE_ATTEMPTS}): ${message(err)}; trying again in ${TREE_RETRY_MS / 1000}s`);
+        (args.wait ?? sleepSync)(TREE_RETRY_MS);
+      }
     }
     const work = tree;
     const at = work.path;
@@ -272,14 +290,41 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       if (round > ROUNDS) return await fail(2, `${into} kept moving under the before-merge steps for ${ROUNDS} rounds`);
       const onto = latest();
       if (!onto) return await fail(2, `git fetch origin ${into} failed`);
-      const rebased = rebaseOnto(exec, at, onto);
+      const generated = readGenerators(exec, at, onto);
+      if (generated.error) log(`${generated.error}: a conflict in generated files goes to the change's session`);
+      const rebased = rebaseOnto(exec, at, onto, generated.generators);
       if ("conflicted" in rebased) {
         const was = git(at, "merge-base", "HEAD", onto).stdout.trim();
         const theirs = lines(git(at, "log", "--format=%h %s", "-n", "5", `${was}..${onto}`, "--", ...rebased.conflicted.map((f) => `:(literal)${f}`)).stdout);
         return await fail(1, `${branch} conflicts with ${into} in ${rebased.conflicted.join(", ")}; ${into}'s commits that touched them: ${theirs.join("; ")}`);
       }
       if ("reason" in rebased) return await fail(2, rebased.reason);
-      tip = rebased.sha;
+      if (rebased.taken.length) {
+        // Conflicts only in files a generator writes: main's side was taken, and the generators write them anew
+        // over the rebased tree, so the change's session is not sent to resolve what no one should edit by hand.
+        const gens = generatorsFor(generated.generators, rebased.taken)!;
+        log(`${branch} conflicts with ${into} only in generated files (${rebased.taken.join(", ")}): took ${into}'s side; regenerating with ${gens.map((g) => g.run).join(", ")}`);
+        await work.setup();
+        setUpFrom ||= rebased.sha;
+        // What setup itself left uncommitted (an install rewriting a lockfile, say) is not the generators' doing.
+        const before = uncommitted(exec, at);
+        for (const g of gens) {
+          const r = await runStep(g.run, at, log, {}, trackStep);
+          if (r.code !== 0) return await fail(1, `${branch} conflicts with ${into} in ${rebased.taken.join(", ")}, and their generator failed on the rebased tree (${g.run}, exit ${r.code}): ${tail(r.output) || "no output"}`);
+        }
+        const moved = git(at, "rev-parse", "HEAD").stdout.trim();
+        if (moved !== rebased.sha) return await fail(2, `regenerating ${rebased.taken.join(", ")} moved the tree off the rebased ${short(rebased.sha)} to ${short(moved)}: a generator must only write files`);
+        const after = uncommitted(exec, at);
+        const written = [...new Set([...before.keys(), ...after.keys()])].filter((f) => before.get(f) !== after.get(f));
+        const stray = written.filter((f) => !writtenBy(gens, f));
+        if (stray.length) return await fail(2, `regenerating ${rebased.taken.join(", ")} changed files ${GENERATED_FILE} does not list for its generators: ${stray.slice(0, 5).join(", ")}`);
+        if (written.length) {
+          git(at, "add", "-A", "--", ...written.map((f) => `:(literal)${f}`));
+          const commit = git(at, "commit", "-q", "--no-verify", "-m", `Regenerate ${rebased.taken.join(", ")} on ${into}`);
+          if (commit.status !== 0) return await fail(2, `the regenerated ${rebased.taken.join(", ")} could not be committed: ${tail(commit.stderr || commit.stdout)}`);
+        }
+      }
+      tip = git(at, "rev-parse", "HEAD").stdout.trim();
       if (tip !== head) log(`rebased ${short(head)} onto ${into} at ${short(onto)}: ${short(tip)}`);
       // A change that sets main's recent work back was built on a stale tree: the conflict route, since the change's
       // session rebuilds it on main as well as anyone could.
@@ -287,6 +332,18 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       if (undone.length) {
         const theirs = undone.map((u) => `${u.file} from ${git(at, "log", "-1", "--format=%h %s", u.commit).stdout.trim()}`);
         return await fail(1, `${branch} would set back what ${into} changed after it was built: ${theirs.join("; ")}; rebuild the change on ${into}`);
+      }
+      if (rebased.taken.length) {
+        // Generator output over both sides' sources is a tree CI never ran and no review read, so it never merges
+        // from here: it goes back to CI as a recorded rebase of the head, recorded before the push so origin never
+        // holds it unrecorded. The reviewer's verdict covers it (rebaseRecord.isRebaseOf accepts a rebase that differs
+        // from the plain merge only in files the generated list names), and the next Merge merges it once CI is green.
+        const why = `${branch} conflicted with ${into} only in generated files (${rebased.taken.join(", ")}), regenerated at ${short(tip)}`;
+        try { await recordRebase({ post: args.post, runId: args.runId, runDir, from: head, to: tip }); }
+        catch (err) { return await fail(2, `${why}, but the rebase could not be recorded: ${message(err)}`); }
+        const push = git(at, "push", `--force-with-lease=refs/heads/${branch}:${head}`, "origin", `${tip}:refs/heads/${branch}`);
+        if (push.status !== 0) return await fail(2, `${why}, but the rebased branch could not be pushed: ${tail(push.stderr)}`);
+        return await fail(3, `${why}; pushed ${branch} rebased at ${short(tip)} to test again`);
       }
       const files = lines(git(at, "diff", "--name-only", "--no-renames", onto, tip).stdout);
 
@@ -368,18 +425,79 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   }
 }
 
-/** Rebase the tree's HEAD onto `onto`; a conflict is aborted, leaving the tree as it was. */
-function rebaseOnto(exec: Exec, at: string, onto: string): { sha: string } | { conflicted: string[] } | { reason: string } {
+/** Rebase the tree's HEAD onto `onto`. A stop whose conflicts are all files `generators` write takes `onto`'s side of
+ *  them and goes on (`taken` names them, for their generators to write anew); any other conflict is aborted, leaving
+ *  the tree as it was. */
+function rebaseOnto(exec: Exec, at: string, onto: string, generators: Generator[]): { sha: string; taken: string[] } | { conflicted: string[] } | { reason: string } {
   const git = (...a: string[]) => exec("git", a, at);
+  const taken = new Set<string>();
   if (git("merge-base", "--is-ancestor", onto, "HEAD").status !== 0) {
-    const rebase = git("rebase", "-q", onto);
-    if (rebase.status !== 0) {
+    for (let step = git("rebase", "-q", onto), stops = 0; step.status !== 0; stops++) {
       const conflicted = lines(git("diff", "--name-only", "--diff-filter=U").stdout);
-      git("rebase", "--abort");
-      return conflicted.length ? { conflicted } : { reason: `git rebase failed: ${tail(rebase.stderr || rebase.stdout)}` };
+      // A stop that comes back however often it is resolved is no rebase going forward.
+      if (!conflicted.length || !generatorsFor(generators, conflicted) || stops > 1000) {
+        git("rebase", "--abort");
+        return conflicted.length ? { conflicted } : { reason: `git rebase failed: ${tail(step.stderr || step.stdout)}` };
+      }
+      // In a rebase "ours" is the branch being rebased onto; a file that side deleted stays deleted.
+      for (const f of conflicted) {
+        if (git("cat-file", "-e", `:2:${f}`).status === 0) {
+          git("checkout", "--ours", "--", `:(literal)${f}`);
+          git("add", "--", `:(literal)${f}`);
+        } else {
+          git("rm", "-q", "-f", "--", `:(literal)${f}`);
+        }
+        taken.add(f);
+      }
+      // A commit left with nothing of its own once main's side is taken is dropped.
+      step = git("diff", "--cached", "--quiet").status === 0 ? git("rebase", "--skip") : git("-c", "core.editor=true", "rebase", "--continue");
     }
   }
-  return { sha: git("rev-parse", "HEAD").stdout.trim() };
+  return { sha: git("rev-parse", "HEAD").stdout.trim(), taken: [...taken] };
+}
+
+/** Why a regenerated rebase's generated files are not what main's generators write at its head, or null when they
+ *  are: the generators run in a worktree of the head, set up as the station's own, and must write nothing new. A tree
+ *  that cannot be made, a generator that fails or one that moves the tree fails closed. */
+async function proveRegenerated(args: MergeStationArgs, exec: Exec, r: RegeneratedRebase): Promise<string | null> {
+  const log = args.log ?? (() => {});
+  const git = (cwd: string, ...a: string[]) => exec("git", a, cwd);
+  let tree: ScratchTree;
+  try { tree = await (args.scratch ?? acquiredTree)(mainCheckout(args.cwd), r.link.to); } catch (err) {
+    return `no worktree could be made to run their generators in (${message(err)})`;
+  }
+  try {
+    log(`checking that ${r.files.join(", ")} at ${short(r.link.to)} are what ${r.generators.map((g) => g.run).join(", ")} write`);
+    await tree.setup();
+    const before = uncommitted(exec, tree.path);
+    for (const g of r.generators) {
+      const run = await (args.runStep ?? runShell)(g.run, tree.path, log, {}, trackStep);
+      if (run.code !== 0) return `${g.run} failed there (exit ${run.code}): ${tail(run.output) || "no output"}`;
+    }
+    if (git(tree.path, "rev-parse", "HEAD").stdout.trim() !== r.link.to) return "a generator moved the tree off it";
+    const after = uncommitted(exec, tree.path);
+    const written = [...new Set([...before.keys(), ...after.keys()])].filter((f) => before.get(f) !== after.get(f));
+    return written.length ? `their generators write ${written.slice(0, 5).join(", ")} differently` : null;
+  } catch (err) {
+    return `their generators could not be run (${message(err)})`;
+  } finally {
+    await tree.release();
+  }
+}
+
+/** Every uncommitted path in the tree, staged, unstaged or untracked, with a hash of what it holds now (empty when
+ *  it is gone): two readings differ exactly where something wrote between them. */
+function uncommitted(exec: Exec, at: string): Map<string, string> {
+  const entries = exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], at).stdout.split("\0");
+  const out = new Map<string, string>();
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    out.set(entry.slice(3), "");
+    if (entry[0] === "R" || entry[0] === "C") out.set(entries[++i], "");
+  }
+  for (const f of out.keys()) out.set(f, exec("git", ["hash-object", "--", f], at).stdout.trim());
+  return out;
 }
 
 /** merge.json, written the moment the merge lands, before anything else can stop the station. */

@@ -1,0 +1,35 @@
+# .codecast/generated.toml: the files a generator writes from this repo's own
+# sources, each set with the command that writes it, run from the repo's top.
+# The change flow's Merge station reads this list from main: a rebase that
+# conflicts only in these files takes main's side and runs their generators
+# itself, instead of sending the change back to its session, and sends the
+# result to CI. Never edit these files by hand; add a generator here when you
+# add one. packages/cli/src/workflow/generatedFiles.fresh.test.ts runs each
+# generator on HEAD and fails unless it writes back exactly its listed files.
+#
+# Not listed, so their conflicts still go to the change's session:
+# - packages/{convex,playground}/convex/_generated/**: Convex's codegen writes
+#   them, and it reads a deployment, not only the tree.
+# - packages/playground/convex/lib/sdk.generated.ts: scripts/build-sdk.ts
+#   bundles the installed Convex client into it, so its output follows
+#   node_modules as much as the tree; not checked to reproduce from a tree.
+# - packages/web/lib/renderGalleryPipeline.generated.ts: scripts/
+#   gen-gallery-pipeline.ts runs `cast flow pipeline`, which needs a signed-in
+#   cast and reads the signed-in team's published flows, so its output is not
+#   the tree's alone (and a CI runner cannot run it).
+
+[[generated]]
+paths = ["packages/web/lib/line/shippedFlows.generated.ts", "packages/web/lib/line/shippedFlowStations.generated.ts"]
+run = "bun packages/cli/scripts/gen-shipped-flows.ts"
+
+[[generated]]
+paths = ["packages/web/lib/line/shippedLine.generated.ts"]
+run = "bun packages/cli/scripts/gen-shipped-line.ts"
+
+[[generated]]
+paths = ["packages/web/lib/ship/__tests__/changeGraph.fixture.json"]
+run = "bun packages/cli/scripts/gen-change-graph-fixture.ts"
+
+[[generated]]
+paths = ["packages/web/lib/line/__tests__/pipelines.fixture.generated.ts"]
+run = "bun packages/web/scripts/gen-pipeline-fixtures.ts"

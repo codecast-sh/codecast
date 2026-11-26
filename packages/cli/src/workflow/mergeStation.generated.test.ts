@@ -1,0 +1,227 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { BRANCH, T, setup } from "./mergeStation.testkit";
+import { GENERATED_FILE, generatorsFor, readGenerators } from "./generatedFiles";
+
+// The Merge station and generated files (generatedFiles.ts): a rebase that
+// conflicts only in files .codecast/generated.toml lists is resolved by the
+// station, which takes main's side, runs their generator and sends the result
+// to CI as a recorded rebase; any other conflict still goes to the change's
+// session.
+
+/** A repository whose gen/out.txt is every src/*.txt, written by its generator. */
+function generatedWorld() {
+  const s = setup();
+  s.onMain({
+    [GENERATED_FILE]: `[[generated]]\npaths = ["gen/*.txt"]\nrun = "cat src/*.txt > gen/out.txt"\n`,
+    "src/a.txt": "a\n",
+    "gen/out.txt": "a\n",
+  });
+  /** The change: one commit of `files`, pushed. */
+  const change = (files: Record<string, string>) => {
+    s.git(s.work, "checkout", "-q", "-b", BRANCH);
+    for (const [f, t] of Object.entries(files)) { s.write(s.work, f, t); s.git(s.work, "add", f); }
+    s.git(s.work, "commit", "-q", "-m", "change");
+    s.git(s.work, "push", "-q", "origin", BRANCH);
+    s.git(s.work, "checkout", "-q", "main");
+    return s.git(s.work, "rev-parse", BRANCH);
+  };
+  const onOrigin = (file: string) => s.git(s.root, "--git-dir", s.origin, "show", `refs/heads/main:${file}`);
+  return { ...s, change, onOrigin };
+}
+
+describe("cast flow merge: generated files", () => {
+  /** The change conflicts with main only in gen/out.txt: Merge regenerates it and sends the result to CI. */
+  async function regenerated(s: ReturnType<typeof generatedWorld>, extra: Parameters<typeof s.run>[0] = {}) {
+    const head = s.change({ "src/b.txt": "b\n", "gen/out.txt": "a\nb\n" });
+    s.ci(head);
+    s.advanceMain("src/c.txt", "c\n");
+    s.advanceMain("gen/out.txt", "a\nc\n");
+    const r = await s.run(extra);
+    return { head, r, tip: s.originBranch() };
+  }
+
+  test("a conflict only in generated files is resolved, regenerated, recorded as a rebase and pushed for CI (exit 3), never merged untested", async () => {
+    const s = generatedWorld();
+    try {
+      const { head, r, tip } = await regenerated(s);
+      expect(r.code).toBe(3);
+      expect(r.line).toBe(`${BRANCH} conflicted with main only in generated files (gen/out.txt), regenerated at ${tip.slice(0, 10)}; pushed ${BRANCH} rebased at ${tip.slice(0, 10)} to test again`);
+      expect(tip).not.toBe(head);
+      expect(s.git(s.work, "show", `${tip}:gen/out.txt`)).toBe("a\nb\nc");
+      expect(s.git(s.work, "show", `${tip}:src/b.txt`)).toBe("b");
+      expect(s.merged()).toBe(false);
+      expect(s.logged.some((l) => l.startsWith(`${BRANCH} conflicts with main only in generated files (gen/out.txt): took main's side; regenerating with cat src/*.txt > gen/out.txt`))).toBe(true);
+      // The link is on the server and in rebase.json, where the Retest station and the next Merge read it.
+      expect(s.proof.rebases).toEqual([{ from: head, to: tip }]);
+      expect(JSON.parse(readFileSync(join(s.runDir, "rebase.json"), "utf-8"))).toMatchObject({ from: head, to: tip });
+      expect(s.posts.map((p) => p.path)).not.toContain("/cli/model/call");
+    } finally { s.done(); }
+  }, T);
+
+  test("the next attempt, CI green on the regenerated head, merges it without a new review; a refused merge on the way strands nothing", async () => {
+    const s = generatedWorld();
+    try {
+      const { head, tip } = await regenerated(s);
+      // CI tested the pushed head; the reviewer's verdict is still on the head it read.
+      s.ci(tip, s.originMain(), {}, head);
+      const refused = await s.run({ exec: (cmd, args, cwd, env) => (cmd === "gh" && args[1] === "merge" ? { status: 1, stdout: "", stderr: "GitHub is unavailable" } : s.exec(cmd, args, cwd, env)) });
+      expect(refused.code).toBe(2);
+      expect(s.merged()).toBe(false);
+      expect(s.originBranch()).toBe(tip);
+      const r = await s.run();
+      expect(r.code).toBe(0);
+      expect(s.onOrigin("gen/out.txt")).toBe("a\nb\nc");
+      const merge = s.gh().calls.find((c) => c[1] === "merge")!;
+      expect(merge[merge.indexOf("--match-head-commit") + 1]).toBe(tip);
+      expect(s.posts.filter((p) => p.path === "/cli/workflow-runs/clear").at(-1)!.body.head_sha).toBe(tip);
+    } finally { s.done(); }
+  }, T);
+
+  test("a recorded rebase whose head differs from the merge outside the generated files is not one: refused, to be reviewed again", async () => {
+    const s = generatedWorld();
+    try {
+      const { head, tip } = await regenerated(s);
+      s.git(s.work, "fetch", "-q", "origin");
+      s.git(s.work, "checkout", "-q", "-b", "forged", tip);
+      s.write(s.work, "src/b.txt", "not what was reviewed\n");
+      s.git(s.work, "commit", "-q", "-am", "slip in");
+      const forged = s.git(s.work, "rev-parse", "HEAD");
+      s.git(s.work, "push", "-q", "-f", "origin", `${forged}:refs/heads/${BRANCH}`);
+      s.git(s.work, "checkout", "-q", "main");
+      s.proof.rebases.splice(0, Infinity, { from: head, to: forged });
+      s.ci(forged, s.originMain(), {}, head);
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: `the recorded rebase of ${head.slice(0, 10)} into ${forged.slice(0, 10)} is not a rebase of it onto main; it must be reviewed again` });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  /** Put `files` over `at` as one more commit, push it as the branch, and record it as the reviewed head's rebase. */
+  function forge(s: ReturnType<typeof generatedWorld>, head: string, at: string, files: Record<string, string>) {
+    s.git(s.work, "fetch", "-q", "origin");
+    s.git(s.work, "checkout", "-q", "--detach", at);
+    for (const [f, t] of Object.entries(files)) s.write(s.work, f, t);
+    s.git(s.work, "commit", "-q", "-am", "forged");
+    const forged = s.git(s.work, "rev-parse", "HEAD");
+    s.git(s.work, "push", "-q", "-f", "origin", `${forged}:refs/heads/${BRANCH}`);
+    s.git(s.work, "checkout", "-q", "main");
+    s.proof.rebases.splice(0, Infinity, { from: head, to: forged });
+    s.ci(forged, s.originMain(), {}, head);
+    return forged;
+  }
+
+  test("a recorded rebase whose conflicted generated file is not what its generator writes is refused, to be reviewed again", async () => {
+    const s = generatedWorld();
+    try {
+      const { head, tip } = await regenerated(s);
+      const forged = forge(s, head, tip, { "gen/out.txt": "not generated\n" });
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: `the recorded rebase of ${head.slice(0, 10)} into ${forged.slice(0, 10)} differs from the plain rebase in gen/out.txt, but their generators write gen/out.txt differently; it must be reviewed again` });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("a generated file that differs from a plain rebase that did not conflict in it is refused, even as generator output", async () => {
+    const s = generatedWorld();
+    try {
+      // Main moves only a source, so the plain rebase merges gen/out.txt cleanly; the "rebase" regenerates it anyway.
+      const head = s.change({ "src/b.txt": "b\n", "gen/out.txt": "a\nb\n" });
+      s.advanceMain("src/c.txt", "c\n");
+      s.git(s.work, "fetch", "-q", "origin");
+      s.git(s.work, "checkout", "-q", "--detach", "origin/main");
+      s.git(s.work, "cherry-pick", head);
+      const rebased = s.git(s.work, "rev-parse", "HEAD");
+      s.git(s.work, "checkout", "-q", "main");
+      const forged = forge(s, head, rebased, { "gen/out.txt": "a\nb\nc\n" });
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: `the recorded rebase of ${head.slice(0, 10)} into ${forged.slice(0, 10)} is not a rebase of it onto main; it must be reviewed again` });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("what the tree's setup writes is not the generator's, and is not committed", async () => {
+    const s = generatedWorld();
+    try {
+      const { r, tip } = await regenerated(s, {
+        scratch: async (repo, at) => {
+          const tree = await s.scratch(repo, at);
+          return { ...tree, setup: async () => { writeFileSync(join(tree.path, "bun.lock"), "installed\n"); } };
+        },
+      });
+      expect(r.code).toBe(3);
+      expect(s.git(s.work, "show", "--format=", "--name-only", tip)).toBe("gen/out.txt");
+    } finally { s.done(); }
+  }, T);
+
+  test("a generator that writes outside its listed files refuses (exit 2), pushing nothing", async () => {
+    const s = generatedWorld();
+    try {
+      s.onMain({ [GENERATED_FILE]: `[[generated]]\npaths = ["gen/*.txt"]\nrun = "cat src/*.txt > gen/out.txt; echo x > stray.txt"\n` });
+      const head = s.change({ "src/b.txt": "b\n", "gen/out.txt": "a\nb\n" });
+      s.ci(head);
+      s.advanceMain("gen/out.txt", "a\nc\n");
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: "regenerating gen/out.txt changed files .codecast/generated.toml does not list for its generators: stray.txt" });
+      expect(s.originBranch()).toBe(head);
+    } finally { s.done(); }
+  }, T);
+
+  test("a conflict in a generated file and any other file goes to the change's session (exit 1), merging nothing", async () => {
+    const s = generatedWorld();
+    try {
+      const head = s.change({ "a.txt": "mine\n", "src/b.txt": "b\n", "gen/out.txt": "a\nb\n" });
+      s.ci(head);
+      s.advanceMain("a.txt", "theirs\n");
+      s.advanceMain("gen/out.txt", "a\nc\n");
+      const r = await s.run();
+      expect(r.code).toBe(1);
+      expect(r.line).toStartWith(`${BRANCH} conflicts with main in a.txt, gen/out.txt;`);
+      expect(s.merged()).toBe(false);
+      expect(s.originBranch()).toBe(head);
+    } finally { s.done(); }
+  }, T);
+
+  test("a generator that fails on the rebased tree sends the conflict to the change's session (exit 1)", async () => {
+    const s = generatedWorld();
+    try {
+      s.onMain({ [GENERATED_FILE]: `[[generated]]\npaths = ["gen/*.txt"]\nrun = "echo no generator here >&2; exit 4"\n` });
+      const head = s.change({ "src/b.txt": "b\n", "gen/out.txt": "a\nb\n" });
+      s.ci(head);
+      s.advanceMain("gen/out.txt", "a\nc\n");
+      const r = await s.run();
+      expect(r.code).toBe(1);
+      expect(r.line).toBe(`${BRANCH} conflicts with main in gen/out.txt, and their generator failed on the rebased tree (echo no generator here >&2; exit 4, exit 4): no generator here`);
+      expect(s.merged()).toBe(false);
+      expect(s.originBranch()).toBe(head);
+    } finally { s.done(); }
+  }, T);
+});
+
+describe("this repository's generated files", () => {
+  const root = join(import.meta.dir, "../../../..");
+  const text = readFileSync(join(root, GENERATED_FILE), "utf-8");
+  const { generators, error } = readGenerators(() => ({ status: 0, stdout: text, stderr: "" }), root, "HEAD");
+
+  test("the list reads, and each entry's paths name tracked files and its generator script exists", () => {
+    expect(error).toBeUndefined();
+    expect(generators.length).toBeGreaterThan(0);
+    const tracked = Bun.spawnSync(["git", "ls-files"], { cwd: root }).stdout.toString().split("\n");
+    for (const g of generators) {
+      for (const p of g.paths) expect(tracked.some((f) => new Bun.Glob(p).match(f))).toBe(true);
+      const script = g.run.split(/\s+/)[1];
+      expect(tracked).toContain(script);
+    }
+  });
+
+  test("covers the shipped flows and the change-graph fixture, and nothing hand-written or read from a server", () => {
+    expect(generatorsFor(generators, [
+      "packages/web/lib/line/shippedFlows.generated.ts",
+      "packages/web/lib/line/shippedFlowStations.generated.ts",
+      "packages/web/lib/ship/__tests__/changeGraph.fixture.json",
+    ])).not.toBeNull();
+    expect(generatorsFor(generators, ["packages/web/lib/renderGalleryPipeline.generated.ts"])).toBeNull();
+    expect(generatorsFor(generators, ["packages/web/lib/renderGallery.ts"])).toBeNull();
+  });
+});

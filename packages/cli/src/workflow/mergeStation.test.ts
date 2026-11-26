@@ -320,4 +320,38 @@ describe("cast flow merge", () => {
       expect(r).toEqual({ code: 2, line: "station crashed: TypeError: cannot read properties of undefined" });
     } finally { s.done(); }
   }, T);
+
+  test("a worktree the machine refuses for a moment is tried again, each refusal logged, and the change merges", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("b.txt", "bee\n");
+      s.ci(head);
+      let tries = 0;
+      const waits: number[] = [];
+      const r = await s.run({
+        wait: (ms) => { waits.push(ms); },
+        scratch: async (repo, at) => {
+          if (++tries === 1) throw new Error("Timed out waiting for workspace port reservations (pid 1)");
+          return s.scratch(repo, at);
+        },
+      });
+      expect(r.code).toBe(0);
+      expect(tries).toBe(2);
+      expect(waits).toEqual([10_000]);
+      expect(s.logged).toContain("could not make a worktree to rebase in (try 1 of 3): Timed out waiting for workspace port reservations (pid 1); trying again in 10s");
+    } finally { s.done(); }
+  }, T);
+
+  test("a worktree refused on every try is refused (exit 2) after a bounded number of tries, merging nothing", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("b.txt", "bee\n");
+      s.ci(head);
+      let tries = 0;
+      const r = await s.run({ scratch: async () => { tries++; throw new Error("workspace 'x' has an operation in progress (pid 1)"); } });
+      expect(r).toEqual({ code: 2, line: "could not make a worktree to rebase in after 3 tries: workspace 'x' has an operation in progress (pid 1)" });
+      expect(tries).toBe(3);
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
 });
