@@ -15,13 +15,17 @@
 // to the head CI tested (chainBetween) and re-derives every link with git
 // (verifyRebaseChain, isRebaseOf). A rebase of `from` onto the default branch
 // at B is the three-way merge of B and `from` over their merge base, and its
-// tree must be exactly `to`'s. The server's clearance then requires the same
+// tree must be exactly `to`'s, except in the files B's .codecast/generated.toml
+// lists (generatedFiles.ts): Merge resolves a conflict only in those by
+// running their generators, so there `to` holds generator output, and CI tests
+// that head before anything merges it. The server's clearance then requires the same
 // coverage over the same links (orgLineMerge `unproven`), without the git check.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Exec } from "../lineMerge.js";
 import { mergeTree } from "./gitMergeTree.js";
+import { readGenerators, writtenBy } from "./generatedFiles.js";
 
 export type RebaseLink = { from: string; to: string };
 
@@ -57,7 +61,9 @@ export function chainBetween(links: RebaseLink[], reviewed: string, head: string
   return path;
 }
 
-/** Whether `to` is exactly `from` rebased onto the default branch commit it sits on. */
+/** Whether `to` is `from` rebased onto the default branch commit it sits on: exactly, or differing (and conflicting)
+ *  only in files that commit's generated list names, which Merge regenerated. The list is the default branch's,
+ *  never the change's own, so a change cannot widen what passes. */
 export function isRebaseOf(exec: Exec, cwd: string, into: string, link: RebaseLink): boolean {
   const git = (...a: string[]) => exec("git", a, cwd);
   for (const sha of [link.from, link.to]) {
@@ -67,8 +73,14 @@ export function isRebaseOf(exec: Exec, cwd: string, into: string, link: RebaseLi
   const fork = base ? git("merge-base", link.from, base).stdout.trim() : "";
   if (!base || !fork) return false;
   const merged = mergeTree(exec, cwd, base, link.from, { mergeBase: fork });
-  if (!merged || merged.conflicts.length) return false;
-  return merged.tree === git("rev-parse", `${link.to}^{tree}`).stdout.trim();
+  if (!merged) return false;
+  const tree = git("rev-parse", `${link.to}^{tree}`).stdout.trim();
+  if (!merged.conflicts.length && merged.tree === tree) return true;
+  const { generators } = readGenerators(exec, cwd, base);
+  if (!generators.length || merged.conflicts.some((f) => !writtenBy(generators, f))) return false;
+  const differ = git("diff-tree", "-r", "--name-only", "--no-renames", merged.tree, tree);
+  if (differ.status !== 0) return false;
+  return differ.stdout.split("\n").filter(Boolean).every((f) => writtenBy(generators, f));
 }
 
 /** Null when `head` is the reviewed head, or every link of `links` from it to `head` is a real rebase; else why not. */

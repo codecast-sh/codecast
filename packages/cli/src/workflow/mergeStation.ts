@@ -12,7 +12,8 @@
 // before-merge step the repository's lease across machines (land/repoLease.ts),
 // it rebases the head onto the default branch in a worktree of its own (a
 // conflict only in files .codecast/generated.toml lists is resolved here: the
-// default branch's side, then their generators, generatedFiles.ts), sends
+// default branch's side, then their generators, generatedFiles.ts, and the
+// result goes back to CI as a recorded rebase), sends
 // it back to CI when the default branch changed the same files since CI and a
 // model judges the two diffs interact, runs the before-merge deploy steps that
 // the default branch's own line profile names (codecast: convex, from a tree
@@ -280,9 +281,6 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
 
     let tip = head;
-    // The generators whose files this station regenerated: the tree then differs from any rebase GitHub can make of
-    // the head, so the merge goes out from it.
-    const regenerated: Generator[] = [];
     rounds: for (let round = 1; ; round++) {
       if (round > ROUNDS) return await fail(2, `${into} kept moving under the before-merge steps for ${ROUNDS} rounds`);
       const onto = latest();
@@ -303,19 +301,23 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
         log(`${branch} conflicts with ${into} only in generated files (${rebased.taken.join(", ")}): took ${into}'s side; regenerating with ${gens.map((g) => g.run).join(", ")}`);
         await work.setup();
         setUpFrom ||= rebased.sha;
+        // What setup itself left uncommitted (an install rewriting a lockfile, say) is not the generators' doing.
+        const before = uncommitted(exec, at);
         for (const g of gens) {
           const r = await runStep(g.run, at, log, {}, trackStep);
           if (r.code !== 0) return await fail(1, `${branch} conflicts with ${into} in ${rebased.taken.join(", ")}, and their generator failed on the rebased tree (${g.run}, exit ${r.code}): ${tail(r.output) || "no output"}`);
         }
-        const changed = [...new Set(lines(git(at, "ls-files", "-m", "-o", "--exclude-standard").stdout))];
-        const stray = changed.filter((f) => !writtenBy(gens, f));
+        const moved = git(at, "rev-parse", "HEAD").stdout.trim();
+        if (moved !== rebased.sha) return await fail(2, `regenerating ${rebased.taken.join(", ")} moved the tree off the rebased ${short(rebased.sha)} to ${short(moved)}: a generator must only write files`);
+        const after = uncommitted(exec, at);
+        const written = [...new Set([...before.keys(), ...after.keys()])].filter((f) => before.get(f) !== after.get(f));
+        const stray = written.filter((f) => !writtenBy(gens, f));
         if (stray.length) return await fail(2, `regenerating ${rebased.taken.join(", ")} changed files ${GENERATED_FILE} does not list for its generators: ${stray.slice(0, 5).join(", ")}`);
-        if (changed.length) {
-          git(at, "add", "-A", "--", ...changed.map((f) => `:(literal)${f}`));
+        if (written.length) {
+          git(at, "add", "-A", "--", ...written.map((f) => `:(literal)${f}`));
           const commit = git(at, "commit", "-q", "--no-verify", "-m", `Regenerate ${rebased.taken.join(", ")} on ${into}`);
           if (commit.status !== 0) return await fail(2, `the regenerated ${rebased.taken.join(", ")} could not be committed: ${tail(commit.stderr || commit.stdout)}`);
         }
-        regenerated.push(...gens);
       }
       tip = git(at, "rev-parse", "HEAD").stdout.trim();
       if (tip !== head) log(`rebased ${short(head)} onto ${into} at ${short(onto)}: ${short(tip)}`);
@@ -326,12 +328,23 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
         const theirs = undone.map((u) => `${u.file} from ${git(at, "log", "-1", "--format=%h %s", u.commit).stdout.trim()}`);
         return await fail(1, `${branch} would set back what ${into} changed after it was built: ${theirs.join("; ")}; rebuild the change on ${into}`);
       }
+      if (rebased.taken.length) {
+        // Generator output over both sides' sources is a tree CI never ran and no review read, so it never merges
+        // from here: it goes back to CI as a recorded rebase of the head, recorded before the push so origin never
+        // holds it unrecorded. The reviewer's verdict covers it (rebaseRecord.isRebaseOf accepts a rebase that differs
+        // from the plain merge only in files the generated list names), and the next Merge merges it once CI is green.
+        const why = `${branch} conflicted with ${into} only in generated files (${rebased.taken.join(", ")}), regenerated at ${short(tip)}`;
+        try { await recordRebase({ post: args.post, runId: args.runId, runDir, from: head, to: tip }); }
+        catch (err) { return await fail(2, `${why}, but the rebase could not be recorded: ${message(err)}`); }
+        const push = git(at, "push", `--force-with-lease=refs/heads/${branch}:${head}`, "origin", `${tip}:refs/heads/${branch}`);
+        if (push.status !== 0) return await fail(2, `${why}, but the rebased branch could not be pushed: ${tail(push.stderr)}`);
+        return await fail(3, `${why}; pushed ${branch} rebased at ${short(tip)} to test again`);
+      }
       const files = lines(git(at, "diff", "--name-only", "--no-renames", onto, tip).stdout);
 
       if (tested !== onto) {
         const moved = new Set(lines(git(at, "diff", "--name-only", "--no-renames", tested, onto).stdout));
-        // A regenerated file follows from its sources: those carry whatever interaction there is.
-        const overlap = files.filter((f) => moved.has(f) && !writtenBy(regenerated, f));
+        const overlap = files.filter((f) => moved.has(f));
         if (overlap.length) {
           const shared = overlap.map((f) => `:(literal)${f}`);
           const verdict = await diffsInteract(args, { files: overlap, main: git(at, "diff", tested, onto, "--", ...shared).stdout, change: git(at, "diff", onto, tip, "--", ...shared).stdout });
@@ -380,16 +393,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
 
     if (!(await leaseHeld())) return await fail(2, lostLease("the merge"));
-    // GitHub merges the pull request's head, which still conflicts in the files regenerated here: the branch takes
-    // the resolved tree first.
-    let merging = head;
-    if (regenerated.length) {
-      const push = git(at, "push", `--force-with-lease=refs/heads/${branch}:${head}`, "origin", `${tip}:refs/heads/${branch}`);
-      if (push.status !== 0) return await fail(2, `the regenerated ${branch} could not be pushed for the merge: ${tail(push.stderr)}`);
-      log(`pushed ${branch} at ${short(tip)}, its generated files regenerated on ${into}, to merge`);
-      merging = tip;
-    }
-    const landed = mergePullRequest(exec, at, { pr: String(pr), branch, head: merging, into, wait: args.wait });
+    const landed = mergePullRequest(exec, at, { pr: String(pr), branch, head, into, wait: args.wait });
     if ("reason" in landed) return await fail(2, landed.reason);
     writeMergeJson(args, url, landed.sha);
     // What the landed commit holds under a step's paths can differ from the tree it deployed (main moved after the
@@ -445,6 +449,21 @@ function rebaseOnto(exec: Exec, at: string, onto: string, generators: Generator[
     }
   }
   return { sha: git("rev-parse", "HEAD").stdout.trim(), taken: [...taken] };
+}
+
+/** Every uncommitted path in the tree, staged, unstaged or untracked, with a hash of what it holds now (empty when
+ *  it is gone): two readings differ exactly where something wrote between them. */
+function uncommitted(exec: Exec, at: string): Map<string, string> {
+  const entries = exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], at).stdout.split("\0");
+  const out = new Map<string, string>();
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    out.set(entry.slice(3), "");
+    if (entry[0] === "R" || entry[0] === "C") out.set(entries[++i], "");
+  }
+  for (const f of out.keys()) out.set(f, exec("git", ["hash-object", "--", f], at).stdout.trim());
+  return out;
 }
 
 /** merge.json, written the moment the merge lands, before anything else can stop the station. */

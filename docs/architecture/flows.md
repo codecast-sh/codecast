@@ -582,11 +582,16 @@ is never touched. Each round
 fetches the default branch fresh and rebases onto it. A conflict only in
 files the default branch's `.codecast/generated.toml` lists (each set with the
 command that writes it) is Merge's own: it takes the default branch's side,
-runs their generators over the rebased tree, commits the result, and merges
-that tree, pushed to the branch first since GitHub cannot merge the head; a
-regenerated file is left out of the files a model judges below. Any other
-conflict exits 1, naming the files and the default branch's commits that
-touched them, and so does a generator that fails. So does a
+runs their generators over the rebased tree and commits the result. That tree
+is generator output CI never ran, so it never merges from there: Merge records
+it as a rebase of the head and pushes it (exit 3), and Retest sends it to CI.
+A recorded rebase passes Merge's check when it differs from the plain merge
+only in files the default branch's list names, so the reviewer's verdict
+covers it and the next Merge merges it once CI is green. A generator that
+writes outside its listed files, or moves the tree's HEAD, refuses (exit 2);
+what the tree's own setup writes is not counted. Any other conflict exits 1,
+naming the files and the default branch's commits that touched them, and so
+does a generator that fails. So does a
 change that would set the default branch's recent work back (a stale copy
 built on an old tree, lineMerge's `undoneChanges`): the line names each file
 with the commit it would undo and says to rebuild the change on the default
