@@ -172,7 +172,7 @@ export default function RunScreen() {
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.
   const mergeRole = useInboxStore((s) => (run?.org_role_id && run && mergeIsOff(run as any) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
-  const act = journey && run && changeFlow ? changeAction(journey, run as any, changeFlow, { newer, pr: prMerge, mergeRole }) : null;
+  const act = journey && run && changeFlow ? changeAction(journey, run as any, changeFlow, { newer, pr: prMerge, mergeRole, targets }) : null;
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;

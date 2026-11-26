@@ -37,7 +37,7 @@ export function ChangeRunHead({ run, flow, now_ms, chips, newer }: { run: any; f
   const mergeRole = useInboxStore((s) => (run.org_role_id && mergeIsOff(run) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
   const head = changeHeadline(journey, run, flow, { pr: prMerge });
   const links = changeLinks(run, flow, targets, prMerge);
-  const action = changeAction(journey, run, flow, { newer, pr: prMerge, mergeRole });
+  const action = changeAction(journey, run, flow, { newer, pr: prMerge, mergeRole, targets });
   const subject = run.spawner_conversation_id ? String(run.spawner_conversation_id) : null;
   const subjectTitle = useInboxStore((s) => (subject ? ((s.conversations as Record<string, { title?: string }>)[subject]?.title ?? (s.sessions as Record<string, { title?: string }>)[subject]?.title ?? null) : null));
   const act = !action ? null

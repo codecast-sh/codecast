@@ -257,6 +257,47 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     expect(head(r, null, shipNow)).toMatchObject({ words: "Stopped at Deploy" });
     expect(head(r, null, shipNow).waits).toMatch(/^Landed/);
     expect(act(r, shipNow)?.kind).toBe("deploys");
+    // F1: the track says Land landed too, never "went another way".
+    expect(j.stages.find((s) => s.role === "land")!.state).toBe("done");
+  });
+
+  test("F2: a flow's own top-level unmerged that loops back to landing is not Deploy finding the change off main", () => {
+    // change-pg17's path: ship__unshipped → unmerged → decide → decide__ship → ship → ship__shipped → deploy, which then failed.
+    const flow = pushedFlow({ _id: "wf_pg17", ...BRANCHING_FLOW } as any) as any;
+    const r = run({ status: "failed", current_node_id: "deploy__failed", merge: null, fail_reason: "Stopped: Deploy failed", node_statuses: [st("start", "completed", 1), st("check__verify", "completed", 2), st("review__review", "completed", 3), st("intent", "completed", 4), st("intent_gate", "completed", 5), st("ask", "completed", 6), st("ship__ship", "failed", 7), st("ship__unshipped", "failed", 8, { result_preview: '{"exit": "unshipped"}' }), st("unmerged", "completed", 9), st("decide__decide", "completed", 10), st("decide__ship", "completed", 11), st("ship__ship", "completed", 12), st("ship__shipped", "completed", 13, { result_preview: '{"exit": "shipped"}' }), st("deploy", "completed", 14), st("deploy__wait", "failed", 15), st("deploy__failed", "failed", 16)] });
+    const j = journeyOf(flow, r, [], null);
+    expect(j.now).toMatchObject({ kind: "stopped", stage: "Deploy", landed: true });
+    expect(j.stages.find((s) => s.role === "land")!.state).toBe("done");
+    expect(act(r, flow)?.kind).toBe("deploys");
+    // Deploy's own unmerged, after the landing, still says the change is not on main.
+    const off = run({ ...r, current_node_id: "deploy__unmerged", node_statuses: [...r.node_statuses.slice(0, -2), st("deploy__unmerged", "failed", 15)] });
+    expect(journeyOf(change, { ...off, node_statuses: [...MERGED.filter((n) => n.node_id !== "merge" && n.node_id !== "landed"), st("landed", "completed", 15), st("deploy", "completed", 16), st("deploy__unmerged", "failed", 17)] }, [], null).now.kind).toBe("unlanded");
+  });
+
+  test("F4: a shipped step a merge still follows (Union's one-session fix flow) is not a landing", () => {
+    const g = pushedFlow({
+      _id: "wf_onefix", slug: "onefix", name: "onefix", kind: "line", source: 'digraph f { graph [kind="line", takes="task,branch"] }',
+      nodes: [{ id: "start", label: "start", type: "start" }, { id: "decide", label: "Decide", type: "human" }, { id: "shipped", label: "Ship", type: "command" }, { id: "build", label: "Build", type: "agent" }, { id: "merge", label: "Merge", type: "command" }, { id: "landed", label: "Merged", type: "command" }, { id: "deploy", label: "Deploy", type: "conditional" }, { id: "deploy__wait", label: "Go live", type: "command" }, { id: "deploy__failed", label: "Deploy failed", type: "exit" }, { id: "exit", label: "Live", type: "exit" }],
+      edges: [{ from: "start", to: "decide" }, { from: "decide", to: "shipped" }, { from: "shipped", to: "build" }, { from: "build", to: "merge" }, { from: "merge", to: "landed" }, { from: "landed", to: "deploy" }, { from: "deploy", to: "deploy__wait" }, { from: "deploy__wait", to: "exit" }, { from: "deploy__wait", to: "deploy__failed", condition: "outcome = failure" }],
+    } as any) as any;
+    // shipped passed; the merge never ran; the run stopped at Deploy's failure: nothing says it landed.
+    const r = run({ status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: x", node_statuses: [st("start", "completed", 1), st("decide", "completed", 2), st("shipped", "completed", 3), st("deploy__wait", "failed", 4), st("deploy__failed", "failed", 5)] });
+    expect((journeyOf(g, r, [], null).now as any).landed).toBeUndefined();
+  });
+
+  test("F3: Open Deploys opens the target a stopped deploy is stuck on, from the deploy records first", () => {
+    // th77se1j's stop: cli stuck, backend live.
+    const why = "Stopped: Deploy stuck: cli is not live with acbd8d2 after 60m (last: waiting on main CI at c6c7a32 (running)). Live: backend dp-3302.";
+    const r = run({ status: "failed", current_node_id: "deploy__stuck", merge: { sha: "acbd8d27a8" }, fail_reason: why, node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: why.replace("Stopped: ", "") })] });
+    expect(deploysHref(r, why)).toBe("/deploys?team=t1&target=cli&sha=acbd8d27a8");
+    expect(act(r)).toMatchObject({ kind: "deploys", href: "/deploys?team=t1&target=cli&sha=acbd8d27a8" });
+    // The deploy records name the target and its deploy: they win over any words.
+    expect(act(r, change, { targets: [{ name: "backend", state: "live", deploy: "dp-3302" }, { name: "cli", state: "deploying", deploy: "dp-3313" }] })!.href).toBe("/deploys?team=t1&target=cli&deploy=dp-3313");
+  });
+
+  test("F5: a pushed flow keeps the stored node's backend where its source names none", () => {
+    const f = pushedFlow({ _id: "wf_u", slug: "fixflow", name: "fixflow", kind: "line", source: 'digraph f { graph [kind="line"] }', nodes: [{ id: "start", label: "start", type: "start" }, { id: "fix", label: "Fix findings", type: "agent", backend: "subject" }], edges: [{ from: "start", to: "fix" }] } as any) as any;
+    expect(f.nodes.find((n: any) => n.id === "fix").backend).toBe("subject");
   });
 
   test("a PR GitHub already merged: never Ship again, and the Merged chip shows", () => {

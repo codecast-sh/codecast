@@ -9,7 +9,7 @@ import { entityRoute } from "@codecast/shared/entities";
 import { journeyStages, targetsFromLine, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
-import { deploysFocusHref, deploysHref, runFocus, runTeam } from "../deploys/focus";
+import { deploysFocusHref, deploysHref as wordsHref, runFocus, runTeam } from "../deploys/focus";
 
 type Status = { node_id: string; status?: string; result_preview?: string | null; started_at?: number; session?: { _id: string; title?: string | null } | null };
 export type ChangeGraph = { nodes: ReadonlyArray<FlowNodeIn>; edges: ReadonlyArray<FlowEdgeIn>; kind?: string; takes?: ReadonlyArray<string> };
@@ -217,10 +217,15 @@ export type ChangeAction = { kind: "newer" | "merge_switch" | "deploys" | "sessi
  * the role that holds its switch (`mergeRole`), else falls to the session; a stop at Deploy opens Deploys; one that
  * wants the session's fix opens it. Ship again only for an unplanned stop (fix "again") with nothing on main (the run
  * landed it, its PR was merged, or it may have). Otherwise the session that made the change, else the card the run asked.
+ * `targets`: where the deploy records put the change; Deploys opens the first one not live from them, before any words.
  */
-export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { newer?: string | null; pr?: PrState; mergeRole?: string | null } = {}): ChangeAction | null {
+export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { newer?: string | null; pr?: PrState; mergeRole?: string | null; targets?: ReadonlyArray<TargetState> } = {}): ChangeAction | null {
   const n = j.now;
   const subject = run.spawner_conversation_id ?? null;
+  const pending = ctx.targets?.find((t) => t.state !== "live");
+  const deploysHref = (words: string | null | undefined) => (pending
+    ? deploysFocusHref({ team: runTeam(run), target: pending.name, focus: pending.deploy ? { kind: "deploy", id: pending.deploy } : runFocus(run) })
+    : wordsHref(run, words));
   const openSession = (id: string | null | undefined): ChangeAction | null => (id ? { kind: "session", label: "Open session", href: `/conversation/${id}` } : null);
   switch (n.kind) {
     case "gate": return !n.mine && n.decisionId ? { kind: "card", label: "Open the card", href: `/decisions/${run.gate_decision_short_id ?? n.decisionId}` } : null;
@@ -233,7 +238,7 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
       return n.session ? { kind: n.who === "agent" ? "agent" : "session", label: n.who === "agent" ? "Open agent" : "Open session", href: `/conversation/${n.session.id}` } : null;
     }
     case "landed":
-    case "deploying": return { kind: "deploys", label: "Open Deploys", href: deploysHref(run, n.line) };
+    case "deploying": return { kind: "deploys", label: "Open Deploys", href: deploysHref(n.line) };
     case "stopped":
     case "failed":
     case "unlanded": break;
@@ -243,7 +248,7 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
   const stop = n.kind === "unlanded" ? null : n;
   // Once GitHub merged the PR, merging is moot: the switch would change nothing for this change.
   if (mergeIsOff(run) && !ctx.pr?.merged && ctx.mergeRole) return { kind: "merge_switch", label: "Turn merge on", href: `/org/${ctx.mergeRole}` };
-  if (stop?.fix === "deploy") return { kind: "deploys", label: "Open Deploys", href: deploysHref(run, stop.why) };
+  if (stop?.fix === "deploy") return { kind: "deploys", label: "Open Deploys", href: deploysHref(stop.why) };
   const session = openSession(stop?.session ?? subject);
   if (stop?.fix === "session" && session) return session;
   // A deliberate stop (fix "run") repeats if run again: its session is the way on. Only an unplanned one runs again.

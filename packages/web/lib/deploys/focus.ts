@@ -266,6 +266,10 @@ export function deploysHref(run: any, words?: string | null): string {
     const going = waiting[2].match(/\b(dp-\d+)\b/)?.[1];
     return deploysFocusHref({ team, target: waiting[1], focus: going ? { kind: "deploy", id: going } : runFocus(run) });
   }
+  // A stop's own words ("Deploy stuck: cli is not live with acbd8d2 … Live: backend dp-3302.") name the target it stopped
+  // on before the ones already live.
+  const stuck = words?.match(/\b([a-z][a-z0-9-]{0,31}) is not live\b/)?.[1];
+  if (stuck) return deploysFocusHref({ team, target: stuck, focus: runFocus(run) });
   const named = words?.match(/(?:\b([a-z][a-z0-9-]{0,31}) )?\b(dp-\d+)/);
   // "going out in dp-13" names a deploy but not its target; the page finds that from the deploy.
   const target = named?.[1] && named[1] !== "in" ? named[1] : null;

@@ -324,6 +324,35 @@ export function deployHold(line: string | null | undefined): DeployHold {
   return hold("wait");
 }
 
+/**
+ * Whether a landing step that passed put the change on main when no sha was recorded (`ship__shipped` reports only its
+ * exit). A landing step counts only where no merge or push station can follow it (Union's one-session fix flow has a
+ * `shipped` that runs before its Land merges), and only until Deploy finds the change not on main: an `unmerged` step
+ * of the Deploy stage entered after the latest landing (a flow's own `unmerged` that routes back to landing is not one).
+ */
+function landedByStep(graph: Graph, plan: ReadonlyArray<Base>, statuses: ReadonlyArray<NodeStatus>, at: string | null): boolean {
+  const next = new Map<string, string[]>();
+  for (const e of graph.edges) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
+  const merges = (from: string) => {
+    const seen = new Set([from]);
+    const queue = [...(next.get(from) ?? [])];
+    while (queue.length) {
+      const id = queue.shift()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (/^(merge|push)$/.test(id.split(SEGMENT_SEP).pop()!)) return true;
+      queue.push(...(next.get(id) ?? []));
+    }
+    return false;
+  };
+  const landing = statuses.filter((n) => n.status === "completed" && LANDING_STEP.test(n.node_id) && !merges(n.node_id)).sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0))[0];
+  if (!landing) return false;
+  const deploy = plan.find((s) => s.role === "deploy");
+  const unmerged = (id: string) => /(^|__)unmerged$/.test(id) && !!deploy && inStage(deploy, id);
+  if (at && unmerged(at)) return false;
+  return !statuses.some((n) => unmerged(n.node_id) && (n.started_at ?? 0) >= (landing.started_at ?? 0));
+}
+
 /** The journey of a flow, on a run when there is one, with where its landed change is on each deploy target. */
 export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targets: ReadonlyArray<TargetState> = [], viewer: JourneyViewer | null = null): Journey {
   const plan = planOf(graph, targets.length > 0);
@@ -343,6 +372,8 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const sha = view?.landed ?? landedSha(run);
   const waitingOn = run.waiting_on_session ? { ...run.waiting_on_session, node_id: idOf(run.waiting_on_session.node_id) } : null;
   const at = run.current_node_id ? idOf(run.current_node_id) : null;
+  // Once the run ended: while it runs, Deploy's own wait (await-deploy finding the commit on main) is the word on it.
+  const landedStep = !sha && !live && landedByStep(graph, plan, statuses, at);
   const flowStages = plan.filter((s) => s.role !== "live" && s.members.length);
   const stageOf = (nodeId: string | null) => (nodeId ? flowStages.find((s) => inStage(s, nodeId)) ?? null : null);
   // A fix station belongs to the stage that sent the work back.
@@ -474,11 +505,12 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const last = latestOf(b);
     if (!last) return passed ? "skipped" : "idle";
     if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
-    // A landing stage with the merge recorded landed, whatever its bookkeeping did after.
-    if (b.role === "land" && sha) return "done";
+    // A landing stage with the merge recorded, or whose landing step passed (landedByStep), landed, whatever its
+    // bookkeeping did after.
+    if (b.role === "land" && (sha || landedStep)) return "done";
     if (last.status === "failed") return "routed";
     // A landing stage that went on with no merged sha recorded did not land anything.
-    if (b.role === "land" && !sha) return "routed";
+    if (b.role === "land") return "routed";
     return "done";
   };
   // A branch says what its verdict says, once the round has one: red CI and changes asked sent the work back, a CI held
@@ -632,9 +664,6 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : subject ? "session"
       : deliberate ? "run"
       : "again";
-    // A landing step that passed (`ship__shipped`, `landed`) put the change on main even when it reported no sha, unless
-    // Deploy then found it not on main (its `unmerged` stop).
-    const landedStep = !sha && statuses.some((n) => n.status === "completed" && LANDING_STEP.test(n.node_id)) && !statuses.some((n) => /(^|__)unmerged$/.test(n.node_id)) && !/(^|__)unmerged$/.test(at ?? "");
     // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
     if (!sha && !landedStep && stage?.role === "deploy") now = { kind: "unlanded", why: (own ? stopWhy(run.fail_reason) : readableWhy(run.fail_reason)) ?? "The run ended with no merge recorded", waits: [] };
     // An own-results round's stops are ends of their own, each said by its name with its reason (a result's note, a
