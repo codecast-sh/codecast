@@ -41,18 +41,17 @@ simulators = ["iOS"]
 # are sized to it (a 16 GB t3.xlarge), and placements prefer hosts that have it.
 memory_gb = 12
 
-# How `cast ship checkout` lands everything uncommitted in this shared
-# checkout: commits by session, replayed onto origin/main in memory, checked
-# here, pushed straight to main. Convex deploys before the push when the
-# shipped commits touch it (CLAUDE.md "Deploy convex BEFORE you push"); its own
-# typecheck is off because `cast check` just ran over the same tree, convex
-# included. Web ships itself: Railway builds every push to main. Tests run in
-# CI, not here: a day's ship touches a hundred test files across packages with
-# their own runners, and the fix-forward trigger answers a red run.
+# How `cast ship checkout` (the checkout's Ship button, the cast-ship and
+# cast-deploy skills) lands everything uncommitted in this shared checkout: it
+# runs the pass through the change flow (`cast flow run change --checkout`), a
+# commit per session that wrote the files, as one pull request. CI runs beside
+# an independent review, each finding goes back to the sessions that wrote the
+# files it names, and the flow merges only on green, then deploys. Merge runs
+# the before_push steps below (from main's copy of this file) before it
+# merges, so convex still deploys first. `level` lets the daemon keep this
+# checkout level with origin/main.
 [ship]
-mode = "direct"
-check = "cast check --changed-since $CAST_SHIP_BASE"   # only the projects this ship touches
-tests = false
+flow = "change"
 level = true
 
 # The composer typing budget (packages/web/scripts/typing-guard.sh): a change
