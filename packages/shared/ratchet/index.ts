@@ -10,15 +10,16 @@ import { basename, join } from "node:path";
 // move together and the guard stays green. That is how a guard rots into
 // paperwork.
 //
-// A ratchet closes both holes. It holds a PINNED COUNT of offending files as a
-// literal in the test, so a swap fails even when the allowlist still balances,
-// and it fails on a STALE entry, so ground taken cannot be quietly given back.
-// The count may only ever be lowered. The listed files carry a pinned number
-// too (occurrences, or lines for the size baseline), so a listed file may not
-// grow either.
+// A ratchet closes both holes. The allowlist is its one record: an offender
+// that is not listed fails, and a STALE entry fails, so a swap fails even when
+// the list still balances and ground taken cannot be quietly given back. The
+// listed files carry a pinned number (occurrences, or lines for the size
+// baseline), so a listed file may not grow either. There is no total to keep
+// in step: the list is the count, and two branches that each fix a different
+// file edit different lines of it rather than one shared number.
 //
 // The fix for a failure is always to remove the offence, never to widen the
-// list. The only sanctioned edit to a pin is downward:
+// list. The only sanctioned edit to the list is downward:
 //   RATCHET_WRITE=prune bun test <the ratchet test>
 // which drops entries that no longer match and lowers pinned numbers that came
 // down. It never adds an entry and never raises a number.
@@ -43,8 +44,6 @@ export type RatchetSpec = {
   count: (source: string, rel: string) => number;
   /** Absolute path of the allowlist file. */
   allowlist: string;
-  /** How many files break the rule today. May only ever be lowered. */
-  pin: number;
   /** One line: what to do instead of adding an entry. */
   fix: string;
   /** The exact command that prunes this ratchet's allowlist. */
@@ -248,17 +247,6 @@ export function checkRatchet(spec: RatchetSpec): RatchetResult {
   for (const key of allowed.keys()) {
     if (offenderKeys.has(key)) continue;
     problems.push(`${spec.name}: ${key} no longer breaks this rule — delete its line from ${listName} so it cannot come back for free. (${spec.pruneCommand})`);
-  }
-
-  if (offenders.length > spec.pin) {
-    problems.push(
-      `${spec.name}: ${offenders.length} files break this rule and the pin is ${spec.pin}. Never raise the pin. ${spec.fix}`,
-    );
-  } else if (offenders.length < spec.pin) {
-    // A pin left above reality re-opens room for the next offender to land free.
-    problems.push(
-      `${spec.name}: only ${offenders.length} files break this rule now — lower the pin in this test from ${spec.pin} to ${offenders.length} to keep the ground you took.`,
-    );
   }
 
   return { scanned, offenders, problems };

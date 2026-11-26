@@ -17,11 +17,6 @@ import { CLIENT_SYNC_REGISTRY, SYNCED_WRITER_MODULES } from "../../store/clientS
 // call one of them itself: it calls the store action instead.
 
 const WEB = join(import.meta.dir, "..", "..");
-/** Files that call a synced module's mutation no store action owns. May only
- *  fall. Pinned at 54 when the rule widened to bespoke-fed keys (`writtenBy`)
- *  and to Convex client calls, with the team, org, PR and palette gestures it
- *  first caught moved onto store actions. */
-const PIN_DIRECT_SYNCED_WRITES = 44;
 const CONVEX = join(WEB, "..", "convex", "convex");
 const DISPATCH = readFileSync(join(CONVEX, "dispatch.ts"), "utf8");
 
@@ -194,7 +189,6 @@ const directSyncedWrites = checkRatchet({
       SYNCED_MODULES.has(path.split(".").slice(0, -1).join(".")) && !ownedByAction.has(path) && !COMMAND_ONLY.has(path),
     ).length,
   allowlist: join(import.meta.dir, "storeActionMutations.allowlist.txt"),
-  pin: PIN_DIRECT_SYNCED_WRITES,
   fix: "Add a store action for the gesture (draft write + named dispatch side effect in convex/dispatch.ts), classify it in store/undo/policy.ts, and call it.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/storeActionMutations.guard.test.ts",
   minScanned: 400,

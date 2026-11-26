@@ -28,9 +28,6 @@ const ALLOWLIST = join(import.meta.dir, "registeredFeeds.allowlist.txt");
 const feedPattern = (feed: string) =>
   new RegExp(String.raw`\bapi\)?(?:\.|\[["'])` + feed.replace(".", String.raw`(?:["']\])?\.`) + String.raw`\b`);
 
-/** How many files subscribe to a registered feed directly. May only fall. */
-const PIN = 1;
-
 const feeds = Object.keys(REGISTERED_FEEDS);
 const patterns = feeds.map(feedPattern);
 
@@ -48,7 +45,6 @@ const result = checkRatchet({
       .filter((line) => !/\btypeof\s+api\b/.test(line))
       .reduce((hits, line) => hits + (patterns.some((re) => re.test(line)) ? 1 : 0), 0),
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: "Read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection) and mount the feeder hook in hooks/.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/registeredFeeds.guard.test.ts",
   minScanned: 400,

@@ -54,9 +54,6 @@ function rawVisibilityPatches(source: string): number {
   return hits;
 }
 
-/** How many files patch conversation visibility outside the chokepoint. */
-const PIN = 0;
-
 const result = checkRatchet({
   name: "raw conversation visibility patch",
   root: ROOT,
@@ -66,7 +63,6 @@ const result = checkRatchet({
     rel === "lib/conversationVisibility.ts" || /\.test\.ts$/.test(rel) || rel.startsWith("__tests__/"),
   count: rawVisibilityPatches,
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: "Call patchConversationVisibility from lib/conversationVisibility.ts instead — it patches the row and rewrites the workspace key of every linked work item.",
   pruneCommand: "cd packages/convex && RATCHET_WRITE=prune bun test convex/conversationVisibilityPatch.ratchet.test.ts",
   minScanned: 100,
