@@ -14,7 +14,8 @@
   font-family: var(--font-ui);
   color: var(--sol-text);
 }
-/* A card is as wide as where it sits, so the track can ask how much room each of its stages gets. */
+/* A card is as wide as where it sits, so the track can ask how much room each of its stages gets. An inline-size container
+   takes no width from its content: its parent must give it one (a block, or a sized popover), never shrink to fit it. */
 .sj { container: sj / inline-size; }
 
 /* The track: one equal column per stage, joined by a line that fills in as the change moves. */
@@ -63,10 +64,11 @@
 .sj-stage[data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-stage[data-who="you"] { --sj-who-c: var(--sj-you); }
 .sj-stage[data-who="session"], .sj-stage[data-state="back"] { --sj-who-c: var(--sj-session); }
-/* A label wraps rather than hides its end: "Land without asking?" reads whole on two lines. */
-.sj-label { font-size: 12.5px; font-weight: 600; line-height: 1.2; margin-top: 3px; max-width: 100%; overflow-wrap: break-word; text-wrap: balance; }
+/* A label wraps rather than hides its end: "Land without asking?" reads whole on two lines. A word wider than its column
+   (only where the track cannot turn down the card, below) is hyphenated where English allows, split only past that. */
+.sj-label { font-size: 12.5px; font-weight: 600; line-height: 1.2; margin-top: 3px; max-width: 100%; overflow-wrap: break-word; hyphens: auto; text-wrap: balance; }
 .sj-stage[data-state="idle"] .sj-label { color: var(--sol-text-muted); }
-.sj-who { font-size: var(--fs-meta); line-height: 1.2; color: var(--sj-who-c); max-width: 100%; overflow-wrap: break-word; }
+.sj-who { font-size: var(--fs-meta); line-height: 1.2; color: var(--sj-who-c); max-width: 100%; overflow-wrap: break-word; hyphens: auto; }
 .sj-stage[data-state="idle"] .sj-who { opacity: .8; }
 .sj-round { color: var(--sol-text-dim); margin-left: 3px; }
 /* Under who acts, not beside it: six stages leave no room for both on one line. */
@@ -192,17 +194,19 @@ a.sj-left { text-decoration: none; }
 
 /* Too many stages for the card's width (each needs about 84px for its name and who acts there): the track turns down the
    card, one stage a row, as the phone draws it. A rule per stage count, each matching a track with at least that many
-   stages, sets one switch; the rows read it. A browser without style queries keeps the row, its labels wrapped. */
-@container sj (width < 272px) { .sj-track:has(> .sj-stages > :nth-child(3)) { --sj-stack: 1; } }
-@container sj (width < 356px) { .sj-track:has(> .sj-stages > :nth-child(4)) { --sj-stack: 1; } }
-@container sj (width < 440px) { .sj-track:has(> .sj-stages > :nth-child(5)) { --sj-stack: 1; } }
-@container sj (width < 524px) { .sj-track:has(> .sj-stages > :nth-child(6)) { --sj-stack: 1; } }
-@container sj (width < 608px) { .sj-track:has(> .sj-stages > :nth-child(7)) { --sj-stack: 1; } }
-@container sj (width < 692px) { .sj-track:has(> .sj-stages > :nth-child(8)) { --sj-stack: 1; } }
-@container sj (width < 776px) { .sj-track:has(> .sj-stages > :nth-child(9)) { --sj-stack: 1; } }
-@container sj (width < 860px) { .sj-track:has(> .sj-stages > :nth-child(10)) { --sj-stack: 1; } }
-@container sj (width < 944px) { .sj-track:has(> .sj-stages > :nth-child(11)) { --sj-stack: 1; } }
-@container sj (width < 1028px) { .sj-track:has(> .sj-stages > :nth-child(12)) { --sj-stack: 1; } }
+   stages, sets one switch; the rows read it. Thirteen stages or more always turn. A browser without container style
+   queries keeps the row: its labels wrap and hyphenate, and a column narrower than "Automatic" still splits the word. */
+@container sj (width < 272px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(3)) { --sj-stack: 1; } }
+@container sj (width < 356px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(4)) { --sj-stack: 1; } }
+@container sj (width < 440px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(5)) { --sj-stack: 1; } }
+@container sj (width < 524px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(6)) { --sj-stack: 1; } }
+@container sj (width < 608px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(7)) { --sj-stack: 1; } }
+@container sj (width < 692px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(8)) { --sj-stack: 1; } }
+@container sj (width < 776px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(9)) { --sj-stack: 1; } }
+@container sj (width < 860px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(10)) { --sj-stack: 1; } }
+@container sj (width < 944px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(11)) { --sj-stack: 1; } }
+@container sj (width < 1028px) { .sj-track:has(> .sj-stages > .sj-stage:nth-child(12)) { --sj-stack: 1; } }
+.sj-track:has(> .sj-stages > .sj-stage:nth-child(13)) { --sj-stack: 1; }
 @container style(--sj-stack: 1) {
   .sj-stages { display: flex; flex-direction: column; }
   .sj-stage, .sj-stage-btn { display: grid; grid-template-columns: 22px minmax(0, max-content) minmax(0, 1fr); column-gap: 10px; row-gap: 2px; align-items: center; text-align: left; }
@@ -218,6 +222,8 @@ a.sj-left { text-decoration: none; }
   .sj-return { grid-column: 1 / -1; align-items: flex-start; padding-left: 32px; text-align: left; }
   .sj-return-words { text-align: left; }
   .sj-return-line { display: none; }
+  /* The stages that send findings back carry the return mark the words under the list explain. */
+  .sj-stage[data-loops] .sj-who::after { content: "↵" / ""; margin-left: 6px; font-weight: 600; color: var(--sj-session); }
 }
 .sj-in { list-style: none; margin: 0; padding: 12px 14px 12px 16px; border-top: 1px solid var(--sj-rule-2); background: var(--sj-card); font-size: 12px; }
 .sj-in-step { position: relative; padding: 0 0 12px 26px; --sj-who-c: var(--sj-auto); }

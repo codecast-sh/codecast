@@ -48,7 +48,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
         {stages.map((s, i) => {
           const next = stages[i + 1];
           return (
-            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done" || s.state === "nothing") ? "" : undefined} data-stage={s.id} title={s.note ?? undefined}>
+            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done" || s.state === "nothing") ? "" : undefined} data-loops={looping.includes(i) ? "" : undefined} data-stage={s.id} title={s.note ?? undefined}>
               {onOpen && (s.steps?.length || s.inside) ? (
                 <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} aria-controls={s.inside ? insideId : undefined} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
                   <StageFace s={s} finished={finished} />
