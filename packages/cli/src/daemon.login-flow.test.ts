@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { buildLoginFlowCommand, buildMintFlowCommand, loginPaneSucceeded, summarizeLoginPaneTail } from "./daemon.js";
+import { buildLoginFlowCommand, buildMintFlowCommand, loginPaneSucceeded, storeBeatAction, summarizeLoginPaneTail } from "./daemon.js";
 
 const daemonSource = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 
@@ -80,6 +80,26 @@ describe("per-profile credential stores", () => {
   test("provisions stores on every heartbeat without a settings gate", () => {
     expect(daemonSource).not.toContain("sessionTokensEnabled");
     expect(daemonSource).toMatch(/async function sendHeartbeat[\s\S]*?void ensureProfileStores\("heartbeat"\);/);
+  });
+
+  // 2026-11-25: a wrong "unsupported" deleted each saved login's store as it
+  // was saved. Only a proved negative may delete; an unknown waits, unless this
+  // daemon already saw the binary prove support.
+  test("only a proved negative deletes stores", () => {
+    expect(storeBeatAction("unsupported", true)).toBe("delete");
+    expect(storeBeatAction("supported", false)).toBe("provision");
+    expect(storeBeatAction("unknown", true)).toBe("provision");
+    expect(storeBeatAction("unknown", false)).toBe("wait");
+  });
+
+  test("a profile sign-in asks the binary afresh, then re-checks for a flow started meanwhile", () => {
+    const body = /async function startLoginFlow[\s\S]*?const gen = \+\+loginFlowGeneration;/.exec(daemonSource)?.[0] ?? "";
+    const probe = body.indexOf("checkSecureStorageSupport({ fresh: true");
+    const recheck = body.lastIndexOf('if (loginFlowActive && !force) return "login_flow_already_running";');
+    expect(probe).toBeGreaterThan(-1);
+    expect(recheck).toBeGreaterThan(probe);
+    // Nothing awaits between that last check and the flag being taken.
+    expect(body.slice(recheck)).not.toContain("await");
   });
 
   test("never opens a browser unattended", () => {
