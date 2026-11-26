@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { recentForTeam } from "./deployRefs";
+import { deployLines, recentForTeam } from "./deployRefs";
 
 // A team's deploy list names the sessions and tasks each deploy carried. A
 // commit's session can be private to its owner (team_id is routing), so each
@@ -36,7 +36,7 @@ function ctxAs(userId: string, o: { priorities?: boolean } = {}) {
       { _id: "c_b", sha: SHA_B, repository: "o/r", message: "two (#42)", files: [{ filename: "z.ts", status: "modified", additions: 0, deletions: 0, changes: 0 }], insertions: 1, deletions: 0 },
       { _id: "c_c", sha: SHA_C, repository: "o/r", message: "three", files: [{ filename: "w.ts", status: "modified", additions: 0, deletions: 0, changes: 0 }], insertions: 1, deletions: 0 },
     ],
-    pull_requests: [{ _id: "pr_42", repository: "o/r", number: 42, head_ref: "ana/two", additions: 120, deletions: 30 }],
+    pull_requests: [{ _id: "pr_42", repository: "o/r", number: 42, head_ref: "ana/two", additions: 120, deletions: 30, merge_commit_sha: SHA_B }],
     tasks: [
       { _id: "task_team", short_id: "ct-1", title: "Team task", user_id: BEN, team_id: TEAM, workspace: WS },
       { _id: "task_private", short_id: "ct-2", title: "Private task", user_id: BEN, team_id: TEAM, workspace: `user:${BEN}` },
@@ -92,32 +92,15 @@ describe("deployRefs.recentForTeam", () => {
     expect(on.sessions.find((s: any) => s.conversation_id === "conv_open").priority).toBeUndefined();
   });
 
-  test("each commit carries its lines, pull request and branch from its row on main", async () => {
-    const [d] = await run(BEN);
-    const [a, b, c] = d.commit_rows;
-    // The checkout's numstat: the files' own counts.
-    expect(a).toMatchObject({ insertions: 10, deletions: 2, pr_number: 41, branch: null });
-    // A push webhook row with no line counts, squash-merged from #42: the pull request's lines and head.
-    expect(b).toMatchObject({ insertions: 120, deletions: 30, pr_number: 42, branch: "ana/two" });
-    // Nothing recorded its lines: none are claimed (never the row's file count); the branch is its session's.
-    expect(c.insertions).toBeUndefined();
-    expect(c.deletions).toBeUndefined();
-    expect(c).toMatchObject({ pr_number: null, branch: "ben/secret" });
-  });
-
   test("each session names the tasks its commits carry, only those the viewer may read", async () => {
     const [own] = await run(BEN);
     expect(own.sessions.find((x: any) => x.conversation_id === "conv_private").task_short_ids).toEqual(["ct-2"]);
     expect(own.sessions.find((x: any) => x.conversation_id === "conv_open").task_short_ids).toEqual(["ct-1"]);
   });
 
-  test("every commit row says its branch: null when none is known, never left out", async () => {
+  test("the list reads no commit rows or pull requests: lines and branches are deployLines' to read", async () => {
     const [d] = await run(BEN);
-    expect(d.commit_rows[2].branch).toBe("ben/secret");
-    expect(d.commit_rows[0].branch).toBeNull();
-    // Codecast never saw this one on main: no lines claimed, the branch still said.
-    expect(d.commit_rows[3]).toMatchObject({ branch: null });
-    expect("insertions" in d.commit_rows[3]).toBe(false);
+    for (const r of d.commit_rows) for (const k of ["insertions", "deletions", "pr_number", "branch"]) expect(k in r).toBe(false);
   });
 
   test("a session's tasks span every commit of the deploy, past the rows it lists", async () => {
@@ -131,8 +114,39 @@ describe("deployRefs.recentForTeam", () => {
     expect(d.sessions.find((x: any) => x.conversation_id === "conv_open").task_short_ids).toEqual(["ct-1"]);
   });
 
+});
+
+const lines = (userId: string, deploy_id = "dep_1") => (deployLines as any)._handler(ctxAs(userId), { deploy_id });
+
+describe("deployRefs.deployLines", () => {
+  test("each listed commit with its lines, pull request and branch, from its row on main", async () => {
+    const { rows } = await lines(BEN);
+    expect(rows).toEqual([
+      // The checkout's numstat: the files' own counts; no pull request, no session branch.
+      { sha: SHA_A, insertions: 10, deletions: 2, pr_number: 41, branch: null },
+      // A push webhook row with no line counts, squash-merged as #42: the pull request's lines and head.
+      { sha: SHA_B, insertions: 120, deletions: 30, pr_number: 42, branch: "ana/two" },
+      // Nothing recorded its lines: none are claimed (never the row's file count); the branch is its session's.
+      { sha: SHA_C, pr_number: null, branch: "ben/secret" },
+      // Codecast never saw it on main: no lines, the branch still said.
+      { sha: "d".repeat(40), pr_number: null, branch: null },
+    ]);
+  });
+
   test("a session's branch is never read for a viewer who may not read that session", async () => {
-    const [d] = await run(ANA);
-    expect(d.commit_rows[2].branch).toBeNull();
+    const { rows } = await lines(ANA);
+    expect(rows[2]).toEqual({ sha: SHA_C, pr_number: null, branch: null });
+  });
+
+  test("someone outside the team, or a deploy that does not exist, gets no rows", async () => {
+    expect(await lines(EVE)).toEqual({ rows: [] });
+    expect(await lines(BEN, "dep_missing")).toEqual({ rows: [] });
+  });
+
+  test("only the rows the list shows", async () => {
+    const ctx = ctxAs(BEN);
+    ctx.db._tables.deploys[0].commits = Array.from({ length: 45 }, (_, i) => ({ sha: i.toString(16).padStart(40, "0"), subject: `c${i}` }));
+    const { rows } = await (deployLines as any)._handler(ctx, { deploy_id: "dep_1" });
+    expect(rows).toHaveLength(40);
   });
 });

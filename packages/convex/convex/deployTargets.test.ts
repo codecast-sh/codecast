@@ -162,6 +162,21 @@ describe("the waiting queue (DP12)", () => {
     expect(backend.queue.groups[0].commits[0].ci_url).toBe("https://ci/2");
   });
 
+  test("a session the viewer may not read is named by id alone: no title, owner or branch", async () => {
+    const { t, ctx } = await published();
+    t.conversations.push({ _id: "conv_bo_secret", title: "Bo's private fix", user_id: BO, team_id: TEAM, is_private: true, git_branch: "bo/secret" });
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(1), repository: REPO, source: "cast ship mark", at: NOW - 9_000 });
+    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], conv: "conv_bo_secret" }], NOW - 5_000);
+    const sessionOf = async (token: string) => {
+      const [backend] = (await (view as any)._handler(ctx, { api_token: token, team_id: TEAM, target: "backend" })).targets;
+      const [c] = backend.queue.groups[0].commits;
+      return { session: c.session, branch: c.branch };
+    };
+    expect(await sessionOf(TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: null }, branch: null });
+    expect(await sessionOf(BO_TOKEN)).toEqual({ session: { conversation_id: "conv_bo_secret", short_id: "conv_bo", title: "Bo's private fix", user_id: BO }, branch: "bo/secret" });
+  });
+
   test("a deploy going live records the commits it carried, the sessions and tasks behind them, and what came after", async () => {
     const { t, ctx } = await published();
     await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 10_000);

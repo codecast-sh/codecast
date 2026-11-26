@@ -27,8 +27,6 @@ const RECENT = 80;
 const COMMIT_ROWS = 40;
 /** The sessions a deploy row names: every one its commits carry, up to this. */
 const SESSION_ROWS = 80;
-/** Commits on main read for their lines, pull request and branch, newest deploys first; rows past this go without. */
-const COMMIT_LOOKUPS = 300;
 
 /** A team's newest deploys, every target, each with the sessions whose commits it carried and the tasks it took out. */
 export const recentForTeam = query({
@@ -41,31 +39,17 @@ export const recentForTeam = query({
     const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
     // A session the viewer may read, with its owner and the priority it serves.
     const priorityOf = await sessionPriorityReader(ctx, userId, args.team_id);
-    const convs = new Map<string, { title: string | null; user_id: string; git_branch?: string; priority: { id: string; title: string | null } | null } | null>();
+    const convs = new Map<string, { title: string | null; user_id: string; priority: { id: string; title: string | null } | null } | null>();
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {
       const k = String(id);
       if (!convs.has(k)) {
         const c = await ctx.db.get(id);
         convs.set(k, c && (await canAccessConversation(ctx, userId, c))
-          ? { title: (c.title || c.subtitle || null) as string | null, user_id: String(c.user_id), git_branch: c.git_branch, priority: await priorityOf(c) }
+          ? { title: (c.title || c.subtitle || null) as string | null, user_id: String(c.user_id), priority: await priorityOf(c) }
           : null);
       }
       return convs.get(k);
-    };
-    // Each commit's lines, pull request and branch, from its row on main (a deploy's record keeps only sha and subject).
-    const facts = new Map<string, Promise<Awaited<ReturnType<typeof commitFacts>> | null>>();
-    const factsOf = (repository: string | undefined, c: { sha: string; conversation_id?: Id<"conversations"> }) => {
-      if (!repository) return null;
-      const k = `${repository}@${c.sha}`;
-      if (!facts.has(k)) {
-        if (facts.size >= COMMIT_LOOKUPS) return null;
-        facts.set(k, (async () => {
-          const row = await commitBySha(ctx, repository, c.sha);
-          return row ? await commitFacts(ctx, row, (c.conversation_id ? await convOf(c.conversation_id) : null) ?? null) : null;
-        })());
-      }
-      return facts.get(k)!;
     };
     const taskOf = async (id: Id<"tasks">) => {
       const k = String(id);
@@ -123,8 +107,6 @@ export const recentForTeam = query({
           ...(c.author ? { author: c.author } : {}),
           ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}),
           tasks: (await Promise.all((c.task_ids ?? []).slice(0, 3).map(async (t) => (await taskOf(t))?.short_id ?? null))).filter(Boolean),
-          // Every row says its branch: null when none is known, looked up or not.
-          ...((await factsOf(d.repository, c)) ?? { branch: null }),
         }))),
         sessions,
         tasks: taskRows,
@@ -134,5 +116,33 @@ export const recentForTeam = query({
       });
     }
     return out;
+  },
+});
+
+/**
+ * One deploy's listed commits (the first COMMIT_ROWS, as recentForTeam lists them) with their lines, pull request and
+ * branch, read from their rows on main and their pull requests (commitFacts). Its own query, asked per card the page
+ * shows: those rows are large, and recentForTeam is held by every viewer of the page.
+ */
+export const deployLines = query({
+  args: { deploy_id: v.id("deploys") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { rows: [] };
+    const d = await ctx.db.get(args.deploy_id);
+    if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) return { rows: [] };
+    const convs = new Map<string, Promise<Doc<"conversations"> | null>>();
+    // A session's branch is read only for a viewer who may read the session.
+    const readable = (id: Id<"conversations">) => {
+      const k = String(id);
+      if (!convs.has(k)) convs.set(k, ctx.db.get(id).then(async (c) => (c && (await canAccessConversation(ctx, userId, c)) ? c : null)));
+      return convs.get(k)!;
+    };
+    const rows: Array<{ sha: string; insertions?: number; deletions?: number; pr_number: number | null; branch: string | null }> = [];
+    for (const c of (d.commits ?? []).slice(0, COMMIT_ROWS)) {
+      const row = d.repository ? await commitBySha(ctx, d.repository, c.sha) : null;
+      rows.push({ sha: c.sha, ...(row ? await commitFacts(ctx, row, c.conversation_id ? await readable(c.conversation_id) : null) : { pr_number: null, branch: null }) });
+    }
+    return { rows };
   },
 });
