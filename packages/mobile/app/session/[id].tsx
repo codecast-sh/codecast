@@ -94,6 +94,7 @@ import { sessionLanded } from '@/lib/compose';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/components/session/SessionActionsSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
+import { projectName } from '@/components/sessionFormat';
 import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
 import { DecisionCard } from '@/components/decisions/DecisionCard';
 import { PermissionRecordLine } from '@/components/decisions/PermissionRecord';
@@ -3898,6 +3899,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // The chip strip shows the model and the branch; the rest wait behind one
   // "+N" tap so the strip under the title stays a single calm line.
   const [chipsExpanded, setChipsExpanded] = useState(false);
+  const sessionProject = conversation ? projectName(conversation as any) : null;
   const extraChipCount = [
     (conversation?.fork_count ?? 0) > 0,
     !!latestUsage && internals,
@@ -4600,6 +4602,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     showToast={showToast}
                   />
                 )}
+                {!hosted && sessionProject ? (
+                  <RNView style={styles.metaChip} accessibilityLabel={`Project ${sessionProject}`}>
+                    <Feather name="folder" size={10} color={Theme.cyan} />
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, codeFont]} numberOfLines={1}>{sessionProject}</RNText>
+                  </RNView>
+                ) : null}
                 {allSessionImages.length > 0 && (
                   <Pressable
                     onPress={openGalleryAtNewest}

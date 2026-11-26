@@ -2,7 +2,7 @@
 // search and the long-press sheet. SessionItem.tsx re-exports them.
 import { Theme } from '@/constants/Theme';
 import { agentStatusAt } from '@codecast/web/lib/liveness';
-import { agentDisplayName, isHostedAgentType } from '@codecast/shared/contracts';
+import { agentDisplayName, isHostedAgentType, worktreeOfPath } from '@codecast/shared/contracts';
 import { MOBILE_AGENT_TINT } from '@codecast/shared/render/mobileSessionStyle';
 import { conversationTitle } from '@codecast/web/components/simple/lane';
 import type { SessionData } from '@/components/SessionItem';
@@ -95,7 +95,9 @@ export function statusLabel(session: SessionData): string | null {
 }
 
 export function projectName(conv: { git_root?: string | null; project_path?: string | null }): string | null {
-  const path = conv.git_root || conv.project_path;
-  if (!path) return null;
+  const raw = (conv.git_root || conv.project_path)?.replace(/\/+$/, '');
+  if (!raw) return null;
+  // A managed worktree names the repository it hangs off, not its own folder.
+  const path = worktreeOfPath(raw)?.root || raw;
   return path.split('/').pop() || null;
 }
