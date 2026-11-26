@@ -97,7 +97,10 @@ describe("every closed session stays out through machine wakes", () => {
       const t = await closed(o);
       await t.wake(sessionMessage);
       await t.wake({ human: true });
-      inInbox((await t.read()).conv);
+      const { conv } = await t.read();
+      inInbox(conv);
+      // The flag goes with the stash, so a later plain stash is not a hidden one.
+      expect(conv.inbox_stash_hidden).toBeUndefined();
     });
 
     test(`${name}: a run that completes --needs-attention brings it back`, async () => {
@@ -288,6 +291,14 @@ describe("a team session: each person's own Close follows the same rule", () => 
     hiddenStash(await s.triage());
     await s.pin("blocked");
     inInbox(await s.triage());
+  });
+
+  test("blocked brings each person's close back even when the row has its own hide", async () => {
+    const s = await teamClosed();
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_dismissed_at: Date.now() }); });
+    await s.pin("blocked");
+    inInbox(await s.triage());
+    inInbox((await s.read()).conv);
   });
 
   test("a straggling done before any wake leaves the close alone", async () => {

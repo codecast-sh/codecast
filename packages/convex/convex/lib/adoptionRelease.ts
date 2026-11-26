@@ -30,15 +30,17 @@ export async function releaseCloseAdoptions(db: any, leadId: any, stamp: number 
 // no longer in that close, so they read nothing.
 // A machine wake turning the close into its hidden stash (closeWakeFields,
 // the stash stamped with the close) keeps it: the lead is still out of sight.
+// A stash cleared ends it too, even one a person re-stamped over the close
+// (releasing finds only the adoptions the close's own stamp made).
 function endsClose(before: any, fields: any): boolean {
   const closedAt = before.inbox_closed_at;
   if (closedAt == null || before.inbox_killed_at) return false;
+  if ("inbox_stashed_at" in fields && fields.inbox_stashed_at == null && before.inbox_stashed_at != null) return true;
   if (before.inbox_dismissed_at !== closedAt && before.inbox_stashed_at !== closedAt) return false;
   if (!!fields.inbox_killed_at && !before.inbox_killed_at) return true;
   const stashAfter = "inbox_stashed_at" in fields ? fields.inbox_stashed_at : before.inbox_stashed_at;
   if (stashAfter === closedAt) return false;
-  if ("inbox_dismissed_at" in fields && fields.inbox_dismissed_at !== before.inbox_dismissed_at) return true;
-  return "inbox_stashed_at" in fields && fields.inbox_stashed_at == null && before.inbox_stashed_at === closedAt;
+  return "inbox_dismissed_at" in fields && fields.inbox_dismissed_at !== before.inbox_dismissed_at;
 }
 
 export function makeAdoptionReleaseDb(db: any, rawDb: any): any {

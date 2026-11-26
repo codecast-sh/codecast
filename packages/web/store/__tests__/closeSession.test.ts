@@ -61,6 +61,10 @@ describe("closeSessions", () => {
     useInboxStore.getState().closeSession(IDLE);
     expect(get(IDLE).inbox_stashed_at).toBeGreaterThan(0);
     expect(get(IDLE).inbox_dismissed_at ?? null).toBeNull();
+    // The lead is the closed hidden stash (isClosedHidden); anything stashed under it stays plain.
+    expect(get(IDLE).inbox_stash_hidden).toBe(true);
+    expect(get(IDLE).inbox_closed_at).toBe(get(IDLE).inbox_stashed_at);
+    expect(get(CHILD).inbox_stash_hidden ?? null).toBeNull();
     expect(get(CHILD).inbox_dismissed_at ?? null).toBeNull();
     const close = sent.find((s) => s.action === "closeSession");
     expect(close?.result).toEqual({ aside: [IDLE] });

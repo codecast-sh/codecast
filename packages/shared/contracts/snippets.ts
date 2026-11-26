@@ -590,7 +590,7 @@ EOF
 cast send <session_id> --done "<final result>"   # closes the exchange: no reply
 cast send <session_id> --status                  # your recent sends there: typed in, delivered
 cast stash [session_id]        # out of the inbox; the agent KEEPS RUNNING. No ID = this session
-cast stash --hide [session_id] # stash and stay hidden through trigger wakes
+cast stash --hide [session_id] # stash and stay hidden through trigger wakes and session messages
 cast restore [session_id]      # back into the inbox (stashed or killed)
 cast kill <session_id>         # tear down, mark completed, cancel its triggers; transcript stays, restartable.
 \`\`\`

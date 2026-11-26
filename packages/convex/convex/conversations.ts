@@ -12480,7 +12480,8 @@ export async function performSetThreadState(
   const returnsOnDone = closeReturnsOnDone(conv);
   const back = pinHideFields(conv, status, returnsOnDone);
   if (back) await ctx.db.patch(conv._id, back);
-  const resurfaced = !!back || (!conv.inbox_killed_at && await resurfaceViewerTriageOnPin(ctx, conv, status, returnsOnDone));
+  const viewersBack = !conv.inbox_killed_at && await resurfaceViewerTriageOnPin(ctx, conv, status, returnsOnDone);
+  const resurfaced = !!back || viewersBack;
   // The pin is the strip's title, and a blocked / done declaration can move
   // the row between Lock Screen statuses: those refresh at once, a reworded
   // working line rides the next routine push.

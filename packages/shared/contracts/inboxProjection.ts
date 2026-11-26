@@ -899,7 +899,7 @@ export function isMachineWake(m: { origin?: string | null; quiet?: boolean | nul
 export function wakeHideFields(
   row: ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
   wake: { machine: boolean },
-): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true } {
+): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true | undefined } {
   const out: ReturnType<typeof wakeHideFields> = {};
   if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
   if (row.inbox_killed_at) out.inbox_killed_at = undefined;
@@ -909,6 +909,7 @@ export function wakeHideFields(
     out.inbox_stash_hidden = true;
   } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
     out.inbox_stashed_at = undefined;
+    if (row.inbox_stash_hidden) out.inbox_stash_hidden = undefined;
   }
   return out;
 }

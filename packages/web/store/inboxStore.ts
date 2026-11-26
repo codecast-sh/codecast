@@ -9931,20 +9931,21 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const merge = (mode: "stash" | "kill", list: string[]) => {
     const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
     for (const id of list) {
-      // A set-aside is a hidden stash: its machine wakes leave it out, as the
-      // server decides (dispatch applyPatches, isClosedHidden).
-      const r = hideSessionInDraft(draft, id, mode, now, mode === "stash", mode === "kill");
+      const r = hideSessionInDraft(draft, id, mode, now, false, mode === "kill");
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
       Object.assign(merged.writes, r.writes);
       // Both are the close: the stamp a set-aside shares with its stash is what
       // lets a done pin bring it back (isClosedHidden), as the server writes it.
-      // A set-aside marks only the row closed; the server stashes its cascade plainly.
+      // A set-aside is a hidden stash, so its machine wakes leave it out (as
+      // dispatch applyPatches writes it); only the row closed, while its
+      // cascade is stashed plainly, as the server stashes it.
+      const aside = mode === "stash" ? { inbox_closed_at: now, inbox_stash_hidden: true } : { inbox_closed_at: now };
       for (const sid of mode === "kill" ? r.hidden : [id]) {
-        if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
-        if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
+        if (draft.sessions[sid]) Object.assign(draft.sessions[sid], aside);
+        if (draft.conversations[sid]) Object.assign(draft.conversations[sid], aside);
         // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
-        if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
+        if (r.writes[sid]) Object.assign(r.writes[sid], aside);
       }
     }
     announceHide(draft, mode, merged);

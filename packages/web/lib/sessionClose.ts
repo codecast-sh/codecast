@@ -53,15 +53,16 @@ export function closeTooltip(f: CloseFacts): string {
   const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
   // What brings a closed session back: its agent pinning done (an ordinary
   // session) or blocked (isClosedHidden, performSetThreadState), named by the
-  // sections they file under, or a person writing to it.
-  const back = f.returnsOnDone ? "back on Done or Needs you" : "back on Needs you";
+  // or a person writing to it.
+  const back = f.returnsOnDone ? "back when it reports done or needs you" : "back when it needs you";
   switch (closeKindOf(f)) {
     case "aside": return `Close: hides it, ${back}`;
     case "awaiting": return "Close: hides it; it still waits on you";
     case "keeps_background": return `Close: hides it, keeps its background work, ${back}`;
     case "keeps_loop": return `Close: hides it, keeps its loop, ${back}`;
-    // The resume after a reset is an ordinary send, so it shows the session.
-    case "keeps_limit": return "Close: hides it, back when its limit resets";
+    // Its resume (a "continue" send, when recovery is on) is an ordinary send
+    // and shows it; with recovery off, it waits for the person.
+    case "keeps_limit": return "Close: hides it, still parked on its limit";
     case "keeps_triggers":
       if (f.triggers === 0) return `Close: stops ${them}, ${back}`;
       return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, ${back}`;

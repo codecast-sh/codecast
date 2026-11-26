@@ -153,12 +153,13 @@ describe("a close takes down only what goes down with the lead", () => {
     });
     expect((await s.row(s.ids.conv)).inbox_stash_hidden).toBe(true);
     expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(adopted);
-    // A person stashing the still-hidden lead anew keeps them too.
-    await s.t.run(async (ctx) => {
-      const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
-      await db.patch(s.ids.conv, { inbox_stashed_at: Date.now() + 5, inbox_stash_hidden: true });
-    });
+    // A person stashing the still-hidden lead anew keeps them too,
+    const db = (ctx: any) => makeAdoptionReleaseDb(ctx.db, ctx.db);
+    await s.t.run(async (ctx) => { await db(ctx).patch(s.ids.conv, { inbox_stashed_at: Date.now() + 5, inbox_stash_hidden: true }); });
     expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBe(adopted);
+    // and bringing it back from that stash releases them.
+    await s.t.run(async (ctx) => { await db(ctx).patch(s.ids.conv, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined }); });
+    expect((await s.row(s.kids.spawned)).inbox_adopted_at).toBeUndefined();
   });
 
   for (const order of ["lead first", "child first"] as const) {
