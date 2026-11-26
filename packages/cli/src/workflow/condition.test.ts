@@ -241,6 +241,12 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["verdicts.json.next = conflict", { "verdicts.json.next": "conflict" }, true],
     ["verdicts.json.next = conflict", { "verdicts.json.next": "brief" }, false],
     ["verdicts.json.next = brief", { "verdicts.json.next": "brief" }, true],
+    // The change flow's Review runs only when the PR station carried no ship from the server for this head.
+    ["not pr.json.reviewed.verdict", { "pr.json.reviewed.verdict": "ship" }, false],
+    ["not pr.json.reviewed.verdict", {}, true],
+    // Only a brief that asks for a code change spends a fix round; the rest go round free.
+    ["verdicts.json.next = brief and verdicts.json.fix = true", { "verdicts.json.next": "brief", "verdicts.json.fix": "true" }, true],
+    ["verdicts.json.next = brief and verdicts.json.fix = true", { "verdicts.json.next": "brief", "verdicts.json.fix": "false" }, false],
     ["verdicts.json.next = brief", { "verdicts.json.next": "conflict" }, false],
     ["outcome = success and merge.json.sha", { outcome: "success", "merge.json.sha": "5ca1ab1e" }, true],
     ["outcome = success and merge.json.sha", { outcome: "success", "merge.json.sha": "" }, false],

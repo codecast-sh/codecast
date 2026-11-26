@@ -25,7 +25,7 @@ describe("a flow as a diagram", () => {
     expect(side(2)).toEqual([
       ["out", "pushed after this round", "Branch moved"], ["stop", "Branch keeps moving", null], ["stop", "Rejected", null], ["out", "CI never reported", "CI"], ["out", "no verdict this round", "Review"], ["stop", "CI never reported", null],
       ["out", "every failure is main's", "Wait for green main"], ["stop", "Main stayed red", null], ["out", "it edits CI", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
-      ["back", "conflicts with main", "this session"], ["back", "CI red, changes asked or no verdict", "this session"], ["stop", "No verdicts", null],
+      ["back", "conflicts with main", "this session"], ["back", "CI red or changes asked", "this session"], ["back", "no verdict", "this session"], ["stop", "No verdicts", null],
     ]);
     expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Not merged", null]]);
   });
