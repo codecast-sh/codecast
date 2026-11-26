@@ -17,6 +17,9 @@ db.run("CREATE TABLE IF NOT EXISTS storage (key TEXT PRIMARY KEY NOT NULL, value
 
 const statements: string[] = [];
 const perKeyWrites: string[] = [];
+const reads: string[] = [];
+// A write landing between a sliced read's key listing and its value batches.
+let afterListing: (() => void) | null = null;
 const get = db.query("SELECT value FROM storage WHERE key = ?");
 const value = (key: string): string | null => (get.get(key) as { value: string } | null)?.value ?? null;
 const allKeys = (): string[] => (db.query("SELECT key FROM storage").all() as Array<{ key: string }>).map((r) => r.key);
@@ -27,7 +30,14 @@ const shimBefore = (globalThis as any).__CODECAST_TEST_KV_STORAGE__;
   // What expo-sqlite's SQLiteDatabase offers and the cache calls.
   cacheDb: {
     async runAsync(sql: string, params: string[]) { statements.push(sql); db.run(sql, params); },
-    async getAllAsync(sql: string, params: string[]) { return db.query(sql).all(...params); },
+    async getAllAsync(sql: string, params: string[]) {
+      reads.push(sql);
+      const rows = db.query(sql).all(...params);
+      if (sql.includes("octet_length")) afterListing?.();
+      return rows;
+    },
+    getAllSync(sql: string, params: string[]) { reads.push(sql); return db.query(sql).all(...params); },
+    getFirstSync(sql: string, params: string[]) { return db.query(sql).get(...params); },
   },
   async getItem(key: string) { return value(key); },
   getItemSync(key: string) { return value(key); },
@@ -42,7 +52,7 @@ const shimBefore = (globalThis as any).__CODECAST_TEST_KV_STORAGE__;
 
 // Its own copy of the module: another suite in the same process may have
 // loaded it over a plain map.
-const { writePatchesToIDB, loadCache, loadCacheSync, flushPersistence, setHydrating, _resetPersistedShadow } =
+const { writePatchesToIDB, loadCache, loadCacheSync, flushPersistence, setHydrating, _resetPersistedShadow, _setReadSliceBytes, persistSplitRows, loadSplitRows } =
   await import("../idbCache.native?sqlite" as string) as typeof import("../idbCache.native");
 
 const sessions = (n: number, title = "row"): Record<string, any> =>
@@ -131,5 +141,67 @@ describe("the phone cache on a real SQLite table", () => {
     const cached = await loadCache(["sessions", "liveInboxIdList"]);
     expect(cached!.liveInboxIdList).toEqual(["s0", "s2"]);
     expect(Object.keys(cached!.sessions)).toEqual(["s0", "s1", "s2"]);
+  });
+
+  // Android: a statement's whole result sits on the Java heap before JS sees
+  // it, so the boot and split reads go in slices under a byte budget.
+  it("a sliced read returns every row the one statement does", async () => {
+    const state = { sessions: sessions(150), liveInboxIdList: ["s0", "s149"] };
+    writePatchesToIDB([...touch("sessions"), ...touch("liveInboxIdList")], state);
+    persistSplitRows("conversations:listInboxSessions", [
+      { id: "a", hash: "h1", row: { _id: "a" } },
+      { id: "b", hash: "h2", row: { _id: "b", title: "x".repeat(300) } },
+    ], []);
+    await flushPersistence();
+    _resetPersistedShadow();
+    reads.length = 0;
+    _setReadSliceBytes(1_000);
+    try {
+      const cached = await loadCache(["sessions", "liveInboxIdList"]);
+      expect(cached!.sessions).toEqual(state.sessions);
+      expect(cached!.liveInboxIdList).toEqual(["s0", "s149"]);
+      // One sizing pass, then many value reads.
+      expect(reads.filter((sql) => sql.includes("octet_length"))).toHaveLength(1);
+      expect(reads.filter((sql) => sql.startsWith("SELECT key, value")).length).toBeGreaterThan(5);
+      // The paint fallback's synchronous read, sliced the same way.
+      _resetPersistedShadow();
+      reads.length = 0;
+      expect(loadCacheSync(["sessions"])!.sessions).toEqual(state.sessions);
+      expect(reads.filter((sql) => sql.includes("octet_length"))).toHaveLength(1);
+      expect(reads.length).toBeGreaterThan(5);
+      expect(await loadSplitRows("conversations:listInboxSessions")).toEqual([
+        { id: "a", hash: "h1", row: { _id: "a" } },
+        { id: "b", hash: "h2", row: { _id: "b", title: "x".repeat(300) } },
+      ]);
+    } finally {
+      _setReadSliceBytes(null);
+    }
+    // Off the phone the read stays one statement.
+    reads.length = 0;
+    _resetPersistedShadow();
+    expect((await loadCache(["sessions"]))!.sessions).toEqual(state.sessions);
+    expect(reads).toHaveLength(1);
+  });
+
+  it("a write between the listing and the batches reads fresh and drops deleted rows", async () => {
+    const state = { sessions: sessions(20) };
+    writePatchesToIDB(touch("sessions"), state);
+    await flushPersistence();
+    _resetPersistedShadow();
+    _setReadSliceBytes(200);
+    afterListing = () => {
+      afterListing = null;
+      db.run(upsert, ["col:sessions:s7", JSON.stringify({ _id: "s7", title: "fresh" })]);
+      db.run("DELETE FROM storage WHERE key = ?", ["col:sessions:s3"]);
+    };
+    try {
+      const cached = (await loadCache(["sessions"]))!.sessions;
+      expect(cached.s7.title).toBe("fresh");
+      expect(cached.s3).toBeUndefined();
+      expect(Object.keys(cached)).toHaveLength(19);
+    } finally {
+      afterListing = null;
+      _setReadSliceBytes(null);
+    }
   });
 });

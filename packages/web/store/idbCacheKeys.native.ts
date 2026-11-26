@@ -59,8 +59,9 @@ export function readPlan(wanted: Set<string> | null): { prefixes: string[]; exac
   };
 }
 
-/** `SELECT key, value` over the plan: a half-open range per prefix, IN for the exact keys. */
-export function readPlanSql(plan: { prefixes: string[]; exact: string[] }): { sql: string; params: string[] } {
+type ReadPlan = { prefixes: string[]; exact: string[] };
+
+function planWhere(plan: ReadPlan): { where: string; params: string[] } {
   const clauses: string[] = [];
   const params: string[] = [];
   for (const prefix of plan.prefixes) {
@@ -71,7 +72,49 @@ export function readPlanSql(plan: { prefixes: string[]; exact: string[] }): { sq
     clauses.push(`key IN (${plan.exact.map(() => "?").join(", ")})`);
     params.push(...plan.exact);
   }
-  return { sql: `SELECT key, value FROM storage WHERE ${clauses.join(" OR ") || "0"}`, params };
+  return { where: clauses.join(" OR ") || "0", params };
+}
+
+/** `SELECT key, value` over the plan: a half-open range per prefix, IN for the exact keys. */
+export function readPlanSql(plan: ReadPlan): { sql: string; params: string[] } {
+  const { where, params } = planWhere(plan);
+  return { sql: `SELECT key, value FROM storage WHERE ${where}`, params };
+}
+
+/** The plan's keys with each value's size in bytes, in the order readPlanSql
+ *  returns them (same WHERE, so the same plan: a seek per prefix). Values
+ *  stay in SQLite; none crosses into JS or Java. */
+export function readPlanSizesSql(plan: ReadPlan): { sql: string; params: string[] } {
+  const { where, params } = planWhere(plan);
+  return { sql: `SELECT key, octet_length(value) AS bytes FROM storage WHERE ${where}`, params };
+}
+
+// Bound statement variables well under SQLite's limit.
+const MAX_KEYS_PER_READ = 500;
+
+/** The sized keys cut into consecutive batches of at most `budget` bytes and
+ *  MAX_KEYS_PER_READ keys (a row over budget gets a batch to itself). */
+export function sliceKeys(sizes: Array<{ key: string; bytes: number | null }>, budget: number): string[][] {
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let used = 0;
+  for (const { key, bytes } of sizes) {
+    const size = bytes ?? 0;
+    if (batch.length > 0 && (used + size > budget || batch.length >= MAX_KEYS_PER_READ)) {
+      batches.push(batch);
+      batch = [];
+      used = 0;
+    }
+    batch.push(key);
+    used += size;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
+
+/** `SELECT key, value` for exactly these keys. */
+export function readKeysSql(keys: string[]): { sql: string; params: string[] } {
+  return { sql: `SELECT key, value FROM storage WHERE key IN (${keys.map(() => "?").join(", ")})`, params: keys };
 }
 
 export function rowsToMap(rows: { key: string; value: string | null }[]): Map<string, string | null> {
