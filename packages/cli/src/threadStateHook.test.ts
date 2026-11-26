@@ -43,6 +43,15 @@ function run(sessionId: string, event: "Stop" | "UserPromptSubmit", messages: nu
   }).toString();
 }
 
+/** What the daemon does when it syncs a session: map it to its conversation. */
+function synced(sessionId: string): string {
+  const file = path.join(home, ".codecast", "conversations.json");
+  const cache = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+  cache[sessionId] = `conv-${sessionId}`;
+  fs.writeFileSync(file, JSON.stringify(cache, null, 2));
+  return sessionId;
+}
+
 function fresh(): string {
   return `s${++n}`;
 }
@@ -69,7 +78,7 @@ describe("thread-state hook", () => {
   });
 
   test("a substantial undeclared session is recruited ONCE, at Stop, to declare who acts next", () => {
-    const id = fresh();
+    const id = synced(fresh());
     const out = run(id, "Stop", THREAD_STATE_RECRUIT_MSGS);
     const json = JSON.parse(out);
     expect(json.decision).toBe("block");
@@ -78,18 +87,22 @@ describe("thread-state hook", () => {
     // Once per session — never nagged again however long it runs, and never
     // while the Stop hook is already holding it.
     expect(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS + 300)).toBe("");
-    const other = fresh();
+    const other = synced(fresh());
     expect(run(other, "Stop", THREAD_STATE_RECRUIT_MSGS, { stop_hook_active: true })).toBe("");
+  });
+
+  test("a session the daemon never synced is never recruited", () => {
+    expect(run(fresh(), "Stop", THREAD_STATE_RECRUIT_MSGS + 300)).toBe("");
   });
 
   test("silent while Thread State is off in Agent Features", () => {
     fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ state_enabled: false }));
-    expect(run(fresh(), "Stop", THREAD_STATE_RECRUIT_MSGS)).toBe("");
+    expect(run(synced(fresh()), "Stop", THREAD_STATE_RECRUIT_MSGS)).toBe("");
     fs.writeFileSync(path.join(home, ".codecast", "config.json"), JSON.stringify({ state_enabled: true, work_enabled: true }));
   });
 
   test("once it declares, the ordinary staleness reminder takes over", () => {
-    const id = fresh();
+    const id = synced(fresh());
     expect(JSON.parse(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS)).decision).toBe("block");
     stamp(id);
     expect(run(id, "Stop", THREAD_STATE_RECRUIT_MSGS + 2)).toBe(""); // baseline recorded
