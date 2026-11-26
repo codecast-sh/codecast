@@ -23,8 +23,9 @@ export type RoundState = "idle" | "running" | "done" | "failed" | "back" | "stop
 export type RoundStation = {
   state: RoundState; result: StationResult | null; note: string | null;
   /** What the run's end says in place of a station's own words: a station that reported live on a run that ended short
-   *  of Live (Deployed, unverified), or one whose way out left the run (Left the run). No surface calls the first live,
-   *  or the second failed. */
+   *  of Live (Deployed, unverified), one whose way out left the run (Left the run), or a Land that pushed though the run
+   *  stopped after it (Landing not recorded, Land cut off), which says `landed`. No surface calls the first live, the
+   *  second failed, or the third stopped. */
   endSays?: { end: string; why: string | null };
 };
 
@@ -56,6 +57,12 @@ const IDLE: RoundStation = { state: "idle", result: null, note: null };
 /** The personal Ship's ends for a landing that may have happened (personal.cast `unknown` from Land, `unknown_cut` from
  *  a Land its station cut off; both "Landing unknown"). */
 const UNKNOWN_ENDS = new Set(["unknown", "unknown_cut"]);
+/** The sha an entry says it landed: a Land result (or the bookkeeping that read a cut-off Land's markers) that landed, or
+ *  pushed and could not record it (unrecorded): the change is on main either way. */
+const landingOf = (n: Entry | undefined): string | null => {
+  const sha = n && ["landed", "unrecorded"].includes(stationResult(n.result_preview)?.outcome ?? "") ? jsonOf(n.result_preview)?.sha : null;
+  return typeof sha === "string" && sha ? sha : null;
+};
 /** The JSON object a text is, or leads with on its first line; null for any other text. */
 export function jsonOf(text: string | null | undefined): Record<string, any> | null {
   const t = text?.trim();
@@ -158,6 +165,8 @@ export function personalRound(graph: Graph, run: Run | null | undefined): RoundV
       // One that may have done its work, which the run stopped to say (Landing unknown, straight from Land or through
       // the bookkeeping that reads a Land cut off), is unknown: never failed, never done.
       if (stopExit && UNKNOWN_ENDS.has(stopExit) && (ledToStop(id) || left)) return { state: "unknown", result, note, endSays: { end: byId.get(stopExit)?.label ?? stopExit, why: (left ? noteOf(left) : null) ?? note } };
+      // One that pushed, which the run stopped after (Landing not recorded, Land cut off after its push), landed.
+      if (landingOf(n) || landingOf(left)) return { state: "done", result, note, endSays: { end: "landed", why: note ?? (left ? noteOf(left) : null) } };
       if (left) return { state: "stopped", result, note, endSays: { end: byId.get(stopExit!)?.label ?? stopExit!, why: noteOf(left) ?? (left.result_preview?.trim() || null) } };
       return { state: failedRun ? "stopped" : "failed", result, note };
     }
@@ -196,11 +205,10 @@ export function personalRound(graph: Graph, run: Run | null | undefined): RoundV
     return own(id);
   };
 
-  // A push whose recording failed (unrecorded) landed too: the change is on main.
-  const landings = statuses.filter((n) => ["landed", "unrecorded"].includes(stationResult(n.result_preview)?.outcome ?? "") && typeof jsonOf(n.result_preview)?.sha === "string" && jsonOf(n.result_preview)!.sha);
+  const landings = statuses.filter((n) => landingOf(n));
   const landing = landings.reduce<Entry | undefined>((best, n) => (!best || (n.completed_at ?? n.started_at ?? 0) >= (best.completed_at ?? best.started_at ?? 0) ? n : best), undefined);
   for (const n of landings) landingIds.add(n.node_id);
-  const landedSha: string | null = landing ? jsonOf(landing.result_preview)!.sha : null;
+  const landedSha: string | null = landing ? landingOf(landing) : null;
   return { start: roundStart, nonce, current, fixing, landed: landedSha, station, ofRound, tailOf };
 }
 

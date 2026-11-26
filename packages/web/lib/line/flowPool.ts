@@ -162,6 +162,11 @@ export const linesFirst = (pool: ReadonlyArray<AppFlow>): AppFlow[] => [...pool.
 /** The Ship picker's flows for a session (RunThroughFlow), its default first: the session's pool in its workspace's
  *  terms (a personal session ships through `personal` where the repository has no `change` of its own, as `cast flow
  *  run` there does), only the whole flows that take a session's change, the default by defaultFlowOf. */
+/** Whether a session's Ship previews the personal Ship, as far as the web can tell what `cast flow run change` decides
+ *  (cli directoryTeam.ts): no team shares the session, and its checkout has an origin to land on. The CLI also asks the
+ *  server whether a team already knows that repository, which the web cannot read; there it runs `change`. */
+export const previewsPersonal = (workspace: string | null | undefined, repository: string | null): boolean => !!workspace?.startsWith("user:") && !!repository;
+
 export function shipPicks(pool: ReadonlyArray<AppFlow>, repository: string | null, workspaceSlug: string | null, personal: boolean): { pool: AppFlow[]; fallback: AppFlow | null } {
   // Flows only: a segment runs one part of a change, never the change to live.
   const all = namedForRepo(linesFirst(workspacePool(pool, personal).filter((f) => f.kind === "line" && takesSessionChange(f))), repository);

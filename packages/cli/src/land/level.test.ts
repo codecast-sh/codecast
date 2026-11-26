@@ -287,4 +287,26 @@ describe("a level that moves the branch last (--ref-last, the personal Ship's La
     expect([read(shared, "a.txt"), read(shared, "b.txt")]).toEqual(["a\n", "b\n"]);
     expect(execFileSync("git", ["-C", shared, "status", "--porcelain"], { encoding: "utf-8", env: ENV })).toBe("A  w.txt\n");
   });
+
+  test("a commit made while it writes keeps every file it touched, on disk and in the index; only the rest is put back", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n" });
+    upstream({ "a.txt": "A\n", "b.txt": "B\n", "c.txt": "C\n" });
+    write(shared, "w.txt", "staged\n");
+    sh(shared, "add", "w.txt");
+    let committed = "";
+    const r = await levelCheckout(shared, "origin/main", { refLast: true, onWrite: (rel) => {
+      if (rel !== "c.txt") return;
+      // Once every file is written: the person edits a.txt on top of what the level wrote there, and commits it with
+      // c.txt exactly as the level wrote it.
+      write(shared, "a.txt", "A\nmine\n");
+      execFileSync("git", ["-C", shared, "commit", "-qm", "mine", "--", "a.txt", "c.txt"], { env: ENV });
+      committed = sh(shared, "rev-parse", "HEAD");
+    } });
+    expect(r.ok).toBe(false);
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(committed);
+    // The commit's files stand as committed; b.txt, which it left alone, is put back.
+    expect([read(shared, "a.txt"), read(shared, "b.txt"), read(shared, "c.txt")]).toEqual(["A\nmine\n", "b\n", "C\n"]);
+    // Nothing staged or unstaged against the person's commit but their own staged file: no revert of it anywhere.
+    expect(execFileSync("git", ["-C", shared, "status", "--porcelain"], { encoding: "utf-8", env: ENV })).toBe("A  w.txt\n");
+  });
 });

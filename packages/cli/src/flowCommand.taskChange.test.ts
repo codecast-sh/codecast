@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { taskChange } from "./flowCommand";
+import { taskChange } from "./flowRunSubject";
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cast-task-change-")));
 const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };

@@ -3,6 +3,7 @@
 // own machine has a free run slot (a queued resume, which the line's sweep
 // carries out ahead of new starts: orgLine.planSweep).
 import { ConvexError, v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { endedFailing, endedUnmerged } from "@codecast/shared/contracts/changeCard";
 import { tookPastStart } from "@codecast/shared/contracts/runStart";
@@ -81,5 +82,16 @@ export const resumeFromCli = mutation({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
     return resumeFailedRunCore(ctx, auth.userId, args.run_id, args.at, { check: args.check, currentFlow: args.current_flow, queue: args.queue });
+  },
+});
+
+/** The app's Resume on a stop the run names a station for (the personal Ship's Landing unknown and Land cut off, at
+ *  `land`): the signed-in person resumes their own run, as `cast workflow resume --at` does (resumeFailedRunCore). */
+export const resume = mutation({
+  args: { run_id: v.id("workflow_runs"), at: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new ConvexError("Not signed in");
+    return resumeFailedRunCore(ctx, userId, args.run_id, args.at);
   },
 });

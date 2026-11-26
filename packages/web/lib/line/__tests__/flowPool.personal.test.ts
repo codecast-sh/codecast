@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
-import { appPool, shipPicks, type AppFlow } from "../flowPool";
+import { appPool, previewsPersonal, shipPicks, type AppFlow } from "../flowPool";
 import { runThroughMessage } from "../flowMessages";
 import { sessionWorkspaceOf } from "../../../hooks/useRepoFlows";
 
@@ -30,7 +30,11 @@ const repoChange: RepoFlow = {
 
 describe("the Ship picker's default", () => {
   const store = { currentUser: { _id: "u1" }, conversations: { cTeam: { team_id: "t1" }, cMine: {} } };
-  const personalOf = (conversation: string) => !!sessionWorkspaceOf(store, conversation)?.startsWith("user:");
+  const personalOf = (conversation: string) => previewsPersonal(sessionWorkspaceOf(store, conversation), "o/repo");
+
+  test("only a session no team shares, in a checkout with an origin, previews the personal Ship: the CLI lands nothing personal without one", () => {
+    expect([previewsPersonal(sessionWorkspaceOf(store, "cMine"), "o/repo"), previewsPersonal(sessionWorkspaceOf(store, "cMine"), null), previewsPersonal(sessionWorkspaceOf(store, "cTeam"), "o/repo")]).toEqual([true, false, false]);
+  });
 
   test("a session no team shares defaults to personal, labelled Ship, with no second Ship beside it", () => {
     expect(personalOf("cMine")).toBe(true);

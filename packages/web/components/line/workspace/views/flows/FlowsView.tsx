@@ -6,7 +6,8 @@
 // team's sessions used. A flow opens its detail in place. On a role's page
 // (/flows/<owner>): that role's flow, drawn, with its facts and its counts.
 import { useContext, useMemo, useState, type ReactNode } from "react";
-import { journeyOf, journeyWhy, journeyWords, readableWhy } from "../../../../../lib/ship/journey";
+import { journeyOf } from "../../../../../lib/ship/journey";
+import { journeyWhy, journeyWords, readableWhy } from "../../../../../lib/ship/journeyWords";
 import { blockedWaitOf, runAskOf, type AskRow } from "../../../../../lib/ship/sessionAsk";
 import { roundsOnOwnResults } from "../../../../../lib/ship/ownRound";
 

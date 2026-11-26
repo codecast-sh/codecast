@@ -4209,7 +4209,7 @@ cliRoute("/cli/workflows/list", async (ctx, body) => {
 // The team's published flows (flows.md FL2), for `cast flow ls/show/run`.
 cliRoute("/cli/workflows/pool", async (ctx, body) => ctx.runQuery(api.workflows.poolForCli, body));
 // What `cast flow` needs to tell a personal checkout: the calling session's stamp and whether a team knows the repository (cli directoryTeam.ts).
-cliRoute("/cli/workflows/workspace-facts", async (ctx, body) => ctx.runQuery((api as any).workflows.workspaceFactsForCli, body));
+cliRoute("/cli/workflows/workspace-facts", async (ctx, body) => ctx.runQuery(internal.workflows.workspaceFactsForCli, body));
 // A checkout's own flows (repoFlows.ts), so the Ship picker shows what `cast flow run` runs in that repository.
 cliRoute("/cli/repo-flows/report", async (ctx, body) => ctx.runMutation((api as any).repoFlows.report, body));
 // A Try's case settling on the graph's machine (line-workspace.md LW4, cli lineTry.ts).

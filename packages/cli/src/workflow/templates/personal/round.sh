@@ -20,6 +20,8 @@ if [ -z "$wt" ] || ! cd "$wt" 2>/dev/null; then
   echo "The run's worktree $worktree is not on this machine."
   exit 2
 fi
+# A Round cut off mid-rebase leaves that rebase in progress, and every later round would fail to start one: abort it.
+git rebase --abort > /dev/null 2>&1
 if ! git fetch -q origin "$base" > "$dir/round-fetch.log" 2>&1; then
   echo "git fetch origin $base failed: $(tail -n 3 "$dir/round-fetch.log" | tr '\n' ' ')"
   exit 2

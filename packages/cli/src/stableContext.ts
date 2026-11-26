@@ -535,15 +535,8 @@ async function sendRepoFlows(siteUrl: string, apiToken: string, cwd?: string): P
  *  server predates the flag, which leaves the line as it was. `defaultFlow` is the default flow that team set.
  *  `undecided` says the directory may ship through the personal Ship, which only the run itself decides (directoryTeam.ts). */
 async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<{ rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null; undecided: boolean } | null> {
-  const dir = cwd ?? process.cwd();
-  // Loaded here, off the boot graph. Session start never reads the active team, so in doubt no team is named.
-  const { directoryWorkspace, checkoutLocation } = await import("./directoryTeam.js");
-  const post = async (route: string, body: Record<string, unknown>) => {
-    const r = await fetch(`${siteUrl}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: apiToken, ...body }), signal: AbortSignal.timeout(10_000) });
-    if (!r.ok) throw new Error(`${route}: ${r.status}`);
-    return r.json();
-  };
-  const where = await directoryWorkspace({ post, session: undefined, cwd: dir, active: async () => ({ kind: "personal" }), location: () => checkoutLocation(dir) }).catch(() => null);
+  // Loaded here, off the boot graph.
+  const where = await (await import("./directoryTeam.js")).sessionStartWorkspace(siteUrl, apiToken, cwd ?? process.cwd());
   const team = where?.ownsDefault && where.ws.kind === "team" ? where.ws.teamId : null;
   const response = await fetch(`${siteUrl}/cli/workflows/pool`, {
     method: "POST",

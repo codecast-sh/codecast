@@ -10,10 +10,13 @@ import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
-import { WHO_WORDS, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { insideWords, targetsFromLine, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { WHO_WORDS, gateWaitWords, holdWords, sentBackWords, stopWords, waitWords } from "../../lib/ship/journeyWords";
 import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
 import { leftWords } from "../../lib/ship/stationResult";
+import { resumeWords, type ResumeAt } from "../../lib/ship/resumeAt";
+import { useResumeAt } from "../../hooks/useResumeAt";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
@@ -226,7 +229,9 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
   const stop = now.kind === "stopped" || now.kind === "failed" ? now : null;
   const inSession = !!stop && stop.fix === "session" && !!stop.session && stop.session === here;
   const briefId = useBriefMessageId(inSession ? here : null, stop?.briefAt ?? null);
-  const openRun = run?._id ? <Link className="sj-act" data-primary href={`/workflows/runs/${run._id}`} data-journey-open-run>Open run</Link> : null;
+  // A stop that says to resume the run leads with that press (ResumeAtPress); opening the run follows it.
+  const resume = stop?.resume && run?._id ? stop.resume : null;
+  const openRun = run?._id ? <Link className="sj-act" data-primary={resume ? undefined : ""} href={`/workflows/runs/${run._id}`} data-journey-open-run>Open run</Link> : null;
   switch (now.kind) {
     case "idle": return null;
     case "starting":
@@ -311,6 +316,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
         <div className="sj-now" data-kind="stopped" data-journey-fix={now.fix}>
           <X className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />
           <b>{now.kind === "failed" && !now.end ? `Failed${now.stage ? ` at ${now.stage}` : ""}` : stopWords(now)}</b>
+          {resume ? <ResumeAtPress runId={String(run._id)} resume={resume} /> : null}
           {/* The action that can work for this stop leads: re-running a refusal, or a session out of rounds, repeats it. */}
           {now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open {now.why?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? "Deploys"}</Link>
             : now.fix === "session" && !inSession && now.session ? <Link className="sj-act" data-primary href={`/conversation/${now.session}`} data-journey-open-session>Open session</Link>
@@ -319,7 +325,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
             : null}
           {/* Ship again, never for a deploy (it would land the change again); it leads when re-running is the fix, or when nothing else here can. */}
           {/* A change already on main lands nothing if shipped again: the run is the way on. */}
-          {/* A change that may be on main (Landing unknown) could land twice: its reason says to resume the run instead. */}
+          {/* A change that may be on main (Landing unknown) could land twice: resuming the run at Land is the way on. */}
           {now.fix !== "deploy" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
           {children}
           {/* A stop's reason is whole: its last words are what the person does next. */}
@@ -327,6 +333,19 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
         </div>
       );
   }
+}
+
+/** Resume a stopped run at the station its reason names (lib/ship/resumeAt.ts): pending while the server takes it, then
+ *  the run moves on and this bar with it; a refusal says the server's own words. */
+function ResumeAtPress({ runId, resume }: { runId: string; resume: ResumeAt }) {
+  const { state, press } = useResumeAt(runId, resume.at);
+  const pending = state.kind === "pending";
+  return (
+    <>
+      <button type="button" className="sj-act" data-primary disabled={pending} aria-busy={pending || undefined} onClick={() => void press()} data-journey-resume={resume.at}>{pending ? "Resuming…" : resumeWords(resume)}</button>
+      {state.kind === "refused" ? <p className="sj-note" role="alert" data-journey-resume-refused>Could not resume: {state.why}</p> : null}
+    </>
+  );
 }
 
 /**

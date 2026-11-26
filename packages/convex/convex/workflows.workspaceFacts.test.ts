@@ -7,7 +7,7 @@ import { anyApi } from "convex/server";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 
-const api = anyApi as any;
+const internal = anyApi as any;
 setDefaultTimeout(120_000);
 
 const modules = {
@@ -45,7 +45,7 @@ async function seed() {
     } as any);
     return { mine, other, ana, bo };
   });
-  const facts = (args: Record<string, unknown>) => t.query(api.workflows.workspaceFactsForCli, { api_token: "tok-ana", ...args });
+  const facts = (args: Record<string, unknown>) => t.query(internal.workflows.workspaceFactsForCli, { api_token: "tok-ana", ...args });
   return { t, ...ids, facts };
 }
 
@@ -133,7 +133,7 @@ describe("the workspace facts `cast flow` reads", () => {
       const cy = await ctx.db.insert("users", { name: "Cy", email: "cy@example.com" } as any);
       await ctx.db.insert("api_tokens", { user_id: cy, token_hash: await hashToken("tok-cy"), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any);
     });
-    expect(await s.t.query(api.workflows.workspaceFactsForCli, { api_token: "tok-cy", repository: "cy/solo" })).toEqual({ workspace: null, team_repository: false, in_team: false });
+    expect(await s.t.query(internal.workflows.workspaceFactsForCli, { api_token: "tok-cy", repository: "cy/solo" })).toEqual({ workspace: null, team_repository: false, in_team: false });
   });
 
   test("the calling session's stamp: personal, its team, or none for a ref the caller owns no session by", async () => {

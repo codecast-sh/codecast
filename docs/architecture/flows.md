@@ -796,56 +796,76 @@ deploy are what the project's docs say, read again every run.
 
 ```
 Round → Find check → (Check ‖ Review) → Verdicts → Land → Landed → Deploy → Live
- ↑ │                                       │         │                 │  ├→ Deployed, unverified
- │ └─ Resolve conflict ─┐                  │         │                 │  └→ Landed
- ├──────────────────────┘                  │         │                 │
- ├──── Fix findings ←──────────────────────┘         │                 │
- ├──── main moved (at most 3 times) ←────────────────┘                 │
- └──── Landed outside ← Fix deploy ←───────────────────────────────────┘
+ ↑ │                                       │         │                 ├→ Deployed, unverified
+ │ └─ Resolve conflict ─┐                  │         │                 ├→ Landed
+ ├──────────────────────┘                  │         │                 └→ Fix deploy → After the fix ─→ Deploy
+ ├──── Fix findings ←──────────────────────┘         │                                    │
+ ├──── main moved (at most 3 times) ←────────────────┘                                    │
+ └──── a fix in the repository ←──────────────────────────────────────────────────────────┘
 ```
 
-Round (`personal/round.sh`) opens each round in the run's worktree: it fetches
-origin's default branch, rebases the change onto it, and prints `round.json` =
-{round, head_sha, main_sha, verdicts_at}, `round` a fresh nonce, so Check and
-Review judge exactly the commit Land pushes. A conflict (exit 1) is briefed to
-the session (Resolve conflict); a change with nothing left above the default
-branch (exit 4) was put there by the session and goes to Landed outside.
+Round (`personal/round.sh`) opens each round in the run's worktree: it aborts
+any rebase a Round cut off earlier left in progress, fetches origin's default
+branch, empties the worktree of anything a station left in it, rebases the
+change onto that branch, and prints `round.json` = {round, head_sha, main_sha,
+verdicts_at}, `round` a fresh nonce, so Check and Review judge exactly the
+commit Land pushes. A conflict (exit 1) is briefed to the session (Resolve
+conflict); a change with nothing left above the default branch (exit 4) goes to
+Left the run (below); any other failure stops at No round.
 
 Find check, once a run, is an agent session that reads the docs in the change's
 tree, in order: CLAUDE.md and AGENTS.md at the root and below, the lines of
 `~/.claude/CLAUDE.md` that name the repository or a class it belongs to,
-`.codecast/line.toml` and `workspace.toml`, README.md, then scripts plainly
-named for the job. It runs nothing and invents nothing. It pins
+`.codecast/deploy.toml`, `line.toml` and `workspace.toml`, README.md, then
+scripts plainly named for the job. It runs nothing and invents nothing. It pins
 `{outcome: found|skipped, note, commands: [{run, cwd, source}]}`, each command
 with the doc line that names it; nothing documented is `skipped`, its note
 saying what it read. An answer the run cannot read stops at No check found.
 Check (`cast flow check`, `workflow/personalCheck.ts`) runs each command in the
 change's tree and writes `check.json` = {outcome, note, results}, each result
 with its exit code and its output's end (the whole in `check-<n>.log`). The
-exit codes decide: `pass` only when every command exited 0. A command whose
-directory is outside the tree, that `cd`s out of it, or that names the person's
-checkout by path is never run: the station exits 2 and the run stops at Check
-did not run.
+exit codes decide: `pass` only when every command exited 0. Check runs nothing
+in a tree that is not at the round's head or holds changes of its own, nor a
+command whose directory is outside the tree, that `cd`s out of it, or that
+names the person's checkout by path: the station exits 2 and the run stops at
+Check did not run.
 
-Review runs beside Check: the line's review prompt plus `personal/review.md`,
-reading `git diff <main_sha>...<head_sha>` and pinning {verdict, findings,
-round, head_sha}. Verdicts counts the pin only with this round's nonce; with
-none, the reviewer is asked once more in the round, then the run stops at
-Review never finished. A `ship` beside a passing or skipped check lands, so a
-project with no documented check lands on the reviewer's verdict alone. A red
-check or `changes` is one brief to the session (Fix findings, carrying
-`check.json` and the review); a rejection ends at Rejected.
+Review runs beside Check: the line's review prompt, included whole, plus
+`personal/review.md`, which reads `git diff <main_sha>...<head_sha>` and pins
+{verdict, findings, round, head_sha}. Verdicts counts the pin only with this
+round's nonce; with none, the reviewer is asked once more in the round, then
+the run stops at Review never finished. A `ship` beside a passing or skipped
+check lands, so a project with no documented check lands on the reviewer's
+verdict alone. A red check or `changes` is one brief to the session (Fix
+findings, carrying `check.json` and the review); a rejection ends at Rejected.
 
 Land (`personal/land.sh`) pushes the round's head straight to origin's default
 branch, only while the worktree still holds it and origin has not moved since
 the round. A moved main, or a push refused because it just moved, opens a new
-round (exit 3), at most three times before Main keeps moving. `cast flow
-landed` then records the commit on origin as the run's merge, an observed
-landing that spends no merge allowance (Deploy, above). Land brings the
-person's checkout up to it with `cast land level`, which keeps every local
-edit, when that checkout is on the default branch, and says why when not.
-Landed prints {outcome, sha, note}; its id is `landed`, so a stop past it tells
-the session its change is on main.
+round (exit 3), at most three times before Main keeps moving; a push refused
+otherwise (a protected branch) stops at Not landed. Before it pushes, Land
+writes the head it sets out to push (`land-pushing-<run>`), and once origin
+holds it, the head it pushed (`land-pushed-<run>`). A push whose answer is lost
+is a landing when origin holds the head; when origin cannot be read, or a push
+cut off is not on origin yet, the run stops at Landing unknown, and a resume at
+Land records the landing or pushes again. A Land its station cuts off is read
+from those two markers (Land cut off): pushed stops at Land cut off, saying the
+change landed, for a resume to finish; set out to push stops at Landing
+unknown; neither stops at Not landed with Land's own output. The head on origin by a push this run did not make goes to Left the
+run (exit 4). `cast flow landed` then records the commit on origin as the run's
+merge, an observed landing that spends no merge allowance (Deploy, above); a
+record that fails stops at Landing not recorded, saying the push succeeded.
+Land brings the person's checkout up to it with `cast land level --ref-last`,
+which keeps every local edit and moves the branch last, when that checkout is
+on the default branch, and says why when not. A commit the person makes in the
+checkout meanwhile wins: level puts back what it wrote, except the files that
+commit touched, and the note gives the one command that finishes the catch-up.
+
+Landed (`personal/landed.sh`) passes Land's {outcome, sha, note} on to Deploy
+once origin's default branch is still the landed commit; its id is `landed`,
+so a stop past it tells the session its change is on main. A newer commit on
+top stops at Main moved, and origin it cannot read at Main unchecked: neither
+deploys an older commit over a newer one.
 
 Deploy is an agent session in the run's worktree at the landed commit. It reads
 the same docs in the same order for the documented deploy (a push counts only
@@ -861,17 +881,26 @@ with `cast computer` when its grants are in place; otherwise Deploy names it in
 `left_for_you` and finishes the rest, and Left for you posts "One step left for
 you: …" on the task and the node. The run never waits for it. A documented
 deploy that fails goes to the session (Fix deploy), which fixes the script and
-the doc that describes it. Landed outside (`land.sh` as the `outside` station)
-then reads what the fix left on origin: nothing new, the fix having lived
-outside the repository, sends the same landing back to Deploy; a fix still to
-land opens a new round.
+the doc that describes it, or what broke outside the repository. After the fix
+(`personal/after_fix.sh`) then reads git alone: a change that holds nothing the
+landed commit lacks, with origin still at that commit, sends the same landing
+back to Deploy; a fix in the change opens a new round; a fix the session
+committed in the person's checkout stops at Fix not shipped, and origin moved
+past the landing stops at Main moved.
 
-A session that puts its change on the default branch itself, when briefed,
-goes through Landed outside to Deploy from origin's head, unchecked by this
-run, and Deploy's note says so; one that dropped its change ends at Not landed.
-Each way back to the session (Fix findings, Resolve conflict, Fix deploy) has
-`max_visits=3`. A run with no session behind it stops where it would brief one:
-Conflict, Found work, Deploy failed.
+Only the run lands the change: the briefs tell the session never to push the
+default branch itself. A session whose turn leaves nothing of the change above
+origin (it dropped the change, or landed it itself) stops the run at Left the
+run (a deploy fix of its own edits that it pushed itself stops at Main moved,
+from After the fix), which says from Land's markers what this run did: landed an earlier
+commit and deployed nothing after it, set out to push one and never heard back
+(so that push may be what landed it), or landed and deployed nothing. The run
+never deploys what it did not land. A brief after which the change cannot be
+frozen again stops at Fix not shipped when the session committed its fix in
+the person's checkout, else at Fix not frozen. Each way back to the session
+(Fix findings, Resolve conflict, Fix deploy) has `max_visits=3`. A run with no
+session behind it stops where it would brief one: Conflict, Found work, Deploy
+failed.
 
 ## FL5. A Claude Code workflow becomes a flow
 
@@ -942,7 +971,7 @@ reached (Deployed, unverified; Landed) where Live would be.
   branch qualifies. A team that set none, or set one that left the pool, gets
   `change`, labeled Ship (`defaultFlowOf` in `shared/contracts/flowPool.ts`). A
   personal workspace (FL2) gets `personal`, also labelled Ship, and `change`
-  names it there unless the repository has its own `.codecast/flows/change.cast`
+  names it there unless the repository has a `change` flow of its own
   (`workspacePool`, `shipFlowSlug`). The CLI reads it
   from `default_flow` on `/cli/workflows/pool` and resolves it by the same
   function against its own pool (FL2's, the repo's flows included): a nameless

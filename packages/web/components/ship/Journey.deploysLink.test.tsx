@@ -8,6 +8,9 @@ mock.module("next/link", () => ({
 }));
 const targetsHook = { ...(await import("../../hooks/useSyncDeployTargets")) };
 mock.module("../../hooks/useSyncDeployTargets", () => ({ ...targetsHook, useDeployTargets: () => ({ targets: [], deploys: [], ready: true }) }));
+// A stop that says to resume the run draws its Resume press, which holds a mutation (Journey.resume.mount.test.tsx).
+const convex = await import("convex/react");
+mock.module("convex/react", () => ({ ...convex, useMutation: () => async () => ({}) }));
 const pressHook = { ...(await import("../../hooks/useDeployPress")) };
 mock.module("../../hooks/useDeployPress", () => ({ ...pressHook, useDeployPress: () => ({ open() {}, review: null }) }));
 
@@ -76,6 +79,7 @@ describe("the Ship panel's links into Deploys", () => {
       const html = renderToStaticMarkup(<JourneyView journey={journey} run={stopped} now_ms={0} again={again} />);
       expect(html).not.toContain("data-ship-again");
       expect(html).toContain(`href="/workflows/runs/${stopped._id}"`);
+      expect(html).toContain(">Resume at Land</button>");
     }
     // A stop where shipping again is the way on still offers it.
     const rejected = end(replay("a session that drops its change when briefed"));

@@ -1,4 +1,4 @@
-import { internalMutation, mutation, query } from "./functions";
+import { internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { ConvexError, v } from "convex/values";
@@ -298,9 +298,10 @@ export const poolForCli = query({
  * ref), and whether any team the caller belongs to already knows the checkout's repository, whatever folder it sits in:
  * a teammate's published checkout of it (repo_sources), a pull request of it the team holds (pull_requests), a
  * commit of it the team's sessions made (commits), or a share rule of a member's that names it (directory_team_mappings). `in_team`
- * says whether the caller belongs to any team: one who belongs to none has nobody to share a checkout with.
+ * says whether the caller belongs to any team: one who belongs to none has nobody to share a checkout with. Internal:
+ * only the http route /cli/workflows/workspace-facts runs it, for the caller its token names.
  */
-export const workspaceFactsForCli = query({
+export const workspaceFactsForCli = internalQuery({
   args: { api_token: v.string(), session: v.optional(v.string()), repository: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);

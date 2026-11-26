@@ -10,7 +10,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
-import { registerFlowCommands, workflowRunArgs, type FlowDeps } from "./flowCommand";
+import { registerFlowCommands, type FlowDeps } from "./flowCommand";
+import { workflowRunArgs } from "./flowPersonal";
 import { checkoutLocation, directoryWorkspace, runSubjects, shippedPersonalRefusal, type DirectoryIO, type DirectoryRule } from "./directoryTeam";
 import { matchDirectoryMapping } from "@codecast/shared/team/directoryRules";
 import { changeFlowOf } from "./pipeline";
@@ -318,6 +319,9 @@ describe("in a personal workspace", () => {
     git(origin, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "the repo's own change");
     const clone = path.join(mkdtemp(), "clone");
     if (spawnSync("git", ["clone", "-q", origin, clone]).status !== 0) throw new Error("clone failed");
+    // Personal needs origin to name a repository, and a local path names one only by accident (macOS's temp path
+    // parses as one, Linux's /tmp does not): the clone names one outright, keeping the origin/main it fetched.
+    git(clone, "remote", "set-url", "origin", "https://git.invalid/jb/repo.git");
     git(clone, "reset", "-q", "--hard", "HEAD~1");
     git(clone, "branch", "feature");
     for (const args of [["run", "change"], ["run"]]) {

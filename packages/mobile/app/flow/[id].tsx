@@ -35,7 +35,8 @@ import { flowDiagram, routeTail, type DiagramStep, type SideRoute } from '@codec
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { useFlowStations } from '@codecast/web/lib/line/flowStations';
 import { stationView } from '@codecast/web/lib/line/stationView';
-import { journeyOf, journeyWhy, journeyWords, readableWhy } from '@codecast/web/lib/ship/journey';
+import { journeyOf } from '@codecast/web/lib/ship/journey';
+import { journeyWhy, journeyWords, readableWhy } from '@codecast/web/lib/ship/journeyWords';
 import { roundsOnOwnResults } from '@codecast/web/lib/ship/ownRound';
 import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 

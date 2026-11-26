@@ -266,7 +266,7 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
 
   if (before && !(await moveRef())) {
     const now = (await gitTry(root, ["rev-parse", "HEAD"]))?.trim() ?? "";
-    await putBack(root, before);
+    await putBack(root, before, from, now);
     return { ...empty, ok: false, reason: `HEAD moved to ${now.slice(0, 9)} while levelling (a commit was made here), so nothing of ${to.slice(0, 9)} was kept: the index and files are as they were, on that commit; run again once it sits on ${to.slice(0, 9)}'s line` };
   }
 
@@ -294,9 +294,16 @@ async function priorState(root: string, actions: Action[], entries: DiffEntry[])
   return { files, index, paths, wrote: new Map() };
 }
 
-/** Put back what a `refLast` level wrote: a file still as the level left it gets its old bytes, then the index entries. */
-async function putBack(root: string, prior: Prior): Promise<void> {
+/**
+ * Put back what a `refLast` level wrote once a commit made meanwhile (`from` to `now`) won the swap: a file still as the
+ * level left it gets its old bytes, then the index entries. A file that commit touched is the person's and stays as it
+ * is, whatever its bytes (a commit can take the level's own write): its index entry becomes the commit's, never the
+ * level's or the one before it, so nothing reverts the commit.
+ */
+async function putBack(root: string, prior: Prior, from: string, now: string): Promise<void> {
+  const touched = new Set((now ? (await gitTry(root, ["diff", "--name-only", "--no-renames", "-z", from, now])) ?? "" : "").split("\0").filter(Boolean));
   for (const [rel, wrote] of prior.wrote) {
+    if (touched.has(rel)) continue;
     if (((await worktreeBlobs(root, [rel])).get(rel) ?? null) !== wrote) continue;
     const file = path.join(root, rel);
     const was = prior.files.get(rel) ?? null;
@@ -306,15 +313,17 @@ async function putBack(root: string, prior: Prior): Promise<void> {
     fs.writeFileSync(file, was.bytes);
     fs.chmodSync(file, was.mode);
   }
-  const listed = new Set<string>();
-  const lines = prior.index.split("\0").filter(Boolean).map((l) => {
+  // Each entry as `mode sha<TAB>path`: the index's from before the level (ls-files -s), the commit's for what it touched (ls-tree).
+  const entriesOf = (out: string) => new Map(out.split("\0").filter(Boolean).map((l) => {
     const [meta, p] = [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)];
-    const [mode, sha] = meta.split(" ");
-    listed.add(p);
-    return `${mode} ${sha}\t${p}`;
-  });
-  const gone = prior.paths.filter((p) => !listed.has(p)).map((p) => `0 ${NULL_SHA}\t${p}`);
-  await withIndexLockRetry(() => git(root, ["update-index", "--index-info"], undefined, [...gone, ...lines].join("\n") + "\n"));
+    const f = meta.split(" ");
+    return [p, `${f[0]} ${f.length === 3 && f[1] === "blob" ? f[2] : f[1]}`] as const;
+  }));
+  const before = entriesOf(prior.index);
+  const mine = prior.paths.filter((p) => touched.has(p));
+  const committed = mine.length ? entriesOf((await gitTry(root, ["ls-tree", "-z", now, "--", ...mine])) ?? "") : new Map<string, string>();
+  const lines = prior.paths.map((p) => `${(touched.has(p) ? committed : before).get(p) ?? `0 ${NULL_SHA}`}\t${p}`);
+  await withIndexLockRetry(() => git(root, ["update-index", "--index-info"], undefined, lines.join("\n") + "\n"));
 }
 
 /** Retry `fn` while another git process holds an index lock (the daemon snapshots the same checkouts). */

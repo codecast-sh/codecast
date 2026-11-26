@@ -115,6 +115,17 @@ export async function checkoutLocation(cwd: string): Promise<CheckoutAt> {
   return { root: loc.repoRoot || loc.root, repository: repositoryKeyOfRemote(loc.remoteUrl) };
 }
 
+/** The workspace session start reads a directory's flows from (stableContext.ts), with no session and no active team:
+ *  session start never reads the active team, so in doubt no team is named. Null when the server cannot say. */
+export async function sessionStartWorkspace(siteUrl: string, apiToken: string, dir: string): Promise<DirectoryWorkspace | null> {
+  const post = async (route: string, body: Record<string, unknown>) => {
+    const r = await fetch(`${siteUrl}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: apiToken, ...body }), signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`${route}: ${r.status}`);
+    return r.json();
+  };
+  return directoryWorkspace({ post, session: undefined, cwd: dir, active: async () => ({ kind: "personal" }), location: () => checkoutLocation(dir) }).catch(() => null);
+}
+
 /** Why a workflow must not run here: the shipped personal Ship, or a flow built on it (`shipsPersonal`,
  *  parser.ts reachesShippedFlow), lands on main with no pull request, so only a checkout established as personal runs
  *  it. A team's own `personal` is not the shipped one. Null to run. */

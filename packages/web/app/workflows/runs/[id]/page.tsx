@@ -17,7 +17,8 @@ import { WorkflowGraphView, type WFNode, type NodeStatus } from "../../../../com
 import { ChangeCardView, answererNameOf } from "../../../../components/decisions/ChangeCardView";
 import { DecisionDiscussion } from "../../../../components/decisions/DecisionDiscussion";
 import { CauseRunList, ReportChip, ReportSection, RunOutcomeText, RunPathView, answerTone, useCauseRuns } from "../../../../components/line/RunReport";
-import { readsAsPath, runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
+import { runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
+import { readsAsPath } from "../../../../lib/line/personalReport";
 import { SHIPPED_LINE } from "../../../../lib/line/shippedLine.generated";
 import { costParts, costUsd, isLineRun } from "@codecast/shared/contracts/changeCard";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useSyncDecisionDetail";

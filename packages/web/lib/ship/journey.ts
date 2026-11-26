@@ -12,10 +12,12 @@
 import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
-import { leftWords, stationResult } from "./stationResult";
-import { jsonOf, noteOf, personalRound, shortWhy } from "./personalRound";
+import { stationResult } from "./stationResult";
+import { personalRound, shortWhy } from "./personalRound";
+import { personalStages } from "./personalJourney";
+import { askStopWhy, readableWhy, stopWhy } from "./journeyWords";
+import { resumeOf, type ResumeAt } from "./resumeAt";
 import { roundsOnOwnResults } from "./ownRound";
-export { shortWhy };
 import type { SessionAsk } from "./sessionAsk";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
@@ -93,7 +95,9 @@ export type JourneyNow =
       /** The change is on main already: running it again would land nothing, so the run (or its task) is the way on. */
       landed?: boolean;
       /** The change may be on main (Landing unknown): shipping again could land it twice, so the run is the way on. */
-      mayHaveLanded?: boolean };
+      mayHaveLanded?: boolean;
+      /** The station the stop's reason says to resume the run at (Landing unknown, Land cut off: resumeAt.ts). */
+      resume?: ResumeAt };
 
 /** `personal`: a personal Ship's run (ownRound.ts), whose bar reads by its own rules. */
 export type Journey = { stages: JourneyStage[]; now: JourneyNow; personal?: true };
@@ -358,42 +362,6 @@ export function stagesHolding(graph: Graph, nodeIds: ReadonlyArray<string>): str
 
 const LIVE_STATUSES = new Set(["pending", "running", "paused"]);
 
-/** How the step that posts a station's step left for the person says it. */
-const LEFT_PREFIX = leftWords("");
-
-/** A run that stopped on its session's ask, in the past tense: the run ended, so nobody waits on it any more. Older
- *  runners said "<station> is waiting on a person" for a killed session's ask too. */
-export function askStopWhy(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  if (/^\S+ stopped: its session was killed while it waited on a person$/.test(raw)) return "Its session was killed while it waited on a person";
-  return /^\S+ is waiting on a person$/.test(raw) ? "Its session asked a person, and the run stopped" : null;
-}
-
-/** A stop reason a person can read: its leading "Stopped:" and any JSON or a trailing cut word taken off. `whole` keeps
- *  every word (an own-results round's stop, whose words say all of how the change stands). */
-export function readableWhy(raw: string | null | undefined, whole = false): string | null {
-  if (!raw) return null;
-  let s = raw.replace(/^Stopped:\s*/, "").replace(/\s*\{[^{}]*"[a-z_]+"\s*:[^{}]*\}\s*$/i, "").trim();
-  if (!whole && s.length > 280) s = s.slice(0, 280).replace(/\s+\S*$/, "") + "…";
-  return s || null;
-}
-
-const skippedResult = (preview: string | null | undefined) => { const r = stationResult(preview); return r?.outcome === "skipped" && !r.leftForYou; };
-
-/** Why an own-results round stopped, whole: the words before a result's JSON, then its note, or a rejection's findings. */
-export function stopWhy(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const body = raw.replace(/^Stopped:\s*/, "");
-  const start = body.indexOf("{");
-  const o = start >= 0 ? jsonOf(body.slice(start)) : null;
-  const said = typeof o?.note === "string" && o.note.trim() ? o.note.trim()
-    : Array.isArray(o?.findings) && o.findings.length ? o.findings.map(String).join("; ")
-    : null;
-  if (!said) return readableWhy(raw, true);
-  const before = body.slice(0, start).trim().replace(/:$/, "");
-  return !before ? said : /[.!?]$/.test(before) ? `${before} ${said}` : `${before}: ${said}`;
-}
-
 /** A step's latest words a person can read: its live activity, else its output (a result JSON's note), never machine output (a JSON report). */
 const lineOf = (n: NodeStatus | undefined, own: boolean) => {
   const said = n?.activity?.trim() || (own ? stationResult(n?.result_preview)?.note : null) || n?.result_preview?.trim() || null;
@@ -563,72 +531,23 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const steps: StageStep[] = statuses
       .filter((n) => (inStage(b, n.node_id) && !isEntry(n.node_id) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
       .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: n.result_preview?.trim() || n.activity || null, session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null }));
-    if (!view) return steps;
-    // An own-results round's steps say what its round's view says (personalRound.ts): a step of an earlier round is
-    // marked so and says nothing of it; one that found work or failed is marked failed, as it is; one that found nothing
-    // to do is skipped. Bookkeeping says nothing a person reads: the JSON a round opens with, or the words the stage's
-    // own step already said.
-    const noteOfStep = (st: StageStep) => stationResult(statusOf(st.id)?.result_preview)?.note ?? st.said;
-    const noted = new Set(statuses.filter((n) => !!stationResult(n.result_preview)?.note).map((n) => n.node_id));
-    const quiet = (st: StageStep) => (!!b.head?.includes(st.id) && !!st.said?.startsWith("{"))
-      || (!!b.tail?.includes(st.id) && noted.has(st.id) && steps.some((o) => o !== st && !b.tail!.includes(o.id) && !!noteOfStep(o) && noteOfStep(o) === noteOfStep(st)));
-    return steps.map((st) => {
-      const skipped = st.status === "completed" && skippedResult(statusOf(st.id)?.result_preview) ? { skipped: true } : {};
-      if (!view.ofRound(st.id) && view.station(st.id).state !== "done") return { ...st, ...skipped, said: null, earlier: true };
-      const { state, endSays } = view.station(st.id);
-      const said = quiet(st) ? null : endSays ? endSays.why : noteOf({ result_preview: statusOf(st.id)?.result_preview }) ?? noteOfStep(st);
-      return { ...st, ...skipped, said, ...(["back", "failed", "stopped"].includes(state) ? { status: "failed" } : {}) };
-    });
+    return personal ? personal.steps(b, steps) : steps;
   };
   // What a stage's steps did last (one entry per node: its latest visit); a segment's entry only routes into its steps.
   const latestOf = (b: Base) => newest(statuses.filter((n) => inStage(b, n.node_id) && !(b.members.includes(n.node_id) && isEntry(n.node_id))));
-  // What a stage reported when it finished (stationResult.ts): its newest finished step with a result, so bookkeeping
-  // folded in after it (the step that posts what Deploy left for the person) does not hide it. Only an own-results
-  // round reads its stations' results; every other flow's stage is as its steps ran.
-  const resultOf = (b: Base) => {
-    if (!view) return null;
-    const last = newest(statuses.filter((n) => inStage(b, n.node_id) && n.status === "completed" && !!stationResult(n.result_preview) && view.ofRound(n.node_id)));
-    return last ? stationResult(last.result_preview) : null;
-  };
-  const ranEmpty = (b: Base) => { const r = resultOf(b); return latestOf(b)?.status === "completed" && r?.outcome === "skipped" && !r.leftForYou; };
-  // A branch of an own-results round reads as the round's view says (personalRound.ts).
-  const OWN_STATE: Record<string, StageState> = { idle: "idle", running: "active", done: "done", nothing: "nothing", back: "back", stopped: "stopped", failed: "stopped", unknown: "unknown" };
-  // A stage of its own (Deploy) between its reports: as its station's round says.
-  const OWN_STAGE: Record<string, StageState> = { idle: "idle", running: "active", done: "done", nothing: "nothing", back: "back", stopped: "stopped", failed: "routed", unknown: "unknown" };
-  const ownBranchState = (br: Base): StageState => {
-    const id = latestOf(br)?.node_id ?? br.members[br.members.length - 1];
-    const state = OWN_STATE[view!.station(id).state];
-    return state === "active" && !live ? "idle" : state;
-  };
-  // A finished stage whose result says it found nothing to do reads `nothing`; one that left the person a step reads done, with it.
-  // A stage this round has not reached carries nothing of an earlier round. The step left for the person is in the words
-  // of the step that posted it, whole, where one did (a result's JSON may be cut short).
-  const ranAs = (b: Base, state: StageState): Pick<JourneyStage, "state" | "note" | "left"> => {
-    const r = state === "idle" ? null : resultOf(b);
-    if (!r) return { state };
-    const finished = state === "done" || state === "nothing";
-    const posted = newest(statuses.filter((n) => inStage(b, n.node_id) && n.status === "completed" && !!n.result_preview?.startsWith(LEFT_PREFIX)));
-    const left = r.leftForYou ? posted?.result_preview!.slice(LEFT_PREFIX.length).trim() || r.leftForYou : null;
-    // A Deploy that reported live on a run that ended short of Live says what the end says.
-    const endSays = view ? b.members.map((m) => view.station(m).endSays).find(Boolean) : undefined;
-    return { state: finished ? (ranEmpty(b) ? "nothing" : "done") : state, note: endSays ? endSays.why : r.note, left: finished ? left : null };
-  };
+  // An own-results round's stages, branches and steps are its stations as its round's view says (personalJourney.ts).
+  const personal = view ? personalStages(view, { statuses, statusOf, newest, inStage, latestOf, live, passed, paused: run.status === "paused" }) : null;
+  const ranAs = (b: Base, state: StageState): Pick<JourneyStage, "state" | "note" | "left"> => personal?.ranAs(b, state) ?? { state };
   // A run that ended past its landing short of Live says where it ended: at an end of its own ("Deployed, unverified",
   // "Landed"), or with a Deploy that found no deploy documented. Read from the end it reached, never from passing alone.
   const ended = passed && at ? byId.get(at) : undefined;
   const offEnd = own && ended?.type === "exit" && !ended.segment && !ended.stop && ended.label !== "Live" ? ended.label : null;
-  const shortOfLive = ownDeploy && passed && (!!offEnd || ranEmpty(deployStage!));
+  const shortOfLive = ownDeploy && passed && (!!offEnd || !!personal?.ranEmpty(deployStage!));
 
   const stateOf = (b: Base, index: number): StageState => {
     if (b.id === backStage) return "back";
     if (b.id === gateStage) return "waiting";
-    // An own-results round's stage is its station as its round's view says (personalRound.ts): the view the diagram, a
-    // station's panel and the run report read.
-    if (own) {
-      const v = view!.station(b.id).state;
-      if (v === "idle") return b.id === stopStage ? "stopped" : passed ? "skipped" : "idle";
-      return v === "running" && run.status === "paused" ? "waiting" : OWN_STAGE[v];
-    }
+    if (personal) return personal.stage(b, stopStage);
     if (b.id === stopStage) return "stopped";
     if (!passed && current >= 0 && index > current) return "idle";
     // A fan-out's own state comes from its branches, except while the run stands at a step it holds after them.
@@ -646,10 +565,9 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   // A branch says what its verdict says, once the round has one: red CI and changes asked sent the work back, a CI held
   // by main's red waits for main. Before the verdict a branch is running or idle, never a check from its exit alone.
   const branchState = (br: Base): StageState => {
-    if (own) return ownBranchState(br);
+    if (personal) return personal.branch(br);
     const last = latestOf(br);
     if (last?.status === "running" || last?.status === "pending") return live ? "active" : "idle";
-    if (ranEmpty(br)) return "nothing";
     const said = br.who === "agent" ? verdicts?.review : verdicts?.ci;
     if (said === "green" || said === "ship") return "done";
     if (said === "red" || said === "timed_out" || said === "changes" || said === "stale") return "back";
@@ -785,6 +703,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // Once the change is on main, running it again would land nothing: the run is the way on, never Ship again.
     const landedAlready = own && !!view?.landed;
     const landUnknown = own && plan.some((b) => b.role === "land" && view!.station(b.id).state === "unknown");
+    const resume = own ? resumeOf(run, graph.nodes) : null;
     const fix: StopFix = landedAlready && stage?.role !== "deploy" ? (subject ? "session" : "run")
       : stage?.role === "deploy" && deploysItself ? (deliberate || landedAlready ? "run" : "again")
       : stage?.role === "deploy" ? "deploy"
@@ -796,7 +715,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // An own-results round's stops are ends of their own, each said by its name with its reason (a result's note, a
     // rejection's findings), never as where on the track it stopped.
     else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: own ? stopWhy(run.fail_reason) : askStopWhy(run.fail_reason) ?? readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && ((own && !!exit?.stop) || walked.some((id) => id !== at && byId.get(id)?.type !== "exit")) ? exit?.label ?? null : null,
-      ...(landedAlready ? { landed: true } : {}), ...(landUnknown ? { mayHaveLanded: true } : {}) };
+      ...(landedAlready ? { landed: true } : {}), ...(landUnknown ? { mayHaveLanded: true } : {}), ...(resume ? { resume } : {}) };
   } else if (allLive && shortOfLive) now = sha ? { kind: "merged", sha, at: run.merge?.at ?? null, end: offEnd ?? "Landed", ...(view && deployStage ? { why: shortWhy(statusOf(deployStage.id)?.result_preview, sha) } : {}) } : { kind: "passed" };
   else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
   else if (!plan.some((s) => s.role === "land")) now = { kind: "passed" };
@@ -811,27 +730,6 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
 
 /** Whether a run is still in flight: the session's Ship control shows it rather than offering another. */
 export const runIsLive = (run: { status: string } | null | undefined) => !!run && LIVE_STATUSES.has(run.status);
-
-/** Whether a personal Ship's bar shows its reason whole, never clamped: a stop's, whose last words are what the person
- *  does next, and an end short of Live's (Deployed, unverified; Landed). Every other flow's clamps. */
-export const wholeWhy = (j: Journey): boolean =>
-  !!j.personal && (j.now.kind === "stopped" || j.now.kind === "failed" || j.now.kind === "unlanded" || (j.now.kind === "merged" && !!j.now.end));
-
-/** Why a run stopped or ended short of Live, whole, as its bar says it: a list row's reason. */
-export function journeyWhy(j: Journey): string | null {
-  const n = j.now;
-  return n.kind === "stopped" || n.kind === "failed" ? n.why : n.kind === "merged" ? n.why ?? null : null;
-}
-
-/** The few words for who acts at a stage. */
-export const WHO_WORDS: Record<StageWho, string> = { session: "This session", agent: "Agent", you: "You", person: "Person", auto: "Automatic" };
-
-/** A wait in a few words: "CI · 9 of 14 jobs · 7m · due in 13m". `age` formats a span of milliseconds. */
-export function waitWords(w: JourneyWait, now: number, age: (ms: number) => string): string {
-  const parts = [w.on, w.line, w.since ? age(Math.max(0, now - w.since)) : null];
-  if (w.deadline) parts.push(w.deadline > now ? `due in ${age(w.deadline - now)}` : `${age(now - w.deadline)} past its deadline`);
-  return parts.filter(Boolean).join(" · ");
-}
 
 /**
  * The targets a Deploy stage's line names (`cast flow await-deploy`): while it waits, one `<target>: <state>` per
@@ -862,68 +760,4 @@ function targetsFromOldLine(line: string): TargetState[] {
     if (!out.some((t) => t.name === name)) out.push({ name, state: waiting![2] ? "deploying" : "waiting", ...(waiting![2] ? { deploy: waiting![2] } : {}) });
   }
   return out;
-}
-
-/** "CI and review": station names as one phrase, an acronym kept as written. */
-const phrase = (labels: string[]) => labels.map((l) => (l !== l.toUpperCase() ? l.toLowerCase() : l)).join(" and ");
-
-export type JourneyTone = "idle" | "working" | "agent" | "session" | "you" | "wait" | "ok" | "bad";
-
-/** The words for a card nobody the viewer is may answer. */
-/**
- * Who a handle is, as a person reads it: a role (`@handle`) by its title from the roster when the caller has it, the
- * Release Captain's (pl-1075 Words) when it does not; anyone else as named.
- */
-export function whoWords(by: string | null | undefined, roles?: ReadonlyArray<{ handle?: string; name?: string }>): string | null {
-  if (!by) return null;
-  if (!by.startsWith("@")) return by;
-  const title = roles?.find((r) => `@${r.handle}` === by)?.name;
-  return title ?? (by === "@release" ? "Release Captain" : by);
-}
-
-/** A run waiting on its approval card, naming who answers it when the card says (never "paused": production's pause owns that word). */
-export const gateWaitWords = (holder: "person" | "role", who?: string | null) => (who ? `Waiting for approval from ${whoWords(who)}` : "Waiting for approval");
-
-/** A stop in a few words: the exit's own name when the run reached it off the main path, else the stage it stopped at. */
-export function stopWords(n: { stage: string | null; end: string | null }): string {
-  if (n.end) return `Stopped: ${/^[A-Z]{2,}\b/.test(n.end) ? n.end : n.end.charAt(0).toLowerCase() + n.end.slice(1)}`;
-  return n.stage ? `Stopped at ${n.stage}` : "Stopped";
-}
-
-/** Who sent the work back, in the bar's words; while the session waits on a person, whom it waits on. */
-export const sentBackWords = (n: { stage: string; by: string | null; blocked?: boolean; ask?: SessionAsk | null; what?: string }) =>
-  (n.blocked ? (n.ask?.mine ? "Waiting on you" : "Waiting for a person") : n.what ? n.what : n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
-
-/** A landed change's Deploy in a pill's words: "Deploying" only while a deploy carries it. */
-export function holdWords(hold: DeployHold, roles?: ReadonlyArray<{ handle?: string; name?: string }>): { words: string; tone: "working" | "wait" } {
-  if (hold.kind === "out") return { words: "Deploying", tone: "working" };
-  if (hold.kind === "red") return { words: "Waiting for green main", tone: "wait" };
-  if (hold.kind === "ci") return { words: "Waiting on main CI", tone: "wait" };
-  if (hold.kind === "press") return { words: `Waiting for ${whoWords(hold.by, roles) ?? "a person"} to deploy`, tone: "wait" };
-  return { words: "Waiting to deploy", tone: "wait" };
-}
-
-/** Where a session's change is, in the words and tone its Ship control and a run's row both show. */
-export function journeyWords(j: Journey | null): { words: string; tone: JourneyTone } {
-  if (!j) return { words: "Ship", tone: "idle" };
-  const n = j.now;
-  switch (n.kind) {
-    case "working": {
-      const tone = n.who === "agent" ? "agent" : "working";
-      if (n.verb) return { words: n.verb, tone };
-      if (n.role === "parallel") return { words: `In ${phrase(n.waits.length ? n.waits.map((w) => w.on) : n.stage.split(" + "))}`, tone };
-      return { words: n.stage, tone };
-    }
-    case "starting": return { words: "Starting", tone: "working" };
-    case "session": return n.blocked ? { words: sentBackWords(n), tone: n.ask?.mine ? "you" : "wait" } : { words: "Fixing", tone: "session" };
-    case "gate": return n.mine ? { words: "Your call", tone: "you" } : { words: gateWaitWords(n.holder, n.who), tone: "wait" };
-    case "landed": return holdWords(n.hold);
-    case "deploying": return { words: "Deploying", tone: "working" };
-    case "merged": return { words: n.end ?? "Merged", tone: "ok" };
-    case "passed": return { words: "Done", tone: "ok" };
-    case "unlanded": return { words: "Not merged", tone: "bad" };
-    case "live": return { words: "Live", tone: "ok" };
-    case "stopped": case "failed": return { words: stopWords(n), tone: "bad" };
-    default: return { words: "Ship", tone: "idle" };
-  }
 }

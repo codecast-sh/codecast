@@ -24,9 +24,12 @@ import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 import { answererNameOf } from '@codecast/web/lib/decisionLinks';
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from '@codecast/web/lib/workflowRun';
 import {
-  LANDING_STATIONS, behindBase, cardName, choiceWords, landingOf, runOutcome, runPath, shortDay,
+  LANDING_STATIONS, behindBase, cardName, choiceWords, runOutcome, runPath, shortDay,
   type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState,
 } from '@codecast/web/lib/line/runReport';
+import { landingOf, ownGraphOf } from '@codecast/web/lib/line/personalReport';
+import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
+import { ResumeAtAction } from '@/components/session/ResumeAtAction';
 import { compactAge } from '@codecast/web/lib/threadState';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { optionIsShip } from '@codecast/shared/contracts/shipAnswer';
@@ -136,6 +139,8 @@ export default function RunScreen() {
   const outcome = runOutcome(run, task, now, false, { graph: workflow as any, ask });
   // A personal Ship lands, maybe twice: its latest landing, as its journey shows it.
   const landing = landingOf(run, workflow as any);
+  // A personal Ship's stop that says to resume the run (Landing unknown, Land cut off) offers that press, as its card does.
+  const resumeAt = ownGraphOf(workflow as any) ? resumeOf(run, (workflow as any)?.nodes) : null;
   // The session the run waits on asks a person: whom it waits on and what, as the run's card says it.
   const asking = live && run.waiting_on_session?.blocked && ask?.open !== false
     ? { head: ask?.mine ? 'Waiting on you' : 'Waiting for a person', body: [ask?.question, run.waiting_on_session.note].filter(Boolean).join('\n') }
@@ -241,6 +246,7 @@ export default function RunScreen() {
             {live ? <ActionButton icon="stop" label="Stop the run" color={Theme.red} onPress={stop} testID="run-stop" /> : null}
           </RNView>
         ) : null}
+        {resumeAt ? <ResumeAtAction runId={run._id} resume={resumeAt} /> : null}
 
         <Facts>
           {hostId ? <FactRow label="Ran in" icon="comments-o" tone={Theme.blue} onPress={() => go(`/session/${hostId}`)} testID="run-session">{hostTitle ?? 'Its session'}</FactRow> : null}

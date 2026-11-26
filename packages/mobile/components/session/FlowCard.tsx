@@ -20,7 +20,8 @@ import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type 
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { takesSessionChange } from '@codecast/shared/contracts/flowPool';
 import { leftWords } from '@codecast/web/lib/ship/stationResult';
-import { gateWaitWords, holdWords, insideWords, journeyOf, sentBackWords, stopWords, waitWords, wholeWhy, WHO_WORDS, type JourneyNow, type JourneyStage, type JourneyWait, type StageState } from '@codecast/web/lib/ship/journey';
+import { insideWords, journeyOf, type JourneyNow, type JourneyStage, type JourneyWait, type StageState } from '@codecast/web/lib/ship/journey';
+import { gateWaitWords, holdWords, sentBackWords, stageNote, stopWords, waitWords, wholeWhy, WHO_WORDS } from '@codecast/web/lib/ship/journeyWords';
 import type { FlowEdit } from '@codecast/shared/contracts/flowEdit';
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy, type EditMark } from '@codecast/web/lib/line/flowEditCard';
 import { CastDiff } from '@/components/CastDiff';
@@ -33,6 +34,7 @@ import { repoName, spanWords, type PipelineLane } from '@codecast/web/lib/line/p
 import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { ageShort } from '@codecast/web/lib/lineFlow';
+import { ResumeAtAction } from './ResumeAtAction';
 
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 type RunRow = Parameters<typeof stepStates>[1] & { _id: string; status: string; task_short_id?: string | null; fail_reason?: string | null; workflow_slug?: string; workflow_name?: string };
@@ -71,10 +73,10 @@ function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
   const tone: Record<StageState, string> = { idle: Theme.textDim, active: Theme.blue, back: Theme.violet, waiting: Theme.yellow, done: Theme.green, routed: Theme.textMuted, stopped: Theme.red, skipped: Theme.textDim, nothing: Theme.textMuted, unknown: Theme.textMuted };
   const icon: Record<StageState, FeatherName> = { idle: 'circle', active: 'loader', back: 'corner-down-left', waiting: 'clock', done: 'check-circle', routed: 'arrow-right-circle', stopped: 'x-circle', skipped: 'minus-circle', nothing: 'minus', unknown: 'help-circle' };
   const whoWords = (s: JourneyStage) => (s.state === 'nothing' ? 'Skipped' : finished ? (s.round ? `round ${s.round}` : '') : `${s.state === 'back' ? 'This session' : s.role === 'live' || s.state === 'skipped' ? '' : WHO_WORDS[s.who]}${s.round ? ` · round ${s.round}` : ''}`);
-  // What a station's result said, under it (the phone has no hover): why it skipped, a step it left to the person.
+  // What a station's result said, under it (the phone has no hover): what it found or why it skipped, a step it left to the person.
   const result = (s: JourneyStage, indent: number) => (
     <>
-      {s.state === 'nothing' && s.note ? <RNText style={[styles.who, { marginLeft: indent, color: Theme.textDim }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.note}</RNText> : null}
+      {stageNote(s, journey) ? <RNText style={[styles.who, { marginLeft: indent, color: Theme.textDim }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{stageNote(s, journey)}</RNText> : null}
       {/* The step left for the person opens the task it was posted to, a native screen. */}
       {s.left && run.task_short_id ? (
         <Pressable onPress={() => router.push(`/task/${run.task_short_id}` as never)} hitSlop={8} accessibilityRole="link">
@@ -138,7 +140,7 @@ function nowAction(now: JourneyNow, run: RunRow): { label: string; href: string 
   return { label: 'Open run', href: `/run/${run._id}` };
 }
 
-/** `whole`: a personal Ship's stop or end short of Live, whose reason shows whole (journey.ts wholeWhy). */
+/** `whole`: a personal Ship's stop or end short of Live, whose reason shows whole (journeyWords.ts wholeWhy). */
 function NowLine({ now, run, whole }: { now: JourneyNow; run: RunRow; whole: boolean }) {
   const Theme = useTheme();
   const router = useRouter();
@@ -167,6 +169,8 @@ function NowLine({ now, run, whole }: { now: JourneyNow; run: RunRow; whole: boo
       <RNText style={[styles.state, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{head}</RNText>
       {/* A stop's reason is whole: its last words are what the person does next. */}
       {body ? <RNText style={[styles.why, { color: Theme.text, paddingHorizontal: 0, paddingBottom: 0 }]} numberOfLines={whole ? undefined : 4} maxFontSizeMultiplier={CHROME_FONT_CAP} testID="flow-now-why"><CodeRuns text={body} /></RNText> : null}
+      {/* A stop that says to resume the run leads with that press, natively; opening the run follows it. */}
+      {(now.kind === 'stopped' || now.kind === 'failed') && now.resume ? <ResumeAtAction runId={run._id} resume={now.resume} /> : null}
       {action ? (
         <Pressable onPress={() => router.push(action.href as never)} hitSlop={8} style={[styles.save, styles.act, { borderColor: Theme.blue }]}>
           <RNText style={[styles.saveText, { color: Theme.blue }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{action.label}</RNText>

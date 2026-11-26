@@ -9,7 +9,8 @@ import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployR
 import { sessionsOf, type TeamDeployRow } from "../deploys/targets";
 import { deploysFocusHref, runTeam } from "../deploys/focus";
 import { entityRoute } from "@codecast/shared/entities";
-import { canAnswer, deployHold, gateOpen, gateWaitWords, holderOf, holdWords, type GateDecision, type TargetState } from "./journey";
+import { canAnswer, deployHold, gateOpen, holderOf, type GateDecision, type TargetState } from "./journey";
+import { gateWaitWords, holdWords } from "./journeyWords";
 import { landedSha as mergedSha } from "./runRecord";
 import { runAskOf, type AskRow, type SessionAsk } from "./sessionAsk";
 

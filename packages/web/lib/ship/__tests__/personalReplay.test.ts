@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { journeyOf, journeyWhy, journeyWords, sentBackWords, wholeWhy } from "../journey";
+import { journeyOf } from "../journey";
+import { journeyWhy, journeyWords, sentBackWords, stageNote, wholeWhy } from "../journeyWords";
 import { stationRun } from "../../line/stationRun";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { journeyStages } from "../journey";
 import { PERSONAL_FLOW } from "../journeyFixtures";
 import { flowDiagram, runReached, stepStates } from "../../line/flowDiagram";
-import { landingOf, readsAsPath, runOutcome, runPath } from "../../line/runReport";
+import { runOutcome, runPath } from "../../line/runReport";
+import { landingOf, readsAsPath } from "../../line/personalReport";
 import { roundsOnOwnResults } from "../ownRound";
 import { buildLineModel } from "../../line/lineModel";
 import { causeHistory } from "../../line/causeHistory";
@@ -16,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { workflowNodeValidator } from "@codecast/convex/convex/lib/workflowGraphValidators";
 import { runNodeRows } from "../../workflowRun";
 import { at, end, replay, scenarios, stoppedAt, type ReplayedRun } from "./replayReports";
+import { resumeOf, resumeRefusal, resumeWords } from "../resumeAt";
 
 // The personal Ship as a person's screen draws it while it runs: every run here is the real runner's progress reports
 // (cli personalFlow.e2e.test.ts, recorded into personalReports.json) merged as the server merges them (replayReports.ts),
@@ -127,6 +130,16 @@ describe("the personal journey, as its reports arrive", () => {
     expect(journey(end(replay("a push whose landing could not be recorded"))).now).toMatchObject({ kind: "stopped", end: "Landing not recorded", fix: "run", landed: true });
   });
 
+  test("a card with no hover says each stage's note under it, as the web's hover and steps do, never twice beside the bar", () => {
+    const red = journey(at(RED, { node: "brief", status: "running" }));
+    expect(red.stages[0].branches!.map((b) => stageNote(b, red))).toEqual(["./check.sh exited 1 (README.md:3)", null]);
+    const live = journey(end(PASS));
+    expect(stageNote(live.stages[2], live)).toBe("ran ./deploy.sh and saw the commit live");
+    // Deployed, unverified says its reason on the bar: the Deploy stage's note is those words, said once.
+    const unverified = journey(end(replay("the rest end Deployed, unverified or Landed (run 2)")));
+    expect([unverified.stages[2].note, stageNote(unverified.stages[2], unverified)]).toEqual([journeyWhy(unverified), null]);
+  });
+
   test("a conflict with main reads as one, never as Check + Review sending the work back", () => {
     const j = journey(at(replay("a change that conflicts with main goes back"), { node: "fix_conflict", status: "running" }));
     expect(journeyWords(j).words).toBe("Fixing");
@@ -169,6 +182,39 @@ describe("the personal journey, as its reports arrive", () => {
       expect(runOutcome(run as any, null, Date.now(), false, { graph: personal }).text).toBe(`Main unchecked: ${whole.replace(/\.$/, "")}.`);
       expect([journey(run).stages[1].state, stepStates(diagram, run as any).get("land"), stationRun(personal, "land", run)?.status, runPath(run as any, personal)[0].steps.find((x) => x.id === "land")?.state]).toEqual(["done", "done", "completed", "done"]);
     }
+  });
+
+  test("a Land that pushed before the run stopped (Landing not recorded, Land cut off after its push) reads landed on every surface", () => {
+    for (const [name, stop] of [["a push whose landing could not be recorded", "Landing not recorded"], ["r8f: a Land its station cuts off during the catch-up says the change landed, and resuming it finishes and deploys (run 1)", "Land cut off"]]) {
+      const run = end(replay(name));
+      expect(run.node_statuses.filter((n) => n.node_id === "land").pop()!.status).toBe("failed");
+      const j = journey(run);
+      expect(j.now).toMatchObject({ kind: "stopped", end: stop, fix: "run", landed: true });
+      const step = j.stages[1].steps!.find((x) => x.id === "land")!;
+      expect([j.stages[1].state, step.status, stepStates(diagram, run as any).get("land"), stationRun(personal, "land", run), runPath(run as any, personal)[0].steps.find((x) => x.id === "land")?.state])
+        .toEqual(["done", "completed", "done", { status: "completed", outcome: "landed", note: step.said, left: null, session: null }, "done"]);
+      expect(step.said).toMatch(/succeeded|so the change landed/);
+      expect(landingOf(run as any, storedRow)?.word).toBe("Landed");
+    }
+  });
+
+  test("only the stops that say to resume the run (Landing unknown, Land cut off) offer Resume at Land, on the bar and the run screen", () => {
+    const offered = scenarios().map((name) => end(replay(name))).filter((run) => run.status === "failed")
+      .map((run) => [run.current_node_id, (journey(run).now as any).resume ?? null, resumeOf(run as any, storedRow.nodes)] as const);
+    for (const [id, bar, screen] of offered) {
+      const expected = ["unknown", "unknown_cut", "cutlanded"].includes(id!) ? { at: "land", label: "Land" } : null;
+      expect([id, bar, screen]).toEqual([id, expected, expected]);
+    }
+    expect(new Set(offered.filter(([, bar]) => bar).map(([id]) => id))).toEqual(new Set(["unknown", "unknown_cut", "cutlanded"]));
+    expect(resumeWords({ at: "land", label: "Land" })).toBe("Resume at Land");
+    // A team's flow never offers it, whatever its reason says.
+    const cut = end(replay("r8f: a Land its station cuts off during the catch-up says the change landed, and resuming it finishes and deploys (run 1)"));
+    expect((journeyOf({ ...personal, own_results: false, source: null }, cut as any).now as any).resume).toBeUndefined();
+  });
+
+  test("a refused resume says the server's own words, never the error's envelope", () => {
+    expect(resumeRefusal(Object.assign(new Error("[CONVEX M(failedRunResume:resume)] Server Error"), { data: "Only the run's owner resumes it" }))).toBe("Only the run's owner resumes it");
+    expect(resumeRefusal(new Error("[CONVEX M(failedRunResume:resume)] [Request ID: 1] Server Error\nUncaught Error: Not signed in\n    at handler (../convex/failedRunResume.ts:94:11)"))).toBe("Not signed in");
   });
 
   test("Land that finds the change already pushed by the session reads as leaving the run, never as Land failing", () => {

@@ -22479,13 +22479,8 @@ workflow
       process.exit(1);
     }
     // Asked only of a run typed by hand: one `cast flow run` started has decided this already, where it was decided.
-    const personalRefused = options.personalEstablished ? null : await (async () => {
-      const { shippedPersonalRefusal, runSubjects } = await import("./directoryTeam.js");
-      const { reachesShippedFlow } = await import("./workflow/parser.js");
-      const ships = resolved.label === "builtin:personal" || reachesShippedFlow(resolved.source, resolved.dir, "personal");
-      const subjects = runSubjects({ post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()] });
-      return shippedPersonalRefusal(ships, () => groupDeps().flow.directoryWorkspace(subjects));
-    })();
+    const personalRefused = options.personalEstablished ? null : await (await import("./flowPersonal.js")).workflowRunRefusal(resolved, {
+      post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()], where: groupDeps().flow.directoryWorkspace });
     if (personalRefused) { console.error(`✗ ${personalRefused}`); process.exit(1); }
     const source = resolved.source;
     const graph = parseWorkflowSource(source, resolved.dir);

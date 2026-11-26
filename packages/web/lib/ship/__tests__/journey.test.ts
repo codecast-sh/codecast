@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { canAnswer, gateWaitWords, whoWords, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { canAnswer, deployHold, insideWords, journeyOf, journeyStages, targetsFromLine, verdictsOf } from "../journey";
+import { gateWaitWords, whoWords, journeyWords, readableWhy, sentBackWords, waitWords } from "../journeyWords";
 import { approvalOf, approvalWords, shipConfirms } from "../approval";
 import { landedSha } from "../runRecord";
 import { sessionAskOf } from "../sessionAsk";

@@ -14,8 +14,9 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
 import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
-import { appPool, shipPicks, type AppFlow } from "../../../lib/line/flowPool";
-import { journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { appPool, previewsPersonal, shipPicks, type AppFlow } from "../../../lib/line/flowPool";
+import { journeyOf, journeyStages, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { journeyWords } from "../../../lib/ship/journeyWords";
 import { approvalOf, approvalWords, shipConfirms } from "../../../lib/ship/approval";
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
 import { useDeployReach, type DeployReachRow } from "../../../hooks/useDeployReach";
@@ -261,7 +262,7 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
   const repository = repositoryOfRemote(remote);
   const repoFlows = useRepoFlows(root, repository);
   // A session no team shares ships through the personal Ship, as `cast flow run change` does in its directory.
-  const personal = !!workspace?.startsWith("user:");
+  const personal = previewsPersonal(workspace, repository);
   const { pool, fallback } = useMemo(() => shipPicks(appPool(workflows, repoFlows), repository, teamSlug, personal), [workflows, repoFlows, repository, teamSlug, personal]);
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
