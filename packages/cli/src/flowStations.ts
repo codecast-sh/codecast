@@ -35,6 +35,16 @@ export async function recordRunPr(deps: Pick<FlowDeps, "cliPost">, pr: { run_id?
   await reportToRun(deps, "the pull request", "/cli/workflow-runs/pr", { run_id: pr.run_id, repository: pr.repository, number: pr.number, head_sha: pr.head_sha });
 }
 
+/**
+ * The run's landing commit, on the server: the one commit a station pushed for CI that main is fast-forwarded to, with
+ * no pull request (convex orgLineMerge.recordRunLanding). The first one is what a Ship press approves, and each report
+ * works the approval status out again on that commit. A failed report costs the status a wait, never the station.
+ */
+export async function recordRunLanding(deps: Pick<FlowDeps, "cliPost">, landing: { run_id?: string; repository?: string | null; sha: string }): Promise<void> {
+  if (!landing.repository) return console.error("the landing commit was not recorded on the run: no repository");
+  await reportToRun(deps, "the landing commit", "/cli/workflow-runs/landing", { run_id: landing.run_id, repository: landing.repository, sha: landing.sha });
+}
+
 export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
   // What the server holds for the run's attempt (orgLineMerge.mergeProofCore), or null without a run or an answer:
   // then nothing is carried, and the round is reviewed.
@@ -139,10 +149,22 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
       await recordRunPr(deps, { run_id: opts.run ?? process.env.run_id, repository, number: Number(opts.number), head_sha: opts.head });
     });
 
+  // A landing with no pull request: the station pushed the change as one commit, which main is fast-forwarded to.
+  flow
+    .command("record-landing")
+    .description("From a station's script: record the landing commit it pushed (the change squashed onto main's tip, or carried onto a newer main), on the run, so codecast posts its approval status on that commit. A report that fails is printed and exits 0, so it never fails the station")
+    .requiredOption("--head <sha>", "The landing commit the station pushed")
+    .option("--repository <owner/name>", "The repository (default: this checkout's origin)")
+    .option("--run <id>", "The run whose station this is (default: $run_id)")
+    .action(async (opts: { head: string; repository?: string; run?: string }) => {
+      const repository = opts.repository ?? (await import("./prCommand.js")).readLocalGitContext(deps.realCwd()).repository;
+      await recordRunLanding(deps, { run_id: opts.run ?? process.env.run_id, repository, sha: opts.head });
+    });
+
   // And its rebases: a review of the head before covers the head after only once the run holds the link (orgLineMerge.coveredHeads).
   flow
     .command("record-rebase")
-    .description("From a station's script: record that it rebased the pull request's head from one commit to another, before it pushes the rebase, so the review of the first covers the second. A report that fails is printed and exits 0, so it never fails the station")
+    .description("From a station's script: record that it rebased the pull request's head (or the landing commit) from one commit to another, before it pushes the rebase, so the review of the first covers the second. A report that fails is printed and exits 0, so it never fails the station")
     .requiredOption("--from <sha>", "The head before the rebase")
     .requiredOption("--to <sha>", "The rebased head it is about to push")
     .option("--run <id>", "The run whose station this is (default: $run_id)")
