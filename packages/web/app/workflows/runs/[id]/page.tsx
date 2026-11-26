@@ -10,6 +10,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { RunSessionAsk } from "../../../../components/ship/Journey";
+import { ChangeRunHead } from "../../../../components/ship/ChangeRunHead";
+import { useRunFlow } from "../../../../hooks/useFlowObject";
+import { shipsChange } from "../../../../lib/ship/changePage";
 import { useJourneyViewer } from "../../../../hooks/useJourneyViewer";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from "../../../../lib/workflowRun";
@@ -128,6 +131,8 @@ function RunDetailContent({ runId }: { runId: string }) {
     return id ? ((s.conversations as Record<string, { title?: string }>)[id]?.title ?? (s.sessions as Record<string, { title?: string }>)[id]?.title ?? null) : null;
   });
   const projectTitle = useInboxStore((s) => (task?.project_id ? ((s.projects as Record<string, { title?: string }>)[task.project_id]?.title ?? null) : null));
+  // The flow the run went through: one that takes a session's change makes this page the change's (ChangeRunHead).
+  const { flow: runFlow } = useRunFlow(run as any);
 
   // Local-first (store respondToGate): the run flips to running on the press.
   const handleGateResponse = (text: string) => {
@@ -157,6 +162,9 @@ function RunDetailContent({ runId }: { runId: string }) {
   const duration = formatRunDuration(run.created_at, isActive ? undefined : run.updated_at);
   const line = isLineRun(run);
   const ended = run.status === "completed" || run.status === "failed";
+  // A change run (a whole flow that lands a session's change): its head says where the change stands and links its PR,
+  // CI, review, merge and deploys. A segment's run (check, review, ship) keeps the run report.
+  const changeFlow = runFlow && shipsChange(runFlow) ? runFlow : null;
 
   // The answered gate, in words (never a raw key), and its card.
   const decision = detail?.decision;
@@ -170,6 +178,8 @@ function RunDetailContent({ runId }: { runId: string }) {
   // The card by what it decided; its key stays behind the link.
   const cardChip = run.gate_decision_short_id ? cardName(answer, card, run.status === "paused") : null;
   const earlier = causeRuns.filter((r) => r._id !== run._id);
+  // The newest later run on the same task: where a stopped run's change went on.
+  const newer = earlier.filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null;
 
   // The graph behind the toggle: the run's stored workflow, else the shipped
   // line for a line run, with each station's state painted on it.
@@ -189,9 +199,9 @@ function RunDetailContent({ runId }: { runId: string }) {
 
   // The run's name, state, facts and share, drawn by whichever header is up.
   const runTitle = run.task_title ?? task?.title ?? flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name });
-  // A line run and a personal Ship say their state in their outcome sentence, never the engine's "Failed".
+  // A line run and a personal Ship say their state in their outcome sentence, a change run in its head, never the engine's "Failed".
   const statusChip = (
-    readsAsPath(run as ReportRun, workflow as any) ? null : (
+    changeFlow || readsAsPath(run as ReportRun, workflow as any) ? null : (
       <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${st.color} ${st.bg}`}>
         <StatusIcon className={`w-3 h-3 ${run.status === "running" ? "animate-spin" : ""}`} />
         {runStatusWords(run.status)}
@@ -212,6 +222,34 @@ function RunDetailContent({ runId }: { runId: string }) {
   );
   const share = <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token, team: policyTeamOf("workflow_runs", run) }} />;
   const backHref = line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/flows") : "/workflows";
+  // Where each fact about the run lives: the session that ran it, its task, its card, its replay.
+  const pageChips = (
+    <>
+      {!line && hostHref && <ReportChip href={hostHref} title="The session that ran this workflow">Ran in {hostTitle ?? "its session"}</ReportChip>}
+      {taskRef && <ReportChip href={`/tasks/${taskRef}`} title={run.task_title ?? task?.title}>{taskRef}{(run.task_title ?? task?.title) ? ` · ${run.task_title ?? task?.title}` : ""}</ReportChip>}
+      {/* One chip for the card: it scrolls to the card below, which links its decision. A change run waiting on it says so in its head. */}
+      {cardChip && !(changeFlow && run.status === "paused") && (
+        <ReportChip href={card ? "#run-card" : `/decisions/${run.gate_decision_short_id}`} tone={answer ? answerTone(answer) : "default"} title={card ? "The change and its proof, below" : "The decision this run asked"}>
+          {cardChip}
+        </ReportChip>
+      )}
+      {/* What changed: the pull request when there is one, else the card's diff below. */}
+      {card && (prUrl
+        ? <ReportChip href={prUrl} external title="The change on GitHub">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>
+        : <ReportChip href="#run-card-diff" title="The change's diff, on the card below">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>)}
+      {/* This run played step by step, and its problem's whole life, in the project's line workspace (line-workspace.md LW1). */}
+      {line && (
+        <ReportChip href={lineHere ? lineHere({ view: "replay", run: run._id, case: run.task_id ?? null }) : lineRefHref(run._id)} title={`Play this run through its flow, step by step${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
+          Replay
+        </ReportChip>
+      )}
+      {line && run.task_id && (
+        <ReportChip href={lineHere ? lineHere({ view: "problems", case: run.task_id }) : lineRefHref(run.task_id)} title="This problem's life on one time axis: its reports, every attempt to fix it, ships, deploys and what came back">
+          Timeline
+        </ReportChip>
+      )}
+    </>
+  );
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-sol-bg">
@@ -248,40 +286,20 @@ function RunDetailContent({ runId }: { runId: string }) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[60rem] mx-auto px-5 py-5 space-y-7">
           {/* What the run did and what is true now, then where each fact lives. */}
+          {changeFlow ? <ChangeRunHead run={run} flow={changeFlow} now_ms={nowMs} chips={pageChips} newer={newer} /> : (
           <section data-run-report-head>
             <p className="text-[17px] leading-snug font-medium">
               <RunOutcomeText run={run as ReportRun} task={task} graph={workflow as any} ask={ask} />
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
-              {!line && hostHref && <ReportChip href={hostHref} title="The session that ran this workflow">Ran in {hostTitle ?? "its session"}</ReportChip>}
-              {taskRef && <ReportChip href={`/tasks/${taskRef}`} title={run.task_title ?? task?.title}>{taskRef}{(run.task_title ?? task?.title) ? ` · ${run.task_title ?? task?.title}` : ""}</ReportChip>}
-              {/* One chip for the card: it scrolls to the card below, which links its decision. */}
-              {cardChip && (
-                <ReportChip href={card ? "#run-card" : `/decisions/${run.gate_decision_short_id}`} tone={answer ? answerTone(answer) : "default"} title={card ? "The change and its proof, below" : "The decision this run asked"}>
-                  {cardChip}
-                </ReportChip>
-              )}
-              {/* What changed: the pull request when there is one, else the card's diff below. */}
-              {card && (prUrl
-                ? <ReportChip href={prUrl} external title="The change on GitHub">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>
-                : <ReportChip href="#run-card-diff" title="The change's diff, on the card below">+{card.diff.added} −{card.diff.removed} in {card.diff.files} {card.diff.files === 1 ? "file" : "files"}</ReportChip>)}
-              {/* This run played step by step, and its problem's whole life, in the project's line workspace (line-workspace.md LW1). */}
-              {line && (
-                <ReportChip href={lineHere ? lineHere({ view: "replay", run: run._id, case: run.task_id ?? null }) : lineRefHref(run._id)} title={`Play this run through its flow, step by step${projectForeign ? `, read from ${projectForeign.name}` : ""}`}>
-                  Replay
-                </ReportChip>
-              )}
-              {line && run.task_id && (
-                <ReportChip href={lineHere ? lineHere({ view: "problems", case: run.task_id }) : lineRefHref(run.task_id)} title="This problem's life on one time axis: its reports, every attempt to fix it, ships, deploys and what came back">
-                  Timeline
-                </ReportChip>
-              )}
+              {pageChips}
             </div>
           </section>
+          )}
 
-          {isActive && run.waiting_on_session?.blocked ? <RunSessionAsk run={run} now_ms={nowMs} /> : null}
+          {!changeFlow && isActive && run.waiting_on_session?.blocked ? <RunSessionAsk run={run} now_ms={nowMs} /> : null}
 
-          {run.status === "paused" && run.gate_decision_id && (
+          {!changeFlow && run.status === "paused" && run.gate_decision_id && (
             <RunGate run={run} className="rounded-xl border border-sol-yellow/30 bg-sol-yellow/5 p-3" />
           )}
 

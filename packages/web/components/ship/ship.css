@@ -257,3 +257,16 @@ button.shp-link { background: none; border: 0; padding: 0; cursor: pointer; font
 .ssc[data-tone="ok"] { --ssc: var(--sol-green); }
 .ssc[data-tone="bad"] { --ssc: var(--sol-red); }
 a.ssc:hover { text-decoration: underline; }
+
+/* A change run's page head: where the change stands, large, its tone a dot; what it waits on under it. */
+.cr-head { --cr: var(--sol-text-dim); display: flex; align-items: center; gap: 10px; margin: 0; font-size: 19px; line-height: 1.3; font-weight: 600; color: var(--sol-text); }
+.cr-dot { width: 10px; height: 10px; border-radius: 999px; background: var(--cr); flex: none; }
+.cr-head[data-tone="working"], .cr-head[data-tone="you"] { --cr: var(--sol-blue); }
+.cr-head[data-tone="agent"] { --cr: var(--sol-orange); }
+.cr-head[data-tone="session"] { --cr: var(--sol-violet); }
+.cr-head[data-tone="wait"] { --cr: var(--sol-yellow); }
+.cr-head[data-tone="ok"] { --cr: var(--sol-green); }
+.cr-head[data-tone="bad"] { --cr: var(--sol-red); }
+.cr-waits { margin: 4px 0 0 20px; font-size: 14px; line-height: 1.4; color: var(--sol-text-muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+/* The run card's journey, framed as the card in the thread frames it. */
+.cr-journey { border: 1px solid var(--sj-rule); border-radius: 12px; overflow: hidden; background: var(--sj-card); }

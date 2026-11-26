@@ -87,6 +87,13 @@ export function stopWords(n: { stage: string | null; end: string | null }): stri
   return n.stage ? `Stopped at ${n.stage}` : "Stopped";
 }
 
+/** A stopped or failed run's title, as the bar and the run page's head both say it: one word for where it stopped. */
+export const stopTitle = (n: { kind: "stopped" | "failed"; stage: string | null; end: string | null }) =>
+  (n.kind === "failed" && !n.end ? `Failed${n.stage ? ` at ${n.stage}` : ""}` : stopWords(n));
+
+/** A note a station or session wrote, as plain words for a bar: markdown headings and emphasis marks taken off. */
+export const plainNote = (note: string) => note.replace(/^#{1,6}\s+/gm, "").replace(/(\*\*|__)(.+?)\1/g, "$2").replace(/`([^`]+)`/g, "$1");
+
 /** Who sent the work back, in the bar's words; while the session waits on a person, whom it waits on. */
 export const sentBackWords = (n: { stage: string; by: string | null; blocked?: boolean; ask?: SessionAsk | null; what?: string }) =>
   (n.blocked ? (n.ask?.mine ? "Waiting on you" : "Waiting for a person") : n.what ? n.what : n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);

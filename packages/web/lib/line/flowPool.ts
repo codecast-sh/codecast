@@ -65,7 +65,8 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
     const exit = out.length > 0 && out.every((e) => segmentTopOf(e.to) !== top) ? (out.every((e) => /\boutcome\s*=\s*failure\b/.test(e.condition ?? "")) ? "stop" : "done") : null;
     return {
       id: n.id, label: n.label, type: n.type, shape: n.shape,
-      ...(backends[n.id] ? { backend: backends[n.id] } : {}),
+      // The source's word, else the stored node's own (a flow whose source names its station in a file it extends).
+      ...(backends[n.id] ?? (n as { backend?: string }).backend ? { backend: backends[n.id] ?? (n as { backend?: string }).backend } : {}),
       ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
       ...(machine[n.id] === "true" ? { machine: true } : {}),
       ...(fold[n.id] === "true" ? { fold: true } : {}),

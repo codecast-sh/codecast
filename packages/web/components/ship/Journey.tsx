@@ -5,13 +5,13 @@
 // right there: an answer at Decide, the session's fix when a stage sent work
 // back, the deploy when it has landed. The Ship panel previews a flow with it
 // and the run's card in the thread draws the run with it.
-import { memo, useId, useMemo, useState } from "react";
+import { createContext, memo, useContext, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
 import { insideWords, targetsFromLine, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
-import { WHO_WORDS, gateWaitWords, holdWords, sentBackWords, stopWords, waitWords } from "../../lib/ship/journeyWords";
+import { WHO_WORDS, gateWaitWords, holdWords, plainNote, sentBackWords, stopTitle, waitWords } from "../../lib/ship/journeyWords";
 import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
 import { leftWords } from "../../lib/ship/stationResult";
@@ -28,6 +28,11 @@ import { useJourneyViewer } from "../../hooks/useJourneyViewer";
 import type { SessionAsk } from "../../lib/ship/sessionAsk";
 import "./ship.css";
 
+/** The session a run's findings come back to, as the place drawing it names it: "this session" inside that session's
+ *  thread, "its session" on the run's own page (JourneyView `onRunPage`). */
+const SessionWord = createContext("this session");
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 /** `insideId`: the element an open segment's inside is drawn in, which its stage's toggle controls. */
 /** `task`: the run's task, where a step left for the person was posted: the step opens it. */
 export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen, insideId, task }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void; insideId?: string; task?: string | null }) {
@@ -36,6 +41,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
   // The stages whose findings come back to the session, as one return line under them.
   const looping = finished ? [] : stages.map((s, i) => (s.loops.length ? i : -1)).filter((i) => i >= 0);
   const back = stages.some((s) => s.state === "back");
+  const subject = useContext(SessionWord);
   return (
     <div className="sj-track" style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }} data-compact={compact ? "" : undefined}>
       <ol className="sj-stages" aria-label="Stages">
@@ -55,9 +61,9 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
       </ol>
       {looping.length && !compact ? (
         <div className="sj-return" data-active={back ? "" : undefined} data-single={looping.length === 1 ? "" : undefined} style={{ gridColumn: `${looping[0] + 1} / ${looping[looping.length - 1] + 2}`, ["--n" as string]: looping[looping.length - 1] - looping[0] + 1 }}
-          title={`Back to this session from ${looping.map((i) => stages[i].label).join(", ")}`} data-journey-return>
+          title={`Back to ${subject} from ${looping.map((i) => stages[i].label).join(", ")}`} data-journey-return>
           <span className="sj-return-line" aria-hidden />
-          <span className="sj-return-words"><CornerDownLeft className="w-2.5 h-2.5" aria-hidden />findings come back to this session</span>
+          <span className="sj-return-words"><CornerDownLeft className="w-2.5 h-2.5" aria-hidden />findings come back to {subject}</span>
         </div>
       ) : null}
     </div>
@@ -65,7 +71,8 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
 });
 
 function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolean }) {
-  const who = s.state === "nothing" ? "Skipped" : finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who];
+  const subject = capital(useContext(SessionWord));
+  const who = s.state === "nothing" ? "Skipped" : finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? subject : s.role === "live" || s.state === "skipped" ? "" : s.who === "session" ? subject : WHO_WORDS[s.who];
   return (
     <>
       <span className="sj-node" aria-hidden><Mark state={s.state} /></span>
@@ -112,6 +119,7 @@ function StateWords({ state }: { state: JourneyStage["state"] }) {
  */
 function SegmentInside({ stage, id }: { stage: JourneyStage; id?: string }) {
   const { path, routes, end } = stage.inside!;
+  const subject = useContext(SessionWord);
   return (
     <ol id={id} className="sj-in" aria-label={`Inside ${stage.label}`} data-journey-inside={stage.id}>
       {path.map((p) => {
@@ -121,7 +129,7 @@ function SegmentInside({ stage, id }: { stage: JourneyStage; id?: string }) {
             <span className="sj-in-node" aria-hidden><Mark state={p.state} /></span>
             <span className="sj-in-head">
               <b>{p.branches ? p.branches.map((b, i) => <span key={b.id} className="sj-branch" data-state={b.state} data-stage={b.id}>{i ? <i className="sj-in-beside"> beside </i> : null}{b.label}</span>) : p.label}<StateWords state={p.state} /></b>
-              <span className="sj-in-who">{WHO_WORDS[p.who]}</span>
+              <span className="sj-in-who">{p.who === "session" ? capital(subject) : WHO_WORDS[p.who]}</span>
             </span>
             {off.length ? <ul className="sj-in-routes" aria-label={`Off ${p.label}`}>{off.map((r, i) => <Route key={i} r={r} />)}</ul> : null}
           </li>
@@ -133,6 +141,7 @@ function SegmentInside({ stage, id }: { stage: JourneyStage; id?: string }) {
 }
 
 function Route({ r }: { r: InsideRoute }) {
+  const subject = useContext(SessionWord);
   return (
     <li className="sj-in-route" data-state={r.state} data-asks={r.asks ? "" : undefined} data-to={r.to.kind}>
       {r.label ? <span className="sj-in-when">{r.label}</span> : null}
@@ -143,7 +152,7 @@ function Route({ r }: { r: InsideRoute }) {
         </span>
       ))}
       <span className="sj-in-to">
-        {r.to.kind === "stop" ? <><X className="w-2.5 h-2.5" aria-hidden />stops</> : <><CornerDownLeft className="w-2.5 h-2.5" aria-hidden /><span className="sr-only">back to </span>{r.to.kind === "session" ? "this session" : r.to.label}</>}
+        {r.to.kind === "stop" ? <><X className="w-2.5 h-2.5" aria-hidden />stops</> : <><CornerDownLeft className="w-2.5 h-2.5" aria-hidden /><span className="sr-only">back to </span>{r.to.kind === "session" ? subject : r.to.label}</>}
       </span>
       {r.asks ? <span className="sj-in-if">{approvalWords({ kind: "if", when: r.asks.when })}</span> : null}
     </li>
@@ -222,18 +231,29 @@ function useBriefMessageId(conversationId: string | null, at: number | null): st
 
 /** What is happening now, and the person's part in it. `again` draws Ship again, primary when re-running is the fix. */
 /** `personal`: a personal Ship's run: its reasons show whole, and its Deploy, which deploys itself, opens Deploys only with targets. */
-export function JourneyNowBar({ now, run, now_ms, children, again, personal = false }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean }) {
+/** `onRunPage`: drawn on the run's own page, whose head says the state and whose chips link the objects: the bar then
+ *  carries only what the person does there, `act` (lib/ship/changePage changeAction), an answer to their own card, and
+ *  a stop's resume. */
+export function JourneyNowBar({ now, run, now_ms, children, again, personal = false, onRunPage = false, act }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean; onRunPage?: boolean; act?: React.ReactNode }) {
   const since = (at: number | null | undefined) => (at ? <span className="sj-since">{ageShort(now_ms - at)}</span> : null);
   // The conversation on screen: opening the run's session from inside it goes nowhere, so the brief it sent is the press.
   const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
   // A deploy a role sends names the role by its title (the Release Captain for @release); read only while one waits.
   const roles = useInboxStore((s) => (now.kind === "landed" && now.hold.kind === "press" ? roleRowsOf(s as any).roles : undefined));
   const stop = now.kind === "stopped" || now.kind === "failed" ? now : null;
+  const subject = useContext(SessionWord);
   const inSession = !!stop && stop.fix === "session" && !!stop.session && stop.session === here;
   const briefId = useBriefMessageId(inSession ? here : null, stop?.briefAt ?? null);
   // A stop that says to resume the run leads with that press (ResumeAtPress); opening the run follows it.
   const resume = stop?.resume && run?._id ? stop.resume : null;
-  const openRun = run?._id ? <Link className="sj-act" data-primary={resume ? undefined : ""} href={`/workflows/runs/${run._id}`} data-journey-open-run>Open run</Link> : null;
+  const openRun = run?._id && !onRunPage ? <Link className="sj-act" data-primary={resume ? undefined : ""} href={`/workflows/runs/${run._id}`} data-journey-open-run>Open run</Link> : null;
+  if (onRunPage) {
+    const answer = now.kind === "gate" && now.mine && run?.gate_decision_id ? <div className="sj-gate"><RunGate run={run} className="w-full" /></div>
+      : now.kind === "session" && now.blocked && now.ask?.mine ? <div className="sj-gate"><RunGate run={{ gate_decision_id: now.ask.id, gate_decision_short_id: now.ask.short_id ?? undefined }} className="w-full" /></div>
+      : null;
+    if (!answer && !resume && !act) return null;
+    return <div className="sj-now" data-kind="act" data-journey-acts>{resume ? <ResumeAtPress runId={String(run._id)} resume={resume} /> : null}{act}{children}{answer}</div>;
+  }
   switch (now.kind) {
     case "idle": return null;
     case "starting":
@@ -254,10 +274,10 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
         <div className="sj-now" data-kind="session">
           <CornerDownLeft className="w-3.5 h-3.5" aria-hidden />
           <b>{sentBackWords(now)}</b>
-          <span className="sj-what">this session is fixing it{now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}</span>
+          <span className="sj-what">{subject} is fixing it{now.round && now.max ? ` · round ${now.round} of ${now.max}` : ""}</span>
           {since(now.since)}
           {children}
-          {now.note ? <p className="sj-note" data-journey-note>{now.note}</p> : null}
+          {now.note ? <p className="sj-note" data-journey-note>{plainNote(now.note)}</p> : null}
         </div>
       );
     case "gate":
@@ -318,7 +338,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
       return (
         <div className="sj-now" data-kind="stopped" data-journey-fix={now.fix}>
           <X className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />
-          <b>{now.kind === "failed" && !now.end ? `Failed${now.stage ? ` at ${now.stage}` : ""}` : stopWords(now)}</b>
+          <b>{stopTitle(now)}</b>
           {resume ? <ResumeAtPress runId={String(run._id)} resume={resume} /> : null}
           {/* The action that can work for this stop leads: re-running a refusal, or a session out of rounds, repeats it. */}
           {now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open {now.why?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? "Deploys"}</Link>
@@ -359,18 +379,19 @@ function ResumeAtPress({ runId, resume }: { runId: string; resume: ResumeAt }) {
  */
 function AskBar({ ask, note, since, conversation, now_ms, children }: { ask: SessionAsk | null; note: string; since: number | null; conversation: string | null; now_ms: number; children?: React.ReactNode }) {
   const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
+  const subject = useContext(SessionWord);
   return (
     <div className="sj-now" data-kind={ask?.mine ? "you" : "gate"} data-journey-ask={ask ? (ask.mine ? "mine" : "card") : "words"}>
       <i className="sj-wait" aria-hidden />
       <b>{sentBackWords({ stage: "", by: null, blocked: true, ask })}</b>
-      <span className="sj-what">{ask?.question ?? "this session asks; the run goes on when it next ends a turn"}</span>
+      <span className="sj-what">{ask?.question ?? `${subject} asks; the run goes on when it next ends a turn`}</span>
       {since ? <span className="sj-since">{ageShort(now_ms - since)}</span> : null}
       {ask && !ask.mine ? <Link className="sj-act" href={`/decisions/${ask.short_id ?? ask.id}`} data-journey-open-card>Open card</Link>
         : !ask && conversation && conversation !== here ? <Link className="sj-act" href={`/conversation/${conversation}`} data-journey-open-session>Open session</Link>
         : null}
       {children}
       {/* The session's own words on what it waits for: a card can be about something else. */}
-      {note ? <p className="sj-note" data-journey-note>{note}</p> : null}
+      {note ? <p className="sj-note" data-journey-note>{plainNote(note)}</p> : null}
       {ask?.mine ? <div className="sj-gate"><RunGate run={{ gate_decision_id: ask.id, gate_decision_short_id: ask.short_id ?? undefined }} className="w-full" /></div> : null}
     </div>
   );
@@ -386,20 +407,24 @@ export function RunSessionAsk({ run, now_ms }: { run: any; now_ms: number }) {
 }
 
 /** `targets`, when the caller knows them from the landed commit's deploy reach, are where the change is: never guessed from the session's commits. */
-export function JourneyView({ journey, run, now_ms, compact, actions, again, targets }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState> }) {
+/** `onRunPage`: the run's own page, whose head links each deploy already and where opening the run goes nowhere. */
+/** `act` and `stages`: the run page's one action for the bar, and the track as the run ended (changePage endedStages). */
+export function JourneyView({ journey, run, now_ms, compact, actions, again, targets, onRunPage = false, act, stages }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState>; onRunPage?: boolean; act?: React.ReactNode; stages?: JourneyStage[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const insideId = useId();
   const opened = open ? journey.stages.find((s) => s.id === open) ?? null : null;
   const landed = journey.now.kind === "landed" || journey.now.kind === "deploying" || journey.now.kind === "live";
   const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
   return (
+    <SessionWord.Provider value={onRunPage ? "its session" : "this session"}>
     <div className="sj" data-journey={journey.now.kind}>
-      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} task={run?.task_short_id ?? null} />
+      <JourneyTrack stages={stages ?? journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} task={run?.task_short_id ?? null} />
       {opened?.inside ? <SegmentInside stage={opened} id={insideId} /> : null}
       {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} task={run?.task_short_id ?? null} /> : null}
-      {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal}>{actions}</JourneyNowBar> : null}
-      {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
+      {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal} onRunPage={onRunPage} act={act}>{actions}</JourneyNowBar> : null}
+      {run && landed && team && run.spawner_conversation_id && !onRunPage ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
     </div>
+    </SessionWord.Provider>
   );
 }
 

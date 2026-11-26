@@ -204,9 +204,9 @@ export function MoreToggle({ hidden, open, onPress }: { hidden: number; open: bo
 /** A verb the object takes here (Resolve, Pause, Run now), outlined in its colour;
  *  `filled` marks the one a person most often came to press. Consequential
  *  verbs ask first in the caller's onPress. Lay several out in `objectStyles.verbs`. */
-export function ActionButton({ icon, label, color, filled, onPress, testID }: { icon: IconName; label: string; color: string; filled?: boolean; onPress: () => void; testID?: string }) {
+export function ActionButton({ icon, label, color, filled, onPress, disabled, testID }: { icon: IconName; label: string; color: string; filled?: boolean; onPress: () => void; disabled?: boolean; testID?: string }) {
   return (
-    <TouchableOpacity onPress={onPress} activeOpacity={0.7} style={[styles.verb, { borderColor: color + '55' }, filled && { backgroundColor: color + '18' }]} accessibilityRole="button" testID={testID}>
+    <TouchableOpacity onPress={onPress} disabled={disabled} activeOpacity={0.7} style={[styles.verb, { borderColor: color + '55' }, filled && { backgroundColor: color + '18' }, disabled && { opacity: 0.5 }]} accessibilityRole="button" accessibilityState={disabled ? { disabled: true, busy: true } : undefined} testID={testID}>
       <FontAwesome name={icon} size={13} color={color} />
       <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.verbText, { color }]}>{label}</RNText>
     </TouchableOpacity>
