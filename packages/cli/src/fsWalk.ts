@@ -222,11 +222,3 @@ export async function walkFiles(
     }
   });
 }
-
-/** Every matching file under `root`, newest first. */
-export async function listFilesByMtime(root: string, opts: WalkOptions = {}): Promise<WalkFile[]> {
-  const files: WalkFile[] = [];
-  await walkFiles(root, opts, (f) => files.push(f));
-  files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
-  return files;
-}

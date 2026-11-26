@@ -147,8 +147,6 @@ const ROWS: Row[] = [
   { file: "statusSpool.ts", name: "appendStatusSpool", kind: "function", minLines: 4, mustContain: "appendFile" },
   { file: "statusSpool.ts", name: "listStatusSpools", kind: "function", minLines: 10, mustContain: "SPOOL_EXT" },
   { file: "statusSpool.ts", name: "sweepStatusSpools", kind: "function", minLines: 20, mustContain: "SPOOL_TTL_MS" },
-  { file: D, name: "handlePlanFile", kind: "function", from: MAIN, minLines: 15, mustContain: "syncPlanFromPlanMode" },
-  { file: D, name: "findMostRecentSessionId", kind: "function", from: MAIN, minLines: 5, mustContain: "listFilesByMtime" },
   { file: D, name: "onClaudeTranscript", find: "const onClaudeTranscript", kind: "call", from: MAIN, minLines: 40, mustContain: "chooseSessionTranscript" },
   { file: "claudeCloud.ts", name: "poll", kind: "method", minLines: 10, mustContain: "mirrorSession" },
   { file: "claudeCloud.ts", name: "mirrorSession", kind: "method", minLines: 30, mustContain: "appendFile" },

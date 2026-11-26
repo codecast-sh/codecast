@@ -1253,9 +1253,15 @@ export const create = mutation({
         .query("plans")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
         .first();
-      if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
-      requireSameWorkspace(plan, db.workspace, "plan");
-      plan_id = plan._id;
+      const usable = plan && (await canAccessPlan(ctx, auth.userId, plan)) && isSameWorkspace(plan, db.workspace);
+      if (usable) plan_id = plan._id;
+      // A plan-mode TaskCreate names the plan the daemon cached for its session,
+      // a hint that can outlive the plan: the task files without one instead of
+      // failing, which would retry the transcript forever.
+      else if (args.source !== "plan_mode") {
+        if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
+        requireSameWorkspace(plan, db.workspace, "plan");
+      }
     }
 
     // Subtask: `--parent ct-123`. Resolved (not written raw) so the stored

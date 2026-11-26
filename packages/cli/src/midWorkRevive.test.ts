@@ -155,7 +155,7 @@ describe("status file retention", () => {
 
   test("the cleanup asks the retention rule instead of a bare mtime cutoff", () => {
     const src = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf8");
-    const block = src.slice(src.indexOf("Clean up stale agent-status files"), src.indexOf("const CLAUDE_PLANS_DIR"));
+    const block = src.slice(src.indexOf("Clean up stale agent-status files"), src.indexOf("Sweep ~/.claude/projects for files whose synced position"));
     expect(block).toContain("statusFileExpired(f.data?.status, f.mtimeMs");
     expect(block).not.toMatch(/f\.mtimeMs\s*>=\s*cutoff/);
   });
