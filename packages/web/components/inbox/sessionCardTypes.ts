@@ -89,6 +89,10 @@ export type SessionCardViewProps = {
   /** The declared status the row's section header already says (Needs you
    *  under NEEDS YOU): the card leaves that chip off rather than repeat it. */
   sectionStatus?: ThreadStateStatus;
+  /** The status the sidebar shows the row under (sidebarStatusOf), for a card
+   *  drawn outside a status section. The pin's declared
+   *  status shows only where it agrees. Omitted: the declared status stands. */
+  placedStatus?: ThreadStateStatus | null;
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
   // subagent — the trigger view renders a trigger's sessions as sub rows under

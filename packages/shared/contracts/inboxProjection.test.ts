@@ -207,6 +207,30 @@ describe("classifyWorkState — an exit with an armed wake", () => {
   });
 });
 
+// A session that shipped through a flow waits on the run's CI, and the run's
+// end wakes it. jx70vnz (hibernated, its dormant pin older than its last turn,
+// the classifier reading "done") filed Done while its ship run sat in CI.
+describe("classifyWorkState — a live server-seen park under a done rest", () => {
+  const jx70vnz = { agentStatus: "hibernated", declaredStatus: "dormant", pinPredatesTurn: true, verifiedWake: true, settleVerdict: "done" } as const;
+
+  test("the stale-pin row with a live run files dormant, and done once the run ends", () => {
+    expect(classifyWorkState(input({ ...jx70vnz, parkedWakeLive: true }))).toBe("dormant");
+    expect(classifyWorkState(input({ ...jx70vnz, parkedWakeLive: false, verifiedWake: false }))).toBe("done");
+  });
+
+  test("a declared done, live or after the process exits, parks while the run lives", () => {
+    expect(classifyWorkState(input({ agentStatus: "done", parkedWakeLive: true }))).toBe("dormant");
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "done", parkedWakeLive: true }))).toBe("dormant");
+    expect(classifyWorkState(input({ agentStatus: "done" }))).toBe("done");
+  });
+
+  test("it never hides an ask: a turn with no done verdict stays needs_input", () => {
+    expect(classifyWorkState(input({ ...jx70vnz, settleVerdict: null, parkedWakeLive: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "idle", declaredStatus: "blocked", parkedWakeLive: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "done", awaitingInput: true, parkedWakeLive: true }))).toBe("needs_input");
+  });
+});
+
 describe("placeInboxRow — bucket precedence", () => {
   test("dismissed outranks everything, stashed next", () => {
     expect(placeInboxRow(input({ dismissed: true, stashed: true, asking: true, pinned: true })).bucket).toBe("dismissed");

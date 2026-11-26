@@ -30,6 +30,11 @@ export function threadStateCounterPath(sessionId: string): string {
   return path.join(threadStateDir(), "counters", sessionId);
 }
 
+/** The hook's marker that the turn which wrote the pin has ended: a later Stop with it present ends a later turn. */
+export function threadStateTurnPath(sessionId: string): string {
+  return path.join(threadStateDir(), "turns", sessionId);
+}
+
 /** What the stamp holds. `status` is the agent's declared answer to "who acts
  * next" — the daemon reads it at turn end (daemon.ts declaredSettleVerdict)
  * and settles the agent's status to "dormant" / "done" instead of plain idle
@@ -46,8 +51,9 @@ export function writeThreadStatePulse(sessionId: string, status?: ThreadStateSta
     fs.mkdirSync(threadStateDir(), { recursive: true });
     const stamp: ThreadStateStamp = { at: Date.now(), ...(status ? { status } : {}) };
     fs.writeFileSync(threadStateStampPath(sessionId), JSON.stringify(stamp));
-    const counter = threadStateCounterPath(sessionId);
-    if (fs.existsSync(counter)) fs.unlinkSync(counter);
+    for (const mark of [threadStateCounterPath(sessionId), threadStateTurnPath(sessionId)]) {
+      if (fs.existsSync(mark)) fs.unlinkSync(mark);
+    }
   } catch {}
 }
 
@@ -67,7 +73,7 @@ export function readThreadStateStamp(sessionId: string): ThreadStateStamp | null
 /** Drop the stamp — a session with no pinned state is never nudged. */
 export function clearThreadStatePulse(sessionId: string): void {
   try {
-    for (const file of [threadStateStampPath(sessionId), threadStateCounterPath(sessionId)]) {
+    for (const file of [threadStateStampPath(sessionId), threadStateCounterPath(sessionId), threadStateTurnPath(sessionId)]) {
       if (fs.existsSync(file)) fs.unlinkSync(file);
     }
   } catch {}

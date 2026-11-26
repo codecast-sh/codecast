@@ -7464,6 +7464,8 @@ export const feedForCLI = query({
       is_completed?: boolean;
       recency_rank?: RecencyRank;
       is_pinned?: boolean;
+      // The pinned state's declared status: `--until done` reads a done pin parked dormant as done (sessionsUntil).
+      thread_state_status?: string | null;
       user?: { name: string | null; email: string | null };
       // Second-party owner (the member responsible for steering), when set.
       owner?: { name: string | null; email: string | null };
@@ -7631,6 +7633,7 @@ export const feedForCLI = query({
         agent_type: conv.agent_type,
         ...(await classifier.rowFields(conv)),
         is_pinned: !!conv.inbox_pinned_at,
+        thread_state_status: conv.thread_state_status ?? null,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         ...(sessionOwner ? { owner: sessionOwner } : {}),
         ...(sessionOwnerId === authUserId.toString() ? { owned_by_me: true } : {}),

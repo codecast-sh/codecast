@@ -14,6 +14,8 @@ import { approvesSecretRead, cleanSecretEdit, type SecretMeta, type SecretMetaEd
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
+import { declaredOfPlacement } from "../lib/threadState";
+import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
@@ -4052,6 +4054,46 @@ export function railRowPlacement(s: InboxSession, now: number): RailPlacement {
 export function placedRailPlacement(placed: Pick<PlacedInbox, "placements">, id: string): RailPlacement | null {
   const p = placed.placements.get(id);
   return p ? { bucket: p.bucket, state: p.work_state } : null;
+}
+// The section each row was drawn in, per placed inbox. Section assembly
+// re-routes rows past their bucket (a wait the viewer cannot command files
+// under Dormant, a stashed row with an open ask under Questions), so the
+// sections, not the placements, say where a row sits.
+const DRAWN_SECTIONS = ["questions", "pinned", "newSessions", "needsInput", "done", "dormant", "working"] as const;
+const _drawnSection = new WeakMap<PlacedInbox, Map<string, InboxSectionKey>>();
+function drawnSectionOf(placed: PlacedInbox, id: string): InboxSectionKey | null {
+  let map = _drawnSection.get(placed);
+  if (!map) {
+    map = new Map();
+    for (const key of DRAWN_SECTIONS) for (const row of placed[key]) map.set(row._id, key);
+    _drawnSection.set(placed, map);
+  }
+  return map.get(id) ?? null;
+}
+const STATUS_OF_SECTION: Partial<Record<InboxSectionKey, ThreadStateStatus>> = {
+  questions: "blocked", needsInput: "blocked", done: "done", dormant: "dormant", working: "working",
+};
+
+/** The status the sidebar shows a row under: the status section it last drew
+ *  the row in. A row in no status section (Pinned, New, one the sidebar does
+ *  not hold) reads its own placement, and so does every row once the last
+ *  placement is past the minute before `now`: a mounted sidebar places at
+ *  least every minute, so an older one is a rail nobody draws (the phone
+ *  layout's closed drawer). A pin's chip shows its declared status only where
+ *  it agrees with this. */
+export function sidebarStatusOf(
+  state: Pick<PlaceInboxState, "clientState" | "livenessHeldAt"> & { currentSessionId?: string | null },
+  s: InboxSession,
+  now: number,
+): ThreadStateStatus | null {
+  // While liveness facts are held (waking from sleep, offline), the sidebar
+  // places at the held instant (placeInboxRows), so this reads time there too.
+  now = Math.min(now, state.livenessHeldAt ?? Infinity);
+  const last = lastPlacedInbox(state, { focusedId: state.currentSessionId ?? null });
+  const placed = last && last.epoch >= inboxEpoch(now) - 60_000 ? last : null;
+  const section = placed ? drawnSectionOf(placed, s._id) : null;
+  if (section && section in STATUS_OF_SECTION) return STATUS_OF_SECTION[section]!;
+  return declaredOfPlacement((placed && placedRailPlacement(placed, s._id)) ?? railRowPlacement(s, now));
 }
 
 // Structural signature for the pending `cast decide` rows the questions

@@ -7250,6 +7250,7 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     let untilStates: Set<string> | null = null;
     let untilReached: typeof import("./sessionsUntil.js").untilReached = () => false;
+    let untilStateOf: typeof import("./sessionsUntil.js").untilStateOf = (state) => state;
     if (options.until !== undefined && options.watch) {
       if (options.messages) {
         console.error("Error: --until waits on work states; it cannot be combined with --messages");
@@ -7258,6 +7259,7 @@ program
       try {
         const until = await import("./sessionsUntil.js");
         untilReached = until.untilReached;
+        untilStateOf = until.untilStateOf;
         untilStates = until.parseUntilStates(options.until);
       } catch (e) {
         console.error(e instanceof Error ? e.message : String(e));
@@ -7447,7 +7449,7 @@ program
         updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
         agent_status: c.agent_status, work_state: c.work_state || "idle", with_owner: c.with_owner ?? null, is_pinned: !!c.is_pinned,
         bucket: c.bucket ?? null, below_fold: !!c.below_fold,
-        is_killed: !!c.is_killed,
+        is_killed: !!c.is_killed, thread_state_status: c.thread_state_status ?? null,
         is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
         idle_summary: null, last_user_message: null, active_plan: null, active_task: null,
       }));
@@ -7638,7 +7640,7 @@ program
     // row's with_owner). Its change is a transition too: an agent passing a
     // wait up to its people moves nothing in work_state, which stays the
     // session's own for the agents watching it.
-    let prevRows: Record<string, { state: string; owner: string | null; title: string | null; session_id: string | null }> = {};
+    let prevRows: Record<string, { state: string; pin: string | null; owner: string | null; title: string | null; session_id: string | null }> = {};
     let firstFrame = true;
     let seenAny = false;
     const emit = (ev: { event: string; id: string; session_id: string | null; title: string | null; from: string | null; to: string | null; is_pinned?: boolean; is_live?: boolean; label?: string | null; with_owner?: string | null }) => {
@@ -7660,7 +7662,7 @@ program
         // state it left from.
         if (s.is_killed) continue;
         const owner = s.with_owner ?? null;
-        cur[s.id] = { state: s.work_state, owner, title: s.title ?? null, session_id: s.session_id ?? null };
+        cur[s.id] = { state: s.work_state, pin: s.thread_state_status ?? null, owner, title: s.title ?? null, session_id: s.session_id ?? null };
         if (firstFrame) continue;
         const prev = prevRows[s.id];
         const isNew = prev === undefined;
@@ -7679,8 +7681,10 @@ program
         seenAny ||= Object.keys(cur).length > 0;
         if (untilReached(untilStates, cur, seenAny)) {
           for (const [id, r] of Object.entries(cur)) {
-            if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), event: "until", id, session_id: r.session_id, title: r.title, to: r.state }));
-            else console.log(`${id.slice(0, 7)}  ${r.state.replace("_", " ")}  ${r.title ?? ""}`);
+            // The state that ended the wait, as the plain path reports it: a done pin parked dormant reads done.
+            const to = untilStateOf(r.state, r.pin, untilStates);
+            if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), event: "until", id, session_id: r.session_id, title: r.title, to }));
+            else console.log(`${id.slice(0, 7)}  ${to.replace("_", " ")}  ${r.title ?? ""}`);
           }
           try { stateClient.close(); } catch {}
           process.exit(0);

@@ -745,7 +745,7 @@ async function waitOnStation(
   if (options.resumed) delete options.resumed.hands[node.id];
   const leftRow = left ? ((await cliCall(options, "/cli/inbox", { session_ids: [left], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === left) : null;
   let reattach = !!leftRow && !leftRow.is_killed;
-  if (reattach && !leftRow.is_live && leftRow.work_state !== "done" && !(await revivedInTime(left!, options))) {
+  if (reattach && !leftRow.is_live && !handFinished(leftRow) && !(await revivedInTime(left!, options))) {
     console.log(`${c.yellow}  ${context[`${node.id}.session_id`] || left!.slice(0, 7)} died with the last runner and was not revived; starting ${node.id} again${c.reset}`);
     await cliCall(options, "/cli/sessions/kill", { session: left });
     reattach = false;
@@ -929,7 +929,7 @@ async function waitOnStation(
     // timeout): a dark row is no quiet hand; a hand that declared done before
     // the silence keeps that answer.
     const dark = wasLive && !row.is_live && !row.is_killed && row.agent_status !== "hibernated";
-    if (dark && state !== "done") {
+    if (dark && !handFinished(row)) {
       if (lastState !== "dark") console.log(`${c.dim}  ${shortId}: its daemon has gone quiet, waiting for it to report again${c.reset}`);
       lastState = "dark";
       watch.active();
@@ -1200,9 +1200,15 @@ async function revivedInTime(conversationId: string, options: RunOptions): Promi
     await new Promise(r => setTimeout(r, pollInterval));
     const row = ((await cliCall(options, "/cli/inbox", { session_ids: [conversationId], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === conversationId);
     if (row?.is_killed) return false;
-    if (row?.is_live || row?.work_state === "done") return true;
+    if (row?.is_live || handFinished(row)) return true;
   }
   return false;
+}
+
+/** A hand that finished: it reads done, or it pinned done and files dormant only because something it holds (a
+ *  routine run, a blocked task) keeps it parked (classifyWorkState's doneRest). */
+function handFinished(row: any): boolean {
+  return row?.work_state === "done" || (row?.work_state === "dormant" && row?.thread_state_status === "done");
 }
 
 /** How long a presenter sent back its brief has to come back for it before a fresh hand presents instead. */

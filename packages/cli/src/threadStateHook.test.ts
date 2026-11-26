@@ -25,15 +25,16 @@ function transcript(sessionId: string, messages: number): string {
   return file;
 }
 
-function stamp(sessionId: string): void {
+function stamp(sessionId: string, status?: string): void {
   const dir = path.join(home, ".codecast", "thread-state");
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${sessionId}.json`), JSON.stringify({ at: Date.now() }));
+  fs.writeFileSync(path.join(dir, `${sessionId}.json`), JSON.stringify({ at: Date.now(), ...(status ? { status } : {}) }));
 }
 
-/** What `cast state` does on every write: drop the mark so the baseline resets. */
+/** What `cast state` does on every write: drop the marks so the baseline and the turn reset. */
 function rewriteState(sessionId: string): void {
   fs.rmSync(path.join(home, ".codecast", "thread-state", "counters", sessionId), { force: true });
+  fs.rmSync(path.join(home, ".codecast", "thread-state", "turns", sessionId), { force: true });
 }
 
 function run(sessionId: string, event: "Stop" | "UserPromptSubmit", messages: number, extra: Record<string, unknown> = {}): string {
@@ -67,6 +68,50 @@ beforeAll(() => {
 
 afterAll(() => {
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// The inbox stops counting a dormant or done pin once a later turn opens
+// (rowPinPredatesTurn). jx75e8s pinned dormant, three background-task wakes ran
+// three turns, and none pinned again: the card read "Dormant" under Needs You.
+describe("thread-state hook: a dormant or done pin older than the ending turn", () => {
+  for (const status of ["dormant", "done"]) {
+    test(`a ${status} pin: its own turn ends quietly, the next turn that ends without a pin is held once`, () => {
+      const id = fresh();
+      stamp(id, status);
+      expect(run(id, "Stop", 10)).toBe("");
+      const held = JSON.parse(run(id, "Stop", 13));
+      expect(held.decision).toBe("block");
+      expect(held.reason).toContain(`since you pinned ${status}`);
+      expect(held.reason).toContain("offer them named work");
+      // The agent's continuation after the hold is not held again.
+      expect(run(id, "Stop", 14, { stop_hook_active: true })).toBe("");
+      // A new pin resets it: that turn's end is quiet again.
+      stamp(id, status);
+      rewriteState(id);
+      expect(run(id, "Stop", 16)).toBe("");
+    });
+  }
+
+  test("a blocked pin holds across turns in the inbox, so it is never held for one", () => {
+    const id = fresh();
+    stamp(id, "blocked");
+    run(id, "Stop", 10);
+    expect(run(id, "Stop", 13)).toBe("");
+  });
+
+  test("a pin written under a stop hook's continuation still marks its turn", () => {
+    const id = fresh();
+    stamp(id, "dormant");
+    expect(run(id, "Stop", 10, { stop_hook_active: true })).toBe("");
+    expect(JSON.parse(run(id, "Stop", 13)).decision).toBe("block");
+  });
+
+  test("UserPromptSubmit never holds or marks a turn", () => {
+    const id = fresh();
+    stamp(id, "dormant");
+    expect(run(id, "UserPromptSubmit", 10)).toBe("");
+    expect(run(id, "Stop", 12)).toBe("");
+  });
 });
 
 describe("thread-state hook", () => {

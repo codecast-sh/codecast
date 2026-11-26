@@ -384,6 +384,24 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     }, 30000);
   }
 
+  // A done rest files dormant while something the hand holds stays parked (its own run, a blocked task): it finished.
+  test("a station whose hand pinned done and reads dormant under a park is not stopped or started again", async () => {
+    hangOn = "/cli/inbox";
+    void runWorkflow(graph(), options());
+    const runDir = lineRunDir(tmpDir, `line-${runId}`);
+    await until(() => readCheckpoint(runDir, runId)?.context["build.conversation_id"] === "conv_build_2"
+      && calls.some((c) => c.route === "/cli/inbox" && c.body.session_ids?.[0] === "conv_build_2"));
+    calls.length = 0;
+    hangOn = null;
+    handRow = (id) => (id === "conv_build_2" ? { id, work_state: "dormant", thread_state_status: "done", is_live: false } : { id, work_state: "done", is_live: false });
+
+    gateAnswer = "S";
+    const outcome = await runWorkflow(graph(), options({ resume: row({ current_node_id: "build" }), reviveGraceMs: 50 }));
+    expect(outcome).toBe("completed");
+    expect(calls.some((c) => c.route === "/cli/sessions/kill" && c.body.session === "conv_build_2")).toBe(false);
+    expect(calls.some((c) => c.route === "/cli/spawn" && c.body.title === "Build")).toBe(false);
+  }, 30000);
+
   test("a station whose hand died with its runner and was revived in the grace goes on with that hand", async () => {
     hangOn = "/cli/inbox";
     void runWorkflow(graph(), options());

@@ -15,7 +15,7 @@ import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from ".
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { workProjectSig } from "../../lib/workProjectSig";
-import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, sidebarStatusOf, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { latestRestartRow, restartPending } from "../../lib/sessionCommands";
@@ -229,8 +229,9 @@ export const SessionCard = memo(function SessionCard({
       `${showsBlockedBadge(session.pending_api_error, false, reviveRequestedAtRef.current, t) ? 1 : 0}|` +
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}|` +
       `${restartPending(restartRowRef.current, t) ? 1 : 0}` +
-      // Modern reads the row's placement where no section decides its word.
-      (modern ? `|${modernPlacementSig(session, t)}` : ""),
+      // Modern reads the row's placement where no section decides its word,
+      // and so does the pin's status chip on a card drawn outside a section.
+      (modern || !rest.sectionStatus ? `|${modernPlacementSig(session, t)}` : ""),
     30_000,
   );
   // The machine behind a worktree, read straight off the persisted roster —
@@ -380,6 +381,7 @@ export const SessionCard = memo(function SessionCard({
       workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
       roleAbove={roleAbove}
+      placedStatus={rest.sectionStatus ? undefined : sidebarStatusOf(st, session, coarseNow)}
       now={coarseNow}
       chrome={chrome}
       liveness={{

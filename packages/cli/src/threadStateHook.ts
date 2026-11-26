@@ -72,6 +72,30 @@ if [ ! -f "$DIR/$SESSION_ID.json" ]; then
   return 0
 fi
 
+# A dormant or done pin answers the turn that wrote it. Once a later turn opens
+# (a wake, a session message, a person), the inbox no longer counts it
+# (rowPinPredatesTurn), so a turn that ends without a new pin is held once to
+# say where this stands now. The turn marker is made at the first Stop after a
+# write (the pinning turn's own end) and \`cast state\` deletes it on every
+# write; any later Stop is a later turn's. A Stop continuing from a stop hook
+# still makes the marker but never blocks, so the hold comes once per turn.
+if [ "$EVENT" = "Stop" ]; then
+  PIN_STATUS=$(grep -o '"status":"[a-z]*"' "$DIR/$SESSION_ID.json" 2>/dev/null | head -n 1 | cut -d'"' -f4)
+  case "\${PIN_STATUS:-}" in
+    dormant|done)
+      mkdir -p "$DIR/turns"
+      TURN="$DIR/turns/$SESSION_ID"
+      if [ ! -f "$TURN" ]; then
+        : > "$TURN"
+      elif [ "\${STOP_ACTIVE:-false}" != "true" ]; then
+        MSG="A turn ran since you pinned $PIN_STATUS, so the inbox no longer counts that pin. Run cast state --status done|blocked|dormant with one line saying where this stands now (done = delivered; blocked = a human must act or you offer them named work, even optional; dormant = a machine wakes you, name the wake), or cast state clear if no state holds any more, then stop. The pin is already on the human's screen: run the command and stop, with no reply text about it."
+        printf '{"decision":"block","reason":"%s"}\\n' "$MSG"
+        return 0
+      fi
+      ;;
+  esac
+fi
+
 # The mark holds "<baseline> [nudged]". \`cast state\` deletes it on every write,
 # so the first event after a write records where the thread stood, and the
 # nudge fires on the crossing only, never after. An agent that keeps its state

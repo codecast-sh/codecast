@@ -5,8 +5,8 @@ import { useLayoutFlag } from "../hooks/useOverflows";
 import { Check, ChevronDown, Copy, Maximize2, X } from "lucide-react";
 import { useDecisionOpener } from "../lib/decisionOpenRegistry";
 import { toast } from "sonner";
-import { threadStateAskParts, type ThreadStateRow } from "@codecast/shared/contracts";
-import { useInboxStore } from "../store/inboxStore";
+import { threadStateAskParts, type ThreadStateRow, type ThreadStateStatus } from "@codecast/shared/contracts";
+import { sidebarStatusOf, useInboxStore } from "../store/inboxStore";
 import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { PrStack, PrStatusChip } from "./PrStatusChip";
@@ -64,6 +64,14 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   // is this session waiting on. The field only changes when the shepherd
   // rewrites it, so subscribing to it directly does not follow row churn.
   const prStatus = useInboxStore((s) => s.sessions[conversationId]?.pr_status ?? null);
+  // The status the sidebar shows this session under: the chip shows the pin's
+  // declared status only when it agrees. A scalar, so row churn that leaves the
+  // verdict alone re-renders nothing. Undefined for a session not in the store:
+  // its pin speaks for itself.
+  const placed = useInboxStore((s) => {
+    const row = s.sessions[conversationId];
+    return row ? sidebarStatusOf(s, row, now) : undefined;
+  });
   // Every other pull request the session links, beside it.
   const prSig = useInboxStore((s) => sessionPullRequestsSig(s as any, conversationId));
   const linkedPrs = useMemo(() => titledSessionPullRequests(useInboxStore.getState() as any, conversationId), [prSig, conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -110,6 +118,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
       threadStateAt={threadStateAt}
       threadStateMsgCount={threadStateMsgCount}
       threadStateStatus={threadStateStatus}
+      placed={placed}
       messageCount={messageCount}
       now={now}
       collapsed={collapsed}
@@ -133,6 +142,7 @@ export function ThreadStatePanelView({
   threadStateAt,
   threadStateMsgCount,
   threadStateStatus,
+  placed,
   messageCount,
   now,
   collapsed,
@@ -148,6 +158,8 @@ export function ThreadStatePanelView({
   threadStateAt?: number | null;
   threadStateMsgCount?: number | null;
   threadStateStatus?: string | null;
+  /** The status the sidebar shows the session under (sidebarStatusOf); omitted, the declared status stands. */
+  placed?: ThreadStateStatus | null;
   messageCount?: number | null;
   now: number;
   collapsed: boolean;
@@ -179,6 +191,7 @@ export function ThreadStatePanelView({
     },
     messageCount ?? 0,
     now,
+    placed,
   );
   const otherPrs = prStatus ? linkedPrs.filter((p) => p.id !== String(prStatus.pr_id)) : linkedPrs;
   if (!view) {
@@ -197,8 +210,11 @@ export function ThreadStatePanelView({
   const tone = TONE[view.freshness];
   // The declared status owns the bar when present — it is the semantic signal;
   // freshness keeps the age and takes the bar over only on rows written before
-  // the status existed.
-  const statusMeta = view.status ? THREAD_STATE_STATUS_META[view.status] : null;
+  // the status existed. Where the inbox files the session elsewhere (a pin a
+  // later turn left behind), the chip says where it files: the panel and the
+  // sidebar name the same status, never a pin's claim beside silence.
+  const shownStatus = view.status ?? placed ?? null;
+  const statusMeta = shownStatus ? THREAD_STATE_STATUS_META[shownStatus] : null;
   const barClass = statusMeta ? statusMeta.bar : tone.bar;
   const canClear = !!onClear;
   const clear = () => onClear?.(view.headline);

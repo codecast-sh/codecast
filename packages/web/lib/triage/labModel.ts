@@ -81,6 +81,7 @@ export function runLab(f: LabFacts, now: number): LabResult {
     snoozeDue: f.snooze === "due",
     armedTriggerHome: f.trigger === "standing",
     armedOnceTriggerHome: f.trigger === "once",
+    parkedWakeLive: f.parked !== "none",
     armedLoopHome: f.loop,
     childProducing: f.worker,
     settleVerdict: f.verdict === "none" ? null : f.verdict,
