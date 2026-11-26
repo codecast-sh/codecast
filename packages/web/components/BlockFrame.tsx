@@ -17,6 +17,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 const COLLAPSE_PX = 620;
 
 const headerBtn = "p-1 rounded text-sol-text-dim/70 hover:text-sol-text-secondary hover:bg-sol-bg-highlight/50 transition-colors";
+const foldBtn = "flex items-center justify-center gap-1 py-1 hover:bg-sol-bg-highlight/40 hover:text-sol-text-secondary transition-colors";
 
 export function BlockFrame({
   title,
@@ -135,13 +136,19 @@ export function BlockFrame({
             )}
           </div>
           {overflowing && (
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="flex w-full items-center justify-center gap-1 border-t border-sol-border/40 py-1 text-meta text-sol-text-dim hover:bg-sol-bg-highlight/40 hover:text-sol-text-secondary transition-colors"
-            >
-              {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              {expanded ? "Collapse" : "Show all"}
-            </button>
+            // A block too tall to fold is usually too big for the column
+            // too, so the bar under the fade, where the reader's eye already
+            // is, offers both the inline unfold and the view that fits it.
+            <div className="flex border-t border-sol-border/40 text-meta text-sol-text-dim">
+              <button onClick={() => setExpanded((v) => !v)} className={`flex-1 ${foldBtn}`}>
+                {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                {expanded ? "Collapse" : "Show all"}
+              </button>
+              <button onClick={() => setFullscreen(true)} className={`border-l border-sol-border/40 px-3 ${foldBtn}`}>
+                <Maximize2 size={12} />
+                Fullscreen
+              </button>
+            </div>
           )}
         </>
       )}
