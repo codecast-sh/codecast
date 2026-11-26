@@ -479,6 +479,11 @@ test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer pres
     for (const b of [priorityMenu("pri-1"), line("pri-1", "s1").querySelector('[data-milestone-menu="s1"]')!]) {
       expect(b.className).toContain("size-6");
       expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-2.5");
+      // Always shown where a finger points, as where nothing hovers.
+      if (b.hasAttribute("data-milestone-menu")) {
+        expect(b.className).toContain("[@media(hover:none)]:opacity-100");
+        expect(b.className).toContain("[@media(pointer:coarse)]:opacity-100");
+      }
     }
     expect(line("pri-1", "s1").querySelector('[role="button"]')!.className).toContain("[@media(pointer:coarse)]:min-h-11");
     expect(line("pri-1", "s1").querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:h-11");
@@ -549,6 +554,10 @@ test("Drop and Merge count linked sessions the same way, from the links; Drop sa
     const drop = document.querySelector('[data-switch-review="Drop milestone"]')!.textContent!;
     expect(drop).toContain("3linked sessions");
     expect(drop).toContain("Stay on the priority, without that milestone");
+    // The keyboard hints (esc, ⌘↵) are gone under a coarse pointer.
+    const keys = [...document.querySelectorAll("[data-switch-review] [data-switch-keys]")];
+    expect(keys).toHaveLength(2);
+    for (const k of keys) expect(k.className).toContain("[@media(pointer:coarse)]:hidden");
     await press([...document.querySelectorAll("[data-switch-review] button")].find((b) => b.textContent?.trim().startsWith("Cancel")) as HTMLElement);
     await page.waitFor(() => !document.querySelector("[data-switch-review]"));
     await openSub(priorityMenu("pri-1"), '[data-act="merge"]');

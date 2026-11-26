@@ -30,7 +30,7 @@ import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame } from "../ui/page-header";
 import { pastBadge, priorityHref, rankProvenance } from "../../lib/priorities";
-import { LIST_DAYS, TOUCH_AREA, lastDays, lineSession, localDayKey, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { LIST_DAYS, TOUCH_AREA, lastDays, lineSession, localDayKey, sessionWords, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { ActionButton, AnswerSecondary, BranchChip, DeployChip, MilestoneMark, PlanChip, PrChip, SessionChip } from "./parts";
 import { MilestoneDetail, PendingMark, SessionRow, TypeRow, WorkflowRuns } from "./PriorityBlock";
@@ -66,6 +66,7 @@ export default function PriorityPage({ id }: { id: string }) {
 
 function PriorityBody({ row }: { row: PriorityView }) {
   const now = useCoarseNow(30_000);
+  const [titleOpen, setTitleOpen] = useState(false);
   const focus = useSearchParams()?.get("milestone") ?? null;
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
@@ -80,7 +81,10 @@ function PriorityBody({ row }: { row: PriorityView }) {
   const lookups = usePriorityLookups(linked.ids, linked.prs);
   const { action } = model;
   // Everything else asking the person here, past the one the action answers.
-  const waiting = useMemo(() => waitingOf([model]).filter((w) => w.session.conversation_id !== action?.session?.conversation_id).map((w) => ({ ...w, rank: null })), [model, action]);
+  // An ask on Next's own milestone is named by its session: Next already names the milestone.
+  const waiting = useMemo(() => waitingOf([model])
+    .filter((w) => w.session.conversation_id !== action?.session?.conversation_id)
+    .map((w) => ({ ...w, rank: null, ...(w.milestoneKey === action?.milestone.key ? { label: sessionWords(w.session), who: null } : {}) })), [model, action]);
   const critical = model.milestones.filter((m) => m.tier === "critical");
   const polish = model.milestones.filter((m) => m.tier === "polish");
   const corrections = row.corrections;
@@ -93,7 +97,15 @@ function PriorityBody({ row }: { row: PriorityView }) {
       <header className="flex items-start gap-3">
         <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Target className="size-[18px]" aria-hidden /></span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-[22px] font-semibold leading-tight text-sol-text">{row.title}</h1>
+          {/* A long title clamps to three lines on a phone; a tap shows it whole. */}
+          <h1
+            data-priority-title
+            aria-expanded={titleOpen}
+            onClick={() => setTitleOpen((o) => !o)}
+            className={cn("text-[22px] font-semibold leading-tight text-sol-text max-sm:cursor-pointer", !titleOpen && "max-sm:line-clamp-3")}
+          >
+            {row.title}
+          </h1>
           <div data-priority-meta className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-sol-text-dim">
             {active && row.rank != null ? <span data-rank className="font-semibold tabular-nums text-sol-text">#{row.rank}</span> : <span>{pastBadge(row)}</span>}
             {active && why && <span data-rank-by>{why}</span>}

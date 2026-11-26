@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { priorityInboxView } from './inboxPriorities';
+import { priorityInboxSig, priorityInboxView } from './inboxPriorities';
 import { rankLabelWords } from '@codecast/web/store/priorityOrder';
 
 // A priority the pass slotted at `ai_rank`; its rank is its place among its owner's active ones.
@@ -38,6 +38,17 @@ describe('priorityInboxView', () => {
     expect(words(row('c', 'not-loaded', 's1'))).toBe('other ws');
     expect(words(row('d', 'theirs', 's1'))).toBe('None');
     expect(words(row('e'))).toBe('None');
+  });
+
+  it("wakes on a session's priority link, so a moved session re-sorts", () => {
+    const before = { a: row('a', 'p2', 's1'), b: row('b', 'p1', 's1') };
+    const after = { ...before, a: row('a', 'p1', 's1'), b: row('b', 'p2', 's1') };
+    const sig = (sessions: Record<string, ReturnType<typeof row>>) => priorityInboxSig({ sessions, priorities: PRIORITIES as any, currentUser: { _id: 'me' } });
+    expect(sig(after)).not.toBe(sig(before));
+    // A field the order does not read leaves it asleep.
+    expect(sig({ ...before, a: { ...before.a, title: 'renamed' } as any })).toBe(sig(before));
+    expect(view.sort(Object.values(before)).map((r) => r._id)).toEqual(['b', 'a']);
+    expect(view.sort(Object.values(after)).map((r) => r._id)).toEqual(['a', 'b']);
   });
 
   it('places nothing without a viewer', () => {

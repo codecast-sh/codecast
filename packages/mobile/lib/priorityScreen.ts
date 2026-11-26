@@ -4,7 +4,8 @@
 // block's button and words, and what a milestone's box does when pressed.
 import type { PriorityRow } from '@codecast/shared/contracts/priorities';
 import type { NextAction } from '@codecast/shared/contracts/priorityDerive';
-import { rankProvenance } from '@codecast/web/lib/priorities';
+import { milestoneStart, rankProvenance } from '@codecast/web/lib/priorities';
+import type { SessionStart } from '@codecast/web/store/composeSlice';
 import type { MilestoneModel, SessionLine } from '@codecast/web/lib/priorityList';
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
@@ -36,6 +37,22 @@ export function nextWords(action: NextAction<MilestoneModel>): { title: string; 
     answer: action.kind === 'answer',
     session: action.session ? `in ${sessionLabel(action.session)}` : null,
   };
+}
+
+type StartTask = Parameters<typeof milestoneStart>[2];
+
+/**
+ * Start on a milestone, as web starts it: the composer seeded with the same
+ * brief (milestones, open tasks and plan as live references) and the session
+ * linked at creation to the priority, the milestone and its plan.
+ */
+export function startCompose(
+  row: Parameters<typeof milestoneStart>[0],
+  m: Parameters<typeof milestoneStart>[1],
+  task: StartTask,
+): { seed: string; start: SessionStart } {
+  const { draft, start } = milestoneStart(row, m, task);
+  return { seed: draft, start };
 }
 
 /**

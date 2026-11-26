@@ -35,6 +35,7 @@ import { type Device, deviceDisplayName } from '@/components/DevicesSection';
 import { AgentGlyph } from '@/components/AgentLogo';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { awaitSessionLanding, closeCompose, useCompose, type ComposeImage } from '@/lib/compose';
+import { bindComposeStart, type SessionStart } from '@codecast/web/store/composeSlice';
 
 // A sheet that throws closes itself rather than taking the app down with it
 // (it sits at the root); the next opening mounts a fresh one.
@@ -56,6 +57,7 @@ export function ComposeHost() {
   const open = useCompose((s) => s.open);
   const seed = useCompose((s) => s.seed);
   const sharedImages = useCompose((s) => s.images);
+  const start = useCompose((s) => s.start);
   const opens = useCompose((s) => s.opens);
   const router = useRouter();
   // Nothing until the first opening: each opening mounts a fresh sheet
@@ -68,6 +70,7 @@ export function ComposeHost() {
         visible={open}
         seed={seed}
         sharedImages={sharedImages}
+        start={start}
         onClose={closeCompose}
         onSessionCreated={(conversationId, focus) => {
           // reveal=1: no push animation (app/_layout). focus=1: an empty start
@@ -160,7 +163,7 @@ function SettingRow({ label, value, dot, onPress, code }: {
   );
 }
 
-function NewSessionSheet({ visible, seed, sharedImages, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; sharedImages: ComposeImage[]; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
+function NewSessionSheet({ visible, seed, sharedImages, start, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; sharedImages: ComposeImage[]; start?: SessionStart | null; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
   const Theme = useTheme();
   // The agent is the viewer's default (lib/defaultAgent: the hosted assistant
   // with no machine) until they pick one here. Where only
@@ -354,6 +357,8 @@ function NewSessionSheet({ visible, seed, sharedImages, onClose, onSessionCreate
         git_root: path,
         session_id: stubId,
         ...launchStampsForCreate(),
+        // A milestone's Start (lib/compose): linked to its priority, milestone and plan at creation, as on web.
+        ...(start ?? {}),
       });
     let stubId: string;
     try {
@@ -367,6 +372,8 @@ function NewSessionSheet({ visible, seed, sharedImages, onClose, onSessionCreate
       stubId = started.stubId;
       // Before materialize, so the marker is on the stub rows before any rekey.
       stampLabelIntent(stubId);
+      // The stub keeps what the create links, so a heal that re-issues it links the same (web's bindComposeStart).
+      if (start) bindComposeStart(store, stubId, start);
       watchSessionCreate(stubId, started.materialize(), create);
     } catch (error) {
       setSubmitError(mobileCreateErrorMessage("session", error));

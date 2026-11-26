@@ -25,7 +25,9 @@ import { asksPerson, bestSession, type NextAction } from '@codecast/shared/contr
 import type { PriorityHistory, PriorityPlanRef } from '@codecast/shared/contracts/priorities';
 import { ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
-import { milestoneBox, nextWords, ownerWords, sessionLabel, standing, VERB } from '@/lib/priorityScreen';
+import { milestoneBox, nextWords, ownerWords, sessionLabel, standing, startCompose, VERB } from '@/lib/priorityScreen';
+import { lookup } from '@codecast/web/lib/liveEntities';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import type { PriorityView } from '@codecast/web/lib/priorityDetail';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -93,9 +95,10 @@ function PriorityBody({ row }: { row: Row }) {
     const s = bestSession(m.sessions) ?? m.sessions[0];
     if (s) openSession(s);
   };
+  // Web's Start: the same brief, and the session linked to the milestone at creation.
   const start = (m: MilestoneModel) => {
-    const task = m.tasks[0];
-    openCompose(`${row.title}: ${m.step.title}${task ? ` (${task})` : ''}`);
+    const { seed, start: link } = startCompose(row, m, (id) => lookup(useInboxStore.getState().tasks, id));
+    openCompose(seed, [], link);
   };
 
   const action = model.action;

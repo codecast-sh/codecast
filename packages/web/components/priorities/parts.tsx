@@ -115,7 +115,8 @@ export function ActionButton({ row, action, tall, showSession = true }: { row: P
   const href = action.kind === "start" ? milestoneStartHref(row, action.milestone, (id) => lookup(s.tasks, id)) : action.session!.href;
   const size = tall ? "h-11 px-4 text-ui" : TOUCH_AREA;
   return (
-    <span className="inline-flex min-w-0 items-center gap-2">
+    // No min-w-0: the button and its session's words (min 5rem) never shrink below their least.
+    <span data-action-group className="inline-flex items-center gap-2">
       {action.kind === "answer" ? (
         <Link
           href={href}
@@ -135,10 +136,10 @@ export function ActionButton({ row, action, tall, showSession = true }: { row: P
   );
 }
 
-/** "in ‹session›": where the action acts, as quiet words. */
-export function InSession({ s }: { s: SessionLine }) {
+/** "in ‹session›": where the action acts, as quiet words. They truncate, never below 5rem: the action's target always shows. */
+function InSession({ s }: { s: SessionLine }) {
   const label = useSessionLabel(s);
-  return <span className="min-w-0 truncate text-meta text-sol-text-dim" title={label}>in <span className="text-sol-text-muted">{label}</span></span>;
+  return <span data-in-session className="min-w-[5rem] truncate text-meta text-sol-text-dim" title={label}>in <span className="text-sol-text-muted">{label}</span></span>;
 }
 
 /** A plan: square corners and a hairline, a target glyph, its title, a small bar and the count. */

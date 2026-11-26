@@ -187,6 +187,30 @@ test("a page line's secondary Answer names a session other than the one Next alr
   }
 }, 60_000);
 
+test("the page's Also waiting names an ask on Next's own milestone by its session; a long title clamps to three lines on a phone and opens on a tap", async () => {
+  const s2 = [sess("build", "Priorities feature build", "needs_you", 3), sess("other", "Scorer calibration", "needs_you", 5)];
+  answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s2" ? { ...l, sessions: s2 } : l)) };
+  const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  const { act } = React as any;
+  try {
+    await page.waitFor(() => !!page.container.querySelector(`[data-also-waiting] [data-waiting-item="${fixtureId("other")}"]`));
+    const waiting = page.container.querySelector("[data-also-waiting]")!;
+    // Next is "Calibrate goal finding…": the other ask on it reads by its session, not the milestone again.
+    expect(waiting.querySelector(`[data-waiting-item="${fixtureId("other")}"]`)!.textContent).toContain("Scorer calibration");
+    expect(waiting.querySelector(`[data-waiting-item="${fixtureId("other")}"]`)!.textContent).not.toContain("Calibrate goal finding");
+    // An ask on another milestone keeps the milestone's name.
+    expect(waiting.querySelector(`[data-waiting-item="${fixtureId("polish")}"]`)!.textContent).toContain("Priorities page redesign");
+    const h1 = page.container.querySelector("h1[data-priority-title]") as HTMLElement;
+    expect(h1.className).toContain("max-sm:line-clamp-3");
+    await act(async () => { h1.click(); });
+    expect(h1.className).not.toContain("line-clamp-3");
+    expect(h1.getAttribute("aria-expanded")).toBe("true");
+  } finally {
+    answers["priorities:show"] = DETAIL;
+    await page.unmount();
+  }
+}, 60_000);
+
 test("the page opens at the milestone its address names (the list's \"+N older sessions\"), and at none otherwise", async () => {
   const at = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60?milestone=s4");
   try {

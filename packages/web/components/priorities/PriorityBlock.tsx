@@ -23,7 +23,7 @@ import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { usePriorityWrites } from "../../hooks/usePriorities";
 import type { LinkKind } from "./parts";
-import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, InSession, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
+import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 import { LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
 
 /** A desktop drag of the owner's rank (PrioritiesView): this row's part in it. */
@@ -296,7 +296,8 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           <span className={C_MENU_PHONE}><PriorityMenu row={row} touch /></span>
         </>
       )}
-      {!wide && (!compact || pending) && (
+      {/* A phone's meta line: polish (not in compact), a pending correction, and the momentum words, which compact keeps too. */}
+      {!wide && (
         <div data-meta className={cn(C_META, "flex min-h-6 items-center gap-3")}>
           {polish && !compact && (
             <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className="-ml-2 inline-flex h-11 items-center gap-0.5 whitespace-nowrap rounded px-2 text-meta text-sol-text-dim hover:bg-sol-bg-alt">
@@ -305,7 +306,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
             </button>
           )}
           {pending && <PendingMark />}
-          {!compact && <MomentumWords model={model} className="ml-auto" />}
+          <MomentumWords model={model} className="ml-auto" />
         </div>
       )}
       {plan && wide && (
@@ -321,12 +322,14 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
 }
 
 /**
- * A milestone's chips on a wide line, in the order they give way: the
- * bracket's head session where the driver starts, the priority's action on its
- * line, else one session (Answer when it asks); then the plan, and "+N
- * sessions" last, only while the line has no other kind of link the Show
- * filter asks for (those count at the line's end, lineKinds). A chip that
- * would wrap is clipped away.
+ * A milestone's chips on a wide line, first to last: the bracket's head
+ * session where the driver starts, the priority's action on its line with
+ * the session it acts in ("in ‹session›", which keeps a minimum width and is
+ * never dropped), else one session (Answer when it asks); then "+N sessions",
+ * only while the line has no other kind of link the Show filter asks for
+ * (those count at the line's end, lineKinds); then the plan, which is what
+ * gives way: a chip that would wrap is clipped away, and the open line lists
+ * the plan in full.
  */
 function lineChips({ model, m, railed, filters, lookups }: {
   model: PriorityModel;
@@ -342,14 +345,7 @@ function lineChips({ model, m, railed, filters, lookups }: {
   const mine = action?.milestone.key === m.key ? action : null;
   const chips: ReactNode[] = [];
   let shown: SessionLine | undefined;
-  const planChip = filters.show.plans && m.plan ? <span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span> : null;
-  if (mine && planChip) {
-    // The action's "in ‹session›" words give way to the line's plan: they come after it, so they are what a narrow line clips.
-    chips.push(<ActionButton key="act" row={model.row} action={mine} showSession={false} />, planChip);
-    if (mine.session) chips.push(<span key="in" className="flex h-6 min-w-[6rem] shrink items-center"><InSession s={mine.session} /></span>);
-    shown = mine.session;
-  } else if (mine) {
-    // With no plan the words ride the button and truncate there.
+  if (mine) {
     chips.push(<ActionButton key="act" row={model.row} action={mine} />);
     shown = mine.session;
   } else if (driver && railed === "head") {
@@ -358,11 +354,11 @@ function lineChips({ model, m, railed, filters, lookups }: {
     shown = own.find(asksPerson) ?? bestSession(own);
     if (shown) chips.push(<SessionSlot key="s" s={shown} className="min-w-[4.5rem] max-w-[15rem]" />);
   }
-  if (planChip && !mine) chips.push(planChip);
   const others = own.filter((s) => s !== shown).length + m.more;
   if (filters.show.sessions && !m.done && others > 0 && !hasKinds(m, filters, lookups)) {
     chips.push(<span key="o" data-more-sessions className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1.5 text-meta tabular-nums text-sol-text-dim">+{others} {others === 1 ? "session" : "sessions"}</span>);
   }
+  if (filters.show.plans && m.plan) chips.push(<span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span>);
   return chips;
 }
 

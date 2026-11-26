@@ -235,11 +235,12 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick, children, 
         {/* Under a coarse pointer both buttons are 44px tall, for a finger. */}
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-sol-border/60 bg-sol-bg-alt/40 px-5 py-3 sm:rounded-b-xl" data-switch-part>
           <button ref={cancel} type="button" onClick={onClose} className="inline-flex h-8 shrink-0 [@media(pointer:coarse)]:h-11 items-center gap-2 whitespace-nowrap rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50" data-switch-cancel>
-            {l.keep ?? "Keep off"} <KeyCap size="xs">esc</KeyCap>
+            {l.keep ?? "Keep off"} <span data-switch-keys className="inline-flex [@media(pointer:coarse)]:hidden"><KeyCap size="xs">esc</KeyCap></span>
           </button>
           <Button type="button" variant="orange" size="sm" disabled={blocked} onClick={() => { if (!blocked) onConfirm(); }} title={l.blocked ?? l.confirm} className="ml-auto min-w-0 max-w-full [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11" data-switch-confirm>
             <span className="min-w-0 truncate">{l.blocked ?? l.confirm}</span>
-            {!blocked && <span className="inline-flex shrink-0 items-center gap-0.5"><KeyCap size="xs" tone="onAccent">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs" tone="onAccent">↵</KeyCap></span>}
+            {/* Keyboard hints say nothing to a finger: none under a coarse pointer. */}
+            {!blocked && <span data-switch-keys className="inline-flex shrink-0 items-center gap-0.5 [@media(pointer:coarse)]:hidden"><KeyCap size="xs" tone="onAccent">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs" tone="onAccent">↵</KeyCap></span>}
           </Button>
         </footer>
       </DialogContent>

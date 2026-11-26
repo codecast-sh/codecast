@@ -3,7 +3,10 @@
 // same models the screen builds (web lib/priorityList buildModels).
 import { describe, expect, it } from 'bun:test';
 import { buildModels, lastDays } from '@codecast/web/lib/priorityList';
-import { milestoneBox, nextWords, ownerWords, standing } from './priorityScreen';
+import { milestoneBox, nextWords, ownerWords, standing, startCompose } from './priorityScreen';
+import { openCompose, useCompose } from './compose';
+import { milestoneStartHref } from '@codecast/web/lib/priorities';
+import { parseComposeLink } from '@codecast/web/lib/composeLink';
 
 const NOW = Date.now();
 const HOUR = 3_600_000;
@@ -43,5 +46,27 @@ describe('the phone priority screen', () => {
     expect(milestoneBox(theirs, model(theirs).milestones[0])).toEqual({ kind: 'mark', label: 'Done' });
     // A teammate's priority offers no action at all.
     expect(model(theirs).action).toBeNull();
+  });
+
+  it("Start seeds web's brief and links the session to the priority, milestone and plan at creation", () => {
+    const PLAN = { short_id: 'pl-60', title: 'The plan', done: 1, total: 4, size: 4 };
+    const r = row({
+      steps: [step('s1', 'Priorities live behind a flag', true), { ...step('s2', 'Calibrate goal finding'), refs: [{ kind: 'task', id: 'ct-9001' }, { kind: 'task', id: 'ct-9002' }] }],
+      links: [link('s1'), { ...link('s2'), plan: PLAN }],
+    });
+    const m = model(r).milestones[1];
+    const tasks: Record<string, { title: string; status: string }> = { 'ct-9001': { title: 'Old scorer', status: 'done' }, 'ct-9002': { title: 'Write the scorer', status: 'open' } };
+    const { seed, start } = startCompose(r, m, (id) => tasks[id]);
+    expect(start).toEqual({ priority: 'pri-7', priority_step: 's2', plan: 'pl-60' });
+    expect(seed).toBe('pri-7, milestone: Calibrate goal finding\nOpen tasks:\n- ct-9002 Write the scorer\nPlan: pl-60\nRun `cast priorities show pri-7` for current detail.');
+    // Exactly what web's Start link carries.
+    const web = parseComposeLink(new URL(milestoneStartHref(r, m, (id) => tasks[id]), 'https://app.test').searchParams)!;
+    expect(web.draft).toBe(seed);
+    expect([web.priority, web.step, web.plan]).toEqual([start.priority, start.priority_step, start.plan]);
+    // The sheet opens with the brief and holds the link for its create.
+    openCompose(seed, [], start);
+    expect(useCompose.getState()).toMatchObject({ open: true, seed, start });
+    openCompose('plain');
+    expect(useCompose.getState().start).toBeNull();
   });
 });

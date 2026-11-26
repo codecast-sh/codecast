@@ -44,9 +44,8 @@ import { HiddenSessionRow } from '@/components/inbox/HiddenSessionRow';
 import { useSyncCollection } from '@codecast/web/hooks/useSyncCollection';
 import { useActiveWorkspaceKey } from '@codecast/web/hooks/useWorkspaceCollection';
 import { listRows } from '@codecast/web/lib/priorities';
-import { priorityRanksSig } from '@codecast/web/store/priorityOrder';
 import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
-import { priorityInboxView } from '@/lib/inboxPriorities';
+import { priorityInboxSig, priorityInboxView } from '@/lib/inboxPriorities';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
 // multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
@@ -191,7 +190,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const workspaceKey = useActiveWorkspaceKey();
   // The generated api's type stops short of priorities here, as on the priority screen.
   useSyncCollection('priorities', (api as any).priorities.list, prioritiesView && prioritiesOn && workspaceKey ? { workspace: workspaceKey } : 'skip', { select: listRows });
-  const prioritiesSig = useInboxStore((s) => (prioritiesView ? `${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ''}` : ''));
+  const prioritiesSig = useInboxStore((s) => (prioritiesView ? priorityInboxSig(s) : ''));
   const priorityView = useMemo(() => {
     if (!prioritiesSig) return null;
     const st = useInboxStore.getState();

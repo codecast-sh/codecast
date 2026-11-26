@@ -53,7 +53,7 @@ function menuButtonClass(touch?: boolean, reveal?: string) {
   return cn(
     "flex shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text focus-visible:opacity-100 data-[state=open]:opacity-100",
     touch ? "size-11" : "relative size-6 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-2.5 [@media(pointer:coarse)]:after:content-['']",
-    !touch && reveal && cn("opacity-0 [@media(hover:none)]:opacity-100", reveal),
+    !touch && reveal && cn("opacity-0 [@media(hover:none)]:opacity-100 [@media(pointer:coarse)]:opacity-100", reveal),
   );
 }
 

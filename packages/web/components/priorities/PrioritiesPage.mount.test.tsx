@@ -669,7 +669,10 @@ test("every priority says how many landed and how long since, on every layout; a
     const head = block(compact.container, "pri-1").querySelector("[data-priority-head]")!;
     expect(head.textContent).toContain("4 today");
     expect(head.querySelector("[data-day-strip]")).toBeNull();
-    expect(head.querySelector("[data-momentum-words]")).toBeNull();
+    // Compact keeps momentum: the words on its meta line.
+    expect(head.querySelector("[data-meta] [data-momentum-words]")!.textContent).toBe("0 landed · none yet");
+    const five = block(compact.container, "pri-5").querySelector("[data-priority-head] [data-meta] [data-momentum-words]")!;
+    expect(five.textContent).toBe("1 landed · last 2d");
     expect(head.querySelector("[data-action]")).not.toBeNull();
   } finally {
     await compact.unmount();
@@ -730,7 +733,7 @@ test("a narrow window takes the desktop grid on a touch screen at least 900px wi
   }
 }, 60_000);
 
-test("a milestone line's chips use the today and momentum columns, its today count sits in the line, and a plan outranks the \"in ‹session›\" words", async () => {
+test("a milestone line's chips use the today and momentum columns, its today count sits in the line, and the action keeps its session while the plan gives way", async () => {
   const history = { ...HISTORY, sessions: { jx7crfl: at(3) } };
   const page = await mount(view({ history }));
   try {
@@ -738,15 +741,28 @@ test("a milestone line's chips use the today and momentum columns, its today cou
     expect(grid.className).toContain("col-end-6");
     // The line's today count is inside the line, not a column of its own.
     expect(block(page.container, "pri-1").querySelector('[data-milestone="s2"] [data-line-today]')!.textContent).toBe("3 today");
-    // pri-3: the Open action, then its plan, then the words that give way first.
+    // pri-3: the Open action with "in ‹session›" right after the button, which never shrinks below its least
+    // (a 5rem floor on the words); the plan last, the chip a narrow line clips (the open line lists it).
     const chips = [...block(page.container, "pri-3").querySelector('[data-milestone="s1"] [data-line-chips]')!.children];
-    const at3 = (pred: (el: Element) => boolean) => chips.findIndex(pred);
-    const act = at3((el) => !!el.querySelector('[data-action="open"]'));
-    const plan = at3((el) => !!el.querySelector('[data-chip="plan"]'));
-    const words = at3((el) => el.textContent === "in Eval cost reduction");
-    expect([act, plan, words]).toEqual([0, 1, 2]);
+    expect(chips[0].querySelector('[data-action="open"]')).not.toBeNull();
+    expect(chips[0].querySelector("[data-in-session]")!.textContent).toBe("in Eval cost reduction");
+    expect(chips[0].querySelector("[data-in-session]")!.className).toContain("min-w-[5rem]");
+    expect(chips[0].className).not.toContain("min-w-0");
+    expect(chips.at(-1)!.querySelector('[data-chip="plan"]')).not.toBeNull();
   } finally {
     await page.unmount();
+  }
+  // "+N sessions" comes after the session's name, before the plan.
+  const two = row(11, "Two sessions", 1, [step("s1", "One milestone", "critical"), step("s2", "Another", "critical")], {
+    links: [links("s1", [sess("twoa", "First session", "dormant", 1), sess("twob", "Second session", "dormant", 2)], { plan: PL_1075 }), links("s2", [])],
+  });
+  const both = await mount(view({ rows: [two] }));
+  try {
+    const kinds = [...block(both.container, "pri-11").querySelector('[data-milestone="s1"] [data-line-chips]')!.children]
+      .map((c) => (c.querySelector("[data-action]") ? `action ${c.querySelector("[data-in-session]")?.textContent}` : c.hasAttribute("data-more-sessions") ? c.textContent : c.querySelector('[data-chip="plan"]') ? "plan" : "?"));
+    expect(kinds).toEqual(["action in First session", "+1 session", "plan"]);
+  } finally {
+    await both.unmount();
   }
 }, 60_000);
 
@@ -808,6 +824,53 @@ test("a linked session's branch and a PR's state repaint their chips when they c
     await page.waitFor(() => !!b.querySelector('[data-chip="pr"]')?.textContent?.includes("merged"));
   } finally {
     await page.unmount();
+  }
+}, 60_000);
+
+test("Waiting on you tells two sessions on one milestone apart: \"milestone · session\", in the box, the popover and on a phone", async () => {
+  const twice = row(12, "Two asks", 1, [step("s1", "Ship it", "critical"), step("s2", "Tidy it", "critical")], {
+    links: [links("s1", [sess("aska", "Copy review", "needs_you", 1), sess("askb", "Review · ct-9001 the copy", "needs_you", 2)]), links("s2", [sess("askc", "Tidy session", "needs_you", 3)])],
+  });
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(view({ rows: [twice], layout }));
+    try {
+      const labels = [...page.container.querySelectorAll("[data-waiting-item]")].map((a) => a.textContent);
+      expect(labels[0]).toContain("Ship it · Copy review");
+      expect(labels[1]).toContain("Ship it · Review: the copy");
+      // A milestone only one session waits on reads as the milestone alone.
+      expect(labels[2]).toContain("Tidy it");
+      expect(labels[2]).not.toContain("·");
+    } finally {
+      await page.unmount();
+    }
+  }
+}, 60_000);
+
+test("at the desktop width the box never takes a third line: it shows fewer items until \"+N more\" fits the second", async () => {
+  const many = row(13, "Many asks", 1, Array.from({ length: 7 }, (_, i) => step(`s${i}`, `Milestone ${i}`, "critical")), {
+    links: Array.from({ length: 7 }, (_, i) => links(`s${i}`, [sess(`many${i}`, `Session ${i}`, "needs_you", i + 1)])),
+  });
+  // Lay the box out as a browser would: three slots a line (the heading, the items, "+N more"), 28px each.
+  const proto = (window as any).HTMLElement.prototype;
+  const realTop = Object.getOwnPropertyDescriptor(proto, "offsetTop");
+  const realHeight = Object.getOwnPropertyDescriptor(proto, "offsetHeight");
+  const realWidth = Object.getOwnPropertyDescriptor(proto, "offsetWidth");
+  Object.defineProperty(proto, "offsetTop", { configurable: true, get(this: HTMLElement) { const box = this.closest('[data-waiting="wide"]'); return box ? Math.floor([...box.children].indexOf(this) / 3) * 28 : 0; } });
+  Object.defineProperty(proto, "offsetHeight", { configurable: true, get() { return 28; } });
+  Object.defineProperty(proto, "offsetWidth", { configurable: true, get() { return 800; } });
+  try {
+    const page = await mount(view({ rows: [many] }));
+    try {
+      await page.waitFor(() => page.container.querySelectorAll('[data-waiting="wide"] [data-waiting-item]').length === 4);
+      expect(page.container.querySelector('[data-waiting="wide"] [data-waiting-more]')!.textContent).toBe("+3 more");
+    } finally {
+      await page.unmount();
+    }
+  } finally {
+    for (const [k, d] of [["offsetTop", realTop], ["offsetHeight", realHeight], ["offsetWidth", realWidth]] as const) {
+      if (d) Object.defineProperty(proto, k, d);
+      else delete proto[k];
+    }
   }
 }, 60_000);
 

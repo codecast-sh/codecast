@@ -298,6 +298,21 @@ export function milestoneStartHref(
   milestone: { step: Pick<PriorityStep, "key" | "title" | "refs">; plan?: StartPlan },
   task: (shortId: string) => StartTask | undefined,
 ): string {
+  const { draft, task: first, start } = milestoneStart(priority, milestone, task);
+  return composeLinkHref(draft, { task: first, priority: start.priority, step: start.priority_step, plan: start.plan });
+}
+
+/**
+ * What Start on a milestone opens, as both apps open it: the brief (the
+ * milestone, its open tasks, its plan, and how to read the priority's
+ * current detail), the first open task, and what the session is linked to
+ * at creation (createSession's SessionStart: priority, milestone, plan).
+ */
+export function milestoneStart(
+  priority: Pick<PriorityRow, "short_id"> & { plan?: StartPlan },
+  milestone: { step: Pick<PriorityStep, "key" | "title" | "refs">; plan?: StartPlan },
+  task: (shortId: string) => StartTask | undefined,
+): { draft: string; task?: string; start: { priority: string; priority_step: string; plan?: string } } {
   const pri = priority.short_id;
   const plan = (milestone.plan ?? priority.plan)?.short_id;
   const open = milestone.step.refs
@@ -310,7 +325,7 @@ export function milestoneStartHref(
     ...(plan ? [`Plan: ${plan}`] : []),
     `Run \`cast priorities show ${pri}\` for current detail.`,
   ].join("\n");
-  return composeLinkHref(draft, { task: open[0]?.id, priority: pri, step: milestone.step.key, plan });
+  return { draft, task: open[0]?.id, start: { priority: pri, priority_step: milestone.step.key, ...(plan ? { plan } : {}) } };
 }
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });

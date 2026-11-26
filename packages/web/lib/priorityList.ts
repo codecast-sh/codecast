@@ -211,7 +211,19 @@ export function lineSession(model: Pick<PriorityModel, "action" | "rail">, m: Pi
 }
 
 /** Something waiting on the viewer: a session asking on an open milestone of one of their active priorities. */
-export type WaitingItem = { key: string; priority: string; rank: number | null; milestone: string; session: SessionLine };
+/**
+ * Something waiting on the viewer. `label` is what its row reads: the
+ * milestone, or "milestone · session" where more than one session waits on
+ * the same milestone (`who` is that session's part), so the rows tell them
+ * apart.
+ */
+export type WaitingItem = { key: string; priority: string; rank: number | null; milestone: string; milestoneKey: string; label: string; who: string | null; session: SessionLine };
+
+/** A session's title as a row says it: a workflow step reads "Review: <what it works on>", never its id. */
+export function sessionWords(s: Pick<SessionLine, "title">): string {
+  const step = /^([A-Z][A-Za-z]+) · (?:ct|pl)-\d+\s*(.*)$/.exec(s.title);
+  return step ? `${step[1]}: ${step[2] || "work"}` : s.title || "Untitled session";
+}
 
 /** Every session asking the viewer, by rank, critical milestones before polish, each once. */
 export function waitingOf(models: readonly PriorityModel[]): WaitingItem[] {
@@ -224,11 +236,17 @@ export function waitingOf(models: readonly PriorityModel[]): WaitingItem[] {
       for (const s of m.sessions.filter(asksPerson).sort((a, b) => b.last_active_at - a.last_active_at)) {
         if (seen.has(s.conversation_id)) continue;
         seen.add(s.conversation_id);
-        out.push({ key: `${pm.row.short_id}:${m.key}:${s.short_id}`, priority: pm.row.short_id, rank: pm.row.rank, milestone: m.step.title, session: s });
+        out.push({ key: `${pm.row.short_id}:${m.key}:${s.short_id}`, priority: pm.row.short_id, rank: pm.row.rank, milestone: m.step.title, milestoneKey: m.key, label: m.step.title, who: null, session: s });
       }
     }
   }
-  return out;
+  const perMilestone = new Map<string, number>();
+  for (const w of out) perMilestone.set(`${w.priority}:${w.milestoneKey}`, (perMilestone.get(`${w.priority}:${w.milestoneKey}`) ?? 0) + 1);
+  return out.map((w) => {
+    if ((perMilestone.get(`${w.priority}:${w.milestoneKey}`) ?? 0) < 2) return w;
+    const who = sessionWords(w.session);
+    return { ...w, label: `${w.milestone} · ${who}`, who };
+  });
 }
 
 // ── Today and the ten days ───────────────────────────────────────────────
