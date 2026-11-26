@@ -448,14 +448,17 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
     feeds: ["priorities.list"],
   },
-  // One priority as its page and its reference card draw it (convex
-  // priorities.show, PriorityDetail): every milestone's links and sessions,
-  // its plan and the owner's corrections, one row per priority a surface
-  // opened, keyed by the priority's _id. Delta: each surface feeds its own.
+  // What only convex priorities.show returns for a priority a page or a
+  // reference opened, keyed by the priority's _id (lib/priorityDetail): the
+  // owner's corrections, sessions whose milestone is gone, links and plan
+  // where the list row has none, and the row itself only for a priority the
+  // list does not hold. Readers lay it over the `priorities` row, which wins
+  // for every field it carries. Delta: each surface feeds its own; capped
+  // like the detail collections (lib/detailRows).
   priorityDetails: {
     persistence: { kind: "collection", key: "priorityDetails" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true, deepFields: ["steps", "counts", "sessions", "links", "plan", "other_sessions", "corrections"] },
+    sync: { isDelta: true, deepFields: ["corrections", "other_sessions", "links", "plan", "base"] },
     feeds: ["priorities.show"],
   },
   // "Handled without you": decisions a role answered under a grant in the
@@ -2432,7 +2435,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   workflowRuns: "shared",
   weeklyCards: "shared",
   priorities: "shared",
-  priorityDetails: "shared",
+  priorityDetails: "local",
   signals: "shared",
   lineLabels: "shared",
   stationInputs: "shared",

@@ -193,7 +193,7 @@ export function PrChip({ pr, state }: { pr: string; state?: string }) {
 /** A branch: a dashed frame, the branch glyph, its name in mono. */
 export function BranchChip({ name }: { name: string }) {
   return (
-    <span data-chip="branch" title={name} className="inline-flex h-[22px] min-w-[5rem] max-w-[13rem] shrink items-center gap-1 rounded-[3px] border border-dashed border-sol-text-dim/60 px-1.5 font-mono text-[11px] text-sol-text-muted">
+    <span data-chip="branch" title={name} className="inline-flex h-[22px] min-w-[5rem] max-w-[13rem] shrink items-center gap-1 rounded-[3px] border border-dashed border-sol-text-dim/60 px-1.5 font-mono text-mark text-sol-text-muted">
       <GitBranch className="size-3 shrink-0" aria-hidden />
       <span className="min-w-0 truncate">{name}</span>
     </span>

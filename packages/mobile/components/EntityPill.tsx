@@ -6,7 +6,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEntities';
 import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
-import { useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
+import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import Octicons from '@expo/vector-icons/Octicons';
@@ -226,13 +226,16 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   const proposal = useInboxStore((s) => (proposalRef ? findEntityInStore(s, 'proposal', rawId) : undefined));
 
   // A priority (`pri-N`) is store-fed the same way: priorities.show into
-  // priorityDetails (or the workspace list's row), read back from the store.
-  useSyncPriorityDetail(type === 'priority' && !named ? rawId : null);
-  const priority = useInboxStore((s) => (type === 'priority' ? findEntityInStore(s, 'priority', rawId) : undefined));
+  // priorityDetails, laid over the workspace list's row. A refusal reads as
+  // no access, whatever the store held.
+  const priorityFeed = useSyncPriorityDetail(type === 'priority' && !named ? rawId : null);
+  const priorityRow = usePriorityDetail(type === 'priority' ? rawId : null);
+  const priorityRefused = type === 'priority' && priorityFeed.refused;
+  const priority = priorityRefused ? null : priorityRow;
 
   const served: any = type === 'priority' ? priority : type === 'proposal' ? proposal : type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : type === 'replay' ? replay : type === 'deploy' ? deploy : undefined;
 
-  const entity: any = served ?? seed;
+  const entity: any = priorityRefused ? null : served ?? seed;
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;
   const ticks = deployState === 'waiting' || deployState === 'going_out';
   const now = useNowWhen((t) => (ticks ? deployPillElapsed(entity, t) ?? '' : ''), 15_000);

@@ -12,7 +12,7 @@ import { useSyncOrgProposal } from "../hooks/useSyncOrgProposals";
 import { useCallPlaces } from "../hooks/useSyncCalls";
 import { callTitle } from "./calls/roomLabels";
 import { useNamedFlow } from "../hooks/useFlowObject";
-import { useSyncPriorityDetail } from "../hooks/usePriorityDetail";
+import { usePriorityDetail, useSyncPriorityDetail } from "../hooks/usePriorityDetail";
 import { teamMembersOf } from "./activeTeam";
 const api = _api as any;
 
@@ -298,12 +298,14 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const { flow: namedFlow } = useNamedFlow(live && type === "flow" ? flowSlugOf(rawId) : null);
   const flow = useMemo(() => (namedFlow ? { ...namedFlow, _id: namedFlow.workflowId ?? rawId, short_id: `flow:${namedFlow.slug}`, title: namedFlow.label } : namedFlow), [namedFlow, rawId]);
   // A priority (`pri-N`) is store-fed like a proposal: the feeder syncs
-  // priorities.show into priorityDetails and the row is read back from the
-  // store (the workspace list's row until then), so the pill, its card and
-  // the page paint the same row.
+  // priorities.show into priorityDetails and the reader lays it over the
+  // workspace list's row (lib/priorityDetail), so the pill, its card and the
+  // page paint the same row. One `show` refuses reads as no access, whatever
+  // the store held.
   const priorityFeed = useSyncPriorityDetail(live && type === "priority" ? rawId : null);
-  const priorityRow = useInboxStore((s) => (live && type === "priority" ? findEntityInStore(s, "priority", rawId) : undefined));
-  const priority = type === "priority" ? (priorityFeed.ready ? priorityRow ?? null : undefined) : undefined;
+  const priorityRow = usePriorityDetail(live && type === "priority" ? rawId : null);
+  const priorityRefused = type === "priority" && priorityFeed.refused;
+  const priority = type === "priority" ? (priorityRefused ? null : priorityFeed.ready ? priorityRow ?? null : undefined) : undefined;
   // A role (`or-N`) seeds from the org tree in the store, which every
   // workspace screen feeds. The role card answers only for a role the tree
   // does not hold (another workspace's, or a page that never fed the tree):
@@ -324,7 +326,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     () => (live && type ? findEntityInStore(useInboxStore.getState(), type, replayRef?.replay ?? rawId) : undefined),
     [live, type, rawId, replayRef?.replay],
   );
-  const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : served ?? seed;
+  const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : priorityRefused ? null : served ?? seed;
   // An untitled call is named by where it happened ("Huddle in <session>"),
   // by the same rule the Calls list and its page use (callTitle).
   const callRow = type === "call" && entity?.room_key ? entity : null;

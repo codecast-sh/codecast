@@ -42,7 +42,7 @@ const PLAN = { short_id: "pl-1075", title: "Codecast follows what each person dr
 const DETAIL = {
   _id: fixtureId("pri60"), short_id: "pri-60", title: "Priorities for Union",
   summary: "Priorities is live on Union; session mapping sits around 0.65, short of the 0.75 bar, and calibration is paused.",
-  status: "active", rank: 7, rank_set_by: "pass", status_set_by: "pass", serves: null,
+  status: "active", rank: 7, person_pos: null, ai_rank: 7, rank_source: "ai", status_set_by: "pass", serves: null,
   steps: [
     step("s1", "Priorities live behind a flag", "critical", true, { done_at: NOW - 2 * HOUR }),
     step("s2", "Calibrate goal finding and session mapping", "critical"),
@@ -224,6 +224,96 @@ test("the page: rank once with its provenance, ten days with landings, Next and 
     expect(corrections.textContent).toContain("Session mapping reaches 0.75: Calibration scorer belongs here");
   } finally {
     await page.unmount();
+  }
+});
+
+const { isDetailPinned } = await import("../../lib/detailRows");
+const { renderGalleryRecords, GALLERY_PRIORITY } = await import("../../lib/renderGallery");
+
+/** The list row of DETAIL as priorities.list carries it, beside another of the owner's that sits first. */
+const listRows = () => {
+  const { corrections: _c, other_sessions: _o, ...row } = DETAIL;
+  return [
+    { ...row, steps: row.steps.map(({ sessions: _s, ...st }) => st), title: "Priorities for Union, as listed", person_pos: null, ai_rank: 7 },
+    { ...row, _id: fixtureId("pri61"), short_id: "pri-61", title: "Another one", person_pos: 2, ai_rank: null, rank_source: "person", links: [] },
+  ];
+};
+
+test("the list row wins: the detail holds only what show alone returns, and the store's own writes paint on the page at once", async () => {
+  useInboxStore.getState().syncTable("priorities", listRows() as any);
+  const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-priority-page]"));
+    const el = page.container;
+    // Every field the list row carries is read from it, the rank live from its place.
+    expect(el.querySelector("h1")?.textContent).toBe("Priorities for Union, as listed");
+    expect(el.querySelector("[data-rank]")?.textContent).toBe("#2");
+    expect(el.querySelector("[data-rank-by]")?.textContent).toBe("ranked by AI");
+    // What only show has is laid on.
+    expect(el.querySelector("[data-corrections]")?.textContent).toContain("Calibration scorer belongs here");
+    // The detail row is not a second copy of the priority.
+    const detail = (useInboxStore.getState() as any).priorityDetails[DETAIL._id];
+    expect(Object.keys(detail).sort()).toEqual(["_cachedAt", "_id", "corrections", "other_sessions", "short_id"]);
+    // Pinned while the page shows it.
+    expect(isDetailPinned("priorityDetails", DETAIL._id)).toBe(true);
+    // A move paints through the list row, before any server push.
+    await act(async () => { void useInboxStore.getState().movePriority("pri-60", 1).catch(() => {}); });
+    await page.waitFor(() => el.querySelector("[data-rank]")?.textContent === "#1");
+    expect(el.querySelector("[data-rank]")?.textContent).toBe("#1");
+    expect(el.querySelector("[data-rank-by]")?.textContent).toBe("you placed it");
+  } finally {
+    await page.unmount();
+    useInboxStore.getState().syncTable("priorities", [] as any);
+  }
+  expect(isDetailPinned("priorityDetails", DETAIL._id)).toBe(false);
+});
+
+test("a teammate's priority says who placed it", async () => {
+  answers["priorities:show"] = { ...DETAIL, mine: false, owner: "Sam Teammate", person_pos: 3, rank_source: "person" };
+  const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-priority-page]"));
+    expect(page.container.querySelector("[data-rank-by]")?.textContent).toBe("Sam Teammate placed it");
+  } finally {
+    await page.unmount();
+    answers["priorities:show"] = DETAIL;
+  }
+});
+
+test("a refusal drops the cached detail: the page and the pill read not found", async () => {
+  let page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  await page.waitFor(() => !!page.container.querySelector("[data-priority-page]"));
+  await page.unmount();
+  expect((useInboxStore.getState() as any).priorityDetails[DETAIL._id]).toBeDefined();
+  answers["priorities:show"] = null;
+  try {
+    page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+    await page.waitFor(() => page.text().includes("No priority"));
+    expect(page.text()).toContain("No priority pri-60 you can see");
+    expect(page.container.querySelector("[data-priority-page]")).toBeNull();
+    expect((useInboxStore.getState() as any).priorityDetails[DETAIL._id]).toBeUndefined();
+    await page.unmount();
+    page = await inRouter(<p>See <EntityIdPill shortId="pri-60" /> and</p>);
+    expect(page.container.querySelector("[data-priority-pill]")).toBeNull();
+    expect(page.text()).not.toContain("Priorities for Union");
+    await page.unmount();
+  } finally {
+    answers["priorities:show"] = DETAIL;
+  }
+});
+
+test("the render gallery's priority shows Next with Answer, and the real server's refusal leaves its client-keyed row", async () => {
+  const records = renderGalleryRecords(NOW, VIEWER_ID, `team:${TEAM_ID}`, fixtureId("galleryconv"));
+  useInboxStore.getState().syncTable("priorityDetails", records.priorityDetails as any, { isDelta: true });
+  answers["priorities:show"] = null;
+  try {
+    const page = await inRouter(<EntityObjectCard refId={GALLERY_PRIORITY.short} count={1} />);
+    await page.waitFor(() => !!page.container.querySelector('[data-entity-card="priority"]'));
+    const card = page.container.querySelector('[data-entity-card="priority"]')!;
+    expect(card.querySelector('[data-action="answer"]')?.getAttribute("href")).toBe(`/conversation/${GALLERY_PRIORITY.asking}`);
+    await page.unmount();
+  } finally {
+    answers["priorities:show"] = DETAIL;
   }
 });
 

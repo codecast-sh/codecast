@@ -12,7 +12,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, ChevronRight, PencilLine, Target } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityPlanRef, PriorityRow } from "@codecast/shared/contracts/priorities";
+import type { PriorityHistory, PriorityPlanRef } from "@codecast/shared/contracts/priorities";
+import type { PriorityView } from "../../lib/priorityDetail";
 import { asksPerson, bestSession } from "@codecast/shared/contracts/priorityDerive";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { usePriorityDetail, useSyncPriorityDetail } from "../../hooks/usePriorityDetail";
@@ -44,9 +45,10 @@ export default function PriorityPage({ id }: { id: string }) {
   const feed = useSyncPriorityDetail(shortId);
   const row = usePriorityDetail(shortId);
   let body;
-  if (row) body = <PriorityView row={row} />;
+  // A refusal wins over whatever the store held: merged, rewritten, or no longer the viewer's to read.
+  if (feed.refused) body = <EmptyState icon={Target} title={`No priority ${shortId} you can see`} />;
+  else if (row) body = <PriorityBody row={row} />;
   else if (feed.error) body = <EmptyState icon={AlertTriangle} title="This priority didn't load" action={{ label: "Try again", onClick: feed.retry }} />;
-  else if (feed.refused) body = <EmptyState icon={Target} title={`No priority ${shortId} you can see`} />;
   else body = <SkeletonRows rows={8} className="pt-6" rowClassName="h-8" />;
   return (
     <PageFrame header={null} legacyColumn="mx-auto w-full max-w-[820px] px-4 pb-16 pt-4" column="mx-auto w-full max-w-[820px] px-4 pb-16 pt-4">
@@ -58,7 +60,7 @@ export default function PriorityPage({ id }: { id: string }) {
   );
 }
 
-function PriorityView({ row }: { row: PriorityRow | PriorityDetail }) {
+function PriorityBody({ row }: { row: PriorityView }) {
   const now = useCoarseNow(30_000);
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
@@ -75,7 +77,7 @@ function PriorityView({ row }: { row: PriorityRow | PriorityDetail }) {
   const waiting = useMemo(() => waitingOf([model]).filter((w) => w.session.conversation_id !== action?.session?.conversation_id).map((w) => ({ ...w, rank: null })), [model, action]);
   const critical = model.milestones.filter((m) => m.tier === "critical");
   const polish = model.milestones.filter((m) => m.tier === "polish");
-  const corrections: PriorityCorrection[] = "corrections" in row ? row.corrections : [];
+  const corrections = row.corrections;
   const why = rankProvenance(row);
   const active = row.status === "active";
 

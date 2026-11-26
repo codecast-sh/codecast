@@ -13,22 +13,22 @@ import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { findEntityInStore } from '@codecast/web/lib/liveEntities';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { linkedSessionIds, usePriorityLiveStates } from '@codecast/web/hooks/usePriorityModels';
 import { LIST_DAYS, STATE_WORD, ago, buildModels, lastDays, waitingOf, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { asksPerson, bestSession, type NextAction } from '@codecast/shared/contracts/priorityDerive';
-import type { PriorityDetail, PriorityHistory, PriorityPlanRef, PriorityRow } from '@codecast/shared/contracts/priorities';
+import type { PriorityHistory, PriorityPlanRef } from '@codecast/shared/contracts/priorities';
 import { ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
-import { useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
+import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
+import { rankProvenance } from '@codecast/web/lib/priorities';
+import type { PriorityView } from '@codecast/web/lib/priorityDetail';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openCompose } from '@/lib/compose';
 
 const api = _api as any;
 
-type Row = PriorityDetail | PriorityRow;
+type Row = PriorityView;
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
@@ -47,7 +47,9 @@ export default function PriorityScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const ref = String(id ?? '').toLowerCase();
   const feed = useSyncPriorityDetail(ref || null);
-  const row = useInboxStore((s) => (ref ? findEntityInStore(s, 'priority', ref) : undefined)) as Row | undefined;
+  const row = usePriorityDetail(ref || null);
+  // A refusal wins over whatever the store held: merged, rewritten, or no longer the viewer's to read.
+  if (feed.refused) return <ObjectMissing what="Priority" id={ref} loading={false} />;
   if (!row) {
     if (feed.error) {
       return (
@@ -63,7 +65,6 @@ export default function PriorityScreen() {
         </>
       );
     }
-    // `refused` (no such priority, or one the viewer cannot read) reads as not found.
     return <ObjectMissing what="Priority" id={ref} loading={!feed.ready} />;
   }
   return <PriorityBody key={row._id} row={row} />;
@@ -105,8 +106,8 @@ function PriorityBody({ row }: { row: Row }) {
   const polish = model.milestones.filter((m) => m.tier === 'polish');
   const { critical_done: done, critical_total: total } = row.counts;
   const active = row.status === 'active';
-  const placed = active && row.rank != null ? `#${row.rank} · ${row.rank_set_by === 'person' ? 'you placed it' : 'ranked by AI'}` : pastWords(row);
-  const corrections = 'corrections' in row ? row.corrections : [];
+  const placed = active && row.rank != null ? `#${row.rank} · ${rankProvenance(row)}` : pastWords(row);
+  const corrections = row.corrections;
   const linked = useMemo(() => {
     const seen = new Set<string>();
     const out: SessionLine[] = [];

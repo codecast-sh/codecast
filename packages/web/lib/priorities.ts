@@ -54,9 +54,9 @@ export function priorityHref(shortId: string): string {
 export type { PriorityDetail, PriorityHistory, PriorityHistoryLane };
 
 /** Who set the rank, in words: the person's own placement, or the pass's. */
-export function rankProvenance(row: Pick<PriorityRow, "rank" | "rank_set_by" | "mine" | "owner">): string | null {
+export function rankProvenance(row: Pick<PriorityRow, "rank" | "rank_source" | "mine" | "owner">): string | null {
   if (row.rank == null) return null;
-  if (row.rank_set_by !== "person") return "ranked by AI";
+  if (row.rank_source !== "person") return "ranked by AI";
   return row.mine ? "you placed it" : `${row.owner || "owner"} placed it`;
 }
 

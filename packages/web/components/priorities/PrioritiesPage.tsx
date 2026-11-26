@@ -205,7 +205,7 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
       <FilterBar filters={filters} onChange={onFilters} compact={compact} onCompact={onCompact} layout={layout} />
       {filters.mine && <WaitingOnYou items={waiting} now={now} layout={layout} />}
       {layout === "wide" && (
-        <div aria-hidden className={cn(LIST_GRID.wide, "border-b border-sol-border/50 pb-1 text-[10px] font-medium uppercase tracking-wide text-sol-text-dim")}>
+        <div aria-hidden className={cn(LIST_GRID.wide, "border-b border-sol-border/50 pb-1 text-mark font-medium uppercase tracking-wide text-sol-text-dim")}>
           <span className="col-start-3 justify-self-end">Critical</span>
           <span className="col-start-4 justify-self-center">Today</span>
           <span className="col-start-5">10 days</span>

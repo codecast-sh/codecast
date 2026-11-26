@@ -30,6 +30,7 @@ import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { roleAuthorOf, type IdentityPrefs } from "./sessionIdentity";
 import { deployMatchesRef } from "./deploys/deployPill";
 import { teamMembersOf } from "./activeTeam";
+import { priorityInStore } from "./priorityDetail";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
@@ -627,8 +628,8 @@ export function findEntityInStore(
       return (Object.values(state.lineDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))
         ?? Object.values(state.teamDeploys ?? {}).find((d: any) => deployMatchesRef(d, rawId))) as StoreEntitySeed | undefined;
     case "priority":
-      // A priority a page or card opened (priorityDetails), else the workspace list's row, by `pri-N` or Convex id.
-      return lookup(state.priorityDetails, rawId) ?? lookup(state.priorities, rawId);
+      // The workspace list's row with what only `show` has laid on (lib/priorityDetail), by `pri-N` or Convex id.
+      return priorityInStore(state, rawId);
     case "trigger":
       // The viewer's own triggers (agentTasks) resolve locally by Convex id or
       // short id; a foreign (bot-owned) trigger waits for webGet.
