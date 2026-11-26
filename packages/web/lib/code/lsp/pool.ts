@@ -64,8 +64,8 @@ interface Entry {
 }
 
 const defaultEndpoint: LspEndpointResolver = async () => {
-  const { useVaultStore } = await import("../../../store/vaultStore");
-  return useVaultStore.getState().endpoint;
+  const { requestEndpointOf, useVaultStore } = await import("../../../store/vaultStore");
+  return requestEndpointOf(useVaultStore.getState());
 };
 
 let config: LspPoolConfig = {};

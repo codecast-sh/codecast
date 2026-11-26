@@ -15,7 +15,7 @@
 import { Annotation, Compartment, type Extension, type TransactionSpec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { readVaultFile, vaultOp, writeVaultFile, VaultWriteConflict } from "../vault/client";
-import { setCodeBodyHolder, useVaultStore } from "../../store/vaultStore";
+import { requestEndpointOf, setCodeBodyHolder, useVaultStore } from "../../store/vaultStore";
 import { useCodeStore } from "../../store/codeStore";
 import {
   bufferKey,
@@ -58,7 +58,8 @@ export interface DiskIO {
 }
 
 function connectedEndpoint() {
-  const { endpoint } = useVaultStore.getState();
+  // Any endpoint will do: the request is routed by the buffer's vault.
+  const endpoint = requestEndpointOf(useVaultStore.getState());
   if (!endpoint) throw new Error("Files is not connected to this machine");
   return endpoint;
 }

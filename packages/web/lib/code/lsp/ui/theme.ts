@@ -5,6 +5,7 @@
 
 import { EditorView } from "@codemirror/view";
 import { EDITOR_FONT } from "../../theme";
+import { LINT_GUTTER_COLUMN } from "../../gutterSlots";
 
 const mix = (color: string, pct: number) => `color-mix(in srgb, var(${color}) ${pct}%, transparent)`;
 const border = `1px solid ${mix("--sol-border", 45)}`;
@@ -17,7 +18,7 @@ export const lspTheme = EditorView.theme({
   ".cm-lintRange-info": { textDecorationColor: "var(--sol-blue)" },
   ".cm-lintRange-hint": { textDecorationStyle: "dotted", textDecorationColor: "var(--sol-text-dim)" },
   ".cm-lsp-unnecessary": { opacity: "0.55", textDecorationLine: "none" },
-  ".cm-gutter-lint": { width: "10px" },
+  ".cm-gutter-lint": LINT_GUTTER_COLUMN,
   ".cm-gutter-lint .cm-gutterElement": { padding: "0", display: "flex", alignItems: "center", justifyContent: "center" },
   ".cm-lint-marker": { width: "6px", height: "6px", borderRadius: "50%", content: "none" },
   ".cm-lint-marker-error": { background: "var(--sol-red)" },

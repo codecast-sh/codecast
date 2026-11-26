@@ -8,6 +8,7 @@
 // work without a server and load the module themselves.
 
 import { registerEditorFeature } from "../features";
+import { lintGutterStandIn } from "../gutterSlots";
 import { registerCodeCommands, type CodeCommandHandler } from "../commands";
 
 export type LspCommandId =
@@ -39,6 +40,35 @@ function load(): Promise<FeatureModule> {
   return loading;
 }
 
+// Languages whose server attached last time, so the next file in one holds
+// the lint gutter's column from its first paint instead of shifting when the
+// server comes up seconds later. Kept across reloads; a language whose
+// server stops attaching drops out on its next open.
+const ATTACHED_KEY = "codecast:code-lsp-attached:v1";
+let attachedLanguages: Set<string> | null = null;
+
+function attachedSet(): Set<string> {
+  if (attachedLanguages) return attachedLanguages;
+  try {
+    attachedLanguages = new Set(JSON.parse(localStorage.getItem(ATTACHED_KEY) ?? "[]") as string[]);
+  } catch {
+    attachedLanguages = new Set();
+  }
+  return attachedLanguages;
+}
+
+function rememberAttached(languageId: string, attached: boolean): void {
+  const set = attachedSet();
+  if (set.has(languageId) === attached) return;
+  if (attached) set.add(languageId);
+  else set.delete(languageId);
+  try {
+    localStorage.setItem(ATTACHED_KEY, JSON.stringify([...set]));
+  } catch {
+    // Storage blocked: the column arrives with the server instead.
+  }
+}
+
 let registered = false;
 
 export function registerLspFeature(): void {
@@ -48,9 +78,15 @@ export function registerLspFeature(): void {
     "lsp",
     async (ctx) => {
       if (ctx.largeFile || ctx.languageId === "plaintext") return null;
-      return (await load()).lspExtension(ctx);
+      const m = await load();
+      const ext = await m.lspExtension(ctx);
+      rememberAttached(ctx.languageId, m.lspAttached(ext));
+      return ext;
     },
-    { needsVault: true },
+    {
+      needsVault: true,
+      placeholder: (ctx) => (!ctx.largeFile && attachedSet().has(ctx.languageId) ? lintGutterStandIn : null),
+    },
   );
   const route =
     (id: LspCommandId): CodeCommandHandler =>

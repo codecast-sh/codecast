@@ -272,6 +272,12 @@ export function activateLsp(): void {
 /** The "lsp" feature's extension for a file: its server attached, or only the
  *  theme (for the status chip and problems list) when no server for its
  *  language is installed or it could not start. */
+/** Whether `lspExtension` attached a server (it returns the bare theme when
+ *  no server runs for the file). */
+export function lspAttached(ext: Extension | null): boolean {
+  return !!ext && ext !== lspTheme;
+}
+
 export async function lspExtension(ctx: EditorFeatureContext): Promise<Extension | null> {
   activateLsp();
   const client = await getLspClient(ctx.vaultId, ctx.languageId);

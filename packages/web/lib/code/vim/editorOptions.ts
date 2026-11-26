@@ -286,8 +286,20 @@ const optionsField = StateField.define<OptionsState | null>({
 /** The gutter and wrap the core draws, from the options in effect now. The
  *  core's whitespace marks stay off: `list` draws vim's own. */
 function coreOverrides(st: OptionsState | null): Partial<CodeEditorOptions> {
-  if (!st) return {};
-  const o = editorOptionsFromValues(st.values);
+  return st ? overridesOf(editorOptionsFromValues(st.values)) : {};
+}
+
+/** The core options (line numbers, wrap) a vimrc sets for one language, as
+ *  vimOptionsExtension will put over the person's own. */
+export function vimCoreOverrides(
+  report: Pick<VimConfigReport, "options"> | null | undefined,
+  languageId?: string,
+  seed?: VimOptionValues,
+): Partial<CodeEditorOptions> {
+  return overridesOf(editorOptionsFromValues(resolveValues(report, languageId, seed)));
+}
+
+function overridesOf(o: VimEditorOptions): Partial<CodeEditorOptions> {
   const out: Partial<CodeEditorOptions> = { showWhitespace: false };
   if (o.lineNumbers) out.lineNumbers = o.lineNumbers;
   if (o.wrap !== undefined) out.softWrap = o.wrap;

@@ -26,7 +26,7 @@
 import type { Transport } from "@codemirror/lsp-client";
 import type { LspServerInfo, LspWsAck, LspWsControl, LspWsHello, LspWsRestart } from "@codecast/shared/contracts";
 import type { VaultEndpoint } from "../../vault/client";
-import { hostOfEndpoint, hostOfVault, reestablishHost, routeEndpoint } from "../../vault/hosts/routes";
+import { hostOfEndpoint, hostOfVault, onHostEndpointChange, reestablishHost, routeEndpoint, wireVaultId } from "../../vault/hosts/routes";
 
 export type LspStatus =
   /** Connecting, or waiting for the daemon to start the server. */
@@ -132,6 +132,13 @@ export class LspWebSocketTransport implements Transport {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** The cloud host the last connect went to, null for this machine. */
   private host: string | null = null;
+  /** Waiting for an unreachable host's next forward. */
+  private parked: (() => void) | null = null;
+
+  private unpark(): void {
+    this.parked?.();
+    this.parked = null;
+  }
   private retryMs: number;
   private disposed = false;
   private current: LspConnectionState = { status: "starting" };
@@ -256,6 +263,7 @@ export class LspWebSocketTransport implements Transport {
   /** Reconnect now, including after unavailable or crashed. */
   retry(): void {
     if (this.disposed) return;
+    this.unpark();
     this.retryMs = this.opts.retryInitialMs ?? 500;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
@@ -265,6 +273,7 @@ export class LspWebSocketTransport implements Transport {
 
   dispose(): void {
     this.disposed = true;
+    this.unpark();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.drop();
     this.handlers.clear();
@@ -309,8 +318,15 @@ export class LspWebSocketTransport implements Transport {
     // reaches the host's daemon (its binaries, its checkout) through the
     // forward, re-routed on every attempt since a forward can reopen on a
     // new port.
-    ep = routeEndpoint(ep, this.opts.vaultId);
-    this.host = hostOfVault(this.opts.vaultId) ?? hostOfEndpoint(ep);
+    const routed = routeEndpoint(ep, this.opts.vaultId);
+    this.host = hostOfVault(this.opts.vaultId) ?? hostOfEndpoint(routed);
+    if (!routed) {
+      // The host's forward is closed (the retry reopens it), or this
+      // machine's daemon is not known yet.
+      this.setState({ status: "offline", reason: this.host ? "cloud host not reachable" : "no codecast daemon on this machine" });
+      return this.scheduleRetry();
+    }
+    ep = routed;
     const Ctor = this.opts.WebSocket ?? WebSocket;
     const ws = new Ctor(`ws://127.0.0.1:${ep.port}/lsp/ws`);
     const token = ep.token;
@@ -318,7 +334,7 @@ export class LspWebSocketTransport implements Transport {
     let received = 0;
     let acked = 0;
     ws.onopen = () => {
-      const hello: LspWsHello = { type: "hello", token, vault: this.opts.vaultId, server: this.opts.server, acks: true, client: this.client, ...(this.freshNext ? { fresh: true } : {}) };
+      const hello: LspWsHello = { type: "hello", token, vault: wireVaultId(this.opts.vaultId), server: this.opts.server, acks: true, client: this.client, ...(this.freshNext ? { fresh: true } : {}) };
       this.freshNext = false;
       ws.send(JSON.stringify(hello));
     };
@@ -388,9 +404,22 @@ export class LspWebSocketTransport implements Transport {
     if (this.disposed || this.retryTimer) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      // A host's forward may have closed while idle: reopen it first.
-      if (this.host) void reestablishHost(this.host).finally(() => void this.connect());
-      else void this.connect();
+      // A host's forward may have closed while idle: reopen it first. A host
+      // that cannot be reached is not asked again on a timer (a relay round
+      // and an ssh probe each); the next forward anything opens resumes it.
+      const host = this.host;
+      if (!host) return void this.connect();
+      void reestablishHost(host).then((fresh) => {
+        if (this.disposed) return;
+        if (fresh) return void this.connect();
+        this.unpark();
+        this.parked = onHostEndpointChange((device, ep) => {
+          if (device !== host || !ep) return;
+          this.unpark();
+          this.retryMs = this.opts.retryInitialMs ?? 500;
+          void this.connect();
+        });
+      });
     }, this.retryMs);
     this.retryMs = Math.min(this.retryMs * 2, this.opts.retryMaxMs ?? 15_000);
   }

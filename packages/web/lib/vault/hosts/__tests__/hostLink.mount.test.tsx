@@ -111,10 +111,12 @@ test("a path from a cloud host session opens the host's file through the forward
   expect(port(0)).toBe(host.port);
   expect(new URL(requests[0].url).searchParams.get("path")).toBe(hostPath);
   await answer(0, { vault: hostApp, rel: "src/retry.ts", entry: { path: "src/retry.ts", mtime: 1, size: 5 } });
-  expect(routes.hostOfVault("h-app")).toBe("cloud");
-  const adopted = useVaultStore.getState().vaults.find((v) => v.id === "h-app")!;
-  expect(adopted.name.startsWith("app · ")).toBe(true);
-  expect(selected).toEqual(["h-app"]);
+  // The host's vault carries its machine in its id, apart from any local one.
+  expect(routes.hostOfVault("h-app@cloud")).toBe("cloud");
+  const adopted = useVaultStore.getState().vaults.find((v) => v.id === "h-app@cloud")!;
+  // It keeps its daemon's name; the picker draws the machine from the id.
+  expect(adopted.name).toBe("app");
+  expect(selected).toEqual(["h-app@cloud"]);
   await act(() => useVaultStore.setState({ scannedAt: 2, files: { "src/retry.ts": { path: "src/retry.ts", mtime: 1, size: 5 } } }));
   expect(hrefs).toEqual(["/files?f=src%2Fretry.ts&l=12"]);
   expect(useVaultStore.getState().hostFallback).toBeNull();
@@ -154,6 +156,18 @@ test("a host out of reach with no mirror opens this machine's checkout and remem
   await flush();
   // The link keeps its machine, so the next render is still a fallback.
   expect(hrefs).toEqual(["/files?path=%2FUsers%2Fada%2Fsrc%2Fapp%2Fsrc%2Fretry.ts&d=cloud&l=12"]);
+  // The host's own path is held, for the header's way back.
+  expect(useVaultStore.getState().hostFallback).toEqual({ deviceId: "cloud", hostAbs: hostPath });
+});
+
+test("the fallback keeps the host path the original link named once the checkout opens", async () => {
+  reachable = false;
+  useVaultStore.setState({ hostFallback: { deviceId: "cloud", hostAbs: hostPath } });
+  await mount("/Users/ada/src/app/src/retry.ts", "cloud");
+  await flush();
+  await answer(0, { vault: localApp, rel: "src/retry.ts", entry: { path: "src/retry.ts", mtime: 1, size: 5 } });
+  await flush();
+  expect(useVaultStore.getState().hostFallback).toEqual({ deviceId: "cloud", hostAbs: hostPath, localVaultId: "l-app" });
 });
 
 test("the checkout that stood in for a host is marked as the fallback once it opens", async () => {
@@ -162,5 +176,6 @@ test("the checkout that stood in for a host is marked as the fallback once it op
   await flush();
   await answer(0, { vault: localApp, rel: "src/retry.ts", entry: { path: "src/retry.ts", mtime: 1, size: 5 } });
   await flush();
-  expect(useVaultStore.getState().hostFallback).toEqual({ deviceId: "cloud", localVaultId: "l-app" });
+  // Nothing remapped this link, so the host path is the one it names.
+  expect(useVaultStore.getState().hostFallback).toEqual({ deviceId: "cloud", hostAbs: "/Users/ada/src/app/src/retry.ts", localVaultId: "l-app" });
 });

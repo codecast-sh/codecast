@@ -26,6 +26,7 @@ export {
   editorOptionsFromReport,
   readVimEditorOptions,
   vimEditorOptionsChanged,
+  vimCoreOverrides,
   vimOptionsExtension,
   type VimEditorOptions,
 } from "./editorOptions";

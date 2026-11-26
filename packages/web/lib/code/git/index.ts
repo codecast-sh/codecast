@@ -16,6 +16,7 @@ import { fetchGitBase } from "../daemonClient";
 import { featureContext, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "../features";
 import { decodeFileText, textToDoc } from "../buffers";
 import { loadMergeKit, type MergeKit } from "../merge";
+import { gitGutterStandIn } from "../gutterSlots";
 import { ensureGitStatus, gitStatusOf, onGitHeadChange, useGitStatusStore, type VaultGitStatus } from "./status";
 import type { DiffLayout, GitDiffTarget } from "./gutter";
 
@@ -115,6 +116,16 @@ function eligible(ctx: EditorFeatureContext, status: VaultGitStatus | undefined)
   const state = status.files[ctx.path];
   // Nothing at HEAD to compare with: the tree's color says it is new.
   return state !== "untracked" && state !== "added";
+}
+
+/** The gutter's column while its module, the status and HEAD's copy load:
+ *  held for a file the status already calls eligible, or, before the first
+ *  status, for any file in a repo root. */
+function gitPlaceholder(ctx: EditorFeatureContext) {
+  const held = gitStatusOf(ctx.vaultId);
+  if (held) return eligible(ctx, held) ? gitGutterStandIn : null;
+  const vault = useVaultStore.getState();
+  return vault.endpoint && !vault.isRemote && vault.activeVaultId === ctx.vaultId && vault.isRepo ? gitGutterStandIn : null;
 }
 
 function build(ctx: EditorFeatureContext, m: GutterModule, k: MergeKit, base: string | null) {
@@ -226,7 +237,7 @@ export function registerGitFeature(): void {
   if (registered) return;
   registered = true;
 
-  registerEditorFeature(FEATURE, gitFeature, { needsVault: true });
+  registerEditorFeature(FEATURE, gitFeature, { needsVault: true, placeholder: gitPlaceholder });
   registerStatusItem({ id: "git.branch", side: "left", order: 20, priority: 20, needsVault: true, create: branchItem });
 
   // A commit or checkout moves the base every gutter compares against; the

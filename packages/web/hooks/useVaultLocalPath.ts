@@ -123,9 +123,16 @@ export function useVaultLocalPath(
       for (const candidate of candidates) {
         const found = await locateVault(endpoint, candidate);
         if (cancelled) return;
-        if (found) return router.replace(hrefFor(candidate));
+        if (found) {
+          if (fallback) useVaultStore.getState().setHostFallback({ deviceId: device!, hostAbs: abs });
+          return router.replace(hrefFor(candidate));
+        }
       }
-      if (candidates.length && side !== "host") return router.replace(hrefFor(candidates[0]));
+      if (candidates.length && side !== "host") {
+        // Remember the host's own path, so the header can offer it again.
+        if (fallback) useVaultStore.getState().setHostFallback({ deviceId: device!, hostAbs: abs });
+        return router.replace(hrefFor(candidates[0]));
+      }
       useVaultStore.setState({ opError: `${abs} does not exist on ${side === "host" ? hostLabel(device!) : "this machine"}.` });
     })().catch((error: unknown) => {
       if (cancelled) return;
@@ -141,10 +148,15 @@ export function useVaultLocalPath(
   useWatchEffect(() => {
     if (!target || awaitingCheck || mirror || (connection !== "connected" && connection !== "cached")) return;
     const store = useVaultStore.getState();
-    // The header offers the host again from the checkout that stood in for it.
-    const nextFallback = fallback ? { deviceId: device!, localVaultId: target.vaultId } : null;
+    // The header offers the host again from the checkout that stood in for it,
+    // at the host path the link named (held from the remap above, or the
+    // link's own path when it already named this checkout).
     const held = store.hostFallback;
-    if (held?.deviceId !== nextFallback?.deviceId || held?.localVaultId !== nextFallback?.localVaultId) store.setHostFallback(nextFallback);
+    const heldAbs = fallback && held?.deviceId === device && (held.localVaultId === undefined || held.localVaultId === target.vaultId) ? held.hostAbs : null;
+    const nextFallback = fallback ? { deviceId: device!, localVaultId: target.vaultId, hostAbs: heldAbs ?? target.abs } : null;
+    if (held?.deviceId !== nextFallback?.deviceId || held?.localVaultId !== nextFallback?.localVaultId || held?.hostAbs !== nextFallback?.hostAbs) {
+      store.setHostFallback(nextFallback);
+    }
     if (target.vaultId !== activeVaultId) {
       void store.selectVault(target.vaultId);
       return;

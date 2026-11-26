@@ -13,7 +13,6 @@ import type { VaultFileEntry, VaultInfo, VaultWsEvent } from "@codecast/shared/c
 import { isVaultMarkdownPath, VAULT_MAX_PREVIEW_BYTES } from "@codecast/shared/contracts";
 import { getTerminalEndpoint, lastDiscoveryFailure, loopbackFailureReason, type LoopbackUnreachableReason } from "../lib/terminal/endpoint";
 import {
-  bindVaultToHost,
   hostEndpoint,
   hostOfEndpoint,
   hostOfVault,
@@ -21,8 +20,8 @@ import {
   reestablishHost,
   setHostEstablisher,
   setLocalEndpoint,
+  tagHostVault,
 } from "../lib/vault/hosts/routes";
-import { hostVaultName } from "../lib/vault/hosts/hostVaults";
 import {
   fetchRemoteBody,
   fetchRemoteNotes,
@@ -128,8 +127,9 @@ export interface HostFallback {
   deviceId: string;
   /** The path on the host the link named. */
   hostAbs: string;
-  /** The local vault that opened in its place. */
-  localVaultId: string;
+  /** The local vault that opened in its place; absent while the checkout
+   *  is still being opened. */
+  localVaultId?: string;
 }
 
 interface VaultState {
@@ -840,6 +840,14 @@ export function localEndpointOf(s: Pick<VaultState, "localEndpoint" | "endpoint"
   return s.localEndpoint ?? (s.endpoint && !hostOfEndpoint(s.endpoint) ? s.endpoint : null);
 }
 
+/** An endpoint to start a request for some vault from. The request is
+ *  routed by its vault id (lib/vault/hosts/routes.ts), so a host buffer whose
+ *  forward is closed still saves (routing opens the forward), and a local
+ *  buffer still saves while a host vault is active. */
+export function requestEndpointOf(s: Pick<VaultState, "localEndpoint" | "endpoint">): VaultEndpoint | null {
+  return s.endpoint ?? s.localEndpoint;
+}
+
 /** The vaults this machine's daemon serves, the only ones the boot cache
  *  and the last-vault pointer may name: a host vault needs its forward. */
 function localOnly(vaults: VaultInfo[]): VaultInfo[] {
@@ -868,13 +876,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     return ep ? "host" : "unreachable";
   },
   adoptHostVault: (vault, deviceId) => {
-    bindVaultToHost(vault.id, deviceId);
     set((s) => {
-      const named = { ...vault, name: hostVaultName(vault.name, deviceId) };
-      const at = s.vaults.findIndex((v) => v.id === vault.id);
+      const named = tagHostVault(vault, deviceId);
+      const at = s.vaults.findIndex((v) => v.id === named.id);
       if (at >= 0 && s.vaults[at].name === named.name) return {};
       const vaults = at >= 0 ? s.vaults.map((v, i) => (i === at ? named : v)) : [...s.vaults, named];
-      return { vaults, ...(s.activeVaultId === vault.id ? { endpoint: hostEndpoint(deviceId) } : {}) };
+      return { vaults, ...(s.activeVaultId === named.id ? { endpoint: hostEndpoint(deviceId) } : {}) };
     });
   },
   vaults: readCachedVaults(),
@@ -1098,9 +1105,15 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // relay: the same lookup the terminal uses for a cloud pane. Only a
     // forward counts; this machine's own endpoint is never a host's.
     setHostEstablisher(async (deviceId) => {
-      const ep = await getTerminalEndpoint(convex, { deviceId });
+      // The header's machine chip shows the reconnect while it runs.
+      set((s) => ({ hostStates: { ...s.hostStates, [deviceId]: "connecting" } }));
+      const ep = await getTerminalEndpoint(convex, { deviceId }).catch(() => null);
       const local = localEndpointOf(useVaultStore.getState());
-      return ep && ep.deviceId === deviceId && ep.port !== local?.port ? ep : null;
+      const forward = ep && ep.deviceId === deviceId && ep.port !== local?.port ? ep : null;
+      // Settled here too: a forward that was still open comes back unchanged
+      // and fires no endpoint change.
+      set((s) => ({ hostStates: { ...s.hostStates, [deviceId]: forward ? "connected" : "unreachable" } }));
+      return forward;
     });
     const st = get();
     if (st.connection === "discovering") return;

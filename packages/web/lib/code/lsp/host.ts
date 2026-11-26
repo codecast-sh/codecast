@@ -11,7 +11,7 @@ import { applyToBuffer } from "../fileSync";
 import { runCodeCommand } from "../commands";
 import { readVaultFile, writeVaultFile } from "../../vault/client";
 import { filesHref } from "../../vault/vaultHref";
-import { useVaultStore } from "../../../store/vaultStore";
+import { requestEndpointOf, useVaultStore } from "../../../store/vaultStore";
 import type { WorkspaceHost } from "./workspace";
 import type { EditTarget } from "./edits";
 import { resolveUri, uriKey, type UriTarget } from "./uri";
@@ -19,7 +19,7 @@ import { showNotice } from "./ui/notice";
 import { forgetClientDiagnostics } from "./diagnostics";
 
 const endpoint = () => {
-  const ep = useVaultStore.getState().endpoint;
+  const ep = requestEndpointOf(useVaultStore.getState());
   if (!ep) throw new Error("Files is not connected to this machine");
   return ep;
 };

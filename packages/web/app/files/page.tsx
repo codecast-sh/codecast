@@ -58,6 +58,7 @@ import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
 import { VaultPicker } from "../../components/vault/VaultPicker";
 import { VaultMachineBar } from "../../lib/vault/hosts/VaultMachineBar";
+import { hostOfVault } from "../../lib/vault/hosts/routes";
 import { EmptyVaultTeaching } from "../../components/vault/EmptyVaultTeaching";
 import { VaultScopeLine } from "../../components/vault/VaultScopeLine";
 import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useVaultScope";
@@ -621,7 +622,8 @@ function VaultContent() {
     // (CodeWorkspace's code.closeTab).
     <div ref={rootRef} data-files-surface className="h-full flex flex-col">
       <VaultMachineBar activePath={activePath} onNavigate={(href) => router.push(href)} />
-      {connection === "cached" && (
+      {/* A host vault's reconnect shows on its machine chip above. */}
+      {connection === "cached" && !hostOfVault(activeVaultId) && (
         <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <WifiOff className="w-3 h-3" />
           Showing cached copy — reconnecting to the local daemon…

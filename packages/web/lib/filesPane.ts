@@ -7,32 +7,32 @@
 //
 // `openInEditor` is the one door into the code editor. It builds the address
 // (editorHref, over vaultHref's filesHref), reuses the Files pane already on
-// stage rather than stacking another, records which conversation the editor
-// was opened from (filesLinkedSession), and runs the follow-ups the address
-// cannot carry: a new editor split, a diff against a git ref.
+// stage rather than stacking another, records on the stage tab which
+// conversation the editor was opened from (AppTab.editorOpenedFrom, read by the
+// editor's agent link), and runs the follow-ups the address cannot carry: a new
+// editor split, a diff against a git ref.
+//
+// `openConversationPath` is the door for a path a conversation names (a link,
+// a tool card): when this machine cannot reach that conversation's files
+// (`editorReachable`), it opens the session's own changes instead.
 
-import { canOpenBeside, openBeside, paneSessionId } from "./stage";
+import { canOpenBeside, openBeside } from "./stage";
 import { tabNavigate } from "../src/compat/tabRouting";
 import { useInboxStore, type AppTab } from "../store/inboxStore";
 import { findLeaf, leavesOf } from "../store/stageSplit";
-import { inboxTabSessionId } from "./pathLabel";
-import { filesHref, isFilesPath } from "./vault/vaultHref";
-import { resolveMentionPath, type FilePathContextValue } from "./filePathLinks";
+import { sessionOfPanePath } from "./code/agent/sessions";
+import { isFilesPath } from "./vault/vaultHref";
+import { filePathHref, resolveMentionPath, type FilePathContextValue } from "./filePathLinks";
 import { runCodeCommand, type CodeCommandId } from "./code/commands";
 import { CODE_GIT_MERGE_BASE_REF } from "@codecast/shared/contracts";
+import { useVaultStore } from "../store/vaultStore";
+import { openSessionChangedPath } from "./sessionChangedFiles";
+import { toast } from "sonner";
 
-/** True when a Files pane may open beside what's on stage right now. */
-export const canOpenFilesBeside = canOpenBeside;
-
-/** Show `href` (a /files URL) as a pane beside the stage. */
-export function openFilesBeside(href: string): void {
-  if (!openBeside(href)) tabNavigate(href, "push");
-}
-
-/** Beside if the stage allows it, else navigate the tab. */
+/** Show a /files address: in the Files pane already on stage (its workspace
+ *  opens the file as a tab there), else as a pane beside, else in the tab. */
 export function openFiles(href: string): void {
-  if (canOpenFilesBeside()) openFilesBeside(href);
-  else tabNavigate(href, "push");
+  placeFiles(href);
 }
 
 // ── the editor ──────────────────────────────────────────────────────────────
@@ -65,18 +65,23 @@ export function editorTargetPath(t: EditorTarget): string {
   return resolveMentionPath(t.path, t.ctx) ?? t.path;
 }
 
-/** The Files address that opens a target in the editor. */
+/** The Files address that opens a target in the editor: the same address a
+ *  path link carries (on the conversation's machine), plus the range. */
 export function editorHref(t: EditorTarget): string {
-  return filesHref({ localPath: editorTargetPath(t), line: t.line, column: t.column, endLine: t.endLine });
+  return filePathHref(t.path, t.line, t.ctx, t.column, t.endLine);
 }
 
 /** Open a local file in the code editor, beside the stage when it can be. */
 export function openInEditor(target: EditorTarget, opts: OpenInEditorOptions = {}): void {
   const href = editorHref(target);
   const abs = editorTargetPath(target);
+  // Recorded on the stage tab before the pane moves: the agent link reads it
+  // from the store, so it wakes on this write even when placing the pane
+  // changes nothing else, and it lives and dies with the tab.
+  const tab = activeTab();
   const session = sessionOfLeaf(opts.fromLeaf);
+  if (tab && session) useInboxStore.getState().updateTab(tab.id, { editorOpenedFrom: session });
   const placed = opts.split ? placeFiles(href, { keepFile: true }) : placeFiles(href);
-  if (placed.leafId && session) linkedSessions.set(placed.leafId, session);
   if (opts.split && placed.reused) {
     // The pane is there with a workspace in it: the split is a command. When
     // nothing takes it (the file is in another vault), the address opens it.
@@ -85,8 +90,25 @@ export function openInEditor(target: EditorTarget, opts: OpenInEditorOptions = {
   }
   if (opts.diffAgainst) {
     const { ref, label } = opts.diffAgainst;
-    void whenEditorShows(abs).then((view) => view && retryCommand("git.diffAgainst", () => ({ ref, label }), view));
+    const failed = () => toast.error(`Couldn't open the diff against ${label ?? ref}`);
+    // Only an absolute path can be matched to the buffer the editor shows.
+    if (!abs.startsWith("/")) failed();
+    else void whenEditorShows(abs).then(async (view) => (view && (await retryCommand("git.diffAgainst", () => ({ ref, label }), view))) || failed());
   }
+}
+
+/** This machine can open a conversation's files in its editor: the
+ *  conversation is the viewer's own, and a daemon serves the vault. */
+export function editorReachable(ctx: FilePathContextValue | null | undefined, connection = useVaultStore.getState()?.connection): boolean {
+  return !ctx?.foreign && connection !== "no-daemon";
+}
+
+/** Open a path a conversation names. When the editor cannot reach the
+ *  conversation's files, a file the session changed opens in its own
+ *  changes; anything else goes to the editor, which says what is missing. */
+export function openConversationPath(target: EditorTarget, opts: OpenInEditorOptions = {}): void {
+  if (!editorReachable(target.ctx) && openSessionChangedPath(target.path, target.ctx)) return;
+  openInEditor(target, opts);
 }
 
 /**
@@ -94,31 +116,26 @@ export function openInEditor(target: EditorTarget, opts: OpenInEditorOptions = {
  * workspace opens the file as a tab there), else a new pane beside, else the
  * tab itself. `keepFile` focuses an existing pane without moving its file.
  */
-function placeFiles(href: string, opts: { keepFile?: boolean } = {}): { leafId: string | null; reused: boolean } {
+function placeFiles(href: string, opts: { keepFile?: boolean } = {}): { reused: boolean } {
   const tab = activeTab();
-  if (!tab || !canOpenFilesBeside()) {
+  if (!tab || !canOpenBeside()) {
     tabNavigate(href, "push");
-    return { leafId: null, reused: false };
+    return { reused: false };
   }
   // The whole tab is Files already: it is the pane.
   if (!tab.layout && isFilesPath(tab.path)) {
     if (!opts.keepFile) tabNavigate(href, "push");
-    return { leafId: null, reused: true };
+    return { reused: true };
   }
   const existing = leavesOf(tab.layout).find((l) => isFilesPath(l.path));
   if (existing) {
     useInboxStore.getState().stageFocusLeaf(existing.id);
     // The focused pane's navigation is the tab's (history, recents, URL).
     tabNavigate(opts.keepFile ? existing.path : href, opts.keepFile ? "replace" : "push");
-    return { leafId: existing.id, reused: true };
+    return { reused: true };
   }
-  if (!openBeside(href)) {
-    tabNavigate(href, "push");
-    return { leafId: null, reused: false };
-  }
-  const after = activeTab();
-  const leaf = leavesOf(after?.layout).find((l) => l.path === href);
-  return { leafId: leaf?.id ?? null, reused: false };
+  if (!openBeside(href)) tabNavigate(href, "push");
+  return { reused: false };
 }
 
 function activeTab(): AppTab | null {
@@ -128,35 +145,15 @@ function activeTab(): AppTab | null {
 
 // ── the linked session ──────────────────────────────────────────────────────
 
-/** Files pane leaf id → the conversation it was opened from. */
-const linkedSessions = new Map<string, string>();
-
-function sessionOfPath(path: string | undefined): string | null {
-  return path ? (paneSessionId(path) ?? inboxTabSessionId(path)) : null;
-}
-
-/** The conversation a stage leaf shows: the named leaf, else the tab itself. */
+/** The conversation a stage leaf shows: the named leaf, else the tab itself.
+ *  Read the way the agent link reads panes (sessionOfPanePath), so the
+ *  opener it records is one that link can find on the stage. */
 function sessionOfLeaf(leafId: string | null | undefined): string | null {
+  const st = useInboxStore.getState();
   const tab = activeTab();
   if (!tab) return null;
   const leaf = leafId && tab.layout ? findLeaf(tab.layout, leafId) : null;
-  return sessionOfPath(leaf?.path ?? tab.path);
-}
-
-/**
- * The conversation an editor pane works with: the one it was opened from,
- * else the only conversation on the same stage. What the editor sends to an
- * agent (a quoted selection, an inline instruction) goes there. Null when
- * nothing links it, or two conversations share the stage and neither opened it.
- */
-export function filesLinkedSession(filesLeafId?: string | null): string | null {
-  const tab = activeTab();
-  const recorded = filesLeafId ? linkedSessions.get(filesLeafId) : undefined;
-  if (recorded) return recorded;
-  if (!tab) return null;
-  const onStage = tab.layout ? leavesOf(tab.layout).map((l) => sessionOfPath(l.path)) : [sessionOfPath(tab.path)];
-  const sessions = [...new Set(onStage.filter((s): s is string => !!s))];
-  return sessions.length === 1 ? sessions[0] : null;
+  return sessionOfPanePath(leaf?.path ?? tab.path, st.currentSessionId ?? null);
 }
 
 // ── follow-ups once the workspace is up ─────────────────────────────────────
@@ -212,9 +209,11 @@ export function firstChangedLine(patch: string | undefined): number | undefined 
 
 /**
  * The lines an Edit wrote, read off the tool's result snippet (`cat -n`
- * style, `  42→text` or `  42\ttext`): where the replacement's first line sits
- * in the snippet, through as many lines as it has. Falls back to the snippet's
- * first line when the text is not found.
+ * style, `  42→text` or `  42\ttext`): where the replacement's lines appear in
+ * the snippet, in order. Short heads (`}`, `return null;`) repeat in a snippet,
+ * so the whole block is matched, and of several matches the one nearest the
+ * snippet's middle wins (the snippet is centred on the edit). Falls back to the
+ * snippet's first line when the block is not found.
  */
 export function editedLineRange(resultSnippet: string | undefined, newText: string | undefined): { line: number; endLine?: number } | undefined {
   if (!resultSnippet) return undefined;
@@ -224,14 +223,28 @@ export function editedLineRange(resultSnippet: string | undefined, newText: stri
     if (m) rows.push({ n: parseInt(m[1], 10), text: m[2] });
   }
   if (!rows.length) return undefined;
-  const lines = (newText ?? "").split("\n");
-  const head = lines.find((l) => l.trim())?.trim();
-  const offset = head ? lines.findIndex((l) => l.trim() === head) : -1;
-  const at = head ? rows.findIndex((r) => r.text.trim() === head) : -1;
-  if (at < 0 || offset < 0) return { line: rows[0].n };
-  const line = rows[at].n - offset;
-  const endLine = line + lines.length - 1;
-  return endLine > line ? { line, endLine } : { line };
+  const lines = (newText ?? "").split("\n").map((l) => l.trim());
+  const first = lines.findIndex(Boolean);
+  if (first < 0) return { line: rows[0].n };
+  // The block's non-blank lines, with their offsets from its first line.
+  const want = lines.map((text, i) => ({ text, i })).filter((l) => l.text);
+  const middle = (rows[0].n + rows[rows.length - 1].n) / 2;
+  let best: number | null = null;
+  for (let at = 0; at < rows.length; at++) {
+    if (rows[at].text.trim() !== want[0].text) continue;
+    const start = rows[at].n - want[0].i;
+    const byLine = (n: number) => rows.find((r) => r.n === n);
+    // Every non-blank line the snippet shows must match; lines past its end
+    // (a long replacement) cannot be checked and do not count against it.
+    const fits = want.every((w) => {
+      const r = byLine(start + w.i);
+      return !r ? start + w.i > rows[rows.length - 1].n : r.text.trim() === w.text;
+    });
+    if (fits && (best === null || Math.abs(start - middle) < Math.abs(best - middle))) best = start;
+  }
+  if (best === null) return { line: rows[0].n };
+  const endLine = best + lines.length - 1;
+  return endLine > best ? { line: best, endLine } : { line: best };
 }
 
 /**
