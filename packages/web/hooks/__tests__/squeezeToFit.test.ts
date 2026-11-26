@@ -20,6 +20,7 @@ function fakeRow(clientWidth: number, widthAtLevel: (level: number) => number) {
   const attrs = new Map<string, string>();
   const level = () => (attrs.get("data-squeeze")?.split(" ").length ?? 0);
   return {
+    getAttribute: (k: string) => attrs.get(k) ?? null,
     setAttribute: (k: string, v: string) => attrs.set(k, v),
     removeAttribute: (k: string) => attrs.delete(k),
     get clientWidth() { return clientWidth; },
