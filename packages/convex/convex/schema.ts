@@ -1,3 +1,4 @@
+import { automaticReviewValidator } from "./lib/automaticReviewValidator";
 import { permissionRemovalValidator } from "./lib/permissionRemoval";
 import { ruleRequestValidator } from "./lib/permissionRuleRequest";
 import { distributionValidator, updateStateValidator } from "./lib/deviceUpdate";
@@ -4016,6 +4017,9 @@ export default defineSchema({
       card_id: v.optional(v.id("session_decisions")),
       review_asked: v.optional(v.string()),
       engineer_told: v.optional(v.boolean()),
+      // With no codecast run behind it: what codecast's automatic review said about a head (lib/automaticReview.ts),
+      // kept so each head is read once.
+      automatic: v.optional(automaticReviewValidator),
     })),
   })
     .index("by_team_id", ["team_id"])
