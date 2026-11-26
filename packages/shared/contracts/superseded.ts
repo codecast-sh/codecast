@@ -24,12 +24,12 @@ export type SupersededWhy =
 /** Why an artifact is superseded, and the short id of what replaced it when one did. */
 export type Superseded = { why: SupersededWhy; by?: string } | null;
 
-/** Words for a reason, short enough for a row: "replaced by a newer run". */
+/** Words for a reason, short enough for a row: "Replaced · a newer run", "Outdated · its flow step is gone". */
 export const SUPERSEDED_WORDS: Record<SupersededWhy, string> = {
   merged: "merged",
   emptied: "its findings moved",
   newer_run: "a newer run",
-  station_gone: "station removed",
+  station_gone: "its flow step is gone",
   line_changed: "line changed",
   problem_closed: "problem closed",
   run_moved_on: "run moved on",

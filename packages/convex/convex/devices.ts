@@ -1950,8 +1950,8 @@ export const enqueueAgentToolSetupCommand = mutation({
   },
 });
 
-/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in or action, an agent tool's setup. */
-const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action", "agent_tool_setup"]);
+/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in or action, an agent tool's setup, a run's re-ask. */
+const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action", "agent_tool_setup", "run_reask", "line_trial_reask"]);
 
 /**
  * How a watched command went, for the page that sent it: still waiting, or

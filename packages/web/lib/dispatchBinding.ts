@@ -136,6 +136,9 @@ const CALLER_REPORTED_ACTIONS = new Set([
   "removeCallGuest",
   // The meeting link field takes its stub back, puts the link back and says the server's words (calls MeetingBotField).
   "sendMeetingBot",
+  // Re-ask: the button reads "Re-ask refused" with the server's words on hover (components/line/widgets/ReaskRun).
+  "reaskDecision",
+  "trialReask",
   // Live artifact writes: the live layer puts the rows back and says "Not saved: <why>" once per write.
   "applyLiveOps",
   "liveSendOps",

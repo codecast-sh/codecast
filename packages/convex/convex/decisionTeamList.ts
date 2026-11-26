@@ -73,6 +73,6 @@ export const listForTeam = query({
     if (!userId) return [];
     const rows = await teamDecisionsCore(ctx, userId, args.workspace, Date.now());
     const standing = await withLiveSession(ctx, await currentDecisions(ctx, rows));
-    return decisionRowsForViewer(ctx, standing, (r) => inQueueAsTheQueueSays(ctx, r, userId), { team_workspace: args.workspace });
+    return decisionRowsForViewer(ctx, userId, standing, (r) => inQueueAsTheQueueSays(ctx, r, userId), { team_workspace: args.workspace });
   },
 });

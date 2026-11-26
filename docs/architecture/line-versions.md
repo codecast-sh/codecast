@@ -65,7 +65,7 @@ settings edit never detaches a flow's later runs from its checkout. A library fl
 reads its current version, never `version_id`.
 
 A card or run carries the root reason, not a wrapper: a card whose run waits
-at a removed gate reads "station removed", one whose problem lost every
+at a removed gate reads "its flow step is gone", one whose problem lost every
 finding reads "its findings moved".
 
 Some things are never superseded, because they are history: a finished run
@@ -114,10 +114,14 @@ saying which rows are superseded.
 
 A list that hides something offers it back as one control with its count:
 /trial's **Superseded** tab lists them dimmed, each with "Replaced · why" and
-a link to what replaced it. A superseded artifact's own page opens normally
-with the same line at the top (`components/SupersededNote.tsx`, used by the
-trial pane and the decision banner in `DecisionAnswering.tsx`). Nothing is
-deleted.
+a link to what replaced it, or "Outdated · why" when nothing did. A superseded
+artifact's own page opens normally with the same line at the top
+(`components/SupersededNote.tsx`, used by the trial pane and the decision
+banner in `DecisionAnswering.tsx`). A decision whose run waits at a step its
+flow renamed or dropped carries **Re-ask** beside that line for the run's
+owner: the run's machine asks it again at the step as it is now (`cast
+workflow reask`, which finds a renamed step by its segment station). Nothing
+is deleted.
 
 ## LV4. Versions stay honest
 

@@ -352,10 +352,13 @@ export const CLIENT_SYNC_REGISTRY = {
     writtenBy: ["sessionDecisions"],
     feeds: ["sessionDecisions.listForUser", "sessionDecisions.listOpenForLines", "decisionTeamList.listForTeam"],
     // The Team feed's stamp survives the queue feed's push of the same row, so the row stays in the Team view.
-    sync: { preserveFields: ["team_workspace"] },
+    // `reask_at` is this window's mark that it asked the decision's run again (store reaskDecision): the server never
+    // sends it, so a push keeps it and it holds no lock waiting for an echo; a refused re-ask clears it.
+    sync: { preserveFields: ["team_workspace", "reask_at"] },
     persistence: { kind: "collection", key: "sessionDecisions" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    unprotectedFields: ["reask_at"],
     dispatchTable: {
       table: "session_decisions",
       kind: "collection",
@@ -461,7 +464,8 @@ export const CLIENT_SYNC_REGISTRY = {
   decisionDetails: {
     persistence: { kind: "collection", key: "decisionDetails" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true, deepFields: ["decision", "doc", "task", "stack", "ladder", "asked_users", "holder_role", "grant_offer", "grant", "superseded"] },
+    // `reask_at`: the same window-only mark as on sessionDecisions, for a decision the viewer holds no queue row of.
+    sync: { isDelta: true, deepFields: ["decision", "doc", "task", "stack", "ladder", "asked_users", "holder_role", "grant_offer", "grant", "superseded"], preserveFields: ["reask_at"] },
     // getWithDocMany: the sync host keeps every open decision's context cached (useSyncOpenDecisionDetails).
     feeds: ["sessionDecisions.getWithDoc", "sessionDecisions.getWithDocMany"],
   },
@@ -570,9 +574,11 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "trialCards" },
     hydration: { phase: "deferred" },
     localFirst: true,
+    // `reask_at` is this window's mark that it asked the card's run again (trialReask): kept across pushes, never locked.
+    unprotectedFields: ["reask_at"],
     indexes: "_id, project_id",
     // evidence, cited, rule, coverage and overlaps are joined live (lineTrial.cardView) and change while the card row does not.
-    sync: { deepFields: ["options", "card", "proposal", "answer", "evidence", "cited", "rule", "evals_owed", "coverage", "overlaps", "rebuilding", "judge_fix", "superseded"] },
+    sync: { deepFields: ["options", "card", "proposal", "answer", "evidence", "cited", "rule", "evals_owed", "coverage", "overlaps", "rebuilding", "judge_fix", "superseded"], preserveFields: ["reask_at"] },
     feeds: ["lineTrial.cards"],
   },
   // The workspace's trial projects (convex lineTrial.projects), and what each

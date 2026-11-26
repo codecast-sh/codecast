@@ -104,7 +104,7 @@ import { personEditCore, resolveProposalCore } from "./expectations";
 import { fileLineCauseCore, startLineCauseCore } from "./lineCause";
 import { askCheckoutCore } from "./checkoutAsk";
 import { makeProblemOfFindingCore, markAskDoneCore, mergeProblemCore, moveFindingOutCore } from "./signals";
-import { askLineAgentCore, editLineGraphCore, reaskTrialRunCore, tryLineStepCore } from "./lineActions";
+import { askLineAgentCore, editLineGraphCore, reaskDecisionCore, reaskOnRunMachineCore, tryLineStepCore } from "./lineActions";
 import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
@@ -875,11 +875,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!(ctx.db as any).normalizeId("projects", projectId)) return null;
     return await ctx.runMutation!((api as any).lineTrial.raiseLimits, { project: projectId, max_runs: maxRuns, cap_usd: capUsd });
   },
-  // "Re-ask" on a trial run paused where no answer can land (lineActions
-  // reaskTrialRunCore): its machine asks the run again.
+  // "Re-ask" on a run paused where no answer can land (lineActions
+  // reaskOnRunMachineCore): its machine asks the run again. From the trial's
+  // pane by problem, and from a decision's own page by decision.
   trialReask: async (ctx, userId, [taskId]: [string]) => {
     if (!(ctx.db as any).normalizeId("tasks", taskId)) return null;
-    return await reaskTrialRunCore(ctx, userId, taskId);
+    return await reaskOnRunMachineCore(ctx, userId, taskId);
+  },
+  reaskDecision: async (ctx, userId, [decisionId]: [string]) => {
+    if (!(ctx.db as any).normalizeId("session_decisions", decisionId)) return null;
+    return await reaskDecisionCore(ctx, userId, decisionId as Id<"session_decisions">);
   },
   // A person's verdict on one decision a line step made (line-workspace.md
   // LW4); null takes it back. The label lands where the run lives.

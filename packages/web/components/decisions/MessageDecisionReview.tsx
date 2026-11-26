@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Layers, X } from "lucide-react";
 import { useInboxStore, type DecisionDetailItem, type SessionDecisionItem } from "../../store/inboxStore";
-import { askedOfViewer } from "../../lib/decisionQueue";
+import { heldByViewer } from "../../lib/decisionQueue";
 import { latestDecisionNamers, messageDecisionRefs } from "../../lib/messageDecisionRefs";
 import { useSyncDecisionDetail } from "../../hooks/useSyncDecisionDetail";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -74,7 +74,7 @@ function Review({ refs }: { refs: string[] }) {
   const sig = useInboxStore((s) =>
     refs.map((r) => {
       const d = rowOf(s, r);
-      return d ? `${queueRow(s, r) ? "q" : "d"}:${d.status}:${askedOfViewer(d, meId) ? 1 : 0}` : "-";
+      return d ? `${queueRow(s, r) ? "q" : "d"}:${d.status}:${heldByViewer(d, meId) ? 1 : 0}` : "-";
     }).join("|"),
   );
   const parts = sig.split("|");
@@ -124,7 +124,7 @@ function Walk({ refs, at, isOpen, meId, onMove, onClose }: {
   // Names the people it was asked of when the viewer is not one of them.
   const askedOf = useInboxStore((s) => {
     const d = rowOf(s, at);
-    if (!d || askedOfViewer(d, meId)) return undefined;
+    if (!d || heldByViewer(d, meId)) return undefined;
     const detail = (s.decisionDetails as Record<string, DecisionDetailItem>)[d._id];
     return detail?.asked_users?.map((u) => u.name).join(", ") || undefined;
   });

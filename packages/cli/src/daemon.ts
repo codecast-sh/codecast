@@ -9825,6 +9825,24 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "run_reask": {
+        // "Re-ask" on a decision's page whose run waits at a step its flow
+        // renamed or dropped: the same re-ask the CLI does, run here because it
+        // stops the run's runner and reads its graph on this machine. args: { task, run, project_path? }.
+        try {
+          const args = commandArgs ? JSON.parse(commandArgs) : {};
+          if (typeof args.task !== "string" || !/^ct-\d+$/.test(args.task)) throw new Error("run_reask needs the problem's ref");
+          const cwd = typeof args.project_path === "string" && fs.existsSync(args.project_path) ? args.project_path : undefined;
+          if (args.run !== undefined && (typeof args.run !== "string" || !/^[a-z0-9]+$/.test(args.run))) throw new Error("run_reask names no valid run");
+          const run = typeof args.run === "string" ? ["--run", args.run] : [];
+          const ran = await runCastCommand(["workflow", "reask", args.task, ...run, "--json"], { timeoutMs: 3 * 60 * 1000, ...(cwd ? { cwd } : {}) });
+          if (ran.code === 0) { result = ran.stdout.trim() || JSON.stringify({ task: args.task }); log(`[RUN] Re-asked ${args.task}`); }
+          else error = (ran.stderr.trim() || ran.stdout.trim() || `cast workflow reask exited ${ran.code}`).slice(-600);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
+        break;
+      }
       case "config_create": {
         const { dir_path, filename, content: createContent = "" } = commandArgs ? JSON.parse(commandArgs) : {};
         if (!dir_path || !filename) {

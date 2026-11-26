@@ -265,6 +265,12 @@ export function askedOfViewer(d: { asked_user_ids?: string[]; in_queue?: boolean
   return inViewerQueue(d) && (!d.asked_user_ids || !meId || d.asked_user_ids.includes(meId));
 }
 
+/** Whether a decision is the viewer's own, in or out of the queue: one their Close of its session took out of the queue
+ *  (`asker_ended`) is still theirs to answer, never a teammate's. Labels read this; queue lists read askedOfViewer. */
+export function heldByViewer(d: { asked_user_ids?: string[]; in_queue?: boolean; asker_ended?: boolean }, meId: string | undefined): boolean {
+  return askedOfViewer(d.asker_ended ? { ...d, in_queue: true } : d, meId);
+}
+
 /** Whether a decision row is in the viewer's own queue. The store also holds the team's open line decisions (For you
  *  lists them), each saying whether it is the viewer's; a row from before that flag came from the queue. */
 export const inViewerQueue = (d: { in_queue?: boolean }): boolean => d.in_queue !== false;

@@ -365,6 +365,56 @@ test("a run waiting at a step its line dropped offers no answers: one reason, on
   unmount();
 });
 
+test("a decision whose run waits at a step its flow renamed reads outdated, and its run's owner can have it asked again", async () => {
+  const decision = decisionRow();
+  const detail = { ...detailOf(decision), superseded: { why: "station_gone" } };
+  const run = { _id: "run1", user_id: "u1", status: "paused", task_id: "t100", gate_node_id: "decide__decide", created_at: 1, updated_at: 1 };
+  // Outdated, it is in no list feed: the page holds it only as a detail.
+  useInboxStore.setState({ trialCards: {}, sessionDecisions: {}, decisionDetails: { d9: detail }, workflowRuns: { run1: run } } as any);
+  const { container, unmount } = await mount(<LineDecisionBody decision={decision} detail={detail} answerable />);
+  const banner = container.querySelector("[data-decision-banner]")!;
+  // Nothing replaced it: it never reads as replaced.
+  expect(banner.textContent).toContain("Outdated · its flow step is gone");
+  expect(banner.textContent).not.toContain("Replaced");
+  const reask = banner.querySelector("[data-line-reask='sd-9']") as HTMLButtonElement;
+  expect(reask.textContent).toBe("Re-ask");
+  await act(async () => { reask.click(); });
+  const confirm = document.querySelector("[data-switch-review='Re-ask'] [data-switch-confirm]") as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+  // The press stamps the page's detail and never adopts the outdated decision into the viewer's queue.
+  expect((useInboxStore.getState() as any).decisionDetails.d9.reask_at).toBeGreaterThan(0);
+  expect((useInboxStore.getState() as any).sessionDecisions.d9).toBeUndefined();
+  unmount();
+
+  // A refusal says so, with its reason on hover, and gives the button back; it never reads as an offline machine.
+  const real = useInboxStore.getState().reaskDecision;
+  useInboxStore.setState({ sessionDecisions: {}, decisionDetails: { d9: { ...detail } }, reaskDecision: async function (this: any) { useInboxStore.setState((st: any) => ({ decisionDetails: { d9: { ...st.decisionDetails.d9, reask_at: Date.now() } } }));  throw new Error("[CONVEX M(dispatch:dispatch)] [Request ID: 1] Server Error\nUncaught ConvexError: ct-100 has a newer run than the one that asked this\n    at reaskDecisionCore (lineActions.ts:1:1)"); } } as any);
+  const refused = await mount(<LineDecisionBody decision={decision} detail={detail} answerable />);
+  const again = refused.container.querySelector("[data-line-reask='sd-9']") as HTMLButtonElement;
+  await act(async () => { again.click(); });
+  await act(async () => { (document.querySelector("[data-switch-review='Re-ask'] [data-switch-confirm]") as HTMLButtonElement).click(); });
+  expect(again.textContent).toBe("Re-ask refused");
+  expect(again.title).toBe("ct-100 has a newer run than the one that asked this");
+  expect(again.disabled).toBe(false);
+  // The refusal took the press's stamp back: opened again, the page offers Re-ask rather than read as asking.
+  expect((useInboxStore.getState() as any).decisionDetails.d9.reask_at).toBeUndefined();
+  refused.unmount();
+  useInboxStore.setState({ reaskDecision: real } as any);
+
+  // A run that works no problem cannot be addressed by its machine's re-ask: no button that could only be refused.
+  useInboxStore.setState({ sessionDecisions: {}, decisionDetails: { d9: detail }, workflowRuns: { run1: { ...run, task_id: undefined } } } as any);
+  const loose = await mount(<LineDecisionBody decision={decision} detail={detail} answerable />);
+  expect(loose.container.querySelector("[data-line-reask]")).toBeNull();
+  loose.unmount();
+
+  // Someone else's run: its machine is not theirs to move, so the line stands alone.
+  useInboxStore.setState({ sessionDecisions: { d9: decision }, workflowRuns: { run1: { ...run, user_id: "u2" } } } as any);
+  const other = await mount(<LineDecisionBody decision={decision} detail={detail} answerable />);
+  expect(other.container.querySelector("[data-decision-banner]")!.textContent).toContain("Outdated");
+  expect(other.container.querySelector("[data-line-reask]")).toBeNull();
+  other.unmount();
+});
+
 test("the open fix decision for a problem: pending, asked by a run, newest wins, own row over the line's copy", () => {
   const own: any = { a: { _id: "a", status: "pending", task_id: "t1", workflow_run_id: "r1", created_at: 5 } };
   const line: any = {
