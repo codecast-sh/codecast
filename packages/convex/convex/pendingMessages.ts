@@ -24,7 +24,7 @@ import { recordTeamAnswer } from "./lib/teamSessionAnswer";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { composerChannel, insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
+import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, wakeHideFields, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./lib/ownerDevice";
 import {
@@ -644,8 +644,10 @@ export async function enqueuePendingMessage(
   // and killed always clear, so a scheduled follow-up on a session the user
   // closed out does come back (and a killed one is resurrected for delivery) —
   // that revival is deliberate and is surfaced by the schedule strip in the
-  // conversation header. Predicate shared with the risk-resend twin
-  // (executionBindings) and the web: isStashHidden.
+  // conversation header. The exception is a closed role, anchor or standing
+  // trigger's home (closeHidesThroughWakes): its machine wake turns the close
+  // into a hidden stash, so its own schedule does not keep putting it back.
+  // Shared with the risk-resend twin (executionBindings): wakeHideFields.
   const machineWake = fields.origin === "scheduler";
   // The pinned thread state (`cast state`) is the agent's declaration of who
   // acts next. A message from a person IS that person acting, so the
@@ -661,9 +663,7 @@ export async function enqueuePendingMessage(
     updated_at: Date.now(),
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
-    ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at && !((machineWake || fields.quiet) && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
-    ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
+    ...wakeHideFields(conversation, { machine: machineWake || !!fields.quiet, now: Date.now() }),
     ...(!machineWake && !fields.quiet && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? answeredThreadStateFields() : {}),
     // New input opens a new turn, which owes its own report (workerSettle.ts).

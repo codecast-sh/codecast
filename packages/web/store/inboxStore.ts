@@ -94,7 +94,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
 import { adoptedByClose, cascadeTakesDownRow, closeAdoptionWindow, closeLeavesStanding } from "@codecast/shared/contracts/closeCascade";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, closeHidesThroughWakes, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import {
   rowLiveDeadlines,
   projectInbox,
@@ -9787,7 +9787,10 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const merge = (mode: "stash" | "kill", list: string[]) => {
     const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
     for (const id of list) {
-      const r = hideSessionInDraft(draft, id, mode, now, false, mode === "kill");
+      // A role's or a standing trigger's set-aside is a hidden stash: its own
+      // wakes leave it out (closeHidesThroughWakes, as the server decides).
+      const row = draft.sessions[id] ?? draft.conversations[id];
+      const r = hideSessionInDraft(draft, id, mode, now, mode === "stash" && !!row && closeHidesThroughWakes(row), mode === "kill");
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
       Object.assign(merged.writes, r.writes);

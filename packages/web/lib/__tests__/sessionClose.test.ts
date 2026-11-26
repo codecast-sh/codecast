@@ -3,7 +3,8 @@ import { IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
 import { closeFactsOf, closeKindOf, closeSetsAside, closeTakesDownOf, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, triggers: 0, waitingOnRun: false, takesDown: 0, ...f });
+// A role always hides through its wakes (closeHidesThroughWakes), so the facts follow unless a test says otherwise.
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, hidesThroughWakes: !!f.role, triggers: 0, waitingOnRun: false, takesDown: 0, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
@@ -37,6 +38,19 @@ describe("what Close does to a session", () => {
     expect(closeTooltip(facts({ triggers: 1 }))).toBe("Close: stops it, keeps its trigger, comes back when it fires");
     expect(closeTooltip(facts({ role: true }))).toBe("Close: stops it, comes back on its next message");
     expect(closeSetsAside(facts({ role: true, triggers: 2 }))).toBe(false);
+  });
+
+  test("a role, or a session a standing trigger wakes, stays out through its own wakes", () => {
+    expect(closeTooltip(facts({ role: true, triggers: 4 }))).toBe("Close: stops it, runs its 4 triggers out of sight, back on its next message");
+    expect(closeTooltip(facts({ hidesThroughWakes: true, triggers: 1 }))).toBe("Close: stops it, runs its trigger out of sight, back on its next message");
+    const settled = { message_count: 12, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000 };
+    expect(closeFactsOf({ ...settled, armed_trigger_kind: "standing" } as any, 1, NOW).hidesThroughWakes).toBe(true);
+    expect(closeFactsOf({ ...settled, standing_role_id: "r1" } as any, 0, NOW).hidesThroughWakes).toBe(true);
+    expect(closeFactsOf({ ...settled, persistent: true } as any, 0, NOW).hidesThroughWakes).toBe(true);
+    // A one-off trigger is an ordinary session's: it comes back when it fires.
+    const once = closeFactsOf({ ...settled, armed_trigger_kind: "once" } as any, 1, NOW);
+    expect(once.hidesThroughWakes).toBe(false);
+    expect(closeTooltip(once)).toBe("Close: stops it, keeps its trigger, comes back when it fires");
   });
 
   test("a session waiting on a codecast flow run stops and comes back when the run reports", () => {

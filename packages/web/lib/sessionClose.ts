@@ -9,7 +9,7 @@
 // rows the client holds; the server gathers the same facts from its database
 // (convex lib/closeAside) and asks the same function. Imports by relative path
 // only: the phone bundles this file (Metro maps `@/` to the mobile package).
-import { closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
+import { closeHidesThroughWakes, closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
 import { cascadeTakesDownRow, type HoldFacts } from "@codecast/shared/contracts/closeCascade";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
@@ -19,6 +19,9 @@ export type CloseFacts = {
   inFlight: InFlightReason | "nested" | null;
   /** A role's own session or a standing anchor. */
   role: boolean;
+  /** Its close stays hidden through its own wakes (shared closeHidesThroughWakes):
+   *  a role, an anchor, or a standing trigger's home. */
+  hidesThroughWakes: boolean;
   /** Armed triggers that inject into it. */
   triggers: number;
   /** A codecast flow run it started, with station sessions of its own, that
@@ -54,6 +57,8 @@ export function closeTooltip(f: CloseFacts): string {
     case "keeps_loop": return "Close: hides it, keeps its loop running";
     case "keeps_limit": return "Close: hides it, picks up when its limit resets";
     case "keeps_triggers":
+      // Its own triggers run it out of sight; any other message still brings it back.
+      if (f.hidesThroughWakes && f.triggers > 0) return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, back on its next message`;
       if (f.triggers === 0) return `Close: stops ${them}, comes back on its next message`;
       return `Close: stops ${them}, keeps its ${f.triggers === 1 ? "trigger, comes back when it fires" : `${f.triggers} triggers, comes back when one fires`}`;
     case "waits_on_run": return `Close: stops ${them}, comes back when its run reports`;
@@ -148,6 +153,7 @@ export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, 
   return {
     inFlight: closeInFlightReason(facts) ?? (nestedInFlight ? "nested" : null),
     role: !!row.persistent || !!row.standing_role_id,
+    hidesThroughWakes: closeHidesThroughWakes(row),
     triggers: Math.max(armedTriggers, rowArmed),
     waitingOnRun: runLiveOf(row) && !facts.inProcessRun,
     takesDown,
