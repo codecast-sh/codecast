@@ -95,6 +95,9 @@ import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
+import { priorityPlaceReader, priorityRanksSig, sessionPriorityLinkSig, sortByPriority } from "../store/priorityOrder";
+import { useSyncPriorities } from "../hooks/usePriorities";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
 import { windowOrgTree } from "../store/orgSlice";
@@ -1710,6 +1713,9 @@ function SessionListPanelImpl({
     s => orgLensWakeSig(s),
     // Every plan a "By plan" group may name, from any workspace: only while the lens is up.
     s => (resolveInboxViewMode(s.clientState.ui) === "plan" ? allPlansSig(s.plans) : ""),
+    // What the Priorities view sorts and labels by: each session's priority
+    // link and each priority's owner, rank and milestones. Only while it is up.
+    s => (resolveInboxViewMode(s.clientState.ui) === "priorities" ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}` : ""),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2010,12 +2016,22 @@ function SessionListPanelImpl({
   const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
   const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
     sectionHeaderCount(shown, full, n, showSubagents);
+  // The Priorities view keeps the status sections and sorts each by the
+  // viewer's priority a session serves, as the keyboard walk does
+  // (visualOrderSessions); Pinned keeps the person's own order.
+  const priorityKey = resolveInboxViewMode(s.clientState.ui) === "priorities"
+    ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ""}`
+    : "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(s.priorities, s.currentUser?._id) : null), [priorityKey]);
+  const byPriority = useCallback((rows: InboxSession[]) => (priorityPlaceOf ? sortByPriority(rows, priorityPlaceOf) : rows), [priorityPlaceOf]);
   const statusPinned = filteredPinned;
-  const statusNew = filteredNew;
-  const statusNeedsInput = filteredNeedsInput;
-  const statusDone = filteredDone;
-  const statusDormant = filteredDormant;
-  const statusWorking = filteredWorking;
+  const statusNew = useMemo(() => byPriority(filteredNew), [byPriority, filteredNew]);
+  const statusNeedsInput = useMemo(() => byPriority(filteredNeedsInput), [byPriority, filteredNeedsInput]);
+  const statusStopped = useMemo(() => byPriority(filteredStopped), [byPriority, filteredStopped]);
+  const statusDone = useMemo(() => byPriority(filteredDone), [byPriority, filteredDone]);
+  const statusDormant = useMemo(() => byPriority(filteredDormant), [byPriority, filteredDormant]);
+  const statusWorking = useMemo(() => byPriority(filteredWorking), [byPriority, filteredWorking]);
   // The label / plan lenses dissolve the status sections back to one flat
   // active set; questions rows rejoin it so an asking session still shows
   // under its label.
@@ -2412,6 +2428,9 @@ function SessionListPanelImpl({
   // feeder runs only while the lens is up.
   const planWsArgs = useWorkspaceArgs();
   useSyncPlansWithArgs(viewMode === "plan" ? planWsArgs : "skip");
+  // The priorities the Priorities view sorts by, fed only while it is up.
+  useSyncPriorities(viewMode === "priorities");
+  const prioritiesOn = useWorkspaceFeature("priorities");
   const workspacePlans = useWorkspaceCollection<PlanItem>("plans", planLensSig);
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
@@ -2471,8 +2490,8 @@ function SessionListPanelImpl({
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
   const showViewTabs = !favoritesView;
   const viewModes = useMemo(
-    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
-    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
+    () => inboxViewModes({ hasPriorities: prioritiesOn, hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
+    [prioritiesOn, visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
   );
   const viewModesKey = showViewTabs ? viewModes.join(",") : "";
   useWatchEffect(() => {
@@ -3091,6 +3110,7 @@ function SessionListPanelImpl({
                   roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  priorityRank={priorityPlaceOf ? (priorityPlaceOf(session)?.rank ?? null) : undefined}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
@@ -3580,7 +3600,7 @@ function SessionListPanelImpl({
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
         {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
-        {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
+        {renderSection(STOPPED_SECTION.label, statusStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
           floor: true,
           headerAction: <RetryStoppedButton rows={filteredStopped} />,

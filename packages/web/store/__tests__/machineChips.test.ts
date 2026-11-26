@@ -96,7 +96,7 @@ describe("group by machine", () => {
   });
 
   it("is offered only when sessions run on more than one machine", () => {
-    const base = { hasLabels: false, hasPlans: false, orgLenses: [], hasTriggers: false };
+    const base = { hasPriorities: false, hasLabels: false, hasPlans: false, orgLenses: [], hasTriggers: false };
     expect(inboxViewModes({ ...base, hasMachines: true })).toContain("machine");
     expect(inboxViewModes({ ...base, hasMachines: false })).not.toContain("machine");
   });

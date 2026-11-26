@@ -1,6 +1,6 @@
 // Priorities (convex priorities.ts): the feeder and reader of the `priorities`
 // collection, and the person's controls with their put-back on a refusal.
-// Mounted by /priorities only: no other surface lists them.
+// Fed by /priorities and by the inbox while its Priorities view is up.
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -18,9 +18,9 @@ import type { PriorityList } from "@codecast/shared/contracts/priorities";
 const api = _api as any;
 
 /** Feeder: the active workspace's priorities, a snapshot of what the viewer can read there. */
-export function useSyncPriorities() {
+export function useSyncPriorities(on = true) {
   const workspace = useActiveWorkspaceKey();
-  return useSyncCollection("priorities", api.priorities.list, workspace ? { workspace } : "skip", { select: listRows });
+  return useSyncCollection("priorities", api.priorities.list, on && workspace ? { workspace } : "skip", { select: listRows });
 }
 
 /** When the pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */

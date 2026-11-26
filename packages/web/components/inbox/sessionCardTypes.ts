@@ -81,6 +81,8 @@ export type SessionCardViewProps = {
   answeredBy?: string | null;
   /** The user label the row is filed under, else the project name shows. */
   sessionLabel: string | null;
+  /** The Priorities view only: the rank of the viewer's priority this session serves, null for "None". Absent in every other view. */
+  priorityRank?: number | null;
   variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
   /** The declared status the row's section header already says (Needs you
    *  under NEEDS YOU): the card leaves that chip off rather than repeat it. */

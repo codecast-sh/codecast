@@ -902,6 +902,9 @@ export type InboxSession = {
   agent_name?: string | null;
   active_plan?: PlanRef;
   active_task?: TaskRef;
+  /** The priority the pass mapped this session to (a priorities _id) and its milestone's key. Read through sessionPriorityOf. */
+  priority_id?: string | null;
+  priority_step_key?: string | null;
   worktree_name?: string | null;
   worktree_branch?: string | null;
   // "Run in the cloud", before the host has it: the row is parked on the cloud
@@ -4952,9 +4955,13 @@ export function visualOrderSessions(
     walk?: InboxWalk;
     // Which project each session works in, for project chips (store/workProjects).
     projectOf?: (sessionId: string) => string | null;
+    // The Priorities view: each status section sorted by the viewer's priority
+    // a session serves (store/priorityOrder). Pinned keeps the person's order.
+    priorityPlaceOf?: (s: InboxSession) => PriorityPlace | null;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
+  const placeOf = opts.priorityPlaceOf;
   // Same order the status view renders: questions, pinned, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
@@ -4975,9 +4982,15 @@ export function visualOrderSessions(
   });
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
-    result.push(...(chipOn ? chipFilterSection(section, placed.subsByParent, matches) : section));
+    const rows = chipOn ? chipFilterSection(section, placed.subsByParent, matches) : section;
+    result.push(...(placeOf && key !== "pinned" && key !== "questions" ? sortByPriority(rows, placeOf) : rows));
   }
-  return opts.walk ? result.filter(walkFilterOf(placed, opts.walk)) : result;
+  if (!opts.walk) return result;
+  const walked = result.filter(walkFilterOf(placed, opts.walk));
+  // A Needs You or Done walk also takes the New rows whose turn settled on the
+  // person, from the section above: in the Priorities view the jump still
+  // lands on the highest-ranked of them all.
+  return placeOf && (opts.walk === "needsYou" || opts.walk === "done") ? sortByPriority(walked, placeOf) : walked;
 }
 
 // Canonical label ordering — ONE comparator drives the chip row, the "by
@@ -5468,6 +5481,8 @@ export function groupSessionsByPlan(
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
+import { priorityPlaceReader, sortByPriority, type PriorityPlace } from "./priorityOrder";
+import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
@@ -6154,6 +6169,8 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // The viewer's machines: the machine lens groups only these.
   machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
+  // The priorities the Priorities view orders by (store/priorityOrder).
+  priorities?: Record<string, PriorityRow>;
   // What the org lenses group by (orgLensSourcesOf); optional for callers
   // (tests) that model no org.
 } & Partial<Omit<OrgLensState, "sessions" | "currentUser">> & {
@@ -6220,9 +6237,10 @@ export function computeVisualOrder(state: {
   const base = visualOrderSessions(placed, chipProjectFilters(state), {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
-    collapsedSections: mode === "grouped" ? collapsed : undefined,
+    collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
     walk: opts.walk,
     projectOf: projectOfFromState(state),
+    priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state.priorities, state.currentUser?._id) : undefined,
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);

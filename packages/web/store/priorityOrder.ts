@@ -1,0 +1,64 @@
+// The inbox's Priorities order: each status section sorted by the viewer's
+// priority a session serves (its rank, then the milestone's place in that
+// priority), sessions serving none of the viewer's ranked priorities after,
+// in the order they already had. A leaf (types only) so the store and the
+// panel share it without a cycle.
+import type { PriorityRow } from "@codecast/shared/contracts/priorities";
+import { makeCollectionSig } from "./wakeSig";
+
+type PriorityLinked = { priority_id?: string | null; priority_step_key?: string | null };
+type RankedRow = Pick<PriorityRow, "rank" | "user_id" | "steps">;
+
+/** Where a session sits in the viewer's order: the priority's rank, then its milestone's index. */
+export type PriorityPlace = { rank: number; step: number };
+
+/** The one reader of a session's priority link (the conversation's priority_id and priority_step_key). */
+export function sessionPriorityOf(s: PriorityLinked): { priorityId: string; stepKey: string | null } | null {
+  return s.priority_id ? { priorityId: s.priority_id, stepKey: s.priority_step_key ?? null } : null;
+}
+
+/** A priority's position among its owner's active priorities (1 = first), or null when it has none. */
+export function priorityRankOf(row: Pick<PriorityRow, "rank">): number | null {
+  return row.rank ?? null;
+}
+
+/** The session's place when it serves one of the viewer's own ranked priorities, else null. */
+export function sessionPriorityPlace(
+  s: PriorityLinked,
+  priorities: Record<string, RankedRow> | undefined,
+  viewerId: string | null | undefined,
+): PriorityPlace | null {
+  const link = sessionPriorityOf(s);
+  if (!link || !viewerId) return null;
+  const row = priorities?.[link.priorityId];
+  if (!row || String(row.user_id) !== viewerId) return null;
+  const rank = priorityRankOf(row);
+  if (rank == null) return null;
+  const step = link.stepKey ? row.steps.findIndex((st) => st.key === link.stepKey) : -1;
+  return { rank, step: step < 0 ? Infinity : step };
+}
+
+/** The place reader the Priorities view sorts and labels by, over one state's priorities and viewer. */
+export function priorityPlaceReader(
+  priorities: Record<string, RankedRow> | undefined,
+  viewerId: string | null | undefined,
+): (s: PriorityLinked) => PriorityPlace | null {
+  const viewer = viewerId ? String(viewerId) : null;
+  return (s) => sessionPriorityPlace(s, priorities, viewer);
+}
+
+/** Stable: ranked rows by rank then milestone, unranked rows after in their given order. */
+export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => PriorityPlace | null): T[] {
+  const keyed = items.map((s, i) => ({ s, i, p: placeOf(s) }));
+  keyed.sort((a, b) => {
+    if (a.p && b.p) return a.p.rank - b.p.rank || a.p.step - b.p.step || a.i - b.i;
+    if (a.p || b.p) return a.p ? -1 : 1;
+    return a.i - b.i;
+  });
+  return keyed.map((k) => k.s);
+}
+
+// What the order reads, as two digests for a list's wake deps: each session's
+// link, and each priority's owner, rank and milestone keys.
+export const sessionPriorityLinkSig = makeCollectionSig((s: PriorityLinked) => (s.priority_id ? `${s.priority_id}:${s.priority_step_key ?? ""}` : null));
+export const priorityRanksSig = makeCollectionSig((p: RankedRow) => `${p.user_id}:${priorityRankOf(p) ?? ""}:${p.steps.map((st) => st.key).join(",")}`);
