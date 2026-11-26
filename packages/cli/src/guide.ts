@@ -27,14 +27,14 @@ import { commandGroup } from "./commandGroups.js";
 
 /** The line that ties a guide to the binary that printed it. */
 export function guideHeader(slug: string): string {
-  return `cast guide ${slug} — cast v${getVersion()} (daemon build ${DAEMON_BUILD_ID})`;
+  return `cast guide ${slug} — cast v${getVersion()} (daemon build ${DAEMON_BUILD_ID ?? "source"})`;
 }
 
 export interface GuidePayload {
   topic: string;
   name: string;
   version: string;
-  build_id: string;
+  build_id: string | null;
   body: string;
 }
 
@@ -81,7 +81,7 @@ function printList(json: boolean): void {
     return;
   }
   console.log("");
-  console.log(fmt.muted(`  cast guide — cast v${getVersion()} (daemon build ${DAEMON_BUILD_ID})`));
+  console.log(fmt.muted(`  cast guide — cast v${getVersion()} (daemon build ${DAEMON_BUILD_ID ?? "source"})`));
   console.log("");
   const width = Math.max(...topics.map((t) => t.slug.length));
   for (const t of topics) {

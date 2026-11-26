@@ -20,13 +20,9 @@ export function daemonBuildUnchanged(running: string | null | undefined, candida
   return !!running && !!candidate && running === candidate;
 }
 
-/** How many hex characters an id carries. The stamp writer and every reader
- *  take it from here, so widening it is one edit. */
+/** How many hex characters an id carries. The hash and every reader take it
+ *  from here, so widening it is one edit. */
 export const BUILD_ID_CHARS = 12;
 
 /** The id on its own, as `cast _build-id` prints it. */
 export const BUILD_ID_VALUE_RE = new RegExp(`^[0-9a-f]{${BUILD_ID_CHARS}}$`);
-
-/** The stamp line inside the generated daemonBuildId.ts, as the stamp script
- *  and the daemon's read of another install's copy both match it. */
-export const BUILD_ID_RE = /DAEMON_BUILD_ID\s*=\s*["']([0-9a-f]+)["']/;

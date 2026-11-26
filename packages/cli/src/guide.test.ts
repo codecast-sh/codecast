@@ -62,7 +62,7 @@ describe("cast guide", () => {
   test("the header names the binary that printed it", () => {
     const header = guideHeader("browser");
     expect(header).toContain(`cast v${getVersion()}`);
-    expect(header).toContain(DAEMON_BUILD_ID);
+    expect(header).toContain(`daemon build ${DAEMON_BUILD_ID ?? "source"}`);
   });
 
   test("the json payload carries the version, the build id, and the body", () => {
@@ -98,7 +98,7 @@ describe("cast guide", () => {
     const run = runGuide(["--list"]);
     expect(run.status).toBe(0);
     expect(run.stdout).toContain(`cast v${getVersion()}`);
-    expect(run.stdout).toContain(DAEMON_BUILD_ID);
+    expect(run.stdout).toContain(`daemon build ${DAEMON_BUILD_ID ?? "source"}`);
     for (const topic of guideTopics()) expect(run.stdout).toContain(topic.slug);
   }, 60_000);
 

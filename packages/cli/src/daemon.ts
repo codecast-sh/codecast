@@ -299,7 +299,7 @@ import { decideSourceRestart, type SourceRestartState } from "./sourceRestart.js
 import { sweepHostDisk } from "./hostDiskSweep.js";
 import { diskFullFailReason, diskFullHold, freeDiskShare } from "./diskFull.js";
 import { createWorktreeLegacy, type WorktreeResult } from "./worktreeLegacy.js";
-import { BUILD_ID_RE, BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
+import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { ensureGrokFolderTrusted } from "./grokFolderTrust.js";
@@ -30165,17 +30165,6 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
   }
 }
 
-async function readDiskBuildId(): Promise<string | null> {
-  for (const name of ["daemonBuildId.ts", "daemonBuildId.js"]) {
-    try {
-      const content = await fs.promises.readFile(path.join(__dirname, name), "utf-8");
-      const match = content.match(BUILD_ID_RE);
-      if (match) return match[1];
-    } catch {}
-  }
-  return null;
-}
-
 // A cloud host keeps its own disk (hostDiskSweep.ts): every few hours, and
 // sooner when it runs short.
 const HOST_SWEEP_INTERVAL_MS = 6 * 3600_000;
@@ -30271,17 +30260,19 @@ async function checkDiskVersionMismatch(): Promise<void> {
     const diskVersion = pkg.version;
     if (diskVersion !== daemonVersion) {
       // A version bump that did not touch daemon code is not worth a restart:
-      // this daemon may hold hundreds of live panes. Read the build id stamped
-      // beside the code on disk and stand down when it matches what we run.
-      // Unknown id (an older tree, an unreadable file) keeps the old behavior.
-      const diskBuildId = await readDiskBuildId();
-      if (daemonBuildUnchanged(DAEMON_BUILD_ID, diskBuildId)) {
+      // this daemon may hold hundreds of live panes. A daemon run from source
+      // hashes the tree on disk and stands down when it matches the hash it
+      // booted on (sourceRestart.ts). Unknown on either side (a compiled
+      // daemon, a hash that failed or has not run yet) keeps the restart.
+      const bootBuildId = sourceRestartState?.bootId;
+      const diskBuildId = bootBuildId ? await sourceBuildIdOnDisk().catch(() => null) : null;
+      if (daemonBuildUnchanged(bootBuildId, diskBuildId)) {
         // This check runs every 5 minutes and the veto is a steady state, so
         // say it once per disk version. Repeating it forever would bury the
         // freeze and delivery evidence operators read this file for.
         if (vetoedDiskVersion !== diskVersion) {
           vetoedDiskVersion = diskVersion;
-          log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, but the daemon build id is unchanged (${DAEMON_BUILD_ID}), not restarting`);
+          log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, but the daemon build id is unchanged (${bootBuildId}), not restarting`);
         }
         return;
       }
@@ -31622,7 +31613,10 @@ async function main(): Promise<void> {
   } catch {}
 
   try {
-    fs.writeFileSync(BUILD_FILE, DAEMON_BUILD_ID, { mode: 0o600 });
+    // A daemon run from source carries no id. Drop the last daemon's, so no
+    // update or CLI vetoes a restart against code this daemon is not running.
+    if (DAEMON_BUILD_ID) fs.writeFileSync(BUILD_FILE, DAEMON_BUILD_ID, { mode: 0o600 });
+    else fs.rmSync(BUILD_FILE, { force: true });
   } catch {}
 
   activeConfig = readConfig();

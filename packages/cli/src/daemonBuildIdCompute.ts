@@ -30,10 +30,6 @@ const ID_CHARS = BUILD_ID_CHARS;
 /** The daemon source file this walk starts from, relative to the repo root. */
 const ENTRY = "packages/cli/src/daemon.ts";
 
-/** Excluded from the hash so stamping is not a fixed point chase: writing the
- *  new id into this file would otherwise change the id again. */
-const EXCLUDED = "packages/cli/src/daemonBuildId.ts";
-
 /** A string literal is a module specifier only when an import or export names
  *  it. `.import(` is a method call, not the operator. */
 const SPECIFIER_POSITION_RE = /(?:^|[^\w$.])(from|import)\s*\(?\s*$/;
@@ -226,7 +222,6 @@ export interface BuildIdResult {
  */
 export function computeDaemonBuildId(repoRoot = findRepoRoot()): BuildIdResult {
   const entry = path.join(repoRoot, ENTRY);
-  const excluded = path.join(repoRoot, EXCLUDED);
   const sharedRoot = path.join(repoRoot, "packages/shared");
   const platformRoot = path.join(repoRoot, "platform/packages");
 
@@ -274,7 +269,6 @@ export function computeDaemonBuildId(repoRoot = findRepoRoot()): BuildIdResult {
 
   const workerEntry = path.join(repoRoot, "packages/cli/src/main.ts");
   if (isFile(workerEntry)) visited.add(workerEntry);
-  visited.delete(excluded);
   const files = [...visited].map((f) => path.relative(repoRoot, f)).sort();
 
   const hash = crypto.createHash("sha256");
@@ -294,21 +288,4 @@ export function computeDaemonBuildId(repoRoot = findRepoRoot()): BuildIdResult {
   } catch {}
 
   return { id: hash.digest("hex").slice(0, ID_CHARS), files, external: [...external].sort() };
-}
-
-export function renderBuildIdFile(id: string): string {
-  return `// The daemon's build id: a content hash of every first party source file the
-// daemon imports. Generated. Run \`bun scripts/stamp-daemon-build-id.ts\` from
-// packages/cli after changing daemon code, and commit the result.
-//
-// It exists so a CLI release that did not touch daemon code does not bounce a
-// daemon running 200 sessions. It is a VETO, never a trigger: every restart
-// decision keeps its own precondition (a newer CLI version, a disk version
-// mismatch, a finished self update) and only skips the restart when the ids
-// match. Nothing here can cause a restart that would not happen anyway.
-//
-// This file is excluded from its own hash, and it imports nothing on purpose:
-// the CLI fast path reads it, so it must never pull in a module graph.
-export const DAEMON_BUILD_ID = "${id}";
-`;
 }

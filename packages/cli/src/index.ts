@@ -1053,6 +1053,10 @@ function ensureDaemonRunning(): void {
           // of this repo run the same CLI at different commits, so a build id
           // that could START a restart would let a worktree bounce the main
           // daemon into its own tree on every edit.
+          // A CLI run from source carries no id, and its daemon restarts itself
+          // when the code on disk changes (checkDiskVersionMismatch), so the
+          // bounce is the daemon's to make.
+          if (!DAEMON_BUILD_ID) return;
           if (daemonBuildUnchanged(readRunningBuildId(), DAEMON_BUILD_ID)) return;
           if (!ownsDaemonInstallation()) return;
           const pid = getDaemonPid();

@@ -51,8 +51,7 @@ jobs:
     steps:
       # The commit main pointed at when the cut was dispatched, not main when a
       # runner frees up: a macOS job can wait 15 minutes for one, and a CLI push
-      # in that window would change the closure the committed daemon build id
-      # stamp was made for (ct-93387).
+      # in that window would ship code the release did not cut (ct-93387).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}

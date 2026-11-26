@@ -80,6 +80,8 @@ globalThis.fetch = async (url, init) => {
   events.push({ kind: "request", pathname, body: JSON.parse(String(init.body)) });
   return Response.json({ short_id: "jx7test", state: "Sandbox boot verified", status: "done" });
 };
+// A compiled CLI carries its build id; one run from source has none and never bounces.
+globalThis.CODECAST_DAEMON_BUILD_ID = "cli-build";
 process.argv = [process.execPath, ${JSON.stringify(cli)}, "state", "show", "jx7test", "--json"];
 await import(${JSON.stringify(cli)});
 `);
