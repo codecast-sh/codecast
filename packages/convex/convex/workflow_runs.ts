@@ -14,6 +14,7 @@ import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
+import type { ShippingRun, ShippingRuns, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -2020,17 +2021,19 @@ export function answeredOptionLabel(decision: any): string | undefined {
 export type RunReads = { workflows: Map<string, any>; line: LineMemo };
 export const newRunReads = (): RunReads => ({ workflows: new Map(), line: newLineMemo() });
 
-export async function enrichRun(ctx: Ctx, run: any, reads: RunReads = newRunReads()) {
+/** The graph a run executes, read once per workflow and per version a feed's runs pinned. */
+async function feedWorkflowOf(ctx: Ctx, run: any, reads: RunReads): Promise<any> {
+  if (!run.workflow_id) return null;
   const workflows = reads.workflows;
-  let workflow: any = null;
-  if (run.workflow_id) {
-    const wid = String(run.workflow_id);
-    if (!workflows.has(wid)) workflows.set(wid, await ctx.db.get(run.workflow_id));
-    // The graph the run executes, read once per version a list's runs pinned.
-    const at = `${wid}@${run.flow_versions?.[0]?.version_id ?? run.graph_version_id ?? ""}`;
-    if (!workflows.has(at)) workflows.set(at, await runWorkflowOf(ctx, run, workflows.get(wid), reads.line.graph));
-    workflow = workflows.get(at);
-  }
+  const wid = String(run.workflow_id);
+  if (!workflows.has(wid)) workflows.set(wid, await ctx.db.get(run.workflow_id));
+  const at = `${wid}@${run.flow_versions?.[0]?.version_id ?? run.graph_version_id ?? ""}`;
+  if (!workflows.has(at)) workflows.set(at, await runWorkflowOf(ctx, run, workflows.get(wid), reads.line.graph));
+  return workflows.get(at);
+}
+
+export async function enrichRun(ctx: Ctx, run: any, reads: RunReads = newRunReads()) {
+  const workflow = await feedWorkflowOf(ctx, run, reads);
   const node = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   const plan = run.plan_id ? await ctx.db.get(run.plan_id) : null;
@@ -2075,6 +2078,170 @@ export const listRuns = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     return listRunsCore(ctx, userId, args);
+  },
+});
+
+// ── the Deploys page's Shipping column ────────────────────────────────────────
+
+/** The statuses of a run still on its way to main. */
+const SHIPPING_STATUSES = ["running", "paused", "failed", "pending"] as const;
+/** Change runs kept per status, the most recently updated first. */
+const SHIPPING_READ = 150;
+/** Runs scanned per status for them: other flows' runs are skipped, so a burst of them cannot crowd a change run out. */
+const SHIPPING_SCAN = 300;
+/** How far back a run's last update, or its merge, may be. */
+const SHIPPING_WINDOW_MS = 30 * 86_400_000;
+/** A task's runs newer than its Ship run read for a later change run; past this, the Ship run stands. */
+const TASK_RUNS_SCAN = 50;
+/** Merged change runs read for who pressed Ship, the most recently merged first. */
+const SHIPPERS_MERGED_READ = 200;
+
+/** Whether a run's change reached main: its merge step recorded the landing, or its Merged station completed. */
+const runMerged = (run: Doc<"workflow_runs">): boolean => !!run.merge || run.node_statuses.some((n) => n.node_id === "land__landed" && n.status === "completed");
+
+/**
+ * A team's Ship runs still on their way to main (deploys.md, the Shipping column): runs of a flow that takes a change,
+ * not merged, not superseded, on a task still open, and only the newest run of each task (a task's later round
+ * replaces its earlier ones, merged ones included). A run with no task stands alone. Slim rows: no station sessions.
+ * With them, `shippers`: the change runs of the window, unmerged and merged, with the session that pressed Ship on each.
+ */
+export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now = Date.now()): Promise<ShippingRuns> {
+  const workspace = `team:${teamId}`;
+  if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { runs: [], shippers: [] };
+  const since = now - SHIPPING_WINDOW_MS;
+  const reads = newRunReads();
+  // Whether a run's flow takes a change: its graph, read once per version (feedWorkflowOf).
+  const takesChange = async (r: Doc<"workflow_runs">) => sourceTakesSessionChange((await feedWorkflowOf(ctx, r, reads))?.source);
+  // Change runs not yet merged, each status's newest; the caps count change runs only.
+  const candidates: Doc<"workflow_runs">[] = [];
+  for (const status of SHIPPING_STATUSES) {
+    let scanned = 0;
+    let kept = 0;
+    for await (const r of ctx.db
+      .query("workflow_runs")
+      .withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status).gt("updated_at", since))
+      .order("desc")) {
+      if (++scanned > SHIPPING_SCAN) break;
+      if (runMerged(r) || !(await takesChange(r))) continue;
+      candidates.push(r);
+      if (++kept >= SHIPPING_READ) break;
+    }
+  }
+  const newestPerTask = new Map<string, Doc<"workflow_runs">>();
+  const kept: Doc<"workflow_runs">[] = [];
+  for (const r of candidates) {
+    if (!r.task_id) { kept.push(r); continue; }
+    const had = newestPerTask.get(String(r.task_id));
+    if (!had || r.created_at > had.created_at) newestPerTask.set(String(r.task_id), r);
+  }
+  for (const r of newestPerTask.values()) {
+    // The task's newest change run of any status: a later round, merged or not, replaces this one (runSuperseded
+    // never judges a failed run). Another flow's later run on the task (a build, an eval) replaces nothing.
+    let latest: Doc<"workflow_runs"> | null = null;
+    let scanned = 0;
+    for await (const x of ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", r.task_id)).order("desc")) {
+      if (String(x._id) === String(r._id) || ++scanned > TASK_RUNS_SCAN) break;
+      if (await takesChange(x)) { latest = x; break; }
+    }
+    if (!latest) kept.push(r);
+  }
+
+  const runs: ShippingRun[] = [];
+  for (const run of kept) {
+    const e = await enrichRun(ctx, run, reads);
+    // A later run on the task was judged above among change runs only; the other ways a run goes stale stand.
+    if (e.superseded && e.superseded.why !== "newer_run") continue;
+    if (run.task_id) {
+      const task = await ctx.db.get(run.task_id);
+      if (task && isTerminalTaskStatus(task.status)) continue;
+    }
+    runs.push({
+      _id: run._id,
+      status: run.status as ShippingRun["status"],
+      task_id: run.task_id ?? null,
+      task_short_id: e.task_short_id ?? null,
+      task_title: e.task_title ?? null,
+      workflow_slug: e.workflow_slug ?? null,
+      workflow_label: e.workflow_label ?? null,
+      current_node_id: run.current_node_id ?? null,
+      current_node_label: e.current_node_label ?? null,
+      node_statuses: run.node_statuses.map((n) => ({ node_id: n.node_id, status: n.status })),
+      pr: run.pr ?? null,
+      fail_reason: run.fail_reason ?? null,
+      // The stations' own verdicts, which the stepper reads before the station statuses.
+      ci_verdict: run.ci_verdict ? { green: run.ci_verdict.green, head_sha: run.ci_verdict.head_sha, at: run.ci_verdict.at } : null,
+      review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at } : null,
+      merge: run.merge ? { sha: run.merge.sha, branch: run.merge.branch, into: run.merge.into, at: run.merge.at, ...(run.merge.pr_url ? { pr_url: run.merge.pr_url } : {}) } : null,
+      gate_prompt: run.gate_prompt ?? null,
+      gate_node_id: run.gate_node_id ?? null,
+      gate_decision_short_id: e.gate_decision_short_id ?? null,
+      gate_decision_status: e.gate_decision_status ?? null,
+      spawner_conversation_id: run.spawner_conversation_id ?? null,
+      // The project lead's standing session given to a run no session started: not who pressed Ship.
+      stand_in: !!run.spawner_stand_in,
+      primary_conversation_id: run.primary_conversation_id ?? null,
+      project_path: run.project_path ?? null,
+      user_id: run.user_id,
+      created_at: run.created_at,
+      updated_at: run.updated_at,
+    });
+  }
+  runs.sort((a, b) => b.updated_at - a.updated_at);
+
+  // Every change run of the window, merged ones included: who pressed Ship on each, so the page credits a commit on
+  // main to that session (by the merged sha, else by its task) rather than to the flow's own station sessions. The
+  // unmerged ones are the candidates above; the merged ones come off the sparse merge index, merged within the window.
+  const shippers: ShippingShipper[] = [];
+  const merged: Doc<"workflow_runs">[] = await ctx.db
+    .query("workflow_runs")
+    .withIndex("by_workspace_merged", (q: any) => q.eq("workspace", workspace).gt("merge.at", since))
+    .order("desc")
+    .take(SHIPPERS_MERGED_READ);
+  const recent: Doc<"workflow_runs">[] = [...candidates];
+  for (const r of merged) if (await takesChange(r)) recent.push(r);
+  const taskShort = new Map<string, Promise<string | null>>();
+  // Who owns the session that pressed Ship, for a viewer who may read it. The run's own user is the account it runs as,
+  // which for a run placed on a shared machine is that machine's owner, not the caller. Session docs are small; the
+  // pull request rows this query no longer reads were the cost.
+  const owners = new Map<string, Promise<Id<"users"> | null>>();
+  const ownerOf = (id: Id<"conversations"> | undefined) => {
+    if (!id) return Promise.resolve(null);
+    const k = String(id);
+    if (!owners.has(k)) owners.set(k, (async () => {
+      const c = await ctx.db.get(id);
+      return c && (await canAccessConversation(ctx, userId, c)) ? c.user_id : null;
+    })());
+    return owners.get(k)!;
+  };
+  for (const run of recent) {
+    if (!sourceTakesSessionChange((await feedWorkflowOf(ctx, run, reads))?.source)) continue;
+    let task_short_id: string | null = null;
+    if (run.task_id) {
+      const k = String(run.task_id);
+      if (!taskShort.has(k)) taskShort.set(k, ctx.db.get(run.task_id).then((t: any) => t?.short_id ?? null));
+      task_short_id = await taskShort.get(k)!;
+    }
+    shippers.push({
+      run_id: run._id,
+      task_short_id,
+      merged_sha: run.merge?.sha ?? null,
+      spawner_conversation_id: run.spawner_conversation_id ?? null,
+      // A stand-in spawner is the project lead's standing session: the run is its runner's.
+      user_id: run.spawner_stand_in ? run.user_id : await ownerOf(run.spawner_conversation_id),
+      stand_in: !!run.spawner_stand_in,
+      created_at: run.created_at,
+    });
+  }
+  shippers.sort((a, b) => b.created_at - a.created_at);
+  return { runs, shippers };
+}
+
+export const shippingRuns = query({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { runs: [], shippers: [] };
+    return shippingRunsCore(ctx, userId, args.team_id);
   },
 });
 

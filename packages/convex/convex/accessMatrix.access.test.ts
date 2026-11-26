@@ -53,6 +53,9 @@ const NOT_YET_COVERED = new Set([
   // rows need seeds this world lacks (dynamic runs, session flow runs, proposals).
   // listForWorkflow answers only the workflow's owner: stricter than the matrix's workspace rule.
   "workflow_runs.listForWorkflow", "workflow_runs.listDynamicRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam", "orgProposals.list",
+  // Only open runs of change-taking flows (running, paused, failed); this world seeds completed runs of a plain flow.
+  // Its own suite (workflow_runs.shippingRuns.test.ts) holds team isolation, strangers and private sessions.
+  "workflow_runs.shippingRuns",
   // Derived from the workspace goals (initiatives), which this world does not seed either
   // (initiatives.webList above); covered together with them.
   "envs.workspaceStandings",

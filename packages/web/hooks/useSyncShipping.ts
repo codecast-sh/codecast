@@ -1,0 +1,57 @@
+// A team's Ship runs into the store (workflow_runs.shippingRuns), fanned into two homes: each run on its way to main
+// to `shippingRuns`, and who pressed Ship on each recent run (merged ones included) to `shippingShippers`, keyed by
+// the run. Each answer is the team's whole set, so a cached row of that team the answer lacks leaves (dropAbsent, as
+// the checkouts feed does). The Deploys page reads both from the store, so a revisit paints Shipping at once.
+import { useCallback, useMemo } from "react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import type { ShippingRun, ShippingRuns, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { useConvexSync } from "./useConvexSync";
+import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useServerAuthSettled } from "./useServerAuthSettled";
+import { applyCollectionFeed, useFeederError } from "./useSyncCollection";
+import { useWorkspaceCollection } from "./useWorkspaceCollection";
+
+const api = _api as any;
+
+export type ShippingRunRow = ShippingRun & { workspace: string };
+export type ShippingShipperRow = ShippingShipper & { _id: string; workspace: string };
+
+/** One shippingRuns answer into its two homes; the team's rows the answer lacks leave. A null answer changes nothing. */
+export function applyShipping(teamId: string, d: ShippingRuns | null | undefined): void {
+  if (!d) return;
+  const workspace = `team:${teamId}`;
+  const ours = (row: { workspace?: string } | undefined) => row?.workspace === workspace;
+  applyCollectionFeed("shippingRuns", d.runs.map((r) => ({ ...r, workspace })), undefined, undefined, ours);
+  applyCollectionFeed("shippingShippers", d.shippers.map((s) => ({ ...s, _id: s.run_id, workspace })), undefined, undefined, ours);
+}
+
+/** Feeder: one team's Ship runs and shippers. `error` is a failed read (a backend without the query yet). */
+export function useSyncShipping(teamId: string | null | undefined): { ready: boolean; error: Error | undefined } {
+  const authSettled = useServerAuthSettled();
+  const { data, error } = useQueryNoThrow(api.workflow_runs.shippingRuns, teamId && authSettled ? { team_id: teamId } : "skip");
+  useFeederError("workflow_runs:shippingRuns", error);
+  useConvexSync(
+    data,
+    useCallback((d: ShippingRuns | null) => { if (teamId) applyShipping(teamId, d); }, [teamId]),
+  );
+  return { ready: data !== undefined, error };
+}
+
+const runSig = (r: ShippingRunRow) => `${r.status}|${r.updated_at}|${r.current_node_id ?? ""}|${r.node_statuses.map((n) => `${n.node_id}:${n.status}`).join(",")}|${r.pr?.number ?? ""}|${r.task_title ?? ""}|${r.spawner_conversation_id ?? ""}:${r.stand_in ? 1 : 0}|${r.gate_node_id ?? ""}|${r.merge?.sha ?? ""}|${r.ci_verdict?.green ?? ""}|${r.review_verdict?.verdict ?? ""}`;
+const shipperSig = (s: ShippingShipperRow) => `${s.merged_sha ?? ""}|${s.spawner_conversation_id ?? ""}|${s.user_id ?? ""}|${s.stand_in ? 1 : 0}`;
+
+/**
+ * Reader: a team's Ship runs and shippers from the store, with the feeder mounted. `shipping` is null only while
+ * nothing is stored and the first answer has not come; `error` only when the read failed with nothing stored.
+ */
+export function useShipping(teamId: string | null | undefined): { shipping: { runs: ShippingRunRow[]; shippers: ShippingShipperRow[] } | null; error: boolean } {
+  const { ready, error } = useSyncShipping(teamId);
+  const workspace = teamId ? `team:${teamId}` : null;
+  const runs = useWorkspaceCollection<ShippingRunRow>("shippingRuns", runSig, workspace);
+  const shippers = useWorkspaceCollection<ShippingShipperRow>("shippingShippers", shipperSig, workspace);
+  const stored = runs.length > 0 || shippers.length > 0;
+  return useMemo(() => ({
+    shipping: ready || stored ? { runs, shippers } : null,
+    error: !!error && !stored,
+  }), [ready, stored, runs, shippers, error]);
+}

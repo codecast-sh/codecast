@@ -245,7 +245,7 @@ describe("client sync registry", () => {
     });
 
     it("workspace-scoped tables are the collections DATA_SCOPE classes workspace", () => {
-      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "checkouts", "deployProductions", "deployTargets", "docs", "envStandings", "expectationsOverview", "flowMaps", "initiatives", "issueSyncSources", "lineDeploys", "lineLabels", "lineTimeline", "liveFlows", "messageFeed", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "orgProposals", "pipelines", "plans", "priorities", "projects", "secrets", "sessionFlows", "signals", "tasks", "teamDeploys", "teamKitItems", "trialCards", "trialProjects", "trialRuns", "workflowRuns", "workflows"].sort());
+      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "checkouts", "deployProductions", "deployTargets", "docs", "envStandings", "expectationsOverview", "flowMaps", "initiatives", "issueSyncSources", "lineDeploys", "lineLabels", "lineTimeline", "liveFlows", "messageFeed", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "orgProposals", "pipelines", "plans", "priorities", "projects", "secrets", "sessionFlows", "shippingRuns", "shippingShippers", "signals", "tasks", "teamDeploys", "teamKitItems", "trialCards", "trialProjects", "trialRuns", "workflowRuns", "workflows"].sort());
     });
   });
 

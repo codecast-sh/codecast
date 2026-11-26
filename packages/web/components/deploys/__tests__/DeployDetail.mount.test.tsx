@@ -45,7 +45,7 @@ mock.module("next/link", () => ({
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { useInboxStore } = await import("../../../store/inboxStore");
-const { DeployDetail } = await import("../DeploysPage");
+const { DeployDetail } = await import("../DeploysBoard");
 
 afterAll(() => {
   closeDomWindow(dom);

@@ -3,7 +3,7 @@
 // and what derives from them at read time. A target's live deploy, the one
 // going out and its history are read from its deploys, never stored on it.
 // Pure: no store, no React.
-import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
+import type { CommitCiState, DeployTargetPolicy, QueueGroup, TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 import { prNumberOf } from "@codecast/shared/changes";
 import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
@@ -102,7 +102,23 @@ export type TeamDeployRow = {
   finished_at: number | null;
 } & Partial<DeployPushSummary>;
 
-export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null };
+/**
+ * `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may
+ * read it, else null. `task_short_ids`: the tasks this session's commits in the deploy name, every commit counted.
+ */
+export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null; user_id?: string; priority?: { id: string; title: string | null } | null; task_short_ids?: string[] };
+
+/**
+ * One deploy as its two feeds send it into one store row (hooks/useSyncDeployTargets): the targets view (steps, what
+ * came after) and the team's deploy records (commit rows with their lines, PR and branch; sessions with their owner
+ * and tasks). Each would replace the row whole, so what one feed lacks is kept from the row the other left, and each
+ * session keeps the fields the other feed gave it.
+ */
+export function mergeDeployRow<T extends Pick<TeamDeployRow, "sessions">>(prev: Partial<TeamDeployRow> | undefined, next: T): T {
+  if (!prev) return next;
+  const had = new Map((prev.sessions ?? []).map((s) => [s.conversation_id, s]));
+  return { ...prev, ...next, sessions: (next.sessions ?? []).map((s) => ({ ...had.get(s.conversation_id), ...s })) } as T;
+}
 
 /** Who sent a deploy codecast did not start, by where it reports from. */
 export function sourceWord(d: Pick<TeamDeployRow, "source" | "url">): string {
@@ -257,22 +273,4 @@ export function sessionWords(s: { title?: string | null; short_id?: string | nul
 export function prOfSubject(subject: string): { pr: number | null; subject: string } {
   const pr = prNumberOf(subject);
   return { pr, subject: pr ? subject.replace(/\s*\(#\d+\)\s*$/, "") : subject };
-}
-
-/** Whether the viewer wrote a commit: its author is their GitHub login or their name. */
-export function isMineCommit(author: string | null | undefined, me: { login?: string | null; name?: string | null }): boolean {
-  if (!author) return false;
-  const a = author.toLowerCase();
-  return [me.login, me.name].some((x) => !!x && x.toLowerCase() === a);
-}
-
-/**
- * A target's waiting groups cut to the viewer's own commits; a group with none of them drops out. A commit `keep` names
- * (the one a link points at) stays, so a link never opens on a commit the filter hid.
- */
-export function mineOnly(groups: ReadonlyArray<QueueGroup>, me: { login?: string | null; name?: string | null }, keep?: (c: QueueGroup["commits"][number]) => boolean): QueueGroup[] {
-  return groups.flatMap((g) => {
-    const commits = g.commits.filter((c) => isMineCommit(c.author, me) || !!keep?.(c));
-    return commits.length ? [{ ...g, commits, ci: worstCi(commits.map((c) => c.ci)) }] : [];
-  });
 }

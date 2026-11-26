@@ -1085,7 +1085,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "teamDeploys" },
     hydration: { phase: "deferred" },
     indexes: "_id, workspace",
-    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks"] },
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks", "commit_rows", "after"] },
     feeds: ["deployTargets.view", "deployRefs.recentForTeam"],
   },
   // Each repository's pipeline (pipeline.md PL6, contracts/pipeline.ts): its
@@ -1133,6 +1133,38 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "deployDetails" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true, deepFields: ["adds", "drops"] },
+  },
+  // What each commit a finished deploy lists added and removed, with its pull
+  // request and branch (deployRefs.deployLines), keyed by the deploy's id: what a
+  // Deploys card draws beside its rows. A teamDeploys row lists the commits
+  // without them. A row exists only for a card a Deploys page showed, fed by that
+  // page (hooks/useDeployLines) and capped like the detail collections
+  // (lib/detailRows).
+  deployLines: {
+    persistence: { kind: "collection", key: "deployLines" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["rows"] },
+    feeds: ["deployRefs.deployLines"],
+  },
+  // A team's Ship runs on their way to main (workflow_runs.shippingRuns `runs`),
+  // one row per run with its workspace: the Deploys page's Shipping column. Each
+  // answer is the team's whole set (hooks/useSyncShipping prunes the rest).
+  shippingRuns: {
+    persistence: { kind: "collection", key: "shippingRuns" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workspace",
+    sync: { isDelta: true, deepFields: ["node_statuses", "pr", "ci_verdict", "review_verdict", "merge"] },
+    feeds: ["workflow_runs.shippingRuns"],
+  },
+  // Who pressed Ship on each of a team's recent change runs, merged ones
+  // included (workflow_runs.shippingRuns `shippers`), keyed by the run's id:
+  // what the Deploys page credits a commit to. Fed beside shippingRuns.
+  shippingShippers: {
+    persistence: { kind: "collection", key: "shippingShippers" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workspace",
+    sync: { isDelta: true },
+    feeds: ["workflow_runs.shippingRuns"],
   },
   // The flows view's collections (live flows, session flows) live beside this file.
   ...FLOW_SYNC_COLLECTIONS,
@@ -2401,6 +2433,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   teamDeploys: "shared",
   deployReach: "local",
   deployDetails: "local",
+  deployLines: "local",
+  shippingRuns: "shared",
+  shippingShippers: "shared",
   liveFlows: "shared",
   sessionFlows: "shared",
   flowMaps: "shared",

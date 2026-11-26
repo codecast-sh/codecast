@@ -56,7 +56,7 @@ describe("what waits on a target (DP12)", () => {
   });
 
   test("the queue groups by session, the newest session's work first, commits no session claims last", () => {
-    const c = (sha: string, at: number, conv: string | null, ci: QueueCommit["ci"]): QueueCommit => ({ sha, subject: sha, at, author: null, session: conv ? { conversation_id: conv, short_id: conv.slice(0, 7), title: conv } : null, tasks: [], ci, ci_url: null });
+    const c = (sha: string, at: number, conv: string | null, ci: QueueCommit["ci"]): QueueCommit => ({ sha, subject: sha, at, main_at: at, author: null, session: conv ? { conversation_id: conv, short_id: conv.slice(0, 7), title: conv } : null, tasks: [], ci, ci_url: null });
     const groups = groupQueueBySession([c("a", 1, "s1", "passed"), c("b", 2, null, "passed"), c("c", 3, "s2", "running"), c("d", 4, "s1", "failed")]);
     expect(groups.map((g) => [g.key, g.commits.map((x) => x.sha), g.ci])).toEqual([["s:s1", ["d", "a"], "failed"], ["s:s2", ["c"], "running"], ["none", ["b"], "passed"]]);
   });

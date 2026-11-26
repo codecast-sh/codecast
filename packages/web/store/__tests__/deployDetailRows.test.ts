@@ -84,3 +84,43 @@ describe("the collection is capped like the detail collections", () => {
     expect([...drop].sort()).toEqual([id(1), id(2)]);
   });
 });
+
+// deployLines holds each shown Deploys card's commit lines (hooks/useDeployLines), keyed by the deploy's id, so a card
+// seen before paints its +/− from the store; shippingRuns and shippingShippers hold a team's Ship runs
+// (hooks/useSyncShipping), so a revisit paints Shipping from the store.
+describe("a deploy card's lines and a team's Ship runs live in the store", () => {
+  const { deployLinesRows } = require("../../hooks/useDeployLines");
+  const { applyShipping } = require("../../hooks/useSyncShipping");
+  const line = { sha: "abc1234", insertions: 3, deletions: 1, pr_number: 7, branch: "jb/x" };
+  const lines = (answer: unknown) => applyCollectionFeed("deployLines", answer, (a: any) => deployLinesRows(id(1), a));
+
+  it("a deployLines answer lands under the deploy's id, a null one changes nothing, and the cap holds", () => {
+    useInboxStore.setState({ deployLines: {} } as any);
+    lines({ rows: [line] });
+    expect(state().deployLines[id(1)]).toMatchObject({ _id: id(1), rows: [line] });
+    const before = state().deployLines;
+    lines(null);
+    expect(state().deployLines).toBe(before);
+    const CAP = DETAIL_ROW_CAPS.deployLines;
+    const release = pinDetailRows("deployLines", [id(1)]);
+    for (let n = 2; n < CAP + 5; n++) state().syncTable("deployLines", [{ _id: id(n), rows: [], _cachedAt: n }]);
+    expect(Object.keys(state().deployLines).length).toBeLessThanOrEqual(CAP);
+    expect(state().deployLines[id(1)]).toBeDefined();
+    release();
+  });
+
+  it("a shippingRuns answer fills both homes for its team, and the next one drops what that team no longer sends", () => {
+    useInboxStore.setState({ shippingRuns: {}, shippingShippers: {} } as any);
+    const run = (rid: string) => ({ _id: rid, status: "running", node_statuses: [], user_id: "u", created_at: 1, updated_at: 1 });
+    const shipper = (rid: string) => ({ run_id: rid, task_short_id: null, merged_sha: null, spawner_conversation_id: null, user_id: "u", stand_in: false, created_at: 1 });
+    applyShipping("t1", { runs: [run("r1"), run("r2")], shippers: [shipper("r1"), shipper("r9")] });
+    applyShipping("t2", { runs: [run("r5")], shippers: [] });
+    expect(state().shippingRuns.r1.workspace).toBe("team:t1");
+    expect(state().shippingShippers.r9).toMatchObject({ _id: "r9", workspace: "team:t1" });
+    applyShipping("t1", { runs: [run("r2")], shippers: [] });
+    expect(Object.keys(state().shippingRuns).sort()).toEqual(["r2", "r5"]);
+    expect(state().shippingShippers).toEqual({});
+    applyShipping("t1", null);
+    expect(Object.keys(state().shippingRuns).sort()).toEqual(["r2", "r5"]);
+  });
+});

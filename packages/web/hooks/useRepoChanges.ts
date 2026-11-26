@@ -30,30 +30,25 @@ const prSig = (p: ChangePullRequest) => `${p.state}|${p.files_synced_at ?? 0}|${
 const detailSig = (d: PullRequestDetailRow) => `${d.checks_state ?? ""}|${d.checks?.length ?? 0}`;
 const reachSig = (r: DeployReachRow) => `${r.state}|${r.targets?.map((t) => `${t.target}:${t.state}:${t.deploy?.short_id ?? ""}:${t.now?.short_id ?? ""}`).join(",") ?? ""}`;
 
-type TitleRow = { title?: string | null; user_id?: string | null; owner_user_id?: string | null };
+type TitleRow = { title?: string | null };
 type TitleStore = { sessions: unknown; conversations: unknown };
 
 const writerRow = (s: TitleStore, id: string) =>
   ((s.sessions as Record<string, TitleRow>)[id] ?? (s.conversations as Record<string, TitleRow>)[id]) as TitleRow | undefined;
 
-/** A session's author and routed owner, as the viewer's store holds them. */
-const ownersOfRow = (r: TitleRow | undefined) => [r?.user_id, r?.owner_user_id].filter((x): x is string => !!x).map(String);
-
-/** The writers' titles and owners as one FNV-1a number: moves when any does, and costs no allocation on a store write. */
+/** The writers' titles as one FNV-1a number: moves when any does, and costs no allocation on a store write. */
 function titleDigest(s: TitleStore, ids: ReadonlyArray<string>): number {
   let h = 0x811c9dc5;
   for (const id of ids) {
-    const r = writerRow(s, id);
-    for (const t of [r?.title ?? "", r?.user_id ?? "", r?.owner_user_id ?? ""]) {
-      for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
-      h = Math.imul(h ^ 0x2c, 0x01000193);
-    }
+    const t = writerRow(s, id)?.title ?? "";
+    for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
+    h = Math.imul(h ^ 0x2c, 0x01000193);
   }
   return h >>> 0;
 }
 
 const writersOf = (s: TitleStore, ids: ReadonlyArray<string>) =>
-  Object.fromEntries(ids.map((id) => { const r = writerRow(s, id); return [id, { title: r?.title ?? null, owners: ownersOfRow(r) }]; }));
+  Object.fromEntries(ids.map((id) => [id, writerRow(s, id)?.title ?? null]));
 
 /** The conversations a change names, for their titles. */
 function writerIds(checkouts: ReadonlyArray<CheckoutRow>, prs: ReadonlyArray<ChangePullRequest>): string {
@@ -107,8 +102,7 @@ export function useRepoChanges(repository: string | null | undefined, teamId?: s
       pullRequests: prs,
       targets: targetsReady ? targets : undefined,
       branches: opts?.branches ?? null,
-      titleOf: (id) => writers[id]?.title,
-      ownersOf: (id) => writers[id]?.owners,
+      titleOf: (id) => writers[id],
     });
   }, [repo, now, checkouts, prs, targets, targetsReady, opts?.branches, titleSig, idList]);
 

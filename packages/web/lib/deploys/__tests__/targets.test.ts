@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isMineCommit, mineOnly, orderTargets, prOfSubject, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
+import { mergeDeployRow, orderTargets, prOfSubject, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
 
 const target = (name: string, over: Partial<DeployTargetRow> = {}, groups: DeployTargetRow["queue"]["groups"] = []): DeployTargetRow => ({
   _id: `r#${name}`, workspace: "team:t", team_id: "t", name, repository: "o/r", runs: "here", policy: "press", command: "x", rollback: null, paths: [],
@@ -97,28 +97,39 @@ describe("a deploy alone", () => {
   });
 });
 
-describe("the viewer's pull requests in the queue", () => {
+describe("a commit's pull request", () => {
   test("a squash merge's trailing (#N) becomes the PR number and leaves the subject", () => {
     expect(prOfSubject("Gate reuses a floor pass (sd-4131) (#4431)")).toEqual({ pr: 4431, subject: "Gate reuses a floor pass (sd-4131)" });
     expect(prOfSubject("Give the production broker web search")).toEqual({ pr: null, subject: "Give the production broker web search" });
     expect(prOfSubject("Fix (#12) in the middle")).toEqual({ pr: null, subject: "Fix (#12) in the middle" });
     expect(prOfSubject("Merge pull request #12 from a/b")).toEqual({ pr: 12, subject: "Merge pull request #12 from a/b" });
   });
-  test("a commit is mine by GitHub login or name, ignoring case", () => {
-    const me = { login: "JasonBenn", name: "Jason Benn" };
-    expect(isMineCommit("jasonbenn", me)).toBe(true);
-    expect(isMineCommit("Jason Benn", me)).toBe(true);
-    expect(isMineCommit("Ashot Petrosian", me)).toBe(false);
-    expect(isMineCommit(null, me)).toBe(false);
-    expect(isMineCommit("x", { login: null, name: null })).toBe(false);
+});
+
+describe("one deploy fed by two feeds", () => {
+  // deployRefs.recentForTeam sends commit rows and each session's owner and tasks; deployTargets.view sends steps and
+  // what came after. Each lands whole on the same store row, in either order.
+  const record = dp("dp-1", "web", "running", 1, {
+    commit_rows: [{ sha: "abc1234", subject: "x", conversation_id: "c1", tasks: ["ct-1"] }],
+    sessions: [{ conversation_id: "c1", title: "One", user_id: "u1", task_short_ids: ["ct-1"] }],
   });
-  test("mine keeps only my commits, drops groups without any, and recomputes the group's CI", () => {
-    const c = (sha: string, author: string, ci: "passed" | "failed") => ({ sha, subject: "s", at: 1, author, session: null, tasks: [], ci, ci_url: null });
-    const groups = [
-      { key: "s:a", session: null, ci: "failed" as const, commits: [c("1", "JasonBenn", "passed"), c("2", "Ashot", "failed")] },
-      { key: "s:b", session: null, ci: "passed" as const, commits: [c("3", "Ashot", "passed")] },
-    ];
-    const out = mineOnly(groups, { login: "JasonBenn", name: null });
-    expect(out.map((g: any) => [g.key, g.commits.map((x: any) => x.sha), g.ci])).toEqual([["s:a", ["1"], "passed"]]);
+  const view = dp("dp-1", "web", "running", 1, {
+    steps: [{ id: "build", status: "running" }],
+    after: null,
+    sessions: [{ conversation_id: "c1", short_id: "c1", title: "One" }, { conversation_id: "c2", short_id: "c2", title: "Two" }],
+  });
+  test("the view's row keeps the record's commit rows and sessions' owners, and the record's keeps the view's steps", () => {
+    const afterView = mergeDeployRow(record, view);
+    expect(afterView.commit_rows).toEqual(record.commit_rows);
+    expect(afterView.steps).toEqual([{ id: "build", status: "running" }]);
+    expect(afterView.sessions).toEqual([{ conversation_id: "c1", short_id: "c1", title: "One", user_id: "u1", task_short_ids: ["ct-1"] }, { conversation_id: "c2", short_id: "c2", title: "Two" }]);
+    const afterRecord = mergeDeployRow(afterView, { ...record, status: "live" });
+    expect(afterRecord.steps).toEqual([{ id: "build", status: "running" }]);
+    expect(afterRecord.status).toBe("live");
+    expect(afterRecord.sessions).toEqual([{ conversation_id: "c1", short_id: "c1", title: "One", user_id: "u1", task_short_ids: ["ct-1"] }]);
+  });
+  test("a value a feed does send replaces the old one, and a first row is taken as sent", () => {
+    expect(mergeDeployRow(record, { ...view, commit_rows: [] }).commit_rows).toEqual([]);
+    expect(mergeDeployRow(undefined, view)).toBe(view);
   });
 });

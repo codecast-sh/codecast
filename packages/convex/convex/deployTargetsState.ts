@@ -10,6 +10,9 @@ import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCom
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
 import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
+import { parseWorkspaceKey } from "./lib/accessKeys";
+import { canAccessConversation } from "./lib/access";
+import { sessionPriorityReader, type SessionPriority } from "./lib/sessionPriority";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -81,14 +84,44 @@ export async function mainCommitsAfter(ctx: any, repository: string, fromSha: st
   return { commits: rows.slice(0, QUEUE_SCAN).reverse(), known: true, truncated: rows.length > QUEUE_SCAN };
 }
 
-export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>): Promise<QueueCommit> {
+/** What a viewer may see of a queue commit's session: its title, owner, priority and branch only when they may read it. */
+export type QueueReader = { canRead: (conv: Doc<"conversations"> | null) => Promise<boolean>; priorityOf: (conv: Doc<"conversations"> | null) => Promise<SessionPriority | null> };
+
+/** A viewer's QueueReader: each session's access read once (canAccessConversation). */
+export async function queueReaderFor(ctx: any, viewer: Id<"users">, teamId: Id<"teams"> | null): Promise<QueueReader> {
+  const seen = new Map<string, Promise<boolean>>();
+  return {
+    canRead: (conv) => {
+      if (!conv) return Promise.resolve(false);
+      const k = String(conv._id);
+      if (!seen.has(k)) seen.set(k, canAccessConversation(ctx, viewer, conv));
+      return seen.get(k)!;
+    },
+    priorityOf: await sessionPriorityReader(ctx, viewer, teamId),
+  };
+}
+
+/**
+ * One commit waiting on a target. With a viewer (`reader`), a session they may not read is named by id alone; with none
+ * (the auto-deploy sweep) the session is read whole, as the sweep only counts and compares.
+ */
+export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>, reader?: QueueReader): Promise<QueueCommit> {
   let session: QueueCommit["session"] = null;
+  let readable: Doc<"conversations"> | null = null;
   const owner = await commitSession(ctx, c, taskCache);
   if (owner) {
     const key = String(owner.conversation_id);
     if (!convCache.has(key)) convCache.set(key, await ctx.db.get(owner.conversation_id));
     const conv = convCache.get(key);
-    session = { conversation_id: key, short_id: key.slice(0, 7), title: conv?.title ?? null, ...(owner.via === "task" ? { via: "task" as const } : {}) };
+    readable = !reader || (await reader.canRead(conv)) ? conv : null;
+    const priority = readable && reader ? await reader.priorityOf(readable) : null;
+    session = {
+      conversation_id: key, short_id: key.slice(0, 7), title: readable?.title ?? null,
+      ...(readable?.user_id ? { user_id: String(readable.user_id) } : {}),
+      // Always said, null when none: the web store merges rows, and an absent key would keep a removed priority.
+      priority,
+      ...(owner.via === "task" ? { via: "task" as const } : {}),
+    };
   }
   const tasks = [];
   for (const id of c.task_ids ?? []) {
@@ -98,36 +131,77 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     tasks.push({ task_id: key, short_id: t?.short_id ?? null, title: t?.title ?? null });
   }
   const ci = await ciOf(ctx, c.repository!, c.sha);
-  const branch = await commitBranch(ctx, c, session ? convCache.get(session.conversation_id) : null);
+  const facts = await commitFacts(ctx, c, readable);
   return {
     sha: c.sha,
-    subject: c.message.split("\n")[0].slice(0, 200),
+    // Whole in practice; bounded so a pathological one-line message cannot bloat a deploy record.
+    subject: c.message.split("\n")[0].slice(0, 1000),
     at: c.main_at ?? c.timestamp,
+    // Queue commits come off main's order (mainCommitsAfter reads by_repository_main past a main_at), so every one has it.
+    main_at: c.main_at!,
     author: c.author_login ?? c.author_name ?? null,
     session,
     tasks,
-    branch,
+    ...facts,
     ci: ci.state,
     ci_url: ci.url,
   };
 }
 
-/**
- * The branch a commit on main came from. A squash merge's own row only knows the ref it landed on, so the branch is
- * its pull request's head (linked, else the "(#N)" its subject names), else the branch its session worked on. The
- * default branch names nothing.
- */
-export async function commitBranch(ctx: any, c: Doc<"commits">, conv: { git_branch?: string } | null): Promise<string | null> {
-  const prNumber = /\(#(\d+)\)\s*$/.exec(c.message.split("\n")[0])?.[1];
-  const pr: Doc<"pull_requests"> | null = c.pr_id
-    ? await ctx.db.get(c.pr_id)
-    : prNumber && c.repository
-      ? await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(c.repository!)).eq("number", Number(prNumber))).first()
-      : null;
+const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD"]);
+
+/** The branch a commit came from: its pull request's head, else the branch its session worked on; the default branch names nothing. */
+function branchOf(pr: Doc<"pull_requests"> | null, conv: { git_branch?: string } | null): string | null {
   const branch = pr?.head_ref ?? conv?.git_branch ?? null;
   return branch && !DEFAULT_BRANCHES.has(branch) ? branch : null;
 }
-const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD"]);
+
+/** The "(#N)" a subject ends with. */
+const subjectPrNumber = (c: Pick<Doc<"commits">, "message">): number | null => {
+  const n = /\(#(\d+)\)\s*$/.exec(c.message.split("\n")[0])?.[1];
+  return n ? Number(n) : null;
+};
+
+/** Whether a commit is a pull request's squash merge: the pull request's merge commit, or the PR its row records. */
+const squashOf = (c: Pick<Doc<"commits">, "sha" | "pr_number">, pr: Pick<Doc<"pull_requests">, "number" | "merge_commit_sha">) => pr.merge_commit_sha === c.sha || c.pr_number === pr.number;
+
+/**
+ * The pull request a commit on main came from, and whether the commit is its squash merge (squashOf). A linked pull
+ * request (pr_id) holds the commit, squashed or not. A PR the row records or its subject names counts only as its
+ * squash merge: a "(#N)" alone proves nothing, since a revert's subject names the pull request it undoes.
+ */
+async function commitPr(ctx: any, c: Doc<"commits">): Promise<{ pr: Doc<"pull_requests">; squash: boolean } | null> {
+  if (c.pr_id) {
+    const pr: Doc<"pull_requests"> | null = await ctx.db.get(c.pr_id);
+    return pr ? { pr, squash: squashOf(c, pr) } : null;
+  }
+  const n = c.pr_number ?? subjectPrNumber(c);
+  if (n == null || !c.repository) return null;
+  const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(c.repository!)).eq("number", n)).first();
+  return pr && squashOf(c, pr) ? { pr, squash: true } : null;
+}
+
+/**
+ * A commit's lines added and removed, or null when nothing recorded them: its files' counts when they carry any (a
+ * checkout's numstat, GitHub's commit API), else its squash merge's pull request's. A push webhook names files with no
+ * line counts (its row's `insertions` counts files) and a main commit a checkout reported stores zeros, so the row's
+ * own `insertions`/`deletions` are never read as lines.
+ */
+function commitLines(c: Pick<Doc<"commits">, "files">, squashed: Pick<Doc<"pull_requests">, "additions" | "deletions"> | null): { insertions: number; deletions: number } | null {
+  const files = c.files ?? [];
+  if (files.some((f) => f.additions || f.deletions)) return { insertions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0) };
+  return squashed?.additions != null && squashed.deletions != null ? { insertions: squashed.additions, deletions: squashed.deletions } : null;
+}
+
+/**
+ * What a Deploys row shows of a commit beyond its subject: its lines, its pull request's number and its branch, from one
+ * read of its pull request. `conv`: its session, only when the viewer may read it.
+ */
+export async function commitFacts(ctx: any, c: Doc<"commits">, conv: { git_branch?: string } | null): Promise<{ insertions?: number; deletions?: number; pr_number: number | null; branch: string | null }> {
+  const found = await commitPr(ctx, c);
+  const lines = commitLines(c, found?.squash ? found.pr : null);
+  return { ...(lines ?? {}), pr_number: c.pr_number ?? found?.pr.number ?? null, branch: branchOf(found?.pr ?? null, conv) };
+}
 
 /** Commits on main as a deploy's record keeps them, each with the session behind it (commitSession) and the tasks it links. */
 export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
@@ -137,7 +211,7 @@ export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
     const owner = await commitSession(ctx, c, taskCache);
     out.push({
       sha: c.sha,
-      subject: c.message.split("\n")[0].slice(0, 200),
+      subject: c.message.split("\n")[0].slice(0, 1000),
       ...(c.author_login || c.author_name ? { author: c.author_login ?? c.author_name } : {}),
       ...(owner ? { conversation_id: owner.conversation_id } : {}),
       ...(c.task_ids?.length ? { task_ids: c.task_ids } : {}),
@@ -156,11 +230,14 @@ type DeployAfterCounts = { new_errors: number; regressions: number; reopened: nu
  * A deploy as the targets view lists it: the sessions and tasks behind the commits it carried (and the tasks a line
  * deploy carries), and what happened after it went live, in counts (deploysView.afterFor).
  */
-export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Map<string, any>; task: Map<string, any> }, after?: DeployAfterCounts | null) {
+export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Map<string, any>; task: Map<string, any> }, after?: DeployAfterCounts | null, reader?: QueueReader) {
   const sessions = [];
   for (const id of new Set((d.commits ?? []).flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))) {
     if (!caches.conv.has(id)) caches.conv.set(id, await ctx.db.get(id as Id<"conversations">));
-    sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: caches.conv.get(id)?.title ?? null });
+    const conv = caches.conv.get(id) ?? null;
+    // With a viewer, a session they may not read is named by id alone, as in the queue.
+    const title = !reader || (await reader.canRead(conv)) ? conv?.title ?? null : null;
+    sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title });
   }
   const tasks = [];
   for (const id of new Set([...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String)), ...d.carries.map((c) => String(c.task_id))])) {
@@ -236,7 +313,7 @@ export async function devPushOver(ctx: any, t: Pick<Doc<"deploy_targets">, "work
 }
 
 /** One target's state: live, going out, recent history, and what waits on main. */
-export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
+export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: Id<"users">) {
   const deploys = await targetDeploys(ctx, t.workspace, t.name);
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
   const live = liveDeployOf(deploysHere) ?? null;
@@ -257,7 +334,10 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
   const headCi = head ? await ciOf(ctx, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.repository, live.sha) : null;
   // The newest commits are shown whole, with their session, tasks and CI; the rest are counted.
   const shown: QueueCommit[] = [];
-  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, c, convCache, taskCache));
+  // What the viewer may see of each session: its title, owner, priority and branch only when they may read it.
+  const ws = parseWorkspaceKey(t.workspace);
+  const reader = viewer ? await queueReaderFor(ctx, viewer, ws?.type === "team" ? ws.teamId : null) : undefined;
+  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, c, convCache, taskCache, reader));
   return {
     name: t.name,
     repository: t.repository,
@@ -275,10 +355,10 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
     can_rollback: t.runs === "here" && !!t.rollback,
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
-    live: live ? await deployLine(ctx, live, caches, countsOf(live)) : null,
+    live: live ? await deployLine(ctx, live, caches, countsOf(live), reader) : null,
     dev_push: await devPushOver(ctx, t, live),
-    open: open ? { ...(await deployLine(ctx, open, caches)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
-    history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d)))),
+    open: open ? { ...(await deployLine(ctx, open, caches, undefined, reader)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
+    history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d), reader))),
     last_read: t.last_read ?? null,
     queue: {
       // False when the live sha is not on main as codecast knows it (no deploy yet, or main's order not backfilled).

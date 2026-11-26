@@ -50,6 +50,7 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   callRecordings: "a call's video files, fed per view by useCallRecordings, which the sim does not mount",
   callRecordingCalls: "a call's recording state, fed per view by useCallRecordings (the same answer as callRecordings), which the sim does not mount",
   deployDetails: "fed by an opened deploy's own surface (hooks/useDeployDetail), a view the sim does not open",
+  shippingRuns: "fed by the same workflow_runs.shippingRuns answer as shippingShippers, which INV-fixpoint compares; the sim's feed table (REGISTERED_FEEDS) holds one key per query, so it feeds shippingShippers only",
   deployTargets: "fed by the same deployTargets.view answer as teamDeploys, which INV-fixpoint compares; the sim's feed table (REGISTERED_FEEDS) holds one key per query, so it feeds teamDeploys only",
   deployProductions: "fed by the same deployTargets.view answer as teamDeploys, which INV-fixpoint compares; the sim's feed table (REGISTERED_FEEDS) holds one key per query, so it feeds teamDeploys only",
   opsReplayTallies: "a browse's counts, fed by the same replays.browse answer as opsReplays, which INV-fixpoint compares; the sim's feed table holds one key per query, so it feeds opsReplays only",
