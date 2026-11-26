@@ -10,6 +10,8 @@ import { HostWakeNote } from "./HostWakeStatus";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { HostWake } from "../hooks/useHostWake";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import { tmuxInstallCommand } from "../lib/tmuxMissing";
 
 /** A Cast session waiting on the person's cloud machine to come up for the
  *  first time (convex/castMachines.ts): no device owns it yet, so the steps
@@ -37,6 +39,47 @@ function AppOfflineNote({ connection, onCancel, cancelling }: { connection: Conn
         {connection.label === "Offline"
           ? "this device has no network. Your message is kept and goes out when it's back."
           : "your message is kept, and whether it reached the agent shows once the server is back."}
+      </span>
+      {onCancel && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCancel(); }}
+          disabled={cancelling}
+          data-testid="pending-message-cancel"
+          className="text-meta text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60"
+          title="Stop trying to send and discard this message"
+        >
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The person's machine has no tmux, so the daemon cannot start the session or
+// type the message into it. Name that and the install command; a restart
+// cannot install tmux, so none is offered.
+function TmuxMissingNote({ command, onCancel, cancelling }: { command: string; onCancel?: () => void; cancelling?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await copyToClipboard(command);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="flex items-start flex-wrap gap-2 mt-2 pl-8 text-xs text-sol-yellow" data-testid="pending-message-tmux-missing">
+      <span className="w-1.5 h-1.5 mt-1.5 rounded-full flex-shrink-0 bg-sol-yellow" />
+      <span className="text-sol-text-muted leading-relaxed">
+        <span className="font-medium text-sol-yellow">Waiting on tmux — </span>
+        it isn't installed on your machine. Install it and the message goes out:{" "}
+        <button
+          onClick={onCopy}
+          className="ml-1 px-1.5 py-px rounded border border-sol-yellow/40 font-mono align-baseline text-sol-yellow transition-colors hover:bg-sol-yellow/10"
+          title="Copy command"
+        >
+          {copied ? "copied!" : command}
+        </button>
       </span>
       {onCancel && (
         <button
@@ -83,6 +126,8 @@ export function PendingDeliveryNote({
   const hostWake = useHostWake(ownerDeviceId);
   const launch = useCastMachineLaunch(ownerDeviceId);
   const wake = hostWake ?? launch;
+  const { user } = useCurrentUser();
+  const tmuxCommand = tmuxInstallCommand(user);
   const [copied, setCopied] = useState(false);
   // This app is the one cut off: the roster it holds stopped moving when the
   // link dropped, so every machine in it reads as quiet or asleep, and the
@@ -97,6 +142,9 @@ export function PendingDeliveryNote({
   // not after the stuck-message grace, and never offer a restart that cannot
   // reach a machine that is booting. A restart already clicked keeps its UI.
   if (wake && !restartInFlight) return <HostWakeNote wake={wake} onCancel={onCancel} cancelling={cancelling} />;
+  // The machine has no tmux (the top bar says so too): every start, resume and
+  // delivery the daemon tries is refused until it is installed.
+  if (tmuxCommand && state !== "none" && !restartInFlight) return <TmuxMissingNote command={tmuxCommand} onCancel={onCancel} cancelling={cancelling} />;
   const resolved = withDaemonHealth(state, { daemonDegraded: holdsUndeliveredMessage(health), restartInFlight });
   if (resolved !== "daemon") return <>{children}</>;
   const copy = describeDaemonHealth(health);
