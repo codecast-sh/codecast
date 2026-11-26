@@ -121,6 +121,14 @@ const read = (t: any, rec: Id<"transcripts">) =>
   }));
 const scheduled = (t: any, name: string) =>
   t.run(async (ctx: any) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes(name)).length);
+// A job a test only counts must not run after it: convex-test fires it on a
+// real timer, so it would call whatever fetch a later test has stubbed.
+const cancelScheduled = async (t: any) => {
+  await t.run(async (ctx: any) => {
+    for (const f of await ctx.db.system.query("_scheduled_functions").collect()) if (f.state.kind === "pending") await ctx.scheduler.cancel(f._id);
+  });
+  await t.finishInProgressScheduledFunctions();
+};
 
 describe("Scribe reply parsing", () => {
   test("words only, speakers as spk keys in order of first appearance, junk skipped", () => {
@@ -162,6 +170,7 @@ describe("voice_speakers flag", () => {
     expect(await scheduled(t, "transcribeVoiceNote")).toBe(1);
     expect(await scheduled(t, "transcribeRecording")).toBe(0);
     expect((await read(t, ids.rec)).row.transcribe_status).toBe("pending");
+    await cancelScheduled(t);
   });
 
   test("off: today's path unchanged (a note with live words is left alone)", async () => {
@@ -282,6 +291,7 @@ describe("limits and idempotency", () => {
     await t.run((ctx) => ctx.db.patch(ids.rec, { speakers: [{ key: "spk:0", source: "voice" as const }] }));
     await as.mutation(api.transcripts.attachRecording, { transcript_id: ids.rec, storage_id: other });
     expect(await scheduled(t, "transcribeVoiceNote")).toBe(1);
+    await cancelScheduled(t);
   });
 
   test("candidates come as one centroid per person", async () => {

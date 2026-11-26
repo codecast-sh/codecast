@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { relayMain, registerMain, unregisterMain } from "./wiring.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { readAuthConfig } from "../config/readAuthConfig.js";

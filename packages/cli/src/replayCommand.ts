@@ -41,7 +41,7 @@ import { gunzipSync } from "node:zlib";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { JSON_OPTION, TEAM_OPTION, ago, emit, fail, postOrFail, scopedRead, scopedWrite, shortRef } from "./externalDataCli.js";
 import { fenceProductText } from "@codecast/shared/contracts";
 import { INGEST_SHORT_ID_PREFIX } from "@codecast/shared/contracts/ingest";

@@ -1,6 +1,6 @@
 import { inHuddle } from "../lib/calls/huddlePresence";
 import { withInboxView } from "../lib/inboxViewHistory";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";

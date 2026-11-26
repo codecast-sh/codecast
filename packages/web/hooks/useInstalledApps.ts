@@ -3,7 +3,7 @@
 // menu runs. The list is the desktop's own registry, read over the bridge;
 // it never passes through the store, because it is a fact of this computer,
 // not server data.
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -17,9 +17,15 @@ const subscribeBridge = (cb: () => void) => {
   return () => window.removeEventListener(BRIDGE_EVENT, cb);
 };
 
+/** True inside a surface that must not reach this computer's apps (the marketing hero's sandbox). */
+export const InstalledAppsOff = createContext(false);
+const noBridge = () => null;
+const subscribeNothing = () => () => {};
+
 /** The installed-app host, or null outside the desktop app. */
 export function useDesktopApps(): DesktopAppsBridge | null {
-  return useSyncExternalStore(subscribeBridge, desktopApps, () => null);
+  const off = useContext(InstalledAppsOff);
+  return useSyncExternalStore(off ? subscribeNothing : subscribeBridge, off ? noBridge : desktopApps, noBridge);
 }
 
 /** Every app installed on this computer, live; null while the first answer is on its way or outside the desktop app. */

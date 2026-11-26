@@ -26,7 +26,7 @@ import type { Command } from "commander";
 import { readFileSync } from "fs";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { formatAge } from "./decideCommand.js";
 import { stdinText } from "./sendBody.js";
 import { slugifyHeading } from "@codecast/shared/vault";

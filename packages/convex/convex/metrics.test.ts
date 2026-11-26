@@ -645,6 +645,11 @@ describe("history queue and busy retries", () => {
 });
 
 describe("volume watches", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
   test("an SDK source's events per hour and new issues poll from codecast's own counters, with their past backfilled", async () => {
     const w = world();
     (w.db._tables as any).event_source_stats = [];

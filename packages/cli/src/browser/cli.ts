@@ -73,7 +73,7 @@ import { inlineImageMarker } from "../inlineImage.js";
 import { authorizesTeardown } from "@codecast/shared/contracts";
 import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { registerPaneOfferCommand } from "./paneOffer.js";
 import { registerTypeSecretCommand } from "./secretType.js";
 import { registerFlightCommand } from "./flightRecorder.js";

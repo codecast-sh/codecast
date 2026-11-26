@@ -32,7 +32,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
+import { PanelLeft, PanelRight, Menu, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
 import { SeatBanner } from "./team/SeatBanner";
@@ -84,7 +84,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -135,7 +135,7 @@ import { GlobalCloseGuardDialog } from "./CloseGuardDialog";
 import { useLocalAuth } from "../lib/localAuth";
 import { ModRuntimes } from "./mods/ModRuntimes";
 import { useSyncMods } from "../lib/mods/useMods";
-import { resolveCommentsEnabled } from "../lib/uiPrefDefaults";
+import { CommentsToggle } from "./CommentsToggle";
 import { lazyNamed } from "../lib/lazyNamed";
 import { InstalledAppsFacts } from "./installedApps/InstalledAppsFacts";
 
@@ -194,51 +194,6 @@ function sessionListActiveIdOf(st: ShellState, pathname: string | null): string 
 const SessionRailList = memo(function SessionRailList({ pathname, onSessionSelect }: { pathname: string | null; onSessionSelect: (id: string) => void }) {
   const activeSessionId = useInboxStore((st) => sessionListActiveIdOf(st, pathname));
   return <SessionListPanel onSessionSelect={onSessionSelect} activeSessionId={activeSessionId} />;
-});
-
-// The teammate comment rail's header toggle. A conversation-scoped overlay, so
-// it shows only while a conversation is on screen. The comment tools are
-// opt-in (off by default), but a conversation that already has comments still
-// surfaces the toggle so you can open it to read and reply. A leaf: a comment
-// anywhere and every session switch wake this button, not the shell.
-const CommentsToggle = memo(function CommentsToggle({ isOnConversationPage, isOnInboxPage }: { isOnConversationPage: boolean; isOnInboxPage: boolean }) {
-  const s = useTrackedStore([
-    s => s.currentSessionId,
-    s => s.viewingDismissedId,
-    s => selectCommentRailOpen(s),
-    s => resolveCommentsEnabled(s.clientState.ui),
-    // The comments map REF (an O(1) Object.is compare), not a scan: comments
-    // is low-churn (heartbeats never touch it), so the ref is stable between
-    // comment syncs, and the "does the viewed conversation have comments"
-    // answer is derived below off the same ref.
-    s => s.comments,
-  ]);
-  const tipActions = useTipActions();
-  // Conversation ids that carry at least one comment, indexed once per
-  // comments-map change (not per render), so the check below is a Set lookup.
-  const commentedConvIds = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of Object.values(s.comments) as { conversation_id?: string }[]) {
-      if (c.conversation_id) set.add(c.conversation_id);
-    }
-    return set;
-  }, [s.comments]);
-  const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
-  const commentRailOpen = selectCommentRailOpen(s);
-  const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
-  const convHasComments = viewedConvIds.some((id) => commentedConvIds.has(id));
-  if (!isViewingConversation || !(resolveCommentsEnabled(s.clientState.ui) || convHasComments)) return null;
-  return (
-    <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
-      <TopbarButton
-        onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
-        active={commentRailOpen}
-        aria-label={commentRailOpen ? "Hide comments" : "Show comments"}
-      >
-        <MessageSquare />
-      </TopbarButton>
-    </ShortcutTooltip>
-  );
 });
 
 // The shell's prop-less chrome, grouped into memo leaves: each part reads the

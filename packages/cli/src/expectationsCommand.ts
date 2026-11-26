@@ -16,7 +16,7 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import { apiPost, isOlderBackendRefusal, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { formatAge } from "./decideCommand.js";
 import { stdinText } from "./sendBody.js";
 import { lineProjectFor, scopeFor } from "./lineScope.js";

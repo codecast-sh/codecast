@@ -163,7 +163,7 @@ describe("cast sources on the wire", () => {
 describe("help names only real flags", () => {
   test("every --flag the sources help advertises is one of add's options, and none sets a connection's host or url", async () => {
     const { Command } = await import("commander");
-    const { commandGroup } = await import("./commandGroups.js");
+    const { commandGroup } = await import("./commandGroupLookup.js");
     const { registerSourcesCommand } = await import("./sourcesCommand.js");
     const program = new Command();
     registerSourcesCommand(program, {} as any);

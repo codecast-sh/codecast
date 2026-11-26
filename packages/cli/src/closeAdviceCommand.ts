@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import type { CloseAdvice, CloseAdviceResult } from "@codecast/shared/contracts/closeKind";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 
 const DECIDED_BY: Record<CloseAdvice["decided_by"], string> = { facts: "verified facts", pin: "its pinned status", settle: "settle classifier", model: "model" };
 

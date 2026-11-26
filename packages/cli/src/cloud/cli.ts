@@ -30,7 +30,7 @@ import {
   wakeCloudHost,
   type CloudSeed,
 } from "./prepare.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { hostAccessPath, repoOrigin } from "./hostGit.js";
 import { registerCloudEnvAction } from "./env/command.js";
 

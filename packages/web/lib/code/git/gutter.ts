@@ -24,8 +24,6 @@ import {
 import type { Chunk } from "@codemirror/merge";
 import { bufferKey, codeBuffers, savedDocField, textToDoc, decodeFileText } from "../buffers";
 import type { MergeKit } from "../merge";
-import { EDITOR_FONT } from "../theme";
-import { GIT_GUTTER_COLUMN } from "../gutterSlots";
 import { holdGitStatusFeed, requestGitStatusRefresh } from "./status";
 import {
   GIT_DIFF_CONFIG,
@@ -41,6 +39,7 @@ import {
   type Hunk,
 } from "./hunks";
 import { mountSplit, splitTheme, type SplitHandle } from "./split";
+import { gitTheme } from "./gitTheme";
 
 export interface GitDiffTarget {
   /** Anything `git rev-parse` takes that names a commit: HEAD, a sha, a branch. */
@@ -705,132 +704,6 @@ const gitGutter = gutter({
       return true;
     },
   },
-});
-
-const gitTheme = EditorView.theme({
-  ".cm-git-gutter": { ...GIT_GUTTER_COLUMN, cursor: "default" },
-  ".cm-git-gutter .cm-gutterElement": { position: "relative" },
-  ".cm-git-gutter .cm-git-line": { cursor: "pointer" },
-  ".cm-git-line::before": { content: '""', position: "absolute", left: "2px", top: "0", bottom: "0", width: "3px", borderRadius: "1px" },
-  ".cm-git-line:hover::before": { width: "5px", left: "1px" },
-  ".cm-git-added::before": { backgroundColor: "var(--sol-green)" },
-  ".cm-git-modified::before": { backgroundColor: "var(--sol-blue)" },
-  ".cm-git-deleted::before, .cm-git-deleted-end::before": {
-    backgroundColor: "transparent",
-    width: "0",
-    height: "0",
-    borderTop: "4px solid transparent",
-    borderBottom: "4px solid transparent",
-    borderLeft: "5px solid var(--sol-red)",
-    borderRadius: "0",
-  },
-  ".cm-git-deleted::before": { top: "-4px", bottom: "auto" },
-  ".cm-git-deleted-end::before": { top: "auto", bottom: "-4px" },
-  ".cm-git-deleted:hover::before, .cm-git-deleted-end:hover::before": { width: "0", left: "1px", borderLeftWidth: "7px" },
-  ".cm-git-peek": {
-    margin: "2px 0 4px",
-    borderTop: "1px solid color-mix(in srgb, var(--sol-border) 45%, transparent)",
-    borderBottom: "1px solid color-mix(in srgb, var(--sol-border) 45%, transparent)",
-    backgroundColor: "color-mix(in srgb, var(--sol-bg-alt) 70%, transparent)",
-    fontFamily: EDITOR_FONT,
-  },
-  ".cm-git-peek-head, .cm-git-diffbar": {
-    position: "relative",
-    display: "flex",
-    alignItems: "center",
-    gap: "6px",
-    height: "24px",
-    padding: "0 8px",
-    fontSize: "11px",
-    color: "var(--sol-text-dim)",
-    userSelect: "none",
-  },
-  ".cm-git-peek-pos": { fontVariantNumeric: "tabular-nums" },
-  ".cm-git-peek-removed": { color: "var(--sol-red)", fontVariantNumeric: "tabular-nums" },
-  ".cm-git-peek-added": { color: "var(--sol-green)", fontVariantNumeric: "tabular-nums" },
-  ".cm-git-peek-fill": { flex: "1" },
-  ".cm-git-peek-old": {
-    margin: "0",
-    padding: "2px 16px 4px 6px",
-    whiteSpace: "pre",
-    overflowX: "auto",
-    fontFamily: EDITOR_FONT,
-    fontSize: "13px",
-    lineHeight: "1.6",
-    color: "var(--sol-text-muted)",
-    backgroundColor: "color-mix(in srgb, var(--sol-red) 8%, transparent)",
-    tabSize: "4",
-  },
-  ".cm-git-btn": {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "4px",
-    height: "18px",
-    padding: "0 6px",
-    border: "1px solid color-mix(in srgb, var(--sol-border) 50%, transparent)",
-    borderRadius: "3px",
-    background: "var(--sol-bg)",
-    color: "var(--sol-text-muted)",
-    font: "inherit",
-    fontSize: "11px",
-    cursor: "pointer",
-  },
-  ".cm-git-btn:hover:not(:disabled)": { color: "var(--sol-text)", borderColor: "var(--sol-cyan)" },
-  ".cm-git-btn:disabled": { opacity: "0.4", cursor: "default" },
-  ".cm-git-btn-icon": { border: "none", background: "none", padding: "0 4px", fontSize: "13px" },
-  ".cm-git-diffbar": { fontFamily: EDITOR_FONT, height: "28px" },
-  ".cm-git-ref": { color: "var(--sol-text)" },
-  ".cm-git-dim": { color: "var(--sol-text-dim)" },
-  ".cm-git-caret": { color: "var(--sol-text-dim)", fontSize: "9px" },
-  ".cm-git-count": { fontVariantNumeric: "tabular-nums", padding: "0 4px" },
-  ".cm-git-error": { color: "var(--sol-red)" },
-  ".cm-git-segs": { display: "inline-flex" },
-  ".cm-git-seg": { borderRadius: "0" },
-  ".cm-git-seg:first-child": { borderRadius: "3px 0 0 3px" },
-  ".cm-git-seg:last-child": { borderRadius: "0 3px 3px 0", marginLeft: "-1px" },
-  ".cm-git-seg-on": { color: "var(--sol-text)", backgroundColor: "var(--sol-bg-alt)" },
-  // The editor's own popup look (the completion list in theme.ts).
-  ".cm-git-menu": {
-    position: "absolute",
-    top: "26px",
-    left: "8px",
-    zIndex: "20",
-    display: "flex",
-    flexDirection: "column",
-    minWidth: "220px",
-    padding: "4px",
-    border: "1px solid color-mix(in srgb, var(--sol-border) 50%, transparent)",
-    borderRadius: "4px",
-    backgroundColor: "var(--sol-bg)",
-    boxShadow: "0 6px 20px rgb(0 0 0 / 0.18)",
-    fontSize: "12px",
-  },
-  ".cm-git-menu-list": { display: "flex", flexDirection: "column", maxHeight: "16em", overflowY: "auto", marginTop: "4px" },
-  ".cm-git-menu-item": {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: "12px",
-    padding: "3px 8px",
-    border: "none",
-    borderRadius: "3px",
-    background: "none",
-    color: "var(--sol-text-muted)",
-    font: "inherit",
-    textAlign: "left",
-    cursor: "pointer",
-  },
-  ".cm-git-menu-item[aria-selected]": { backgroundColor: "color-mix(in srgb, var(--sol-cyan) 18%, transparent)", color: "var(--sol-text)" },
-  ".cm-git-menu-on": { color: "var(--sol-text)" },
-  ".cm-git-menu-input": {
-    padding: "3px 6px",
-    border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)",
-    borderRadius: "3px",
-    background: "var(--sol-bg-alt)",
-    color: "var(--sol-text)",
-    font: "inherit",
-    outline: "none",
-  },
-  ".cm-git-menu-input:focus": { borderColor: "var(--sol-cyan)" },
 });
 
 /** Escape closes an open peek before vim or the app see it. Hunk keys for

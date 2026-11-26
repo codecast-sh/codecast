@@ -8,7 +8,8 @@
 import type { Command } from "commander";
 import { cliErrorMessage } from "@codecast/shared/contracts";
 import { apiPost } from "./castApi.js";
-import { commandGroup, type GroupDeps } from "./commandGroups.js";
+import { type GroupDeps } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { registerLineProfileCommands } from "./lineProfileCommand.js";
 import { registerMomentsCommands } from "./momentsCommand.js";
 import { registerReviewsCommands } from "./agentReviewsCommand.js";

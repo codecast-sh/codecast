@@ -8,7 +8,7 @@ import type { Command } from "commander";
 import type { PublishDeps } from "../castApi.js";
 import { spawn } from "../proc.js";
 import { fmt, icons } from "../colors.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { exitForApproval, isNeedsApproval } from "../secrets/approval.js";
 import { loadProjectEnv, type VaultMap } from "../secrets/projectMap.js";
 import { resolveManifest } from "./resolver.js";

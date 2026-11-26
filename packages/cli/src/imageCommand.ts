@@ -21,7 +21,7 @@ import { MAX_IMAGE_SIZE, downscaleWithSips } from "./imageDownscale.js";
 import { lookupByHash, storeUpload } from "./imageCache.js";
 import { detectImageMediaType, hashImageBytes } from "./imagePayload.js";
 import { fmt, icons } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { isVideoSrc } from "@codecast/shared/contracts/castPlayer";
 
 const FETCH_TIMEOUT_MS = 20_000;

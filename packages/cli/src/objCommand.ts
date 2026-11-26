@@ -4,7 +4,7 @@
 
 import { Option, type Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { OBJECT_SHORT_ID_RE, objectStatusIsDone, type ModObjectKind } from "@codecast/shared/contracts/mods";
 import { webBaseUrl } from "./config/readLocalConfig.js";
 

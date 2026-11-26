@@ -10,7 +10,7 @@
 import type { Command } from "commander";
 import { stdinText } from "./sendBody.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 
 export function registerSayCommand(program: Command): void {
   program

@@ -112,6 +112,8 @@ function plans() {
     under("authority_events", "by_conversation_created", "conversation_id"),
     // A Ship press names its session and the files it approved (changeApprovals.ts).
     under("change_approvals", "by_conversation", "conversation_id"),
+    // The browser tabs a session has open name their titles and URLs (browserTabs.ts).
+    under("session_browser_tabs", "by_conversation", "conversation_id"),
     // Pages published from the session carry its content.
     { ...artifactBase, table: "artifacts", index: "by_session_conversation", field: "session_conversation_id", value: idOf },
   ];

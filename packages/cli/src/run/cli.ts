@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { dialsWithoutWakingNow, ensureUp, openCloudHosts, readHosts, resolveCloudHost, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { isMacHost } from "../hosts/providers/registry.js";
 import { remoteRepoPath } from "../remote/session-move.js";

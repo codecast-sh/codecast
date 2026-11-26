@@ -18,7 +18,7 @@ import {
 } from "@codecast/shared/team";
 import { TEAM_VISIBILITY_OPTIONS, teamVisibilityOption } from "@codecast/shared/team/visibility";
 import { apiPost, type PublishDeps } from "../castApi.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { fmt, c } from "../colors.js";
 import { codecastPath, homeDir } from "../codecastDir.js";
 import { atomicWriteFile } from "../atomicWrite.js";

@@ -33,7 +33,7 @@ import { deviceInfo, deviceId } from "./device.js";
 import { ensureUp, hostState, isEc2Host, openCloudHosts, readHosts as readCloudHosts, toRemoteHost } from "../browser/cloudHost.js";
 import { sshTmuxAttachCommand } from "@codecast/shared/contracts";
 import { learnHostDeviceId } from "../cloud/prepare.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 /**

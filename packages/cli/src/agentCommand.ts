@@ -28,7 +28,8 @@ import {
   serializeAgentDefinitionFile,
 } from "@codecast/shared/agents";
 import { apiPost } from "./castApi.js";
-import { commandGroup, type GroupDeps } from "./commandGroups.js";
+import { type GroupDeps } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { readStdinBody, stdinText } from "./sendBody.js";
 import { c } from "./colors.js";
 import { parseExecTimeout, parseOutputFormat, resolveExecPrompt, runChain } from "./execCommand.js";

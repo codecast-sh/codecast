@@ -12,7 +12,7 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "../castApi.js";
 import { fmt } from "../colors.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { JSON_OPTION, ago, collect, emit, fail } from "../externalDataCli.js";
 import { promptHiddenSecret } from "../hiddenSecret.js";
 import { lineDefaults } from "../lineScope.js";

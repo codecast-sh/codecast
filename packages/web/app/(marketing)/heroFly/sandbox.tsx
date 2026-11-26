@@ -68,6 +68,7 @@ import { RevealInBandCtx } from "@/lib/revealHost";
 import { TeamFeatureOverride } from "@/lib/teamFeatures";
 import { TaskActiveSessionsOverride } from "@/components/tasks/taskActiveSession";
 import { FeedTriageOff } from "@/hooks/useFeedCardTriage";
+import { InstalledAppsOff } from "@/hooks/useInstalledApps";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { heroConvexStub } from "./convexStub";
 import { HERO_ENTITIES } from "./fixtures";
@@ -186,6 +187,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
               <RelativeTimeNow.Provider value={now}>
               <TaskActiveSessionsOverride.Provider value={NO_ACTIVE_SESSIONS}>
               <FeedTriageOff.Provider value={true}>
+              <InstalledAppsOff.Provider value={true}>
                 <HeroRouter>
                   <div
                     ref={rootRef}
@@ -219,6 +221,7 @@ export function HeroSandbox({ children, fallback = null, className, now = null }
                     {children}
                   </div>
                 </HeroRouter>
+              </InstalledAppsOff.Provider>
               </FeedTriageOff.Provider>
               </TaskActiveSessionsOverride.Provider>
               </RelativeTimeNow.Provider>

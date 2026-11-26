@@ -13,7 +13,7 @@ import * as path from "node:path";
 import type { Command } from "commander";
 import type { PublishDeps } from "../castApi.js";
 import { fmt, icons } from "../colors.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { inlineImageMarker } from "../inlineImage.js";
 import { spawnSync } from "../proc.js";
 import { agentTempPath } from "../tempFiles.js";

@@ -20,7 +20,7 @@ import {
   snippetBySlug,
   type AgentToolSetupStatus,
 } from "@codecast/shared/contracts";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { fmt, icons } from "../colors.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { convexClient } from "../remote/convexClient.js";

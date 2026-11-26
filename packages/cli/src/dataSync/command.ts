@@ -9,7 +9,7 @@ import { acquireLock, releaseLock } from "../capabilities/lock.js";
 import { defaultConfigDir } from "../config/configDir.js";
 import { readAuthConfig } from "../config/readAuthConfig.js";
 import { deviceId } from "../remote/device.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { dataFolderFromManifest } from "@codecast/shared/contracts/dataSync";
 import { convexDataSyncApi } from "./convexApi.js";
 import { declarationsFor, paneProjectPaths } from "./declarations.js";

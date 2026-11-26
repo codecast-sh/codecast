@@ -67,6 +67,7 @@ import { vaultLandingPath } from "../../lib/vault/projectVault";
 import { filesHref } from "../../lib/vault/vaultHref";
 import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
 import { useVaultStore } from "../../store/vaultStore";
+import { SIDE_MIN_PX, useVaultSidePanel } from "../../components/vault/useVaultSidePanel";
 import {
   toggleVaultEditMode,
   toggleVaultSourceMode,
@@ -84,9 +85,6 @@ const VaultGraphView = lazyNamed(() => import("../../components/vault/VaultGraph
 
 // A 24px target per icon, so a glyph is easy to hit and the row's width is known.
 const headerButtonClass = "inline-flex size-6 shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text transition-colors";
-
-const SIDE_MIN_PX = 200;
-
 
 const separatorClass =
   "relative z-10 w-px bg-black/10 cursor-col-resize before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan";
@@ -135,57 +133,9 @@ function VaultContent() {
   const targetLineRaw = searchParams.get("l");
   const showGraph = searchParams.get("view") === "graph";
 
-  // The side panel (backlinks / outline / tags) is closed by default and
-  // toggled from a button in the content pane. In a full Files tab the store
-  // flag is the truth and is remembered; in a split pane (a file link opened
-  // beside a conversation) both side panels start closed and the side panel's
-  // state is the pane's own, so reading a linked file never inherits the full
-  // tab's layout. This effect drives the resizable panel to match. Expanding
-  // resizes to an explicit width rather than calling expand(): the library's
-  // restored size can land below the collapse midpoint and clamp straight back to 0.
+  // The side panel (backlinks / outline / tags): open state and its panel.
   const inSplitPane = !!useTabContext()?.leafId;
-  const storeRightPanelOpen = useVaultStore((s) => s.rightPanelOpen);
-  const setStoreRightPanelOpen = useVaultStore((s) => s.setRightPanelOpen);
-  const [paneRightPanelOpen, setPaneRightPanelOpen] = useState(false);
-  const rightPanelOpen = inSplitPane ? paneRightPanelOpen : storeRightPanelOpen;
-  const setRightPanelOpen = inSplitPane ? setPaneRightPanelOpen : setStoreRightPanelOpen;
-  const tagPaneRequest = useVaultStore((s) => s.tagPaneRequest);
-  const seenTagPaneRequest = useRef(tagPaneRequest);
-  useWatchEffect(() => {
-    if (seenTagPaneRequest.current === tagPaneRequest) return;
-    seenTagPaneRequest.current = tagPaneRequest;
-    setRightPanelOpen(true);
-  }, [tagPaneRequest]);
-  const sidePanelRef = usePanelRef();
-  const sideAppliedRef = useRef<boolean | null>(null);
-  useWatchEffect(() => {
-    const ref = sidePanelRef.current;
-    if (!ref || showGraph) return;
-    if (sideAppliedRef.current === rightPanelOpen) return;
-    const firstSync = sideAppliedRef.current === null;
-    sideAppliedRef.current = rightPanelOpen;
-    if (firstSync && ref.isCollapsed() !== rightPanelOpen) return;
-    if (!rightPanelOpen) {
-      collapsePanelSoon(sidePanelRef, () => sideAppliedRef.current === false);
-      return;
-    }
-    ref.resize("22%");
-    // A narrow window: 22% can fall under the panel's pixel minimum and the
-    // library silently refuses. Ask for the minimum itself, and if that can't
-    // fit either, put the flag back so the button never claims an open panel.
-    requestAnimationFrame(() => {
-      if (!ref.isCollapsed()) return;
-      ref.resize(`${SIDE_MIN_PX}px`);
-      requestAnimationFrame(() => {
-        if (ref.isCollapsed()) {
-          sideAppliedRef.current = false;
-          setRightPanelOpen(false);
-        }
-      });
-    });
-    // `connection` is a dep because the panel group only mounts once the vault
-    // is reachable; before that the ref is empty and the effect must retry.
-  }, [rightPanelOpen, showGraph, connection]);
+  const { rightPanelOpen, setRightPanelOpen, sidePanelRef, sideAppliedRef } = useVaultSidePanel(inSplitPane, showGraph, connection);
   // The explorer column costs ~200px that a narrow pane can't spare — Files
   // opened beside a conversation, mostly. Local state: a split pane starts
   // with the tree hidden, as does any pane narrow at first layout; a full tab

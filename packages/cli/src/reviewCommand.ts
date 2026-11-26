@@ -11,7 +11,7 @@
 // scoped to the worktree: two worktrees of one repository hold different
 // diffs, so they hold different batches.
 
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { execFileSync } from "./proc.js";
 import path from "path";
 import fs from "fs";

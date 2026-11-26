@@ -26,7 +26,7 @@ import {
   type KeyBindingOverride,
 } from "@codecast/shared/contracts/keyBindings";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { verbTypoNextStep } from "./commandSuggestion.js";
 import { unknownVerbError } from "./argChecks.js";
 

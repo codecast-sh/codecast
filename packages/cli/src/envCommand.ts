@@ -30,7 +30,7 @@ import {
   type GoalEnv,
 } from "@codecast/shared/contracts/envs";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { c } from "./colors.js";
 import { fillCommand, loadEnvDeclarations, parseEnvsText, repoIdentity, resultText } from "./envDeclaration.js";
 import { scopeFor } from "./lineScope.js";

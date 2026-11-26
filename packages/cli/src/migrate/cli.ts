@@ -20,7 +20,7 @@
  */
 
 import type { Command } from "commander";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import { convexClient } from "../remote/cli.js";
 import { randomUUID } from "node:crypto";

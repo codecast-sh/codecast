@@ -38,8 +38,6 @@ import {
   getWalkieStatus,
   subscribeWalkie,
   walkieCallState,
-  walkieHoldsRoom,
-  walkieJoinedRoom,
   type WalkieLiveRoom,
   type WalkieStatus,
 } from "../calls/walkie";
@@ -53,13 +51,23 @@ import {
   compareMembersByPresence,
   memberPresenceState,
   memberPresenceVisual,
-  teamBarSig,
 } from "../../components/presence/memberPresence";
 import { memberAvatarUrl, memberDisplayName } from "../liveEntities";
 import { describeRoomLive } from "../calls/roomLabels";
 import { useInboxStore } from "../../store/inboxStore";
 import { dmUnreadByMember, railUnreadSig } from "./faceDmUnread";
 import { subscribeCoarseTick } from "../../hooks/useCoarseNow";
+import {
+  idOf,
+  liveRoomsSig,
+  lockedRoomsSig,
+  occupancySig,
+  ringsSig,
+  roomIsPrivate,
+  rosterFaceSig,
+  walkieRowSig,
+} from "./faceRowSigs";
+export { roomIsPrivate };
 
 // ── vocabulary ──────────────────────────────────────────────────────────────
 
@@ -259,10 +267,6 @@ const ENGAGED: ReadonlySet<FaceState> = new Set([
 ]);
 
 const EMPTY_ROW: FaceRow = { entries: [], links: [], card: { kind: "none" }, me: null, room: null };
-
-function idOf(v: unknown): string {
-  return v == null ? "" : String(v);
-}
 
 /** Every seat the model knows in a room: the occupancy feed, and the live
  *  rooms list for rooms the occupancy subscription has not opened. */
@@ -721,62 +725,6 @@ export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow 
 // row object, which is what lets useSyncExternalStore skip the render and a
 // non React caller compare by identity.
 
-function seatSig(seats: FaceSeat[] | undefined): string {
-  let s = "";
-  for (const m of seats ?? []) s += `${idOf(m.user_id)}:${m.muted ? 1 : 0}:${m.camera ? 1 : 0}:${m.walkie_joined_at ?? ""},`;
-  return s;
-}
-
-function occupancySig(occ: Record<string, FaceSeat[]> | undefined): string {
-  let s = "";
-  for (const k in occ ?? {}) s += `${k}=${seatSig(occ![k])};`;
-  return s;
-}
-
-function liveRoomsSig(rooms: FaceLiveRoom[] | undefined): string {
-  let s = "";
-  for (const r of rooms ?? []) {
-    s += `${r.room_key}|${r.seat ?? ""}|${r.private ? 1 : 0}|${seatSig(r.members)}|${(r.guests ?? []).map((g) => `${g.identity}:${g.name}`).join(",")}\n`;
-  }
-  return s;
-}
-
-function lockedRoomsSig(rooms: Record<string, { locked?: boolean }> | undefined): string {
-  let s = "";
-  for (const k in rooms ?? {}) if (rooms![k]?.locked) s += `${k},`;
-  return s;
-}
-
-/** A huddle that started private and is still locked. Private rides the live
- *  room from the server; the lock's home is `callRooms`, flipped locally, so
- *  opening the door (which makes the huddle ordinary) reads at once. */
-export function roomIsPrivate(st: any, roomKey: string): boolean {
-  return !!st.callRooms?.[roomKey]?.locked && !!(st.liveRooms ?? []).find((r: FaceLiveRoom) => r.room_key === roomKey)?.private;
-}
-
-function rosterFaceSig(members: FaceMember[] | undefined): string {
-  // teamBarSig carries identity, presence, status and the room; the walkie
-  // fields the row adds ride beside it.
-  let extra = "";
-  for (const m of members ?? []) {
-    if (!m?._id) continue;
-    extra += `${m.seat ?? ""}|${m.walkie_joined_at ?? ""}|${m.walkie_pref ?? ""}|${m.walkie_snoozed_until ?? ""}|${m.is_bot ? m.bot_kind ?? "bot" : ""}\n`;
-  }
-  return teamBarSig((members ?? []) as any[]) + extra;
-}
-
-function ringsSig(myCalls: { incoming?: any[]; outgoing?: any[] } | undefined): string {
-  let s = "";
-  for (const r of myCalls?.incoming ?? []) s += `in:${idOf(r.from_user)}:${r.room_key}:${r.from_name ?? ""},`;
-  for (const r of myCalls?.outgoing ?? []) s += `out:${idOf(r.to_user)}:${r.room_key}:${r.status ?? ""}:${r.to_name ?? ""},`;
-  return s;
-}
-
-function walkieRowSig(w: WalkieStatus): string {
-  const s = w.sending;
-  const live = w.liveRoom;
-  return `${live?.key ?? ""}|${live?.mode ?? ""}|${s ? `${s.roomKey}:${s.live ? 1 : 0}:${s.heardLive ? 1 : 0}` : ""}|${w.incoming?.fromUserId ?? ""}:${w.incoming?.roomKey ?? ""}|${w.canReply ? 1 : 0}|${walkieJoinedRoom(w) ?? ""}|${walkieHoldsRoom(w, null) ? 1 : 0}`;
-}
 
 
 /** The clock the row needs: `joinedAgo` and a snooze running out move on

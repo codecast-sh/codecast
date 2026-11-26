@@ -23,7 +23,7 @@ import { didYouMean, nearMatches } from "./commandSuggestion.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { getVersion } from "./update.js";
 import { c, fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 
 /** The line that ties a guide to the binary that printed it. */
 export function guideHeader(slug: string): string {

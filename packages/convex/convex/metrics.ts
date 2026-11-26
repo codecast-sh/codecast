@@ -12,7 +12,7 @@
 // Every public function authenticates itself through ingest.scopeOf and holds
 // the watch to the caller's stored workspace key, never to team_id.
 import { v } from "convex/values";
-import { internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx } from "./functions";
+import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { invalidScope, notFound, requireUserOrToken } from "./lib/auth";
@@ -24,7 +24,7 @@ import { readableRowByRef, rowByRef } from "./lib/rowByRef";
 import { workspaceGrantsAccess } from "./lib/access";
 import { planMetric } from "./lib/ingestGroups";
 import { appendMetricPoint, mergeMetricHistory, mergeReaderSeries } from "./lib/watchSeries";
-import { connFor, fetchMetricHistory, fetchMetricValue } from "./sources/posthog";
+import { connFor, fetchMetricValue } from "./sources/posthog";
 import { readAppMetric } from "./sources/appMetrics";
 import { isTokenRefusal } from "./lib/sourceHealth";
 import { GROUP_RULES, INGEST_LIMITS, INGEST_SHORT_ID_PREFIX, METRIC_WATCH_LIMITS, READER_LIVE_SLACK_MS, WATCH_KINDS_BY_PROVIDER, watchProblem } from "@codecast/shared/contracts/ingest";
@@ -34,6 +34,7 @@ import { isTeamAdmin } from "./privacy";
 import { definitionOf, notRemoved, ofVersion } from "@codecast/shared/contracts/metricStanding";
 import { MONITOR_LIMITS, isMuted, monitorProblem, nextMonitorState, normalizeNotify, notifyProblem, promoteFor, renotifyDue } from "@codecast/shared/contracts/metricMonitor";
 import { deliverWatchAlert } from "./metricAlerts";
+import { readOneHistory } from "./metricHistory";
 import { parseVolumeQuery, volumeHistory, volumeValue, type VolumeInput } from "@codecast/shared/contracts/volumeWatch";
 
 // The watch check is the contract's, shared with the web form.
@@ -745,54 +746,6 @@ export const readHistory = internalAction({
     }
   },
 });
-
-/** One watch's history read (readHistory without the queue). */
-async function readOneHistory(ctx: ActionCtx, args: { watch_id: Id<"metric_watches">; days?: number }): Promise<{ added?: number; note?: string } | null> {
-  const watch = await ctx.runQuery(internal.metrics.historyInputs, { watch_id: args.watch_id });
-  if (!watch) return null;
-  if (watch.query_kind === "volume") {
-    // The counters reach back as far as they keep (48 hours of events, 30 days of issues); open issues has no past.
-    const read = await ctx.runQuery(internal.metrics.volumeRead, { watch_id: args.watch_id, history: true });
-    if (!read?.points?.length) {
-      const note = read?.error ?? "Its source keeps no past for this series; the history is its polls";
-      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note });
-      return { note };
-    }
-    return await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points });
-  }
-  if (watch.query_kind === "reader") {
-    // The reader answers its own series with every read; `days` asks for more when it takes one.
-    const read = await readAppMetric(ctx, watch.source_id, watch.query, fetch, { days: args.days ?? METRIC_WATCH_LIMITS.backfill_days_default });
-    if (!read.ok) {
-      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note: read.error });
-      return { note: read.error };
-    }
-    if (!read.points.length) {
-      const note = "The reader answers no dated points; the history is its polls";
-      await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note });
-      return { note };
-    }
-    return await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points, ...(read.version ? { version: read.version } : {}) });
-  }
-  const source = await ctx.runQuery(internal.sources.posthog.sourceForPoll, { source_id: watch.source_id });
-  if (!source || source.status !== "active") {
-    const note = source ? `The source is ${source.status}` : "The source was removed";
-    await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note });
-    return { note };
-  }
-  const conn = await connFor(ctx, source);
-  const span = { now: Date.now(), oldest: watch.oldest, interval_ms: watch.interval_ms, days: args.days ?? METRIC_WATCH_LIMITS.backfill_days_default };
-  const read = "error" in conn ? { ok: false as const, error: conn.error, lost: true } : await fetchMetricHistory(conn, watch, span);
-  if (read.ok) {
-    const added = await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, points: read.points, ...(read.note ? { note: read.note } : {}) });
-    return { ...added, ...(read.note ? { note: read.note } : {}) };
-  }
-  await ctx.runMutation(internal.metrics.recordHistory, { watch_id: args.watch_id, note: read.error });
-  if ("lost" in read || isTokenRefusal(read.status)) {
-    await ctx.runMutation(internal.ingest.sourceConnectionLost, { source_id: source.source_id, error: read.error });
-  }
-  return { note: read.error };
-}
 
 export const recordHistory = internalMutation({
   args: { watch_id: v.id("metric_watches"), points: v.optional(v.array(v.object({ at: v.number(), value: v.number() }))), note: v.optional(v.string()), version: v.optional(v.string()) },

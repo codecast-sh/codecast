@@ -4,7 +4,8 @@
 import type { Command } from "commander";
 import { canRedeploySha, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
 import { apiPost } from "./castApi.js";
-import { commandGroup, type GroupDeps } from "./commandGroups.js";
+import { type GroupDeps } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 
 /** What a release asks the server for, per target: a deploy, of the named commit when the release pins one. */
 export function releaseRequest(repository: string, target: string, sha: string | null, here: boolean): Record<string, unknown> {

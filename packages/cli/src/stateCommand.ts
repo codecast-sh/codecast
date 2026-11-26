@@ -27,7 +27,7 @@ import {
 } from "@codecast/shared/contracts";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
 import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 
 /** Words that mean "remove the pinned state" when they are the whole argument.
  * Deliberately excludes "done": an agent wrapping up is as likely to mean it as

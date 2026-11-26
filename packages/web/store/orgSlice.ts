@@ -43,6 +43,10 @@ import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
 import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
 import { applyMoveBack, moveBackEchoed, moveBackIntent, revertMoveBack, type MoveBackIntent } from "./orgMoveBack";
+import { applyOrgChangeIntent, applyOrgProposalIntent, applyOrgUndoIntent, putReplyBack, replyStampEchoed, undoIntentBatches } from "./orgReplyIntents";
+import { fillRolesOnlyTree } from "./orgRolesOnlyTree";
+export { applyOrgChangeIntent, applyOrgProposalIntent, applyOrgUndoIntent } from "./orgReplyIntents";
+export { fillRolesOnlyTree } from "./orgRolesOnlyTree";
 
 /** An optimistic edit awaiting the server's echo (see the header). The tree
  *  kinds reshape the tree (a move, a follow, a role's fields, a retire). The
@@ -779,10 +783,6 @@ function applyRoleFields(role: OrgRole, fields: OrgUpdateRoleInput, keys: (keyof
   }
 }
 
-/** A verdict's flip, on the change rows: the same body for the action's
- *  draft and for the replay onto a push that still carries the old status.
- *  The edits ride the intent, so a stale push that replaced the row with the
- *  server's copy (no edits yet) gets them back too. */
 /** Flip every change of a proposal that still waits on a verdict and passes
  *  `match`, one intent each, so a refusal of the whole call puts every row
  *  back and a partial echo settles row by row. */
@@ -822,62 +822,6 @@ function noteProposal(draft: OrgDraft, proposalId: string, stamp: OrgChangeReply
   const intent: OrgIntent = { kind: "noteProposal", id: intentId(), proposal_id: proposalId, short_id: p.short_id, reply: stamp, ...(p.reply ? { from: p.reply } : {}), at: stamp.at };
   applyOrgProposalIntent(draft.orgProposals, intent);
   pushIntent(draft, intent);
-}
-
-export function applyOrgChangeIntent(changes: Record<string, OrgProposalChange>, intent: Extract<OrgIntent, { kind: "decideChange" | "noteChange" }>): void {
-  const c = changes[intent.change_id];
-  if (!c) return;
-  if (intent.kind === "noteChange") return applyNoteStamp(c, intent);
-  if (c.decided_by !== undefined || c.status === intent.to) return;
-  c.status = intent.to;
-  c.decided_at = intent.at;
-  if (intent.reply) c.reply = intent.reply;
-}
-
-/** The server's own `reply` stamp written since this note was pressed: it
- *  names who answered (the draft's stamp never does) and is not the stamp the
- *  row held before (`from`, which the server wrote for an earlier answer).
- *  No clocks: a client's `at` and the server's cannot be compared. */
-function replyStampEchoed(reply: OrgChangeReply | undefined, intent: { from?: OrgChangeReply }): boolean {
-  if (!reply || reply.by === undefined) return false;
-  const was = intent.from;
-  return !was || was.by !== reply.by || was.at !== reply.at || was.verdict !== reply.verdict || (was.text ?? "") !== (reply.text ?? "");
-}
-
-/** A note's stamp on its row (a change, or the proposal for a note on the
- *  whole): the action's draft and the replay onto a push that predates the
- *  mutation. The server's own stamp, once there, is left alone. */
-function applyNoteStamp(row: { reply?: OrgChangeReply }, intent: { reply: OrgChangeReply; from?: OrgChangeReply }): void {
-  if (!replyStampEchoed(row.reply, intent)) row.reply = intent.reply;
-}
-
-/** The intents that act on the list row (a withdraw's flip, a whole-proposal
- *  note's stamp): the action's draft and the replay onto a list push that
- *  started before the mutation landed. */
-export function applyOrgProposalIntent(proposals: Record<string, OrgProposalListRow>, intent: Extract<OrgIntent, { kind: "withdraw" | "noteProposal" }>): void {
-  const p = proposals[intent.proposal_id];
-  if (!p) return;
-  if (intent.kind === "noteProposal") return applyNoteStamp(p, intent);
-  if (p.resolved_at !== undefined || p.status !== "open") return;
-  p.status = "withdrawn";
-}
-
-/** The entries one undo or redo marks: the one pressed, and the later ones
- *  the person agreed go with it. */
-const undoIntentBatches = (intent: Extract<OrgIntent, { kind: "undoChange" }>) => [intent.batch, ...intent.with];
-
-/** The mark an undo or a redo puts on the record: the action's draft and the
- *  replay onto a list push that started before the mutation landed. An undo
- *  strikes each entry under the person's name with no batch named yet (the
- *  server's stamp names it, which is how the echo is told from the mark); a
- *  redo takes the strike off. */
-export function applyOrgUndoIntent(log: Record<string, OrgLogEntry>, intent: Extract<OrgIntent, { kind: "undoChange" }>): void {
-  for (const b of undoIntentBatches(intent)) {
-    const e = log[b];
-    if (!e) continue;
-    if (intent.redo) delete e.undone_by;
-    else if (!e.undone_by) e.undone_by = { batch: "", user_id: intent.by.user_id, name: intent.by.name, at: intent.at };
-  }
 }
 
 /**
@@ -957,11 +901,6 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
     default:
       return;
   }
-}
-
-function putReplyBack(row: { reply?: OrgChangeReply }, from: OrgChangeReply | undefined): void {
-  if (from) row.reply = from;
-  else delete row.reply;
 }
 
 /** The tree edits whose apply cannot be undone by writing one field back: a
@@ -1233,42 +1172,6 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
   draft.orgIntents = [...draft.orgIntents.filter((i) => subjectOf(i) !== key), intent];
 }
 
-
-/** A roles-only payload (org.roles) carries the org without anything a
- *  session touches: members as identity only (no presence, no sessions), no
- *  per role counts or sessions, no live state on a standing session or an
- *  anchor. Both org.roles and org.tree feed this
- *  one slot, so fill those fields from the tree already held for the same
- *  workspace, matched by id; a surface that draws them mounts org.tree, which
- *  replaces them on its next push. With no tree for this workspace they start
- *  empty, which is what a roles-only surface reads anyway. */
-export function fillRolesOnlyTree(incoming: any, current: OrgTree | null | undefined): OrgTree {
-  const { roles_only: _r, ...rest } = incoming;
-  const held = current && current.workspace?.id === incoming.workspace?.id ? current : null;
-  const heldRole = new Map((held?.roles ?? []).map((r) => [r._id, r]));
-  const heldAnchor = new Map((held?.anchors ?? []).map((a) => [String(a.anchor_id), a]));
-  const heldPerson = new Map((held?.people ?? []).map((p) => [String(p.user_id), p]));
-  return {
-    ...rest,
-    people: (rest.people ?? []).map((person: any) => {
-      const was = heldPerson.get(String(person.user_id));
-      return { ...person, presence: was?.presence ?? "offline", counts: was?.counts ?? countStates([]), sessions: was?.sessions ?? [], total: was?.total ?? 0 };
-    }),
-    truncated: held?.truncated,
-    roles: rest.roles.map((role: any) => {
-      const was = heldRole.get(role._id);
-      const standing = role.standing
-        ? (was?.standing && was.standing.conversation_id === role.standing.conversation_id ? was.standing : role.standing)
-        : null;
-      return { ...role, counts: was?.counts ?? countStates([]), sessions: was?.sessions ?? [], total: was?.total ?? 0, standing };
-    }),
-    anchors: rest.anchors.map((anchor: any) => {
-      const was = heldAnchor.get(String(anchor.anchor_id));
-      if (!was || was.conversation_id !== anchor.conversation_id) return anchor;
-      return { ...anchor, short_id: was.short_id, state: was.state, state_line: was.state_line, state_status: was.state_status, state_at: was.state_at };
-    }),
-  } as OrgTree;
-}
 
 /**
  * Settle the journal against a pushed collection and replay the intents still

@@ -5,7 +5,8 @@
  */
 
 import type { Command } from "commander";
-import { COMMAND_GROUPS, groupForToken, type CommandGroup, type GroupDeps } from "./commandGroups.js";
+import { COMMAND_GROUPS, type CommandGroup, type GroupDeps } from "./commandGroups.js";
+import { groupForToken } from "./commandGroupLookup.js";
 
 /**
  * The placeholder every group has in the tree until something names it.

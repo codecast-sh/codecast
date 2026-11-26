@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { FilePatchDiff } from "./DiffView";
-import { diffLineElements, revealDiffLine } from "./diff/pierre";
+import { landOnDiffRow, topDiffRow } from "./diffPaneRows";
 import { parsePatch, getFileStatus, type DiffLineAnchor } from "../lib/patchParser";
 import { cn, copyToClipboard } from "../lib/utils";
 import { copyText } from "../lib/copyText";
@@ -35,7 +35,6 @@ import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { matchesAction, usePaneShortcutAction, useShortcutContext, withShortcut } from "../shortcuts";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { useFollowSurface } from "../hooks/useFollowSurface";
-import { landOn } from "../hooks/useDiffAddress";
 import { notifyFollowView } from "../lib/follow";
 import type { AnchorPlacement, CodeAnchorText } from "@codecast/shared/comments";
 
@@ -1471,48 +1470,5 @@ function FileDiffLayoutBody({
         </Group>
       </div>
     </div>
-  );
-}
-
-// Sticky file header height in a pane scroller: a row under it is not read.
-const PANE_HEADER_PX = 32;
-
-/** The diff row at the top of a pane's scroller: its new-side line, and the
- *  file card it sits in when every file is stacked (`file-<index>`). */
-function topDiffRow(root: HTMLElement): { line?: number; fileIndex?: number } | null {
-  const scroller = root.querySelector<HTMLElement>("[data-follow-diff-scroll]");
-  if (!scroller) return null;
-  const edge = scroller.getBoundingClientRect().top + PANE_HEADER_PX;
-  for (const { el, anchor } of diffLineElements(scroller)) {
-    if (anchor.side !== "RIGHT" || el.getBoundingClientRect().bottom <= edge) continue;
-    // The line sits in its diff's shadow root; the card is around the diff.
-    const host = (el.getRootNode() as ShadowRoot).host as HTMLElement | undefined;
-    const card = host?.closest<HTMLElement>("[id^='file-']");
-    const fileIndex = card ? Number(card.id.slice(5)) : undefined;
-    return { line: anchor.lineNumber, fileIndex: Number.isFinite(fileIndex) ? fileIndex : undefined };
-  }
-  return { line: undefined };
-}
-
-/** Bring a file (its card, when stacked) and a new-side line to the top of a
- *  pane's scroller, the nearest line before it when the diff leaves it out. */
-function landOnDiffRow(paneRef: React.RefObject<HTMLElement | null>, fileIndex: number | null, line: number | undefined): () => void {
-  return landOn(
-    () => paneRef.current?.querySelector<HTMLElement>("[data-follow-diff-scroll]"),
-    (scroller) => {
-      const scope = fileIndex === null ? scroller : scroller.querySelector<HTMLElement>(`[id="file-${fileIndex}"]`);
-      if (!scope || line === undefined) return scope === scroller ? (scroller.firstElementChild as HTMLElement | null) : scope;
-      let best: HTMLElement | null = null;
-      for (const { el, anchor } of diffLineElements(scope)) {
-        if (anchor.side !== "RIGHT") continue;
-        if (anchor.lineNumber > line) break;
-        best = el;
-      }
-      // A long diff draws only near the viewport: when the line (or, in a
-      // collapsed stretch, the nearest line before it) is not drawn yet,
-      // scroll there and look again.
-      return revealDiffLine(scope, { side: "RIGHT", lineNumber: line }, { orEarlier: true }) ? null : best ?? scope;
-    },
-    (el) => (el.matches("[data-line]") ? PANE_HEADER_PX : 0),
   );
 }

@@ -29,7 +29,7 @@ import {
   codecastPrUrl,
   checkLabel,
 } from "@codecast/shared/contracts";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { placementLabel, type AnchorPlacement, type CodeAnchorText } from "@codecast/shared/comments";
 import { captureLocalAnchor, placeComments, readFileLines } from "./codeAnchorLocal.js";
 import { choiceOption } from "./argChecks.js";

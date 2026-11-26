@@ -13,7 +13,6 @@
 // returns the key hash; the ingest key itself is returned once, by create and
 // rotate.
 import { v } from "convex/values";
-import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -26,9 +25,7 @@ import { sha256Hex } from "./lib/hash";
 import { nextShortId } from "./counters";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { withCiRun } from "@codecast/shared/contracts/volumeWatch";
-import { capForeignText, inlineForeignText } from "@codecast/shared/contracts";
-import { recordExternalEventOnce } from "./externalEvents";
-import { recordDeployMarker } from "./deploys";
+import { announceDeploy, releaseSha } from "./ingestDeploys";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
 import { markConnectionLost } from "./lib/sourceHealth";
 import { linkReplayToGroup, upsertReplayManifest } from "./lib/replayWrites";
@@ -39,7 +36,7 @@ import { OVERFLOW_FP, SOURCE_CAPS, announceTransition, appendSamples, findGroup,
 import { countLanded, groupView, patchSourceStats, rollStats, sourceStats, sourceView, sourceViewOf } from "./lib/sourceStats";
 import { scopeArgs } from "./lib/ingestScopeArgs";
 import { scopeOf, sourceByRef } from "./lib/ingestScope";
-import { deployMarkerOf, promotionSignal } from "./lib/ingestPayloads";
+import { promotionSignal } from "./lib/ingestPayloads";
 import { PROMOTE_SPACING_MS, promotionStep, schedulePromotion } from "./ingestPromotions";
 import { commitBySha } from "./commits";
 import { requireTaskByRef } from "./lib/taskGraph";
@@ -1016,25 +1013,6 @@ export const applyReplayIssues = internalMutation({
   },
 });
 
-function deployKey(sourceId: Id<"event_sources">, version: string, environment: string | undefined): string {
-  return `ingest:${sourceId}:deploy:${version}:${environment ?? ""}`;
-}
-
-async function eventByDedupeKey(ctx: any, key: string): Promise<Doc<"external_events"> | null> {
-  return await ctx.db.query("external_events").withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", key)).first();
-}
-
-/**
- * The sha the envelope's release was deployed from: a deploy item in this
- * batch, else the deploy marker already recorded for that release.
- */
-async function releaseSha(ctx: any, sourceId: Id<"event_sources">, envelope: { release?: string; environment?: string }, deploys: Extract<ItemPlan, { type: "deploy" }>[]): Promise<string | undefined> {
-  if (!envelope.release) return undefined;
-  const inBatch = deploys.find((d) => d.version === envelope.release && d.sha && (d.environment ?? "") === (envelope.environment ?? ""));
-  if (inBatch) return inBatch.sha;
-  return (await eventByDedupeKey(ctx, deployKey(sourceId, envelope.release, envelope.environment)))?.sha ?? undefined;
-}
-
 /**
  * One batch from the door, in one transaction. `items_json` is the validated
  * items as JSON: product payloads carry object keys Convex refuses as field
@@ -1160,59 +1138,6 @@ export const promoteDue = internalMutation({
     return { due: due.length, filed };
   },
 });
-
-/**
- * The deploy's name as an armed trigger's run reads it. Whoever holds the
- * source's key writes the version and environment, and a browser key is public,
- * so the run gets them as identifiers: one line each, capped to what a release
- * name needs. The run reads the deploy itself through the fenced event view.
- */
-const DEPLOY_TRIGGER_FIELD_CHARS = 64;
-export function deployTriggerTitle(d: { version: string; environment?: string }): string {
-  const field = (value: string) => capForeignText(inlineForeignText(value), DEPLOY_TRIGGER_FIELD_CHARS);
-  return `Deployed ${field(d.version)}${d.environment ? ` to ${field(d.environment)}` : ""}`;
-}
-
-/**
- * A deploy marker and its triggers, once per version and environment: a
- * retried batch or an SDK that reports its version at every boot records and
- * fires nothing again. New markers past SOURCE_CAPS.deploys_per_hour are
- * skipped. Whether this call recorded one.
- */
-async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract<ItemPlan, { type: "deploy" }>): Promise<boolean> {
-  const key = deployKey(source._id, d.version, d.environment);
-  const seen = await eventByDedupeKey(ctx, key);
-  if (seen) {
-    // A second report of the same version (the deploy path's own, after an
-    // api's boot announced it) adds what it knows: the run, the commit range.
-    if (d.url || d.commits?.length || d.previous_sha) await recordDeployMarker(ctx, deployMarkerOf(source, d, seen._id));
-    return false;
-  }
-  const { granted } = await takeFromWindow(ctx.db, `ingest-deploys:${source._id}`, SOURCE_CAPS.deploys_per_hour, HOUR_MS, 1);
-  if (!granted) return false;
-  const title = `Deployed ${d.version}${d.environment ? ` to ${d.environment}` : ""}`;
-  const { id: eventId } = await recordExternalEventOnce(ctx, {
-    team_id: source.team_id,
-    workspace: source.workspace,
-    source: source.provider,
-    kind: "deploy",
-    title,
-    sha: d.sha,
-    source_id: source._id,
-    data: { transition: "deploy", source_name: source.name, provider: source.provider, release: d.version, environment: d.environment },
-    dedupe_key: key,
-    created_at: d.at,
-  });
-  await recordDeployMarker(ctx, deployMarkerOf(source, d, eventId));
-  await scheduleTriggerMatch(ctx, {
-    event_type: "deploy",
-    team_id: source.team_id,
-    workspace: source.workspace,
-    source: source.name,
-    event_ref: { external_event_id: eventId, title: deployTriggerTitle(d) },
-  });
-  return true;
-}
 
 // ── Promotion (X6) ──
 

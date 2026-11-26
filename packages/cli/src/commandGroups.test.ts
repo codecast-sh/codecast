@@ -9,7 +9,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
-import { COMMAND_GROUPS, groupForToken, type GroupDeps } from "./commandGroups.js";
+import { COMMAND_GROUPS, type GroupDeps } from "./commandGroups.js";
+import { groupForToken } from "./commandGroupLookup.js";
 import { activateAllGroups, activateGroup, groupTokenInArgv, registerGroupStubs } from "./commandGroupActivation.js";
 import { commandTree, unknownCommandNextStep } from "./commandSuggestion.js";
 

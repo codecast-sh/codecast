@@ -22,7 +22,7 @@
 // PURE isomorphic data — no Node or DOM APIs — so the Convex runtime, the Node
 // daemon, and the browser can all import it.
 
-import { CHECK_REFERENCE, CHECK_SNIPPET, CHECK_SNIPPET_END, WORKFLOW_REFERENCE, WORKFLOW_SNIPPET, WORKFLOW_SNIPPET_END } from "./snippetsWorkflow";
+import { CHECK_REFERENCE, CHECK_SECTION, CHECK_SNIPPET, DECIDE_REFERENCE, DECIDE_SECTION, DECIDE_SNIPPET, PR_REFERENCE, PR_SECTION, PR_SNIPPET, WORKFLOW_REFERENCE, WORKFLOW_SNIPPET, WORKFLOW_SNIPPET_END } from "./snippetsWorkflow";
 import { manifestHash } from "./capabilities";
 import { ASSIGNEE_MEANS } from "./orgAssignee";
 import { agentSetupPageUrl } from "./agentToolSetup";
@@ -384,7 +384,7 @@ cast doc delete <id> --yes                  # permanent; only docs you created
 A task can be backed by a Linear or GitHub issue: \`cast task show\` prints its identifier (\`LIN-123\`, \`owner/repo#482\`) and link, \`cast task ls\` shows the identifier beside the title, and the sync runs both ways (\`cast task comment\` posts to the issue, \`cast task done\` closes it).
 `;
 
-export { CHECK_REFERENCE, CHECK_SNIPPET, CHECK_SNIPPET_END, WORKFLOW_REFERENCE, WORKFLOW_SNIPPET, WORKFLOW_SNIPPET_END } from "./snippetsWorkflow";
+export { CHECK_REFERENCE, CHECK_SECTION, CHECK_SNIPPET, CHECK_SNIPPET_END, DECIDE_REFERENCE, DECIDE_SECTION, DECIDE_SNIPPET, DECIDE_SNIPPET_END, PR_REFERENCE, PR_SECTION, PR_SNIPPET, PR_SNIPPET_END, WORKFLOW_REFERENCE, WORKFLOW_SNIPPET, WORKFLOW_SNIPPET_END } from "./snippetsWorkflow";
 
 export const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
 export const VISUAL_SNIPPET = `
@@ -1031,11 +1031,6 @@ export const SIM_SECTION: SectionSpec = {
   endMarker: SIM_SNIPPET_END,
 };
 
-export const CHECK_SECTION: SectionSpec = {
-  headings: ["## Typechecking"],
-  endMarker: CHECK_SNIPPET_END,
-};
-
 // One explanation of how agents name codecast objects in prose, shared by every
 // feature that introduces one (sessions, tasks, plans, triggers, docs). Each of
 // those snippets used to teach its own object's id in its own words — or not at
@@ -1072,47 +1067,6 @@ export const REFERENCES_SECTION: SectionSpec = {
 export const PUBLISH_SECTION: SectionSpec = {
   headings: ["## Publishing pages", "## Publishing artifacts", "## Publishing HTML artifacts"],
   endMarker: PUBLISH_SNIPPET_END,
-};
-
-export const PR_SNIPPET_END = "<!-- /codecast-pr -->";
-export const PR_SNIPPET = `
-## Pull requests (cast pr)
-
-\`cast pr\` reads and steers a pull request from the shell: its checks, reviews, threads, and the session that owns it until it merges. Every verb takes a number, \`owner/repo#123\`, a URL, or nothing (the pull request this session is bound to, else the one for your branch).
-
-**Review as a batch.** Hold a note on each line you have something to say about, then send them as one review with one verdict; nothing reaches GitHub or the author until you submit. A note names a file and line and says what should change or what you want to know; it never pastes the code. Use this rather than \`gh pr review\` or posting comments one at a time.
-
-\`\`\`bash
-cast pr show [ref]                                        # state, checks, reviews, open threads, owner
-gh pr diff 123                                            # read the change
-cast pr comment 123 --hold --file src/x.ts --line 42 "…"  # hold a note on a line
-cast pr review 123 --request-changes -b "…"               # send the batch: --approve | --request-changes | --comment
-cast pr threads [ref]; cast pr comment 123 --reply <thread> "…"; cast pr resolve <thread>
-\`\`\`
-
-The review goes out on GitHub as the human you run as, so the verdict is theirs. **Owning a pull request:** \`cast pr shepherd on [ref]\` binds this session to it, and you are woken when it moves: make each change, push to the same branch, reply to the notes you addressed, and resolve their threads. Do not merge unless a human asked you to. \`cast guide pr\` has the rest.
-${PR_SNIPPET_END}
-`;
-
-/** What `cast guide pr` prints after the body: the detail an install leaves out of CLAUDE.md. */
-export const PR_REFERENCE = `
-\`\`\`bash
-cast pr ls                                  # open pull requests across your teams (--repo, --mine, --shepherded, --state)
-cast pr events [ref]                        # timeline: pushes, reviews, checks, merges
-cast pr watch [ref]                         # one line per change; the first frame is silent
-cast pr open [ref]                          # the page in codecast (--print for the URL only)
-cast pr create -t "<title>" -b -            # open one with gh; the bound task's change guide becomes its walkthrough (--dry-run)
-cast pr notes 123                           # what you are holding (--discard throws them away)
-cast pr comment 123 "…"                     # say something on the conversation now, outside a review
-cast pr resolve <thread> [ref]              # settle a thread you answered (unresolve reopens it)
-\`\`\`
-
-Every read takes \`--json\`. \`-\` reads a note's body from a heredoc. Read the change with \`gh pr diff\` or \`git diff main...<branch>\` in a checkout. GitHub refuses a verdict on the human's own pull request, and says so. If the pull request has an owning session, the whole review reaches it as one message the moment GitHub accepts it. \`cast pr shepherd on --for <session>\` binds another of your sessions; the /cast-ship skill does this when it opens one.
-`;
-
-export const PR_SECTION: SectionSpec = {
-  headings: ["## Pull requests (cast pr)", "## Pull requests"],
-  endMarker: PR_SNIPPET_END,
 };
 
 export const CHAT_SNIPPET_END = "<!-- /codecast-chat -->";
@@ -1222,54 +1176,6 @@ ${LIMITS_SNIPPET_END}
 export const LIMITS_SECTION: SectionSpec = {
   headings: ["## Usage limits"],
   endMarker: LIMITS_SNIPPET_END,
-};
-
-export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
-export const DECIDE_SNIPPET = `
-## Asking for a decision
-
-\`cast decide\` queues a question, so unlike an inline ask it does not stop the human mid-thought. Each still costs an answer, so ask only when it is theirs: intent nothing written settles, a fact only they hold, money beyond the run's budget, or an irreversible change whose mistake hits many. Decide the rest and say what you chose. Never a card: what reading answers, a status update, a probe or test, or deleting disposable or rebuildable data.
-
-Never re-ask what an earlier card (\`cast decide ls\`), ruling or project instruction answered. When the answer deploys, spends, changes access or messages outside the team, pass \`--category production|billing|data|access|external|product|limit\`: the card is then a person's alone, else (outside a run) \`review\`, open to a granted role.
-
-\`\`\`bash
-cast decide "<one question>" \\
-  -o "First option :: what happens if chosen" \\
-  -o "Second option :: what happens instead" \\
-  --impact "<1-5> :: what waits on the answer" \\
-  --context -  <<'EOF'
-What you would pick and why, then what the choice turns on.
-EOF
-\`\`\`
-
-**The card is the whole message, written for someone who was not here.** The person answering knows the product and its people but did not follow this session: they read the card once, in their queue or on their phone, with nothing else open, and answer without opening the session. Name things the way they would. The names this work coined, its shorthand, and ids or references only the session explains (a task, a trigger, a script, "the rule from earlier") mean nothing to them, and neither does a pointer back to something said earlier in the session, their own words included: say what the thing is instead. The question is the choice as they would put it to themselves. Each option says what happens to the product or the people it reaches, then \`::\` and the fact that sizes it. The context opens on what you would pick and why, then gives only what the choice turns on: the finding that forces it, what cuts against your pick, and what you do meanwhile. It reads in a minute, under 150 words; how you got there and the supporting detail go in \`--report report.html\`. When the options are things to look at (layouts, mockups, drafts, charts), the person chooses by looking, so the card carries each picture: a \`cast-canvas\` in that option's \`--option-body n=file.md\`, or all of them side by side in a canvas after the context's opening. Draw them on the card rather than in your reply; a card that points back to a picture in the session leaves them choosing blind. Every number and claim on it is one the session established; an estimate says so. Before posting, read the card as that person: whatever they would have to ask you about, rewrite. After posting, don't repeat the options.
-
-**A step only the person may take** (a grant, a spend, a pairing, an approval) is a permission ask, never a command to type: \`cast decide "<what Yes does, in plain words>?" --run "cast …"\` runs it as theirs on Yes (\`--on laptop\` from a cloud host). A refusal that posted an approval card has asked already: end your turn.
-
-**Blocking is the default**: post, then end your turn; the answer arrives as a user message. \`--advisory --default <n>\` keeps you working on option n, but only when that default is cheap to undo. When facts change, \`cast decide edit\` rewrites your open decision in place and \`cast decide cancel\` withdraws one the work has moved past. \`cast guide decide\` has the rest.
-${DECIDE_SNIPPET_END}
-`;
-
-/** What `cast guide decide` prints after the body: the detail an install leaves out of CLAUDE.md. */
-export const DECIDE_REFERENCE = `
-\`\`\`bash
-cast decide "<q>" -o … -o … --option-page 2=alt.html   # an option with its own page (a file, a slug, or a url)
-cast decide ls                                          # this session's decisions: id, answer, age, messages since (--mine: every pending one you hold)
-cast stack remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N --due tomorrow   # tend a stack; overdue sorts first
-\`\`\`
-
-A withdraw arrives after the human has read the ask, so get it right before posting. To see how a card renders, mount the component on a fixture row or open an answered one. The context renders as markdown, \`cast-canvas\` blocks included, and most decisions read faster as a picture; keep prose for the reasoning a picture cannot carry. A bare question is useless: the queue shows nothing else unless they open the session.
-
-\`cast decide edit\` and \`cast decide cancel\` act on this session's open decision and keep its spot in the queue. An answered decision cannot be edited; act on the answer. Before ending a long turn and whenever you post, cancel open asks the work has moved past: an answer to a question that stopped mattering costs attention and earns nothing. Answers often land an hour later and disagree, and everything built on an advisory default is then work to unwind; if reversing would cost more than waiting, block.
-
-\`--run\` takes one cast command, exactly as you would have pasted it, for an act its help calls a person's. The card shows your question inline in the conversation with Yes and Not now, and the command only as a small terminal line at its foot, so the question says what Yes will do in their terms (who gets what, how much). Yes asks them for Touch ID and runs the command on this machine outside your session, and the answer arrives with its exit and output. Never run it yourself after posting; end your turn.
-
-A decision is your human's to answer. When they tell you in this conversation to answer one ("approve sd-494", "go with option 2 on both"), \`cast decide answer sd-N <n> --for-human\` records it as their answer, carried by this session. Do it only on their explicit word or their explicit agreement to a choice you named, never on your own reading of what they would want, and never for a question you asked yourself.
-`;
-
-export const DECIDE_SECTION: SectionSpec = {
-  headings: ["## Asking for a decision"],
-  endMarker: DECIDE_SNIPPET_END,
 };
 
 export const MESSAGING_SECTION: SectionSpec = {

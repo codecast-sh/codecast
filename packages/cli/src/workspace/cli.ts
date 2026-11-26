@@ -31,7 +31,7 @@ import { publishWorktrees } from "../worktreeMirror.js";
 import { sessionIdFromEnv } from "../sessionIdentity.js";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { defaultConfigDir, readAuthConfig } from "../config/readAuthConfig.js";
 import { formatRelativeTime } from "../formatter.js";
 import { resolveRewind, type ResolvedRewind } from "./rewind.js";

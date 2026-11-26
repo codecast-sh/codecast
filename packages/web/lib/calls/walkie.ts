@@ -85,6 +85,8 @@ import {
   soundWalkieSquelch,
 } from "../sounds";
 import { announceJoin, clearJoinAnnouncement, youJoinedText } from "./joinAnnounce";
+import { BURST_STALE_MS, pickLiveBurst, type LiveBurstRow } from "./liveBursts";
+export { pickLiveBurst, type LiveBurstRow } from "./liveBursts";
 
 const api = _api as any;
 
@@ -101,9 +103,6 @@ type ConvexHandle = {
 // A talk is a TOGGLE now — click to start, click to stop — so the cap is the
 // backstop for a person who walked away mid-talk, not the length of a sentence.
 const MAX_BURST_MS = 5 * 60_000;
-/** The window the server sweeps a dead burst at, for ignoring a live row whose
- *  sender's tab died before anyone talked in that room again. */
-const BURST_STALE_MS = 120_000;
 /** Transcript pushes: a few times a burst, never per word. */
 const TRANSCRIPT_PUSH_MS = 2_500;
 // A hold with nothing being said still has to say "I am here". The server ages
@@ -1561,35 +1560,6 @@ function shutWalkieDoorHere(): void {
 }
 
 // ── the receiving half ──────────────────────────────────────────────────────
-
-export type LiveBurstRow = {
-  messageId: string;
-  channelId: string;
-  roomKey?: string;
-  fromUserId: string;
-  fromName: string;
-  createdAt: number;
-};
-
-/**
- * Which burst, if any, this client should be hearing. The newest one wins — a
- * second teammate keying up while the first talks is the more recent thing said
- * to you, and one pair of ears cannot follow two rooms.
- *
- * A row without a room key is a burst nobody can join (an older client, or a
- * sender who never reached the media plane), and a row past the server's live
- * window belongs to a tab that died mid-word — the sweep will land or discard
- * it the next time anyone talks in that room. Neither is something to join.
- */
-export function pickLiveBurst(bursts: LiveBurstRow[], now: number): LiveBurstRow | null {
-  let best: LiveBurstRow | null = null;
-  for (const b of bursts) {
-    if (!b.roomKey) continue;
-    if (now - b.createdAt >= BURST_STALE_MS) continue;
-    if (!best || b.createdAt > best.createdAt) best = b;
-  }
-  return best;
-}
 
 /**
  * The watcher's report, called on every push of the live-burst subscription

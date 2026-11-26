@@ -48,7 +48,7 @@ describe("cast vault on the wire", () => {
 
   test("every place that teaches get hands the value to stdin, and names $(…) only to forbid it: ps shows argv to other local users", async () => {
     const { VAULT_SNIPPET, VAULT_REFERENCE } = await import("@codecast/shared/contracts");
-    const { commandGroup } = await import("../commandGroups.js");
+    const { commandGroup } = await import("../commandGroupLookup.js");
     await h.run("get", "--help").catch(() => {});
     expect(VAULT_SNIPPET).toContain("Never print one or put it in argv");
     for (const text of [VAULT_REFERENCE, commandGroup("vault").description, stdout]) {

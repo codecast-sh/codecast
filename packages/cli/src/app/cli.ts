@@ -35,7 +35,7 @@ import { defaultShotPath } from "../browser/shotFile.js";
 import { secureTempFile, TEMP_FILE_MODE } from "../tempFiles.js";
 import { repoRootFor } from "../gitPlane.js";
 import type { PublishDeps } from "../castApi.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 const OK = `${c.green}✓${c.reset}`;

@@ -38,6 +38,7 @@ import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
 import { realtimeWebhook as recallRealtimeWebhook, statusWebhook as recallStatusWebhook } from "./meetingBotsHttp";
 import { RECALL_REALTIME_PATH, RECALL_STATUS_PATH } from "./lib/recall";
 import { claimFrontier } from "./lib/claimFrontier";
+import { withChatMessageIds } from "./chatMessageIds";
 import { vendorRefusalFor } from "./lib/vendorGuard";
 import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
 import { waitingOutLiveEdits } from "./lib/docBody";
@@ -3593,21 +3594,7 @@ cliRoute("/cli/session/unread", async (ctx, body) => {
 // Team chat. Every one of these authorizes the caller inside the function — this
 // route only forwards the request body, so the mutation's own argument list is
 // what keeps identity and scope out of the caller's hands.
-//
-// The CLI prints messages by a short id prefix, so each message-id field is
-// resolved to the full id first (chat.resolveMessageRef); the function still
-// checks access itself.
-async function withChatMessageIds(ctx: any, body: any, ...fields: string[]) {
-  for (const field of fields) {
-    if (typeof body?.[field] !== "string") continue;
-    const { id, error } = await ctx.runQuery(internal.chat.resolveMessageRef, {
-      api_token: body.api_token, ref: body[field],
-    });
-    if (!id) throw new ConvexError({ code: "NOT_FOUND", message: error });
-    body[field] = id;
-  }
-  return body;
-}
+// Message-id fields go through withChatMessageIds (chatMessageIds.ts) first.
 cliRoute("/cli/chat/channels", async (ctx, body) => {
   return await ctx.runQuery(api.chat.listChannels, body);
 });

@@ -2,7 +2,7 @@
 // scripts and station files that call `cast line …` keep running while people and prompts read `cast flow …`.
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
-import { commandGroup } from "./commandGroups";
+import { commandGroup } from "./commandGroupLookup";
 
 const names = (cmd: Command | undefined) => (cmd?.commands ?? []).map((c) => c.name());
 

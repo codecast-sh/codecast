@@ -24,7 +24,7 @@ import {
   type TokenConfigField,
 } from "@codecast/shared/contracts";
 import { describeConnectorError } from "@codecast/shared/contracts/connectorReasons";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { ago, fail, optionKey } from "./externalDataCli.js";
 import { promptHiddenSecret } from "./hiddenSecret.js";
 

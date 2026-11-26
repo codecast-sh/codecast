@@ -14,7 +14,7 @@
  */
 
 import type { Command } from "commander";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { commandTree, unknownCommandNextStep } from "../commandSuggestion.js";
 import type { ComputerOptions, ComputerRunDeps, ComputerVerb } from "./run.js";
 

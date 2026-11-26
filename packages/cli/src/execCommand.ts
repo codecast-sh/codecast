@@ -48,7 +48,8 @@ import {
 } from "./launchCommand.js";
 import { definitionLaunchFlags, describeDropped } from "./agentLaunch.js";
 import { spawn, whichBin } from "./proc.js";
-import { commandGroup, type GroupDeps } from "./commandGroups.js";
+import { type GroupDeps } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { readAuthConfig } from "./config/readAuthConfig.js";
 import { apiPost } from "./castApi.js";

@@ -17,7 +17,7 @@
 import type { Command } from "commander";
 import type { PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { JSON_OPTION, TEAM_OPTION, ago, csv, emit, fail, optionKey, scopedRead, scopedWrite, sparkline } from "./externalDataCli.js";
 import { stdinText } from "./sendBody.js";
 import { codecastJsonPath, committedIngestKey, writeCodecastJson } from "./codecastJson.js";

@@ -13,7 +13,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import { fmt } from "../colors.js";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { execFileAsync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { PRUNABLE, processCwds, scanRepo, type FileVerdict, type RepoScan, type RosterRow, type TreeReport, type TreeVerdict } from "./scan.js";

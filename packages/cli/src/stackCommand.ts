@@ -23,7 +23,7 @@ import type { Command } from "commander";
 import { parseApiAnswer, type PublishDeps } from "./castApi.js";
 import { cliFetch } from "./cliHttp.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { formatAge, formatDecisionList, type DecisionRow } from "./decideCommand.js";
 
 export interface StackRow {

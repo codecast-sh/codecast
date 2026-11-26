@@ -8,7 +8,7 @@
 // working commands).
 import { registerIntentCommands } from "./workflow/intentCommands.js";
 import type { Command } from "commander";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { spawnSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";

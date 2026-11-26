@@ -6,7 +6,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import type { Command } from "commander";
 import { apiPost, apiUpload, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { checkoutRepository } from "./checkoutWords.js";
 import { logTail, parseRunnerVerdict, type RunnerVerdict } from "@codecast/shared/contracts/ciVerdict";
 

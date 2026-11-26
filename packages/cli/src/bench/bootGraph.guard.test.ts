@@ -345,8 +345,8 @@ describe("command groups stay off the boot graph", () => {
     // 374 (2026-11-23): contracts/closedSession.ts, the shared Close verdict
     // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
     // 375 (2026-11-24): fsAtomic.ts (node imports only), so machineKey.ts and
-    // device.ts replace their files whole and concurrent readers agree on a key. 376 (11-25): contracts/replyStream.ts. 377: ccMintIdentity.ts (ct-101517). 383 (11-26): seven barrel contracts, all leaves (asrEndpointer, browserTabs, codeProtocol, mcpLogin, personProfile, speakerTurns, speakers).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(383);
+    // device.ts replace their files whole and concurrent readers agree on a key. 376 (11-25): contracts/replyStream.ts. 377: ccMintIdentity.ts (ct-101517). 383 (11-26): seven barrel contracts, all leaves (asrEndpointer, browserTabs, codeProtocol, mcpLogin, personProfile, speakerTurns, speakers). 384 (11-26): commandGroupLookup.ts, the token lookup split out of commandGroups.ts for its max-lines cap.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(384);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.

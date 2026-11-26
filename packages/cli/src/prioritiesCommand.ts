@@ -6,7 +6,7 @@
 
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { ago, sparkline } from "./externalDataCli.js";
 import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityList, PriorityRow } from "@codecast/shared/contracts/priorities";
 

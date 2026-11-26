@@ -18,7 +18,7 @@ import { renderGoalsBrief, type GoalsBrief } from "@codecast/shared/contracts/go
 import SHARED_PRINCIPLES from "../../../docs/principles.md" with { type: "text" };
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { taskWorkspaceScope } from "./cardCommand.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { lineProjectFor, scopeFor } from "./lineScope.js";
 import { CODECAST_PRINCIPLES, loadLineProfile } from "./lineProfile.js";
 

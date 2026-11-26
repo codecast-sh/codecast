@@ -147,6 +147,7 @@ import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/u
 import { Theme, Spacing, chipShell, chipText, chipQuiet, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { CodeRuns } from '@/components/CodeRuns';
+import { isTaskNotification, TaskNotificationLine } from '@/components/session/TaskNotificationLine';
 import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
@@ -1057,59 +1058,6 @@ function SkillBlockCard({ name, description, path }: { name?: string; descriptio
       {description && <RNText style={styles.skillBlockDesc}>{description}</RNText>}
       {shortPath && <RNText style={styles.skillBlockPath}>{shortPath}</RNText>}
     </RNView>
-  );
-}
-
-function isTaskNotification(content: string): boolean {
-  return content.trim().startsWith('<task-notification>');
-}
-
-function parseTaskNotification(content: string): { taskId: string; status: string; summary: string; outputFile?: string } | null {
-  const match = content.match(/<task-notification>([\s\S]*?)<\/task-notification>/);
-  if (!match) return null;
-  const inner = match[1];
-  const taskId = inner.match(/<task-id>(.*?)<\/task-id>/)?.[1] || '';
-  const status = inner.match(/<status>(.*?)<\/status>/)?.[1] || '';
-  const summary = inner.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim() || '';
-  const outputFile = inner.match(/<output-file>(.*?)<\/output-file>/)?.[1];
-  return { taskId, status, summary, outputFile };
-}
-
-const taskStatusConfig: Record<string, { icon: string; color: string; bg: string }> = {
-  completed: { icon: '\u2713', color: Theme.green, bg: Theme.green + '1a' },
-  killed: { icon: '\u25A0', color: Theme.orange, bg: Theme.orange + '1a' },
-  failed: { icon: '\u2717', color: Theme.red, bg: Theme.red + '1a' },
-  running: { icon: '\u25B6', color: Theme.blue, bg: Theme.blue + '1a' },
-};
-
-function TaskNotificationLine({ content, timestamp, childConversationMap }: { content: string; timestamp?: number; childConversationMap?: Record<string, string> }) {
-  const Theme = useTheme();
-  const router = useRouter();
-  const parsed = parseTaskNotification(content);
-  if (!parsed) return null;
-  const config = taskStatusConfig[parsed.status] || taskStatusConfig.running;
-
-  let childId: string | undefined;
-  const nameMatch = parsed.summary.match(/['\u201c\u201d"](.*?)['\u201c\u201d"]/);
-  const agentName = nameMatch?.[1];
-  if (agentName && childConversationMap) {
-    childId = childConversationMap[agentName];
-  }
-
-  return (
-    <TouchableOpacity
-      // Disabled with no child to open, so a tap on it falls through to the
-      // transcript, which puts the keyboard away.
-      disabled={!childId}
-      onPress={childId ? () => router.push(`/session/${childId}`) : undefined}
-      activeOpacity={childId ? 0.7 : 1}
-      style={[styles.taskNotificationRow, { backgroundColor: config.bg }]}
-    >
-      <RNText style={[styles.taskNotificationIcon, { color: config.color }]}>{config.icon}</RNText>
-      <RNText style={styles.taskNotificationSummary} numberOfLines={2}>{parsed.summary}</RNText>
-      <RNText style={styles.taskNotificationId}>{parsed.taskId}</RNText>
-      {timestamp != null && <RNText style={styles.taskNotificationTime}>{formatRelativeTime(timestamp)}</RNText>}
-    </TouchableOpacity>
   );
 }
 
@@ -6371,15 +6319,6 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
   },
-  taskNotificationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 6,
-    marginVertical: 2,
-  },
   // Session-message / scheduled-task cards (mirrors web's left-accented blocks)
   sessionMessageBlock: {
     marginVertical: 4,
@@ -6431,27 +6370,6 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     fontSize: 13,
     color: Theme.textSecondary,
     lineHeight: 19,
-  },
-  taskNotificationIcon: {
-    fontSize: 14,
-    fontWeight: '700',
-    width: 18,
-    textAlign: 'center',
-  },
-  taskNotificationSummary: {
-    fontSize: 12,
-    color: Theme.text,
-    flex: 1,
-    lineHeight: 17,
-  },
-  taskNotificationId: {
-    fontSize: 10,
-    fontFamily: 'JetBrainsMono-Regular',
-    color: Theme.textDim,
-  },
-  taskNotificationTime: {
-    fontSize: 10,
-    color: Theme.textDim,
   },
   apiErrorCard: {
     borderWidth: 1,

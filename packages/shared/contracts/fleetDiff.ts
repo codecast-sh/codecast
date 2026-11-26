@@ -50,6 +50,9 @@
 // inventory can actually report are the narrower list `KIND_ORDER` ranks below.
 import type { CapabilityKind, ObservedScope } from "./capabilities";
 import { isMcpLoginClient, isRemoteMcpTransport, type McpLoginClient } from "./mcpLogin";
+import type { DeviceReport } from "./fleetReport";
+
+export type { DeviceReport, ReportedInventory } from "./fleetReport";
 
 /**
  * Marketplaces sit in the same grid as capabilities on purpose: a plugin that
@@ -61,43 +64,6 @@ import { isMcpLoginClient, isRemoteMcpTransport, type McpLoginClient } from "./m
  * has it dropped, and a dropped row reads as a missing capability.
  */
 export type FleetRowKind = CapabilityKind | "marketplace";
-
-/**
- * What a machine says it has.
- *
- * Typed as `unknown` on purpose. This arrives as JSON parsed from a report sent
- * by another machine, possibly written by an older binary, so `Inventory` here
- * would be a promise the wire cannot keep. Every field is validated below, and
- * a real `Inventory` satisfies this shape unchanged.
- */
-export interface ReportedInventory {
-  items?: unknown;
-  marketplaces?: unknown;
-}
-
-/**
- * One machine's report.
- *
- * `inventory` absent (undefined, null, or a payload we cannot read) means this
- * device has told us nothing — a genuinely different fact from a device that
- * reported an EMPTY inventory, which is a machine that really has nothing
- * installed. The first produces `unknown` cells and does not count towards
- * agreement; the second counts fully and makes every row "absent here".
- *
- * A device may legitimately appear more than once: the server stores one report
- * per (device, client, project scope), so a caller handing us raw rows will pass
- * several for one machine. They are folded into a single column rather than
- * deduplicated, so nothing a machine reported is lost.
- */
-export interface DeviceReport {
-  deviceId: string;
-  deviceLabel?: string;
-  inventory?: ReportedInventory | null;
-  /** Column metadata — see `FleetDevice`. Carried through, never reasoned about. */
-  reportedAt?: number;
-  lastError?: string;
-  entryCount?: number;
-}
 
 /** One column of the grid, in the order the caller supplied. */
 export interface FleetDevice {

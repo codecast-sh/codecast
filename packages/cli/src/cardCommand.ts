@@ -34,7 +34,7 @@ import { renderChangeCardHtml } from "@codecast/shared/render/changeCardHtml";
 import type { EvalResult } from "@platform/evals/contract";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { printPublishResult, publishOnce } from "./publish.js";
 import { runGit } from "./repoMirror.js";
 import { stdinText } from "./sendBody.js";

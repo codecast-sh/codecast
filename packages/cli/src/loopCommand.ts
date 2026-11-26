@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { stdinText } from "./sendBody.js";
 import { fmt, c } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { createInterface } from "node:readline";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, goalObjectiveProblem, type SessionGoal } from "@codecast/shared/contracts/sessionGoal";
 

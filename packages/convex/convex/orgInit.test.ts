@@ -8,7 +8,6 @@ import { readGoalCandidates, readStatedGoals } from "./orgSaid";
 import type { AskModel } from "./lib/statedGoals";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 import { charterText, giveCharter } from "./roleCharter.testkit";
-
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
 // bounded and access checked, and applying an answered proposal is idempotent.
 
@@ -537,9 +536,7 @@ describe("org.analysisInputs", () => {
     const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
     const activity = await computeAnalysisActivity(ctx, ME as any, TEAM, NOW);
     const landing = await readLanding(ctx, ME as any, TEAM, NOW, activity.repos, landingRecordsOf(activity.activity));
-    // What each person did is its own slice, laid beside the merge (orgInit's action reads it in its own budget).
-    const people = await readPeopleEvidence(ctx, ME as any, TEAM, NOW, await readActivityWork(ctx, ME as any, TEAM, NOW));
-    expect({ ...mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, ME as any, TEAM, NOW)), await readStatedGoals(await readGoalCandidates(ctx, ME as any, TEAM, NOW), org.sessions.long_running.rows, "Acme", goalAsk)), people }).toEqual(whole);
+    expect({ ...mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, ME as any, TEAM, NOW)), await readStatedGoals(await readGoalCandidates(ctx, ME as any, TEAM, NOW), org.sessions.long_running.rows, "Acme", goalAsk)), people: await readPeopleEvidence(ctx, ME as any, TEAM, NOW, await readActivityWork(ctx, ME as any, TEAM, NOW)) }).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
     expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks", "templates"]);
     // The activity block is its own slice (S9): areas, people and stale lists.

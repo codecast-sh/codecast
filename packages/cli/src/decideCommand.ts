@@ -48,7 +48,7 @@ import presenterBrief from "./workflow/presenter.md" with { type: "text" };
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { loadWorkspaceRoster, resolveWorkspaceForRead } from "./resolveWorkspace.js";
 import { fmt } from "./colors.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
 import { verbTypoNextStep } from "./commandSuggestion.js";
 import { boundedCountOption, unknownVerbError, wrongKindIdError } from "./argChecks.js";

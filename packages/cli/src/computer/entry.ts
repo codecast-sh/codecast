@@ -14,7 +14,8 @@
 import { Command } from "commander";
 import { getVersion } from "../cliVersion.js";
 import { activateGroup, registerGroupStubs } from "../commandGroupActivation.js";
-import { groupForToken, type GroupDeps } from "../commandGroups.js";
+import { type GroupDeps } from "../commandGroups.js";
+import { groupForToken } from "../commandGroupLookup.js";
 
 export async function runComputerEntry(argv: string[]): Promise<void> {
   const group = groupForToken("computer")!;

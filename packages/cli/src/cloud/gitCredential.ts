@@ -28,7 +28,7 @@
  */
 
 import type { Command } from "commander";
-import { commandGroup } from "../commandGroups.js";
+import { commandGroup } from "../commandGroupLookup.js";
 import { githubRepo, parseOrigin } from "./gitOrigin.js";
 
 /** One credential request, as git spells it on stdin. */

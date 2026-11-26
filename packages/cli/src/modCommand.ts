@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { buildMod, findModDir, MANIFEST_FILE, TYPES_FILE, authoringTypes, type ModBuild } from "./mods/build.js";
 import { scaffoldFiles } from "./mods/scaffold.js";
 import { formatModGuide } from "./mods/guide.js";

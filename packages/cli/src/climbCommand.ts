@@ -10,7 +10,7 @@ import type { Command } from "commander";
 import { MetricUnread, experimentWords } from "./climb/readability.js";
 import { archiveSealed, climbHome } from "./climb/store.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { recordRun, runEnv, runWithCases, withTreeAt } from "./envCommand.js";
 import { climbBase, stackBase } from "./climb/base.js";
 import { repoRoot } from "./envDeclaration.js";

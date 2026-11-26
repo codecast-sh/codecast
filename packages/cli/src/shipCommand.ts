@@ -18,7 +18,7 @@ import { Option, type Command } from "commander";
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 import { gitTry } from "./gitPlane.js";
 import { locate, readLocalGitContext } from "./prCommand.js";
 import type { ShipPlan } from "@codecast/shared/contracts/shipPlan";

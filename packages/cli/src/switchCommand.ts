@@ -15,7 +15,7 @@ import {
 } from "@codecast/shared/contracts";
 import { c, fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { commandGroup } from "./commandGroups.js";
+import { commandGroup } from "./commandGroupLookup.js";
 
 const AGENT_NAMES = Object.keys(LOCAL_AGENT_CLIENTS).join(", ");
 
