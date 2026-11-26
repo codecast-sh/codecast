@@ -1,10 +1,11 @@
-// A closed role, anchor or standing trigger's home follows the "Stash and
-// hide" rules (shared closeHidesThroughWakes): its own machine wakes (a trigger
-// firing, a quiet send) run it out of sight as a hidden stash, and it comes
-// back when it pins blocked, a trigger run completes --needs-attention, or a
-// person writes to it. A close of any other session still comes back on its
-// next wake.
+// A closed session stays out through machine wakes (shared isMachineWake: a
+// trigger firing, a quiet send, another session's message): the wake runs it
+// as a hidden stash stamped with its close (isClosedHidden). It comes back
+// when it pins blocked, a trigger run completes --needs-attention, or a person
+// writes to it; an ordinary session also when it pins done (closeReturnsOnDone),
+// a role, anchor or standing trigger's home not.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { formatSessionMessage } from "@codecast/shared/contracts";
 import { setup } from "./dispatch.close.testkit";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { performSetThreadState } from "./conversations";
@@ -20,12 +21,18 @@ async function closed(o: Parameters<typeof setup>[0] = {}) {
   const wake = (fields: Record<string, unknown>) => s.t.run(async (ctx) => {
     await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", ...fields } as any);
   });
-  return { ...s, wake };
+  const pin = (status: "done" | "blocked" | "dormant" | "working") => s.t.run(async (ctx) => {
+    await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, `Pinned ${status}`, status);
+  });
+  return { ...s, wake, pin };
 }
+
+const sessionMessage = { content: formatSessionMessage("jx7work", "Report: CI is green") };
 
 const hiddenStash = (conv: any) => {
   expect(conv.inbox_dismissed_at).toBeUndefined();
   expect(conv.inbox_stashed_at).toBeGreaterThan(0);
+  expect(conv.inbox_stashed_at).toBe(conv.inbox_closed_at);
   expect(conv.inbox_stash_hidden).toBe(true);
   expect(conv.inbox_killed_at).toBeUndefined();
 };
@@ -35,101 +42,175 @@ const inInbox = (conv: any) => {
   expect(conv.inbox_killed_at).toBeUndefined();
 };
 
-describe("a closed role stays out through its own wakes", () => {
-  const homes: Array<[string, Parameters<typeof setup>[0]]> = [
-    ["a role's own session", { role: true }],
-    ["a standing anchor", { conv: { persistent: true } }],
-    ["a standing trigger's home", { conv: { armed_trigger_kind: "standing" } }],
-  ];
-  for (const [name, o] of homes) {
-    test(`${name}: a trigger firing runs it as a hidden stash, again and again`, async () => {
+const ROLES: Array<[string, Parameters<typeof setup>[0]]> = [
+  ["a role's own session", { role: true }],
+  ["a standing anchor", { conv: { persistent: true } }],
+  ["a standing trigger's home", { conv: { armed_trigger_kind: "standing" } }],
+];
+const ORDINARY: Array<[string, Parameters<typeof setup>[0]]> = [
+  ["an ordinary session", {}],
+  ["a one-off trigger's home", { conv: { armed_trigger_kind: "once" } }],
+];
+
+describe("every closed session stays out through machine wakes", () => {
+  for (const [name, o] of [...ROLES, ...ORDINARY]) {
+    test(`${name}: a trigger, a quiet send and another session's message each run it as a hidden stash`, async () => {
       const s = await closed(o);
       await s.wake({ origin: "scheduler" });
       hiddenStash((await s.read()).conv);
       expect((await s.read()).conv.has_pending_messages).toBe(true);
+      await s.wake({ quiet: true });
+      hiddenStash((await s.read()).conv);
+      await s.wake(sessionMessage);
+      hiddenStash((await s.read()).conv);
+    });
+
+    test(`${name}: another session's message alone hides it`, async () => {
+      const s = await closed(o);
+      await s.wake(sessionMessage);
+      hiddenStash((await s.read()).conv);
+    });
+
+    test(`${name}: pinning blocked brings it back`, async () => {
+      const s = await closed(o);
       await s.wake({ origin: "scheduler" });
+      await s.pin("blocked");
+      const { conv } = await s.read();
+      inInbox(conv);
+      expect(conv.inbox_stash_hidden).toBeUndefined();
+    });
+
+    test(`${name}: pinning dormant or working leaves it out`, async () => {
+      const s = await closed(o);
+      await s.wake({ origin: "scheduler" });
+      await s.pin("dormant");
+      hiddenStash((await s.read()).conv);
+      await s.pin("working");
+      hiddenStash((await s.read()).conv);
+    });
+
+    test(`${name}: a person writing brings it back, before or after a hidden wake`, async () => {
+      const s = await closed(o);
+      await s.wake({ human: true });
+      inInbox((await s.read()).conv);
+      const t = await closed(o);
+      await t.wake(sessionMessage);
+      await t.wake({ human: true });
+      inInbox((await t.read()).conv);
+    });
+
+    test(`${name}: a run that completes --needs-attention brings it back`, async () => {
+      const s = await closed(o);
+      await s.wake({ origin: "scheduler" });
+      await s.t.run(async (ctx) => { await restoreToInbox(ctx, (await ctx.db.get(s.ids.conv)) as any); });
+      inInbox((await s.read()).conv);
+    });
+  }
+});
+
+describe("pinning done", () => {
+  for (const [name, o] of ORDINARY) {
+    test(`${name}: brings it back, since it delivered something`, async () => {
+      const s = await closed(o);
+      await s.wake(sessionMessage);
+      await s.pin("done");
+      const { conv } = await s.read();
+      inInbox(conv);
+      expect(conv.inbox_stash_hidden).toBeUndefined();
+    });
+  }
+  for (const [name, o] of ROLES) {
+    test(`${name}: leaves it out, since its routine runs end done`, async () => {
+      const s = await closed(o);
+      await s.wake({ origin: "scheduler" });
+      await s.pin("done");
       hiddenStash((await s.read()).conv);
     });
   }
 
-  test("a quiet send leaves it out too", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ quiet: true });
-    hiddenStash((await s.read()).conv);
+  test("a straggling done before any wake leaves a plain close alone", async () => {
+    const s = await closed();
+    await s.pin("done");
+    const { conv } = await s.read();
+    expect(conv.inbox_dismissed_at).toBe(conv.inbox_closed_at);
   });
 
-  test("pinning blocked brings it back", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ origin: "scheduler" });
-    await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "Needs your call on the deploy", "blocked"); });
+  test("a person's own Stash and hide does not come back on done", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_stashed_at: Date.now(), inbox_stash_hidden: true }); });
+    await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "Shipped", "done"); });
+    const { conv } = await s.read();
+    expect(conv.inbox_stash_hidden).toBe(true);
+    expect(conv.inbox_stashed_at).toBeGreaterThan(0);
+  });
+
+  test("an earlier close left on a stash and hide does not mark it as closed", async () => {
+    const s = await setup();
+    const closedAt = Date.now() - 60_000;
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_closed_at: closedAt, inbox_stashed_at: Date.now(), inbox_stash_hidden: true }); });
+    await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "Shipped", "done"); });
+    expect((await s.read()).conv.inbox_stash_hidden).toBe(true);
+  });
+});
+
+describe("a person's own Stash and hide", () => {
+  test("stays out through another session's message, which it used to show", async () => {
+    const s = await setup();
+    const at = Date.now();
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_stashed_at: at, inbox_stash_hidden: true }); });
+    await s.t.run(async (ctx) => { await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.conv), s.ids.user, sessionMessage); });
+    expect((await s.read()).conv.inbox_stashed_at).toBe(at);
+  });
+
+  test("a plain stash still comes back on another session's message", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_stashed_at: Date.now() }); });
+    await s.t.run(async (ctx) => { await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.conv), s.ids.user, sessionMessage); });
+    expect((await s.read()).conv.inbox_stashed_at).toBeUndefined();
+  });
+});
+
+describe("a send nobody marked keeps showing a closed session", () => {
+  test("a codecast notice with no session wrapper brings it back, as before", async () => {
+    const s = await closed();
+    await s.wake({ content: "Your account switched; continue." });
     inInbox((await s.read()).conv);
   });
 
-  test("pinning done or dormant leaves it out", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ origin: "scheduler" });
-    await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "Checked CI, all green", "done"); });
-    hiddenStash((await s.read()).conv);
-  });
-
-  test("a run that completes --needs-attention brings it back", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ origin: "scheduler" });
-    await s.t.run(async (ctx) => { await restoreToInbox(ctx, (await ctx.db.get(s.ids.conv)) as any); });
-    inInbox((await s.read()).conv);
-  });
-
-  test("a person writing to it brings it back", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ human: true });
-    inInbox((await s.read()).conv);
-  });
-
-  test("another session's message brings it back", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ origin: "scheduler" });
-    await s.wake({});
-    inInbox((await s.read()).conv);
-  });
-
-  test("a person writing after a hidden wake brings it back", async () => {
-    const s = await closed({ role: true });
-    await s.wake({ origin: "scheduler" });
-    await s.wake({ human: true });
+  test("a person's `cast send` from a terminal (human, session-wrapped) brings it back", async () => {
+    const s = await closed();
+    await s.wake({ ...sessionMessage, human: true });
     inInbox((await s.read()).conv);
   });
 });
 
 describe("a close set aside mid-turn", () => {
-  test("a role's is a hidden stash, so its next trigger leaves it out", async () => {
-    const s = await setup({ role: true, agent: "working", conv: { updated_at: Date.now() } });
-    await s.send("closeSession", [String(s.ids.conv)]);
-    hiddenStash((await s.read()).conv);
-    await s.t.run(async (ctx) => { await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" }); });
-    hiddenStash((await s.read()).conv);
-  });
-
-  test("an ordinary session's is a plain stash, as before", async () => {
-    const s = await setup({ agent: "working", conv: { updated_at: Date.now() } });
-    await s.send("closeSession", [String(s.ids.conv)]);
-    const { conv } = await s.read();
-    expect(conv.inbox_stashed_at).toBeGreaterThan(0);
-    expect(conv.inbox_stash_hidden).toBeUndefined();
-  });
-});
-
-describe("an ordinary closed session is unchanged", () => {
-  for (const [name, o] of [["no trigger", {}], ["a one-off trigger", { conv: { armed_trigger_kind: "once" } }]] as const) {
-    test(`${name}: a trigger firing brings it back`, async () => {
-      const s = await closed(o);
-      await s.wake({ origin: "scheduler" });
-      inInbox((await s.read()).conv);
+  for (const [name, o] of [["a role's", { role: true }], ["an ordinary session's", {}]] as const) {
+    test(`${name} is a hidden stash, so its next wake leaves it out`, async () => {
+      const s = await setup({ ...o, agent: "working", conv: { updated_at: Date.now() } });
+      await s.send("closeSession", [String(s.ids.conv)]);
+      hiddenStash((await s.read()).conv);
+      await s.t.run(async (ctx) => { await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", origin: "scheduler" }); });
+      hiddenStash((await s.read()).conv);
     });
   }
 
-  test("a quiet send brings it back", async () => {
-    const s = await closed();
-    await s.wake({ quiet: true });
+  test("an ordinary one comes back when its turn finishes done", async () => {
+    const s = await setup({ agent: "working", conv: { updated_at: Date.now() } });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "Shipped the fix", "done"); });
     inInbox((await s.read()).conv);
+  });
+});
+
+describe("a killed session stays out", () => {
+  test("no pin brings it back", async () => {
+    const s = await setup();
+    const at = Date.now();
+    await s.t.run(async (ctx) => { await ctx.db.patch(s.ids.conv, { inbox_killed_at: at, inbox_dismissed_at: at, inbox_closed_at: at }); });
+    for (const status of ["done", "blocked"] as const) {
+      await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "late", status); });
+      expect((await s.read()).conv.inbox_killed_at).toBe(at);
+    }
   });
 });

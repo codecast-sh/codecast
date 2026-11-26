@@ -12,6 +12,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   AGENT_MODEL_CONFIG,
   agentSupportsExecutionTransport,
+  isMachineWake,
   wakeHideFields,
 } from "@codecast/shared/contracts";
 import type { Id } from "./_generated/dataModel";
@@ -2093,12 +2094,11 @@ export async function abandonAmbiguousAndResendInDb(
     resendOfDeliveryId: fence.deliveryId,
   });
   // The same hide rule as the send it resends (enqueuePendingMessage): wakeHideFields.
-  const machineWake = message.origin === "scheduler";
   await ctx.db.patch(fence.conversationId, {
     updated_at: fence.now,
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
-    ...wakeHideFields(conversation, { machine: machineWake || !!message.quiet, now: fence.now }),
+    ...wakeHideFields(conversation, { machine: isMachineWake(message) }),
   });
   return {
     originalDeliveryId: fence.deliveryId,

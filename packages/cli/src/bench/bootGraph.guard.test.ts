@@ -537,8 +537,8 @@ describe("command groups stay off the boot graph", () => {
     // `done -m` and `drop -m` (+1).
     // 4857 (2026-11-25): the messaging-only onboarding gate and `cast relay --stop` in index.ts (#149) (+1).
     // 4863 the same day: live replies, contracts/replyStream.ts (+4) and SyncService.pushReplyStream with its config mirror (+2).
-    // 4864 the same day: checker = "bun" for `cast check`, its `check-watch` flags and the guide paragraph (+1); the bodies load on demand. 4866: ccMintIdentity.ts (+2). 4868: contracts closeHidesThroughWakes and wakeHideFields (+2). 4885: the owners model's shared placement rules (contracts/inboxProjection.ts, inboxMembership.ts, inboxFields.ts, +14) and own/disown/owners help in index.ts (+2); ownersView.ts loads on demand.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4885);
+    // 4864 the same day: checker = "bun" for `cast check`, its `check-watch` flags and the guide paragraph (+1); the bodies load on demand. 4866: ccMintIdentity.ts (+2). 4868: contracts closeHidesThroughWakes and wakeHideFields (+2). 4885: the owners model's shared placement rules (contracts/inboxProjection.ts, inboxMembership.ts, inboxFields.ts, +14) and own/disown/owners help in index.ts (+2); ownersView.ts loads on demand. 4886: contracts isClosedHidden and isMachineWake, Close hiding every session (+1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4886);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

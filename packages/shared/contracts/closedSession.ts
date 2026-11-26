@@ -14,19 +14,25 @@ export function isClosedSession(row: ClosedFields): boolean {
   return row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_dismissed_at && !row.inbox_killed_at;
 }
 
-/** A session whose Close follows the "Stash and hide" rules: a role's own
- *  session, a standing anchor, or one a standing trigger wakes. Its own
- *  machine wakes (a trigger firing, a quiet send) run it out of sight as a
- *  hidden stash instead of bringing it back; it returns when it pins blocked,
- *  a trigger run completes --needs-attention, or any other message reaches it
- *  (a person's, another session's). A close of any other session comes back
- *  on its next wake. */
-export function closeHidesThroughWakes(row: {
+/** A closed session a machine wake (a trigger, a quiet send, another session's
+ *  message) has run out of sight: a hidden stash stamped with the close's own
+ *  stamp. A set-aside close (one in flight) writes the same shape. A person's
+ *  own "Stash and hide" stamps the stash anew, so it never reads as one. */
+export function isClosedHidden(row: ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null }): boolean {
+  return !!row.inbox_stash_hidden && row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_stashed_at && !row.inbox_killed_at;
+}
+
+/** Whether a closed session comes back when its woken turn pins done. Every
+ *  closed session comes back when it pins blocked, a trigger run completes
+ *  --needs-attention, or a person writes. An ordinary one also comes back on
+ *  done: it delivered something. A role's own session, a standing anchor or a
+ *  standing trigger's home does not, since its routine runs end done. */
+export function closeReturnsOnDone(row: {
   persistent?: boolean | null;
   standing_role_id?: unknown;
   armed_trigger_kind?: string | null;
 }): boolean {
-  return !!row.persistent || !!row.standing_role_id || row.armed_trigger_kind === "standing";
+  return !row.persistent && !row.standing_role_id && row.armed_trigger_kind !== "standing";
 }
 
 /** A patch (or a row) that IS a close: the two stamps written together. */

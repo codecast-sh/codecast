@@ -57,8 +57,14 @@ describe("a quiet send from a session", () => {
     expect((await row()).inbox_stashed_at).toBeUndefined();
   });
 
-  test("an ordinary session send clears a hidden stash", async () => {
+  test("an ordinary session send keeps a hidden stash too: no person sent it (isMachineWake)", async () => {
     const { send, row } = await setup({ inbox_stashed_at: 100, inbox_stash_hidden: true });
+    await send({ from: "jx7send" });
+    expect((await row()).inbox_stashed_at).toBe(100);
+  });
+
+  test("an ordinary session send clears a plain stash", async () => {
+    const { send, row } = await setup({ inbox_stashed_at: 100 });
     await send({ from: "jx7send" });
     expect((await row()).inbox_stashed_at).toBeUndefined();
   });

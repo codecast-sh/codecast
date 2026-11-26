@@ -22,7 +22,7 @@ export function InboxGesturesFigure() {
   );
   return (
     <Stage minWidth={680}>
-      <Sheet w={760} h={300} label="Stash moves a session out of the inbox while it keeps running; a scheduled wake brings a plain stash back; a hidden stash returns only when it needs you; close stops a finished session and keeps its triggers, so a trigger, a message or Restore brings it back">
+      <Sheet w={760} h={300} label="Stash moves a session out of the inbox while it keeps running; a scheduled wake brings a plain stash back; a hidden stash returns only when it needs you; close stops a finished session and keeps its triggers, which run it out of sight; it comes back when it finishes or asks for you, when you write to it, or on Restore">
         {(arrow) => (
           <>
             {node(300, 20, 160, "inbox", "you see it", SOL.blue, 0.1)}
@@ -44,7 +44,7 @@ export function InboxGesturesFigure() {
             {[
               { x: 135, color: SOL.cyan, lines: ["back when a scheduled wake fires,", "or it asks for you"] },
               { x: 380, color: SOL.violet, lines: ["back only when it needs you:", "blocked, flagged, or stalled"] },
-              { x: 625, color: SOL.base01, lines: ["back when a trigger fires,", "a message arrives, or on Restore"] },
+              { x: 625, color: SOL.base01, lines: ["back when it finishes or asks,", "you write, or on Restore"] },
             ].map((c, i) => (
               <text key={i} x={c.x} y={226} textAnchor="middle" fontSize="10" fill={c.color} className="bj-fade" style={t(1.7 + i * 0.3)}>
                 <tspan x={c.x}>{c.lines[0]}</tspan>

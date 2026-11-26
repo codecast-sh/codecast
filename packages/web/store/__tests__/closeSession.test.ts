@@ -247,6 +247,8 @@ describe("closeSessions", () => {
     expect(close?.result).toEqual({ aside: [BUSY] });
     expect(close?.patches.conversations[IDLE].inbox_dismissed_at).toBeGreaterThan(0);
     expect(close?.patches.conversations[BUSY].inbox_stashed_at).toBeGreaterThan(0);
+    // Any set-aside is a hidden stash: its machine wakes leave it out (isClosedHidden).
+    expect(close?.patches.conversations[BUSY].inbox_stash_hidden).toBe(true);
     expect(sent.some((s) => s.action === "killSession" || s.action === "killSessions")).toBe(false);
   });
 

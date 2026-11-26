@@ -26,7 +26,7 @@ import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
-import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/shared/contracts";
+import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId, isClosedHidden, closeReturnsOnDone } from "@codecast/shared/contracts";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { isHotRow, splitRows } from "@codecast/shared/contracts/inboxSplit";
@@ -12469,15 +12469,22 @@ export async function performSetThreadState(
   // cleared the same way (agentTasks.completeTaskRun). If the session is
   // still stashed when the agent declares blocked, nobody is watching by
   // definition (a human send un-stashes at enqueue), so the machine woke it
-  // and the human must now be shown. `done` / `dormant` / `working` never
-  // resurface anything: stash fails quiet except for asks. Killed rows are
-  // exempt — kill tore the agent down; a straggling write must not resurrect.
+  // and the human must now be shown. A closed ordinary session a machine woke
+  // (isClosedHidden) comes back on `done` too: it delivered something. A
+  // role's, anchor's or standing trigger's home does not (closeReturnsOnDone),
+  // since its routine runs end done. Otherwise `done` / `dormant` / `working`
+  // never resurface anything: stash fails quiet except for asks. Killed rows
+  // are exempt — kill tore the agent down; a straggling write must not resurrect.
   let resurfaced = false;
   if (status === "blocked" && (conv.inbox_stashed_at || conv.inbox_dismissed_at) && !conv.inbox_killed_at) {
     await ctx.db.patch(conv._id, {
       inbox_stashed_at: undefined,
+      inbox_stash_hidden: undefined,
       inbox_dismissed_at: undefined,
     });
+    resurfaced = true;
+  } else if (status === "done" && isClosedHidden(conv) && closeReturnsOnDone(conv)) {
+    await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined });
     resurfaced = true;
   }
   // The pin is the strip's title, and a blocked / done declaration can move
