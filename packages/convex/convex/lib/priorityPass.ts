@@ -747,13 +747,14 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
     keys.push(step.key);
   }
   for (const s of pool) {
-    if (!holds(s) || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
+    // Never carry withheld words; a tombstone carries no words the prompt showed, so it goes whatever needs_rewrite says.
+    if (!holds(s) || matched.includes(s) || (!s.dropped && needsRewrite.has(ownerOf.get(s) ?? target))) continue;
     const from = ownerOf.get(s);
     steps.push(withDone({ ...s, key: keyOf(s) }, s.done, s, taskStatus, now));
     if (!s.dropped) notes.push(`${target}: kept step ${from ? `${from} ${s.key}` : s.key}, ${isPersonHeld(s) ? "the person set it" : "a session the person or a link put there is on it"}`);
   }
   // A matched dropped step stays a tombstone, under its own key.
-  for (const s of pool) if (s.dropped && matched.includes(s) && !needsRewrite.has(ownerOf.get(s) ?? target)) steps.push({ ...s, key: keyOf(s) });
+  for (const s of pool) if (s.dropped && matched.includes(s)) steps.push({ ...s, key: keyOf(s) });
   const kept = withoutDroppedRepeats(own, steps, notes, target, absorbed.flatMap((p) => p.steps));
   return { steps: kept, remap, keys: keys.map((k) => (k && kept.some((s) => s.key === k) ? k : null)) };
 }

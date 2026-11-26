@@ -593,6 +593,15 @@ describe("rewriting a priority whose sessions left view", () => {
     const fresh = mergePriorities(input({ priorities: [secret] }), out([proposal({ short_id: "pri-1", title: "Partnerships", summary: "two calls this week" })]));
     expect(fresh.rewritten).toEqual(["pri-1"]);
   });
+  test("a merge carries an absorbed priority's tombstones whatever its needs_rewrite says, but none of its withheld live steps", () => {
+    const survivor = priority("pri-2", { title: "Partnerships", steps: [step("s1", { title: "Call list" })] });
+    const absorbed = { ...secret, steps: [step("s1", { title: "Draft Acme term sheet", tier_set_by: "person" }), step("s2", { title: "Old outreach plan", dropped: true })] };
+    const plan = mergePriorities(input({ priorities: [survivor, absorbed] }), out([proposal({ short_id: "pri-2", title: "Partnerships", steps: [{ key: "s1", title: "Call list", tier: "critical", refs: [] }], merges: ["pri-1"] })]));
+    const steps = plan.updates.find((u) => u.short_id === "pri-2")!.patch.steps!;
+    expect(steps.map((x) => [x.title, !!x.dropped])).toEqual([["Call list", false], ["Old outreach plan", true]]);
+    expect(plan.merges.map((m) => m.short_id)).toEqual(["pri-1"]);
+  });
+
   test("a step whose tier the person set is not carried under its old title", () => {
     const plan = mergePriorities(input({ priorities: [secret] }), out([proposal({ short_id: "pri-1", title: "Partnerships", summary: "two calls", steps: [{ title: "Call list", tier: "critical", refs: [] }] })]));
     const steps = plan.updates.find((u) => u.short_id === "pri-1")?.patch.steps ?? [];
