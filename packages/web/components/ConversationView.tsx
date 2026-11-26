@@ -98,7 +98,6 @@ import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { LocalMirrorChip } from "./LocalMirror";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { useSyncSessionOwners } from "../hooks/useSyncSessionOwners";
-import { NotInInboxBar } from "./conversation/ComposerOwnerStrip";
 import { SessionAgentsBand } from "./conversation/SessionAgentsBand";
 import { OwnersMenuItem, OwnersSheet } from "./OwnersMenu";
 import { ThreadSuggestions } from "./org/SuggestionSet";
@@ -5552,9 +5551,6 @@ const ConversationViewInner = (
               than a floating overlay. treePopoverOpen is owner-only, so only the
               owner branch needs it; the no-composer case is the fixed fallback
               above. */}
-          {/* Under the owners model: a session you can see but do not own (the
-              owner composer draws its own, above its box). */}
-          {!guest && !onSendOverride && !effectiveIsOwner && <NotInInboxBar conversationId={conversation._id.toString()} className="mx-auto mb-1.5 px-4 conv-col" />}
           {!effectiveIsOwner ? (
             <NonOwnerMessageInput
               conversation={conversation}

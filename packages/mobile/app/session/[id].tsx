@@ -83,7 +83,7 @@ import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
-import { ComposerOwnerStrip, NotInInboxBar } from '@/components/session/OwnerComposerLines';
+import { ComposerOwnerStrip } from '@/components/session/OwnerComposerLines';
 import { SessionAgentsList } from '@/components/session/SessionAgentsList';
 import { useSyncSessionOwners } from '@codecast/web/hooks/useSyncSessionOwners';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
@@ -2694,10 +2694,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
         above={hosted ? null : (
           <>
             {isConvexId(String(conversationId)) && (
-              <>
-                <NotInInboxBar conversationId={conversationId as string} />
-                <ComposerOwnerStrip conversationId={conversationId as string} active={composerFocused || !!message.trim()} />
-              </>
+              <ComposerOwnerStrip conversationId={conversationId as string} active={composerFocused || !!message.trim()} />
             )}
             <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />
           </>

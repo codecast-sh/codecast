@@ -1,23 +1,20 @@
-// The lines above a session's composer under the session_owners model, the
-// phone twins of the web ComposerOwnerStrip / NotInInboxBar:
-//  - an agent owner (its role, else the session that started it) answers the
-//    session: while the box is focused or holds text, "<agent> answers here
-//    too" with Take it over, which removes every agent owner and makes you an
-//    owner. Sending never takes anything over.
-//  - you can see the session but do not own it: "Not in your inbox", Add me.
-// Neither draws anything for a session off the model, nor reads past one
-// store selector there.
+// The line above a session's composer under the session_owners model, the
+// phone twin of the web ComposerOwnerStrip: an agent owner (its role, else the
+// session that started it) answers the session: while the box is focused or
+// holds text, "<agent> answers here too" with Take it over, which removes every
+// agent owner and makes you an owner. Sending never takes anything over. It
+// draws nothing for a session off the model, nor reads past one store selector
+// there.
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { Text } from '@/components/Themed';
-import { themedStyles, useTheme } from '@/constants/Theme';
+import { themedStyles } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useSessionOwners } from '@codecast/web/hooks/useSessionOwners';
 import { ownersModelOnFor } from '@codecast/web/store/sessionOwnersSlice';
 import { takeOverChange } from '@codecast/web/lib/ownersDraft';
 import { applyOwnersWithUndo } from '@/lib/ownersGestures';
-import { OwnerFace, OwnerFaces, ownersLabel, ParentSessionFace } from '@/components/owners/OwnerFace';
+import { OwnerFace, ParentSessionFace } from '@/components/owners/OwnerFace';
 
 const tap = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -55,34 +52,6 @@ function OwnerStrip({ conversationId }: Props) {
   );
 }
 
-export function NotInInboxBar({ conversationId }: Props) {
-  const on = useInboxStore((s) => ownersModelOnFor(s as never, conversationId));
-  return on ? <InboxBar conversationId={conversationId} /> : null;
-}
-
-function InboxBar({ conversationId }: Props) {
-  const Theme = useTheme();
-  const view = useSessionOwners(conversationId);
-  if (!view.on || view.mine || !view.meId) return null;
-  const me = view.meId;
-  return (
-    <View style={styles.strip} testID="not-in-inbox">
-      <View accessibilityLabel={`Owners: ${ownersLabel(view)}`}><OwnerFaces view={view} size={16} /></View>
-      <Text style={styles.words} numberOfLines={1}>Not in your inbox</Text>
-      <TouchableOpacity
-        style={styles.button}
-        activeOpacity={0.6}
-        onPress={() => { tap(); applyOwnersWithUndo(conversationId, { add: [me] }, { remove: [me] }, 'In your inbox'); }}
-        accessibilityRole="button"
-        testID="not-in-inbox-add-me"
-      >
-        <FontAwesome name="plus" size={11} color={Theme.text} />
-        <Text style={styles.buttonText}>Add me</Text>
-      </TouchableOpacity>
-    </View>
-  );
-}
-
 const styles = themedStyles((Theme) => StyleSheet.create({
   strip: {
     flexDirection: 'row',
@@ -97,7 +66,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderColor: Theme.border,
     backgroundColor: Theme.bgAlt,
   },
-  words: { flex: 1, minWidth: 0, fontSize: 13, color: Theme.textMuted },
   wordsRow: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center' },
   name: { flexShrink: 1, fontSize: 13, fontWeight: '600', color: Theme.text },
   wordsTail: { flexShrink: 0, fontSize: 13, color: Theme.textMuted },
