@@ -322,7 +322,7 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-ask .cc-toast-ask-triggers {
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-ask .cc-toast-ask-note {
   color: var(--sol-text-dim);
 }
 

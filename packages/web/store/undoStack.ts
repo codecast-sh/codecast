@@ -89,6 +89,8 @@ type LiveAdvice = {
   entryId: string;
   advice: PendingCloseAdvice;
   card: CloseAdviceCard | null;
+  /** The receipt's own note (a Kill's "Agent stays stopped on undo"), kept on the card. */
+  note?: string;
   triggersToastId?: string;
   /** The timeline took the receipt down: that is not the person letting it go. */
   behindTimeline?: boolean;
@@ -153,7 +155,7 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
   notifyWithUndo: (label, entryId) => {
     // A Close or Kill hands its pending close advice to the bar it raises.
     const advice = claimCloseAdvice();
-    const live: LiveAdvice | null = advice && { entryId, advice, card: null };
+    const live: LiveAdvice | null = advice && { entryId, advice, card: null, note: splitLabelNote(label)[1] };
     // A newly recorded gesture is not a step the card narrates. The held
     // peek is on its way out (the gesture's key or click ends the walk), so
     // only the interactive card, which lists the entry with its own way
@@ -250,7 +252,7 @@ function awaitCloseAdvice(live: LiveAdvice, receipt: ((duration: number) => void
 }
 
 /** The card takes the receipt's place (or shows, when the timeline took the
- *  receipt): the ask, a Kill's triggers line under it, Undo, and Open or Keep
+ *  receipt): the ask, a Kill's triggers line and the receipt's note under it, Undo, and Open or Keep
  *  K. A new toast, so sonner puts it in front of any toast raised since the
  *  gesture (an update keeps a toast where it was in the stack, hidden behind
  *  newer ones), retiring the toast it replaces; `fresh: false` (a later
@@ -279,7 +281,8 @@ function showAdviceCard(card: CloseAdviceCard, live: LiveAdvice, fresh = true): 
     "span",
     { className: "cc-toast-ask-body" },
     createElement("span", { className: "cc-toast-ask-reason" }, card.ask),
-    card.triggers ? createElement("span", { className: "cc-toast-ask-triggers" }, card.triggers) : null,
+    card.triggers ? createElement("span", { className: "cc-toast-ask-note" }, card.triggers) : null,
+    live.note ? createElement("span", { className: "cc-toast-ask-note" }, live.note) : null,
   );
   toast(card.title, {
     id: cardId,
