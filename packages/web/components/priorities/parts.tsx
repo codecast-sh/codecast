@@ -11,12 +11,16 @@ import type { NextAction } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Button } from "../ui/button";
 import { useEntityResolution } from "../../lib/entityDisplay";
-import { newSessionHref } from "../../lib/priorities";
+import { lookup } from "../../lib/liveEntities";
+import { milestoneStartHref } from "../../lib/priorities";
 import { STATE_WORD, ago, type MilestoneModel, type SessionLine } from "../../lib/priorityList";
 import type { SessionStatus } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
+import { useTrackedStore } from "../../store/inboxStore";
+import { stableRefId } from "../../store/wakeSig";
 
 const stop = (e: React.MouseEvent) => e.stopPropagation();
+const NO_TASKS: string[] = [];
 
 /** Ten days as thin bars on the page's one scale, a stub for none; today outlined; a tick over a day a critical milestone landed. */
 export function DayStrip({ counts, todayIndex, landed, peak, size = "row" }: { counts: number[]; todayIndex: number; landed?: boolean[]; peak: number; size?: "row" | "mini" }) {
@@ -103,7 +107,11 @@ const VERB = { answer: "Answer", open: "Open", resume: "Resume", start: "Start" 
  * grayscale; Start opens a composer on the milestone.
  */
 export function ActionButton({ row, action, tall, showSession = true }: { row: PriorityRow; action: NextAction<MilestoneModel>; tall?: boolean; showSession?: boolean }) {
-  const href = action.kind === "start" ? newSessionHref(row, action.milestone.step) : action.session!.href;
+  // Start's brief names the milestone's open tasks by title: the store's task
+  // rows, read again whenever one of them changes (a title, a close).
+  const taskIds = action.kind === "start" ? action.milestone.tasks : NO_TASKS;
+  const s = useTrackedStore([(st) => taskIds.map((id) => { const t = lookup(st.tasks, id); return t ? stableRefId(t) : 0; }).join(",")]);
+  const href = action.kind === "start" ? milestoneStartHref(row, action.milestone, (id) => lookup(s.tasks, id)) : action.session!.href;
   const tallSize = tall && "h-11 px-4 text-ui";
   return (
     <span className="inline-flex min-w-0 items-center gap-2">

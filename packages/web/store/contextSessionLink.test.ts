@@ -60,13 +60,14 @@ describe("ContextChat linked create intent", () => {
     expect(healedOpts?.linked_object).toEqual(LINKED_DOC);
   });
 
-  // A compose link's composer stamps the task on its stub (ComposeView), and
-  // the create carries it on every agent, the hosted assistant included.
+  // A compose link's composer stamps the task, and a milestone's Start its
+  // priority and plan, on its stub (ComposeView), and the create carries them
+  // on every agent, the hosted assistant included.
   for (const agent of ["claude_code", "codecast"]) {
     test(`a task stamped on a compose stub reaches the ${agent} create`, async () => {
       const task = { type: "task", id: "tasks_linked" };
       useInboxStore.getState().syncRecord("sessions", STUB_ID, { _id: STUB_ID, session_id: STUB_ID, agent_type: agent, project_path: "/repo" });
-      useInboxStore.getState().syncRecord("sessions", STUB_ID, { _linkedObject: task });
+      useInboxStore.getState().syncRecord("sessions", STUB_ID, { _linkedObject: task, _start: { priority: "pri-5", priority_step: "s1", plan: "pl-9" } });
       const originalCreate = useInboxStore.getState().createSession;
       let sent: Record<string, any> | undefined;
       useInboxStore.setState({ createSession: ((opts: Record<string, any>) => { sent = opts; return Promise.resolve(REAL_ID); }) as any });
@@ -77,6 +78,7 @@ describe("ContextChat linked create intent", () => {
       }
       expect(sent?.agent_type).toBe(agent);
       expect(sent?.linked_object).toEqual(task);
+      expect(sent).toMatchObject({ priority: "pri-5", priority_step: "s1", plan: "pl-9" });
     });
   }
 });

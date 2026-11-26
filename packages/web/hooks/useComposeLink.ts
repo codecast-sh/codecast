@@ -101,10 +101,18 @@ export function useComposeLink(active: boolean): void {
       : undefined;
     const projectPath = taskPath || resolveLinkProject(link.project, known);
     const draft = linked ? draftForTask(link.draft, linked.short_id) : link.draft;
+    // The priority and plan go to the create as written: the server links
+    // them only when they are the starter's (linkFromStart, bindStartPlan).
+    const start = {
+      ...(link.priority ? { priority: link.priority } : {}),
+      ...(link.step ? { priority_step: link.step } : {}),
+      ...(link.plan ? { plan: link.plan } : {}),
+    };
     st.openCompose(draft || undefined, {
       ...(projectPath ? { projectPath, gitRoot: projectPath } : {}),
       ...(link.agent ? { agentType: link.agent } : {}),
       ...(linked ? { linkedTask: { _id: String(linked._id), short_id: linked.short_id, title: linked.title, status: linked.status } } : {}),
+      ...(Object.keys(start).length ? { start } : {}),
     });
     // What the link asked for and did not get is said, never dropped quietly:
     // a task the session will not be linked to, a folder it will not start in.

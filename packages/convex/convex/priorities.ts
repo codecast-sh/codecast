@@ -34,6 +34,7 @@ import type {
   PriorityPinLine, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep,
 } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
+import { planFactsOf } from "./lib/priorityLinks";
 
 const DAY = 86_400_000;
 /** Sessions a list shows per priority, and how many of the owner's mapped sessions it reads to count them before the pass stored a count ("50+" past that). */
@@ -268,8 +269,7 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     plan: memo(async (id): Promise<LinkPlan | null> => {
       const plan: Doc<"plans"> | null = await ctx.db.get(id as Id<"plans">);
       if (!plan || !authorizedFor(await accessStampFor(ctx, "plans", plan), String(r.viewer), r.held)) return null;
-      const size = Math.max(plan.task_ids?.length ?? 0, plan.progress?.total ?? 0);
-      return { id: String(plan._id), short_id: plan.short_id, title: plan.title, status: plan.status, done: plan.progress?.done ?? 0, total: plan.progress?.total ?? size, size, current: plan.current_session_id ? String(plan.current_session_id) : null };
+      return { ...planFactsOf(plan), current: plan.current_session_id ? String(plan.current_session_id) : null };
     }),
     listed: (c) => listed(String(c._id)),
     mine: (c) => mine(String(c._id)),

@@ -248,10 +248,19 @@ describe("stripComposeLink", () => {
 
 describe("composeLinkHref", () => {
   test("round-trips through parseComposeLink, the task attached only when given", () => {
-    const href = composeLinkHref("Trusted evals: Grader faults & 10% #2", "ct-123");
+    const href = composeLinkHref("Trusted evals: Grader faults & 10% #2", { task: "ct-123" });
     expect(href.startsWith("/inbox?")).toBe(true);
     expect(parse(href.slice("/inbox?".length))).toEqual({ draft: "Trusted evals: Grader faults & 10% #2", task: "ct-123" });
     expect(parse(composeLinkHref("A: b").slice("/inbox?".length))).toEqual({ draft: "A: b" });
+    const start = composeLinkHref("A", { priority: "pri-57", step: "s2", plan: "pl-1075" });
+    expect(parse(start.slice("/inbox?".length))).toEqual({ draft: "A", priority: "pri-57", step: "s2", plan: "pl-1075" });
+  });
+
+  test("a priority, step and plan carry only in their own shapes, and a step only with its priority", () => {
+    expect(parse("compose=x&priority=PRI-5&step=s1&plan=pl-9")).toEqual({ draft: "x", priority: "pri-5", step: "s1", plan: "pl-9" });
+    expect(parse("compose=x&priority=ct-5&step=s1&plan=pri-9")).toEqual({ draft: "x" });
+    expect(parse("compose=x&priority=pri-5&step=a%20b")).toEqual({ draft: "x", priority: "pri-5" });
+    expect(stripComposeLink("/inbox", "?compose=x&priority=pri-5&step=s1&plan=pl-9&s=keep")).toBe("/inbox?s=keep");
   });
 });
 

@@ -28,6 +28,7 @@
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { PriorityRef } from "@codecast/shared/contracts/priorities";
+import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
 import { stepDone } from "./priorityPass";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
@@ -228,6 +229,42 @@ export async function linkFromStart(ctx: Ctx, starter: Id<"users">, convId: Id<"
   if (!p || String(p.user_id) !== String(starter)) return false;
   const conv: Conv | null = await ctx.db.get(convId);
   return !!conv && linkSession(ctx, conv, p._id, stepKey);
+}
+
+/** What the plan attribution rules read of a plan (priorityDerive PlanFacts). */
+export function planFactsOf(plan: Doc<"plans">): PlanFacts {
+  const size = Math.max(plan.task_ids?.length ?? 0, plan.progress?.total ?? 0);
+  return { id: String(plan._id), short_id: plan.short_id, title: plan.title, status: plan.status, done: plan.progress?.done ?? 0, total: plan.progress?.total ?? size, size };
+}
+
+/**
+ * The plan a Start on a milestone may bind its session to: the milestone's own
+ * plan by the list's attribution rules (priorityDerive attributePlans), else
+ * the priority's plan. Null when neither is attributed or the milestone is
+ * gone, so a link naming any other plan binds nothing.
+ */
+export async function startPlanId(ctx: Ctx, shortId: string, stepKey: string | undefined): Promise<string | null> {
+  const p: Priority | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId.trim().toLowerCase())).first();
+  const steps = (p?.steps ?? []).filter((s) => !s.dropped);
+  if (!steps.some((s) => s.key === stepKey)) return null;
+  const facts = new Map<string, PlanFacts>();
+  const taskPlans = new Map<string, Array<string | null>>();
+  for (const s of steps) {
+    const plans: Array<string | null> = [];
+    for (const ref of s.refs) {
+      if (ref.kind !== "task") continue;
+      const task: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.id)).first();
+      const id = task?.plan_id ? String(task.plan_id) : null;
+      if (id && !facts.has(id)) {
+        const plan: Doc<"plans"> | null = await ctx.db.get(id as Id<"plans">);
+        if (plan) facts.set(id, planFactsOf(plan));
+      }
+      plans.push(id && facts.has(id) ? id : null);
+    }
+    taskPlans.set(s.key, plans);
+  }
+  const attribution = attributePlans(steps.map((s) => ({ key: s.key, taskPlans: taskPlans.get(s.key)! })), (id) => facts.get(id));
+  return (attribution.steps.get(stepKey!)?.plan ?? attribution.priority)?.id ?? null;
 }
 
 /** A session bound to a task (lib/taskOwner claimTaskOwnership, `cast task start`): the first milestone naming the task, active priorities first. */

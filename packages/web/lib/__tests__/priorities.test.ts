@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, newSessionHref, nextPassLabel, ownerGroups, paintRank, paintStatus, paintTier, pastBadge, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintRank, paintStatus, paintTier, pastBadge, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -122,10 +122,24 @@ describe("steps", () => {
   const s = step("s1", "critical", false, [{ kind: "task", id: "ct-12" }, { kind: "session", id: "jx2" }, { kind: "pr", id: "acme/web#4" }]);
   const r = row("pri-1", { title: "Trusted evals", steps: [s] });
 
-  test("+ new session opens the composer on the priority and step, its task attached", () => {
-    const href = newSessionHref(r, s);
-    expect(parseComposeLink(new URLSearchParams(href.split("?")[1]))).toEqual({ draft: "Trusted evals: Step s1", task: "ct-12" });
-    expect(parseComposeLink(new URLSearchParams(newSessionHref(r, step("s9", "polish")).split("?")[1]))).toEqual({ draft: "Trusted evals: Step s9" });
+  test("Start opens the composer on a brief of live references, linked to the milestone and its plan", () => {
+    const link = (href: string) => parseComposeLink(new URLSearchParams(href.split("?")[1]));
+    const tasks: Record<string, { title: string; status: string }> = { "ct-12": { title: "Grader faults", status: "done" }, "ct-13": { title: "Seed the goals", status: "in_progress" } };
+    const m = { step: step("s1", "critical", false, [{ kind: "task", id: "ct-12" }, { kind: "task", id: "ct-13" }, { kind: "task", id: "ct-14" }, { kind: "pr", id: "acme/web#4" }]), plan: { short_id: "pl-7" } };
+    // A finished task is left out; one the store does not know goes by its id.
+    expect(link(milestoneStartHref(r, m, (id) => tasks[id]))).toEqual({
+      draft: "pri-1, milestone: Step s1\nOpen tasks:\n- ct-13 Seed the goals\n- ct-14\nPlan: pl-7\nRun `cast priorities show pri-1` for current detail.",
+      task: "ct-13", priority: "pri-1", step: "s1", plan: "pl-7",
+    });
+    // No milestone plan: the priority's own. No task, no plan: the reference lines alone.
+    expect(link(milestoneStartHref({ ...r, plan: { short_id: "pl-2" } }, { step: step("s9", "polish"), plan: null }, () => undefined))).toEqual({
+      draft: "pri-1, milestone: Step s9\nPlan: pl-2\nRun `cast priorities show pri-1` for current detail.",
+      priority: "pri-1", step: "s9", plan: "pl-2",
+    });
+    expect(link(milestoneStartHref(r, { step: step("s9", "polish") }, () => undefined))).toEqual({
+      draft: "pri-1, milestone: Step s9\nRun `cast priorities show pri-1` for current detail.",
+      priority: "pri-1", step: "s9",
+    });
   });
 });
 

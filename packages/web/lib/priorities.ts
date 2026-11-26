@@ -4,6 +4,7 @@
 // the server refuses one, and the pass's timing. What the list page derives
 // from them lives in lib/priorityList.
 import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { composeLinkHref } from "./composeLink";
 import { serverErrorText } from "./errorCause";
 
@@ -119,13 +120,36 @@ export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   return groups;
 }
 
-export function stepTask(step: PriorityStep): string | undefined {
-  return step.refs.find((r) => r.kind === "task")?.id;
-}
+type StartPlan = { short_id: string } | null;
+export type StartTask = { title?: string; status?: string };
 
-/** Opens a new session's composer on this step, its task attached. */
-export function newSessionHref(row: Pick<PriorityRow, "title">, step: PriorityStep): string {
-  return composeLinkHref(`${row.title}: ${step.title}`, stepTask(step));
+/**
+ * Start on a milestone: a new session's composer holding a short brief of
+ * live references (the priority, the milestone, its open tasks, its plan) for
+ * the person to edit, and the create links the session to the milestone and
+ * binds it to the plan (the milestone's own, else the priority's). The first
+ * open task is attached as a compose link's task is. `task` reads the
+ * viewer's store for a task: its title goes beside its id, and one known
+ * to be finished is left out, so it is never the attached task either.
+ */
+export function milestoneStartHref(
+  priority: Pick<PriorityRow, "short_id"> & { plan?: StartPlan },
+  milestone: { step: Pick<PriorityStep, "key" | "title" | "refs">; plan?: StartPlan },
+  task: (shortId: string) => StartTask | undefined,
+): string {
+  const pri = priority.short_id;
+  const plan = (milestone.plan ?? priority.plan)?.short_id;
+  const open = milestone.step.refs
+    .filter((r) => r.kind === "task")
+    .map((r) => ({ id: r.id, ...task(r.id) }))
+    .filter((t) => !isTerminalTaskStatus(t.status));
+  const draft = [
+    `${pri}, milestone: ${milestone.step.title}`,
+    ...(open.length ? ["Open tasks:", ...open.map((t) => `- ${t.id}${t.title ? ` ${t.title}` : ""}`)] : []),
+    ...(plan ? [`Plan: ${plan}`] : []),
+    `Run \`cast priorities show ${pri}\` for current detail.`,
+  ].join("\n");
+  return composeLinkHref(draft, { task: open[0]?.id, priority: pri, step: milestone.step.key, plan });
 }
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });

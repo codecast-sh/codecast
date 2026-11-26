@@ -46,7 +46,8 @@ export const startConversation = mutation({
   handler: async (ctx, args): Promise<{ conversation_id: Id<"conversations">; short_id: string }> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    return startHostedConversationFor(ctx, userId, args);
+    const { conversation_id, short_id } = await startHostedConversationFor(ctx, userId, args);
+    return { conversation_id, short_id };
   },
 });
 
