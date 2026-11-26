@@ -1,6 +1,7 @@
 // The inbox's Priorities view as the person sees it: the WHOLE panel mounted
 // over a seeded store. Each card shows the rank of the viewer's priority it
-// serves ("#1") or "None" while the view is up, and nothing of the kind in
+// serves ("#1"), "—" for a priority in another workspace (the window loads
+// only the active workspace's), or "None", while the view is up, and nothing of the kind in
 // any other view; Needs You lists its cards in rank order.
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
@@ -70,6 +71,7 @@ const UNLINKED = id("unlinked");
 const SECOND = id("second");
 const FIRST = id("first");
 const TEAMMATES = id("teammates");
+const ELSEWHERE = id("elsewhere");
 
 function row(_id: string, title: string, extra: Record<string, unknown> = {}) {
   return {
@@ -103,6 +105,7 @@ function seed(mode: "priorities" | "grouped") {
     row(SECOND, "Second priority", { priority_id: "p2", priority_step_key: "s1" }),
     row(FIRST, "First priority", { priority_id: "p1", priority_step_key: "s1" }),
     row(TEAMMATES, "A teammate's priority", { priority_id: "pt", priority_step_key: "s1" }),
+    row(ELSEWHERE, "Another workspace's priority", { priority_id: "pOther", priority_step_key: "s1" }),
   ];
   useInboxStore.setState({
     sessions: Object.fromEntries(rows.map((r) => [r._id, r])),
@@ -145,10 +148,14 @@ test("in the Priorities view every card shows its rank or None, in rank order", 
   expect(rankOf(m.host, UNLINKED)).toBe("None");
   // A teammate's priority is not the viewer's: no rank.
   expect(rankOf(m.host, TEAMMATES)).toBe("None");
+  // A priority this window has not loaded is not "None": it is elsewhere.
+  expect(rankOf(m.host, ELSEWHERE)).toBe("—");
+  expect(m.host.querySelector(`[data-session-id="${ELSEWHERE}"] [data-priority-rank]`)?.getAttribute("title")).toBe("In another workspace");
   const order = cardOrder(m.host);
   expect(order.indexOf(FIRST)).toBeLessThan(order.indexOf(SECOND));
   expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(UNLINKED));
   expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(TEAMMATES));
+  expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(ELSEWHERE));
   await m.unmount();
 });
 

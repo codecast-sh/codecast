@@ -230,6 +230,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // lib/
   "lib/inputQuiet.ts:lastInputAt": { shared: "the person's last keystroke, one keyboard for every window; the sim types nothing, so it never moves" },
   "lib/externalEventOutcomes.ts:SESSION_COMMIT_KINDS": CONSTANT,
+  "lib/hostedNotice.ts:ANSWER_WORDS": CONSTANT,
   "lib/settingsData.ts:TEAM_SCOPED_SETTINGS": CONSTANT,
   "lib/settingsData.ts:RETIRED_SETTINGS": CONSTANT,
   "lib/settingsSections.ts:pendingAnchor": { shared: "the fragment a clicked settings link carried, read once by the panel that opens; the sim clicks no links" },

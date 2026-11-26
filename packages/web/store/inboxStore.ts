@@ -4876,20 +4876,14 @@ export function visualOrderSessions(
     projectOf?: (sessionId: string) => string | null;
     // The Priorities view: each status section sorted by the viewer's priority
     // a session serves (store/priorityOrder). Pinned keeps the person's order.
-    priorityPlaceOf?: (s: InboxSession) => PriorityPlace | null;
+    priorityPlaceOf?: (s: InboxSession) => PriorityStanding;
+    // A conversation's loaded transcript, for the hosted stop rule's fallback
+    // (lib/hostedNotice hostedStopOf).
+    messagesOf?: (id: string) => readonly any[] | undefined;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
   const placeOf = opts.priorityPlaceOf;
-  // Same order the status view renders: questions, pinned, new, needs input,
-  // done, working, dormant — the chokepoint's own sections, so the walk and
-  // the render can never disagree.
-  const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
-    [placed.needsInput, "needs_input"], [placed.done, "done"],
-    [placed.working, "working"], [placed.dormant, "dormant"],
-  ];
-  const result: InboxSession[] = [];
   // The shared predicate and section rule (chipFilterSection) so the walk and
   // the render can never disagree, including the mid-create stub carve-out.
   const chipOn = !!(projectFilters?.length || opts.bucketFilters?.length);
@@ -4899,17 +4893,31 @@ export function visualOrderSessions(
     bucketByConv: opts.bucketByConv ?? {},
     projectOf: opts.projectOf,
   });
-  for (const [section, key] of sections) {
+  const chipped = (rows: InboxSession[]) => (chipOn ? chipFilterSection(rows, placed.subsByParent, matches) : rows);
+  // Needs You splits as the panel draws it: the person's real turns, then the
+  // hosted conversations that ended on a stop ("Couldn't finish").
+  const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
+  // Same order the status view renders: questions, pinned, new, needs input,
+  // couldn't finish, done, working, dormant — the chokepoint's own sections,
+  // so the walk and the render can never disagree.
+  const sections: Array<[InboxSession[], string]> = [
+    [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
+    [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
+    [chipped(placed.working), "working"], [chipped(placed.dormant), "dormant"],
+  ];
+  const result: InboxSession[] = [];
+  for (const [rows, key] of sections) {
     if (collapsed?.[key]) continue;
-    const rows = chipOn ? chipFilterSection(section, placed.subsByParent, matches) : section;
     result.push(...(placeOf && key !== "pinned" && key !== "questions" ? sortByPriority(rows, placeOf) : rows));
   }
   if (!opts.walk) return result;
   const walked = result.filter(walkFilterOf(placed, opts.walk));
+  if (!placeOf || (opts.walk !== "needsYou" && opts.walk !== "done")) return walked;
   // A Needs You or Done walk also takes the New rows whose turn settled on the
-  // person, from the section above: in the Priorities view the jump still
-  // lands on the highest-ranked of them all.
-  return placeOf && (opts.walk === "needsYou" || opts.walk === "done") ? sortByPriority(walked, placeOf) : walked;
+  // person, from the section above: in the Priorities view the jump lands on
+  // the highest-ranked of them, and never on a "Couldn't finish" row first.
+  const stopped = new Set(needs.stopped.map((s) => s._id));
+  return [...sortByPriority(walked.filter((s) => !stopped.has(s._id)), placeOf), ...walked.filter((s) => stopped.has(s._id))];
 }
 
 // Canonical label ordering — ONE comparator drives the chip row, the "by
@@ -5400,7 +5408,8 @@ export function groupSessionsByPlan(
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
-import { priorityPlaceReader, sortByPriority, type PriorityPlace } from "./priorityOrder";
+import { priorityPlaceReader, sortByPriority, type PriorityStanding } from "./priorityOrder";
+import { splitHostedStops } from "../lib/hostedNotice";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
 
@@ -6035,6 +6044,8 @@ export function computeVisualOrder(state: {
   machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
   // The priorities the Priorities view orders by (store/priorityOrder).
   priorities?: Record<string, PriorityRow>;
+  // Loaded transcripts: the hosted stop rule's fallback splits "Couldn't finish" out of Needs You.
+  messages?: Record<string, readonly any[] | undefined>;
   // What the org lenses group by (orgLensSourcesOf); optional for callers
   // (tests) that model no org.
 } & Partial<Omit<OrgLensState, "sessions" | "currentUser">> & {
@@ -6104,6 +6115,7 @@ export function computeVisualOrder(state: {
     walk: opts.walk,
     projectOf: projectOfFromState(state),
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state.priorities, state.currentUser?._id) : undefined,
+    messagesOf: (id) => state.messages?.[id],
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);

@@ -16,6 +16,7 @@ import {
 // it is the one in use, so the switch never hides what the list is showing.
 const SEGMENT: Partial<Record<InboxViewMode, string>> = {
   grouped: 'Status',
+  priorities: 'Priorities',
   recent: 'Recent',
   time: 'Created',
   bucket: 'Label',

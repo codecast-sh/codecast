@@ -95,7 +95,7 @@ import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
-import { priorityPlaceReader, priorityRanksSig, sessionPriorityLinkSig, sortByPriority } from "../store/priorityOrder";
+import { priorityPlaceReader, priorityRanksSig, rankLabelOf, sessionPriorityLinkSig, sortByPriority } from "../store/priorityOrder";
 import { useSyncPriorities } from "../hooks/usePriorities";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
@@ -2426,9 +2426,10 @@ function SessionListPanelImpl({
   // feeder runs only while the lens is up.
   const planWsArgs = useWorkspaceArgs();
   useSyncPlansWithArgs(viewMode === "plan" ? planWsArgs : "skip");
-  // The priorities the Priorities view sorts by, fed only while it is up.
-  useSyncPriorities(viewMode === "priorities");
+  // The priorities the Priorities view sorts by, fed only while it is up in a
+  // workspace with the feature on.
   const prioritiesOn = useWorkspaceFeature("priorities");
+  useSyncPriorities(viewMode === "priorities" && prioritiesOn);
   const workspacePlans = useWorkspaceCollection<PlanItem>("plans", planLensSig);
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
@@ -3123,7 +3124,7 @@ function SessionListPanelImpl({
                   roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
-                  priorityRank={priorityPlaceOf ? (priorityPlaceOf(session)?.rank ?? null) : undefined}
+                  priorityRank={priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
