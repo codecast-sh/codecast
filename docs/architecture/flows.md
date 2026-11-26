@@ -324,17 +324,27 @@ subject's row with `include_killed` (`/cli/inbox`), so a killed subject is
 still read, and sent the brief all the same: the send restarts it, and the
 run's log says so. Only a subject the run cannot read stops the station.
 
-The subject is the session that asked for the run, and a Task-tool subagent is
-not one. Its Bash runs inside its parent's Claude process with its parent's
-session id, so the CLI tells the two apart by the transcript that holds the
-call (`subagentCaller.ts`: the newest Bash call naming the command's words, in
-the session's own transcript or a subagent's). A subagent's run adopts no
-session: with nothing named it refuses, a task named alone takes no session's
-edits, and only `--session <id>` names one. `--no-subject` gives a named change
-(a task, branch, pull request or checkout) no subject even from the session
-itself. Either way `cast workflow run` is passed `--no-subject`, so the run has
-no spawner either. A subagent's `cast task start` likewise binds no session
-(ct-101911).
+The subject is the session that asked for the run, and a subagent (a Task
+tool's or a Workflow tool's agent) is not one. Its Bash runs inside its
+parent's Claude process with its parent's session id, so the CLI tells the two
+apart by the transcript that holds the call (`subagentCaller.ts`): the newest
+Bash call made in the 30 seconds before the command started whose text names
+the command's words, in the session's own transcript or a subagent's (whose
+entries carry its `agentId`). A call that does not spell the words out (a
+script that runs cast, a `$VAR`) is found nowhere and counts as the session's
+own, so a subagent that calls cast that way still adopts its parent.
+
+A subagent's run adopts no session: with nothing named it refuses, a task
+named alone takes no session's edits, the session the task's change came from
+does not stand in as subject, and only `--session <id>` names one (and the
+run's spawner with it). `--no-subject` gives a named change (a task, branch,
+pull request or checkout) no subject even from the session itself. Either way
+`cast workflow run` is passed `--no-subject`: the run is created
+`no_subject`, so its spawner is the project lead's standing session when its
+project has a lead, and its gates ask that session, else the run's own log,
+never the session the task's change came from. A subagent's `cast task start`
+binds no session and sets no assignee; its `cast task ready --claim` and
+`cast plan bind` refuse (ct-101911).
 
 Between its own stations the run does not need the session, so it parks it
 (`subjectPark.ts`). Before every other station, and every minute while one runs

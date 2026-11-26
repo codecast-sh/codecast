@@ -39,8 +39,9 @@ describe("callingSubject", () => {
     expect(await callingSubject({ cliPost: async () => ({ sessions: [] }) }, "x")).toBeUndefined();
   });
 
-  test("--no-subject leaves a run with none, not even the session the task's change came from", async () => {
-    expect(await callingSubject({ cliPost: async () => { throw new Error("not asked"); } }, false, "ct-9")).toBeUndefined();
+  test("a subagent's run, or --no-subject, has none: the session the task's change came from does not stand in", async () => {
+    const madeBy = { short_id: "ct-9", change_session: { short_id: "jx756fb", conversation_id: FULL } };
+    expect(await callingSubject({ cliPost: async () => madeBy }, false, "ct-9")).toBeUndefined();
   });
 });
 

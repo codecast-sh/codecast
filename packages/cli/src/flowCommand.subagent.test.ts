@@ -9,9 +9,9 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { registerFlowCommands, type FlowDeps } from "./flowCommand";
+import { registerFlowCommands, spawnerArgs, type FlowDeps } from "./flowCommand";
 
-const PARENT = "b79f5fd7-6971-4271-b942-2e30a02e438b";
+const PARENT = "00000000-0000-4000-8000-000000000002";
 const tmp: string[] = [];
 const savedCache = process.env.CODECAST_FLOWS_CACHE;
 afterEach(() => {
@@ -52,7 +52,7 @@ async function run(args: string[], subagent: boolean) {
       throw new Error(`not asked: ${route}`);
     },
     callingSession: () => PARENT,
-    subjectSession: async () => (subagent ? undefined : PARENT),
+    subjectSession: async () => (subagent ? false : PARENT),
     realCwd: () => cwd,
     readWorkspace: async () => ({ kind: "personal" }),
     directoryTeam: async () => null,
@@ -80,7 +80,7 @@ describe("cast flow run from a subagent", () => {
   test("a task named alone takes no session's edits: the parent's are not adopted", async () => {
     const r = await run(["--task", "ct-7"], true);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("ct-7 has no branch here yet");
+    expect(r.err).toContain("ct-7 has no branch here yet; a subagent's run takes no session's edits, so name the change with --branch or --pr");
     expect(r.err).not.toContain(PARENT);
   });
 
@@ -93,7 +93,7 @@ describe("cast flow run from a subagent", () => {
   test("with nothing named, a subagent is told to name the change rather than ship its parent's edits", async () => {
     const r = await run([], true);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("Name the change: a subagent's run takes no session's edits unless named");
+    expect(r.err).toContain("Name the change: a subagent's run takes no session's edits, so name a branch with --branch or --pr");
   });
 
   test("--session names the session outright, from a subagent too", async () => {
@@ -105,12 +105,25 @@ describe("cast flow run from a subagent", () => {
   test("--no-subject takes no session, even from the session's own agent", async () => {
     const r = await run(["--task", "ct-7", "--no-subject"], false);
     expect(r.code).toBe(1);
-    expect(r.err).toContain("ct-7 has no branch here yet");
+    expect(r.err).toContain("ct-7 has no branch here yet; a --no-subject run takes no session's edits");
   });
 
   test("--no-subject with a session's own edits is refused", async () => {
     const r = await run(["--session", PARENT, "--no-subject"], false);
     expect(r.code).toBe(1);
     expect(r.err).toContain("--no-subject runs a named change with no session");
+  });
+});
+
+describe("spawnerArgs: what the run's own process is told", () => {
+  test("a subagent's run names no spawner, or the session named with --session, never the parent", () => {
+    expect(spawnerArgs(false, undefined)).toEqual(["--no-subject"]);
+    expect(spawnerArgs(false, true)).toEqual(["--no-subject"]);
+    expect(spawnerArgs(false, PARENT)).toEqual(["--spawner", PARENT]);
+  });
+
+  test("a session's own run, and a plain shell's, leave the run to find its spawner as before", () => {
+    expect(spawnerArgs(PARENT, undefined)).toEqual([]);
+    expect(spawnerArgs(undefined, undefined)).toEqual([]);
   });
 });

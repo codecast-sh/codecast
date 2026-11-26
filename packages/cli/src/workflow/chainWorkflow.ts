@@ -237,6 +237,9 @@ export async function startRecordedRun(deps: PublishDeps, graph: WorkflowGraph, 
   let runId: string | undefined;
   const pushed = await post("/cli/workflows/upsert", workflowUpsertPayload(graph));
   if (pushed) {
+    // A subagent is no session of its own: its run has no spawner, and asks nobody its parent stands for (ct-101911).
+    const caller = deps.detectCurrentSessionId();
+    const subagent = caller ? (await import("../subagentCaller.js")).subagentOf(caller) : null;
     const created = await post("/cli/workflow-runs/create", {
       workflow_name: graph.name,
       workflow_goal: graph.goal,
@@ -247,7 +250,8 @@ export async function startRecordedRun(deps: PublishDeps, graph: WorkflowGraph, 
       plan_id: opts.planId,
       project_path: opts.projectPath,
       // L7: spawner = the current session, so the run sits under it and its role.
-      spawner_session: deps.detectCurrentSessionId() ?? undefined,
+      spawner_session: subagent ? undefined : caller ?? undefined,
+      ...(subagent ? { no_subject: true } : {}),
     });
     runId = created?.run_id;
     if (created && !runId) noteOnce("no run id returned");

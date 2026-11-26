@@ -14311,16 +14311,12 @@ const callingSession = (): string | undefined =>
 // session id, so only the transcripts tell which agent ran this command
 // (subagentCaller.ts). A subagent is no session of its own: what it starts
 // (a run, a task) adopts none from the process tree (ct-101911).
-let subagentAsked: Promise<string | null> | undefined;
-function callingSubagent(): Promise<string | null> {
-  return (subagentAsked ??= (async () => {
-    const own = ownSessionId(getRealCwd());
-    if (!own) return null;
-    const [{ subagentCalling }, { claudeProjectsDirs }] = await Promise.all([import("./subagentCaller.js"), import("./claudeConfigDirs.js")]);
-    return subagentCalling(own, process.argv.slice(2), { projectsDirs: claudeProjectsDirs() });
-  })());
+async function callingSubagent(): Promise<string | null> {
+  const own = ownSessionId(getRealCwd());
+  return own ? (await import("./subagentCaller.js")).subagentOf(own) : null;
 }
-const subjectSession = async (): Promise<string | undefined> => ((await callingSubagent()) ? undefined : callingSession());
+/** The calling session; false when a subagent of it runs this, so nothing may stand in for it. */
+const subjectSession = async (): Promise<string | false | undefined> => ((await callingSubagent()) ? false : callingSession());
 
 // What a reparent told (org-staffing.md S11): the moved session, or the role
 // and the hands that ride its frame. Nothing to say when nobody was told.
@@ -18549,6 +18545,7 @@ work
     filters.project_path = getRealCwd();
     const sessionId = ownSessionId(getRealCwd());
     if (options.claim) {
+      if (await callingSubagent()) { console.error("A subagent has no session of its own to claim for: pick a task with cast task ready, then cast task start <id>"); process.exit(1); }
       const claim = await cliPost("/cli/work/claim", buildTaskClaimBody(filters, sessionId, { stale: options.stale }));
       if (options.json) {
         // The pulse and the plan binding are the claim's, not the output's.
@@ -20204,6 +20201,7 @@ plan
   .description("Bind current session to a plan and inject context")
   .argument("<plan_id>", "Plan short ID")
   .action(async (planId: string) => {
+    if (await callingSubagent()) { console.error("A subagent has no session of its own to bind: its parent session binds plans"); process.exit(1); }
     const sessionId = detectCurrentSessionId();
     if (!sessionId) {
       console.error("Could not detect current session. Set CLAUDE_CODE_SESSION_ID or run from within a Claude Code session.");
@@ -22433,7 +22431,8 @@ workflow
   .option("--json", "With --detach: print {run_id, task} as JSON")
   .option("--device <name>", "With --detach: hand the whole run to this machine of yours (id, label or hostname), in its checkout of this repository; refused when it is offline")
   .addOption(new Option("--change <file>", "With --device: the frozen change (JSON) that machine fetches and freezes before the run starts (cast flow run writes it)").hideHelp())
-  .option("--no-subject", "No session is behind the run: its hands spawn under none and its gates ask from the run's own log")
+  .option("--no-subject", "No session is behind the run: its hands spawn under none, and its gates ask the project lead's session, else the run's own log")
+  .addOption(new Option("--spawner <session>", "The session behind the run, named by the cast flow run that started it").hideHelp())
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -22532,8 +22531,9 @@ workflow
       convexSiteUrl: siteUrl,
       apiToken,
       // No spawner when told (--no-subject) or when a subagent runs this: its parent never asked (ct-101911).
-      spawnerSession: options.subject && !(await callingSubagent()) ? ownSessionId(getRealCwd()) || undefined : undefined,
+      spawnerSession: options.spawner ?? (options.subject && !(await callingSubagent()) ? ownSessionId(getRealCwd()) || undefined : undefined),
     };
+    const noSubject = !runOpts.spawnerSession && (!options.subject || !!(await callingSubagent()));
 
     if (options.task) {
       const task = await cliPost("/cli/work/get", { short_id: options.task });
@@ -22590,6 +22590,8 @@ workflow
           // The session behind the run: hands spawn under it (and its role)
           // even when the daemon executes the run later.
           spawner_session: runOpts.spawnerSession,
+          // Nobody's run: its gates never fall back to the session the task's change came from.
+          ...(noSubject ? { no_subject: true } : {}),
           ...(options.force ? { force: true } : {}),
           ...(options.detach ? { detach: true, run_on_device: deviceId() } : {}),
           ...(placeOn ? { place_device: placeOn.device_id, place_origin: (await import("./workflow/placedChange.js")).originOf(projectPath) ?? undefined, ...(placedChange ? { placed_change: placedChange } : {}) } : {}),
