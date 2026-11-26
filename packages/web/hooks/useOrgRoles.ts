@@ -20,9 +20,17 @@ export type OrgWorkspace = OrgTree["workspace"];
 
 const NO_ROLES: OrgRole[] = [];
 
-/** The wake signature: workspace plus, per role, what a name lookup reads. */
+/** The wake signature: workspace plus, per role, what a name lookup reads.
+ *  Kept per tree object: every store write re-reads it for each subscriber,
+ *  and the tree changes far less often than the store. */
+const _sigs = new WeakMap<object, string>();
 export function orgRolesSig(tree: OrgTree | null | undefined): string {
   if (!tree) return "";
+  let cached = _sigs.get(tree);
+  if (cached === undefined) _sigs.set(tree, (cached = buildOrgRolesSig(tree)));
+  return cached;
+}
+function buildOrgRolesSig(tree: OrgTree): string {
   let sig = `${tree.workspace.kind}:${tree.workspace.id}:${tree.workspace.name}`;
   // `avatar` is in the signature because these surfaces DRAW the face (the
   // ownership menu's role list, the role pill): without it a face change lands

@@ -86,15 +86,41 @@ function searchTitle(conv: HaystackRow): string {
 
 // Per row object: a search re-reads the same rows on every keystroke, and a row
 // that changed arrives as a new object.
-const _haystackCache = new WeakMap<object, { personify: IdentityPrefs; text: string; words?: string[] }>();
-function haystackEntry(conv: HaystackRow): { personify: IdentityPrefs; text: string; words?: string[] } {
-  const personify = identityPrefsNow();
+// The entry also keeps the title and worn name a tier is scored on, lowered,
+// so a keystroke that reaches a row re-cleans neither.
+type HaystackEntry = { personify: IdentityPrefs; text: string; words?: string[]; title?: string; titleWords?: string[]; name?: string | null; nameWords?: string[] };
+const _haystackCache = new WeakMap<object, HaystackEntry>();
+function haystackEntry(conv: HaystackRow, personify: IdentityPrefs = identityPrefsNow()): HaystackEntry {
   const hit = _haystackCache.get(conv);
   if (hit && hit.personify === personify) return hit;
-  const entry = { personify, text: buildHaystack(conv, personify) };
+  const entry: HaystackEntry = { personify, text: buildHaystack(conv, personify) };
   _haystackCache.set(conv, entry);
   return entry;
 }
+function entryTitle(conv: HaystackRow, entry: HaystackEntry): string {
+  return (entry.title ??= searchTitle(conv).toLowerCase());
+}
+function entryName(conv: HaystackRow, entry: HaystackEntry): string | null {
+  if (entry.name === undefined) {
+    const name = conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, entry.personify).name : null;
+    entry.name = name ? name.toLowerCase() : null;
+  }
+  return entry.name;
+}
+/** Builds the search entries of `rows` from `from` on, until `hasTime` says
+ *  stop; returns where it stopped (rows.length when done). For warming the
+ *  cache in idle time, so the first typed key ranks warm rows. */
+export function warmSessionSearch(rows: readonly HaystackRow[], from: number, hasTime: () => boolean): number {
+  const personify = identityPrefsNow();
+  let i = from;
+  for (; i < rows.length && (i % 256 !== 0 || hasTime()); i++) {
+    const entry = haystackEntry(rows[i], personify);
+    entryTitle(rows[i], entry);
+    entryName(rows[i], entry);
+  }
+  return i;
+}
+
 export function sessionSearchHaystack(conv: HaystackRow): string {
   return haystackEntry(conv).text;
 }
@@ -194,13 +220,19 @@ export function standingMark(standing: SessionStanding | undefined): "needs_inpu
 
 // How well the typed words name a text: 0 it starts with them, 1 every word
 // starts some word of it, 2 every word is inside it, Infinity otherwise.
-function nameScore(text: string, q: string): number {
-  const lower = text.toLowerCase();
+// The same rungs over a lowered text whose words are already split (cached
+// per row), so scanning thousands of rows allocates nothing per row.
+function nameScoreOf(lower: string, words: () => string[], q: string, tokens: string[]): number {
   if (lower.startsWith(q)) return 0;
-  const m = matchScore(lower, q);
-  if (m === Infinity) return m;
-  const words = textWords(lower);
-  return q.split(/\s+/).every((tok) => words.some((w) => w.startsWith(tok))) ? 1 : 2;
+  // matchScore is finite exactly when every typed word is inside the text.
+  for (const tok of tokens) if (!lower.includes(tok)) return Infinity;
+  const ws = words();
+  for (const tok of tokens) if (!startsSomeWord(ws, tok)) return 2;
+  return 1;
+}
+function startsSomeWord(words: string[], tok: string): boolean {
+  for (const w of words) if (w.startsWith(tok)) return true;
+  return false;
 }
 
 /** 0: title or worn name starts with the typed words, or each starts one of
@@ -210,20 +242,34 @@ function nameScore(text: string, q: string): number {
 export function sessionMatchTier(conv: HaystackRow & { title?: string }, lowerQuery: string): { tier: 0 | 1 | 2 | 3; exact: number } | null {
   const q = lowerQuery.trim();
   if (!q) return { tier: 0, exact: 0 };
+  return matchTier(conv, q, q.split(/\s+/));
+}
+
+// sessionMatchTier with the query already trimmed and split, for a scan that
+// tests one query against thousands of rows. `weakTierCannotRank` says the
+// caller has no use for a tier 2 or 3 hit (its list is full of better ones):
+// the hit then answers tier 3 without the per-word check.
+function matchTier(conv: HaystackRow, q: string, tokens: string[], personify?: IdentityPrefs, weakTierCannotRank?: () => boolean): { tier: 0 | 1 | 2 | 3; exact: number } | null {
   // The cached haystack holds the title and the worn name, so a typed word
   // absent from it rules out every tier. This cheap reject is what lets a
   // search scan the whole cache rather than only its most recent rows.
-  const hay = sessionSearchHaystack(conv);
-  if (!q.split(/\s+/).every((tok) => hay.includes(tok))) return null;
-  const name =conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, identityPrefsNow()).name : null;
-  const best = Math.min(nameScore(searchTitle(conv), q), name ? nameScore(name, q) : Infinity);
+  const entry = haystackEntry(conv, personify);
+  const hay = entry.text;
+  for (const tok of tokens) if (!hay.includes(tok)) return null;
+  const name = entryName(conv, entry);
+  const title = entryTitle(conv, entry);
+  const titleScore = nameScoreOf(title, () => (entry.titleWords ??= textWords(title)), q, tokens);
+  const best = titleScore === 0 || !name ? titleScore : Math.min(titleScore, nameScoreOf(name, () => (entry.nameWords ??= textWords(name)), q, tokens));
   if (best <= 1) return { tier: 0, exact: best };
   if (best !== Infinity) return { tier: 1, exact: 0 };
+  if (weakTierCannotRank?.()) return WEAK_UNRANKED;
   // Every typed word is somewhere in what the session is about (the reject
   // above): starting a word there, or only inside one.
-  const words = sessionSearchWords(conv);
-  return { tier: q.split(/\s+/).every((tok) => words.some((w) => w.startsWith(tok))) ? 2 : 3, exact: 0 };
+  const words = (entry.words ??= textWords(hay));
+  for (const tok of tokens) if (!startsSomeWord(words, tok)) return { tier: 3, exact: 0 };
+  return { tier: 2, exact: 0 };
 }
+const WEAK_UNRANKED = { tier: 3 as const, exact: 0 };
 
 /** Hits this many or more at a stronger tier leave the mid-word ones out. */
 const WEAK_HIT_CUTOFF = 3;
@@ -255,23 +301,81 @@ export function sessionRankScore(
   );
 }
 
-/** Match and rank rows best first, keeping at most `cap`. */
+/** What one ranking scan matched (rankSessions' `out`). */
+export type SessionScan<T> = { q: string; matched: T[]; complete: boolean };
+
+/** The rows a query must scan, given the last scan over the same pool: a
+ *  query that extends a fully scanned one ("sync r" after "sync") can only
+ *  match rows that one matched, since every typed word must appear in a
+ *  row's haystack. */
+export function narrowSessionScan<T>(pool: readonly T[], lowerQuery: string, last: (SessionScan<T> & { pool: readonly T[] }) | null): readonly T[] {
+  const q = lowerQuery.trim();
+  return last && last.pool === pool && last.complete && last.q && q.startsWith(last.q) ? last.matched : pool;
+}
+
+/** The most a row's standing can lift it (STATE_LIFT's largest), so a bound
+ *  on its score from its age alone. */
+const MAX_LIFT = Math.max(...Object.values(STATE_LIFT));
+
+/** Match and rank rows best first, keeping at most `cap`. Rows given newest
+ *  first (`newestFirst`) stop the scan once a row's age alone ranks it below
+ *  every row kept: every later row is older still, so the answer is the same
+ *  as a full scan's. */
 export function rankSessions<T extends HaystackRow & { title?: string; updated_at?: number }>(
   rows: Iterable<T>,
   lowerQuery: string,
   standingOf: (row: T) => SessionStanding,
   cap: number,
   now = Date.now(),
+  opts: {
+    newestFirst?: boolean;
+    /** Filled with every row that matched, in scan order, and whether the
+     *  scan saw every row (an early stop leaves it partial). A later query
+     *  that extends this one can rank these rows alone (narrowSessionScan). */
+    out?: SessionScan<T>;
+  } = {},
 ): T[] {
-  const ranked: Array<{ row: T; score: number; tier: number }> = [];
+  const q = lowerQuery.trim();
+  const tokens = q ? q.split(/\s+/) : [];
+  const personify = identityPrefsNow();
+  const out = opts.out;
+  if (out) { out.q = q; out.matched = []; out.complete = true; }
+  // The best `cap` rows of all hits and of the strong ones (tier < 3), worst
+  // last; dropWeakHits chooses between them by how many strong hits there are.
+  type Hit = { row: T; score: number; tier: number; at: number };
+  const all: Hit[] = [];
+  const strong: Hit[] = [];
+  let strongCount = 0;
+  const before = (a: Hit, b: Hit) => a.score < b.score || (a.score === b.score && a.at > b.at);
+  const keep = (top: Hit[], hit: Hit) => {
+    if (top.length === cap && !before(hit, top[cap - 1])) return;
+    let i = top.length < cap ? top.length : cap - 1;
+    while (i > 0 && before(hit, top[i - 1])) { top[i] = top[i - 1]; i--; }
+    top[i] = hit;
+  };
+  const bound = (top: Hit[], floor: number) => top.length === cap && top[cap - 1].score <= floor;
   for (const row of rows) {
-    const match = sessionMatchTier(row, lowerQuery);
+    const at = row.updated_at ?? 0;
+    if (opts.newestFirst && cap > 0) {
+      const floor = Math.log2(1 + Math.max(0, now - at) / 3_600_000) - MAX_LIFT;
+      if (bound(strong, floor) && (strongCount >= WEAK_HIT_CUTOFF || bound(all, floor))) {
+        if (out) out.complete = false;
+        break;
+      }
+    }
+    // A tier 2 or 3 hit scores at least 2 * TIER_SPAN plus its age's floor;
+    // once the strong list is full of better rows it cannot place, so it
+    // skips the per-word check (its weak tier is only kept for narrowing).
+    const weakCannotRank = () => bound(strong, 2 * TIER_SPAN + Math.log2(1 + Math.max(0, now - at) / 3_600_000) - MAX_LIFT);
+    const match = q ? matchTier(row, q, tokens, personify, weakCannotRank) : { tier: 0 as const, exact: 0 };
+    if (match === WEAK_UNRANKED) { out?.matched.push(row); continue; }
     if (!match) continue;
-    ranked.push({ row, tier: match.tier, score: sessionRankScore(match, standingOf(row), row.updated_at ?? 0, now) });
+    out?.matched.push(row);
+    const hit = { row, tier: match.tier, at, score: sessionRankScore(match, standingOf(row), at, now) };
+    keep(all, hit);
+    if (hit.tier < 3) { strongCount++; keep(strong, hit); }
   }
-  const kept = dropWeakHits(ranked);
-  kept.sort((a, b) => a.score - b.score || (b.row.updated_at ?? 0) - (a.row.updated_at ?? 0));
-  return kept.slice(0, cap).map((r) => r.row);
+  return (strongCount >= WEAK_HIT_CUTOFF ? strong : all).map((h) => h.row);
 }
 
 // Only the fields a match or a row's face reads (identitySig covers the name). updated_at is deliberately

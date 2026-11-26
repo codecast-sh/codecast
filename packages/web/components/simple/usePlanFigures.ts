@@ -10,9 +10,12 @@ import { useWallet } from "../../hooks/useWallet";
 import { LANE_COPY, accountLine, meterFill, meterOut, upgradesFrom } from "./lane";
 import { useLaneConversations, useLaneTitles } from "./useLane";
 
-/** A day the way the plan screen says it: "October 21". */
+/** A day the way the plan screen says it: "October 21". One formatter for
+ *  every call: the meter reads this on each render of everything that shows
+ *  it, and toLocaleDateString builds a new formatter every time. */
+let dayFormat: Intl.DateTimeFormat | null = null;
 export function planDay(at: number | null): string | null {
-  return at ? new Date(at).toLocaleDateString([], { month: "long", day: "numeric" }) : null;
+  return at ? (dayFormat ??= new Intl.DateTimeFormat([], { month: "long", day: "numeric" })).format(new Date(at)) : null;
 }
 
 /** The month's meter alone: the wallet's figures, the plan they belong to,

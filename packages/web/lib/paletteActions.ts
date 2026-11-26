@@ -276,11 +276,29 @@ export function palettePageValue({ page, label }: { page: { keywords: string; al
 function titleHit(value: string, search: string): number {
   const needle = search.trim().toLowerCase();
   if (!needle) return 0;
-  const text = value.slice(value.indexOf("__", 2) + 2).trimStart();
-  const end = text.search(/\u2063|\|\|\|/);
-  const title = (end >= 0 ? text.slice(0, end) : text).toLowerCase();
+  const title = parsedValue(value).title;
   if (title.startsWith(needle)) return PALETTE_TITLE_START;
   return hasEveryWord(title, needle.split(/\s+/)) ? PALETTE_TITLE_WORDS : 0;
+}
+
+// cmdk scores every mounted row on every key, and a row's value rarely
+// changes, so each value is cut up and lowered once. Bounded: a long session
+// of searching mints new values, and the oldest are dropped.
+type ParsedValue = { title: string; hay: string; label: string | null; names: string[] };
+const _parsed = new Map<string, ParsedValue>();
+function parsedValue(value: string): ParsedValue {
+  let hit = _parsed.get(value);
+  if (hit) return hit;
+  const text = value.slice(value.indexOf("__", 2) + 2).trimStart();
+  const end = text.search(/\u2063|\|\|\|/);
+  const idx = value.indexOf("|||");
+  const hay = (idx >= 0 ? value.slice(0, idx) : value).toLowerCase();
+  const labelEnd = hay.indexOf(LABEL_END);
+  const label = labelEnd >= 0 ? hay.slice(0, labelEnd) : null;
+  hit = { title: (end >= 0 ? text.slice(0, end) : text).toLowerCase(), hay, label, names: label !== null ? label.split(ALIAS_SEP) : [hay] };
+  if (_parsed.size >= 5000) _parsed.delete(_parsed.keys().next().value!);
+  _parsed.set(value, hit);
+  return hit;
 }
 
 /** Every word of the query appears somewhere in the text, in any order. */
@@ -315,20 +333,16 @@ export function paletteItemScore(value: string, search: string): number {
     value.startsWith("__pick__") ||
     value.startsWith("__teammate__")
   ) return PALETTE_MATCH;
-  const idx = value.indexOf("|||");
-  const searchable = idx >= 0 ? value.slice(0, idx) : value;
-  const hay = searchable.toLowerCase();
   const needle = search.trim().toLowerCase();
   if (!needle) return PALETTE_MATCH;
+  const { hay, label, names } = parsedValue(value);
   // The label and each alias are names: one the query spells out in full
   // ranks above one it only starts ("team" is the Org row's Team before it is
   // the start of Team Charts).
-  const labelEnd = hay.indexOf(LABEL_END);
-  const names = labelEnd >= 0 ? hay.slice(0, labelEnd).split(ALIAS_SEP) : [hay];
   if (names.some((name) => name === needle)) return PALETTE_LABEL_EXACT;
   if (names.some((name) => name.startsWith(needle))) return PALETTE_LABEL_HIT;
   // Each word on its own, so "new task" finds "Create task new todo".
   const words = needle.split(/\s+/);
-  if (labelEnd >= 0 && hasEveryWord(hay.slice(0, labelEnd), words)) return PALETTE_LABEL_WORDS;
+  if (label !== null && hasEveryWord(label, words)) return PALETTE_LABEL_WORDS;
   return hay.includes(needle) || hasEveryWord(hay, words) ? PALETTE_MATCH : 0;
 }

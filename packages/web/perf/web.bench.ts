@@ -36,6 +36,11 @@ const WORKLOAD: Record<string, string> = {
   "heartbeat in an inbox of 5000 sessions": "inbox-heartbeat",
   // A 1,560-line diff shown whole, highlighted, in a warm app.
   "open a long diff": "diff",
+  // The command palette opening over a busy account's cache (32k sessions,
+  // 52k tasks, 20k docs), with heartbeats and a task edit between opens.
+  "open the command palette": "palette-open",
+  // Typing "sync review" into it, a key at a time.
+  "type into the command palette": "palette-type",
 };
 
 export default bench({
@@ -53,5 +58,7 @@ export default bench({
     "load an inbox of 5000 sessions": harnessCase(["cards"]),
     "heartbeat in an inbox of 5000 sessions": harnessCase(),
     "open a long diff": harnessCase(["diffLines"]),
+    "open the command palette": harnessCase(),
+    "type into the command palette": harnessCase(),
   },
 });

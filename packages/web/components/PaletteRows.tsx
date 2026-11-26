@@ -1,5 +1,5 @@
 import { FolderGit2, Map as MapIcon, Clock, Waypoints, Cpu, Link as LinkIcon, ListTodo, Newspaper, Radar, Network, KeyRound, Rocket } from "lucide-react";
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import { Command as CommandPrimitive } from "cmdk";
 import { SessionGlyph, SessionIdentityLine } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
@@ -187,7 +187,9 @@ function ProjectChip({ directory }: { directory?: string | null }) {
 /** A "Recent Sessions" row: face (state on its corner), identity line, label,
  *  where it is when that is news (set aside, another machine), project,
  *  whose, age. */
-export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: {
+// Memoized: a key re-ranks the list, and the sessions that stay on it keep
+// their row (the palette hands each a stable onSelect).
+export const PaletteSessionRow = memo(function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: {
   conv: PaletteSessionRowConv;
   bucket: { name: string } | null;
   standing?: SessionStanding;
@@ -246,7 +248,7 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
       <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
-}
+});
 
 export type PaletteSearchResult = {
   conversationId: string;
