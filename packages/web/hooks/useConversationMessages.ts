@@ -416,7 +416,9 @@ export function useConversationMessages(
     // stays put through transient auth blips, and a truly-deleted conversation
     // just stops receiving updates.
     if (!meta) return;
-    useInboxStore.getState().syncRecord("conversations", conversationId, withClearedInboxStamps(meta));
+    const store = useInboxStore.getState();
+    store.syncRecord("conversations", conversationId, withClearedInboxStamps(meta));
+    if (meta.content_access === "summary") store.dropConversationContent(conversationId);
   }, [conversationId]));
 
   // =============================================

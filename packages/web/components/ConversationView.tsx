@@ -2365,6 +2365,9 @@ const ConversationViewInner = (
   const scopeConvId = conversation?._id ? String(conversation._id) : null;
   const scopeToken = getShareTokenScope(scopeConvId);
   const viaShare = !!scopeToken || conversation?.access_level === "shared";
+  // The owner shares this session with the viewer as a summary: the summary
+  // replaces the transcript, whatever rows this window still holds locally.
+  const summaryOnly = (conversation as any)?.content_access === "summary";
   const referenceScope = useMemo(
     () => (scopeConvId && viaShare ? { conversationId: scopeConvId, shareToken: scopeToken } : null),
     [scopeConvId, viaShare, scopeToken],
@@ -5255,12 +5258,12 @@ const ConversationViewInner = (
       )}
       <div ref={containerRef} data-sv-feed data-cc-density={feedDensity} className="flex-1 min-h-0 overflow-y-auto" style={{ overflowAnchor: "none" }}>
         <div className="flex flex-col min-h-full">
-        {conversation && timeline.length === 0 && leadNode && !leadPinned ? (
+        {conversation && !summaryOnly && timeline.length === 0 && leadNode && !leadPinned ? (
           <div className="flex-1">{leadNode}</div>
-        ) : (!conversation || timeline.length === 0) ? (
+        ) : (!conversation || summaryOnly || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${newSessionPage ? "justify-end pt-6 pb-5" : hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
-              (conversation as any).content_access === "summary" ? (
+              summaryOnly ? (
                 <SummaryOnlyState conversation={conversation as any} />
               ) : (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
                 <MessagesUnavailableState
