@@ -3,10 +3,7 @@ import { probeGesture, probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import { createContext, memo, useContext, useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
-import { railRowPlacement, showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
-import { convHasPendingSend } from '@codecast/web/store/inboxOverlays';
-import { sessionStatusOf } from '@codecast/web/lib/sessionStatus';
-import { pendingDecisionConvIds } from '@codecast/web/lib/decisionQueue';
+import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { resolveImageThumbs } from '@codecast/web/lib/uiPrefDefaults';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
@@ -23,7 +20,7 @@ import { ImageViewer } from '@/components/chat/ImageViewer';
 import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { coOwnersOf, coOwnersSig } from '@codecast/web/lib/coOwners';
-import { ownerRoleHandleOf, ownerSessionTitleOf, withOwnerFactsOf, withOwnerLabelOf, withOwnerShown } from '@codecast/web/lib/withOwner';
+import { rowWithOwnerLabel } from '@/lib/rowWithOwner';
 import { underOwnersModel } from '@codecast/shared/contracts';
 import { holdOwnerCard } from '@codecast/web/lib/visibleOwnerCards';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
@@ -203,17 +200,7 @@ export type RowPlacementProps = { placedBucket?: string; placedState?: string; p
  *  detail line, with no separator after it. */
 function RowWithOwner({ session, line = false, placedBucket, placedState, pendingSend }: { session: SessionData; line?: boolean } & RowPlacementProps) {
   const Theme = useTheme();
-  const label = useInboxStore((s) => {
-    const row = withOwnerFactsOf(s as never, session as any);
-    const now = Date.now();
-    const pending = pendingSend ?? (s.sessionsWithQueuedMessages.has(session._id) || convHasPendingSend((s.pendingMessages as any)?.[session._id], now));
-    // A list that places nothing: the row's own placement, lifted into
-    // Questions by a pending decide for you, as the inbox's placement lifts it.
-    const placement = placedBucket ? { bucket: placedBucket, state: placedState } as never : railRowPlacement(row, now);
-    const asking = !placedBucket && pendingDecisionConvIds(s.sessionDecisions as never, s.currentUser?._id ? String(s.currentUser._id) : null).has(session._id);
-    const working = sessionStatusOf({ row, section: null, placement, now, live: { pendingSend: pending, asking } }) === 'working';
-    return withOwnerShown(withOwnerLabelOf(row, ownerSessionTitleOf(s as never, row), ownerRoleHandleOf(s as never, row)), working, pending);
-  });
+  const label = useInboxStore((s) => rowWithOwnerLabel(s, session as any, { placedBucket, placedState, pendingSend }, Date.now()));
   if (!label) return null;
   const lead = <RNText style={{ color: Theme.green, fontWeight: '600' }} testID="row-with-owner">With {label}{line ? null : <RNText style={{ color: Theme.textMuted0, fontWeight: '400' }}> · </RNText>}</RNText>;
   return line ? <RNText style={styles.summaryText} numberOfLines={1}>{lead}</RNText> : lead;

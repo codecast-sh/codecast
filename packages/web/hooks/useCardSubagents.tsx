@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from "react";
-import { fullRowsCounts, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
+import { fullRowsCounts, isOwnedChildRow, isSessionHidden, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
 import { awaitingOkIds } from "../lib/decisionQueue";
 import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { CardSubagentRows, CardSubagentsLine } from "../components/inbox/SessionCardParts";
@@ -10,6 +10,30 @@ import { CardSubagentRows, CardSubagentsLine } from "../components/inbox/Session
 // what the section headers count for them.
 
 const EMPTY_SUBAGENT_ROWS: readonly SubagentRow[] = [];
+
+/** What the rail's stale sweep would dismiss: EVERY non-hidden session
+ *  untouched since `cutoff`, minus pinned (explicit keep), snoozed or stashed
+ *  ones and the one you're viewing. Read from the full session map, not the
+ *  active buckets, on purpose: subagents nested under a parent are held out of
+ *  those buckets, but dismissing their parent promotes them to top-level, so
+ *  they must be in the dismiss set or they refill the inbox after a sweep. A
+ *  child its session owns (isOwnedChildRow) is in nobody's inbox and rides its
+ *  owner's card, so it is never counted. Newest first, so the borderline ones
+ *  lead the review list. */
+export function staleInboxSessions(sessions: Record<string, InboxSession>, activeSessionId: string | null | undefined, cutoff: number): InboxSession[] {
+  return Object.values(sessions)
+    .filter(
+      (sess) =>
+        !isSessionHidden(sess) &&
+        !isOwnedChildRow(sess) &&
+        !sess.is_pinned &&
+        !sess.inbox_snoozed_until &&
+        sess._id !== activeSessionId &&
+        // An unstamped row is unknown, not ancient: never offer it for dismissal.
+        !!sess.updated_at && sess.updated_at < cutoff,
+    )
+    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+}
 
 export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeSessionId, onOpen }: {
   ui: ClientUI | undefined;

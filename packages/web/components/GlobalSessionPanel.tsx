@@ -22,7 +22,7 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem, isOwnedChildRow } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -76,7 +76,7 @@ import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { railRowSelector } from "../lib/subagentRows";
-import { useCardSubagents } from "../hooks/useCardSubagents";
+import { staleInboxSessions, useCardSubagents } from "../hooks/useCardSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "../store/browserTabsView";
@@ -2265,29 +2265,9 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSetsKey]);
 
-  // Stale working set: EVERY non-hidden session untouched for >30d, minus
-  // pinned (explicit keep) and the one you're viewing. Stashed sessions are an
-  // explicit keep too — the sweep must not retire what the user deliberately
-  // set aside. Computed from the full session map — NOT the active buckets —
-  // on purpose: subagents nested under a parent are held out of those buckets,
-  // but dismissing their parent promotes them to top-level, so they must be in
-  // the dismiss set too or they refill the inbox after a sweep.
-  // Sorted newest-first so the borderline ones (the sessions most worth a
-  // second look before a sweep) lead the review list.
+  // Stale working set: what the sweep would dismiss (staleInboxSessions).
   const staleCutoff = coarseNow - STALE_SESSION_MS;
-  const staleSessions = useMemo(() => {
-    return (Object.values(s.sessions) as InboxSession[])
-      .filter(
-        (sess) =>
-          !isSessionHidden(sess) &&
-          !sess.is_pinned &&
-          !sess.inbox_snoozed_until &&
-          sess._id !== activeSessionId &&
-          // An unstamped row is unknown, not ancient: never offer it for dismissal.
-          !!sess.updated_at && sess.updated_at < staleCutoff,
-      )
-      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  }, [s.sessions, activeSessionId, staleCutoff]);
+  const staleSessions = useMemo(() => staleInboxSessions(s.sessions, activeSessionId, staleCutoff), [s.sessions, activeSessionId, staleCutoff]);
   // The snooze is a persisted pref, not component state: a "Not now" used to
   // evaporate on every reload, so the prompt kept coming back.
   const stalePromptSnoozedAt = s.clientState.ui?.inbox_stale_prompt_snoozed_at ?? 0;
@@ -2319,6 +2299,7 @@ function SessionListPanelImpl({
     return (Object.values(s.sessions) as InboxSession[]).filter(
       (sess) =>
         !isSessionHidden(sess) &&
+        !isOwnedChildRow(sess) &&
         !reviving.has(sess._id) &&
         isCurrentBlock(sess, now),
     ).map(withSafetyBlock).filter(

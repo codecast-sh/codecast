@@ -514,4 +514,22 @@ describe("the nested window: released subagents only", () => {
     const { sessions } = await computeInboxSessions({ db }, ME as any, { includeLiveness: false });
     expect(ids(sessions).filter((id) => id !== "lead")).toEqual(["mine"]);
   });
+
+  // A child a role took, or one someone released, has left its parent's card
+  // (isParentOwnedChild): neither read sends it under the lead stamped as the
+  // lead's. Neither is mine, so no seat of its own masks the check.
+  test("a role-owned or released child of a listed lead never rides the lead's card", async () => {
+    const db = () => nestedWorld([
+      sub("roled", 5, { org_role_id: "org_roles_r", role_started: true }),
+      sub("theirs", 6, { parent_released_at: EPOCH - H, owner_user_id: MATE }),
+      sub("kept", 7),
+    ]);
+    const underLead = (rows: any[]) => rows.filter((r: any) => r.owner_session_id === "conversations_lead").map((r: any) => String(r._id)).sort();
+    const { sessions } = await computeInboxSessions({ db: db() }, ME as any, { includeLiveness: false });
+    expect(ids(sessions)).toContain("lead");
+    expect(underLead(sessions)).toEqual(["conversations_kept"]);
+    const page = await collectInboxSessionsPaginated({ db: db() }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(page.page.map((r: any) => String(r._id))).toContain("conversations_lead");
+    expect(underLead(page.page)).toEqual(["conversations_kept"]);
+  });
 });
