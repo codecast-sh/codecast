@@ -52,10 +52,12 @@ describe("cast flow review-verdict", () => {
   });
 });
 
-describe("cast flow record-pr", () => {
-  test("a repository's own PR station records its pull request on $run_id, and a failed report only prints", async () => {
+describe("cast flow record-pr and record-rebase", () => {
+  test("a repository's own station scripts record its pull request and rebases on $run_id, and a failed report only prints", async () => {
     const head = "e".repeat(40);
+    const rebased = "f".repeat(40);
     const line = ["node", "cast", "flow", "record-pr", "--number", "4923", "--head", head, "--repository", "Union-AI/Union-Mobile"];
+    const rebaseLine = ["node", "cast", "flow", "record-rebase", "--from", head, "--to", rebased];
     const { program, posts } = cast({});
     const logged: string[] = [];
     const error = console.error;
@@ -64,11 +66,19 @@ describe("cast flow record-pr", () => {
     process.env.run_id = "run_7";
     try {
       await program.parseAsync(line);
-      expect(posts).toEqual([{ path: "/cli/workflow-runs/pr", body: { run_id: "run_7", repository: "Union-AI/Union-Mobile", number: 4923, head_sha: head } }]);
+      await program.parseAsync(rebaseLine);
+      expect(posts).toEqual([
+        { path: "/cli/workflow-runs/pr", body: { run_id: "run_7", repository: "Union-AI/Union-Mobile", number: 4923, head_sha: head } },
+        { path: "/cli/workflow-runs/rebase", body: { run_id: "run_7", from: head, to: rebased } },
+      ]);
 
-      const refused = cast({}, async () => { throw new Error("/cli/workflow-runs/pr answered 502"); });
+      const refused = cast({}, async (path) => { throw new Error(`${path} answered 502`); });
       await refused.program.parseAsync(line);
-      expect(logged).toEqual(["the pull request was not recorded on the run: /cli/workflow-runs/pr answered 502"]);
+      await refused.program.parseAsync(rebaseLine);
+      expect(logged).toEqual([
+        "the pull request was not recorded on the run: /cli/workflow-runs/pr answered 502",
+        "the rebase was not recorded on the run: /cli/workflow-runs/rebase answered 502",
+      ]);
     } finally {
       console.error = error;
       if (runId === undefined) delete process.env.run_id; else process.env.run_id = runId;
