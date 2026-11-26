@@ -483,9 +483,9 @@ describe("tests outside packages/", () => {
 });
 
 describe("workflow concurrency", () => {
-  test("a pull request's newer run cancels the older one, and a push to main keeps its own", () => {
+  test("a pull request's newer run cancels the older one; pushes to main share one group that never cancels a running run", () => {
     const top = workflow as any;
-    expect(top.concurrency.group).toBe("ci-${{ github.event.pull_request.number || github.sha }}");
+    expect(top.concurrency.group).toBe("ci-${{ github.event.pull_request.number || 'main' }}");
     expect(top.concurrency["cancel-in-progress"]).toBe("${{ github.event_name == 'pull_request' }}");
   });
 });

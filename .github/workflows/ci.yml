@@ -6,11 +6,13 @@ on:
   pull_request:
     branches: [main]
 
-# A new push to a pull request supersedes the run before it. A push to main is
-# keyed by its commit, so every push keeps its own run: a shared group would
-# cancel the pending run of the push before.
+# A new push to a pull request cancels the run before it. Pushes to main share
+# one group that never cancels a running run: one runs to its verdict, and
+# only the newest push waits behind it, so a burst of pushes does not queue a
+# full run per commit ahead of main's head. A commit whose waiting run was
+# replaced is judged by the newer run, which holds it.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
