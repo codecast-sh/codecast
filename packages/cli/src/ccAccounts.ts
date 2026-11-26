@@ -1295,13 +1295,42 @@ export function accountLaunchInfo(name: string): AccountLaunchInfo | null {
  *  and on 2026-09-17 that timeout was recorded as a permanent "unsupported",
  *  keyed by size+mtime so the binary was never asked again. The daemon then
  *  deleted every profile store on every beat, and each browser sign-in a person
- *  completed was erased seconds later. */
+ *  completed was erased seconds later.
+ *
+ *  Only a login the store itself would hold proves it was ignored. Claude Code
+ *  also signs in from an Anthropic Console profile (~/.config/anthropic, moved
+ *  by ANTHROPIC_CONFIG_DIR) and from token and key variables; any of those
+ *  answers `loggedIn: true` with its own authMethod and says nothing about the
+ *  store (2026-11-25: a Console login marked a current Claude Code
+ *  "unsupported"). So the probe empties them, and a login by any method other
+ *  than the keychain's "claude.ai" is unknown.
+ *
+ *  A cached answer lasts an hour. The path a daemon launches is often a
+ *  launcher script that execs the newest installed version, so its size and
+ *  mtime never change when Claude Code updates; without an expiry one wrong
+ *  answer outlived every update on such a machine. An unknown is cached too,
+ *  for ten minutes: it replaces any older answer, so a negative the latest
+ *  probe could not confirm never deletes a store, and a machine whose settings
+ *  sign Claude Code in some other way (an apiKeyHelper, Bedrock) is not asked
+ *  on every beat. */
 export type SecureStorageVerdict = "supported" | "unsupported" | "unknown";
+
+const SECURE_STORAGE_PROBE_TTL_MS = 60 * 60 * 1000;
+const SECURE_STORAGE_UNKNOWN_TTL_MS = 10 * 60 * 1000;
+/** Credential sources Claude Code checks before its keychain store. */
+const NON_STORE_AUTH_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"];
 
 export async function probeSecureStorageSupport(
   claudeBin: string,
-  opts: { env?: NodeJS.ProcessEnv; execImpl?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string> } = {},
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    execImpl?: (bin: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
+    /** Ask the binary even when a cached answer is current. */
+    fresh?: boolean;
+    now?: number;
+  } = {},
 ): Promise<SecureStorageVerdict> {
+  const now = opts.now ?? Date.now();
   const cachePath = path.join(defaultConfigDir(), "cc-store", ".support.json");
   let identity = claudeBin;
   try {
@@ -1310,14 +1339,24 @@ export async function probeSecureStorageSupport(
   } catch {}
   try {
     const cached = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
-    if (cached?.identity === identity && typeof cached.supported === "boolean") {
-      return cached.supported ? "supported" : "unsupported";
+    const verdict: unknown = cached?.verdict;
+    const ttl = verdict === "unknown" ? SECURE_STORAGE_UNKNOWN_TTL_MS : SECURE_STORAGE_PROBE_TTL_MS;
+    const current = typeof cached?.checked_at === "number" && now - cached.checked_at < ttl;
+    if (!opts.fresh && current && cached.identity === identity && (verdict === "supported" || verdict === "unsupported" || verdict === "unknown")) {
+      return verdict;
     }
   } catch {}
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-store-probe-"));
   let verdict: SecureStorageVerdict = "unknown";
   try {
-    const env = { ...(opts.env ?? process.env), CLAUDE_SECURESTORAGE_CONFIG_DIR: probeDir };
+    const consoleDir = path.join(probeDir, "anthropic");
+    fs.mkdirSync(consoleDir);
+    const env: NodeJS.ProcessEnv = {
+      ...(opts.env ?? process.env),
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: probeDir,
+      ANTHROPIC_CONFIG_DIR: consoleDir,
+    };
+    for (const key of NON_STORE_AUTH_ENV) delete env[key];
     const exec =
       opts.execImpl ??
       (async (bin: string, args: string[], e: NodeJS.ProcessEnv) => {
@@ -1331,20 +1370,20 @@ export async function probeSecureStorageSupport(
         });
       });
     const out = await exec(claudeBin, ["auth", "status", "--json"], env);
-    const loggedIn = JSON.parse(out)?.loggedIn;
+    const status = JSON.parse(out);
     // Anything but a real boolean is a binary that answered in a shape we do
-    // not understand — that is an unknown, never a negative.
-    if (loggedIn === false) verdict = "supported";
-    else if (loggedIn === true) verdict = "unsupported";
+    // not understand — that is an unknown, never a negative. A login that names
+    // no authMethod is read as the keychain's, as it was before methods existed.
+    if (status?.loggedIn === false) verdict = "supported";
+    else if (status?.loggedIn === true && (status.authMethod === "claude.ai" || status.authMethod === undefined)) verdict = "unsupported";
   } catch {
     verdict = "unknown";
   } finally {
     fs.rmSync(probeDir, { recursive: true, force: true });
   }
-  if (verdict === "unknown") return verdict;
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true, mode: 0o700 });
-    atomicWriteFile(cachePath, JSON.stringify({ identity, supported: verdict === "supported" }), { mode: 0o600 });
+    atomicWriteFile(cachePath, JSON.stringify({ identity, verdict, checked_at: now }), { mode: 0o600 });
   } catch {}
   return verdict;
 }
@@ -1842,22 +1881,36 @@ export function extractSetupToken(text: string): string | null {
 // ---------------------------------------------------------------------------
 // Account attribution for a scope-less token. A setup-token can't read its own
 // profile or usage, but every model response carries the account's unified
-// rate-limit windows. Two credentials whose 5h AND 7d reset timestamps match
-// to the second belong to the same account — that is how a freshly minted
-// token is proven to belong to the profile it was minted for before it is
-// stored (the browser may have been signed into a different account; the
-// token itself can't say whose it is).
+// rate-limit windows. Two credentials whose window reset timestamps match to
+// the second belong to the same account — that is how a freshly minted token
+// is proven to belong to the profile it was minted for before it is stored
+// (the browser may have been signed into a different account; the token
+// itself can't say whose it is).
 // ---------------------------------------------------------------------------
 
-/** Same account iff both reset timestamps are known and identical. Utilization
- *  is deliberately ignored — it moves between two probes seconds apart. */
-export function sameAccountFingerprint(a: RateLimitFingerprint, b: RateLimitFingerprint): boolean {
-  return (
-    a.five_hour_reset != null &&
-    a.seven_day_reset != null &&
-    a.five_hour_reset === b.five_hour_reset &&
-    a.seven_day_reset === b.seven_day_reset
-  );
+/** How two credentials' windows compare, judged on reset times alone
+ *  (utilization moves between two probes seconds apart).
+ *  - "different": a reset both carry differs, or only one side has a 5-hour
+ *    window (two plans, so two accounts).
+ *  - "same": the 7d and 5h resets both match.
+ *  - "weekly": the 7d reset matches and neither side has a 5-hour window. An
+ *    account without one sends no 5h headers at all (two Team seats,
+ *    2026-11-25), so for it the weekly reset is all there is. That is weak
+ *    evidence: resets land on the hour, so unrelated accounts share one about
+ *    once in 168, and seats created together more often.
+ *  - "unknown": a side carries no 7d reset, so nothing can be compared. */
+export type FingerprintMatch = "same" | "weekly" | "different" | "unknown";
+
+export function compareAccountFingerprints(a: RateLimitFingerprint, b: RateLimitFingerprint): FingerprintMatch {
+  if (a.seven_day_reset == null || b.seven_day_reset == null) return "unknown";
+  if (a.seven_day_reset !== b.seven_day_reset) return "different";
+  if (a.five_hour_reset == null && b.five_hour_reset == null) return "weekly";
+  return a.five_hour_reset === b.five_hour_reset ? "same" : "different";
+}
+
+/** A snapshot's reset (ms) and a header's reset (s) name the same second. */
+function sameResetSecond(ms: number | undefined, s: number | null): boolean {
+  return ms != null && s != null && Math.abs(ms / 1000 - s) <= 2;
 }
 
 /** Which SAVED profile a scope-less token belongs to, judged from the usage
@@ -1873,21 +1926,75 @@ export function attributeFingerprint(
   now: number,
 ): string | null {
   if (fp.seven_day_reset == null) return null;
-  const near = (ms: number | undefined, s: number | null): boolean =>
-    ms != null && s != null && Math.abs(ms / 1000 - s) <= 2;
   const hits: string[] = [];
   for (const [name, meta] of Object.entries(profiles)) {
     const snap = usage[meta.uuid || meta.email || ""];
-    if (!snap || !near(snap.weekly?.resets_at, fp.seven_day_reset)) continue;
+    if (!snap || !sameResetSecond(snap.weekly?.resets_at, fp.seven_day_reset)) continue;
     const sessionOpen = snap.session?.resets_at != null && snap.session.resets_at > now;
-    if (sessionOpen && !near(snap.session?.resets_at, fp.five_hour_reset)) continue;
+    if (sessionOpen && !sameResetSecond(snap.session?.resets_at, fp.five_hour_reset)) continue;
     hits.push(name);
   }
   return hits.length === 1 ? hits[0] : null;
 }
 
-export function attributeFingerprintToProfile(fp: RateLimitFingerprint, now: number = Date.now()): string | null {
-  return attributeFingerprint(fp, readProfileIndex().profiles, readUsageCache().accounts, now);
+export type MintedOwner = { owner: string; caveat?: string } | { rejected: string };
+
+/**
+ * Whose account a freshly minted setup-token is, before it is stored.
+ * `mine` is the fingerprint of `profile`'s saved login, or null when that login
+ * could not be asked (dead, expired, the probe threw). `label` names the
+ * account to the person (its email when known).
+ *
+ * Only a direct comparison that proves a different account rejects. A
+ * weekly-only match is stored for `profile` with a note that only the weekly
+ * window could be compared, and that it was not checked at all when another
+ * saved account's weekly window resets at the same second (the guided flow
+ * told the person which account to sign into, the same trust the dead-login
+ * case below extends). When nothing can be compared, the
+ * usage snapshots of the saved profiles are the witness, and failing them the
+ * token is stored for `profile` (the account the flow told the person to sign
+ * into) with a note that its identity was not checked.
+ */
+export function judgeMintedOwner(input: {
+  profile: string;
+  label: string;
+  mine: RateLimitFingerprint | null;
+  minted: RateLimitFingerprint;
+  profiles: Record<string, { uuid?: string; email?: string }>;
+  usage: Record<string, CcUsageSnapshot>;
+  now: number;
+}): MintedOwner {
+  const { profile, label, mine, minted, profiles, usage, now } = input;
+  const match = mine ? compareAccountFingerprints(mine, minted) : "unknown";
+  if (match === "same") return { owner: profile };
+  if (match === "weekly") {
+    const twins = Object.entries(profiles)
+      .filter(([name, meta]) => name !== profile && sameResetSecond(usage[meta.uuid || meta.email || ""]?.weekly?.resets_at, minted.seven_day_reset))
+      .map(([name, meta]) => meta.email ?? name);
+    if (twins.length) {
+      const others = twins.length > 1 ? `${twins[0]} and ${twins.length - 1} more` : twins[0];
+      return {
+        owner: profile,
+        caveat: `stored without an identity check — ${others} shares this account's weekly window, and there is no 5-hour window to tell them apart`,
+      };
+    }
+    return { owner: profile, caveat: `partly checked — the weekly window matched ${label}, which has no 5-hour window to confirm it` };
+  }
+  const attributed = attributeFingerprint(minted, profiles, usage, now);
+  if (match === "different") {
+    // The direct comparison ruled `profile` out, whatever a snapshot says.
+    if (attributed && attributed !== profile) return { owner: attributed };
+    return {
+      rejected: `the browser signed into a different Claude account than ${label}, and not one saved here — sign in to claude.ai as ${label} and try again`,
+    };
+  }
+  if (attributed) return { owner: attributed };
+  return {
+    owner: profile,
+    caveat: mine
+      ? `stored without an identity check — the rate-limit windows of ${label} and the new token could not be compared`
+      : `stored without an identity check — the saved login for ${label} could not vouch for the account the browser signed into`,
+  };
 }
 
 const CC_MESSAGES_URL = process.env.CODECAST_CC_MESSAGES_URL || "https://api.anthropic.com/v1/messages";
@@ -1927,7 +2034,9 @@ export async function fetchRateLimitFingerprint(bearerToken: string, fetchImpl?:
   // A limit-parked account answers 429 — with the same window headers, which
   // is all the fingerprint needs (2026-09-01: a mint for an exhausted account
   // was thrown away because the probe treated its 429 as a failure).
-  if ((status < 200 || status >= 300) && !(fp.five_hour_reset != null && fp.seven_day_reset != null)) {
+  // The 7d reset is the part an identity check needs; an account with no
+  // 5-hour window never sends the 5h one.
+  if ((status < 200 || status >= 300) && fp.seven_day_reset == null) {
     throw new CcAccountError(`Account probe failed: HTTP ${status} ${(await body()).slice(0, 160)}`);
   }
   return fp;
