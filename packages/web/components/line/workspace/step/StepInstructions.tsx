@@ -108,7 +108,7 @@ export function StepInstructions({ model, step: s, editing, onEditing, testRuns,
             </p>
           )}
           {dirty && showDiff && <div className="lw-obj sp-ins-diff" data-flat=""><PromptDiffLines before={s.prompt.text} after={draft!} /></div>}
-          <PromptView prompt={s.prompt} nodes={model.graph.nodes} text={draft} changed={diff?.changedAfter ?? null} editing={editing} onEdit={(text) => setStepDraft(s.id, text)} />
+          <PromptView prompt={s.prompt} nodes={model.graph.nodes} text={draft} changed={diff?.changedAfter ?? null} editing={editing} onEdit={(text) => setStepDraft(s.id, text)} foldKey={s.id} />
         </>
       ) : s.kind !== "person" ? (
         <div className="sp-none">The flow names {s.label} without its {noun}, so there is nothing to read or edit here.</div>

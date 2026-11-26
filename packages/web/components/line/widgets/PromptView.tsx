@@ -5,13 +5,14 @@
 // inserted value said in words and linked to the step it comes from. Edit
 // mode is a plain text area that emits the new text; saving and trying it
 // belong to the actions (LW4), which read the draft the caller keeps.
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import type { Components } from "react-markdown";
 import { MarkdownBlocks } from "../../tools/MarkdownRenderer";
 import { readableTemplate, stationRefOf } from "../../../lib/line/lineGraphs";
 import type { PromptInclude, StepPrompt } from "../../../lib/line/lineModel";
 import { promptParts, promptSections } from "../../../lib/line/promptText";
 import { useLineNav } from "./parts";
+import { setPromptOpenAll, setPromptSectionOpen, usePromptFolds } from "./promptFolds";
 
 type NodeName = { id: string; label: string };
 
@@ -87,12 +88,15 @@ export type PromptViewProps = {
   layout?: "outline" | "flat" | "peek";
   editing?: boolean;
   onEdit?: (text: string) => void;
+  /** Whose opened sections are remembered (the step's id); the prompt's file when unset. */
+  foldKey?: string;
 };
 
 /** A prompt read as an outline, or edited as text. */
-export function PromptView({ prompt, nodes = [], text, changed, layout = "outline", editing, onEdit }: PromptViewProps) {
+export function PromptView({ prompt, nodes = [], text, changed, layout = "outline", editing, onEdit, foldKey }: PromptViewProps) {
   const shown = text ?? prompt.text;
-  const [openAll, setOpenAll] = useState(false);
+  const stepKey = foldKey ?? prompt.file ?? "";
+  const { openAll, byHand } = usePromptFolds(stepKey);
   const sections = useMemo(() => (layout === "outline" ? promptSections(shown) : []), [layout, shown]);
 
   if (editing) {
@@ -120,14 +124,23 @@ export function PromptView({ prompt, nodes = [], text, changed, layout = "outlin
     <div data-line-prompt="outline">
       {sections.length > 2 && (
         <div className="lw-doctools" style={{ justifyContent: "flex-end", marginTop: -6 }}>
-          <button type="button" className="lw-link" onClick={() => setOpenAll((v) => !v)} aria-pressed={openAll}>{openAll ? "Fold all" : "Open all"}</button>
+          <button type="button" className="lw-link" onClick={() => setPromptOpenAll(!openAll)} aria-pressed={openAll}>{openAll ? "Fold all" : "Open all"}</button>
         </div>
       )}
       <div className="lw-outline">
-        {sections.map((s) => {
+        {sections.map((s, i) => {
           const isChanged = !!changed && [...changed].some((n) => n >= s.start && n < s.end);
+          // Named by title (and which of that title it is), so an edit above it keeps it.
+          const name = `${s.title}#${sections.slice(0, i).filter((x) => x.title === s.title).length}`;
+          const open = isChanged || (byHand?.[name] ?? openAll);
           return (
-            <details key={`${s.start}:${openAll}`} className="lw-psec" open={openAll || isChanged || sections.length === 1} data-changed={isChanged ? "" : undefined}>
+            <details
+              key={name}
+              className="lw-psec"
+              open={open}
+              onToggle={(e) => { if (e.currentTarget.open !== open) setPromptSectionOpen(stepKey, name, e.currentTarget.open); }}
+              data-changed={isChanged ? "" : undefined}
+            >
               <summary>
                 <span className="lw-chev" aria-hidden />
                 <b>{s.title}</b>
