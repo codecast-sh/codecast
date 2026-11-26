@@ -260,7 +260,33 @@ const sessionPage = (ctx: { db: any }, priorityId: Id<"priorities">, after: numb
 /** A session the person placed, or a known link mapped: the milestone it sits on stays (the anchor). */
 const anchors = (conv: Doc<"conversations">) => !!conv.priority_step_key && (conv.priority_set_by === "person" || conv.priority_set_by === "link");
 
-type MergePage = { next: number | null; step_keys: Record<string, string> };
+type MergePage = { next: number | null; into: Id<"priorities">; step_keys: Record<string, string> };
+
+/** How many merges a page follows from the survivor it was given to the one that is live now. */
+const MERGE_HOPS = 5;
+
+/**
+ * The priority `into` was merged into since, followed to the live one (at
+ * most MERGE_HOPS hops), and `step_keys` mapped onto it: each key goes to the
+ * live milestone of the same title there, as a merge carries milestones, and
+ * is left out when there is none (the session keeps the priority, step unknown).
+ */
+async function liveSurvivor(ctx: { db: any }, into: Id<"priorities">, step_keys: Record<string, string>): Promise<{ row: Doc<"priorities"> | null; step_keys: Record<string, string> }> {
+  let row: Doc<"priorities"> | null = await ctx.db.get(into);
+  let keys = step_keys;
+  for (let hop = 0; row?.status === "merged" && row.merged_into && hop < MERGE_HOPS; hop++) {
+    const next: Doc<"priorities"> | null = await ctx.db.get(row.merged_into);
+    if (!next) break;
+    const from = row;
+    keys = Object.fromEntries(Object.entries(keys).flatMap(([k, key]) => {
+      const title = from.steps.find((st) => st.key === key && !st.dropped)?.title;
+      const to = title ? next.steps.find((st) => !st.dropped && st.title === title) : undefined;
+      return to ? [[k, to.key]] : [];
+    }));
+    row = next;
+  }
+  return { row, step_keys: keys };
+}
 
 /**
  * One page of a merge: each session still on `from` goes to `into`, onto the
@@ -273,9 +299,12 @@ type MergePage = { next: number | null; step_keys: Record<string, string> };
  * sessions of that person in that workspace (the pass's). Returns where the
  * next page starts (or null) and the map, with what this page carried.
  */
-export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, into: Id<"priorities">, step_keys: Record<string, string>, after: number, scope?: { user_id: Id<"users">; workspace: string }): Promise<MergePage> {
-  const keys = { ...step_keys };
-  const intoRow: Doc<"priorities"> | null = await ctx.db.get(into);
+export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, to: Id<"priorities">, step_keys: Record<string, string>, after: number, scope?: { user_id: Id<"users">; workspace: string }): Promise<MergePage> {
+  // A survivor merged away since the merge began: the pages go on to the one it went to.
+  const survivor = await liveSurvivor(ctx, to, step_keys);
+  const intoRow = survivor.row;
+  const into = intoRow?._id ?? to;
+  const keys = { ...survivor.step_keys };
   const fromRow: Doc<"priorities"> | null = await ctx.db.get(from);
   const live = new Set((intoRow?.steps ?? []).filter((st) => !st.dropped).map((st) => st.key));
   const page = await sessionPage(ctx, from, after);
@@ -301,7 +330,7 @@ export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, i
   }
   if (intoRow && mark !== null) await ctx.db.patch(into, { steps, step_key_max: mark, updated_at: Date.now() });
   if (intoRow) await recount(intoRow.user_id);
-  return { next: page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null, step_keys: keys };
+  return { next: page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null, into, step_keys: keys };
 }
 
 /**
@@ -337,8 +366,8 @@ export async function clearDeadKeysPage(ctx: { db: any }, priorityId: Id<"priori
 export const moveMergedSessions = internalMutation({
   args: { from: v.id("priorities"), into: v.id("priorities"), step_keys: v.record(v.string(), v.string()), after: v.number(), scope: v.optional(v.object({ user_id: v.id("users"), workspace: v.string() })) },
   handler: async (ctx, args): Promise<void> => {
-    const { next, step_keys } = await moveMergedPage(ctx, args.from, args.into, args.step_keys, args.after, args.scope);
-    if (next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { ...args, step_keys, after: next });
+    const { next, into, step_keys } = await moveMergedPage(ctx, args.from, args.into, args.step_keys, args.after, args.scope);
+    if (next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { ...args, into, step_keys, after: next });
   },
 });
 
@@ -354,7 +383,7 @@ export const clearDeadStepKeys = internalMutation({
 /** A merge's sessions: the first page now, the rest by scheduled runs. */
 export async function moveMergedSessionsNow(ctx: { db: any; scheduler: any }, from: Id<"priorities">, into: Id<"priorities">, step_keys: Record<string, string>, scope?: { user_id: Id<"users">; workspace: string }): Promise<void> {
   const page = await moveMergedPage(ctx, from, into, step_keys, 0, scope);
-  if (page.next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { from, into, step_keys: page.step_keys, after: page.next, ...(scope ? { scope } : {}) });
+  if (page.next !== null) await ctx.scheduler.runAfter(0, self.moveMergedSessions, { from, into: page.into, step_keys: page.step_keys, after: page.next, ...(scope ? { scope } : {}) });
 }
 
 /** A priority's sessions on dead keys: the first page now, the rest by scheduled runs. `removed`: the milestones the pass took off, as they were. */

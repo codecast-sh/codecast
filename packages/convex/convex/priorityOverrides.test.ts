@@ -411,6 +411,22 @@ describe("past 1,500 sessions on one priority", () => {
     }, 120_000);
   }
 
+  test("a merge's later pages follow its survivor when the person merged that away meanwhile, onto the milestone it carried", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const p8 = await priority(w, "pri-8", { steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], step_key_max: 1, status: "merged", merged_into: p1._id });
+    const p2 = await priority(w, "pri-2", { steps: [{ key: "s1", title: "Other", tier: "critical", refs: [] }], step_key_max: 1 });
+    // The pass merged pri-8 into pri-1; its first page ran, these 250 wait for the next.
+    await make(w, p8, 250, "s1");
+    await as(w, w.ana).mutation(pri.merge, { short_id: "pri-1", into: "pri-2" });
+    await drain(w);
+    const carried = (await byShort(w, "pri-2")).steps.find((s: any) => s.title === "Grader faults under 10%").key;
+    expect(carried).toBe("s2");
+    await w.t.mutation((internal as any).priorityPassRun.moveMergedSessions, { from: p8, into: p1._id, step_keys: { s1: "s1" }, after: 0 });
+    await drain(w);
+    expect([await on(w, p8), await on(w, p1._id), await on(w, p2, carried) >= 250]).toEqual([0, 0, true]);
+  }, 120_000);
+
   test("a person's drop clears the milestone off a session they placed on it", async () => {
     const w = await seeded();
     const p1 = await byShort(w, "pri-1");
