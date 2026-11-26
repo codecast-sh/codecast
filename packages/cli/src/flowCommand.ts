@@ -20,13 +20,12 @@ import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption } from "./argChecks.js";
 import { staleShipFlow } from "./workflow/staleRepoFlow.js";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
-import { flowAtDefaultWords, repoFlowAtDefault } from "./workflow/repoFlowAtDefault.js";
 import { registerFlowStations } from "./flowStations.js";
 import { registerFlowEditCommand } from "./flowEditCommand.js";
 import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
 import { registerFlowRunsCommand } from "./flowRunsCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
-import { findFlow, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
+import { findFlow, flowAsDefaultHasIt, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
 import { flowRunSubjects, personalHandoff, personalShipOf, personalTaskRefusal, workflowRunArgs } from "./flowPersonal.js";
 import { boundOpenTask, callingSubject, sessionTitleOf, spawnerArgs, taskChange } from "./flowRunSubject.js";
 import { acquireFailureLine, castResult } from "./flowAcquire.js";
@@ -738,22 +737,6 @@ async function readLive(deps: FlowDeps, at: PoolAt): Promise<{ flows: LiveFlow[]
   } catch (err) {
     return { flows: [], error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-/**
- * A flow named in a checkout, as the repo's default branch has it (workflow/repoFlowAtDefault.ts, flows.md FL2): the
- * checkout's copy only when it is the default branch's or holds edits of its own. A path or a graph on stdin runs as
- * given. Says on stderr when the copy that runs is not the checkout's file as it stands.
- */
-function flowAsDefaultHasIt(ref: string, found: FoundFlow, cwd: string, opts: { fetch?: boolean; reading?: boolean } = {}): FoundFlow {
-  const abs = path.resolve(cwd, ref);
-  if (ref === "-" || (fs.existsSync(abs) && fs.statSync(abs).isFile())) return found;
-  const at = repoFlowAtDefault(found.slug, cwd, found.where === "repo" ? found.file : null, opts);
-  const said = flowAtDefaultWords(found.slug, at);
-  // A run never falls back to a copy the default branch has replaced; a read shows it, marked.
-  if (at.use === "unparsed" && !opts.reading) { console.error(`✗ ${said}`); process.exit(1); }
-  if (said) console.error(at.use === "unparsed" ? `! ${said}` : dim(`  ${said}`));
-  return at.use === "default" ? { ...describeFlow(found.slug, at.source, "repo", at.file), source: at.source, at: `${at.ref}:${at.rel}` } : found;
 }
 
 /**

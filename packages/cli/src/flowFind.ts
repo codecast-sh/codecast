@@ -7,6 +7,8 @@ import { notFoundLine } from "./argChecks.js";
 import { retiredFlowLine, shipFlowSlug, workspacePool } from "@codecast/shared/contracts/flowPool";
 import { describeFlow, poolFlows, workspaceDefaultFlow, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
+import { flowAtDefaultWords, repoFlowAtDefault } from "./workflow/repoFlowAtDefault.js";
+import type { Workspace } from "./resolveWorkspace.js";
 import type { DirectoryWorkspace } from "./directoryTeam.js";
 import type { FlowDeps } from "./flowCommand.js";
 
@@ -87,4 +89,20 @@ export async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[], 
     process.exit(1);
   }
   return { ...f, source: f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug] };
+}
+
+/**
+ * A flow named in a checkout, as the repo's default branch has it (workflow/repoFlowAtDefault.ts, flows.md FL2): the
+ * checkout's copy only when it is the default branch's or holds edits of its own. A path or a graph on stdin runs as
+ * given. Says on stderr when the copy that runs is not the checkout's file as it stands.
+ */
+export function flowAsDefaultHasIt(ref: string, found: FoundFlow, cwd: string, opts: { fetch?: boolean; reading?: boolean } = {}): FoundFlow {
+  const abs = path.resolve(cwd, ref);
+  if (ref === "-" || (fs.existsSync(abs) && fs.statSync(abs).isFile())) return found;
+  const at = repoFlowAtDefault(found.slug, cwd, found.where === "repo" ? found.file : null, opts);
+  const said = flowAtDefaultWords(found.slug, at);
+  // A run never falls back to a copy the default branch has replaced; a read shows it, marked.
+  if (at.use === "unparsed" && !opts.reading) { console.error(`✗ ${said}`); process.exit(1); }
+  if (said) console.error(at.use === "unparsed" ? `! ${said}` : `\x1b[2m  ${said}\x1b[0m`);
+  return at.use === "default" ? { ...describeFlow(found.slug, at.source, "repo", at.file), source: at.source, at: `${at.ref}:${at.rel}` } : found;
 }
