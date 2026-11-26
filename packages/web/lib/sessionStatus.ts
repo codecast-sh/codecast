@@ -143,6 +143,8 @@ export type StatusRow = {
   pending_api_error_kind?: string | null;
   thread_state_status?: string | null;
   thread_state_at?: number | null;
+  /** The last-known model id; IMPORTED_SNAPSHOT_MODEL marks a transcript no agent ran here. */
+  model?: string | null;
   /** When the latest turn opened: a pin older than it answered an earlier turn (rowPinPredatesTurn). */
   last_turn_at?: number | null;
   /** The pin rule's fallback with no last_turn_at, answered by the server (pinPredatesUserMessage). */
@@ -194,6 +196,11 @@ export function sectionOfBucket(bucket: string | null | undefined): StatusSectio
 const firstLine = (t: string) => (t.split("\n").find((l) => l.trim()) ?? "").trim();
 const capitalize = (t: string) => (t ? t[0].toUpperCase() + t.slice(1) : t);
 
+/** The model Claude Code names on every assistant entry of a transcript copied
+ *  in from elsewhere (a claude.ai conversation written out as a session file).
+ *  No agent ran it on this machine, so it has no process that could have died. */
+export const IMPORTED_SNAPSHOT_MODEL = "imported-snapshot";
+
 /** Why a settled row is Error rather than Needs you, in words, or null when
  *  nothing failed: the hard blocks the placement files under needs_input that
  *  are failures, not asks (isHardBlocked minus the asks). */
@@ -211,9 +218,12 @@ export function statusFailure(row: StatusRow, now: number, live: StatusLive = {}
   // work: a claimed wake the system cannot see is the person's move (Needs
   // you), not a failure to clear. A pin older than the latest turn (done or
   // dormant) answered an earlier turn, so it exempts nothing.
+  // An imported transcript ends where the copy ended, not where an agent died:
+  // its stopped status is the person's move (Needs you), never a failure.
   const status = agentStatusAt(row, now);
   if (
     status && DEAD_AGENT_STATUSES.has(status) && (row.message_count ?? 0) > 0 &&
+    row.model !== IMPORTED_SNAPSHOT_MODEL &&
     (row.thread_state_status !== "dormant" || rowPinPredatesTurn(row)) &&
     !isExitAfterDone({ agentStatus: status, declaredStatus: row.thread_state_status ?? null, hasPending: !!row.has_pending, isUnresponsive: !!row.is_unresponsive, pinPredatesTurn: rowPinPredatesTurn(row) })
   ) return { label: "Agent stopped" };
