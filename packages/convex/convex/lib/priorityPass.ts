@@ -671,8 +671,9 @@ export function withPersonFields(step: PriorityStep, was: PriorityStep): Priorit
   if (was.tier_set_by === "person") out = { ...out, tier: was.tier, tier_set_by: "person" };
   if (was.title_set_by === "person") out = { ...out, title: was.title, title_set_by: "person" };
   if (doneHeld(was)) {
+    // Its refs stay as they were too: a task the pass attaches would hand its done state back to the tasks.
     const { done_at: _, ...rest } = out;
-    out = { ...rest, done: was.done, ...(was.done_at !== undefined ? { done_at: was.done_at } : {}), done_set_by: was.done_set_by };
+    out = { ...rest, refs: was.refs, done: was.done, ...(was.done_at !== undefined ? { done_at: was.done_at } : {}), done_set_by: was.done_set_by };
   }
   return out;
 }

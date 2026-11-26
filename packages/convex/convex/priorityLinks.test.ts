@@ -120,6 +120,20 @@ describe("a pass never undoes what tasks and pull requests say", () => {
     expect(await stepOf(t, p1, "s2")).toMatchObject({ done: true, done_at: mergedAt });
   });
 
+  test("the pass cannot reopen a milestone a pin or the person closed by attaching a task to it", async () => {
+    const { t, ada, p1 } = await world();
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    await t.withIdentity({ subject: `${ada}|session` }).mutation((api as any).priorities.setStepDone, { short_id: "pri-1", step_key: "s4", done: true });
+    const before = (await t.run((ctx: any) => ctx.db.get(p1))).steps;
+    // ct-4 is open: attached, it would hand both milestones back to their tasks.
+    const steps = before.map((s: any) => (s.key === "s3" || s.key === "s4" ? { ...s, refs: [{ kind: "task", id: "ct-4" }], done: false } : s));
+    await applyPlan(t, ada, NOW, [{ short_id: "pri-1", patch: { steps } }]);
+    for (const key of ["s3", "s4"]) {
+      const was = before.find((s: any) => s.key === key);
+      expect(await stepOf(t, p1, key)).toMatchObject({ done: true, done_at: was.done_at, done_set_by: was.done_set_by, refs: [] });
+    }
+  });
+
   test("a done pin naming its milestone lands while the model reads: the stale plan keeps it done; the person can reopen it", async () => {
     const { t, ada, p1, cPin } = await world();
     const read = (await t.run((ctx: any) => ctx.db.get(p1))).steps;

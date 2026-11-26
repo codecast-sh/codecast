@@ -403,7 +403,8 @@ describe("session overrides survive the next pass", () => {
     expect(after.status).toBe("done");
     expect(after.ai_rank).toBeUndefined();
     expect(after.steps).toEqual([
-      { ...pass_step("s1", "Grader faults under 10%"), done: true, done_at: before.steps[0].done_at, done_set_by: "person" },
+      // The person's done keeps its refs too: the plan's would hand its state back to them.
+      { ...pass_step("s1", "Grader faults under 10%"), refs: before.steps[0].refs, done: true, done_at: before.steps[0].done_at, done_set_by: "person" },
       { ...pass_step("s2", "Mine"), title_set_by: "person" },
       before.steps[2],
     ]);
