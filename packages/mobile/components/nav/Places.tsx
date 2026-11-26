@@ -18,12 +18,13 @@ export function useMenuSignals(): { waiting: number; live: boolean } {
 }
 
 /** The app's places that are not tabs, as slide-out rows: the questions
- *  you own, calls, the week, plans, docs, triggers and the org. `onLeave`
+ *  you own, calls, the week, priorities, plans, docs, triggers and the org. `onLeave`
  *  closes the panel the rows sit in. */
 export function Places({ onLeave }: { onLeave: () => void }) {
   const Theme = useTheme();
   const router = useRouter();
   const orgOn = useWorkspaceFeatureState('org');
+  const prioritiesOn = useWorkspaceFeatureState('priorities');
   const { waiting, live } = useMenuSignals();
 
   const go = (route: string) => {
@@ -37,6 +38,7 @@ export function Places({ onLeave }: { onLeave: () => void }) {
     { page: '/decisions', name: 'Decisions', icon: 'help-circle', route: '/decisions', count: waiting || undefined },
     { page: '/calls', name: 'Calls', icon: 'phone', route: '/calls', live },
     { page: '/week', name: 'Week', icon: 'calendar', route: '/week' },
+    ...(prioritiesOn === true ? [{ page: '/priorities', name: 'Priorities', icon: 'target' as const, route: '/priorities' }] : []),
     { page: '/plans', name: 'Plans', icon: 'map', route: '/(tabs)/tasks?segment=plans' },
     { page: '/docs', name: 'Docs', icon: 'file-text', route: '/(tabs)/tasks?segment=docs' },
     { page: '/triggers', name: 'Triggers', icon: 'clock', route: '/(tabs)/tasks?segment=routines' },
