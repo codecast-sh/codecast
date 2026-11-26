@@ -18,7 +18,7 @@ import { ConversationPlaceholder } from "../../components/ConversationPlaceholde
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../components/conversation/types";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome, viewerCommandsSession } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, bootLandingSession, sessionsWakeSig, ensureHydrated, resolveInboxHome, viewerCommandsSession } from "../../store/inboxStore";
 import { freshHomeLaunchPending } from "../../store/viewNav";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
@@ -704,14 +704,14 @@ export function QueuePageClient() {
     if (freshHomeLaunchPending()) return;
     // Board home: an empty view means "show the fleet", never "adopt a
     // conversation" — the board is the landing surface, drilling in is a
-    // gesture. Feed home keeps the old top-of-inbox adoption.
+    // gesture. Feed home adopts the viewer's own top session, else the top row.
     if (inboxHome === "board") {
       setShowMySessions(true);
       return;
     }
-    const top = sortedSessions[0];
+    const top = bootLandingSession(sortedSessions, meId);
     if (top) setCurrentSession(top._id, "adopt");
-  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions]);
+  }, [paramSessionId, currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab, inboxHome, setShowMySessions, meId]);
 
   // Sync URL when current session changes (but not before initial param is
   // resolved). Only the active tab owns the address bar — a background pane must
