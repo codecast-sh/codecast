@@ -10,6 +10,7 @@ import { isMachineDeliveredMessage } from "./machineMessages";
 import type { LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
+import { closeHidesThroughWakes, isClosedSession, type ClosedFields } from "./closedSession";
 import type { WorkState } from "./workState";
 import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
@@ -863,6 +864,29 @@ export function isStashHidden(
   row: { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
 ): boolean {
   return !!row.inbox_stashed_at && !!row.inbox_stash_hidden;
+}
+
+/** The hide fields a send into a session writes (pendingMessages
+ *  enqueuePendingMessage and its risk-resend twin in executionBindings). A
+ *  dismissal and a kill always clear. A plain stash clears; a hidden one
+ *  survives a machine wake (a trigger firing) or a quiet send. A close whose
+ *  session hides through wakes (closeHidesThroughWakes: a role, an anchor, a
+ *  standing trigger's home) becomes a hidden stash on such a wake: the agent
+ *  runs, out of sight, until it asks for the person. */
+export function wakeHideFields(
+  row: ClosedFields & Parameters<typeof closeHidesThroughWakes>[0] & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
+  wake: { machine: boolean; now: number },
+): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true } {
+  const out: ReturnType<typeof wakeHideFields> = {};
+  if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
+  if (row.inbox_killed_at) out.inbox_killed_at = undefined;
+  if (wake.machine && isClosedSession(row) && closeHidesThroughWakes(row)) {
+    out.inbox_stashed_at = wake.now;
+    out.inbox_stash_hidden = true;
+  } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
+    out.inbox_stashed_at = undefined;
+  }
+  return out;
 }
 
 // THE COMMAND RULE: who may send a session's daemon commands (its runner or

@@ -14,6 +14,20 @@ export function isClosedSession(row: ClosedFields): boolean {
   return row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_dismissed_at && !row.inbox_killed_at;
 }
 
+/** A session whose Close follows the "Stash and hide" rules: a role's own
+ *  session, a standing anchor, or one a standing trigger wakes. Its own
+ *  machine wakes (a trigger firing, a quiet send) run it out of sight as a
+ *  hidden stash instead of bringing it back; it returns when it pins blocked,
+ *  a trigger run completes --needs-attention, or a person writes to it. A
+ *  close of any other session comes back on its next wake. */
+export function closeHidesThroughWakes(row: {
+  persistent?: boolean | null;
+  standing_role_id?: unknown;
+  armed_trigger_kind?: string | null;
+}): boolean {
+  return !!row.persistent || !!row.standing_role_id || row.armed_trigger_kind === "standing";
+}
+
 /** A patch (or a row) that IS a close: the two stamps written together. */
 export function isClosePatch(fields: ClosedFields): boolean {
   return !!fields.inbox_dismissed_at && fields.inbox_closed_at === fields.inbox_dismissed_at;

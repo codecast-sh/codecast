@@ -55,7 +55,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 } from "@codecast/shared/contracts";
 import { applyHideTransition, closeAdoptionHolds, GROUP_SCAN_COST, hideBudgetLeft, noteGestureRows, spendHideBudget } from "./cleanup";
 import { closeSetsAsideOnServer } from "./lib/closeAside";
-import { isClosePatch } from "@codecast/shared/contracts";
+import { closeHidesThroughWakes, isClosePatch } from "@codecast/shared/contracts";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
@@ -509,6 +509,9 @@ export async function applyPatches(
         if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now(), { forceKill: opts?.forceKill })) {
           (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_dismissed_at;
+          // A role's or a standing trigger's set-aside close is a hidden stash, so
+          // its next trigger does not bring it back (closeHidesThroughWakes).
+          if (closeHidesThroughWakes(doc as any)) (finalSafe as any).inbox_stash_hidden = true;
           // inbox_closed_at stays: with no dismissed stamp it is inert (not a close),
           // and it is the cell the close's undo finds to clear this stash with.
           if ((finalSafe as any).inbox_closed_at == null) (finalSafe as any).inbox_closed_at = (finalSafe as any).inbox_stashed_at;
