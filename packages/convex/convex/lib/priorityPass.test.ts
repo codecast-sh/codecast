@@ -664,4 +664,21 @@ describe("dropped steps", () => {
     expect(plan.notes).toContain('pri-1: left out new step "docs", it repeats "Docs", which the person dropped');
     expect(plan.updates[0].seen_steps).toEqual(["s1", "s2"]);
   });
+
+  test("a merge never brings back a step the person dropped on the absorbed priority, and keeps its tombstone", () => {
+    const inp = input({
+      priorities: [
+        priority("pri-1", { steps: [step("s1", { title: "Grader live" })] }),
+        priority("pri-2", { steps: [step("s1", { title: "Write the docs", dropped: true })] }),
+      ],
+    });
+    const plan = mergePriorities(inp, out([proposal({
+      short_id: "pri-1",
+      merges: ["pri-2"],
+      steps: [{ key: "s1", title: "Grader live", tier: "critical", refs: [] }, { title: "Write the docs", tier: "polish", refs: [] }, { title: "Write docs", tier: "polish", refs: [] }],
+    })]));
+    const steps = plan.updates[0].patch.steps!;
+    expect(steps.map((s) => [s.title, !!s.dropped])).toEqual([["Grader live", false], ["Write the docs", true]]);
+    expect(plan.notes).toContain('pri-1: left out new step "Write docs", it repeats "Write the docs", which the person dropped');
+  });
 });

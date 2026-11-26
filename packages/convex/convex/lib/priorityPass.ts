@@ -555,15 +555,16 @@ export function repeatsDropped(dropped: string, title: string): boolean {
 
 /**
  * `proposed` less every step whose key is new to `current` and whose title
- * repeats one of `current`'s dropped steps (repeatsDropped), each noted. A
- * step already on the row is never judged by its title: a drop takes away
- * only what it names.
+ * repeats a dropped step of `current` or of the priorities a merge absorbs
+ * (`absorbed`'s steps) (repeatsDropped), each noted. A step already on the
+ * row, and a dropped step itself, is never judged by its title: a drop takes
+ * away only what it names.
  */
-export function withoutDroppedRepeats(current: PriorityStep[], proposed: PriorityStep[], notes: string[], target: string): PriorityStep[] {
-  const dropped = current.filter((s) => s.dropped);
+export function withoutDroppedRepeats(current: PriorityStep[], proposed: PriorityStep[], notes: string[], target: string, absorbed: PriorityStep[] = []): PriorityStep[] {
+  const dropped = [...current, ...absorbed].filter((s) => s.dropped);
   if (!dropped.length) return proposed;
   return proposed.filter((s) => {
-    if (current.some((c) => c.key === s.key)) return true;
+    if (s.dropped || current.some((c) => c.key === s.key)) return true;
     const d = dropped.find((x) => repeatsDropped(x.title, s.title));
     if (d) notes.push(`${target}: left out new step "${s.title}", it repeats "${d.title}", which the person dropped`);
     return !d;
@@ -726,7 +727,7 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
   }
   // A matched dropped step stays a tombstone, under its own key.
   for (const s of pool) if (s.dropped && matched.includes(s) && !needsRewrite.has(ownerOf.get(s) ?? target)) steps.push({ ...s, key: keyOf(s) });
-  const kept = withoutDroppedRepeats(own, steps, notes, target);
+  const kept = withoutDroppedRepeats(own, steps, notes, target, absorbed.flatMap((p) => p.steps));
   return { steps: kept, remap, keys: keys.map((k) => (k && kept.some((s) => s.key === k) ? k : null)) };
 }
 
