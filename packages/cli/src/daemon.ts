@@ -168,6 +168,7 @@ import {
   deleteProfileStoreAsync,
   readProfileIndex,
   probeSecureStorageSupport,
+  type SecureStorageVerdict,
   absorbProfileStore,
   adoptProfileStoreCredential,
   profileStoreDir,
@@ -179,8 +180,8 @@ import {
   ingestStatusLineUsage,
   extractSetupToken,
   fetchRateLimitFingerprint,
-  sameAccountFingerprint,
-  attributeFingerprintToProfile,
+  judgeMintedOwner,
+  readUsageCache,
   writeAccountToken,
   removeAccountToken,
 } from "./ccAccounts.js";
@@ -4730,6 +4731,10 @@ async function maintainReach(): Promise<void> {
 // opens (signInProfile below).
 // ---------------------------------------------------------------------------
 
+// The last proved answer, for the log line when it changes and for the sign-in
+// guard. The probe's own cache (an hour, by binary identity) decides when the
+// binary is asked again, so an in-place Claude Code update is noticed without a
+// daemon restart.
 let secureStorageSupport: { bin: string; supported: boolean } | null = null;
 let profileStoresInFlight = false;
 let lastStoreReport = "";
@@ -4737,35 +4742,57 @@ let lastStoreReport = "";
 // stays silent after the first report.
 let lastUnknownProbeBin = "";
 
+async function launchClaudePath(): Promise<string> {
+  const bin = launchBinary("claude", { warn: log });
+  return path.isAbsolute(bin) ? bin : await _execFileAsync("which", [bin], { encoding: "utf-8", timeout: 5000 }).then(r => r.stdout.trim() || bin, () => bin);
+}
+
+async function checkSecureStorageSupport(opts: { fresh?: boolean; timeoutMs?: number } = {}): Promise<SecureStorageVerdict> {
+  const resolved = await launchClaudePath();
+  const verdict = await probeSecureStorageSupport(resolved, { env: { ...process.env, PATH: agentSpawnPath() }, ...opts });
+  // A probe that could not answer deletes nothing, and is asked again in ten
+  // minutes. Treating it as a negative deletes the credential a person just
+  // signed in for, which is what happened on 2026-09-17.
+  if (verdict === "unknown") {
+    // A proof about another binary says nothing about this one.
+    if (secureStorageSupport?.bin !== resolved) secureStorageSupport = null;
+    if (lastUnknownProbeBin !== resolved) {
+      lastUnknownProbeBin = resolved;
+      log(`[CC-STORE] ${resolved} did not answer the credential-store probe — leaving saved logins alone and asking again in ten minutes`);
+    }
+    return verdict;
+  }
+  lastUnknownProbeBin = "";
+  const supported = verdict === "supported";
+  if (secureStorageSupport?.bin !== resolved || secureStorageSupport.supported !== supported) {
+    log(
+      supported
+        ? `[CC-STORE] ${resolved} honors per-session credential stores`
+        : `[CC-STORE] ${resolved} ignores CLAUDE_SECURESTORAGE_CONFIG_DIR — sessions cannot be pinned to saved logins until Claude Code is updated`,
+    );
+  }
+  secureStorageSupport = { bin: resolved, supported };
+  return verdict;
+}
+
+/** What a beat does with the profile stores. Only a proved negative deletes. An
+ *  unknown (a probe that timed out on the first run after an update) keeps
+ *  provisioning for a binary this daemon has seen prove support, and before
+ *  any proof provisions nothing. */
+export function storeBeatAction(verdict: SecureStorageVerdict, provedSupported: boolean): "delete" | "provision" | "wait" {
+  if (verdict === "unsupported") return "delete";
+  return verdict === "supported" || provedSupported ? "provision" : "wait";
+}
+
 async function ensureProfileStores(reason: string): Promise<void> {
   if (isRemoteDevice() || profileStoresInFlight) return;
   profileStoresInFlight = true;
   try {
     const profiles = Object.keys(readProfileIndex().profiles);
     if (!profiles.length) return;
-    const bin = launchBinary("claude", { warn: log });
-    const resolved = path.isAbsolute(bin) ? bin : await _execFileAsync("which", [bin], { encoding: "utf-8", timeout: 5000 }).then(r => r.stdout.trim() || bin, () => bin);
-    if (!secureStorageSupport || secureStorageSupport.bin !== resolved) {
-      const verdict = await probeSecureStorageSupport(resolved, { env: { ...process.env, PATH: agentSpawnPath() } });
-      // A probe that could not answer leaves every store exactly as it is and
-      // asks again next beat. Treating it as a negative deletes the credential
-      // a person just signed in for, which is what happened on 2026-09-17.
-      if (verdict === "unknown") {
-        if (lastUnknownProbeBin !== resolved) {
-          lastUnknownProbeBin = resolved;
-          log(`[CC-STORE] ${resolved} did not answer the credential-store probe — leaving saved logins alone and asking again next beat`);
-        }
-        return;
-      }
-      lastUnknownProbeBin = "";
-      secureStorageSupport = { bin: resolved, supported: verdict === "supported" };
-      log(
-        verdict === "supported"
-          ? `[CC-STORE] ${resolved} honors per-session credential stores`
-          : `[CC-STORE] ${resolved} ignores CLAUDE_SECURESTORAGE_CONFIG_DIR — sessions cannot be pinned to saved logins until Claude Code is updated`,
-      );
-    }
-    if (!secureStorageSupport.supported) {
+    const action = storeBeatAction(await checkSecureStorageSupport(), secureStorageSupport?.supported === true);
+    if (action === "wait") return;
+    if (action === "delete") {
       const dropped: string[] = [];
       for (const name of profiles) if (await deleteProfileStoreAsync(name)) dropped.push(name);
       // Deleting a store throws away a browser sign-in. Say so: the silence
@@ -4976,12 +5003,28 @@ async function startLoginFlow(email: string | undefined, force = false, profile?
   // A profile sign-in writes only into that profile's store. On a Claude Code
   // that has been PROVED to ignore the store, that credential is deleted on the
   // next beat, so opening a browser would spend a real sign-in on nothing. Say
-  // that instead of taking it. A verdict we never reached does not block.
-  if (profile && secureStorageSupport && !secureStorageSupport.supported) {
-    throw new Error(
-      "This machine's Claude Code ignores per-account credential stores, so a sign-in here would be discarded — " +
-      "update Claude Code, or run `claude auth login` in a terminal to change the machine's own login",
-    );
+  // that instead of taking it. A verdict we never reached does not block, and
+  // short of a remembered yes the binary is asked fresh first: the person may
+  // have just updated, and after a restart the disk may still hold a negative.
+  if (profile) {
+    const proved = secureStorageSupport?.supported === true && secureStorageSupport.bin === (await launchClaudePath());
+    // A short wait: the command queue waits on this, and a probe that runs
+    // out of time is an unknown, which lets the sign-in go ahead.
+    const verdict = proved ? "supported" : await checkSecureStorageSupport({ fresh: true, timeoutMs: 10_000 });
+    if (verdict === "unsupported") {
+      throw new Error(
+        "This machine's Claude Code ignores per-account credential stores, so a sign-in here would be discarded — " +
+        "update Claude Code, or run `claude auth login` in a terminal to change the machine's own login",
+      );
+    }
+    // No answer against a remembered negative for this binary: signing in on a
+    // build that ignores the store would replace the machine's own login. The
+    // usual cause is the slow first run after an update, so a retry answers.
+    if (verdict === "unknown" && secureStorageSupport?.supported === false) {
+      throw new Error("Claude Code on this machine did not answer in time to confirm it keeps saved logins apart — try again in a minute");
+    }
+    // A second click may have started a flow while this one waited.
+    if (loginFlowActive && !force) return "login_flow_already_running";
   }
   const gen = ++loginFlowGeneration;
   loginFlowActive = true;
@@ -5245,45 +5288,25 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
   });
 
   const storeMinted = async (token: string): Promise<void> => {
-    let owner: string | null = null;
-    let caveat: string | undefined;
     try {
       const mine = await comparableAccessToken(profile);
-      const [mineRes, minted] = await Promise.all([
-        mine
-          ? fetchRateLimitFingerprint(mine).then((fp) => ({ fp }), (err) => ({ err }))
-          : Promise.resolve({ err: new Error("no usable saved credential") }),
+      const [mineFp, minted] = await Promise.all([
+        // A saved login that cannot be asked (dead, expired, a probe that
+        // threw) leaves the snapshots as the only witness.
+        mine ? fetchRateLimitFingerprint(mine).catch(() => null) : Promise.resolve(null),
         fetchRateLimitFingerprint(token),
       ]);
-      const compared = "fp" in mineRes;
-      if (compared && sameAccountFingerprint(mineRes.fp, minted)) {
-        owner = profile;
-      } else {
-        // Not proven by the direct comparison. The usage snapshots of every
-        // saved profile are the other witness: they name the account whose
-        // windows the new token shares, which may be another saved profile
-        // (the browser was signed into that one) — still worth keeping there.
-        owner = attributeFingerprintToProfile(minted);
-        // Only the direct comparison can rule `profile` out. When it never ran
-        // (a dead login, an expired access token, a probe that threw), a
-        // snapshot pointing back at `profile` is the best evidence there is.
-        if (owner === profile && compared) owner = null;
-        if (!owner && !compared) {
-          // Nothing could vouch either way: the saved login is dead or stale,
-          // which is one of the reasons a person mints a token in the first
-          // place. The guided flow told them which account to sign into;
-          // store it, and say plainly that the identity was not checked.
-          owner = profile;
-          caveat = `stored without an identity check — the saved login for ${email ?? profile} could not vouch for the account the browser signed into`;
-        }
-      }
-      if (!owner) {
-        return finish(
-          "rejected",
-          `the browser signed into a different Claude account than ${email ?? profile} (and none of the other saved accounts) — sign out of claude.ai, sign in as ${email ?? profile}, and try again`,
-        );
-      }
-      return await finish("confirmed", caveat, owner, token);
+      const verdict = judgeMintedOwner({
+        profile,
+        label: email ?? profile,
+        mine: mineFp,
+        minted,
+        profiles: readProfileIndex().profiles,
+        usage: readUsageCache().accounts,
+        now: Date.now(),
+      });
+      if ("rejected" in verdict) return finish("rejected", verdict.rejected);
+      return await finish("confirmed", verdict.caveat, verdict.owner, token);
     } catch (err) {
       return finish("rejected", `could not verify or store the token: ${err instanceof Error ? err.message : String(err)}`);
     }
