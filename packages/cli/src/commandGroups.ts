@@ -432,8 +432,8 @@ Subcommands:
 
 --status answers WHO ACTS NEXT and files the session in the inbox at turn end:
   working   still moving (default)
-  blocked   a human must act, or you hand them anything, even optional → Needs You
-  done      delivered, nothing for them to do (a You: line is refused) → Done
+  blocked   a human must act, or you offer them named work, even optional → Needs You
+  done      delivered, no work for them (a You: line is refused) → Done
   dormant   a machine wakes you; name the wake in the text → Sleeping
 done and dormant cover exactly the turn that declares them: after the next
 wake, declare again or the session returns to Needs You.
