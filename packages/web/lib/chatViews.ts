@@ -298,7 +298,7 @@ export type LineAuthorFields = Pick<ChatMessageRow,
  *  a bridge line carried in, the session that typed it, the role whose agent
  *  wrote it, else the member on the row. A surface that skips a step names the
  *  wrong author (a session's line under its human's photo). */
-export function lineAuthorFor(row: LineAuthorFields, ctx: Pick<ViewContext, "members" | "sessionFor" | "seatFor">): ChatAuthor {
+export function lineAuthorFor(row: LineAuthorFields, ctx: Pick<ViewContext, "members" | "sessionFor" | "seatFor" | "standingFor">): ChatAuthor {
   return slackAuthorFor(row) ?? sessionAuthorFor(row, ctx) ?? seatAuthorFor(row.user_id, ctx, row.author_kind);
 }
 
@@ -422,6 +422,8 @@ export type ViewContext = {
   sessionFor?: (sessionId: string) => SessionPersona | undefined;
   /** Live lookup for a role's standing agent by its bot user id (seatAuthorFor). */
   seatFor?: (botUserId: string) => RoleSeat | undefined;
+  /** The standing session of an agent member, by its bot user id: where a tap on its name goes. */
+  standingFor?: (botUserId: string) => string | undefined;
 };
 
 /** A session as its chat lines show it. `speaker` is set when the session
@@ -440,8 +442,10 @@ export type RoleSeat = { name: string; title: string; shortId: string; handle: s
 
 /** A line a role's standing agent wrote wears the role, not its bot user's
  *  name: the person like name, the role's face, and a link to its page. */
-export function seatAuthorFor(userId: string, ctx: Pick<ViewContext, "members" | "seatFor">, authorKind?: "user" | "agent"): ChatAuthor {
-  const base = authorFor(userId, authorKind, ctx.members);
+export function seatAuthorFor(userId: string, ctx: Pick<ViewContext, "members" | "seatFor" | "standingFor">, authorKind?: "user" | "agent"): ChatAuthor {
+  const author = authorFor(userId, authorKind, ctx.members);
+  const standing = author.isAgent ? ctx.standingFor?.(userId) : undefined;
+  const base = standing ? { ...author, standingSessionId: standing } : author;
   const seat = base.isAgent ? ctx.seatFor?.(userId) : undefined;
   if (!seat) return base;
   return { ...base, name: seat.name, role: { shortId: seat.shortId, handle: seat.handle, avatar: seat.avatar, title: seat.title } };

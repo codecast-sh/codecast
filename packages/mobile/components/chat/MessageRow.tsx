@@ -95,6 +95,8 @@ export type ChatAuthorLite = {
   /** The author is a Slack person or app the bridge relayed (the row carries
    *  `external_author`). An app with no face gets the Slack mark as its tile. */
   slack?: { isBot: boolean; /** Their Slack user id — the grouping identity (shared authorGroupKey). */ userId?: string };
+  /** An agent member's standing session: a tap on its face or name opens it. */
+  standingSessionId?: string;
 };
 
 export type MobileChatMessage = {
@@ -119,7 +121,8 @@ export type MobileChatMessage = {
   agentDeadlineAt?: number;
   pending?: boolean;
   failed?: boolean;
-  reactions?: { emoji: string; count: number; mine: boolean }[];
+  /** `names`: who reacted, shown in the long-press sheet. */
+  reactions?: { emoji: string; count: number; mine: boolean; names?: string[] }[];
   /** Uploaded images, shown as tappable tiles under the text. */
   attachments?: { storage_id: string; name?: string; preview_url?: string; kind: ChatAttachmentKind }[];
   thread?: {
@@ -154,7 +157,7 @@ export function fromChatView(
           isAgent: true,
           session: { id: a.session.id, agentType: a.session.agentType, via: a.session.via, identity: identityFor(a.session.id) ?? null },
         }
-      : { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, slack: a.slack as ChatAuthorLite['slack'] },
+      : { id: a.id, name: a.name, avatarUrl: a.avatarUrl, isAgent: a.isAgent, slack: a.slack as ChatAuthorLite['slack'], standingSessionId: a.standingSessionId },
     content: view.content,
     contextSession: view.contextSessionId
       ? { id: view.contextSessionId, title: identityFor(view.contextSessionId)?.title ?? undefined }
@@ -168,7 +171,7 @@ export function fromChatView(
     agentDeadlineAt: (row as any)?.agent_deadline_at,
     pending: view.pending && !view.failed,
     failed: view.failed,
-    reactions: view.reactions?.map((r) => ({ emoji: r.emoji, count: r.count, mine: r.mine })),
+    reactions: view.reactions?.map((r) => ({ emoji: r.emoji, count: r.count, mine: r.mine, names: r.names })),
     attachments: attachments?.length ? attachments : undefined,
     thread: view.replyCount
       ? {
@@ -297,6 +300,9 @@ export const MessageRow = memo(function MessageRow({
   const elapsed = thinking ? Math.max(0, Math.round((now - message.createdAt) / 1000)) : 0;
   // Chat's sheet has its own actions; a link's Copy link is covered by Copy text.
   const openMenu = useCallback(() => onLongPress?.(message), [onLongPress, message]);
+  // The session that wrote the line, or the agent's standing session.
+  const authorSessionId = author.session?.id ?? author.standingSessionId;
+  const openAuthorSession = authorSessionId ? () => router.push(`/session/${authorSessionId}`) : undefined;
 
   return (
     <MessageLongPressContext.Provider value={onLongPress ? openMenu : null}>
@@ -318,13 +324,23 @@ export const MessageRow = memo(function MessageRow({
       ]}
     >
       <RNView style={styles.gutter}>
-        {!grouped && <ChatAvatar author={author} size={AVATAR} />}
+        {!grouped && (openAuthorSession ? (
+          <TouchableOpacity onPress={openAuthorSession} onLongPress={openMenu} accessibilityRole="link" accessibilityLabel={`Open ${author.name}'s session`}>
+            <ChatAvatar author={author} size={AVATAR} />
+          </TouchableOpacity>
+        ) : <ChatAvatar author={author} size={AVATAR} />)}
       </RNView>
 
       <RNView style={styles.body}>
         {!grouped && (
           <RNView style={styles.head}>
-            <MobileSessionIdentityLine row={author.session?.identity} title={author.name} style={styles.author} />
+            {openAuthorSession ? (
+              <TouchableOpacity onPress={openAuthorSession} onLongPress={openMenu} accessibilityRole="link" style={styles.authorLink}>
+                <MobileSessionIdentityLine row={author.session?.identity} title={author.name} style={styles.author} />
+              </TouchableOpacity>
+            ) : (
+              <MobileSessionIdentityLine row={author.session?.identity} title={author.name} style={styles.author} />
+            )}
             {author.isAgent && (
               <RNView style={styles.agentChip}>
                 <RNText style={styles.agentChipText}>{author.session ? 'SESSION' : 'AGENT'}</RNText>
@@ -432,6 +448,7 @@ export const MessageRow = memo(function MessageRow({
                 key={r.emoji}
                 style={[styles.reaction, r.mine && styles.reactionMine]}
                 onPress={() => onToggleReaction?.(message.id, r.emoji)}
+                onLongPress={openMenu}
               >
                 <RNText style={styles.reactionText}>{r.emoji} {r.count}</RNText>
               </TouchableOpacity>
@@ -531,6 +548,7 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   // chip, via and time drop to a second line.
   head: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 6, rowGap: 1, marginBottom: 2 },
   author: { fontSize: 14, fontWeight: '700', color: Theme.text, flexShrink: 1 },
+  authorLink: { flexShrink: 1 },
   agentChip: {
     borderWidth: 1,
     borderColor: Theme.violet + '70',

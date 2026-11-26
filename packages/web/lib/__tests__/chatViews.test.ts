@@ -117,6 +117,13 @@ describe("seatAuthorFor", () => {
   it("never dresses a person as a role", () => {
     expect(seatAuthorFor(ME._id, { members: byId, seatFor: () => seat }, "user").role).toBeUndefined();
   });
+
+  it("carries an agent's standing session so its name opens it, with or without a role", () => {
+    const standingFor = (id: string) => (id === ANCHOR._id ? "conv-tux" : undefined);
+    expect(seatAuthorFor(ANCHOR._id, { members: byId, standingFor }, "agent").standingSessionId).toBe("conv-tux");
+    expect(seatAuthorFor(ANCHOR._id, { members: byId, seatFor, standingFor }, "agent").standingSessionId).toBe("conv-tux");
+    expect(seatAuthorFor(ME._id, { members: byId, standingFor: () => "conv-x" }, "user").standingSessionId).toBeUndefined();
+  });
 });
 
 describe("memberName", () => {

@@ -31,6 +31,8 @@ export type ChatAuthor = {
   /** Present when the author is a role's standing agent: `name` is the role's
    *  person like name, and this is its face, its title and its page. */
   role?: { shortId: string; handle: string; avatar?: string | null; title: string };
+  /** An agent member's standing session (its anchor's conversation): its name opens it. */
+  standingSessionId?: string;
 };
 
 export type ChatReaction = {
@@ -41,6 +43,13 @@ export type ChatReaction = {
   /** Names for the tooltip, already ordered. */
   names?: string[];
 };
+
+/** "Maya" / "Maya and Sam" / "Maya, Sam and Ada": who reacted, for web's
+ *  pill tooltip and the phone's long-press sheet. */
+export function reactorNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 /** Lifecycle of an agent's reply, mirroring comments.agent_status so the two
  *  surfaces behave the same way. */

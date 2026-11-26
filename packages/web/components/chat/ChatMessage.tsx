@@ -16,7 +16,7 @@ import { remarkChatMentions, channelNameMap } from "../../lib/remarkChatMentions
 import { remarkEntityCards } from "../../lib/remarkEntityCards";
 import { compactAge } from "../../lib/threadState";
 import { copyToClipboard, sharePageUrl } from "../../lib/utils";
-import { threadRootOf, type ChatMessageView } from "./chatTypes";
+import { reactorNames, threadRootOf, type ChatMessageView } from "./chatTypes";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { ChatVoiceBubble } from "./ChatVoiceBubble";
 import { ChatAttachments } from "./ChatAttachments";
@@ -80,13 +80,6 @@ export const TOOLBAR_REACTIONS = ["👍", "👎", "❤️"];
 /** The rest of the one-tap set, behind the toolbar's picker. Small on purpose:
  *  a full picker is a different surface. */
 export const QUICK_REACTIONS = ["🎉", "👀", "🚀", "😄"];
-
-/** "Maya" / "Maya and Sam" / "Maya, Sam and Ada" — the reaction tooltip's
- *  who-list. */
-function reactorNames(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
 
 export type ChatMessageProps = {
   message: ChatMessageView;
@@ -327,10 +320,10 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         ) : !grouped && (
           <div className="ch-msg-head">
-            {author.session ? (
+            {author.session || (author.standingSessionId && !author.role) ? (
               <a
                 className="ch-msg-author"
-                href={`/conversation/${encodeURIComponent(author.session.id)}`}
+                href={`/conversation/${encodeURIComponent(author.session?.id ?? author.standingSessionId!)}`}
                 title={`${author.name} · open session`}
               >
                 {author.name}

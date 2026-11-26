@@ -12,6 +12,7 @@ import { setTriggerFeedArgs, useSyncTriggers } from '@codecast/web/hooks/useSync
 import { useSyncTeams } from '@codecast/web/hooks/useSyncTeams';
 import { useSyncTeamMembers } from '@codecast/web/hooks/useSyncTeamMembers';
 import { useChatChannelsSync } from '@codecast/web/hooks/useChatSync';
+import { useSyncAnchors } from '@codecast/web/hooks/useSyncAnchors';
 import { ChatPrefetchFeeder } from '@codecast/web/hooks/useChatPrefetch';
 import { useCallBaseFeeds } from '@codecast/web/hooks/useCallBaseFeeds';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
@@ -104,6 +105,8 @@ function StoreSyncBridgeInner() {
   useSyncTeams();
   useSyncTeamMembers(useInboxStore(activeTeamIdOf));
   useChatChannelsSync();
+  // The workspace agents: a chat line an agent wrote opens its standing session.
+  useSyncAnchors();
   useCallBaseFeeds();
   // Notifications, tasks, plans, docs, projects and org roles.
   useSyncWorkspaceData();
