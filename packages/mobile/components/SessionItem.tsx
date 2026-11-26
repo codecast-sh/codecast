@@ -85,7 +85,8 @@ export * from '@/components/sessionFormat';
 import { useSessionShip } from '@codecast/web/hooks/useSessionShipState';
 import type { SessionShip } from '@codecast/web/lib/ship/sessionShip';
 import { formatRelativeTime, sessionTitle, projectColor, statusColor, statusLabel, projectName } from '@/components/sessionFormat';
-import { rankLabelWords, type PriorityRankLabel } from '@codecast/web/store/priorityOrder';
+import type { PriorityRankLabel } from '@codecast/web/store/priorityOrder';
+import { PriorityRankTag } from '@/components/PriorityRankTag';
 
 /** Where a session's work is on its way to production, as a small tag in its tone. */
 function ShipTag({ ship }: { ship: SessionShip }) {
@@ -297,12 +298,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
           />
         </RNView>
         <RNView style={styles.rightMeta}>
-          {/* The Priorities view only: the rank of the viewer's priority it serves (web's PriorityRankChip). */}
-          {priorityRank !== undefined && (
-            <RNText style={[styles.priorityRank, typeof priorityRank !== 'number' && styles.priorityRankNone]} accessibilityLabel={rankLabelWords(priorityRank).title}>
-              {rankLabelWords(priorityRank).touch}
-            </RNText>
-          )}
+          {priorityRank !== undefined && <PriorityRankTag rank={priorityRank} />}
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
           {ownersModel && <RowCoOwners id={session._id} />}
           <RNText style={styles.timeText}>
@@ -657,19 +653,6 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  priorityRank: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Theme.cyan,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.border,
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    overflow: 'hidden',
-  },
-  priorityRankNone: {
-    color: Theme.textMuted0,
   },
   statusBadge: {
     fontSize: 10,

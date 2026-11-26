@@ -41,11 +41,7 @@ import { InboxLensBar } from '@/components/inbox/InboxLensBar';
 import { AreaBar } from '@/components/nav/AreaBar';
 import { LivePulse } from '@/components/calls/LiveRooms';
 import { HiddenSessionRow } from '@/components/inbox/HiddenSessionRow';
-import { useSyncCollection } from '@codecast/web/hooks/useSyncCollection';
-import { useActiveWorkspaceKey } from '@codecast/web/hooks/useWorkspaceCollection';
-import { listRows } from '@codecast/web/lib/priorities';
-import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
-import { priorityInboxSig, priorityInboxView } from '@/lib/inboxPriorities';
+import { useInboxPriorityView, usePrioritySections } from '@/hooks/useInboxPriorityView';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
 // multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
@@ -182,20 +178,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
 
-  // The Priorities view (web's): the status sections stay, each sorted by
-  // the viewer's priority a session serves, and every row says its rank. The
-  // priorities are fed only while the view is up, in a workspace with them on.
-  const prioritiesView = viewMode === 'priorities';
-  const prioritiesOn = useWorkspaceFeatureState('priorities');
-  const workspaceKey = useActiveWorkspaceKey();
-  // The generated api's type stops short of priorities here, as on the priority screen.
-  useSyncCollection('priorities', (api as any).priorities.list, prioritiesView && prioritiesOn && workspaceKey ? { workspace: workspaceKey } : 'skip', { select: listRows });
-  const prioritiesSig = useInboxStore((s) => (prioritiesView ? priorityInboxSig(s) : ''));
-  const priorityView = useMemo(() => {
-    if (!prioritiesSig) return null;
-    const st = useInboxStore.getState();
-    return priorityInboxView(st.priorities, st.currentUser?._id, st.sessions);
-  }, [prioritiesSig]);
+  // The Priorities view: each status section sorted by rank, every row its rank.
+  const priorityView = useInboxPriorityView(viewMode);
 
   const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, roleSessionsByLead } = placed;
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
@@ -472,14 +456,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // (armed_trigger_kind / loop_state reach the shared classifier inside the
   // chokepoint), identically on web, mobile and the server. QUESTIONS renders
   // ahead of Needs You — same lift web ships; it was missing here.
-  // Pinned keeps the person's own order in every view.
-  const byPriority = useCallback((rows: InboxSession[]) => (priorityView ? priorityView.sort(rows) : rows), [priorityView]);
-  const filteredQuestions = useMemo(() => byPriority(chipFilter(questions)), [byPriority, chipFilter, questions]);
-  const statusNew = useMemo(() => byPriority(filteredNew), [byPriority, filteredNew]);
-  const statusNeedsInput = useMemo(() => byPriority(filteredNeedsInput), [byPriority, filteredNeedsInput]);
-  const statusDone = useMemo(() => byPriority(filteredDone), [byPriority, filteredDone]);
-  const statusDormant = useMemo(() => byPriority(filteredDormant), [byPriority, filteredDormant]);
-  const statusWorking = useMemo(() => byPriority(filteredWorking), [byPriority, filteredWorking]);
+  // The Priorities view sorts each section by rank; Pinned keeps the person's own order in every view.
+  const { questions: filteredQuestions, newRows: statusNew, needsInput: statusNeedsInput, done: statusDone, dormant: statusDormant, working: statusWorking } =
+    usePrioritySections(priorityView, useMemo(() => chipFilter(questions), [chipFilter, questions]), filteredNew, filteredNeedsInput, filteredDone, filteredDormant, filteredWorking);
 
   const listData = useMemo((): InboxListItem[] => {
     const sections: InboxListItem[][] = [];
