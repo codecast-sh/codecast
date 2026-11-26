@@ -8,13 +8,16 @@
 //
 // Each segment is a machine: the open one carries the device accent, the
 // other is a button when that machine has the same checkout. A mirror shows
-// its lock in place of the live dot, so read-only is the segment's state.
+// its lock in place of the live dot, so read-only is the segment's state. A
+// machine out of reach shows an offline mark; when it is the open one, its
+// segment is the reconnect button (the file tree and language servers wait
+// for that host's next forward, and this is the person's way to ask for it).
 
-import { Loader2, Lock } from "lucide-react";
-import { DeviceDot, DeviceIcon, deviceAccentClasses, useRosterDevice, type Device } from "../../../components/DeviceBadge";
+import { Loader2, Lock, RotateCw, WifiOff } from "lucide-react";
+import { DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, useRosterDevice, type Device } from "../../../components/DeviceBadge";
 import { localEndpointOf, useVaultStore } from "../../../store/vaultStore";
 import { filesHref } from "../vaultHref";
-import { counterpartPath, hostLabel } from "./hostVaults";
+import { counterpartPath, hostPathFor, joinVaultPath as join } from "./hostVaults";
 import { hostOfVault } from "./routes";
 
 type SegmentState = "live" | "connecting" | "unreachable" | "mirror";
@@ -26,8 +29,6 @@ interface Segment {
    *  machine has no such checkout. */
   href?: string;
 }
-
-const join = (root: string, rel: string | null) => (rel ? `${root.replace(/\/+$/, "")}/${rel}` : root);
 
 export function VaultMachineBar({ activePath, onNavigate }: { activePath: string | null; onNavigate: (href: string) => void }) {
   // Field by field: the bar never re-renders on a file event or a body fetch.
@@ -71,7 +72,7 @@ export function VaultMachineBar({ activePath, onNavigate }: { activePath: string
       other = {
         deviceId: hostId,
         state: s.hostStates[hostId] === "connected" ? "live" : (s.hostStates[hostId] ?? "unreachable"),
-        href: filesHref({ localPath: onHost?.abs ?? abs, device: hostId }),
+        href: filesHref({ localPath: onHost?.abs ?? (fallback ? hostPathFor(fallback.hostAbs, vault.root, activePath) : abs), device: hostId }),
       };
     }
   }
@@ -87,7 +88,11 @@ export function VaultMachineBar({ activePath, onNavigate }: { activePath: string
   return (
     <div className="flex items-center gap-2 px-3 py-1 border-b border-sol-border/30 bg-sol-bg-alt/40" data-vault-machine-bar>
       <div role="group" aria-label="Machine" className="inline-flex items-center rounded border border-sol-border/40 p-px gap-px">
-        <MachineSegment seg={current} active />
+        <MachineSegment
+          seg={current}
+          active
+          onPress={host && current.state === "unreachable" ? () => void s.connectHost(host) : undefined}
+        />
         {other && <MachineSegment seg={other} onPress={() => go(other!)} />}
       </div>
     </div>
@@ -97,13 +102,14 @@ export function VaultMachineBar({ activePath, onNavigate }: { activePath: string
 function MachineSegment({ seg, active = false, onPress }: { seg: Segment; active?: boolean; onPress?: () => void }) {
   const roster = useRosterDevice(seg.deviceId);
   const d: Pick<Device, "platform"> & { is_remote?: boolean } = roster ?? { platform: "", is_remote: true };
-  const name = roster ? hostLabel(seg.deviceId) : seg.deviceId.slice(0, 8);
+  const name = roster ? deviceDisplayName(roster) : seg.deviceId.slice(0, 8);
   const tone = active && roster ? deviceAccentClasses(roster) : active ? "bg-sol-violet/10 text-sol-violet border-sol-violet/30" : "border-transparent text-sol-text-muted";
   const status = (
     <>
       {seg.state === "mirror" && <Lock className="w-3 h-3" aria-label="Read-only mirror" />}
       {seg.state === "connecting" && <Loader2 className="w-3 h-3 animate-spin" aria-label="Connecting" />}
-      {(seg.state === "live" || seg.state === "unreachable") && <DeviceDot online={seg.state === "live"} />}
+      {seg.state === "live" && <DeviceDot online />}
+      {seg.state === "unreachable" && <WifiOff className="w-3 h-3 text-sol-red" aria-label="Not reachable" />}
     </>
   );
   const title =
@@ -117,6 +123,21 @@ function MachineSegment({ seg, active = false, onPress }: { seg: Segment; active
       {status}
     </>
   );
+  if (active && onPress) {
+    return (
+      <button
+        type="button"
+        className={`${cls} hover:bg-sol-bg-alt hover:text-sol-text`}
+        title={`${name}: not reachable. Reconnect`}
+        aria-current="true"
+        onClick={onPress}
+        data-reconnect-host
+      >
+        {body}
+        <RotateCw className="w-3 h-3" aria-hidden />
+      </button>
+    );
+  }
   if (active) return <span className={cls} title={title} aria-current="true">{body}</span>;
   return (
     <button
