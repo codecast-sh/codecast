@@ -27,8 +27,8 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, rowLastTurnAllowsPark, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
-import { rowParkedWakeLive, rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
+import { rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
@@ -324,18 +324,18 @@ function workStateOfRow(row: StatusRow, now: number): WorkState {
   const status = agentStatusAt(row, now);
   if (row.awaiting_input || status === "permission_blocked") return "needs_input";
   const failed = !!(row.pending_api_error || row.session_error || row.is_unresponsive);
+  const wake = carriesWakeFacts(row) ? rowWakeInputs({ ...row, updated_at: row.updated_at ?? 0 }, { trusted: status, raw: row.agent_status }, now) : null;
   // A done rest under a live server-seen park (its ship run in CI) is dormant,
   // as classifyWorkState's doneRest files it.
-  const parked = carriesWakeFacts(row) && rowParkedWakeLive({ ...row, updated_at: row.updated_at ?? 0 }, now) && rowLastTurnAllowsPark(row);
+  const parked = !!wake?.parkedWakeLive;
   if (status === "done") return parked ? "dormant" : "done";
   if (status === "waiting") return "dormant";
-  if (!carriesWakeFacts(row)) {
+  if (!wake) {
     if (status === "hibernated" && failed) return "needs_input";
     if (status === "dormant" || status === "hibernated") return "dormant";
     if (status && status !== "idle" && !DEAD_AGENT_STATUSES.has(status)) return "working";
     return failed ? "needs_input" : "idle";
   }
-  const wake = rowWakeInputs({ ...row, updated_at: row.updated_at ?? 0 }, { trusted: status, raw: row.agent_status }, now);
   const pin = wake.pinPredatesTurn ? null : row.thread_state_status;
   if (status === "dormant") return wake.dormantClaimExpired ? "needs_input" : "dormant";
   if (status && status !== "idle" && status !== "hibernated" && !DEAD_AGENT_STATUSES.has(status)) return "working";

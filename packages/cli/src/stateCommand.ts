@@ -316,12 +316,6 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
           : "") +
         ` ${fmt.muted("(the human already sees the pin: do not mention this update in your reply. Rewrite it when this changes; `cast state clear` when it no longer holds)")}`,
       );
-      // A done pin is read the moment it is written, in the turn that wrote
-      // it, so this is where a done that is really an offer or a wait gets
-      // corrected: "want me to ship?" pinned done filed under Done (jx75e8s).
-      if ((result.status ?? status) === "done") {
-        console.log(fmt.muted("done files this session under Done: nothing waits on the person. If your reply offers them a next step (ship? merge?), pin --status blocked; if a run or check you started is still going, pin --status dormant and name it."));
-      }
       // A blocked declaration from a hidden session (or done from one the
       // human closed) is a claim on the human's eyes — the server just honored
       // it; say so, since the agent may believe it is still out of sight.
