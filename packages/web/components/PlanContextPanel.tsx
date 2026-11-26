@@ -13,7 +13,7 @@ import {
   CheckCircle2,
   CircleDotDashed,
   XCircle,
-  Target,
+  Map as MapIcon,
   ArrowUp,
   Minus,
   ArrowDown,
@@ -81,7 +81,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
   return (
     <div data-cc-context-panel className="contents">
       <RailChip data-cc-rail-item="plan" open={expanded} onToggle={() => setExpanded(!expanded)} title={`${plan.title} · ${plan.short_id ?? ""}`}>
-        <Target className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
+        <MapIcon className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
         <span className="min-w-0 truncate font-medium text-sol-cyan">{plan.title}</span>
         <span data-rail-full className="flex-shrink-0"><ShortId id={plan.short_id} className="text-sol-text-dim" /></span>
         <span className="ml-auto" />

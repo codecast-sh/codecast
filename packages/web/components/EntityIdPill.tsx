@@ -13,7 +13,7 @@ import { PersonHoverContent } from "./identity/PersonHoverCard";
 import { sessionIdentity } from "../lib/sessionIdentity";
 import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import {
-  Target,
+  Map as MapIcon, Target,
   ArrowUpRight,
   MessageSquare,
   FolderOpen,
@@ -179,7 +179,7 @@ function TaskHoverContent({ task }: { task: any }) {
       shrink: true,
       node: (
         <span className="inline-flex min-w-0 items-center gap-1 text-sol-cyan">
-          <Target className="w-2.5 h-2.5 flex-shrink-0" />
+          <MapIcon className="w-2.5 h-2.5 flex-shrink-0" />
           <span className="truncate">{task.plan.title}</span>
         </span>
       ),
@@ -277,7 +277,7 @@ function PlanHoverContent({ plan }: { plan: any }) {
   return (
     <div className="space-y-2">
       <div className="flex items-start gap-2">
-        <Target className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${statusColor}`} />
+        <MapIcon className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${statusColor}`} />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">
             {plan.title || plan.short_id}
@@ -1168,7 +1168,7 @@ export function EntityIdPill({
   const Icon = isSession
     ? MessageSquare
     : isPlan
-      ? Target
+      ? MapIcon
       : isTrigger
         ? Zap
         : type === "doc"

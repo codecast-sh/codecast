@@ -5,7 +5,7 @@
 // solid tag; branch: a dashed frame in mono; deploy: a filled pill with a
 // rocket). Labels are titles, never short ids; the id is in the tooltip.
 import Link from "next/link";
-import { Check, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Reply, Rocket, Square, SquareCheck, Target, Workflow } from "lucide-react";
+import { Check, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Reply, Rocket, Square, SquareCheck, Map as MapIcon, Workflow } from "lucide-react";
 import type { PriorityPlanRef, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
 import type { NextAction } from "@codecast/shared/contracts/priorityDerive";
 import type { DeployInfo } from "../../lib/priorityList";
@@ -145,7 +145,7 @@ export function InSession({ s }: { s: SessionLine }) {
 }
 
 /**
- * A plan: square corners and a hairline, a target glyph, its title, a small bar and the count.
+ * A plan: square corners and a hairline, a map glyph, its title, a small bar and the count.
  * `bar={false}` on a milestone's line, where the count says the progress and the room goes to the title.
  */
 export function PlanChip({ plan, prefix, showSize, bar = true, className }: { plan: PriorityPlanRef; prefix?: string; showSize?: boolean; bar?: boolean; className?: string }) {
@@ -158,7 +158,7 @@ export function PlanChip({ plan, prefix, showSize, bar = true, className }: { pl
       title={`${plan.title} · ${plan.done}/${plan.total} done${plan.size > plan.total ? ` · ${plan.size} tasks` : ""}`}
       className={cn("inline-flex h-6 min-w-[6rem] max-w-[15rem] shrink items-center gap-1.5 rounded-[3px] border border-sol-border px-1.5 text-meta text-sol-text hover:border-sol-text-dim/60", TOUCH_AREA, className)}
     >
-      <Target className="size-3 shrink-0 text-sol-text-dim" aria-hidden />
+      <MapIcon className="size-3 shrink-0 text-sol-text-dim" aria-hidden />
       {prefix && <span className="shrink-0 text-sol-text-dim">{prefix}</span>}
       {/* A "Part of" chip keeps 6rem for the title: in a narrow row (a phone) the bar leaves first, then "(N tasks)". */}
       <span data-plan-title className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>

@@ -43,7 +43,7 @@ import { useInboxStore, isConvexId, retryPendingSend, type ForkChild } from "../
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { useCommentTools } from "../../../hooks/useCommentTools";
 import { BranchSelector } from "../../BranchSelector";
-import { Check, FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X, History } from "lucide-react";
+import { Check, FileText, ListChecks, Map as MapIcon, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, MessageCircle, SquareDashedMousePointer, X, History } from "lucide-react";
 import { sendableText } from "../../../lib/sendableText";
 import { useTeamFeature } from "../../../lib/teamFeatures";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/context-menu";
@@ -95,7 +95,7 @@ function clippedStyle(maxHeight: number): React.CSSProperties {
 
 const CONTEXT_TYPE_CONFIG: Record<string, { icon: typeof ListChecks; colorClass: string }> = {
   task: { icon: ListChecks, colorClass: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20" },
-  plan: { icon: Target, colorClass: "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20" },
+  plan: { icon: MapIcon, colorClass: "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20" },
   doc: { icon: FileText, colorClass: "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20" },
 };
 

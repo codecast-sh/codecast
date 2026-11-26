@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
-import { Target } from "lucide-react";
+import { Map as MapIcon } from "lucide-react";
 import { HoverCard } from "./ui/HoverCard";
 import { taskVisual } from "./TaskStatusBadge";
 
@@ -102,7 +102,7 @@ export function PlanBadge({
         onClick={() => router.push(`/plans/${plan._id}`)}
         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-meta flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px] ${className || ""}`}
       >
-        <Target className="w-2.5 h-2.5 flex-shrink-0" />
+        <MapIcon className="w-2.5 h-2.5 flex-shrink-0" />
         <span className="truncate">{plan.title}</span>
       </button>
     </HoverCard>

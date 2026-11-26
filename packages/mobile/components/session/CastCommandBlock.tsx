@@ -37,7 +37,7 @@ type Tone = 'yellow' | 'cyan' | 'blue' | 'violet' | 'green' | 'orange' | 'magent
 
 const CATEGORY: Record<string, { icon: FeatherName; tone: Tone }> = {
   task: { icon: 'check-square', tone: 'yellow' },
-  plan: { icon: 'target', tone: 'cyan' },
+  plan: { icon: 'map', tone: 'cyan' },
   doc: { icon: 'file-text', tone: 'blue' },
   search: { icon: 'search', tone: 'violet' },
   feed: { icon: 'list', tone: 'green' },

@@ -1,4 +1,4 @@
-import { Bot, CheckSquare, FileText, FolderOpen, Hash, Lock, MessageSquare, Shield, Slash, Tag, Target, User, Calendar } from "lucide-react";
+import { Bot, CheckSquare, FileText, FolderOpen, Hash, Lock, MessageSquare, Shield, Slash, Tag, Map as MapIcon, User, Calendar } from "lucide-react";
 import type { MentionItem } from "./MentionList";
 import { useInboxStore, placeInboxRows, rankVerdictOf } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -16,7 +16,7 @@ const TYPES = {
   session: { icon: MessageSquare, label: "Session", color: "text-sol-blue" },
   task: { icon: CheckSquare, label: "Task", color: "text-sol-violet" },
   doc: { icon: FileText, label: "Doc", color: "text-sol-cyan" },
-  plan: { icon: Target, label: "Plan", color: "text-sol-violet" },
+  plan: { icon: MapIcon, label: "Plan", color: "text-sol-violet" },
   label: { icon: Tag, label: "Label", color: "text-sol-magenta" },
   person: { icon: User, label: "Person", color: "text-sol-green" },
   // An org role (the org page's violet shield): @handle wakes its agent.

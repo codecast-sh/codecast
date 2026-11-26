@@ -9,7 +9,7 @@ import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { LivenessDot } from "./LivenessDot";
 import {
-  Target,
+  Map as MapIcon,
   Zap,
   ExternalLink,
   CircleDot,
@@ -270,7 +270,7 @@ export function OrchestrationDashboard({ className }: OrchestrationDashboardProp
 
       <div>
         <h3 className="flex items-center gap-2 text-xs font-semibold text-sol-text-dim uppercase tracking-wider mb-2">
-          <Target className="w-3 h-3" />
+          <MapIcon className="w-3 h-3" />
           Active Plans ({activePlans.length})
         </h3>
         {activePlans.length === 0 ? (

@@ -21,13 +21,14 @@ import {
   ArrowRight,
   Circle,
   FilePlus2,
+  Folder,
   GitCommit,
   History,
   ListPlus,
+  Map as MapIcon,
   Megaphone,
   MessageSquare,
   Sparkles,
-  Target,
 } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useProjectUpdates } from "../hooks/useProjectUpdates";
@@ -75,13 +76,13 @@ type TimelineEvent = {
 
 /** Icon + accent per event kind. The rail dot wears the accent; rows stay calm. */
 const EVENT_STYLE: Record<TimelineEvent["type"], { icon: typeof Circle; color: string }> = {
-  project_created: { icon: Target, color: "text-sol-violet" },
+  project_created: { icon: Folder, color: "text-sol-violet" },
   update_posted: { icon: Megaphone, color: "text-sol-blue" },
   update_comment: { icon: MessageSquare, color: "text-sol-blue" },
   task_created: { icon: ListPlus, color: "text-sol-text-dim" },
   task_status: { icon: ArrowRight, color: "text-sol-yellow" },
   task_comment: { icon: MessageSquare, color: "text-sol-text-dim" },
-  plan_created: { icon: Target, color: "text-sol-cyan" },
+  plan_created: { icon: MapIcon, color: "text-sol-cyan" },
   plan_entry: { icon: History, color: "text-sol-cyan" },
   doc_created: { icon: FilePlus2, color: "text-sol-orange" },
   git: { icon: GitCommit, color: "text-sol-blue" },
