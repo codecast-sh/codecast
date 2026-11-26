@@ -17,7 +17,6 @@ import { isStandingSession } from "./lib/orgOwnership";
 import { isRunLog, parseRoomKey } from "@codecast/shared/contracts";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { effectivePriorityOrder, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { PRIORITY_PASS_CAPS, type PassCall, type PassCorrection, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 
 export const DAY = 86_400_000;
@@ -506,13 +505,6 @@ export const passInputs = internalQuery({
     }
 
     // The person's priorities in this workspace (read above), with their newest sessions.
-    // A group the rank backfill has not reached: each active row's place as it shows (and as the backfill will write it), so the pass slots around it.
-    const legacyPlace = new Map<string, Pick<PassPriority, "person_pos" | "ai_rank">>();
-    if (rows.some((p) => p.status === "active" && p.rank_set_by != null)) {
-      for (const [i, p] of effectivePriorityOrder(rows).entries()) {
-        legacyPlace.set(String(p._id), rankSourceOf(p) === "person" ? { person_pos: i + 1, ai_rank: null } : { person_pos: null, ai_rank: i + 1 });
-      }
-    }
     const priorities: PassPriority[] = [];
     const strays: Id<"conversations">[] = [];
     const stepTaskIds = new Set<string>();
@@ -545,7 +537,6 @@ export const passInputs = internalQuery({
         status: p.status as PassPriority["status"],
         person_pos: p.person_pos ?? null,
         ai_rank: p.ai_rank ?? null,
-        ...legacyPlace.get(String(p._id)),
         ...(p.status_set_by ? { status_set_by: p.status_set_by } : {}),
         serves: p.serves ?? null,
         steps: p.steps,

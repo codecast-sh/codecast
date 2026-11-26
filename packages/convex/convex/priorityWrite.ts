@@ -6,7 +6,6 @@ import { lastPriorityKey, placePriority } from "@codecast/shared/contracts/prior
 import { readerFor } from "./lib/priorityAccess";
 import { moveCorrections } from "./priorityPassRun";
 import { clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
-import { backfillGroup, legacy } from "./priorityRankBackfill";
 import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
 import { inWorkspace } from "./priorityPassInputs";
 import { passActivity } from "./lib/priorityPassSchedule";
@@ -39,18 +38,12 @@ export async function doMove(ctx: Ctx, viewer: Id<"users">, shortId: string, to:
       .take(OWN_SCAN_READ)).filter((r: Priority) => r.status !== "merged" && r.status !== "active");
     return [...(await activeGroup(ctx, viewer, p.workspace)), ...others];
   };
-  let rows = await read();
-  // A group the rank backfill has not reached yet is rewritten as it would rewrite it, so the move starts from the order the person set.
-  if (rows.some((r) => r.status === "active" && legacy(r))) {
-    await backfillGroup(ctx, rows.filter((r) => r.status === "active"));
-    rows = await read();
-  }
+  const rows = await read();
   const row = rows.find((r) => String(r._id) === String(p._id))!;
   const at = positionsOf(rows).get(String(p._id))!;
   const now = Date.now();
   for (const w of placePriority(rows, row, to === "up" ? at - 1 : to === "down" ? at + 1 : to)) {
-    // The absolute rank relative rank replaced goes with the rewrite (priorityRankBackfill).
-    await ctx.db.patch(w.row._id, { ...(w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank }), rank: undefined, rank_set_by: undefined, updated_at: now });
+    await ctx.db.patch(w.row._id, { ...(w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank }), updated_at: now });
   }
   return echo(ctx, viewer, p._id);
 }
