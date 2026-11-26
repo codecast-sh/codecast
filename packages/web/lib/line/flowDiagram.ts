@@ -6,8 +6,10 @@
 // `cast flow run` card all read a flow through it.
 import { foldFlow, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn, type FlowStation, type FlowStationKind } from "@codecast/shared/contracts/flowPool";
 import { edgeWords } from "./lineModel";
+import { stationResult, type StationResult } from "../ship/stationResult";
 
-export type StepState = "idle" | "done" | "current" | "stopped";
+/** `nothing`: the run passed through it and its result said it found nothing to do there (stationResult.ts). */
+export type StepState = "idle" | "done" | "current" | "stopped" | "nothing";
 export type SideRoute = {
   /** What happened, in a few words: an end's own name, else the condition or option that takes this route. */
   outcome: string;
@@ -253,22 +255,33 @@ function dedupe(routes: SideRoute[]): SideRoute[] {
   });
 }
 
-type RunNodes = { status: string; current_node_id?: string | null; node_statuses?: ReadonlyArray<{ node_id: string; status: string }> | null };
+type RunNodes = { status: string; current_node_id?: string | null; node_statuses?: ReadonlyArray<{ node_id: string; status: string; started_at?: number; result_preview?: string | null }> | null };
 
-/** Each step's state on a run: done when the run passed through it, current where it stands, stopped where it failed. */
+const inStep = (stepId: string, nodeId: string) => nodeId === stepId || nodeId.startsWith(`${stepId}${SEGMENT_SEP}`);
+
+/** What a step reported when it last finished on a run: its own result, or for a segment its newest step's. */
+export function stepResult(run: RunNodes | null | undefined, stepId: string): StationResult | null {
+  const mine = (run?.node_statuses ?? []).filter((n) => inStep(stepId, n.node_id));
+  const last = mine.reduce<(typeof mine)[number] | undefined>((best, n) => (!best || (n.started_at ?? 0) >= (best.started_at ?? 0) ? n : best), undefined);
+  return last?.status === "completed" ? stationResult(last.result_preview) : null;
+}
+
+/** Each step's state on a run: done when the run passed through it (nothing when its result said it found nothing to
+ *  do), current where it stands, stopped where it failed. */
 export function stepStates(model: FlowDiagramModel, run: RunNodes | null | undefined): Map<string, StepState> {
   const out = new Map<string, StepState>();
   if (!run) return out;
   const statuses = run.node_statuses ?? [];
   const live = run.status === "running" || run.status === "paused" || run.status === "pending";
-  const inGroup = (stepId: string, nodeId: string) => nodeId === stepId || nodeId.startsWith(`${stepId}${SEGMENT_SEP}`);
+  const inGroup = inStep;
+  const skippedRan = (id: string) => { const r = stepResult(run, id); return r?.outcome === "skipped" && !r.leftForYou; };
   const walk = (steps: DiagramStep[]) => {
     for (const s of steps) {
       const mine = statuses.filter((n) => inGroup(s.id, n.node_id));
       const here = !!run.current_node_id && inGroup(s.id, run.current_node_id);
       const state: StepState = here && live ? "current"
         : mine.some((n) => n.status === "failed") || (here && run.status === "failed") ? "stopped"
-        : mine.length || here ? "done" : "idle";
+        : mine.length || here ? (skippedRan(s.id) ? "nothing" : "done") : "idle";
       out.set(s.id, state);
       walk(s.inner);
     }

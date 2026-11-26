@@ -41,6 +41,12 @@
 .sj-stage[data-state="routed"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
 .sj-stage[data-state="skipped"] .sj-node { border-style: dashed; border-color: var(--sj-rule); }
 .sj-stage[data-state="skipped"] .sj-label { color: var(--sol-text-dim); }
+/* Ran and found nothing to do (its result said skipped): a solid ring with a dash, neither a pass nor never entered. */
+.sj-stage[data-state="nothing"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-stage[data-state="nothing"] .sj-who { color: var(--sol-text-muted); }
+.sj-branch[data-state="nothing"] { color: var(--sol-text-muted); }
+/* A step a station left to the person: shown under the stage, whole on hover. */
+.sj-left { font-size: var(--fs-meta); line-height: 1.25; color: var(--sj-you, var(--sol-blue)); font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A fan-out's one name: a branch that sent work back, stopped or waits takes that state's color. */
 .sj-branch[data-state="back"] { color: var(--sj-session); }
 .sj-branch[data-state="stopped"] { color: var(--sj-bad); }
@@ -157,6 +163,7 @@
 .sj-detail-mark[data-status="failed"] { background: var(--sj-bad); }
 .sj-detail-mark[data-status="running"] { background: var(--sol-blue); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-detail-session { color: var(--sol-blue); text-decoration: none; }
+.sj-detail .sj-detail-left { color: var(--sj-you, var(--sol-blue)); font-weight: 600; }
 .sj-detail-session:hover { text-decoration: underline; }
 
 /* A segment's inside, hinted under its stage and opened in place: its passing steps down a spine, each route off a step a

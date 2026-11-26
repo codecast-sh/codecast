@@ -12,6 +12,7 @@
 import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { asksIfOf, insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
+import { stationResult } from "./stationResult";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
@@ -20,9 +21,10 @@ export type StageWho = "session" | "agent" | "you" | "person" | "auto";
 /**
  * `back`: it sent the work back to the session (a red CI, changes asked). `routed`: a step in it failed and the run went
  * on through a route out of it (a script that exits non-zero to choose a path); never a stop. `stopped`: the run ended
- * there. `skipped`: a finished run never entered it.
+ * there. `skipped`: a finished run never entered it. `nothing`: it ran and found nothing to do there, its result's
+ * outcome `skipped` (no checks documented, no deploy documented; stationResult.ts).
  */
-export type StageState = "idle" | "active" | "back" | "waiting" | "done" | "routed" | "stopped" | "skipped";
+export type StageState = "idle" | "active" | "back" | "waiting" | "done" | "routed" | "stopped" | "skipped" | "nothing";
 /** What a stage is for, read from the graph: a fan-out, the station that lands the change (one holding the runner's
  *  `shipped` or `landed` step), Deploy, Live, or any other step. */
 export type StageRole = "step" | "parallel" | "land" | "deploy" | "live";
@@ -44,6 +46,9 @@ export type JourneyStage = {
   branches?: JourneyStage[];
   /** A segment's own steps, when it has more than one or routes off them. */
   inside?: StageInside;
+  /** What its last step's result said (`note`), and a step it left to the person (`left_for_you`), on a run. */
+  note?: string | null;
+  left?: string | null;
 };
 
 export type StageStep = { id: string; label: string; status: string; visits: number | null; said: string | null; session: { id: string; title: string | null } | null; at: number | null };
@@ -479,9 +484,21 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const isEnd = (id: string) => { const n = byId.get(id); return !!n && (n.type === "exit" || !!n.segment_exit); };
   const stepsOf = (b: Base): StageStep[] => statuses
     .filter((n) => (inStage(b, n.node_id) && !isEntry(n.node_id) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
-    .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: n.result_preview?.trim() || n.activity || null, session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null }));
+    .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: stationResult(n.result_preview)?.note ?? (n.result_preview?.trim() || n.activity || null), session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null }));
   // What a stage's steps did last (one entry per node: its latest visit); a segment's entry only routes into its steps.
   const latestOf = (b: Base) => newest(statuses.filter((n) => inStage(b, n.node_id) && !(b.members.includes(n.node_id) && isEntry(n.node_id))));
+  // What a stage's last step reported when it finished (stationResult.ts).
+  const resultOf = (b: Base) => { const last = latestOf(b); return last?.status === "completed" ? stationResult(last.result_preview) : null; };
+  const ranEmpty = (b: Base) => { const r = resultOf(b); return r?.outcome === "skipped" && !r.leftForYou; };
+  // A finished stage whose result says it found nothing to do reads `nothing`; one that left the person a step reads done, with it.
+  const ranAs = (b: Base, state: StageState): Pick<JourneyStage, "state" | "note" | "left"> => {
+    const r = resultOf(b);
+    if (!r) return { state };
+    const finished = state === "done" || state === "nothing";
+    return { state: finished ? (ranEmpty(b) ? "nothing" : "done") : state, note: r.note, left: finished ? r.leftForYou : null };
+  };
+  // A Deploy that ran and found no deploy documented sent nothing live: the run ends where it landed.
+  const deployEmpty = ownDeploy && passed && ranEmpty(deployStage!);
 
   const stateOf = (b: Base, index: number): StageState => {
     if (b.id === backStage) return "back";
@@ -505,6 +522,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const branchState = (br: Base): StageState => {
     const last = latestOf(br);
     if (last?.status === "running" || last?.status === "pending") return live ? "active" : "idle";
+    if (ranEmpty(br)) return "nothing";
     const said = br.who === "agent" ? verdicts?.review : verdicts?.ci;
     if (said === "green" || said === "ship") return "done";
     if (said === "red" || said === "timed_out" || said === "changes" || said === "stale") return "back";
@@ -524,7 +542,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // An open card says who may answer it: the viewer, or someone else.
     const who: StageWho = b.id === gateStage ? (gateMine ? "you" : "person") : b.who;
     const base = { ...strip(b), ...(b.id === gateStage && gateOff ? { label: gateOff } : {}), who, steps: stepsOf(b), round: rounds > 1 ? rounds : null, ...(b.inside ? { inside: insideOn(b, index) } : {}) };
-    if (b.role === "live") return { ...base, state: allLive ? "done" : passed ? "skipped" : "idle" };
+    if (b.role === "live") return { ...base, state: allLive && !deployEmpty ? "done" : passed ? "skipped" : "idle" };
     if (b.role === "deploy") {
       const state: StageState = allLive ? "done"
         : atDeploy ? (sha && hold.kind === "out" ? "active" : "waiting")
@@ -532,12 +550,12 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
         : !ownDeploy && passed && sha ? (hold.kind === "out" ? "active" : targets.some((t) => t.state === "failed") ? "stopped" : "waiting")
         : passed ? "skipped"
         : "idle";
-      return { ...base, state };
+      return { ...base, ...(ownDeploy ? ranAs(b, state) : { state }) };
     }
-    if (!b.branches) return { ...base, state: stateOf(b, index) };
+    if (!b.branches) return { ...base, ...ranAs(b, stateOf(b, index)) };
     const own = stateOf(b, index);
     const later = !passed && current >= 0 && index > current;
-    const branches = b.branches.map((br) => ({ ...stageOn(br, index), state: later ? "idle" as const : branchState(br) }));
+    const branches = b.branches.map((br) => ({ ...stageOn(br, index), ...ranAs(br, later ? "idle" : branchState(br)) }));
     // A stop inside a fan-out is the branch whose step failed last (or still ran); its siblings keep their own state.
     if (b.id === stopStage) {
       const culprit = b.branches.findIndex((br) => latestOf(br)?.status === "failed");
@@ -548,7 +566,8 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const state: StageState = own === "waiting" || own === "stopped" || later || (own === "active" && !!at && !!b.tail?.includes(at)) ? own
       : has("stopped") ? "stopped"
       : own === "back" || has("back") ? "back"
-      : branches.every((br) => br.state === "done") ? "done"
+      : branches.every((br) => br.state === "nothing") ? "nothing"
+      : branches.every((br) => br.state === "done" || br.state === "nothing") ? "done"
       : branches.every((br) => br.state === "skipped") ? "skipped"
       // Still this round's work while the run goes on; a run that ended mid-way leaves it neither passed nor stopped.
       : live && (has("active") || has("waiting") || ran) ? "active"
@@ -615,7 +634,8 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
     if (!sha && stage?.role === "deploy") now = { kind: "unlanded", why: readableWhy(run.fail_reason) ?? "The run ended with no merge recorded", waits: [] };
     else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && walked.some((id) => id !== at && byId.get(id)?.type !== "exit") ? exit?.label ?? null : null };
-  } else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
+  } else if (allLive && deployEmpty) now = sha ? { kind: "merged", sha, at: run.merge?.at ?? null } : { kind: "passed" };
+  else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
   else if (!plan.some((s) => s.role === "land")) now = { kind: "passed" };
   // A finished run with no merge on it (a merge nobody recorded) says it finished, never that it did not land.
   else if (!sha) now = { kind: "passed" };

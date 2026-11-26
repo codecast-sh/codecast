@@ -9,9 +9,10 @@ import { memo, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
-import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
 import { WHO_WORDS, approvalWords, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
 import { ageShort } from "../../lib/lineFlow";
+import { leftWords } from "../../lib/ship/stationResult";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
@@ -22,7 +23,7 @@ import "./ship.css";
 /** `insideId`: the element an open segment's inside is drawn in, which its stage's toggle controls. */
 export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen, insideId }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void; insideId?: string }) {
   // A finished journey says only what happened: no one acts any more, and nothing goes back.
-  const finished = stages.length > 0 && stages.every((s) => s.state === "done" || s.state === "skipped") && stages.some((s) => s.state === "done");
+  const finished = stages.length > 0 && stages.every((s) => s.state === "done" || s.state === "skipped" || s.state === "nothing") && stages.some((s) => s.state === "done");
   // The stages whose findings come back to the session, as one return line under them.
   const looping = finished ? [] : stages.map((s, i) => (s.loops.length ? i : -1)).filter((i) => i >= 0);
   const back = stages.some((s) => s.state === "back");
@@ -32,7 +33,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
         {stages.map((s, i) => {
           const next = stages[i + 1];
           return (
-            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done") ? "" : undefined} data-stage={s.id}>
+            <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && next.state !== "skipped" && (next.state !== "idle" || s.state === "done" || s.state === "nothing") ? "" : undefined} data-stage={s.id} title={s.note ?? undefined}>
               {onOpen && (s.steps?.length || s.inside) ? (
                 <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} aria-controls={s.inside ? insideId : undefined} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
                   <StageFace s={s} finished={finished} />
@@ -61,16 +62,17 @@ function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolea
         // A fan-out is one stage under one name ("CI + Review"); a branch that sent work back, stopped or waits says so
         // in a glyph and in words for a screen reader, never in its color alone (a grayscale screen shows no color).
         <span className="sj-label" data-journey-branches>
-          {s.branches.map((b, i) => <span key={b.id}>{i ? " + " : null}<span className="sj-branch" data-state={b.state} data-stage={b.id}>{b.label}{BRANCH_FLAG[b.state] ? <><i className="sj-branch-flag" aria-hidden>{BRANCH_FLAG[b.state]!.glyph}</i><span className="sr-only"> ({BRANCH_FLAG[b.state]!.words})</span></> : null}</span></span>)}
+          {s.branches.map((b, i) => <span key={b.id}>{i ? " + " : null}<span className="sj-branch" data-state={b.state} data-stage={b.id} title={b.note ?? undefined}>{b.label}{BRANCH_FLAG[b.state] ? <><i className="sj-branch-flag" aria-hidden>{BRANCH_FLAG[b.state]!.glyph}</i><span className="sr-only"> ({BRANCH_FLAG[b.state]!.words})</span></> : null}</span></span>)}
           <StateWords state={s.state} />
         </span>
       ) : <span className="sj-label">{s.label}<StateWords state={s.state} /></span>}
       {/* A segment hints at its inside, which a press on it opens in place. */}
       {s.inside ? <span className="sj-hint" data-journey-hint><span>{insideWords(s.inside)}</span><ChevronDown className="sj-hint-caret" aria-hidden /></span> : null}
       <span className="sj-who">
-        {finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who]}
+        {s.state === "nothing" ? "Skipped" : finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who]}
         {!finished && s.round ? <span className="sj-round">· round {s.round}</span> : null}
       </span>
+      {s.left ? <span className="sj-left" title={s.left} data-journey-left>{leftWords(s.left)}</span> : null}
     </>
   );
 }
@@ -80,10 +82,11 @@ const BRANCH_FLAG: Partial<Record<JourneyStage["state"], { glyph: string; words:
   stopped: { glyph: "✕", words: "stopped" },
   back: { glyph: "↩", words: "sent back" },
   waiting: { glyph: "…", words: "waiting" },
+  nothing: { glyph: "–", words: "skipped" },
 };
 
 /** A stage's state in words for a screen reader: its node, which shows it, is hidden from one. */
-const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped" };
+const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped", nothing: "ran, skipped" };
 function StateWords({ state }: { state: JourneyStage["state"] }) {
   return STATE_WORDS[state] ? <span className="sr-only">, {STATE_WORDS[state]}</span> : null;
 }
@@ -147,6 +150,7 @@ function StageDetail({ stage, now_ms }: { stage: JourneyStage; now_ms: number })
           {st.said ? <p>{st.said}</p> : null}
         </li>
       ))}
+      {stage.left ? <li className="sj-detail-left" data-journey-left>{leftWords(stage.left)}</li> : null}
     </ul>
   );
 }
@@ -156,6 +160,7 @@ function Mark({ state }: { state: JourneyStage["state"] }) {
   if (state === "stopped") return <X className="w-3 h-3" strokeWidth={3} />;
   if (state === "back") return <CornerDownLeft className="w-3 h-3" strokeWidth={2.6} />;
   if (state === "routed") return <ArrowRight className="w-3 h-3" strokeWidth={2.6} />;
+  if (state === "nothing") return <Minus className="w-3 h-3" strokeWidth={3} />;
   if (state === "active") return <i className="sj-pulse" />;
   if (state === "waiting") return <i className="sj-wait" />;
   return null;

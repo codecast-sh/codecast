@@ -9,6 +9,6 @@ export async function cancelPendingSend(conversationId: string, ref: { messageId
   const store = useInboxStore.getState();
   const status = await store.cancelPendingMessage(conversationId, ref);
   // Already in the session: nothing was taken back.
-  if (content?.trim() && status !== "delivered" && status !== "injected") store.setComposerPrefill({ convId: conversationId, text: content });
+  if (content?.trim() && status !== "delivered" && status !== "injected") store.setComposerPrefill({ convId: conversationId, fill: content, add: "" });
   return status;
 }
