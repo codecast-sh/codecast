@@ -417,11 +417,12 @@ export interface ShipOutcome {
   pr?: string;
 }
 
-/** Run a shell command, streaming nothing, capturing the tail of its output. Given `onChild`, the command runs in a
- *  process group of its own, handed over so a caller can stop the whole group (the Merge station on SIGTERM). */
+/** Run a shell command, streaming nothing, capturing the tail of its output. stderr joins stdout inside the shell, so
+ *  the capture keeps the order the command wrote in (two pipes read separately race). Given `onChild`, the command runs
+ *  in a process group of its own, handed over so a caller can stop the whole group (the Merge station on SIGTERM). */
 export function runShell(command: string, cwd: string, log: Log, env: Record<string, string> = {}, onChild?: (child: ChildProcess) => void): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn("/bin/bash", ["-c", command], { cwd, env: { ...process.env, CAST_SHIP: "1", ...env }, ...(onChild ? { detached: true } : {}) });
+    const child = spawn("/bin/bash", ["-c", `exec 2>&1\n${command}`], { cwd, env: { ...process.env, CAST_SHIP: "1", ...env }, ...(onChild ? { detached: true } : {}) });
     onChild?.(child);
     let output = "";
     const take = (b: Buffer) => { output = (output + b.toString()).slice(-200_000); };
