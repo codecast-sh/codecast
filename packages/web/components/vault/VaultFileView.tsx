@@ -2,7 +2,7 @@
 // editor (components/code, loaded lazily), images, media and PDFs draw
 // themselves, and anything else gets an honest dead end.
 
-import { lazy, memo, Suspense, useState } from "react";
+import { lazy, memo, Suspense, useMemo, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FileQuestion, FileWarning } from "lucide-react";
 import { VAULT_MAX_PREVIEW_BYTES, vaultFileKind } from "@codecast/shared/contracts";
@@ -81,7 +81,10 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
   // be written back (or merged with what returns) rather than stranded.
   const unsaved = useCodeStore((s) => !!vaultId && !!s.dirty[bufferKey(vaultId, path)]);
 
-  const kind = vaultFileKind(path);
+  // The name only rules a file out; a body that turns out to hold a NUL (the
+  // check git and grep use) is binary whatever its extension says.
+  const binaryBody = useMemo(() => !!body?.content.includes("\0"), [body]);
+  const kind = binaryBody ? "binary" : vaultFileKind(path);
   const size = entry?.size ?? 0;
   const tooLarge = size > (kind === "text" ? CODE_EDITOR_MAX_BYTES : VAULT_MAX_PREVIEW_BYTES);
   const title = path.slice(path.lastIndexOf("/") + 1);

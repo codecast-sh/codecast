@@ -327,16 +327,18 @@ export function isVaultTextPath(p: string): boolean {
 /**
  * What kind of thing a vault file is, for the ONE switch every surface makes:
  * markdown gets the full reading/editing experience, an asset renders inline,
- * text opens read-only in the code viewer, and everything else is honestly
- * declared unpreviewable rather than decoded into garbage.
+ * a known binary extension is declared unpreviewable, and everything else
+ * opens as text. An unlisted extension (".cast", a bare "noextension") is far
+ * more often text than not, and the viewer still declines a body whose bytes
+ * hold a NUL, so a binary with an odd name never decodes into garbage.
  */
 export type VaultFileKind = "markdown" | "asset" | "text" | "binary";
 
 export function vaultFileKind(p: string): VaultFileKind {
   if (isVaultMarkdownPath(p)) return "markdown";
   if (isVaultAssetPath(p)) return "asset";
-  if (isVaultTextPath(p)) return "text";
-  return "binary";
+  if (isVaultBinaryPath(p)) return "binary";
+  return "text";
 }
 
 export function isVaultIgnoredPath(p: string): boolean {
