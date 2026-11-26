@@ -24,8 +24,10 @@ import { collectionRowValidator, collectionRowHydrator, isPersistedClientStoreKe
 import {
   COLLECTION_TABLES, META_KEYS, COLLECTION_PREFIX, META_PREFIX, CONVMSG_PREFIX, CONVUSERMSG_PREFIX, OUTBOX_KEY,
   PENDING_INPUT_PREFIX, SPLIT_PREFIX, PER_ROW_META_KEYS, collectionBlobKey, collectionRowKey, readPlan, readPlanSql,
-  rowsToMap, collectReadKeys, isPurgeable, ownedKeysWhere,
+  collectReadKeys, isPurgeable, ownedKeysWhere,
 } from "./idbCacheKeys.native";
+import { readRows, readRowsSync } from "./idbCacheRead.native";
+export { _setReadSliceBytes } from "./idbCacheRead.native";
 import { batchStatements, createWriteBehind } from "./idbCacheWriteBehind.native";
 export { readPlan, readPlanSql };
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
@@ -266,6 +268,7 @@ function openCacheDb(): Promise<any> | null {
 let cacheDbSync: any | null | undefined;
 function openCacheDbSync(): any | null {
   if (cacheDbSync !== undefined) return cacheDbSync;
+  if (testCacheDb?.getAllSync) return (cacheDbSync = testCacheDb);
   try {
     const name = Storage?.databaseName;
     const { openDatabaseSync } = require("expo-sqlite");
@@ -495,8 +498,7 @@ export function loadCacheSync(
     const db = openCacheDbSync();
     let byKey: Map<string, string | null>;
     if (db) {
-      const { sql, params } = readPlanSql(readPlan(wanted));
-      byKey = rowsToMap(db.getAllSync(sql, params));
+      byKey = readRowsSync(db, readPlan(wanted));
       for (const key of byKey.keys()) {
         const scheduled = scheduledValue(key);
         if (scheduled !== undefined) byKey.set(key, scheduled);
@@ -600,8 +602,7 @@ export async function loadCache(keys?: readonly string[], context: Record<string
     const db = await openCacheDb();
     let byKey: Map<string, string | null>;
     if (db) {
-      const { sql, params } = readPlanSql(readPlan(wanted));
-      byKey = rowsToMap(await db.getAllAsync(sql, params));
+      byKey = await readRows(db, readPlan(wanted));
     } else {
       const allKeys = await storageKeys();
       byKey = new Map(await Storage.multiGet(collectReadKeys(allKeys, wanted))) as Map<string, string | null>;
@@ -638,8 +639,7 @@ export async function loadSplitRows(name: string): Promise<Array<{ id: string; h
     const db = await openCacheDb();
     let entries: Array<[string, string | null]>;
     if (db) {
-      const { sql, params } = readPlanSql({ prefixes: [prefix], exact: [] });
-      entries = (await db.getAllAsync(sql, params)).map((r: { key: string; value: string | null }) => [r.key, r.value]);
+      entries = [...(await readRows(db, { prefixes: [prefix], exact: [] }))];
     } else {
       entries = await Storage.multiGet((await storageKeys()).filter((k) => k.startsWith(prefix)));
     }

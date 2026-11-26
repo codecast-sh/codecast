@@ -11,6 +11,7 @@
 // expo-updates can mark it launched — which auto-rolls the update back. Absent
 // native modules degrade to no-ops instead; telemetry resumes once users get a
 // build that bundles them.
+import { Platform } from "react-native";
 import { initAnalytics as initPlatformAnalytics, posthog, Sentry } from "@platform/analytics/native";
 import { CODECAST_EVENTS, POSTHOG_REPLAY_SAMPLE_RATE } from "@codecast/shared/analytics";
 import { MOBILE_EVENTS } from "./mobileEvents";
@@ -39,7 +40,10 @@ export function initAnalytics() {
     appName: "codecast",
     // Replay walks the view tree on the JS thread (and masks every text
     // input); for everyone it froze taps for seconds, so only a sample records.
-    sessionReplaySampleRate: POSTHOG_REPLAY_SAMPLE_RATE,
+    // Android records nothing: its screenshots and logcat capture sit on the
+    // Java heap, which stops at 256 MB on a Daylight tablet and ran out mid-sync.
+    // iOS keeps its sample.
+    sessionReplaySampleRate: Platform.OS === "android" ? 0 : POSTHOG_REPLAY_SAMPLE_RATE,
   });
   watchRegulatedData((on) => {
     if (!on) return;
