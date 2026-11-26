@@ -3,7 +3,7 @@ import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { cleanReservationPurpose, pinnableAgentIds } from "@codecast/shared/contracts";
+import { cleanReservationPurpose, pinnableAgentIds, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { parseStagePinRef, stagePinRowId } from "@codecast/shared/contracts/stagePins";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
@@ -5642,9 +5642,18 @@ export function resolveInboxCompact(ui: { inbox_compact?: boolean; visual_style?
 
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
-// which ordering is on screen.
-export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } | undefined): InboxViewMode {
-  return ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
+// which ordering is on screen. A stored Priorities view in a workspace with
+// Priorities off reads as the grouped view, so nothing sorts or labels by the
+// cached ranks there.
+export type InboxViewModeSource = {
+  clientState?: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; active_team_id?: string | null } };
+  teams?: readonly unknown[] | null;
+};
+export function resolveInboxViewMode(s: InboxViewModeSource): InboxViewMode {
+  const ui = s.clientState?.ui;
+  const mode = ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
+  if (mode === "priorities" && !workspaceFeatureEnabled((s.teams ?? []) as Parameters<typeof workspaceFeatureEnabled>[0], ui?.active_team_id, "priorities")) return "grouped";
+  return mode;
 }
 
 // Whether the flat views list oldest first. Shared by the panel's render and
@@ -6118,7 +6127,8 @@ export function manualOrderKeysForDrop(rows: InboxSession[], opts: {
 // is what re-plans the inbox warm loop (hooks/inboxWarm.ts). Lives beside the
 // chokepoint so the synced view keys are read inside the store, nowhere else.
 export function visualOrderViewSig(state: {
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean; active_team_id?: string | null } };
+  teams?: readonly unknown[] | null;
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
@@ -6130,7 +6140,7 @@ export function visualOrderViewSig(state: {
   const ui = state.clientState.ui;
   const terms = (list?: readonly BucketFilterTerm[]) => (list ?? []).map((t) => `${t.exclude ? "-" : "+"}${t.id}`).join(",");
   return [
-    resolveInboxViewMode(ui), resolveShowOld(ui), ui?.inbox_scope ?? "mine", resolveShowSubagents(ui),
+    resolveInboxViewMode(state), resolveShowOld(ui), ui?.inbox_scope ?? "mine", resolveShowSubagents(ui),
     state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
     terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
     nestsWorkers(ui), resolveInboxOldestFirst(ui),
@@ -6225,7 +6235,7 @@ export function computeVisualOrder(state: {
     return opts.walk ? order.filter(walkFilterOf(placed, opts.walk)) : order;
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
-  const mode = resolveInboxViewMode(state.clientState.ui);
+  const mode = resolveInboxViewMode(state);
   const collapsed = state.collapsedSections ?? {};
   if (mode === "time" || mode === "recent") {
     // The flat views render under a single collapsible "All" section; collapsing
@@ -11491,7 +11501,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this.extraBucketFilters = next.extras;
     commitChipFilterChange(this, prev);
   }),
-  inboxViewMode: () => resolveInboxViewMode(get().clientState.ui),
+  inboxViewMode: () => resolveInboxViewMode(get()),
   setInboxViewMode: (mode: InboxViewMode) => {
     const state = get();
     const prev = snapshotInboxViewFromDraft(state);
@@ -13782,7 +13792,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   },
 
   freezeRecentForNav: () => {
-    if (resolveInboxViewMode(get().clientState.ui) !== "recent") return;
+    if (resolveInboxViewMode(get()) !== "recent") return;
     // Snapshot the live order once; later presses within the window just re-arm
     // the thaw timer so the same frozen order keeps being walked.
     if (!get().recentFreezeOrder) {

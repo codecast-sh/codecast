@@ -163,7 +163,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const killSessions = useInboxStore((s) => s.killSessions);
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
   // The plan rows the "By plan" lens orders by: only while that lens is up.
-  const planRows = useInboxStore((s) => (resolveInboxViewMode(s.clientState.ui) === "plan" ? s.plans : null));
+  const planRows = useInboxStore((s) => (resolveInboxViewMode(s) === "plan" ? s.plans : null));
   const toggleCollapsedSection = useInboxStore((s) => s.toggleCollapsedSection);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
@@ -176,7 +176,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // Scalars off clientState, never the whole singleton — it churns on every
   // draft keystroke synced from any device. inbox_manual_order is an array, so
   // its wake rides a stringified key (ref may flip without content change).
-  const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
   const showSubagents = useInboxStore((s) => resolveShowSubagents(s.clientState?.ui));
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));

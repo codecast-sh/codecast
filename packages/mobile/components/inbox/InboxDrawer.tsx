@@ -31,7 +31,7 @@ export function InboxDrawer() {
   const buckets = useInboxStore((s) => s.buckets);
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
-  const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const [find, setFind] = useState('');
 

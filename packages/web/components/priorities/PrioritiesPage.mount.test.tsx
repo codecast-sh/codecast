@@ -327,6 +327,13 @@ test("Looks done?, correction pending and Stalled read on every width", async ()
       // The pending correction is on a milestone: the header does not repeat it.
       expect(b.querySelector("[data-priority-head] [data-correction-pending]")).toBeNull();
       expect(b.querySelector("[data-priority-head] [data-stalled]")!.textContent).toBe("Stalled 30d");
+      if (layout === "phone") {
+        // On a phone Stalled takes "last Nd"'s place on the meta line, so nothing beside the title reaches the progress.
+        const head = b.querySelector("[data-priority-head]")!;
+        expect(head.querySelector("[data-stalled]")!.closest("[data-meta]")).not.toBeNull();
+        expect(head.querySelector("[data-momentum-words]")!.textContent).toBe("0 landed · Stalled 30d");
+        expect([...head.querySelectorAll("span[title]")].find((n) => n.textContent === "Marked")!.parentElement!.querySelector("[data-stalled]")).toBeNull();
+      }
     } finally {
       await page.unmount();
     }
@@ -440,6 +447,12 @@ test("phone, Daylight and desktop: the list's own width picks the layout", async
     expect(wide.container.querySelector("[data-show-chips]")).not.toBeNull();
     expect(wide.container.querySelector("[data-show-menu]")).toBeNull();
     expect(wide.container.querySelector("[data-line-chips]")).not.toBeNull();
+    // Daylight's filter bar wraps beside the inbox: under a coarse pointer the segments are 44px and wrapped rows sit
+    // 16px apart, so no two press areas overlap.
+    expect(wide.container.querySelector("[data-filters]")!.className).toContain("[@media(pointer:coarse)]:gap-y-4");
+    for (const f of ["mine", "done"]) expect(wide.container.querySelector(`[data-filter="${f}"]`)!.className).toContain("[@media(pointer:coarse)]:h-11");
+    // A Daylight line clips its box's press area to its own height too.
+    expect(wide.container.querySelector("li[data-milestone] [role=button]")!.className).toContain("[@media(pointer:coarse)]:overflow-y-clip");
   } finally {
     await wide.unmount();
   }
@@ -457,6 +470,15 @@ test("phone, Daylight and desktop: the list's own width picks the layout", async
     expect(block(phone.container, "pri-1").querySelector('[data-action="answer"]')!.className).toContain("h-11");
     expect(block(phone.container, "pri-1").querySelector('[data-milestone="s1"]')!.textContent).toContain("Dormant");
     expect(block(phone.container, "pri-1").querySelector("[data-priority-head]")!.textContent).toContain("4 today");
+    // Each line clips its box's press area to its own height (52px from 8px above the title, drawn 15px down beside
+    // the first line), so a tap never lands on a neighbour's box; measured in the browser at 402px.
+    for (const li of phone.container.querySelectorAll("li[data-milestone]")) {
+      const line = li.querySelector("[role=button]")!;
+      expect(line.className).toContain("min-h-11");
+      expect(line.className).toContain("overflow-y-clip");
+      const toggle = li.querySelector("[data-milestone-toggle]");
+      if (toggle) for (const c of ["-mt-2", "-mb-4", "h-[52px]", "items-start", "pt-[15px]"]) expect(toggle.className.split(" ")).toContain(c);
+    }
     // Every ⋯ is a 44px target.
     for (const b of phone.container.querySelectorAll('button[aria-label^="More for"]')) expect(b.className).toContain("size-11");
   } finally {
@@ -773,8 +795,16 @@ test("every priority says how many landed and how long since, on every layout; a
   const compact = await mount(view({ layout: "phone", compact: true }));
   try {
     const head = block(compact.container, "pri-1").querySelector("[data-priority-head]")!;
-    // Its strip shows today: no "4 today" beside the title.
+    // Today is the bare count just before the progress, as the default row says "4 today": none beside the title.
     expect(head.textContent).not.toContain("today");
+    const today = head.querySelector("[data-today]")!;
+    expect(today.textContent).toBe("4");
+    expect(today.getAttribute("aria-label")).toBe("4 today");
+    expect(today.parentElement).toBe(head.children[2] as Element);
+    expect(today.nextElementSibling).not.toBeNull();
+    // An untouched top three says "0" there; a row past the top three with nothing today says nothing.
+    expect(block(compact.container, "pri-3").querySelector("[data-priority-head] [data-today]")?.textContent).toBe("0");
+    expect(block(compact.container, "pri-5").querySelector("[data-priority-head] [data-today]")).toBeNull();
     // One line a priority: the mini sparkline stays in the row, and no meta line of words under it.
     expect(head.querySelector("[data-day-strip]")).not.toBeNull();
     expect(head.querySelector("[data-meta]")).toBeNull();
@@ -806,8 +836,8 @@ test("every priority says how many landed and how long since, on every layout; a
 
 test("under a coarse pointer every control on the list is a 44px target, at every layout", async () => {
   seedKinds();
-  // A size of 44px (h-11, size-11, min-h-11) at every pointer, or one a coarse pointer gets: its own, or a 44px ::after press area.
-  const sized = /(?:^|\s)(?:size-11|h-11|min-h-11)(?:\s|$)|\[@media\(pointer:coarse\)\]:(?:h-11|h-12|min-h-11|size-11|after:)/;
+  // A size of 44px or more (h-11, size-11, min-h-11, a box's 52px) at every pointer, or one a coarse pointer gets: its own, or a 44px ::after press area.
+  const sized = /(?:^|\s)(?:size-11|h-11|min-h-11|h-\[52px\])(?:\s|$)|\[@media\(pointer:coarse\)\]:(?:h-11|h-12|min-h-11|size-11|h-\[52px\]|after:)/;
   for (const layout of ["wide", "phone"] as const) {
     const page = await mount(view({ rows: [...ROWS, KINDS], layout, filters: ALL_KINDS }));
     const { act } = React as any;

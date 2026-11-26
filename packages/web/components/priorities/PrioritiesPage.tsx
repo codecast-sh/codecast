@@ -258,7 +258,7 @@ function Segment({ on, onClick, children, tall, ...rest }: { on: boolean; onClic
       aria-pressed={on}
       onClick={onClick}
       {...rest}
-      className={cn("inline-flex items-center gap-1 rounded-[5px] px-2.5 text-meta transition-colors", tall ? "h-11" : cn("h-7", TOUCH_AREA), on ? "bg-sol-card font-medium text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text")}
+      className={cn("inline-flex items-center gap-1 rounded-[5px] px-2.5 text-meta transition-colors", tall ? "h-11" : cn("h-7 [@media(pointer:coarse)]:h-11", TOUCH_AREA), on ? "bg-sol-card font-medium text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text")}
     >
       {on && <Check className="size-3" strokeWidth={2.5} />}
       {children}
@@ -271,8 +271,9 @@ function FilterBar({ filters, onChange, compact, onCompact, layout }: { filters:
   const shown = SHOW_KINDS.filter((k) => filters.show[k]).length;
   const wide = layout === "wide";
   return (
-    // Wraps rather than clips: on a narrow list (Daylight beside the inbox) Compact goes to a second line.
-    <div data-filters className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+    // Wraps rather than clips: on a narrow list (Daylight beside the inbox) Compact goes to a second line. Under a coarse
+    // pointer the segments are 44px themselves and wrapped rows sit 16px apart, so no two press areas overlap.
+    <div data-filters className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 [@media(pointer:coarse)]:gap-y-4">
       <div className="inline-flex shrink-0 gap-0.5 rounded-[7px] bg-sol-text/[0.06] p-0.5">
         <Segment data-filter="mine" on={filters.mine} onClick={() => onChange({ ...filters, mine: !filters.mine })} tall={!wide}>Mine</Segment>
         <Segment data-filter="done" on={filters.hideDone} onClick={() => onChange({ ...filters, hideDone: !filters.hideDone })} tall={!wide}>Hide done</Segment>

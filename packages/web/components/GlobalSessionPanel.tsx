@@ -1711,10 +1711,12 @@ function SessionListPanelImpl({
     // task collection churns far more than the few facts a lens reads).
     s => orgLensWakeSig(s),
     // Every plan a "By plan" group may name, from any workspace: only while the lens is up.
-    s => (resolveInboxViewMode(s.clientState.ui) === "plan" ? allPlansSig(s.plans) : ""),
+    s => (resolveInboxViewMode(s) === "plan" ? allPlansSig(s.plans) : ""),
     // What the Priorities view sorts and labels by: each session's priority
     // link and each priority's owner, rank and milestones. Only while it is up.
-    s => (resolveInboxViewMode(s.clientState.ui) === "priorities" ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}` : ""),
+    s => (resolveInboxViewMode(s) === "priorities" ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}` : ""),
+    // The view mode itself: Priorities reads as grouped while the workspace has the feature off.
+    s => resolveInboxViewMode(s),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2019,11 +2021,11 @@ function SessionListPanelImpl({
   // viewer's priority a session serves, as the keyboard walk does
   // (visualOrderSessions); Pinned keeps the person's own order. Decisions
   // sorts its own groups (InboxDecisionQueue).
-  const priorityKey = resolveInboxViewMode(s.clientState.ui) === "priorities"
+  const priorityKey = resolveInboxViewMode(s) === "priorities"
     ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ""}`
     : "";
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(s.priorities, s.currentUser?._id, useInboxStore.getState().sessions) : null), [priorityKey]);
   const byPriority = useCallback((rows: InboxSession[]) => (priorityPlaceOf ? sortByPriority(rows, priorityPlaceOf) : rows), [priorityPlaceOf]);
   const statusPinned = filteredPinned;
@@ -2352,7 +2354,7 @@ function SessionListPanelImpl({
   // Reset each render; renderSection (a closure over this) consumes it in call order.
   let globalRenderedCards = 0;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
-  const viewMode: InboxViewMode = resolveInboxViewMode(s.clientState.ui);
+  const viewMode: InboxViewMode = resolveInboxViewMode(s);
   const flatView = viewMode === "time" || viewMode === "recent";
   // Manual drag-order overlay, only consulted in "time" mode (see comparator).
   const manualOrder = s.clientState.ui?.inbox_manual_order;

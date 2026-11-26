@@ -93,9 +93,10 @@ function PriorityBody({ row }: { row: PriorityView }) {
 
   return (
     <article data-priority-page={row.short_id} className="[container-type:inline-size]">
-      <header className="flex items-start gap-3">
+      {/* On a phone the actions take a row of their own above the title, so the title has the whole width. */}
+      <header className="flex items-start gap-3 max-sm:flex-col max-sm:gap-1">
         <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Target className="size-[18px]" aria-hidden /></span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 max-sm:self-stretch">
           {/* The priority's own page shows its title whole. */}
           <h1 data-priority-title className="break-words text-[22px] font-semibold leading-tight text-sol-text">{row.title}</h1>
           <div data-priority-meta className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-sol-text-dim">
@@ -113,7 +114,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
             <span className="font-mono">{row.short_id}</span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div data-priority-actions className="flex shrink-0 items-center gap-1 max-sm:order-first max-sm:self-end">
           {row.mine && <CorrectButton row={row} />}
           {/* Under a coarse pointer the shared Share trigger takes a 44px press area here. */}
           <ShareControl label="priority" path={priorityHref(row.short_id)} className="[@media(pointer:coarse)]:[&_[data-share-trigger]]:size-11" />

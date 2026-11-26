@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'bun:test';
 import { priorityInboxSig, priorityInboxView } from './inboxPriorities';
 import { rankLabelWords } from '@codecast/web/store/priorityOrder';
+import { resolveInboxViewMode } from '@codecast/web/store/inboxStore';
+
+// The phone's inbox, lens bar and drawer read the view through the same resolver as the web.
+describe('the inbox view mode on the phone', () => {
+  it('reads a stored Priorities view as the grouped one where the workspace has Priorities off', () => {
+    const at = (priorities: boolean) => ({
+      teams: [{ _id: 't1', features: { priorities } }],
+      clientState: { ui: { inbox_view_mode: 'priorities' as const, active_team_id: 't1' } },
+    });
+    expect(resolveInboxViewMode(at(true))).toBe('priorities');
+    expect(resolveInboxViewMode(at(false))).toBe('grouped');
+  });
+});
 
 // A priority the pass slotted at `ai_rank`; its rank is its place among its owner's active ones.
 const priority = (_id: string, ai_rank: number, user_id = 'me', steps = ['s1', 's2']) => ({

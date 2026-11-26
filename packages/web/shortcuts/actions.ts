@@ -166,7 +166,7 @@ export function useGlobalShortcutActions() {
   // (walkPick), so repeated presses visit every row in rank order.
   const jumpTo = useCallback((...walks: InboxWalk[]) => {
     const store = useInboxStore.getState();
-    const walkOn = resolveInboxViewMode(store.clientState.ui) === "priorities";
+    const walkOn = resolveInboxViewMode(store) === "priorities";
     for (const walk of walks) {
       const pick = walkPick(store.walkOrder(walk), store.currentSessionId, walkOn);
       if (pick) return openSession(pick._id);

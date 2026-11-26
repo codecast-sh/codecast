@@ -245,6 +245,12 @@ test("the page: rank once with its provenance, ten days with landings, Next and 
     expect(meta.textContent).toContain("pri-60");
     // Share in the header (the guard checks the source; this checks it renders).
     expect(el.querySelector("header [data-share-trigger]")?.getAttribute("aria-label")).toBe("Share priority");
+    // On a phone the actions take a row of their own above the title, which gets the whole width.
+    const actions = el.querySelector("header [data-priority-actions]")!;
+    expect(actions.querySelector("[data-share-trigger]")).not.toBeNull();
+    expect(actions.className).toContain("max-sm:order-first");
+    expect(actions.parentElement!.className).toContain("max-sm:flex-col");
+    expect(el.querySelector("h1")!.parentElement!.className).toContain("max-sm:self-stretch");
 
     // Ten days, today last, with a landing mark on each day a critical milestone landed.
     const ten = el.querySelector("[data-ten-days]")!;

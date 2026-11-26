@@ -107,7 +107,7 @@ const priority = (_id: string, ai_rank: number, user_id = "me") => ({
   _id, short_id: _id, title: _id, ai_rank, person_pos: null, workspace: "team:t1", last_active_at: 0, user_id, status: "active", steps: [{ key: "s1", title: "One", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
 });
 
-function seed(mode: "priorities" | "grouped") {
+function seed(mode: "priorities" | "grouped", prioritiesOn = true) {
   __resetInboxPlacementCacheForTests();
   const rows = [
     row(UNLINKED, "No priority"),
@@ -127,7 +127,8 @@ function seed(mode: "priorities" | "grouped") {
     pendingMessages: {},
     sessionDecisions: {},
     currentUser: { _id: "me", name: "Jason" },
-    clientState: { ui: { inbox_scope: "mine", show_old: true, inbox_view_mode: mode } },
+    teams: [{ _id: "t1", name: "Team", role: "admin", features: { priorities: prioritiesOn } }],
+    clientState: { ui: { inbox_scope: "mine", show_old: true, inbox_view_mode: mode, active_team_id: "t1" } },
   } as any);
 }
 
@@ -174,6 +175,21 @@ test("in the Priorities view every card shows its rank or None, in rank order", 
   expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(TEAMMATES));
   expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(ELSEWHERE));
   await m.unmount();
+});
+
+test("a stored Priorities view in a workspace with Priorities off falls back to Status: no ranks, no rank order, no feed", async () => {
+  seed("priorities", false);
+  asked.length = 0;
+  const m = await mountInbox();
+  expect(m.host.querySelectorAll("[data-session-id]").length).toBeGreaterThan(0);
+  expect(m.host.querySelector("[data-priority-rank]")).toBeNull();
+  expect(asked).not.toContain("priorities:list");
+  const fallback = cardOrder(m.host);
+  await m.unmount();
+  seed("grouped");
+  const grouped = await mountInbox();
+  expect(cardOrder(grouped.host)).toEqual(fallback);
+  await grouped.unmount();
 });
 
 test("the Status view shows no rank on any card", async () => {

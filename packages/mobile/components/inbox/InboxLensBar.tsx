@@ -53,7 +53,7 @@ export function useInboxFilterCounts() {
  *  projects on a full-width row under it. */
 export function InboxLensBar({ stacked = false, accessory }: { stacked?: boolean; accessory?: ReactNode }) {
   const Theme = useTheme();
-  const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);

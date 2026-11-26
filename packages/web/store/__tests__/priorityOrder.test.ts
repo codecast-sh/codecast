@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { computeVisualOrder, placeInboxRows, type InboxSession } from "../inboxStore";
+import { computeVisualOrder, placeInboxRows, resolveInboxViewMode, type InboxSession } from "../inboxStore";
 import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority, walkPick } from "../priorityOrder";
 
 // The inbox's Priorities view: the status sections stay, each sorted by the
@@ -11,6 +11,7 @@ import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority, walkPi
 const cid = (t: string) => `${t}z${t.length}`.padEnd(32, "0");
 const tag = (s: InboxSession) => (s.session_id ?? "").slice("session-".length);
 const ME = "user_me";
+const PRIORITIES_TEAM = { _id: "team_p", name: "Team", features: { priorities: true } };
 
 const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: cid(id),
@@ -79,7 +80,22 @@ const state = (mode: "priorities" | "grouped") => ({
   recentFreezeOrder: null,
   currentUser: { _id: ME },
   priorities,
-  clientState: { ui: { inbox_view_mode: mode } },
+  teams: [PRIORITIES_TEAM],
+  clientState: { ui: { inbox_view_mode: mode, active_team_id: PRIORITIES_TEAM._id } },
+});
+
+describe("a stored Priorities view in a workspace with the feature off", () => {
+  it("reads as the grouped view: no rank order and no rank walk from the cached priorities", () => {
+    const on = state("priorities");
+    const off = { ...on, teams: [{ ...PRIORITIES_TEAM, features: { priorities: false } }] };
+    expect(resolveInboxViewMode(on)).toBe("priorities");
+    expect(resolveInboxViewMode(off)).toBe("grouped");
+    // The personal workspace borrows the flag from the viewer's teams: on while one has it on.
+    expect(resolveInboxViewMode({ ...on, clientState: { ui: { inbox_view_mode: "priorities" } } })).toBe("priorities");
+    expect(resolveInboxViewMode({ ...off, clientState: { ui: { inbox_view_mode: "priorities" } } })).toBe("grouped");
+    expect(computeVisualOrder(off).map(tag)).toEqual(computeVisualOrder(state("grouped")).map(tag));
+    expect(computeVisualOrder(off).map(tag)).not.toEqual(computeVisualOrder(on).map(tag));
+  });
 });
 
 describe("sortByPriority", () => {

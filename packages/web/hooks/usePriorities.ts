@@ -9,7 +9,6 @@ import { serverErrorText } from "../lib/errorCause";
 import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
 import { priorityWrites } from "../lib/priorityWrites";
 import { resolveInboxViewMode, useInboxStore } from "../store/inboxStore";
-import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { useSyncCollection } from "./useSyncCollection";
 import { useQueryNoThrow } from "./useQueryNoThrow";
@@ -33,9 +32,8 @@ export function useSyncPriorities(on = true) {
  * window draws the inbox panel; followers read the replicated rows.
  */
 export function useSyncInboxPriorities() {
-  const view = useInboxStore((s) => resolveInboxViewMode(s.clientState.ui) === "priorities");
-  const on = useWorkspaceFeature("priorities");
-  useSyncPriorities(view && on);
+  // The view reads as grouped where the feature is off (resolveInboxViewMode).
+  useSyncPriorities(useInboxStore((s) => resolveInboxViewMode(s) === "priorities"));
 }
 
 /** When the pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */

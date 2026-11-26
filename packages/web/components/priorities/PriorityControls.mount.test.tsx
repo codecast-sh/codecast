@@ -276,7 +276,7 @@ test("the milestone's whole left gutter toggles Done, a 44px target on a phone",
   const page = await mount(<Live layout="phone" />);
   try {
     const toggle = line("pri-2", "s1").querySelector('[data-milestone-toggle="s1"]') as HTMLElement;
-    expect(toggle.className).toContain("h-11");
+    expect(toggle.className).toContain("h-[52px]");
     expect(toggle.className).toContain("-ml-[30px]");
     await press(toggle);
     expect(stored("pri-2").steps[0].done).toBe(true);
@@ -291,9 +291,9 @@ test("the milestone's whole left gutter toggles Done, a 44px target on a phone",
       expect(b.className).not.toContain("opacity-0");
     }
     // The box sits by the title's first line, not the middle of a title that wraps or carries its marks under it:
-    // the line starts its parts at the top, and the 44px press area rises 8px to centre the box on the first line.
+    // the line starts its parts at the top, and the press area rises 8px and draws the box 15px down, beside the first line.
     expect(line("pri-2", "s1").querySelector("[data-line-title]")!.className).toContain("items-start");
-    expect(toggle.className).toContain("-my-2");
+    for (const c of ["-mt-2", "items-start", "pt-[15px]"]) expect(toggle.className.split(" ")).toContain(c);
   } finally {
     await page.unmount();
   }
@@ -302,7 +302,7 @@ test("the milestone's whole left gutter toggles Done, a 44px target on a phone",
   try {
     const title = line("pri-2", "s1").querySelector("[data-line-title]")!;
     expect(title.className).toContain("items-center [@media(pointer:coarse)]:items-start");
-    expect(title.querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:-my-2 [@media(pointer:coarse)]:h-11");
+    expect(title.querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px]");
   } finally {
     await wide.unmount();
   }
@@ -505,7 +505,7 @@ test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer pres
       }
     }
     expect(line("pri-1", "s1").querySelector('[role="button"]')!.className).toContain("[@media(pointer:coarse)]:min-h-11");
-    expect(line("pri-1", "s1").querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:h-11");
+    expect(line("pri-1", "s1").querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:h-[52px]");
   } finally {
     await page.unmount();
   }

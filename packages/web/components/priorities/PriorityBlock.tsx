@@ -180,11 +180,12 @@ export function PendingMark() {
 const lastLanded = (days: number | null) => (days == null ? "none yet" : days === 0 ? "last today" : `last ${days}d`);
 
 /** "N landed · last Nd", where the momentum column has no room for words beside its strip: under it, on the row's meta line. */
-function MomentumWords({ model, className }: { model: PriorityModel; className?: string }) {
+function MomentumWords({ model, stalled, className }: { model: PriorityModel; stalled?: boolean; className?: string }) {
   return (
     <span data-momentum-words title={`${model.landed10} critical milestones landed in 10 days`} className={cn("whitespace-nowrap text-mark tabular-nums", className)}>
       <span className="text-sol-text">{model.landed10} landed</span>
-      <span className="text-sol-text-dim"> · {lastLanded(model.lastLandedDays)}</span>
+      {/* `stalled`: a stalled priority says so here, in place of how long since. */}
+      <span className="text-sol-text-dim"> · {stalled && model.stalledDays != null ? <StalledMark days={model.stalledDays} className="ml-0.5 inline-flex align-middle" /> : lastLanded(model.lastLandedDays)}</span>
     </span>
   );
 }
@@ -275,14 +276,16 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         </span>
         {/* A compact row's strip already shows today, and Stalled sits by the strip as its mark. */}
         {!wide && !compact && (model.today > 0 || untouched) && <span data-today className="shrink-0 text-meta tabular-nums text-sol-text-dim">{model.today} today</span>}
-        {/* Where the momentum column has no room for words (a narrow list, a phone), Stalled sits by the title. */}
-        {!compact && model.stalledDays != null && <StalledMark days={model.stalledDays} className={wide ? "inline-flex [@container(min-width:44rem)]:hidden" : "inline-flex"} />}
+        {/* Where the momentum column has no room for words (a narrow list), Stalled sits by the title; a phone says it on its meta line. */}
+        {wide && !compact && model.stalledDays != null && <StalledMark days={model.stalledDays} className="inline-flex [@container(min-width:44rem)]:hidden" />}
         {/* On a phone and in the compact view the title keeps the row's width; the mark goes on the meta line below. */}
         {wide && !compact && pending && <PendingMark />}
         {compact && model.action && <span data-compact-action className="ml-auto flex shrink-0"><ActionButton row={row} action={model.action} showSession={false} /></span>}
       </span>
       {/* The pips end at one x on every wide row, polish or not: the polish link has a slot of its own. */}
       <span className={cn(C_PROGRESS, "flex items-center justify-end gap-2", wide && "w-full")}>
+        {/* A phone's compact row keeps today as the bare count before the progress (its default row says "N today" by the title). */}
+        {!wide && compact && (model.today > 0 || untouched) && <span data-today title={`${model.today} today`} aria-label={`${model.today} today`} className="text-meta tabular-nums text-sol-text-dim">{model.today}</span>}
         <Progress model={model} layout={layout} onToggle={onProgress} />
         {wide && (
           <span data-polish-slot className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:hidden")}>
@@ -323,7 +326,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
             </button>
           )}
           {pending && <PendingMark />}
-          {!compact && <MomentumWords model={model} className="ml-auto" />}
+          {!compact && <MomentumWords model={model} stalled className="ml-auto" />}
         </div>
       )}
       {!wide && plan && (
@@ -508,9 +511,10 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
     // Where the title can wrap or carry its marks under it (a coarse pointer, a phone), the box sits by its first line, not the block's middle.
     <span data-line-title className={cn("flex min-w-0 gap-2", wide ? "items-center [@media(pointer:coarse)]:items-start" : "items-start")}>
       {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. A teammate's is a status mark, nothing to press.
-          A 44px press area 8px above the line's top centres the box on a first line that sits under 4px of padding. */}
+          Where the title can wrap (a coarse pointer, a phone) the press area starts 8px above the title and runs 52px, drawing the box 15px down,
+          beside the first line; it takes 28px of the line's height, and the line clips it to its own rows. */}
       {row.mine
-        ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:-my-2 [@media(pointer:coarse)]:h-11" : "-my-2 -ml-[30px] h-11 pl-[30px]"} />
+        ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px] [@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px] [@media(pointer:coarse)]:items-start [@media(pointer:coarse)]:pt-[15px]" : "-mb-4 -ml-[30px] -mt-2 h-[52px] items-start pl-[30px] pt-[15px]"} />
         : <span className="flex h-7 shrink-0 items-center"><MilestoneMark done={step.done} /></span>}
       {wide ? (
         // Under a coarse pointer (Daylight) the marks go on a line of their own under the title, as on a phone.
@@ -533,13 +537,14 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
   );
   return (
     <li data-milestone={m.key}>
+      {/* Where the box's press area is tall (a coarse pointer, a phone) the line clips it to its own height: a tap never lands on a neighbour's box. */}
       <div
         role="button"
         tabIndex={0}
         aria-expanded={open}
         onClick={onToggle}
         onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
-        className={cn(LIST_GRID[layout], "group/line -mx-1.5 cursor-pointer rounded-control px-1.5 hover:bg-sol-bg-alt/60", wide ? "min-h-8 [@media(pointer:coarse)]:min-h-11" : "min-h-11", open && "bg-sol-bg-alt/60")}
+        className={cn(LIST_GRID[layout], "group/line -mx-1.5 cursor-pointer rounded-control px-1.5 hover:bg-sol-bg-alt/60", wide ? "min-h-8 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:overflow-y-clip" : "min-h-11 overflow-y-clip", open && "bg-sol-bg-alt/60")}
       >
         {wide ? (
           <>
