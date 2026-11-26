@@ -400,6 +400,8 @@ export type ShippingRun = {
   review_verdict?: { verdict: string; at: number } | null;
   merge?: { sha: string; branch: string; into: string; at: number; pr_url?: string } | null;
   gate_prompt: string | null;
+  /** The gate the run waits at, when it waits at one. */
+  gate_node_id?: string | null;
   gate_decision_short_id: string | null;
   gate_decision_status: string | null;
   spawner_conversation_id: string | null;

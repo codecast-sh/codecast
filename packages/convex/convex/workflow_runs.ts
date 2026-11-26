@@ -2160,6 +2160,7 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
       review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at } : null,
       merge: run.merge ? { sha: run.merge.sha, branch: run.merge.branch, into: run.merge.into, at: run.merge.at, ...(run.merge.pr_url ? { pr_url: run.merge.pr_url } : {}) } : null,
       gate_prompt: run.gate_prompt ?? null,
+      gate_node_id: run.gate_node_id ?? null,
       gate_decision_short_id: e.gate_decision_short_id ?? null,
       gate_decision_status: e.gate_decision_status ?? null,
       spawner_conversation_id: run.spawner_conversation_id ?? null,

@@ -98,7 +98,7 @@ describe("workflow_runs.shippingRuns", () => {
     const [, own] = await read(ids.ben);
     expect(own.spawner_title).toBe("Ben's private session");
     expect(Object.keys(open).sort()).toEqual([
-      "_id", "ci_verdict", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_prompt",
+      "_id", "ci_verdict", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_node_id", "gate_prompt",
       "merge", "node_statuses", "pr", "primary_conversation_id", "project_path", "review_verdict", "spawner_conversation_id", "spawner_title", "status", "task_id",
       "task_short_id", "task_title", "updated_at", "user_id", "workflow_label", "workflow_slug",
     ]);
@@ -118,7 +118,9 @@ describe("workflow_runs.shippingRuns", () => {
     const { run, read, ids } = await setup();
     await run({ extra: { ci_verdict: { node_id: "ci", green: true, head_sha: "h1", at: 5, attempt: 1 }, review_verdict: { node_id: "review", verdict: "approve", head_sha: "h1", at: 6, attempt: 1 } } });
     const [row] = await read(ids.ana);
-    expect(row).toMatchObject({ ci_verdict: { green: true, head_sha: "h1", at: 5 }, review_verdict: { verdict: "approve", at: 6 }, merge: null });
+    expect(row).toMatchObject({ ci_verdict: { green: true, head_sha: "h1", at: 5 }, review_verdict: { verdict: "approve", at: 6 }, merge: null, gate_node_id: null });
+    await run({ status: "paused", extra: { gate_node_id: "land" }, at: NOW });
+    expect((await read(ids.ana))[0].gate_node_id).toBe("land");
   });
 });
 

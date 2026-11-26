@@ -123,7 +123,8 @@ export const recentForTeam = query({
           ...(c.author ? { author: c.author } : {}),
           ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}),
           tasks: (await Promise.all((c.task_ids ?? []).slice(0, 3).map(async (t) => (await taskOf(t))?.short_id ?? null))).filter(Boolean),
-          ...((await factsOf(d.repository, c)) ?? {}),
+          // Every row says its branch: null when none is known, looked up or not.
+          ...((await factsOf(d.repository, c)) ?? { branch: null }),
         }))),
         sessions,
         tasks: taskRows,

@@ -111,12 +111,24 @@ describe("deployRefs.recentForTeam", () => {
     expect(own.sessions.find((x: any) => x.conversation_id === "conv_open").task_short_ids).toEqual(["ct-1"]);
   });
 
-  test("a commit looked up with no branch says null; one codecast never saw on main says nothing", async () => {
+  test("every commit row says its branch: null when none is known, never left out", async () => {
     const [d] = await run(BEN);
-    expect("branch" in d.commit_rows[2]).toBe(true);
     expect(d.commit_rows[2].branch).toBe("ben/secret");
     expect(d.commit_rows[0].branch).toBeNull();
-    expect("branch" in d.commit_rows[3]).toBe(false);
+    // Codecast never saw this one on main: no lines claimed, the branch still said.
+    expect(d.commit_rows[3]).toMatchObject({ branch: null });
+    expect("insertions" in d.commit_rows[3]).toBe(false);
+  });
+
+  test("a session's tasks span every commit of the deploy, past the rows it lists", async () => {
+    const many = Array.from({ length: 45 }, (_, i) => ({ sha: i.toString(16).padStart(40, "0"), subject: `c${i}`, conversation_id: "conv_open", ...(i === 44 ? { task_ids: ["task_team"] } : {}) }));
+    const ctx = ctxAs(BEN);
+    const dep = ctx.db._tables.deploys[0];
+    dep.commits = many;
+    const [d] = await (recentForTeam as any)._handler(ctx, { team_id: TEAM });
+    expect(d.commit_rows).toHaveLength(40);
+    expect(d.commit_rows.some((r: any) => r.subject === "c44")).toBe(false);
+    expect(d.sessions.find((x: any) => x.conversation_id === "conv_open").task_short_ids).toEqual(["ct-1"]);
   });
 
   test("a session's branch is never read for a viewer who may not read that session", async () => {
