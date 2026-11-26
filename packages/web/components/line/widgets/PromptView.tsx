@@ -13,6 +13,7 @@ import type { PromptInclude, StepPrompt } from "../../../lib/line/lineModel";
 import { promptParts, promptSections } from "../../../lib/line/promptText";
 import { useLineNav } from "./parts";
 
+const OPEN: { all: boolean; by: Record<string, Set<string>> } = { all: false, by: {} };
 type NodeName = { id: string; label: string };
 
 /** A link to another step inside a prompt opens that step. */
@@ -92,7 +93,10 @@ export type PromptViewProps = {
 /** A prompt read as an outline, or edited as text. */
 export function PromptView({ prompt, nodes = [], text, changed, layout = "outline", editing, onEdit }: PromptViewProps) {
   const shown = text ?? prompt.text;
-  const [openAll, setOpenAll] = useState(false);
+  const [openAll, setOpenAllRaw] = useState(OPEN.all);
+  const setOpenAll = (f: (v: boolean) => boolean) => setOpenAllRaw((v) => { const n = f(v); OPEN.all = n; return n; });
+  const memKey = prompt.file ?? "";
+  const mem = (OPEN.by[memKey] ??= new Set());
   const sections = useMemo(() => (layout === "outline" ? promptSections(shown) : []), [layout, shown]);
 
   if (editing) {
@@ -127,7 +131,7 @@ export function PromptView({ prompt, nodes = [], text, changed, layout = "outlin
         {sections.map((s) => {
           const isChanged = !!changed && [...changed].some((n) => n >= s.start && n < s.end);
           return (
-            <details key={`${s.start}:${openAll}`} className="lw-psec" open={openAll || isChanged || sections.length === 1} data-changed={isChanged ? "" : undefined}>
+            <details key={`${s.start}:${openAll}`} className="lw-psec" open={openAll || isChanged || mem.has(s.title)} onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) mem.add(s.title); else mem.delete(s.title); }} data-changed={isChanged ? "" : undefined}>
               <summary>
                 <span className="lw-chev" aria-hidden />
                 <b>{s.title}</b>
