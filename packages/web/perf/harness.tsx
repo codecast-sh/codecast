@@ -174,6 +174,10 @@ const { ConvexProviderWithAuth } = await import("convex/react");
 const { getFunctionName } = await import("convex/server");
 const { MemoryRouter } = await import("react-router");
 const { useInboxStore } = await import("../store/inboxStore");
+// The store hydrates from IndexedDB as its module loads and writes
+// draftsHydrated once the first keys land. Let that happen before any world is
+// built, or a slow machine lands the write inside a measured action.
+while (!useInboxStore.getState().draftsHydrated) await new Promise((r) => setTimeout(r, 5));
 
 // --- A Convex client that answers nothing and counts everything asked -------
 
