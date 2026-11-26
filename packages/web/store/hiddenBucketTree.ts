@@ -4,7 +4,8 @@ import { inboxNestParentOf, type InboxSession } from "./inboxStore";
 // A set aside bucket's rows as cards with their sub rows beneath, one level
 // deep: each row nests under its outermost ancestor inside the bucket, and a
 // row whose parent is outside the bucket is a card of its own. Every row lands
-// exactly once, so the header count is the number of rows drawn.
+// exactly once: with sub rows shown the header counts every row, with them
+// folded it counts the cards.
 export function hiddenBucketTree(items: InboxSession[]): { topLevel: InboxSession[]; subsByTop: Map<string, InboxSession[]> } {
   const byId = new Map(items.map((s) => [s._id, s]));
   const nestParentOf = inboxNestParentOf(items);
