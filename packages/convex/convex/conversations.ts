@@ -2185,6 +2185,8 @@ export const getAllMessages = query({
 // most-recently-updated first. The CLI/daemon uses this to remap a foreign
 // project_path (created on another machine, or forked from another user) to
 // a local checkout of the same repo. Pure metadata — no message bodies.
+const LOCAL_CHECKOUT_SCAN_LIMIT = 2000;
+
 export const findUserLocalCheckouts = query({
   args: {
     git_remote_url: v.string(),
@@ -2194,22 +2196,27 @@ export const findUserLocalCheckouts = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return [];
     if (!args.git_remote_url) return [];
-    const convs = await ctx.db
+    // Stream the newest sessions and keep one entry per root. Collecting every
+    // session on a busy remote held thousands of full rows and ran the isolate
+    // out of memory (47 failures in 3h, 2026-11-25); a checkout no recent
+    // session used is not worth remapping to.
+    const byRoot = new Map<string, { git_root: string; project_path: string | null; updated_at: number }>();
+    let scanned = 0;
+    const newest = ctx.db
       .query("conversations")
       .withIndex("by_user_git_remote_url", (q) =>
         q.eq("user_id", userId).eq("git_remote_url", args.git_remote_url)
       )
-      .collect();
-    const seen = new Set<string>();
-    const out: { git_root: string; project_path: string | null; updated_at: number }[] = [];
-    convs.sort((a, b) => b.updated_at - a.updated_at);
-    for (const c of convs) {
+      .order("desc");
+    for await (const c of newest) {
       const root = c.git_root;
-      if (!root || seen.has(root)) continue;
-      seen.add(root);
-      out.push({ git_root: root, project_path: c.project_path ?? null, updated_at: c.updated_at });
+      const seen = root ? byRoot.get(root) : undefined;
+      if (root && (!seen || c.updated_at > seen.updated_at)) {
+        byRoot.set(root, { git_root: root, project_path: c.project_path ?? null, updated_at: c.updated_at });
+      }
+      if (++scanned >= LOCAL_CHECKOUT_SCAN_LIMIT) break;
     }
-    return out;
+    return [...byRoot.values()].sort((a, b) => b.updated_at - a.updated_at);
   },
 });
 
