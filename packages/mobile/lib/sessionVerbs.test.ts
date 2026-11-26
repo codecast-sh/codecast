@@ -11,20 +11,20 @@ const trigger = (title: string, status = "scheduled"): TaskRow =>
 
 describe("the line under the menu's Close", () => {
   test("says the web tooltip's words without repeating Close", () => {
-    expect(closeDetail(settled, {}, NOW)).toBe("Stops it, clears it from the list");
+    expect(closeDetail(settled, {}, NOW)).toBe("Stops it, clears it until it asks");
   });
 
   test("counts the armed triggers from the store's roster", () => {
     const tasks = [trigger("Daily digest"), trigger("CI check"), trigger("Old one", "completed")];
-    expect(closeDetail(settled, { agentTasks: Object.fromEntries(tasks.map((t) => [t._id, t])) }, NOW)).toBe("Stops it, keeps its 2 triggers, back when a run finishes or asks");
+    expect(closeDetail(settled, { agentTasks: Object.fromEntries(tasks.map((t) => [t._id, t])) }, NOW)).toBe("Stops it, runs its 2 triggers out of sight, back when it's done or asks");
   });
 
   test("a role's own session closes without a retire question", () => {
-    expect(closeDetail({ ...settled, standing_role_id: "r1" }, {}, NOW)).toBe("Stops it, back when it asks for you");
+    expect(closeDetail({ ...settled, standing_role_id: "r1" }, {}, NOW)).toBe("Stops it, back when it asks");
   });
 
   test("a send this phone has not seen land is a turn starting: it is set aside", () => {
-    expect(closeDetail(settled, { pendingMessages: { [ID]: [{ _id: "m1", content: "hi", timestamp: NOW - 1000 }] } }, NOW)).toBe("Hides it, back when it finishes or asks");
+    expect(closeDetail(settled, { pendingMessages: { [ID]: [{ _id: "m1", content: "hi", timestamp: NOW - 1000 }] } }, NOW)).toBe("Hides it, back when it's done or asks");
   });
 
   test("a session waiting on a permission prompt says it still waits on you", () => {
@@ -33,13 +33,13 @@ describe("the line under the menu's Close", () => {
 
   test("a lead whose subagent is mid-turn is set aside, as the gesture does", () => {
     const sub = { _id: "s".repeat(32), session_id: "agent-a0a0a0737562", message_count: 3, agent_status: "working", updated_at: NOW - 1000, last_heartbeat: NOW - 500, parent_conversation_id: ID };
-    expect(closeDetail(settled, { sessions: { [sub._id]: sub } }, NOW)).toBe("Hides it, back when it finishes or asks");
+    expect(closeDetail(settled, { sessions: { [sub._id]: sub } }, NOW)).toBe("Hides it, back when it's done or asks");
   });
 
   test("a lead with finished subagents names them; a spawned child stays up, uncounted", () => {
     const kid = (id: string, sessionId: string) => ({ _id: id, session_id: sessionId, message_count: 3, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000, is_subagent: true, parent_conversation_id: ID });
     const sessions = { a: kid("a", "agent-a0a0a031"), b: kid("b", "agent-a0a0a032"), c: kid("c", "ca19ce3d-spawned") };
-    expect(closeDetail(settled, { sessions }, NOW)).toBe("Stops it and the 2 agents under it, clears them from the list");
+    expect(closeDetail(settled, { sessions }, NOW)).toBe("Stops it and the 2 agents under it, clears them until it asks");
   });
 });
 

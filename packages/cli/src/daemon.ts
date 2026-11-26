@@ -24839,7 +24839,8 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
 // either way. A CLOSED conversation (the person's Close, shared
 // isClosedSession) is not retired, but it is not to come back on its own
 // either; the server reports `closed` only while no message waits for it, so a
-// delivery is never held back, and a message or trigger reaching it un-hides it.
+// delivery is never held back. A machine wake turns it into a hidden stash, so
+// the server stops reporting it closed and it resumes for the delivery.
 // Other dismissals (bulk tidy, a linked child) are not closes and stay
 // resumable, as they always were.
 export function isConversationRetired(

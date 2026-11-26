@@ -26,7 +26,7 @@ import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentStatus, ThreadStateStatus } from "@codecast/shared/contracts";
-import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId, isClosedHidden, closeReturnsOnDone } from "@codecast/shared/contracts";
+import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId, pinHideFields, closeReturnsOnDone } from "@codecast/shared/contracts";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { isHotRow, splitRows } from "@codecast/shared/contracts/inboxSplit";
@@ -88,7 +88,7 @@ import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, is
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, ownerRowsForUser, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
-import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
+import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession, resurfaceViewerTriageOnPin } from "./lib/viewerTriage";
 import { inboxMemoGet, inboxOwnersOf, ownersModelOnMemo, userMembershipsMemo, withInboxOwners } from "./lib/inboxOwners";
 import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
@@ -12475,18 +12475,12 @@ export async function performSetThreadState(
   // since its routine runs end done. Otherwise `done` / `dormant` / `working`
   // never resurface anything: stash fails quiet except for asks. Killed rows
   // are exempt — kill tore the agent down; a straggling write must not resurrect.
-  let resurfaced = false;
-  if (status === "blocked" && (conv.inbox_stashed_at || conv.inbox_dismissed_at) && !conv.inbox_killed_at) {
-    await ctx.db.patch(conv._id, {
-      inbox_stashed_at: undefined,
-      inbox_stash_hidden: undefined,
-      inbox_dismissed_at: undefined,
-    });
-    resurfaced = true;
-  } else if (status === "done" && isClosedHidden(conv) && closeReturnsOnDone(conv)) {
-    await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined });
-    resurfaced = true;
-  }
+  // A team session's hides are each person's own: the same rule brings it
+  // back for each of them (resurfaceViewerTriageOnPin).
+  const returnsOnDone = closeReturnsOnDone(conv);
+  const back = pinHideFields(conv, status, returnsOnDone);
+  if (back) await ctx.db.patch(conv._id, back);
+  const resurfaced = !!back || (!conv.inbox_killed_at && await resurfaceViewerTriageOnPin(ctx, conv, status, returnsOnDone));
   // The pin is the strip's title, and a blocked / done declaration can move
   // the row between Lock Screen statuses: those refresh at once, a reworded
   // working line rides the next routine push.

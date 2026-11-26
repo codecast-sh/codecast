@@ -342,7 +342,8 @@ start over after a person's answer and on a resume: a second Revise brief
 keyed on them was taken for the first and dropped. Briefs
 and a gate's answer go out as quiet sends (`sendSessionMessage` `quiet`): like
 a trigger's wake, a quiet send from a session leaves a hidden stash and a
-snooze in place, while a killed or dismissed session still revives. So a
+snooze in place, and a closed session's close becomes a hidden stash
+(`wakeHideFields`), while a killed or dismissed session still revives. So a
 session working on a failed check stays out of the inbox, and surfaces on its
 own only when it pins blocked. A run with no session of its own sends no
 quiet briefs, and its log says so. A hibernated subject is not resumed to hear

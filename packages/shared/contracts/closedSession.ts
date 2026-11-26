@@ -35,6 +35,27 @@ export function closeReturnsOnDone(row: {
   return !row.persistent && !row.standing_role_id && row.armed_trigger_kind !== "standing";
 }
 
+type HideFields = ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null };
+
+/** What a machine wake writes over a closed session (or one person's close of
+ *  a team session): the close becomes a hidden stash stamped with the close,
+ *  so the agent runs out of sight (isClosedHidden). Null when it is no close. */
+export function closeWakeFields(row: HideFields): { inbox_dismissed_at: undefined; inbox_stashed_at: number; inbox_stash_hidden: true } | null {
+  return isClosedSession(row) ? { inbox_dismissed_at: undefined, inbox_stashed_at: row.inbox_closed_at!, inbox_stash_hidden: true } : null;
+}
+
+/** What a pinned thread state writes over a hidden session (performSetThreadState,
+ *  on the row and on each person's own triage of a team session). `blocked`
+ *  brings back any stash or dismissal; `done` brings back a closed session a
+ *  machine woke (isClosedHidden) when it returns on done (closeReturnsOnDone).
+ *  Null when the pin brings nothing back. */
+export function pinHideFields(row: HideFields, status: string, returnsOnDone: boolean): { inbox_stashed_at: undefined; inbox_stash_hidden: undefined; inbox_dismissed_at?: undefined } | null {
+  if (row.inbox_killed_at) return null;
+  if (status === "blocked" && (row.inbox_stashed_at || row.inbox_dismissed_at)) return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined, inbox_dismissed_at: undefined };
+  if (status === "done" && returnsOnDone && isClosedHidden(row)) return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined };
+  return null;
+}
+
 /** A patch (or a row) that IS a close: the two stamps written together. */
 export function isClosePatch(fields: ClosedFields): boolean {
   return !!fields.inbox_dismissed_at && fields.inbox_closed_at === fields.inbox_dismissed_at;

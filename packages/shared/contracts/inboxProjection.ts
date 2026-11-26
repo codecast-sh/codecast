@@ -10,7 +10,7 @@ import { isMachineDeliveredMessage, isSessionMessage } from "./machineMessages";
 import type { LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
-import { isClosedSession, type ClosedFields } from "./closedSession";
+import { closeWakeFields, type ClosedFields } from "./closedSession";
 import type { WorkState } from "./workState";
 import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf, underOwnersModel, type OwnersModelRow, waitReachedPeople, agentAnswersRow } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
@@ -903,8 +903,9 @@ export function wakeHideFields(
   const out: ReturnType<typeof wakeHideFields> = {};
   if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
   if (row.inbox_killed_at) out.inbox_killed_at = undefined;
-  if (wake.machine && isClosedSession(row)) {
-    out.inbox_stashed_at = row.inbox_closed_at!;
+  const closed = wake.machine ? closeWakeFields(row) : null;
+  if (closed) {
+    out.inbox_stashed_at = closed.inbox_stashed_at;
     out.inbox_stash_hidden = true;
   } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
     out.inbox_stashed_at = undefined;

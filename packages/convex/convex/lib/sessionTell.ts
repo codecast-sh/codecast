@@ -5,7 +5,7 @@
 // reaches agentTasks, sessionDecisions and the whole function graph behind
 // them (ct-92329). Nothing here may import a module that defines functions
 // other than pendingMessages.
-import { isClosedSession } from "@codecast/shared/contracts";
+import { isClosedHidden, isClosedSession } from "@codecast/shared/contracts";
 import type { Id } from "../_generated/dataModel";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { checkConversationAccess, isVisibilityShareable, teamVisibleConvTeam } from "../privacy";
@@ -101,7 +101,7 @@ export async function sayIntoSession(
   const defer = !conversation.standing_role_id && (cost.killed || cost.cacheCold);
   // A closed session (its seat included) is not woken for a product line: the
   // line is held and rides its next turn (closedSession.ts, machine notices).
-  const hold = line.hold || isClosedSession(conversation);
+  const hold = line.hold || isClosedSession(conversation) || isClosedHidden(conversation);
   await enqueuePendingMessage(ctx, conversation, authUserId, {
     content: line.content,
     client_id: line.client_id,

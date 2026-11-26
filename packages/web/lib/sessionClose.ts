@@ -51,21 +51,21 @@ export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 
 export function closeTooltip(f: CloseFacts): string {
   const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
-  // What brings a closed session back (isClosedHidden, performSetThreadState).
-  const back = f.returnsOnDone ? "back when it finishes or asks" : "back when it asks for you";
-  const runs = (n: number) => (n === 1 ? "trigger" : `${n} triggers`);
+  // What brings a closed session back: its agent pinning done (an ordinary
+  // session) or blocked (isClosedHidden, performSetThreadState), or a person
+  // writing to it.
+  const back = f.returnsOnDone ? "back when it's done or asks" : "back when it asks";
   switch (closeKindOf(f)) {
     case "aside": return `Close: hides it, ${back}`;
     case "awaiting": return "Close: hides it; it still waits on you";
     case "keeps_background": return `Close: hides it, keeps its background work, ${back}`;
-    case "keeps_loop": return `Close: hides it, keeps its loop running, ${back}`;
-    case "keeps_limit": return `Close: hides it, picks up when its limit resets, ${back}`;
+    case "keeps_loop": return `Close: hides it, keeps its loop, ${back}`;
+    case "keeps_limit": return `Close: hides it, resumes after its limit, ${back}`;
     case "keeps_triggers":
       if (f.triggers === 0) return `Close: stops ${them}, ${back}`;
-      if (!f.returnsOnDone) return `Close: stops ${them}, runs its ${runs(f.triggers)} out of sight, ${back}`;
-      return `Close: stops ${them}, keeps its ${runs(f.triggers)}, back when a run finishes or asks`;
-    case "waits_on_run": return `Close: stops ${them}, back when its run finishes or asks`;
-    case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} from the list`;
+      return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, ${back}`;
+    case "waits_on_run": return `Close: stops ${them}, its run goes on, ${back}`;
+    case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} until it asks`;
   }
 }
 

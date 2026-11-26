@@ -41,8 +41,8 @@ You find these controls in a session's right-click menu. Hovering an inbox card 
 
 | Control | Keys | What it does |
 |---------|------|--------------|
-| **Close** | `Ctrl` `Shift` `Backspace` | You're done looking at it. A finished session stops and leaves the inbox; one still working keeps running out of view. Its triggers, queued messages and other sessions' messages still run it, out of sight. It comes back when it finishes with a result or asks for you, or when you write to it. A role's session, or one a repeating trigger wakes, comes back only when it asks for you, since its routine runs end finished |
-| **Stash** | `Ctrl` `Backspace` | Takes the session out of the inbox. The agent keeps running, and the session comes back when it needs you or a scheduled wake fires |
+| **Close** | `Ctrl` `Shift` `Backspace` | You're done looking at it. A finished session stops and leaves the inbox; one still working keeps running out of view. Its triggers, queued messages and other sessions' messages still run it out of sight, under Stashed. It comes back when its agent says it is done or needs you, or when you write to it. A role's session, or one a repeating trigger wakes, does not come back on done, since its routine runs end done |
+| **Stash** | `Ctrl` `Backspace` | Takes the session out of the inbox. The agent keeps running, and the session comes back when it needs you, a scheduled wake fires, or another session writes to it |
 | **Stash and hide** | `Ctrl` `Alt` `Backspace` | Like Stash, but a scheduled wake or another session's message doesn't bring it back. Only a real need for you does |
 | **Kill session** | | Not on the card toolbar: it is in the right-click menu, the command palette and the selection bar, and is the square stop button on a card already in Stashed or Closed. The agent stops and its schedules and queued messages are cancelled; it asks first when that would cancel something. The transcript stays |
 | **Restore session to inbox** | | Takes the place of Stash on a session that is already out of the inbox, and brings it back. A closed or killed agent restarts only when you send it a message |
@@ -52,7 +52,7 @@ InboxGesturesFigure
 Stash and hide take a session out of view while it keeps working. Close stops a finished one and keeps its wakes. The dashed lines are what brings each one back.
 ```
 
-Stashed sessions sit in the **Stashed** section at the bottom of the inbox, and closed and killed ones in **Closed**, both folded by default. A closed session shows its triggers under it.
+Stashed sessions sit in the **Stashed** section at the bottom of the inbox, and closed and killed ones in **Closed**, both folded by default. A closed session shows its triggers under it, and moves to Stashed once something wakes it.
 
 ## When something is off
 

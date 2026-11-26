@@ -111,12 +111,14 @@ afterEach(() => {
 });
 
 describe("a close crosses windows as a close", () => {
-  it("closeSession's hide carries inbox_closed_at equal to its dismissed stamp, and a sibling applies both", () => {
+  it("closeSession's hide carries inbox_closed_at equal to its stamp, and a sibling applies both", () => {
     seed({ sessions: { [REAL_A]: session(REAL_A) }, conversations: { [REAL_A]: { _id: REAL_A } } });
     useInboxStore.getState().closeSession(REAL_A);
     const msg = hub.posted.find((p) => p.data.kind === "hide")!.data;
     const wrote = msg.writes[REAL_A];
-    expect(wrote.inbox_closed_at).toBe(wrote.inbox_dismissed_at);
+    // A close stamps dismissed; one it sets aside stamps the stash (isClosedHidden).
+    expect(wrote.inbox_closed_at).toBeGreaterThan(0);
+    expect(wrote.inbox_closed_at).toBe(wrote.inbox_dismissed_at ?? wrote.inbox_stashed_at);
 
     // A sibling window holding the row un-hidden receives it.
     seed({ sessions: { [REAL_A]: session(REAL_A) }, conversations: { [REAL_A]: { _id: REAL_A } } });

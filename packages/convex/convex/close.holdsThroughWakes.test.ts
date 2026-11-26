@@ -10,6 +10,7 @@ import { setup } from "./dispatch.close.testkit";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { performSetThreadState } from "./conversations";
 import { restoreToInbox } from "./inboxFilters";
+import { makeAdoptionReleaseDb } from "./lib/adoptionRelease";
 
 setDefaultTimeout(60_000);
 
@@ -212,5 +213,86 @@ describe("a killed session stays out", () => {
       await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "late", status); });
       expect((await s.read()).conv.inbox_killed_at).toBe(at);
     }
+  });
+});
+
+describe("the paths around a closed session", () => {
+  test("a close the web sets aside (its own read of a running turn) comes back on done", async () => {
+    const s = await setup({ agent: "working", conv: { updated_at: Date.now() } });
+    const now = Date.now();
+    // The patch the web store's closeInDraft sends for a row it sets aside.
+    await s.send("closeSession", [String(s.ids.conv)], { [s.ids.conv]: { inbox_stashed_at: now, inbox_stash_hidden: true, inbox_closed_at: now } });
+    hiddenStash((await s.read()).conv);
+    await s.t.run(async (ctx) => { await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, "Shipped", "done"); });
+    inInbox((await s.read()).conv);
+  });
+
+  test("a worker's report to its closed lead keeps the close's adoption: the worker stays its own card", async () => {
+    const s = await setup();
+    const kid = await s.t.run(async (ctx) => {
+      const t = Date.now();
+      const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t - 3_600_000, status: "active", session_id: "ca19ce3d-0000-4000-8000-000000000001", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant" } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "ca19ce3d-0000-4000-8000-000000000001", conversation_id: c, user_id: s.ids.user, pid: 2, started_at: t, last_heartbeat: t, agent_status: "idle", agent_status_updated_at: t - 3_600_000 } as any);
+      return c;
+    });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    const row = (id: any) => s.t.run(async (ctx) => (await ctx.db.get(id)) as any);
+    const adopted = (await row(kid)).inbox_adopted_at;
+    expect(adopted).toBeGreaterThan(0);
+    const send = (fields: Record<string, unknown>) => s.t.run(async (ctx) => {
+      const db = makeAdoptionReleaseDb(ctx.db, ctx.db);
+      await enqueuePendingMessage({ ...ctx, db } as any, await ctx.db.get(s.ids.conv), s.ids.user, fields as any);
+    });
+    await send(sessionMessage);
+    hiddenStash(await row(s.ids.conv));
+    expect((await row(kid)).inbox_adopted_at).toBe(adopted);
+    // A person writing ends the close: the worker nests under its lead again.
+    await send({ content: "what did it find?", human: true });
+    inInbox(await row(s.ids.conv));
+    expect((await row(kid)).inbox_adopted_at).toBeUndefined();
+  });
+});
+
+describe("a team session: each person's own Close follows the same rule", () => {
+  async function teamClosed(o: Parameters<typeof setup>[0] = {}) {
+    const s = await setup(o);
+    const at = Date.now() - 60_000;
+    await s.t.run(async (ctx) => {
+      const team = await ctx.db.insert("teams", { name: "Crew", created_at: at } as any);
+      await ctx.db.patch(s.ids.conv, { team_owner_team_id: team } as any);
+      await ctx.db.insert("session_team_owners", { conversation_id: s.ids.conv, team_id: team, created_at: at } as any);
+      await ctx.db.insert("session_viewer_triage", { user_id: s.ids.user, conversation_id: s.ids.conv, inbox_dismissed_at: at, inbox_closed_at: at, updated_at: at } as any);
+    });
+    const triage = () => s.t.run(async (ctx) => (await ctx.db.query("session_viewer_triage").collect())[0] as any);
+    const wake = (fields: Record<string, unknown>) => s.t.run(async (ctx) => {
+      await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.conv), s.ids.user, { content: "check CI", ...fields } as any);
+    });
+    const pin = (status: "done" | "blocked") => s.t.run(async (ctx) => {
+      await performSetThreadState(ctx, (await ctx.db.get(s.ids.conv)) as any, `Pinned ${status}`, status);
+    });
+    return { ...s, at, triage, wake, pin };
+  }
+
+  test("a machine wake keeps it out; a done pin brings an ordinary one back", async () => {
+    const s = await teamClosed();
+    await s.wake(sessionMessage);
+    hiddenStash(await s.triage());
+    await s.pin("done");
+    inInbox(await s.triage());
+  });
+
+  test("a role's comes back on blocked, not on done", async () => {
+    const s = await teamClosed({ role: true });
+    await s.wake({ origin: "scheduler" });
+    await s.pin("done");
+    hiddenStash(await s.triage());
+    await s.pin("blocked");
+    inInbox(await s.triage());
+  });
+
+  test("a straggling done before any wake leaves the close alone", async () => {
+    const s = await teamClosed();
+    await s.pin("done");
+    expect((await s.triage()).inbox_dismissed_at).toBe(s.at);
   });
 });

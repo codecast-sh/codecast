@@ -43,7 +43,7 @@ async function tip(session: InboxSession): Promise<string> {
 
 describe("SessionCloseTip", () => {
   test("a running session", async () => {
-    expect(await tip({ ...settled, agent_status: "working", updated_at: NOW - 1000 } as InboxSession)).toBe("Close: hides it, back when it finishes or asks");
+    expect(await tip({ ...settled, agent_status: "working", updated_at: NOW - 1000 } as InboxSession)).toBe("Close: hides it, back when it's done or asks");
   });
 
   async function withKids(kids: Record<string, Record<string, unknown>>, run: () => Promise<void>) {
@@ -55,13 +55,13 @@ describe("SessionCloseTip", () => {
 
   test("an idle lead whose subagent is mid-turn", async () => {
     await withKids({ "agent-a0a0a0737562": { agent_status: "working", updated_at: NOW - 1000 } }, async () => {
-      expect(await tip(settled)).toBe("Close: hides it, back when it finishes or asks");
+      expect(await tip(settled)).toBe("Close: hides it, back when it's done or asks");
     });
   });
 
   test("an idle lead whose spawned child is mid-turn stops alone: the child keeps running", async () => {
     await withKids({ "ca19ce3d-spawned": { agent_status: "working", updated_at: NOW - 1000 } }, async () => {
-      expect(await tip(settled)).toBe("Close: stops it, clears it from the list");
+      expect(await tip(settled)).toBe("Close: stops it, clears it until it asks");
     });
   });
 
@@ -71,24 +71,24 @@ describe("SessionCloseTip", () => {
       "agent-a0a0a0636c6f736564": { inbox_dismissed_at: 5, inbox_closed_at: 5 },
       "ca19ce3d-spawned": {},
     }, async () => {
-      expect(await tip(settled)).toBe("Close: stops it and the 2 agents under it, clears them from the list");
+      expect(await tip(settled)).toBe("Close: stops it and the 2 agents under it, clears them until it asks");
     });
   });
 
   test("a session with armed triggers counts only its own", async () => {
     useInboxStore.setState({ agentTasks: { t1: armed("t1", "c1"), t2: armed("t2", "c1"), t3: armed("t3", "other") } } as any);
-    expect(await tip(settled)).toBe("Close: stops it, keeps its 2 triggers, back when a run finishes or asks");
+    expect(await tip(settled)).toBe("Close: stops it, runs its 2 triggers out of sight, back when it's done or asks");
   });
 
   test("a role's own session with none", async () => {
-    expect(await tip({ ...settled, standing_role_id: "r1" } as InboxSession)).toBe("Close: stops it, back when it asks for you");
+    expect(await tip({ ...settled, standing_role_id: "r1" } as InboxSession)).toBe("Close: stops it, back when it asks");
   });
 
   test("a session waiting on its workflow run", async () => {
-    expect(await tip({ ...settled, workflow_run_id: "w1", workflow_run_status: "running" } as InboxSession)).toBe("Close: stops it, back when its run finishes or asks");
+    expect(await tip({ ...settled, workflow_run_id: "w1", workflow_run_status: "running" } as InboxSession)).toBe("Close: stops it, its run goes on, back when it's done or asks");
   });
 
   test("an ordinary finished session", async () => {
-    expect(await tip(settled)).toBe("Close: stops it, clears it from the list");
+    expect(await tip(settled)).toBe("Close: stops it, clears it until it asks");
   });
 });

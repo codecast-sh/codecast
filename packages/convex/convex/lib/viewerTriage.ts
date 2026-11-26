@@ -3,6 +3,7 @@
 // the rest of the team. Those four live per person in session_viewer_triage
 // and are laid over the row each viewer reads; the conversation's own stamps
 // stay for what ends it for everyone (Done, kill). A leaf module.
+import { closeWakeFields, pinHideFields } from "@codecast/shared/contracts";
 import type { Id } from "../_generated/dataModel";
 
 type Db = { db: any };
@@ -98,6 +99,37 @@ export async function clearViewerTriageOnSend(ctx: Db, userId: Id<"users">, conv
     .first();
   if (!row || (!row.inbox_dismissed_at && !row.inbox_closed_at && !row.inbox_stashed_at && !row.inbox_snoozed_until)) return;
   await ctx.db.patch(row._id, { inbox_dismissed_at: undefined, inbox_closed_at: undefined, inbox_stashed_at: undefined, inbox_stash_hidden: undefined, inbox_snoozed_until: undefined, updated_at: Date.now() });
+}
+
+async function triageRowsOf(ctx: Db, conversation: any): Promise<any[]> {
+  if (!mayBeTeamOwned(conversation)) return [];
+  return await ctx.db
+    .query("session_viewer_triage")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversation._id))
+    .collect();
+}
+
+/** A machine wake (isMachineWake) of a team session runs each person's own
+ *  Close of it out of sight, as wakeHideFields does for the row. */
+export async function hideViewerClosesOnWake(ctx: Db, conversation: any): Promise<void> {
+  for (const row of await triageRowsOf(ctx, conversation)) {
+    const fields = closeWakeFields(row);
+    if (fields) await ctx.db.patch(row._id, { ...fields, updated_at: Date.now() });
+  }
+}
+
+/** A pinned state brings a team session back for each person who hid it, by
+ *  the rule the row follows (pinHideFields). True when it brought any back. */
+export async function resurfaceViewerTriageOnPin(ctx: Db, conversation: any, status: string, returnsOnDone: boolean): Promise<boolean> {
+  if (status !== "blocked" && status !== "done") return false;
+  let any = false;
+  for (const row of await triageRowsOf(ctx, conversation)) {
+    const fields = pinHideFields(row, status, returnsOnDone);
+    if (!fields) continue;
+    await ctx.db.patch(row._id, { ...fields, updated_at: Date.now() });
+    any = true;
+  }
+  return any;
 }
 
 /** Every person's own triage of one session, gone (it ended, or the team no

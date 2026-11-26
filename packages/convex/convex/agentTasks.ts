@@ -459,6 +459,12 @@ async function wakeRunOwner(
     origin: "scheduler",
     client_id: `run-outcome:${task._id}:${task.run_count}:${outcome}:${now}`,
   });
+  // The notice is a machine wake, which leaves a closed owner out of sight; a
+  // run asking for attention asks for the person, so it comes back.
+  if (outcome === "attention") {
+    const fresh = await ctx.db.get(owner._id);
+    if (fresh) await restoreToInbox(ctx, fresh);
+  }
   return true;
 }
 

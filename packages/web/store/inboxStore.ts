@@ -9937,13 +9937,13 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
       Object.assign(merged.writes, r.writes);
-      if (mode === "kill") {
-        for (const sid of r.hidden) {
-          if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
-          if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
-          // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
-          if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
-        }
+      // Both are the close: the stamp a set-aside shares with its stash is what
+      // lets a done pin bring it back (isClosedHidden), as the server writes it.
+      for (const sid of r.hidden) {
+        if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
+        if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
+        // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
+        if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
       }
     }
     announceHide(draft, mode, merged);
