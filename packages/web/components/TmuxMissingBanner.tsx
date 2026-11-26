@@ -3,6 +3,7 @@ import { Terminal } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { tmuxInstallCommand } from "../lib/tmuxMissing";
 import { useStatusNotice, type StatusNotice } from "../hooks/useStatusNotice";
 
 const DISMISS_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -26,13 +27,8 @@ function useTmuxMissingNotice(): StatusNotice | null {
 
   if (!initialized || isDismissed) return null;
   if (user === undefined) return null;
-  if (user?.has_tmux !== false) return null;
-
-  const lastSeen = user?.daemon_last_seen || user?.last_heartbeat;
-  if (!lastSeen || Date.now() - lastSeen > 24 * 60 * 60 * 1000) return null;
-
-  const isMac = user?.cli_platform === "darwin";
-  const installCmd = isMac ? "brew install tmux" : "sudo apt-get install -y tmux";
+  const installCmd = tmuxInstallCommand(user);
+  if (!installCmd) return null;
 
   const handleCopy = async () => {
     await copyToClipboard(installCmd);
