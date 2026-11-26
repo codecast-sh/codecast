@@ -2307,6 +2307,13 @@ function SessionListPanelImpl({
   }, [staleSessions, dismissStaleMutation, snoozeStalePrompt]);
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
+  // Cards whose workers the person opened from the card's "N workers" line:
+  // that one card lists its spawned workers, whatever the global Sub-agents
+  // option says (ct-101636).
+  const [openWorkers, setOpenWorkers] = useState<Record<string, boolean>>({});
+  const toggleWorkers = useCallback((id: string) => setOpenWorkers((prev) => ({ ...prev, [id]: !prev[id] })), []);
+  const showsSubRow = (parentId: string, sub: InboxSession) =>
+    showSubagents || sub._id === activeSessionId || (!!openWorkers[parentId] && isSpawnedWorker(sub));
   // Cap how many rows each section renders. A section like "Needs You" can
   // accumulate thousands of finished sessions (the store never prunes), and
   // rendering them all materializes tens of thousands of DOM nodes in this
@@ -2867,6 +2874,8 @@ function SessionListPanelImpl({
                     count={workerCountByParent.get(session._id) ?? 0}
                     needsYou={workersNeedingYouByParent.get(session._id) ?? []}
                     onOpen={handleSelect}
+                    expanded={!!openWorkers[session._id]}
+                    onToggle={() => toggleWorkers(session._id)}
                   />
                 )}
                 <CardBars
@@ -2877,7 +2886,7 @@ function SessionListPanelImpl({
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
-                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
+                {(subMap.get(session._id) ?? []).filter((sub) => showsSubRow(session._id, sub)).map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -3045,8 +3054,9 @@ function SessionListPanelImpl({
             // The selected subagent always renders — even when subagents are
             // globally hidden or fall past the "+N more" cutoff. The row being
             // viewed must never vanish from the list.
-            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
-            const subsExpanded = !!expandedSubSessions[session._id];
+            const subs = allSubs.filter((sub) => showsSubRow(session._id, sub));
+            // Workers opened from the card's line all show; that press asked for them.
+            const subsExpanded = !!expandedSubSessions[session._id] || !!openWorkers[session._id];
             let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
             if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {
               const activeSub = subs.find((sub) => sub._id === activeSessionId);
@@ -3108,6 +3118,18 @@ function SessionListPanelImpl({
                   isFavorite={cardIsFavorite(session)}
                   {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
                 />
+                {/* The workers this agent spawned fold under its card (Modern
+                    focused, nestsWorkers); the line counts them and opens them
+                    here, so one card's workers never need the global option. */}
+                {!flat && (!showSubagents || workersNeedingYouByParent.has(session._id)) && (
+                  <CardWorkersLine
+                    count={workerCountByParent.get(session._id) ?? 0}
+                    needsYou={workersNeedingYouByParent.get(session._id) ?? []}
+                    onOpen={handleSelect}
+                    expanded={!!openWorkers[session._id]}
+                    onToggle={() => toggleWorkers(session._id)}
+                  />
+                )}
                 {/* The bars stack under their card the way subagent rows do —
                     schedule rows keep the dock roster's full anatomy (name,
                     gist, cadence, countdown, hover verbs); click selects the
@@ -3156,7 +3178,7 @@ function SessionListPanelImpl({
                 )}
                 {subsExpanded && subs.length > 2 && (
                   <button
-                    onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false }))}
+                    onClick={() => { setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false })); setOpenWorkers((prev) => ({ ...prev, [session._id]: false })); }}
                     className="w-full px-2 py-0.5 text-meta text-sol-text-dim hover:text-sol-violet transition-colors text-left pl-[26px]"
                   >
                     collapse
