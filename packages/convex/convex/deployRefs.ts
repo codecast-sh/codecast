@@ -8,7 +8,8 @@ import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./lib/access";
-import { pushSummary } from "./deployTargetsState";
+import { commitBySha, commitFacts, pushSummary } from "./deployTargetsState";
+import { sessionPriorityReader } from "./lib/sessionPriority";
 
 export const whereIs = query({
   args: { ref: v.string() },
@@ -24,6 +25,10 @@ export const whereIs = query({
 const RECENT = 80;
 /** The commits a deploy row lists by name; the rest are counted. */
 const COMMIT_ROWS = 40;
+/** The sessions a deploy row names: every one its commits carry, up to this. */
+const SESSION_ROWS = 80;
+/** Commits on main read for their lines, pull request and branch, newest deploys first; rows past this go without. */
+const COMMIT_LOOKUPS = 300;
 
 /** A team's newest deploys, every target, each with the sessions whose commits it carried and the tasks it took out. */
 export const recentForTeam = query({
@@ -34,12 +39,33 @@ export const recentForTeam = query({
     const workspace = `team:${args.team_id}`;
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
     const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
-    const convs = new Map<string, { title: string | null } | null>();
+    // A session the viewer may read, with its owner and the priority it serves.
+    const priorityOf = await sessionPriorityReader(ctx, userId, args.team_id);
+    const convs = new Map<string, { title: string | null; user_id: string; git_branch?: string; priority: { id: string; title: string | null } | null } | null>();
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {
       const k = String(id);
-      if (!convs.has(k)) { const c = await ctx.db.get(id); convs.set(k, c && (await canAccessConversation(ctx, userId, c)) ? { title: (c.title || c.subtitle || null) as string | null } : null); }
+      if (!convs.has(k)) {
+        const c = await ctx.db.get(id);
+        convs.set(k, c && (await canAccessConversation(ctx, userId, c))
+          ? { title: (c.title || c.subtitle || null) as string | null, user_id: String(c.user_id), git_branch: c.git_branch, priority: await priorityOf(c) }
+          : null);
+      }
       return convs.get(k);
+    };
+    // Each commit's lines, pull request and branch, from its row on main (a deploy's record keeps only sha and subject).
+    const facts = new Map<string, Promise<Awaited<ReturnType<typeof commitFacts>> | null>>();
+    const factsOf = (repository: string | undefined, c: { sha: string; conversation_id?: Id<"conversations"> }) => {
+      if (!repository) return null;
+      const k = `${repository}@${c.sha}`;
+      if (!facts.has(k)) {
+        if (facts.size >= COMMIT_LOOKUPS) return null;
+        facts.set(k, (async () => {
+          const row = await commitBySha(ctx, repository, c.sha);
+          return row ? await commitFacts(ctx, row, (c.conversation_id ? await convOf(c.conversation_id) : null) ?? null) : null;
+        })());
+      }
+      return facts.get(k)!;
     };
     const taskOf = async (id: Id<"tasks">) => {
       const k = String(id);
@@ -50,9 +76,9 @@ export const recentForTeam = query({
     for (const d of rows) {
       const sessionIds = [...new Set((d.commits ?? []).flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))];
       const sessions = [];
-      for (const id of sessionIds.slice(0, 12)) {
+      for (const id of sessionIds.slice(0, SESSION_ROWS)) {
         const c = await convOf(id as Id<"conversations">);
-        if (c) sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title });
+        if (c) sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, ...(c.priority ? { priority: c.priority } : {}) });
       }
       const taskIds = [...new Set([...d.carries.map((c) => String(c.task_id)), ...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String))])];
       const taskRows = [];
@@ -88,6 +114,7 @@ export const recentForTeam = query({
           ...(c.author ? { author: c.author } : {}),
           ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}),
           tasks: (await Promise.all((c.task_ids ?? []).slice(0, 3).map(async (t) => (await taskOf(t))?.short_id ?? null))).filter(Boolean),
+          ...((await factsOf(d.repository, c)) ?? {}),
         }))),
         sessions,
         tasks: taskRows,

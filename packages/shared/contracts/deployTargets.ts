@@ -362,11 +362,19 @@ export type QueueCommit = {
   subject: string;
   at: number;
   author: string | null;
-  /** The session that wrote it: its Codecast-Session trailer, or (`via: "task"`) the newest session on the task it names. */
-  session: { conversation_id: string; short_id: string | null; title: string | null; via?: "task" } | null;
+  /**
+   * The session that wrote it: its Codecast-Session trailer, or (`via: "task"`) the newest session on the task it names.
+   * `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may read it.
+   */
+  session: { conversation_id: string; short_id: string | null; title: string | null; user_id?: string; priority?: { id: string; title: string | null }; via?: "task" } | null;
   tasks: Array<{ task_id: string; short_id: string | null; title: string | null }>;
   /** The branch the change came from: its pull request's head, else the branch its session worked on (never the default branch). */
   branch?: string | null;
+  /** Lines added and removed, absent when nothing recorded them (deployTargetsState commitLines). */
+  insertions?: number;
+  deletions?: number;
+  /** The pull request it came from: its own record, its linked pull request, else the "(#N)" its subject names. */
+  pr_number?: number | null;
   ci: CommitCiState;
   ci_url: string | null;
 };

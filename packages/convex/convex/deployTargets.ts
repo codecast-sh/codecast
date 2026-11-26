@@ -178,7 +178,7 @@ export const view = query({
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
     const rows = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => !args.target || r.name === args.target);
     const targets = [];
-    for (const t of rows) targets.push(await targetState(ctx, t));
+    for (const t of rows) targets.push(await targetState(ctx, t, userId));
     // Production's controls, once per repository (DP17): its standing pause and whether the viewer may pause, lift
     // and roll back.
     const holder = await pauseHolderOf(ctx, userId, teamId);

@@ -92,7 +92,7 @@ export type TeamDeployRow = {
   sessions: DeploySession[];
   steps?: Array<{ id: string; status: "pending" | "running" | "completed" | "failed" }>;
   /** Its commits by name (the newest few), each with the session that wrote it and the tasks it names. */
-  commit_rows?: Array<{ sha: string; subject: string; author?: string; conversation_id?: string; tasks?: string[] }>;
+  commit_rows?: Array<{ sha: string; subject: string; author?: string; conversation_id?: string; tasks?: string[]; insertions?: number; deletions?: number; pr_number?: number | null; branch?: string | null }>;
   /** The tasks its commits named. */
   tasks?: Array<{ short_id?: string | null; title?: string | null }>;
   /** What happened after it went live, over its window (deploys.md DP7): counts only. */
@@ -102,7 +102,8 @@ export type TeamDeployRow = {
   finished_at: number | null;
 } & Partial<DeployPushSummary>;
 
-export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null };
+/** `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may read it. */
+export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null; user_id?: string; priority?: { id: string; title: string | null } };
 
 /** Who sent a deploy codecast did not start, by where it reports from. */
 export function sourceWord(d: Pick<TeamDeployRow, "source" | "url">): string {

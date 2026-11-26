@@ -10,6 +10,8 @@ import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCom
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
 import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
+import { parseWorkspaceKey } from "./lib/accessKeys";
+import { sessionPriorityReader, type SessionPriority } from "./lib/sessionPriority";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -81,14 +83,20 @@ export async function mainCommitsAfter(ctx: any, repository: string, fromSha: st
   return { commits: rows.slice(0, QUEUE_SCAN).reverse(), known: true, truncated: rows.length > QUEUE_SCAN };
 }
 
-export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>): Promise<QueueCommit> {
+export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<string, any>, taskCache: Map<string, any>, priorityOf?: (conv: any) => Promise<SessionPriority | null>): Promise<QueueCommit> {
   let session: QueueCommit["session"] = null;
   const owner = await commitSession(ctx, c, taskCache);
   if (owner) {
     const key = String(owner.conversation_id);
     if (!convCache.has(key)) convCache.set(key, await ctx.db.get(owner.conversation_id));
     const conv = convCache.get(key);
-    session = { conversation_id: key, short_id: key.slice(0, 7), title: conv?.title ?? null, ...(owner.via === "task" ? { via: "task" as const } : {}) };
+    const priority = priorityOf ? await priorityOf(conv) : null;
+    session = {
+      conversation_id: key, short_id: key.slice(0, 7), title: conv?.title ?? null,
+      ...(conv?.user_id ? { user_id: String(conv.user_id) } : {}),
+      ...(priority ? { priority } : {}),
+      ...(owner.via === "task" ? { via: "task" as const } : {}),
+    };
   }
   const tasks = [];
   for (const id of c.task_ids ?? []) {
@@ -98,7 +106,7 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     tasks.push({ task_id: key, short_id: t?.short_id ?? null, title: t?.title ?? null });
   }
   const ci = await ciOf(ctx, c.repository!, c.sha);
-  const branch = await commitBranch(ctx, c, session ? convCache.get(session.conversation_id) : null);
+  const facts = await commitFacts(ctx, c, session ? convCache.get(session.conversation_id) : null);
   return {
     sha: c.sha,
     subject: c.message.split("\n")[0].slice(0, 200),
@@ -106,7 +114,7 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     author: c.author_login ?? c.author_name ?? null,
     session,
     tasks,
-    branch,
+    ...facts,
     ci: ci.state,
     ci_url: ci.url,
   };
@@ -118,16 +126,49 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
  * default branch names nothing.
  */
 export async function commitBranch(ctx: any, c: Doc<"commits">, conv: { git_branch?: string } | null): Promise<string | null> {
-  const prNumber = /\(#(\d+)\)\s*$/.exec(c.message.split("\n")[0])?.[1];
-  const pr: Doc<"pull_requests"> | null = c.pr_id
-    ? await ctx.db.get(c.pr_id)
-    : prNumber && c.repository
-      ? await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(c.repository!)).eq("number", Number(prNumber))).first()
-      : null;
+  return branchOf(await commitPr(ctx, c), conv);
+}
+const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD"]);
+
+function branchOf(pr: Doc<"pull_requests"> | null, conv: { git_branch?: string } | null): string | null {
   const branch = pr?.head_ref ?? conv?.git_branch ?? null;
   return branch && !DEFAULT_BRANCHES.has(branch) ? branch : null;
 }
-const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD"]);
+
+/** The "(#N)" a squash merge's subject ends with. */
+const subjectPrNumber = (c: Pick<Doc<"commits">, "message">): number | null => {
+  const n = /\(#(\d+)\)\s*$/.exec(c.message.split("\n")[0])?.[1];
+  return n ? Number(n) : null;
+};
+
+/** The pull request a commit on main came from: its linked one, else the one its subject names. */
+async function commitPr(ctx: any, c: Doc<"commits">): Promise<Doc<"pull_requests"> | null> {
+  if (c.pr_id) return await ctx.db.get(c.pr_id);
+  const n = subjectPrNumber(c);
+  return n != null && c.repository
+    ? await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(c.repository!)).eq("number", n)).first()
+    : null;
+}
+
+/**
+ * A commit's lines added and removed, or null when nothing recorded them: its files' counts when they carry any (a
+ * checkout's numstat, GitHub's commit API), else, for the squash merge of a pull request, that pull request's. A push
+ * webhook names files with no line counts (its row's `insertions` counts files) and a main commit a checkout reported
+ * stores zeros, so the row's own `insertions`/`deletions` are never read as lines.
+ */
+function commitLines(c: Pick<Doc<"commits">, "sha" | "message" | "files">, pr: Pick<Doc<"pull_requests">, "number" | "additions" | "deletions" | "merge_commit_sha"> | null): { insertions: number; deletions: number } | null {
+  const files = c.files ?? [];
+  if (files.some((f) => f.additions || f.deletions)) return { insertions: files.reduce((n, f) => n + f.additions, 0), deletions: files.reduce((n, f) => n + f.deletions, 0) };
+  const squash = !!pr && (pr.merge_commit_sha === c.sha || pr.number === subjectPrNumber(c));
+  return squash && pr.additions != null && pr.deletions != null ? { insertions: pr.additions, deletions: pr.deletions } : null;
+}
+
+/** What a Deploys row shows of a commit beyond its subject: its lines, its pull request's number and its branch (commitBranch). */
+export async function commitFacts(ctx: any, c: Doc<"commits">, conv: { git_branch?: string } | null): Promise<{ insertions?: number; deletions?: number; pr_number: number | null; branch: string | null }> {
+  const pr = await commitPr(ctx, c);
+  const lines = commitLines(c, pr);
+  return { ...(lines ?? {}), pr_number: c.pr_number ?? pr?.number ?? subjectPrNumber(c), branch: branchOf(pr, conv) };
+}
 
 /** Commits on main as a deploy's record keeps them, each with the session behind it (commitSession) and the tasks it links. */
 export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
@@ -236,7 +277,7 @@ export async function devPushOver(ctx: any, t: Pick<Doc<"deploy_targets">, "work
 }
 
 /** One target's state: live, going out, recent history, and what waits on main. */
-export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
+export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: Id<"users">) {
   const deploys = await targetDeploys(ctx, t.workspace, t.name);
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
   const live = liveDeployOf(deploysHere) ?? null;
@@ -257,7 +298,10 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
   const headCi = head ? await ciOf(ctx, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.repository, live.sha) : null;
   // The newest commits are shown whole, with their session, tasks and CI; the rest are counted.
   const shown: QueueCommit[] = [];
-  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, c, convCache, taskCache));
+  // The priority each session serves, for a viewer allowed to read it.
+  const ws = parseWorkspaceKey(t.workspace);
+  const priorityOf = viewer ? await sessionPriorityReader(ctx, viewer, ws?.type === "team" ? ws.teamId : null) : undefined;
+  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, c, convCache, taskCache, priorityOf));
   return {
     name: t.name,
     repository: t.repository,

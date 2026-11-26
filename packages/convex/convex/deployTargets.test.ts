@@ -152,7 +152,7 @@ describe("the waiting queue (DP12)", () => {
       ["s:conv_api_work", [["04", "failed"], ["02", "passed"]], "failed"],
       ["none", [["05", "running"]], "running"],
     ]);
-    expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals" });
+    expect(backend.queue.groups[0].session).toEqual({ conversation_id: "conv_api_work", short_id: "conv_ap", title: "Fix the totals", user_id: "user_me" });
     expect(backend.queue.groups[0].commits[1].tasks).toEqual([{ task_id: "task_a", short_id: "ct-7", title: "Totals round wrong" }]);
     expect(backend.queue.groups[0].commits[0].ci_url).toBe("https://ci/2");
   });
