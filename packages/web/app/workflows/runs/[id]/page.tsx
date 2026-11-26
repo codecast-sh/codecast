@@ -12,7 +12,7 @@ import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { RunSessionAsk } from "../../../../components/ship/Journey";
 import { ChangeRunHead } from "../../../../components/ship/ChangeRunHead";
 import { useRunFlow } from "../../../../hooks/useFlowObject";
-import { takesSessionChange } from "@codecast/shared/contracts/flowPool";
+import { shipsChange } from "../../../../lib/ship/changePage";
 import { useJourneyViewer } from "../../../../hooks/useJourneyViewer";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from "../../../../lib/workflowRun";
@@ -162,8 +162,9 @@ function RunDetailContent({ runId }: { runId: string }) {
   const duration = formatRunDuration(run.created_at, isActive ? undefined : run.updated_at);
   const line = isLineRun(run);
   const ended = run.status === "completed" || run.status === "failed";
-  // A change run: its head says where the change stands and links its PR, CI, review, merge and deploys.
-  const changeFlow = runFlow && takesSessionChange(runFlow) ? runFlow : null;
+  // A change run (a whole flow that lands a session's change): its head says where the change stands and links its PR,
+  // CI, review, merge and deploys. A segment's run (check, review, ship) keeps the run report.
+  const changeFlow = runFlow && shipsChange(runFlow) ? runFlow : null;
 
   // The answered gate, in words (never a raw key), and its card.
   const decision = detail?.decision;
@@ -177,6 +178,8 @@ function RunDetailContent({ runId }: { runId: string }) {
   // The card by what it decided; its key stays behind the link.
   const cardChip = run.gate_decision_short_id ? cardName(answer, card, run.status === "paused") : null;
   const earlier = causeRuns.filter((r) => r._id !== run._id);
+  // The newest later run on the same task: where a stopped run's change went on.
+  const newer = earlier.filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null;
 
   // The graph behind the toggle: the run's stored workflow, else the shipped
   // line for a line run, with each station's state painted on it.
@@ -283,7 +286,7 @@ function RunDetailContent({ runId }: { runId: string }) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[60rem] mx-auto px-5 py-5 space-y-7">
           {/* What the run did and what is true now, then where each fact lives. */}
-          {changeFlow ? <ChangeRunHead run={run} flow={changeFlow} now_ms={nowMs} chips={pageChips} /> : (
+          {changeFlow ? <ChangeRunHead run={run} flow={changeFlow} now_ms={nowMs} chips={pageChips} newer={newer} /> : (
           <section data-run-report-head>
             <p className="text-[17px] leading-snug font-medium">
               <RunOutcomeText run={run as ReportRun} task={task} graph={workflow as any} ask={ask} />

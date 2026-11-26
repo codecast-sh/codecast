@@ -11,7 +11,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
 import { insideWords, targetsFromLine, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
-import { WHO_WORDS, gateWaitWords, holdWords, sentBackWords, stopWords, waitWords } from "../../lib/ship/journeyWords";
+import { WHO_WORDS, gateWaitWords, holdWords, plainNote, sentBackWords, stopTitle, waitWords } from "../../lib/ship/journeyWords";
 import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
 import { leftWords } from "../../lib/ship/stationResult";
@@ -231,8 +231,9 @@ function useBriefMessageId(conversationId: string | null, at: number | null): st
 
 /** What is happening now, and the person's part in it. `again` draws Ship again, primary when re-running is the fix. */
 /** `personal`: a personal Ship's run: its reasons show whole, and its Deploy, which deploys itself, opens Deploys only with targets. */
-/** `onRunPage`: drawn on the run's own page, where opening the run goes nowhere. */
-export function JourneyNowBar({ now, run, now_ms, children, again, personal = false, onRunPage = false }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean; onRunPage?: boolean }) {
+/** `onRunPage`: drawn on the run's own page, where opening the run goes nowhere. `stopAct`: the run page's one way on from
+ *  a stop (lib/ship/changePage stopAction), drawn in place of the fix the bar would pick itself. */
+export function JourneyNowBar({ now, run, now_ms, children, again, personal = false, onRunPage = false, stopAct }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; personal?: boolean; onRunPage?: boolean; stopAct?: React.ReactNode }) {
   const since = (at: number | null | undefined) => (at ? <span className="sj-since">{ageShort(now_ms - at)}</span> : null);
   // The conversation on screen: opening the run's session from inside it goes nowhere, so the brief it sent is the press.
   const here = useInboxStore((s) => (s.currentSessionId ? String(s.currentSessionId) : null));
@@ -269,7 +270,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           {since(now.since)}
           {onRunPage && now.conversation ? <Link className="sj-act" href={`/conversation/${now.conversation}`} data-journey-open-session>Open session</Link> : null}
           {children}
-          {now.note ? <p className="sj-note" data-journey-note>{now.note}</p> : null}
+          {now.note ? <p className="sj-note" data-journey-note>{plainNote(now.note)}</p> : null}
         </div>
       );
     case "gate":
@@ -307,7 +308,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           <X className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />
           <b>Not merged</b>
           <span className="sj-what">{now.why}</span>
-          {openRun}
+          {stopAct ?? openRun}
           {children}
           {now.waits.length ? <p className="sj-note"><Waits waits={now.waits} now_ms={now_ms} /></p> : null}
         </div>
@@ -330,10 +331,12 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
       return (
         <div className="sj-now" data-kind="stopped" data-journey-fix={now.fix}>
           <X className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />
-          <b>{now.kind === "failed" && !now.end ? `Failed${now.stage ? ` at ${now.stage}` : ""}` : stopWords(now)}</b>
+          <b>{stopTitle(now)}</b>
           {resume ? <ResumeAtPress runId={String(run._id)} resume={resume} /> : null}
-          {/* The action that can work for this stop leads: re-running a refusal, or a session out of rounds, repeats it. */}
-          {now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open {now.why?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? "Deploys"}</Link>
+          {/* The run page picks its one way on itself (changePage stopAction): it knows of newer runs and a merged PR. */}
+          {stopAct !== undefined ? stopAct
+          /* The action that can work for this stop leads: re-running a refusal, or a session out of rounds, repeats it. */
+            : now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open {now.why?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? "Deploys"}</Link>
             : now.fix === "session" && !inSession && now.session ? <Link className="sj-act" data-primary href={`/conversation/${now.session}`} data-journey-open-session>Open session</Link>
             : now.fix === "session" && briefId ? <button type="button" className="sj-act" data-primary onClick={() => useInboxStore.getState().requestNavigate(here!, { scrollToMessageId: briefId })} data-journey-open-brief>Open the brief</button>
             : now.fix === "run" ? openRun
@@ -341,7 +344,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           {/* Ship again, never for a deploy (it would land the change again); it leads when re-running is the fix, or when nothing else here can. */}
           {/* A change already on main lands nothing if shipped again: the run is the way on. */}
           {/* A change that may be on main (Landing unknown) could land twice: resuming the run at Land is the way on. */}
-          {now.fix !== "deploy" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
+          {stopAct === undefined && now.fix !== "deploy" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
           {children}
           {/* A stop's reason is whole: its last words are what the person does next. */}
           {now.why ? <p className="sj-note" data-whole={personal || undefined} data-journey-why>{now.why}</p> : null}
@@ -383,7 +386,7 @@ function AskBar({ ask, note, since, conversation, now_ms, children }: { ask: Ses
         : null}
       {children}
       {/* The session's own words on what it waits for: a card can be about something else. */}
-      {note ? <p className="sj-note" data-journey-note>{note}</p> : null}
+      {note ? <p className="sj-note" data-journey-note>{plainNote(note)}</p> : null}
       {ask?.mine ? <div className="sj-gate"><RunGate run={{ gate_decision_id: ask.id, gate_decision_short_id: ask.short_id ?? undefined }} className="w-full" /></div> : null}
     </div>
   );
@@ -400,7 +403,7 @@ export function RunSessionAsk({ run, now_ms }: { run: any; now_ms: number }) {
 
 /** `targets`, when the caller knows them from the landed commit's deploy reach, are where the change is: never guessed from the session's commits. */
 /** `onRunPage`: the run's own page, whose head links each deploy already and where opening the run goes nowhere. */
-export function JourneyView({ journey, run, now_ms, compact, actions, again, targets, onRunPage = false }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState>; onRunPage?: boolean }) {
+export function JourneyView({ journey, run, now_ms, compact, actions, again, targets, onRunPage = false, stopAct }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState>; onRunPage?: boolean; stopAct?: React.ReactNode }) {
   const [open, setOpen] = useState<string | null>(null);
   const insideId = useId();
   const opened = open ? journey.stages.find((s) => s.id === open) ?? null : null;
@@ -412,8 +415,8 @@ export function JourneyView({ journey, run, now_ms, compact, actions, again, tar
       <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} task={run?.task_short_id ?? null} />
       {opened?.inside ? <SegmentInside stage={opened} id={insideId} /> : null}
       {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} task={run?.task_short_id ?? null} /> : null}
-      {/* On the run's own page, an end the page head already says whole (Live, Done) leaves the person nothing to do here. */}
-      {run && !(onRunPage && (journey.now.kind === "live" || journey.now.kind === "passed")) ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal} onRunPage={onRunPage}>{actions}</JourneyNowBar> : null}
+      {/* On the run's own page, a finished run's end is the page head's, by the exit it reached: nothing is left to do here. */}
+      {run && !(onRunPage && run.status === "completed") ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again} personal={!!journey.personal} onRunPage={onRunPage} stopAct={stopAct}>{actions}</JourneyNowBar> : null}
       {run && landed && team && run.spawner_conversation_id && !onRunPage ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
     </div>
     </SessionWord.Provider>

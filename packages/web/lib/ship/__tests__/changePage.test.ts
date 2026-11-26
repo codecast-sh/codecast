@@ -1,17 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { journeyOf } from "../journey";
-import { changeHeadline, changeLinks, changePr, changeStations, deployLine, shortWhy } from "../changePage";
-import { UNION_CHANGE_FLOW } from "../journeyFixtures";
-import { pushedFlow } from "../../line/flowPool";
+import { stopTitle } from "../journeyWords";
+import { changeHeadline, changeLinks, changePr, changeStations, currentHead, deployLine, shipsChange, stopAction } from "../changePage";
+import { BRANCHING_FLOW, UNION_CHANGE_FLOW } from "../journeyFixtures";
+import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
+import { replay, end, scenarios } from "./replayReports";
 // The library change flow, parsed with its segments expanded (bun packages/cli/scripts/gen-change-graph-fixture.ts).
 import graph from "./changeGraph.fixture.json";
 
 // Node statuses as the runner reports them (runner.ts), as in journey.test.ts.
-const change = graph as any;
+const change = { ...(graph as any), kind: "line", takes: ["task", "branch"] };
 // Union's Change: PR, CI, review and merge inside its Land segment (land__pr, land__ci, …), then a Deploy segment.
 const union = pushedFlow({ _id: "wf_union", ...UNION_CHANGE_FLOW } as any) as any;
+const personal = flowBySlug(appPool(), "personal") as any;
 const ME = "u1";
-const run = (over: Record<string, unknown>) => ({ status: "running", workspace: "team:t1", node_statuses: [], ...over }) as any;
+const run = (over: Record<string, unknown>) => ({ status: "running", workspace: "team:t1", spawner_conversation_id: "subj", node_statuses: [], ...over }) as any;
 const st = (node_id: string, status: string, t = 1, extra: Record<string, unknown> = {}) => ({ node_id, status, started_at: t, ...extra });
 const PR = st("pr", "completed", 1, { result_preview: '{"url":"https://github.com/acme/app/pull/217","number":217,"head_sha":"c0cac27575"}' });
 const ROUND = [PR, st("checks", "completed", 2), st("ci", "completed", 2, { result_preview: "Waiting on CI for #217 at c0cac27: 9m" }), st("review", "completed", 10, { session: { _id: "convReview", title: "Review ct-1" } }), st("joined", "completed", 12)];
@@ -30,6 +33,21 @@ const liveRun = run({
 // Union's Land, as its runs report it (ct-102041): no verdicts on the row, the stations nested in the segment.
 const U_PR = st("land__pr", "completed", 3, { result_preview: '{"pr":5016,"url":"https://github.com/Union-AI/union-mobile/pull/5016","head_sha":"11e526ca86"}' });
 const U_ROUND = [st("start", "completed", 1), st("land", "completed", 2), U_PR, st("land__checks", "completed", 4), st("land__review", "completed", 5, { session: { _id: "convUR", title: "Review" } }), st("land__ci", "completed", 5), st("land__read", "completed", 6)];
+const head = (r: any, viewer: any = null, g: any = change) => changeHeadline(journeyOf(g, r, [], viewer), r, g);
+const act = (r: any, g: any = change, ctx: any = {}) => stopAction(journeyOf(g, r, [], null), r, ctx);
+
+describe("A: which runs are the change's", () => {
+  test("whole flows that land a session's change; segments and flows that land nothing keep the run report", () => {
+    const pool = appPool() as any[];
+    const of = (slug: string) => shipsChange(pool.find((f) => f.slug === slug));
+    expect(["change", "personal"].map(of)).toEqual([true, true]);
+    // Segments that take a branch (check, review, judge, intent, eval, ship, deploy) are not.
+    expect(["check", "review", "judge", "intent", "eval", "ship", "deploy", "decide", "line", "climb"].map(of)).toEqual(Array(10).fill(false));
+    // A repo's own Change (Union's, Land and Deploy segments), and an older flow composed of segments, are.
+    expect(shipsChange(union)).toBe(true);
+    expect(shipsChange(pushedFlow({ _id: "wf_b", ...BRANCHING_FLOW } as any) as any)).toBe(true);
+  });
+});
 
 describe("changeStations", () => {
   test("CI, Review and Deploy by what they are, at the top level or inside a segment", () => {
@@ -38,80 +56,89 @@ describe("changeStations", () => {
     expect([...top.review]).toEqual(["review"]);
     expect(top.deploy.has("deploy__wait")).toBe(true);
     const nested = changeStations(union);
-    // Union's CI alone (a round with no review) is CI under the same name.
     expect([...nested.ci].sort()).toEqual(["land__ci", "land__ci_alone"]);
     expect([...nested.review]).toEqual(["land__review"]);
     expect(nested.deploy.has("deploy__wait")).toBe(true);
   });
 });
 
-describe("changeHeadline", () => {
-  const head = (r: any, viewer: any = null, g: any = change) => changeHeadline(journeyOf(g, r, [], viewer), r, g);
-
+describe("B: the head is structure, never a station's free text", () => {
   test("a live change names the targets that carry it, and waits on nothing", () => {
     expect(head(liveRun)).toEqual({ words: "Live on web, cli and mobile", waits: null, href: null, tone: "ok" });
   });
 
-  test("CI red sent back to the session: the finding, then the fix it waits on with its round", () => {
-    const r = run({ current_node_id: "brief", ci_verdict: { green: false }, review_verdict: { verdict: "ship" }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 30, note: "fix CI" }, node_statuses: [...ROUND, verdicts("brief", "red", "ship"), st("brief", "running", 20, { visits: 2 })] });
-    expect(head(r)).toEqual({ words: "CI red", waits: "Waiting on its session's fix, round 2 of 3", href: "/conversation/c1", tone: "bad" });
-    const both = { ...r, review_verdict: { verdict: "changes" } };
-    expect(head(both).words).toBe("CI red, review asked for changes");
+  test("a stop's words are the bar's own (one source), and its detail only labels the graph gives", () => {
+    // Merge's rebase failed with git's whole output; the run ended at the exit Not merged.
+    const raw = "Stopped: git rebase failed: packages/cli/src/a.md | Aborting | error: could not detach HEAD";
+    const r = run({ status: "failed", current_node_id: "unshipped", fail_reason: raw, node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "failed", 14, { result_preview: "git rebase failed: a.md | Aborting" }), st("unshipped", "failed", 15)] });
+    const j = journeyOf(change, r, [], null);
+    const h = changeHeadline(j, r, change);
+    expect(h.words).toBe(stopTitle(j.now as any));
+    expect(h).toMatchObject({ words: "Stopped at Merge", waits: "Not merged", tone: "bad", href: null });
   });
 
-  test("Union's review asks for changes inside Land: the way out it took names the finding, and the fix waits on its session", () => {
-    const r = run({ current_node_id: "fix", spawner_conversation_id: "subj", node_statuses: [...U_ROUND, st("land__brief", "completed", 7, { result_preview: "## The reviewer asked for changes - medium x" }), st("land__changes", "failed", 8, { result_preview: '{"exit": "changes"}' }), st("fix", "running", 9)] });
-    expect(head(r, null, union)).toMatchObject({ words: "Changes asked", waits: "Waiting on its session's fix", href: "/conversation/subj" });
+  test("no reason text reaches the head, whatever a station wrote", () => {
+    // Reasons the verifier found in the head: a success-sounding rebase, a wait on a stopped run, a CLI command, ids, a server error.
+    for (const why of [
+      "Stopped: rebased pl1077/x onto main at 4a6e413b2c",
+      "Stopped: waiting for the merge already running in this checkout (pid 80797) to finish",
+      "Stopped: merge is off for this flow; a person turns it on with cast role line --merge on",
+      "Stopped: hand jx73x07 killed before it reported",
+      "Error: Too many writes in a single function execution",
+    ]) {
+      const r = run({ status: "failed", current_node_id: "unshipped", fail_reason: why, node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "failed", 14, { result_preview: why }), st("unshipped", "failed", 15)] });
+      const h = head(r);
+      const said = `${h.words} ${h.waits ?? ""}`;
+      expect(said).not.toContain("cast ");
+      expect(said).not.toMatch(/jx7|pid|rebased|waiting for|Too many|4a6e413/);
+    }
   });
 
-  test("the viewer's own card: waiting on your decision (the card under it asks); someone else's names its question", () => {
-    const r = run({ status: "paused", user_id: ME, current_node_id: "decide__decide", gate_node_id: "decide__decide", gate_decision_id: "d1", gate_prompt: "Ship ct-1? It edits CI.\nmore", gate_decision_status: "pending", node_statuses: [...ROUND, verdicts("decide", "green", "ship"), st("decide__decide", "running", 15)] });
-    const viewer = { id: ME, decision: { user_id: ME, holder: { kind: "user", id: ME }, asked_user_ids: [ME] } };
-    expect(head(r, viewer)).toEqual({ words: "Waiting on your decision", waits: null, href: null, tone: "you" });
-    expect(head({ ...r, gate_decision_short_id: "sd-9" }, { id: "u2", decision: viewer.decision })).toMatchObject({ words: "Waiting for approval", waits: "Ship ct-1? It edits CI.", href: "/decisions/sd-9" });
+  test("Union's stops name Land as the bar does, then the step inside it and the way out it took", () => {
+    const pr = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: The pull request could not be opened: line: origin's branch holds commits; send it again", node_statuses: [st("start", "completed", 1), st("land", "completed", 2), st("land__pr", "failed", 3, { result_preview: "line: origin's branch holds commits" }), st("land__unpushed", "failed", 4, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 5)] });
+    const j = journeyOf(union, pr, [], null);
+    expect(head(pr, null, union)).toMatchObject({ words: stopTitle(j.now as any), waits: "PR · no pull request" });
+    expect(head(pr, null, union).words).toBe("Stopped at Land");
+    // Only the way out failed (CI could not be read): its name is the outcome.
+    const unread = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: GitHub's CI could not be read, so the change is not judged: required check test was cancelled", node_statuses: [...U_ROUND, st("land__unread", "failed", 8, { result_preview: '{"exit": "unread"}' }), st("stopped", "failed", 9)] });
+    expect(head(unread, null, union)).toMatchObject({ words: "Stopped at Land", waits: "CI unread" });
   });
 
-  test("the session asks the viewer: waiting on your answer, with the question", () => {
+  test("an earlier round's failure is not this stop", () => {
+    const r = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: x", node_statuses: [...U_ROUND, st("land__changes", "failed", 7, { result_preview: '{"exit": "changes"}' }), st("fix", "completed", 8), st("land__pr", "failed", 10, { result_preview: "push refused" }), st("land__unpushed", "failed", 11, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 12)] });
+    expect(head(r, null, union).waits).toBe("PR · no pull request");
+  });
+
+  test("CI red sent back to the session: the finding, then the fix it waits on, its round as the bar says it", () => {
+    const r = run({ current_node_id: "brief", pr: { number: 217, repository: "acme/app", head_sha: "c0cac27575" }, ci_verdict: { green: false, head_sha: "c0cac27575" }, review_verdict: { verdict: "ship", head_sha: "c0cac27575" }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 30, note: "fix CI" }, node_statuses: [...ROUND, verdicts("brief", "red", "ship"), st("brief", "running", 20, { visits: 2 })] });
+    expect(head(r)).toEqual({ words: "CI red", waits: "Its session is fixing it · round 2 of 3", href: "/conversation/c1", tone: "bad" });
+  });
+
+  test("Union's review asks for changes inside Land: the way out it took names the finding", () => {
+    const r = run({ current_node_id: "fix", node_statuses: [...U_ROUND, st("land__brief", "completed", 7, { result_preview: "## The reviewer asked for changes - medium x" }), st("land__changes", "failed", 8, { result_preview: '{"exit": "changes"}' }), st("fix", "running", 9)] });
+    expect(head(r, null, union)).toMatchObject({ words: "Changes asked", waits: "Its session is fixing it", href: "/conversation/subj" });
+  });
+
+  test("a card: the viewer's own is answered in the bar; someone else's says whose and opens, never its question", () => {
+    const r = run({ status: "paused", user_id: ME, current_node_id: "decide__decide", gate_node_id: "decide__decide", gate_decision_id: "d1", gate_decision_short_id: "sd-9", gate_prompt: "Ship ct-1? It edits CI.\nmore", gate_decision_status: "pending", node_statuses: [...ROUND, verdicts("decide", "green", "ship"), st("decide__decide", "running", 15)] });
+    const decision = { user_id: ME, holder: { kind: "user", id: ME }, asked_user_ids: [ME] };
+    expect(head(r, { id: ME, decision })).toEqual({ words: "Waiting on your decision", waits: null, href: null, tone: "you" });
+    const theirs = head(r, { id: "u2", decision, holder_name: "Ashot" });
+    expect(theirs).toMatchObject({ waits: "Open the card", href: "/decisions/sd-9" });
+    expect(`${theirs.words} ${theirs.waits}`).not.toContain("Ship ct-1");
+  });
+
+  test("a session that asks: the viewer's own card is in the bar; someone else's opens; an ask in words opens its session", () => {
     const r = run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 30, note: "keep the old flag?", blocked: true }, node_statuses: [...ROUND, verdicts("brief", "green", "changes"), st("brief", "running", 20, { visits: 1 })] });
     const ask = { id: "d1", short_id: "sd-7", question: "Keep the old flag?", mine: true, open: true };
-    // The viewer's own card is answered on the page (the bar under the head); someone else's opens.
-    expect(head(r, { id: ME, ask })).toMatchObject({ words: "Waiting on your answer", waits: "Keep the old flag?", href: null });
-    expect(head(r, { id: ME, ask: { ...ask, mine: false } })).toMatchObject({ words: "Waiting for a person", waits: "Keep the old flag?", href: "/decisions/sd-7" });
-    // An ask in words only: its session.
-    expect(head(r, { id: ME, ask: null })).toMatchObject({ waits: "keep the old flag?", href: "/conversation/c1" });
+    expect(head(r, { id: ME, ask })).toMatchObject({ words: "Waiting on your answer", waits: null });
+    expect(head(r, { id: ME, ask: { ...ask, mine: false } })).toMatchObject({ words: "Waiting for a person", waits: "Open the card", href: "/decisions/sd-7" });
+    expect(head(r, { id: ME, ask: null })).toMatchObject({ waits: "Open its session", href: "/conversation/c1" });
   });
 
   test("merged and held at Deploy: the sha, then what Deploy waits on", () => {
     const r = run({ current_node_id: "deploy__wait", merge: { sha: "31ccbb83b1", at: 9 }, node_statuses: [...MERGED, st("deploy__wait", "running", 16, { result_preview: "web: waiting on main CI at 31ccbb8 (running)" })] });
     expect(head(r)).toMatchObject({ words: "Merged 31ccbb8", waits: "Waiting on main CI", href: "/deploys?team=t1&sha=31ccbb83b1" });
-  });
-
-  test("a stop names the station it stopped at and a short reason; the raw error stays out of the head", () => {
-    // ct-98570's sibling: Merge's rebase failed with git's whole output.
-    const raw = "Stopped: git rebase failed: packages/cli/src/a.md | packages/cli/src/b.md | Please move or remove them before you switch branches. | Aborting | error: could not detach HEAD";
-    const r = run({ status: "failed", current_node_id: "unshipped", fail_reason: raw, node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "failed", 14, { result_preview: "git rebase failed: packages/cli/src/a.md | Aborting" }), st("unshipped", "failed", 15)] });
-    expect(head(r)).toMatchObject({ words: "Stopped at Merge", waits: "git rebase failed", tone: "bad" });
-    // A Deploy stop opens Deploys.
-    const d = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "31ccbb83b1" }, fail_reason: "Stopped: Deploy stuck: cli is not live with 31ccbb8 after 45m.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] });
-    expect(head(d)).toMatchObject({ words: "Stopped at Go live", waits: "Deploy stuck", tone: "bad" });
-    expect(head(d).href).toStartWith("/deploys?team=t1");
-  });
-
-  test("Union's stops inside Land name the station, never the segment", () => {
-    // ct-102041's sibling: the PR could not be opened.
-    const pr = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: The pull request could not be opened: line: origin's branch holds commits this checkout never had; send it again", node_statuses: [st("start", "completed", 1), st("land", "completed", 2), st("land__pr", "failed", 3, { result_preview: "line: origin's branch holds commits" }), st("land__unpushed", "failed", 4, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 5)] });
-    expect(head(pr, null, union)).toMatchObject({ words: "Stopped at PR", waits: "The pull request could not be opened" });
-    // Only the way out failed (CI could not be read): its name says the outcome.
-    const unread = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: GitHub's CI could not be read, so the change is not judged: required check test was cancelled again on f6b21d25dd", node_statuses: [...U_ROUND, st("land__unread", "failed", 8, { result_preview: '{"exit": "unread"}' }), st("stopped", "failed", 9)] });
-    expect(head(unread, null, union)).toMatchObject({ words: "Stopped: CI unread", waits: "GitHub's CI could not be read, so the change is not judged" });
-    // A way out its graph already names as an end reads whole, never "Stopped: not merged: …".
-    const named = { ...union, nodes: union.nodes.map((n: any) => (n.id === "land__unread" ? { ...n, label: "Not merged: CI unread" } : n)) };
-    expect(head(unread, null, named).words).toBe("Not merged: CI unread");
-  });
-
-  test("an earlier round's failure is not this stop", () => {
-    const r = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: The pull request could not be opened: x", node_statuses: [...U_ROUND, st("land__changes", "failed", 7, { result_preview: '{"exit": "changes"}' }), st("fix", "completed", 8), st("land__pr", "failed", 10, { result_preview: "push refused" }), st("land__unpushed", "failed", 11, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 12)] });
-    expect(head(r, null, union).words).toBe("Stopped at PR");
   });
 
   test("CI and review under way: the stage, nothing named past it", () => {
@@ -120,12 +147,87 @@ describe("changeHeadline", () => {
   });
 });
 
-describe("shortWhy", () => {
-  test("the clause before the detail, never a joined log", () => {
-    expect(shortWhy("Stopped: git rebase failed: a.md | b.md | Aborting")).toBe("git rebase failed");
-    expect(shortWhy("CI is red on main.")).toBe("CI is red on main");
-    expect(shortWhy(null)).toBeNull();
-    expect(shortWhy("x".repeat(30) + " " + "word ".repeat(40))!.length).toBeLessThanOrEqual(101);
+describe("C: truth", () => {
+  test("a finished run says the exit it reached, even where an older flow's journey reads Live", () => {
+    // A personal Ship's pushed row from before own_results (#226): its journey reads the Landed end as Live.
+    const old = { ...personal, own_results: undefined, source: null };
+    const r = run({ status: "completed", workspace: "user:u1", current_node_id: "nodeploy", merge: { sha: "c2cb58d24c" }, node_statuses: [st("start", "completed", 1), st("round", "completed", 2), st("checks", "completed", 3), st("review", "completed", 4), st("check", "completed", 4), st("joined", "completed", 5), st("verdicts", "completed", 6), st("land", "completed", 7), st("landed", "completed", 8, { result_preview: "c2cb58d24c" }), st("deploy", "completed", 9), st("nodeploy", "completed", 10)] });
+    expect(journeyOf(old, r, [], null).now.kind).toBe("live");
+    expect(head(r, null, old)).toMatchObject({ words: "Landed c2cb58d", tone: "ok" });
+    // A run that reached its Live exit reads Live, never Merged.
+    expect(head({ ...r, current_node_id: "exit" }, null, old).words).toBe("Live");
+  });
+
+  test("verdicts count only for the head the run is on now", () => {
+    // Round 1 edited CI; the fix round dropped that edit and CI is green on the new head.
+    const r1 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: false, head_sha: "bbb" }, node_statuses: [st("pr", "completed", 1), verdicts("brief", "green", "changes", 5, { ci_result: { green: true, ci_changed: true } }), st("pr", "completed", 10), st("ci", "completed", 11), st("review", "running", 11, { session: { _id: "r" } })] });
+    expect(changeLinks(r1, change).map((l) => l.label)).toEqual(["PR #217", "CI green", "In review"]);
+    // A new round: the PR is on ccc, CI has not run on it; the last verdicts were on bbb.
+    const r2 = run({ pr: { number: 217, repository: "acme/app", head_sha: "ccc" }, ci_verdict: { green: false, head_sha: "bbb" }, review_verdict: { verdict: "changes", head_sha: "bbb" }, node_statuses: [st("pr", "completed", 1), st("ci", "completed", 2), st("review", "completed", 2, { session: { _id: "r" } }), st("pr", "completed", 20), st("checks", "running", 21)] });
+    expect(changeLinks(r2, change).map((l) => l.label)).toEqual(["PR #217", "CI", "Review"]);
+    // CI green on a change that edits CI, current: shown, but not as a pass.
+    const r3 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, node_statuses: ROUND });
+    expect(changeLinks(r3, change).find((l) => l.kind === "ci")).toMatchObject({ label: "CI green, not counted", tone: "default" });
+  });
+
+  test("Union's runs record no verdicts: CI and Review are plain links, no state", () => {
+    const r = run({ status: "failed", current_node_id: "stopped", node_statuses: [...U_ROUND, st("land__unread", "failed", 8, { result_preview: '{"exit": "unread"}' })] });
+    expect(changeLinks(r, union).map((l) => `${l.kind}:${l.label}:${l.tone}`)).toEqual(["pr:PR #5016:default", "ci:CI:default", "review:Review:default"]);
+  });
+
+  test("current head: the run's record, else the newest step that reported the PR", () => {
+    expect(currentHead(run({ pr: { number: 1, repository: "a/b", head_sha: "abc1234" } }))).toBe("abc1234");
+    expect(currentHead(run({ node_statuses: [PR] }))).toBe("c0cac27575");
+  });
+});
+
+describe("D: a stop always has one way on, and never one that cannot help", () => {
+  const stopped = (over: Record<string, unknown> = {}) => run({ status: "failed", current_node_id: "unshipped", fail_reason: "Stopped: boom", node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "failed", 14), st("unshipped", "failed", 15)], ...over });
+
+  test("a newer run on the task is where the change went", () => {
+    expect(act(stopped(), change, { newer: "run2" })).toEqual({ kind: "newer", label: "Open the newer run", href: "/workflows/runs/run2" });
+  });
+
+  test("merge switched off is a person's switch, until GitHub merged the PR anyway", () => {
+    const off = stopped({ fail_reason: "Stopped: merge is off for this flow; a person turns it on with cast role line --merge on" });
+    expect(act(off)).toMatchObject({ kind: "merge_switch", href: "/org" });
+    const pr = { merged: true, merge_sha: "e582239aa1" };
+    expect(act(off, change, { pr })?.kind).toBe("session");
+    // The head says the PR is on main, never the run's own Not merged.
+    expect(changeHeadline(journeyOf(change, off, [], null), off, change, { pr })).toMatchObject({ words: "Stopped at Merge", waits: "PR merged on GitHub" });
+  });
+
+  test("a PR GitHub already merged: never Ship again, and the Merged chip shows", () => {
+    const r = run({ status: "failed", current_node_id: "nopr", fail_reason: "Stopped: gh pr create failed", pr: { number: 2, repository: "acme/app", head_sha: "3a9ba96" }, node_statuses: [st("pr", "failed", 1), st("merge", "failed", 8), st("fix_conflict", "completed", 9), st("nopr", "failed", 10)] });
+    const pr = { merged: true, merge_sha: "f00dbabe12" };
+    expect(act(r, change, { pr })?.kind).not.toBe("again");
+    expect(changeLinks(r, change, [], pr).find((l) => l.kind === "merged")).toMatchObject({ label: "Merged f00dbab", href: "/commit/acme/app/f00dbabe12" });
+  });
+
+  test("a stop at Deploy opens Deploys", () => {
+    const r = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "31ccbb83b1" }, fail_reason: "Stopped: Deploy stuck", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] });
+    expect(act(r)?.kind).toBe("deploys");
+  });
+
+  test("every recorded personal stop offers one way on, and none offers Ship again once the change is on main", () => {
+    let stops = 0;
+    for (const name of scenarios()) {
+      let r: any;
+      try { r = { workspace: "user:u1", spawner_conversation_id: "subj", ...end(replay(name)) }; } catch { continue; }
+      if (r.status !== "failed") continue;
+      stops++;
+      const j = journeyOf(personal, r, [], null);
+      const a = stopAction(j, r, {});
+      expect(a, name).not.toBeNull();
+      const n = j.now as any;
+      if (n.landed || n.mayHaveLanded || r.merge?.sha) expect(a!.kind, name).not.toBe("again");
+      if (n.fix === "run") expect(a!.kind, name).not.toBe("again");
+    }
+    expect(stops).toBeGreaterThan(10);
+  });
+
+  test("with no session, the card the run asked", () => {
+    expect(act(stopped({ spawner_conversation_id: null, gate_decision_short_id: "sd-3" }))).toMatchObject({ kind: "card", href: "/decisions/sd-3" });
   });
 });
 
@@ -142,19 +244,9 @@ describe("changeLinks", () => {
     ]);
   });
 
-  test("Union's nested stations: the PR, CI and review inside Land, and the deploy line inside its Deploy segment", () => {
+  test("Union's nested stations, and the deploy line inside its Deploy segment", () => {
     const r = run({ status: "completed", current_node_id: "exit", merge: { sha: "5caaa346ac" }, node_statuses: [...U_ROUND, st("land__merge", "completed", 7, { result_preview: '{"sha":"5caaa346ac","pr":5016}' }), st("land__landed", "completed", 8), st("deploy", "completed", 9), st("deploy__wait", "completed", 10, { result_preview: "Live: 5caaa34 on backend dp-12." }), st("deploy__live", "completed", 11, { result_preview: '{"exit": "live"}' })] });
     expect(changeLinks(r, union).map((l) => `${l.kind}:${l.label}`)).toEqual(["pr:PR #5016", "ci:CI", "review:Review", "merged:Merged 5caaa34", "deploy:backend dp-12"]);
-    const running = run({ node_statuses: [U_PR, st("land__checks", "completed", 4), st("land__ci", "running", 5), st("land__review", "running", 5, { session: { _id: "convUR" } })] });
-    expect(changeLinks(running, union).map((l) => `${l.kind}:${l.label}`)).toEqual(["pr:PR #5016", "ci:CI running", "review:In review"]);
-  });
-
-  test("CI green on a change that edits CI is shown, but not as a pass", () => {
-    const r = run({ ci_verdict: { green: true, ci_changed: true }, review_verdict: { verdict: "ship" }, node_statuses: ROUND });
-    expect(changeLinks(r, change).find((l) => l.kind === "ci")).toMatchObject({ label: "CI green, not counted", tone: "default", title: "This change edits CI, so CI can't vouch for it" });
-    // Read from the verdicts step when the row carries no verdict.
-    const said = run({ node_statuses: [...ROUND, verdicts("decide", "green", "ship", 13, { ci_result: { green: true, ci_changed: true } })] });
-    expect(changeLinks(said, change).find((l) => l.kind === "ci")!.label).toBe("CI green, not counted");
   });
 
   test("the deploy records win over the station's line; a waiting target opens Deploys at the change", () => {
@@ -163,26 +255,14 @@ describe("changeLinks", () => {
     expect(links.find((l) => l.label === "backend waiting")!.href).toBe("/deploys?team=t1&target=backend&sha=31ccbb83b1");
   });
 
-  test("before anything merges: the PR from the station's report, CI and review as they stand, no merge or deploys", () => {
-    const r = run({ current_node_id: "ci", node_statuses: [PR, st("checks", "completed", 2), st("ci", "running", 3), st("review", "running", 3, { session: { _id: "convR" } })] });
-    expect(changeLinks(r, change).map((l) => `${l.kind}:${l.label}`)).toEqual(["pr:PR #217", "ci:CI running", "review:In review"]);
-  });
-
-  test("CI red and review asking for changes read as their verdicts", () => {
-    const r = run({ ci_verdict: { green: false }, review_verdict: { verdict: "changes" }, node_statuses: ROUND });
-    expect(changeLinks(r, change).map((l) => `${l.label}:${l.tone}`)).toEqual(["PR #217:default", "CI red:bad", "Review asked for changes:wait"]);
-  });
-
   test("no review session, no review link: a label with nowhere to go is not drawn", () => {
-    const r = run({ node_statuses: [PR, st("review", "completed", 3)] });
-    expect(changeLinks(r, change).some((l) => l.kind === "review")).toBe(false);
+    expect(changeLinks(run({ node_statuses: [PR, st("review", "completed", 3)] }), change).some((l) => l.kind === "review")).toBe(false);
   });
 });
 
 describe("changePr / deployLine", () => {
   test("the PR from the row, else the newest step that reported one, else the merge's link", () => {
     expect(changePr(liveRun)).toEqual({ repository: "acme/app", number: 217 });
-    expect(changePr(run({ node_statuses: [PR] }))).toEqual({ repository: "acme/app", number: 217 });
     expect(changePr(run({ node_statuses: [U_PR] }))).toEqual({ repository: "Union-AI/union-mobile", number: 5016 });
     expect(changePr(run({ merge: { sha: "x", pr_url: "https://github.com/acme/app/pull/9" } }))).toEqual({ repository: "acme/app", number: 9 });
     expect(changePr(run({}))).toBeNull();

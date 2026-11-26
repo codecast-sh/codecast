@@ -30,12 +30,14 @@ import {
 import { landingOf, ownGraphOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
 import { journeyOf, type TargetState } from '@codecast/web/lib/ship/journey';
-import { changeHeadline, changeLinks, changePr, type ChangeLink } from '@codecast/web/lib/ship/changePage';
+import { changeHeadline, changeLinks, changePr, shipsChange, stopAction, type ChangeLink, type StopAction } from '@codecast/web/lib/ship/changePage';
+import { usePullRequestMerge } from '@codecast/web/hooks/useSyncTimeline';
+import { runThroughMessage } from '@codecast/web/lib/line/flowMessages';
+import { approvalOf, shipConfirms } from '@codecast/web/lib/ship/approval';
 import { landedSha } from '@codecast/web/lib/ship/runRecord';
 import { reachTargets } from '@codecast/web/lib/ship/sessionShip';
 import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
 import { useRunFlow } from '@codecast/web/hooks/useFlowObject';
-import { takesSessionChange } from '@codecast/shared/contracts/flowPool';
 import type { JourneyTone } from '@codecast/web/lib/ship/journeyWords';
 import { ResumeAtAction } from '@/components/session/ResumeAtAction';
 import { compactAge } from '@codecast/web/lib/threadState';
@@ -57,6 +59,7 @@ type Run = ReportRun & {
   workflow_label?: string;
   primary_session_id?: string;
   primary_conversation_id?: string;
+  spawner_conversation_id?: string;
   goal_override?: string;
   gate_prompt?: string;
   gate_decision_id?: string;
@@ -113,6 +116,8 @@ function toneColor(tone: JourneyTone | ChangeLink['tone'], t: Palette): string {
   }
 }
 
+const STOP_ACT_ICON: Record<StopAction['kind'], IconName> = { newer: 'arrow-right', merge_switch: 'toggle-on', deploys: 'cloud-upload', session: 'comments-o', again: 'rocket', card: 'question-circle' };
+
 const answerColor = (answer: string | null, t: Palette) =>
   optionIsShip(answer) ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
 
@@ -150,17 +155,20 @@ export default function RunScreen() {
   // The session the run waits on asks a person: its card, answered on the decision's own screen.
   const viewer = useJourneyViewer(run as any);
   const ask = viewer.ask ?? null;
-  // A change run (its flow takes a session's change): its head says where the change stands, with its PR, CI, review,
-  // merge and deploys as links, as the web's run page says it (ChangeRunHead).
+  // A change run (a whole flow that lands a session's change): its head says where the change stands, with its PR, CI,
+  // review, merge and deploys as links and a stop's one way on, as the web's run page says it (ChangeRunHead).
   const { flow: runFlow } = useRunFlow(run as any);
-  const changeFlow = runFlow && takesSessionChange(runFlow) ? runFlow : null;
-  const mergedSha = run && changeFlow ? landedSha(run as any) : null;
-  const changeRepo = run && changeFlow ? changePr(run as any)?.repository ?? null : null;
-  const reach = useDeployReach(mergedSha && changeRepo ? `${changeRepo}@${mergedSha}` : null);
+  const changeFlow = runFlow && shipsChange(runFlow) ? runFlow : null;
+  const changePrRef = run && changeFlow ? changePr(run as any) : null;
+  const prMerge = usePullRequestMerge(changePrRef) ?? null;
+  const mergedSha = run && changeFlow ? landedSha(run as any) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
+  const reach = useDeployReach(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const journey = useMemo(() => (run && changeFlow ? journeyOf(changeFlow, run as any, targets, viewer) : null), [run, changeFlow, targets, viewer]);
-  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow) : null;
-  const links = journey && run && changeFlow ? changeLinks(run as any, changeFlow, targets) : [];
+  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow, { pr: prMerge }) : null;
+  const links = journey && run && changeFlow ? changeLinks(run as any, changeFlow, targets, prMerge) : [];
+  const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
+  const act = journey && run ? stopAction(journey, run as any, { newer, pr: prMerge }) : null;
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -209,6 +217,18 @@ export default function RunScreen() {
     { text: 'Rebase and land', onPress: () => { void useInboxStore.getState().landLineRun(run._id).catch((e: Error) => appAlert('Could not land', e.message)); } },
   ]);
   const answerGate = (text: string) => { const t = text.trim(); if (!t) return; respondToGate(run._id, t); setGateText(''); };
+  // Ship again: the session that made the change sends it through the same flow, as the web's Ship again does; a flow
+  // that asks before it lands (shipConfirms) is confirmed first.
+  const shipAgain = () => {
+    const subject = run.spawner_conversation_id;
+    if (!subject || !changeFlow) return;
+    const send = () => useInboxStore.getState().sendMessage(String(subject), runThroughMessage(changeFlow));
+    if (!shipConfirms(approvalOf(changeFlow))) return send();
+    appAlert(`Ship again through ${changeFlow.label}?`, 'Its session sends its change through the flow again.', [
+      { text: 'Not now', style: 'cancel' },
+      { text: 'Ship again', onPress: send },
+    ]);
+  };
 
   const othersShown = allOthers ? others : others.slice(0, OTHER_RUNS_SHOWN);
 
@@ -253,6 +273,12 @@ export default function RunScreen() {
             ) : null}
           </RNView>
         ) : <RNText style={[styles.outcome, { color: outcomeColor(outcome.tone, Theme) }]} testID="run-outcome">{outcome.text}</RNText>}
+        {/* A stopped change run's one way on, as the web's run page offers it (changePage stopAction). */}
+        {act ? (
+          <RNView style={objectStyles.verbs}>
+            <ActionButton icon={STOP_ACT_ICON[act.kind]} label={act.label} color={Theme.blue} filled onPress={act.kind === 'again' ? shipAgain : () => act.href && void openLink(act.href)} testID={`run-change-act-${act.kind}`} />
+          </RNView>
+        ) : null}
         {asking && !head ? (
           <RNView style={[styles.gate, { borderColor: Theme.yellow + '55', backgroundColor: Theme.yellow + '10' }]} testID="run-session-asks">
             <RNText style={[styles.gatePrompt, { fontWeight: '600' }]}>{asking.head}</RNText>
