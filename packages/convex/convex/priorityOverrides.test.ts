@@ -500,7 +500,7 @@ describe("corrections", () => {
     expect((await me.query(pri.show, { short_id: "pri-1" })).corrections).toEqual([]);
   });
 
-  test("a deleted correction is gone from the page, the pending mark, the sweep and the pass; one a pass applied is still an eval case", async () => {
+  test("a deleted correction is gone from the page, the pending mark, the sweep, the pass and the eval export, applied or not", async () => {
     const w = await seeded();
     const me = as(w, w.ana);
     const exportCases = (internal as any).priorities.exportCases;
@@ -515,7 +515,7 @@ describe("corrections", () => {
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });
     const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
     expect([read.input.corrections, read.corrections]).toEqual([[], []]);
-    expect((await w.t.query(exportCases, {})).cases.map((c: any) => c.id)).toEqual([applied._id]);
+    expect((await w.t.query(exportCases, {})).cases).toEqual([]);
   });
 
   test("a pending correction alone puts the pair in the sweep", async () => {

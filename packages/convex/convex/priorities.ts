@@ -905,7 +905,7 @@ async function doCorrectionDelete(ctx: Ctx, viewer: Id<"users">, ref: string): P
       ? await ctx.db.query("priority_corrections").withIndex("by_user_client_key", (q: any) => q.eq("user_id", viewer).eq("client_key", clientKey)).first()
       : null;
   if (!c || String(c.user_id) !== String(viewer)) return { error: `no correction ${ref} of yours` };
-  // Kept, marked: a correction a pass applied stays an eval case (exportCases).
+  // Marked, not erased: every reader, the eval export included, skips it.
   if (!c.deleted_at) await ctx.db.patch(c._id, { deleted_at: Date.now() });
   return { deleted: c._id };
 }
@@ -1267,8 +1267,8 @@ export const exportCases = internalQuery({
       .take(EXPORT_CASES);
     const out = [];
     for (const c of rows) {
-      // One applied unread (superseded) taught the pass nothing: not a case.
-      if (c.superseded) continue;
+      // One applied unread (superseded) taught the pass nothing, and one the person deleted they took back: neither is a case.
+      if (c.superseded || c.deleted_at) continue;
       const now: Priority | null = await ctx.db.get(c.priority_id);
       out.push({
         id: c._id, user_id: c.user_id, workspace: c.workspace, created_at: c.created_at, applied_at: c.applied_at!, window: c.applied_window ?? null,
