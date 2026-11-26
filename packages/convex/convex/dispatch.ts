@@ -1823,7 +1823,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   dropPriorityStep: async (ctx, _userId, [shortId, stepKey]: [string, string]) =>
     ctx.runMutation!((api as any).priorities.dropStep, { short_id: shortId, step_key: stepKey }),
   markPriorityDone: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.markDone, { short_id: shortId }),
-  // The undo of the person's own done (web hooks/usePriorities records it): the state the press replaced comes back.
+  // The undo of the person's own done (web lib/priorityWrites records it, on web and the phone): the state the press replaced comes back.
   undoPriorityStepDone: async (ctx, _userId, [shortId, stepKey, setBy]: [string, string, "pass" | "person" | null]) =>
     ctx.runMutation!((api as any).priorities.undoStepDone, { short_id: shortId, step_key: stepKey, ...(setBy ? { set_by: setBy } : {}) }),
   undoPriorityDone: async (ctx, _userId, [shortId, prior]: [string, Record<string, unknown>]) =>

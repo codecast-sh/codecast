@@ -24,7 +24,7 @@ export type PrioritiesSliceActions = {
   renamePriorityStep: (shortId: string, stepKey: string, title: string) => Promise<unknown>;
   dropPriorityStep: (shortId: string, stepKey: string) => Promise<unknown>;
   markPriorityDone: (shortId: string) => Promise<unknown>;
-  /** The undo of the person's own done (hooks/usePriorities records it): what the press replaced comes back. */
+  /** The undo of the person's own done (lib/priorityWrites records it): what the press replaced comes back. */
   undoPriorityStepDone: (shortId: string, stepKey: string, setBy: PrioritySetBy | null) => Promise<unknown>;
   undoPriorityDone: (shortId: string, prior: PriorDone) => Promise<unknown>;
   mergePriority: (shortId: string, into: string) => Promise<unknown>;

@@ -22,9 +22,9 @@ const DRAFT = never("draft: unsent text or a pick on an unsent session, changed 
 // The person's own call on a priority (store/prioritiesSlice): the server marks
 // the field as theirs, and no verb hands it back to the pass that set it before.
 const PRIORITY = never("priority control: a rank, tier or set aside becomes the person's own, and the server has no verb to give it back to the pass; the same control sets it again");
-// A check-off's undo is written by hand (hooks/usePriorities): the server's echo
+// A check-off's undo is written by hand (lib/priorityWrites): the server's echo
 // stamps its own done_at, so the generic guard would read every undo as changed since.
-const PRIORITY_DONE = never("priority done: a check-off records its own undo (hooks/usePriorities), whose verbs (undoStepDone, undoDone) put back what it replaced; recording the action too would undo it twice");
+const PRIORITY_DONE = never("priority done: a check-off records its own undo (lib/priorityWrites), whose verbs (undoStepDone, undoDone) put back what it replaced; recording the action too would undo it twice");
 const LOCAL_ECHO = never("local echo: the store's copy of a send or an answer, which the server's reply settles");
 
 export const NEVER_UNDO_POLICY: UndoPolicy = {
