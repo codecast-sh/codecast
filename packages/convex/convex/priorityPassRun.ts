@@ -332,9 +332,9 @@ export const releaseStrays = internalMutation({
  * its plan was made from what that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))) },
+  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))) },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, strays, corrections, ...run } = args;
+    const { plan: raw, from_cursor, strays, corrections, superseded, ...run } = args;
     const vis = sessionVisibility(ctx);
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
@@ -532,10 +532,10 @@ export const applyPlan = internalMutation({
     // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
     if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);
 
-    for (const id of corrections ?? []) {
+    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
       if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
-        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at } });
+        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
       }
     }
 
@@ -614,7 +614,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   }
   const { cursor_at } = read;
   // A priority that needs a rewrite (it held a session since gone from here) is work too, and so is a correction no pass has read.
-  if (!read.input.sessions.length && !read.input.calls.length && !args.force && !read.input.priorities.some((p) => p.needs_rewrite) && !read.corrections.length) {
+  if (!read.input.sessions.length && !read.input.calls.length && !args.force && !read.input.priorities.some((p) => p.needs_rewrite) && !read.corrections.length && !read.superseded.length) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, status: "skipped", error: "nothing touched since the last pass", step_to: read.read_to });
     const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
@@ -644,7 +644,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
   const plan = mergePriorities(input, output);
-  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections });
+  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;

@@ -64,6 +64,8 @@ export type PassInputs = {
   strays: Id<"conversations">[];
   /** The pending corrections the input holds: applyPlan marks them applied. */
   corrections: Id<"priority_corrections">[];
+  /** Pending ones no prompt can hold (older than all it read, or their priority gone): applyPlan marks them applied as superseded. */
+  superseded: Id<"priority_corrections">[];
 };
 
 const sessionId = (conv: Doc<"conversations">) => conv.short_id ?? String(conv._id);
@@ -210,9 +212,10 @@ const SUPERSEDED_READ = 200;
  * gone, and those older than every correction it read. A prompt only ever
  * holds the newest ones, so an older correction can never reach a pass: left
  * pending, it would put the pair in the sweep forever. It counts as
- * superseded by the newer ones the pass read, and stays listed as applied.
+ * superseded by the newer ones the pass read (`superseded`, apart from the
+ * ones a prompt holds), and stays listed as applied.
  */
-async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: string, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<{ input: PassCorrection[]; pending: Id<"priority_corrections">[] }> {
+async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: string, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<{ input: PassCorrection[]; pending: Id<"priority_corrections">[]; superseded: Id<"priority_corrections">[] }> {
   const rows: Doc<"priority_corrections">[] = await ctx.db
     .query("priority_corrections")
     .withIndex("by_user_workspace_created", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
@@ -221,10 +224,11 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
     .take(PRIORITY_PASS_CAPS.corrections);
   const input: PassCorrection[] = [];
   const pending: Id<"priority_corrections">[] = [];
+  const superseded: Id<"priority_corrections">[] = [];
   for (const c of rows.reverse()) {
-    if (c.status === "pending") pending.push(c._id);
     const priority = await shortId(c.priority_id);
     if (priority) input.push({ priority, step_key: c.step_key ?? null, text: c.text, at: c.created_at });
+    if (c.status === "pending") (priority ? pending : superseded).push(c._id);
   }
   if (rows.length === PRIORITY_PASS_CAPS.corrections) {
     const read = new Set(rows.map((c) => String(c._id)));
@@ -233,9 +237,9 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
       .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "pending"))
       .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
       .take(SUPERSEDED_READ + read.size);
-    for (const c of waiting) if (!read.has(String(c._id))) pending.push(c._id);
+    for (const c of waiting) if (!read.has(String(c._id))) superseded.push(c._id);
   }
-  return { input, pending };
+  return { input, pending, superseded };
 }
 
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
@@ -512,6 +516,7 @@ export const passInputs = internalQuery({
       read_to: stopAt !== null ? Math.max(cursor_at, Math.max(stopAt, cursor_at) - 1) : until,
       strays,
       corrections: corrections.pending,
+      superseded: corrections.superseded,
     };
   },
 });

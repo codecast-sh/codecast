@@ -477,11 +477,15 @@ describe("corrections", () => {
     const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
     expect(read.input.corrections).toHaveLength(PRIORITY_PASS_CAPS.corrections);
     expect(read.input.corrections[0].text).toBe("fix 5");
-    expect(read.corrections).toHaveLength(n);
+    expect([read.corrections.length, read.superseded.length]).toEqual([PRIORITY_PASS_CAPS.corrections, 5]);
     model.reply = () => JSON.stringify({ priorities: [], unassigned: [] });
     await run(w);
-    const statuses = await w.t.run(async (ctx) => (await ctx.db.query("priority_corrections").collect()).map((c) => c.status));
-    expect(statuses.filter((s) => s !== "applied")).toEqual([]);
+    const rows = await w.t.run(async (ctx) => (await ctx.db.query("priority_corrections").collect()).sort((a, b) => a.created_at - b.created_at));
+    expect(rows.filter((c) => c.status !== "applied")).toEqual([]);
+    // The five no prompt held are marked superseded, and only the ones a pass read are eval cases.
+    expect(rows.map((c) => !!c.superseded)).toEqual(rows.map((_, i) => i < 5));
+    const cases = (await w.t.query((internal as any).priorities.exportCases, {})).cases;
+    expect(cases.map((c: any) => c.text).sort()).toEqual(rows.slice(5).map((c) => c.text).sort());
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });
   });
 

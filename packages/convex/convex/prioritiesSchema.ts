@@ -175,6 +175,8 @@ export const priorityTables = {
     client_key: v.optional(v.string()),
     /** The person deleted it: no pass, list or pending mark reads it again; one a pass applied stays an eval case (priorities exportCases). */
     deleted_at: v.optional(v.number()),
+    /** Turned applied without a pass reading it (older than any prompt holds, or its priority gone): not an eval case. */
+    superseded: v.optional(v.boolean()),
   })
     .index("by_user_client_key", ["user_id", "client_key"])
     .index("by_user_workspace_created", ["user_id", "workspace", "created_at"])

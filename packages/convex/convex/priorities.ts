@@ -1266,6 +1266,8 @@ export const exportCases = internalQuery({
       .take(EXPORT_CASES);
     const out = [];
     for (const c of rows) {
+      // One applied unread (superseded) taught the pass nothing: not a case.
+      if (c.superseded) continue;
       const now: Priority | null = await ctx.db.get(c.priority_id);
       out.push({
         id: c._id, user_id: c.user_id, workspace: c.workspace, created_at: c.created_at, applied_at: c.applied_at!, window: c.applied_window ?? null,
