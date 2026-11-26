@@ -465,10 +465,10 @@ export const applyPlan = internalMutation({
       }
     }
 
-    // A session a known link or the classifier put on a milestone this plan removed keeps the priority, step unknown.
+    // A session the person, a known link or the classifier put on a milestone this plan removed keeps the priority, step unknown.
     for (const [id, keys] of gone) {
       for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP)) {
-        if ((conv.priority_set_by === "link" || conv.priority_set_by === "classifier") && conv.priority_step_key && keys.has(conv.priority_step_key)) {
+        if (conv.priority_set_by && conv.priority_set_by !== "pass" && conv.priority_step_key && keys.has(conv.priority_step_key)) {
           await ctx.db.patch(conv._id, { priority_step_key: undefined });
         }
       }

@@ -210,6 +210,24 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s1")).done).toBe(false);
   });
 
+  test("with priorities off in the task's workspace, a close reads nothing past the flag and recomputes nothing", async () => {
+    const { t, p1, ct1 } = await world();
+    const tables: string[] = [];
+    await t.run(async (ctx: any) => {
+      for (const team of await ctx.db.query("teams").collect()) await ctx.db.patch(team._id, { features: {} });
+      const db = new Proxy(ctx.db, {
+        get(target: any, prop: string) {
+          if (prop === "query") return (table: string) => (tables.push(table), target.query(table));
+          const value = target[prop];
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      await patchTask({ ...ctx, db }, await ctx.db.get(ct1), { status: "done", closed_at: NOW - H });
+    });
+    expect(tables.filter((x) => x !== "team_memberships")).toEqual([]);
+    expect((await stepOf(t, p1, "s1")).done).toBe(false);
+  });
+
   test("a cascade closing many tasks reads the owner's priorities once", async () => {
     const { t, p1, ct1, ct3, ct4, ct5 } = await world();
     const reads = await t.run(async (ctx: any) => {
@@ -577,6 +595,8 @@ describe("an inbound issue sync closing or reopening a task", () => {
     const { ctx, tables } = engineCtx({
       tasks: [{ ...structuredClone(TASK), workspace: "team:team_cc" }], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
       conversations: [], entity_conversations: [],
+      // Priorities on in the task's team, or a close recomputes nothing.
+      teams: [{ _id: "team_cc", name: "CC", features: { priorities: true } }],
       priorities: [{
         _id: "pri_1", user_id: "user_owner", workspace: "team:team_cc", short_id: "pri-1", title: "Sync", summary: "", status: "active",
         steps: [step("s1", [{ kind: "task", id: "ct-1" }])], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,

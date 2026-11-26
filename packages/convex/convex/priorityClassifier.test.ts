@@ -290,8 +290,12 @@ describe("precedence: the person > a known link > the classifier > the pass", ()
     expect((await w.t.run((ctx) => ctx.db.get(w.grader)))!.steps[0].title).toBe("Grader faults under 10%, renamed");
   });
 
-  test("a milestone the pass removes or drops leaves a linked or classified session on the priority, step unknown; a live milestone keeps its sessions", async () => {
+  test("a milestone the pass removes or drops leaves a placed, linked or classified session on the priority, step unknown; a live milestone keeps its sessions", async () => {
     const w = await classifierWorld();
+    const placed = await w.t.run((ctx) => ctx.db.insert("conversations", {
+      user_id: w.ana, agent_type: "claude_code", session_id: "jx7plcd", short_id: "jx7plcd", team_id: w.acme, is_private: false, team_visibility: "full",
+      started_at: 1, updated_at: 1, message_count: 3, status: "active", priority_id: w.grader, priority_step_key: "s1", priority_set_by: "person",
+    } as any));
     const free = await w.t.run(async (ctx) => {
       await ctx.db.patch(w.grader, { steps: [step("s1", "Grader faults under 10%"), step("s3", "Grader in CI"), step("s4", "Kept")] } as any);
       await ctx.db.patch(w.teamConv, { priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" } as any);
@@ -306,7 +310,7 @@ describe("precedence: the person > a known link > the classifier > the pass", ()
       user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
       plan: { creates: [], updates: [{ short_id: "pri-1", patch: { steps: [step("s3", "Grader in CI", [], { dropped: true }), step("s4", "Kept")] } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
     });
-    for (const [id, by] of [[w.teamConv, "classifier"], [w.oldConv, "link"]] as const) {
+    for (const [id, by] of [[w.teamConv, "classifier"], [w.oldConv, "link"], [placed, "person"]] as const) {
       const conv = await w.conversation(id);
       expect(conv).toMatchObject({ priority_id: w.grader, priority_set_by: by });
       expect(conv?.priority_step_key).toBeUndefined();

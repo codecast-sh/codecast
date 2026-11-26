@@ -199,7 +199,18 @@ async function personLinks(conv: Doc<"conversations">, shortId: (id: Id<"priorit
   return out;
 }
 
-/** The person's corrections in the workspace the pass reads, newest PRIORITY_PASS_CAPS.corrections, oldest first. */
+/** The most older pending corrections one pass marks superseded; a later pass takes the rest. */
+const SUPERSEDED_READ = 200;
+
+/**
+ * The person's corrections in the workspace the pass reads, newest
+ * PRIORITY_PASS_CAPS.corrections, oldest first, and the pending ones the
+ * pass turns applied when it succeeds: those it read, those whose priority is
+ * gone, and those older than every correction it read. A prompt only ever
+ * holds the newest ones, so an older correction can never reach a pass: left
+ * pending, it would put the pair in the sweep forever. It counts as
+ * superseded by the newer ones the pass read, and stays listed as applied.
+ */
 async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: string, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<{ input: PassCorrection[]; pending: Id<"priority_corrections">[] }> {
   const rows: Doc<"priority_corrections">[] = await ctx.db
     .query("priority_corrections")
@@ -209,10 +220,17 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
   const input: PassCorrection[] = [];
   const pending: Id<"priority_corrections">[] = [];
   for (const c of rows.reverse()) {
-    const priority = await shortId(c.priority_id);
-    if (!priority) continue;
-    input.push({ priority, step_key: c.step_key ?? null, text: c.text, at: c.created_at });
     if (c.status === "pending") pending.push(c._id);
+    const priority = await shortId(c.priority_id);
+    if (priority) input.push({ priority, step_key: c.step_key ?? null, text: c.text, at: c.created_at });
+  }
+  if (rows.length === PRIORITY_PASS_CAPS.corrections) {
+    const read = new Set(rows.map((c) => String(c._id)));
+    const waiting: Doc<"priority_corrections">[] = await ctx.db
+      .query("priority_corrections")
+      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "pending"))
+      .take(SUPERSEDED_READ + read.size);
+    for (const c of waiting) if (!read.has(String(c._id))) pending.push(c._id);
   }
   return { input, pending };
 }

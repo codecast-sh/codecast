@@ -40,6 +40,8 @@ import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
 import { passActivity, pinsAskForPass } from "./priorityPassSchedule";
 import { classifierReads } from "./priorityClassifierHook";
+import { parseWorkspaceKey } from "./accessKeys";
+import { teamHasFeature, workspaceHasFeature } from "./teamFeatureGuard";
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -184,7 +186,7 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
  */
 export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">, actor?: Conv | null): Promise<void> {
   const workspace = task.workspace;
-  if (!workspace) return;
+  if (!workspace || !(await prioritiesOn(ctx, workspace))) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
     .query("entity_conversations")
     .withIndex("by_entity", (q: any) => q.eq("entity_type", "task").eq("entity_id", String(task._id)))
@@ -194,6 +196,13 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
   if (actor && !pinsAskForPass(actor)) return;
   for (const { user } of places) await passActivity(ctx, user, workspace);
+}
+
+/** Whether the priorities feature is on in a workspace: no priority there to recompute, and no pass to ask for, when it is off. */
+async function prioritiesOn(ctx: Ctx, workspace: string): Promise<boolean> {
+  const ws = parseWorkspaceKey(workspace);
+  if (!ws) return false;
+  return ws.type === "team" ? teamHasFeature(ctx, ws.teamId, "priorities") : workspaceHasFeature(ctx, { user_id: ws.userId }, "priorities");
 }
 
 /**

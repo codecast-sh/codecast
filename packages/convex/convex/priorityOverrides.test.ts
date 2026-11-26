@@ -8,6 +8,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
+import { PRIORITY_PASS_CAPS } from "./lib/priorityPass";
 
 setDefaultTimeout(60_000);
 
@@ -297,6 +298,29 @@ describe("corrections", () => {
     expect(cases[0]).toMatchObject({ id: c._id, text: "Two priorities in one", window: { from: cursor }, before: { short_id: "pri-1", title: "Trusted evals" }, after: { title: "Grader evals" } });
     expect(cases[0].window.to).toBeGreaterThanOrEqual(cursor);
     expect((await w.t.query(exportCases, { since: cases[0].applied_at })).cases).toEqual([]);
+  });
+
+  test("corrections past the newest the prompt holds turn applied too, superseded, and stop putting the pair in the sweep", async () => {
+    const w = await seeded();
+    const n = PRIORITY_PASS_CAPS.corrections + 5;
+    const pri1 = (await w.priorities()).find((p: any) => p.short_id === "pri-1")!;
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < n; i++) {
+        await ctx.db.insert("priority_corrections", {
+          user_id: w.ana, workspace: w.team, priority_id: pri1._id, text: `fix ${i}`, status: "pending", created_at: Date.now() - (n - i) * 1000,
+          snapshot: { short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", steps: [] },
+        } as any);
+      }
+    });
+    const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    expect(read.input.corrections).toHaveLength(PRIORITY_PASS_CAPS.corrections);
+    expect(read.input.corrections[0].text).toBe("fix 5");
+    expect(read.corrections).toHaveLength(n);
+    model.reply = () => JSON.stringify({ priorities: [], unassigned: [] });
+    await run(w);
+    const statuses = await w.t.run(async (ctx) => (await ctx.db.query("priority_corrections").collect()).map((c) => c.status));
+    expect(statuses.filter((s) => s !== "applied")).toEqual([]);
+    expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });
   });
 
   test("a pending correction alone puts the pair in the sweep", async () => {
