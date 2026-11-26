@@ -1,7 +1,7 @@
 import type { ComponentType, CSSProperties } from "react";
 import {
   CircleDot, Film, Flag, FileText, Flame, Folder, GitCommitHorizontal, GitPullRequest,
-  Hexagon, MessageSquare, Network, Phone, Radio, Signpost, Target, UserRound, Zap, Building2,
+  Hexagon, MessageSquare, Network, Phone, Radio, Signpost, Map as MapIcon, UserRound, Zap, Building2,
 } from "lucide-react";
 import { SOL } from "../../blog/blogChrome";
 import { DIM, V } from "./theme";
@@ -66,7 +66,7 @@ export const TASK: Obj = {
 };
 
 export const PLAN: Obj = {
-  id: "pl-88", kind: "Plan", icon: Target, color: SOL.cyan,
+  id: "pl-88", kind: "Plan", icon: MapIcon, color: SOL.cyan,
   title: "Webhook reliability", state: { label: "active · 4 of 7 done", color: SOL.cyan },
   body: "Every delivery lands within 30 minutes of an outage ending, without tripping provider limits.",
   extra: { kind: "progress", value: 4 / 7, color: SOL.cyan, items: [["Backoff with jitter", true], ["Dead letter queue", true], ["Replay from the dashboard", false]] },

@@ -25,7 +25,7 @@ import {
   CheckCircle2,
   PauseCircle,
   XCircle,
-  Target,
+  Map as MapIcon,
   MessageSquare,
   ChevronRight,
   Plus,
@@ -367,7 +367,7 @@ export default function PlansPage() {
                   {/* The tab bar already says "Plans"; repeating it here was the
                       doubled title. Identity stays as the glyph alone. */}
                   <div className="flex items-center gap-2">
-                    <Target className="w-4 h-4 text-sol-cyan" />
+                    <MapIcon className="w-4 h-4 text-sol-cyan" />
                     <h2 className="sr-only">Plans</h2>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -399,7 +399,7 @@ export default function PlansPage() {
                 </div>
               }
               title="Plans"
-              icon={Target}
+              icon={MapIcon}
               count={plansLoading ? null : allPlans.length}
               tabs={<PlanSourceToggle planSource={planSource} setPlanSource={setPlanSource} />}
               actions={<>
@@ -426,7 +426,7 @@ export default function PlansPage() {
                 <AppLoader className="min-h-[16rem] h-full" />
               ) : allPlans.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim px-4">
-                  <Target className="w-6 h-6 mb-2 opacity-30" />
+                  <MapIcon className="w-6 h-6 mb-2 opacity-30" />
                   <p className="text-xs">No plans yet</p>
                   <button
                     onClick={() => setShowCreate(true)}
@@ -535,14 +535,14 @@ function MobileList({
         legacy={
           <div ref={titlebarRef} className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Target className="w-4 h-4 text-sol-cyan" />
+              <MapIcon className="w-4 h-4 text-sol-cyan" />
               <h1 className="text-base font-semibold text-sol-text">Plans</h1>
             </div>
             {toggle}
           </div>
         }
         title="Plans"
-        icon={Target}
+        icon={MapIcon}
         tabs={toggle}
       />
       <div className="flex-1 overflow-y-auto">
@@ -550,7 +550,7 @@ function MobileList({
           <AppLoader className="min-h-[16rem] h-full" />
         ) : empty ? (
           <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim">
-            <Target className="w-6 h-6 mb-2 opacity-30" />
+            <MapIcon className="w-6 h-6 mb-2 opacity-30" />
             <p className="text-sm">No plans yet</p>
           </div>
         ) : (

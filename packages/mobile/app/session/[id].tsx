@@ -1289,9 +1289,9 @@ function ApiErrorCard({ error, conversationId }: { error: ParsedApiError; conver
 // (components/MarkdownRenderer.tsx, shared parser from web insightBlocks.ts)
 // so every markdown surface gets them, not just the message-bubble branch.
 
-const contextTypeConfig: Record<string, { icon: 'list' | 'crosshairs' | 'file-text-o'; color: string }> = {
+const contextTypeConfig: Record<string, { icon: 'list' | 'map' | 'file-text-o'; color: string }> = {
   task: { icon: 'list', color: Theme.accent },
-  plan: { icon: 'crosshairs', color: Theme.cyan },
+  plan: { icon: 'map', color: Theme.cyan },
   doc: { icon: 'file-text-o', color: Theme.violet },
 };
 

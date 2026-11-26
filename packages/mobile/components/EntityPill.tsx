@@ -89,7 +89,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
   session: 'message-square',
-  plan: 'target',
+  plan: 'map',
   task: 'circle',
   doc: 'file-text',
   project: 'folder',
@@ -109,7 +109,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   person: 'user',
   secret: 'key',
   flow: 'git-merge',
-  priority: 'crosshair',
+  priority: 'target',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the

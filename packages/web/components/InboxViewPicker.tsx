@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { ArrowDownWideNarrow, ArrowUp, ArrowUpNarrowWide, CalendarPlus, Check, ChevronDown, Crosshair, FolderKanban, Globe, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
+import { ArrowDownWideNarrow, ArrowUp, ArrowUpNarrowWide, CalendarPlus, Check, ChevronDown, Flag, FolderKanban, Globe, History, Laptop, List, Map as MapIcon, Network, Tag, Target, Zap } from "lucide-react";
 import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -9,13 +9,13 @@ type ViewOption = { key: InboxViewMode; label: string; icon: typeof List };
 
 const VIEW_OPTIONS: Record<InboxViewMode, Omit<ViewOption, "key">> = {
   grouped: { label: "Status", icon: List },
-  priorities: { label: "Priorities", icon: Crosshair },
+  priorities: { label: "Priorities", icon: Target },
   recent: { label: "Updated", icon: History },
   time: { label: "Created", icon: CalendarPlus },
   bucket: { label: "Label", icon: Tag },
-  plan: { label: "Plan", icon: Workflow },
+  plan: { label: "Plan", icon: MapIcon },
   project: { label: "Project", icon: FolderKanban },
-  goal: { label: "Goal", icon: Target },
+  goal: { label: "Goal", icon: Flag },
   reports: { label: "Reports", icon: Network },
   trigger: { label: "Trigger", icon: Zap },
   machine: { label: "Machine", icon: Laptop },

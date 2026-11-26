@@ -17,7 +17,7 @@ import {
   Workflow,
   Signpost,
   Radio,
-  Target,
+  Map as MapIcon, Target,
   Zap,
   Hexagon,
   UserRound,
@@ -92,7 +92,7 @@ import { useRoleAuthor } from "../hooks/useLiveIdentityRow";
 const TYPE_ICON: Record<EntityType, any> = {
   session: MessageSquare,
   task: Target, // replaced by the status disc at render time
-  plan: Target,
+  plan: MapIcon,
   doc: FileText,
   trigger: Zap,
   project: Folder,
@@ -181,7 +181,7 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
     if (entity.plan?.title) {
       push(
         <span className="inline-flex min-w-0 items-center gap-1 text-sol-cyan">
-          <Target className="h-2.5 w-2.5 flex-shrink-0" />
+          <MapIcon className="h-2.5 w-2.5 flex-shrink-0" />
           <span className="truncate">{entity.plan.title}</span>
         </span>,
         "plan",
