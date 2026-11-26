@@ -30,7 +30,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
-import { BRIEF_TREE, heldDir, type FrozenChange } from "./flowChangeFile.js";
+import { BRIEF_TREE, branchChangePaths, heldDir, type FrozenChange } from "./flowChangeFile.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
@@ -486,9 +486,10 @@ const generated = (p: string) => !!LOCKFILES[p.slice(p.lastIndexOf("/") + 1)] ||
 /**
  * The session's uncommitted edits in the run's worktree `tree`, committed on its HEAD off every ref: each file that
  * differs from the tree recorded at the brief (snapshotRunTree; from HEAD when none was recorded). Every such write is
- * the session's own, a file put back as an older version included. A credential stays out, with why, and so does a
- * lockfile or generated file that neither the change's own commits nor the session's other edits make. Null when it
- * changed nothing there. A tree off the change's branch with such edits refuses: the reset would lose them.
+ * the session's own, a file put back as an older version or deleted included. A credential written there stays out,
+ * with why, and so does a lockfile or generated file that neither the change's own files nor the session's other
+ * edits make. Null when it changed nothing there. A tree off the change's branch with such edits refuses: the reset
+ * would lose them.
  */
 async function treeCarry(root: string, tree: string, runDir: string, change: FrozenChange): Promise<TreeCarry | null> {
   const now = await freezeWorktree(tree);
@@ -502,11 +503,14 @@ async function treeCarry(root: string, tree: string, runDir: string, change: Fro
   const held = new Map<string, string>();
   const texts = await readBlobs(tree, changes.map((c) => c.blob ?? ""));
   for (const c of changes) {
-    const why = credentialReason(c.path, c.blob ? texts.get(c.blob) ?? null : null);
+    const why = c.blob ? credentialReason(c.path, texts.get(c.blob) ?? null) : null;
     if (why) held.set(c.path, why);
   }
-  // What makes a lockfile or generated file: the change's own commits, and the session's other edits here.
-  const committed = ((await gitTry(tree, ["diff", "--name-only", "--no-renames", change.base, now.base])) ?? "").split("\n").filter(Boolean);
+  // What makes a lockfile or generated file: the change's own files, and the session's other edits here. A branch's
+  // files are all it changes off the default branch; its recorded base is only where the run found it.
+  const committed = rebuiltFrom(change)
+    ? ((await gitTry(tree, ["diff", "--name-only", "--no-renames", change.base, now.base])) ?? "").split("\n").filter(Boolean)
+    : branchChangePaths(tree, change.branch);
   const sources = [...committed, ...changes.map((c) => c.path)].filter((p) => !held.has(p) && !generated(p));
   const workspaces = workspacePatterns(tree);
   for (const c of changes) {
@@ -565,6 +569,34 @@ function setHeldAside(tree: string, runDir: string, carry: TreeCarry): void {
   }
 }
 
+/** Whether a change is frozen again from a checkout (the session's own edits, or a checkout's), not read off its branch. */
+const rebuiltFrom = (change: FrozenChange) => change.source === "checkout" || (change.source === "session" && !change.pushed);
+
+/**
+ * A credential the session committed in the run's worktree since the change was last frozen refuses the refreeze,
+ * naming it: the run would carry that commit into the change, and rewriting the session's own commit is not the run's
+ * to do. Nothing has moved when it refuses.
+ */
+async function refuseCommittedCredentials(root: string, last: string, head: string): Promise<void> {
+  if (head === last) return;
+  const from = (await gitTry(root, ["merge-base", last, head])) ?? last;
+  const written = (await treeDiff(root, from, head)).filter((e) => e.dst);
+  const texts = await readBlobs(root, written.map((e) => e.dst!));
+  const found = written.flatMap((e) => {
+    const why = credentialReason(e.path, texts.get(e.dst!) ?? null);
+    return why ? [`${e.path} (${why})`] : [];
+  });
+  if (found.length) throw new Error(`The session committed ${found.join(", ")} in the run's worktree, which the change never carries: take it out of those commits and end the turn again. Nothing moved`);
+}
+
+/** Origin's default branch, as this checkout last heard it or origin says now; null when neither can tell. */
+async function originDefault(root: string): Promise<string | null> {
+  const known = await gitTry(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  if (known) return known.replace(/^origin\//, "");
+  const said = await gitTry(root, ["ls-remote", "--symref", "origin", "HEAD"], { ...process.env, GIT_TERMINAL_PROMPT: "0" });
+  return (said && /^ref: refs\/heads\/(\S+)\s+HEAD/m.exec(said)?.[1]) || null;
+}
+
 /** A push that gives up after a minute and never prompts for credentials. */
 function pushRef(root: string, args: string[]) {
   return execFileAsync("git", ["-C", root, "push", "--quiet", ...args], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -572,26 +604,35 @@ function pushRef(root: string, args: string[]) {
 
 /**
  * Push a branch's tip holding edits carried from the run's worktree to origin, so origin holds them: the run may read
- * the branch from origin, and a fix pushed from elsewhere next builds on them rather than dropping them. Leased on
- * origin's tip as the refreeze read it; when origin moved since, what the tip holds over that is replayed onto its
- * new tip and pushed again. A conflict, or a push that keeps failing, refuses and moves nothing. A checkout with no
- * origin keeps the tip local.
+ * the branch from origin, and a fix pushed from elsewhere next builds on them rather than dropping them. A local-only
+ * branch is published. Every push is a fast-forward of origin as just fetched, leased on it: whatever origin holds
+ * that the tip lacks (another clone's push) goes under what the tip holds over their common commit, replayed, never
+ * over. A conflict, a push that keeps failing (origin unreachable), or origin's default branch refuses, and nothing
+ * moves. A checkout with no origin keeps the tip local.
  */
-async function pushCarry(root: string, branch: string, tip: string, remote: string | undefined): Promise<{ tip: string; remote_tip?: string }> {
+async function pushCarry(root: string, branch: string, tip: string): Promise<{ tip: string; remote_tip?: string }> {
   if (!(await gitTry(root, ["remote", "get-url", "origin"]))) return { tip };
-  let [at, lease] = [tip, remote ?? ""];
-  for (let tries = 0; ; tries++) {
-    const failed = await pushRef(root, [`--force-with-lease=refs/heads/${branch}:${lease}`, "origin", `${at}:refs/heads/${branch}`]).then(() => null, (err: Error) => err);
+  const main = await originDefault(root);
+  if (branch === main || (!main && /^(main|master)$/.test(branch))) throw new Error(`The change's branch ${branch} is origin's default branch, which the run never pushes to: commit the fix on a branch of the change's own. Nothing moved`);
+  let at = tip;
+  let failure = "";
+  for (let tries = 0; tries < 3; tries++) {
+    const now = await originTip(root, branch);
+    if (now && !(await isAncestor(root, now, at))) {
+      const from = await gitTry(root, ["merge-base", at, now]);
+      if (!from) throw new Error(`Origin's ${branch} at ${now.slice(0, 10)} shares no history with the change, so the edits carried from the run's worktree cannot go on it. Nothing moved`);
+      at = await replayCarry(root, from, at, now, `origin's ${branch} at ${now.slice(0, 10)}`);
+    }
+    const failed = await pushRef(root, [`--force-with-lease=refs/heads/${branch}:${now}`, "origin", `${at}:refs/heads/${branch}`]).then(() => null, (err: Error & { stderr?: string }) => err.stderr?.trim().split("\n")[0] || err.message.split("\n")[0]);
     if (!failed) {
       await git(root, ["update-ref", `refs/remotes/origin/${branch}`, at]);
       return { tip: at, remote_tip: at };
     }
-    const now = await originTip(root, branch);
-    if (!now || now === lease || tries >= 2) throw new Error(`Could not push the edits carried from the run's worktree to origin's ${branch} (${(failed as { stderr?: string }).stderr?.trim().split("\n")[0] || failed.message.split("\n")[0]}), so nothing moved`);
-    const from = lease && (await isAncestor(root, lease, at)) ? lease : await git(root, ["merge-base", at, now]);
-    at = await replayCarry(root, from, at, now, `origin's ${branch} at ${now.slice(0, 10)}`);
-    lease = now;
+    failure = failed;
+    // Origin unmoved means the push itself failed (unreachable, refused): another try changes nothing.
+    if ((await originTip(root, branch)) === now) break;
   }
+  throw new Error(`Could not push the edits carried from the run's worktree to origin's ${branch} (${failure}), so nothing moved; they stay in the worktree`);
 }
 
 /**
@@ -610,8 +651,9 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   const carry = worktreePath ? await treeCarry(root, worktreePath, runDir, before) : null;
   const head = carry?.head ?? (worktreePath ? await git(worktreePath, ["rev-parse", "HEAD"]) : before.tip);
   const top = carry?.commit ?? head;
+  await refuseCommittedCredentials(root, before.tip, head);
   let change: FrozenChange;
-  if (before.source === "checkout" || (before.source === "session" && !before.pushed)) {
+  if (rebuiltFrom(before)) {
     // The run's worktree held the change as last frozen: one reset or rebased there holds something else.
     if (!(await isAncestor(root, before.tip, head))) throw new Error(`The run's worktree is at ${head.slice(0, 10)}, which does not hold the change as last frozen (${before.tip.slice(0, 10)}): it was reset or rebased there, so it is left as it is`);
     change = before.source === "checkout" ? await refreezeCheckoutChange(root, before, opts.roster, opts.since) : await refreezeOwnChange(root, before);
@@ -626,7 +668,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
     change = { ...before, ...(await branchTip(root, before)) };
     if (top !== head) {
       const tip = change.tip === head ? top : await replayCarry(root, head, top, change.tip, `the branch's tip ${change.tip.slice(0, 10)}`);
-      change = { ...change, ...(await pushCarry(root, change.branch, tip, change.remote_tip)) };
+      change = { ...change, ...(await pushCarry(root, change.branch, tip)) };
     }
   }
   if (carry?.held.length) change.held = [...change.held.filter((h) => !carry.held.some((c) => c.path === h.path)), ...carry.held];

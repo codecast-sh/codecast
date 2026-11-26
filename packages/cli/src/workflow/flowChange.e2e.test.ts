@@ -313,6 +313,80 @@ describe("a named branch's fix comes back to the run", () => {
     expect(readFrozenChange(runDir)?.tip).toBe(second.tip);
     expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here again\n");
   }, 180_000);
+  /** Origin with main and `branch` at one base commit, this checkout's run worktree on `branch`, and another clone on it. */
+  function originWorld(name: string, branch = "feat") {
+    const origin = path.join(sandbox, `origin-${name}.git`);
+    const here = path.join(sandbox, `here-${name}`);
+    const there = path.join(sandbox, `there-${name}`);
+    execFileSync("git", ["init", "--quiet", "--bare", "-b", "main", origin]);
+    execFileSync("git", ["clone", "--quiet", origin, here], { env: { ...process.env, ...ENV } });
+    write(here, "a.txt", "a\n");
+    write(here, "package.json", "{}\n");
+    write(here, "bun.lock", "lock 1\n");
+    git(here, "add", "-A");
+    git(here, "commit", "--quiet", "-m", "base");
+    git(here, "push", "--quiet", "origin", ...new Set(["HEAD:refs/heads/main", `HEAD:refs/heads/${branch}`]));
+    git(here, "fetch", "--quiet", "origin");
+    if (branch === "main") git(here, "checkout", "--quiet", "--detach");
+    else git(here, "branch", branch, `origin/${branch}`);
+    const worktree = path.join(sandbox, `run-wt-${name}`);
+    git(here, "worktree", "add", "--quiet", worktree, branch);
+    execFileSync("git", ["clone", "--quiet", "--branch", branch, origin, there], { env: { ...process.env, ...ENV } });
+    const runDir = path.join(sandbox, `run-dir-${name}`);
+    // The run starts on the branch as it stands: its recorded base is its head then.
+    const start = () => {
+      const tip = git(here, "rev-parse", branch);
+      writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: tip, tip, remote_tip: tip, branch, worktree: `run-wt-${name}`, paths: [], shared: [], held: [] } as any);
+      return tip;
+    };
+    return { origin, here, there, worktree, runDir, start };
+  }
+
+  test("another clone's push between rounds goes under the session's commit and carry, never under a force-push (ct-99118)", async () => {
+    const { origin, here, there, worktree, runDir, start } = originWorld("under");
+    start();
+    write(there, "y.txt", "another clone\n");
+    git(there, "add", "y.txt");
+    git(there, "commit", "--quiet", "-m", "y there");
+    git(there, "push", "--quiet", "origin", "feat");
+    const theirs = git(there, "rev-parse", "HEAD");
+    await snapshotRunTree(worktree, runDir);
+    // The session commits one fix in the worktree and leaves another uncommitted.
+    write(worktree, "x.txt", "committed here\n");
+    git(worktree, "add", "x.txt");
+    git(worktree, "commit", "--quiet", "-m", "x here");
+    write(worktree, "z.txt", "left here\n");
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(git(origin, "rev-parse", "feat")).toBe(change.tip);
+    expect(git(here, "merge-base", "--is-ancestor", theirs, change.tip)).toBe("");
+    expect(["x.txt", "y.txt", "z.txt"].map((f) => git(here, "show", `${change.tip}:${f}`))).toEqual(["committed here", "another clone", "left here"]);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(change.tip);
+  }, 180_000);
+
+  test("a lockfile regenerated for the branch's own manifest edit, made before the run, is carried (ct-99118)", async () => {
+    const { origin, here, worktree, runDir, start } = originWorld("lock");
+    write(worktree, "package.json", "{\"dependencies\":{\"y\":\"1\"}}\n");
+    git(worktree, "commit", "--quiet", "-am", "add y");
+    git(worktree, "push", "--quiet", "origin", "feat");
+    start();
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "bun.lock", "lock 2\n");
+    const { change, held } = await refreezeSessionChange(here, runDir, worktree);
+    expect(held).toEqual([]);
+    expect(git(origin, "show", "feat:bun.lock")).toBe("lock 2");
+    expect(change.tip).toBe(git(origin, "rev-parse", "feat"));
+  }, 180_000);
+
+  test("a carry on origin's default branch refuses and moves nothing (ct-99118)", async () => {
+    const { origin, here, worktree, runDir, start } = originWorld("main", "main");
+    const tip = start();
+    await snapshotRunTree(worktree, runDir);
+    write(worktree, "b.txt", "left here\n");
+    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/origin's default branch/);
+    expect(git(origin, "rev-parse", "main")).toBe(tip);
+    expect(git(here, "rev-parse", "main")).toBe(tip);
+    expect(fs.readFileSync(path.join(worktree, "b.txt"), "utf-8")).toBe("left here\n");
+  }, 180_000);
 });
 
 // A shared checkout whose HEAD lags its upstream: the change is cut on HEAD,
@@ -652,7 +726,7 @@ describe("edits left in the run's worktree", () => {
     const root = path.join(sandbox, name);
     fs.mkdirSync(root);
     git(root, "init", "-q", "-b", "main");
-    for (const f of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "package.json", "bun.lock"]) write(root, f, "base\n");
+    for (const f of ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "package.json", "bun.lock", ".env.production"]) write(root, f, "base\n");
     git(root, "add", "-A");
     git(root, "commit", "-qm", "base");
     if (opts.grow) {
@@ -805,5 +879,28 @@ describe("edits left in the run's worktree", () => {
     await expect(refreezeSessionChange(root, runDir, tree)).rejects.toThrow(/does not hold the change as last frozen/);
     expect(readFrozenChange(runDir)?.tip).toBe(before);
     expect(fs.readFileSync(path.join(tree, "b.txt"), "utf-8")).toBe("fixed on the wrong base\n");
+  }, 180_000);
+  test("a credential the session committed in the worktree refuses the refreeze, naming it, and moves nothing (ct-99118)", async () => {
+    const { root, runDir, tree, branch } = await carryWorld("cari");
+    const before = git(root, "rev-parse", branch);
+    await snapshotRunTree(tree, runDir);
+    write(tree, ".env", "KEY=1\n");
+    write(tree, "b.txt", "fixed\n");
+    git(tree, "add", ".env", "b.txt");
+    git(tree, "commit", "--quiet", "-m", "fix with a secret");
+    const committed = git(tree, "rev-parse", "HEAD");
+    await expect(refreezeSessionChange(root, runDir, tree)).rejects.toThrow(/committed \.env \(named like a credential file\)/);
+    expect(git(root, "rev-parse", branch)).toBe(committed);
+    expect(readFrozenChange(runDir)?.tip).toBe(before);
+  }, 180_000);
+
+  test("deleting a tracked file named like a credential is carried, not held", async () => {
+    const { root, runDir, tree } = await carryWorld("carj");
+    await snapshotRunTree(tree, runDir);
+    fs.rmSync(path.join(tree, ".env.production"));
+    const { change, held } = await refreezeSessionChange(root, runDir, tree);
+    expect(held).toEqual([]);
+    expect(git(root, "ls-tree", "--name-only", change.tip, "--", ".env.production")).toBe("");
+    expect(fs.existsSync(path.join(tree, ".env.production"))).toBe(false);
   }, 180_000);
 });
