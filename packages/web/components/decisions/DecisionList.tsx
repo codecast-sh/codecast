@@ -11,8 +11,7 @@ import { ArrowUpRight, CircleDot, Clock, FolderKanban, Inbox, Shapes, Tag, UserR
 import { toast } from "sonner";
 import { GenericListView, type ItemRowState, type ListGroup, type ListTab } from "../GenericListView";
 import { useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
-import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
-import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
+import { useDecisionParties } from "../../hooks/useDecisionParties";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import type { DecisionViewState } from "../../hooks/useDecisionView";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
@@ -54,7 +53,8 @@ export type DecisionListProps = {
   savedViews?: boolean;
   headerExtra?: ReactNode;
   displayExtra?: ReactNode;
-  customContent?: () => ReactNode;
+  /** Draws the tab's rows another way (cards, the answered feed), handed the rows the list would show, filters applied. */
+  customContent?: (items: ReadonlyArray<SessionDecisionItem>) => ReactNode;
   emptyMessage?: ReactNode;
   /** Draw narrow rows (the list beside a reader). */
   compact?: boolean;
@@ -65,21 +65,12 @@ export type DecisionListProps = {
 export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact, publishOrder }: DecisionListProps) {
   const { view, set, prefs, replace } = state;
   const now = useCoarseNow(60_000);
-  const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const roster = useTeamRosterIdentity();
-  const { people, roles } = useRolesAndPeopleOptions(roster);
+  const { me, people, roles, parties: owners, partyOf: ownerOf } = useDecisionParties();
   // The areas' names, looked up by the ids the rows name (a row may come from another workspace than the active one).
   const areaIds = useMemo(() => [...new Set([...rows.mine, ...rows.workspace].map((d) => d.area_project_id).filter((p): p is string => !!p))].sort(), [rows]);
   const titlesSig = useInboxStore((s) => areaIds.map((id) => (s.projects as Record<string, { title?: string } | undefined> | undefined)?.[id]?.title ?? "").join("\u0001"));
   const projectTitle = useMemo(() => { const t = titlesSig.split("\u0001"); return new Map(areaIds.map((id, i) => [id, t[i] ?? ""])); }, [areaIds, titlesSig]);
   const areaName = useCallback((p: string) => (p && p !== "none" ? projectTitle.get(p) || "Another project" : "No project"), [projectTitle]);
-  const owners = useMemo(() => {
-    const m = new Map<string, { label: string; face: ReactNode }>();
-    for (const p of people) m.set(`user:${p.key}`, { label: p.key === me ? `${p.label} (you)` : p.label, face: p.face });
-    for (const r of roles) m.set(`role:${r.key}`, { label: r.label, face: r.face });
-    return m;
-  }, [people, roles, me]);
-  const ownerOf = useCallback((key: string) => owners.get(key) ?? null, [owners]);
   const label = useCallback((axis: DecisionAxis, value: string) => {
     switch (axis) {
       case "owner": return value === "none" ? "Unassigned" : owners.get(value)?.label ?? (value.startsWith("role:") ? "A role" : "Someone");
@@ -194,7 +185,7 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
       activeItemId={activeItemId}
       headerExtra={headerExtra}
       displayExtra={displayExtra}
-      customContent={customContent}
+      customContent={customContent ? () => customContent(arranged.groups ? arranged.groups.flatMap((g) => g.items) : arranged.items) : undefined}
     />
   );
 }
