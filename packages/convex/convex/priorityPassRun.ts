@@ -219,6 +219,9 @@ export const recordRun = internalMutation({
   },
 });
 
+/** A milestone whose done state its tasks or pull requests decide (lib/priorityLinks evidenceFor). */
+const hasRecords = (st: { refs: Array<{ kind: string }> }) => st.refs.some((r) => r.kind === "task" || r.kind === "pr");
+
 /** Plan fields as row fields: null clears a field on a patch and is left out of an insert. */
 function rowFields(w: Record<string, unknown>, insert = false): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -352,6 +355,8 @@ export const applyPlan = internalMutation({
       });
       ids.set(ref, id);
       counts.created++;
+      // A milestone born done takes its done time from its tasks and pull requests, not this pass (a catch-up builds from last week's).
+      for (const st of w.steps) if (st.done && hasRecords(st)) await recomputeStepDone(ctx, id, st.key);
     }
 
     // Per priority this plan rewrote: its live step keys after the write, and the plan's new keys that moved.
@@ -393,11 +398,11 @@ export const applyPlan = internalMutation({
       const rewrote = plan.rewritten.includes(row.short_id) ? { needs_rewrite: undefined } : {};
       await ctx.db.patch(row._id, { ...(rowFields(patch) as any), ...rewrote, updated_at: now });
       counts.updated++;
-      // A milestone whose done state this write changed follows its tasks and pull requests as they are now
-      // (lib/priorityLinks): a plan made before a task closed, or one that flips a merged milestone, never undoes them.
+      // A milestone this write leaves done, or whose done state it changed, follows its tasks and pull requests as they are now
+      // (lib/priorityLinks): done_at is theirs, and a plan made before a task closed, or one that flips a merged milestone, never undoes them.
       for (const st of patch.steps ?? []) {
         const before = row.steps.find((x) => x.key === st.key);
-        if (before && (before.done !== st.done || before.done_at !== st.done_at) && st.refs.some((r) => r.kind === "task" || r.kind === "pr")) await recomputeStepDone(ctx, row._id, st.key);
+        if (hasRecords(st) && (st.done || (before && (before.done !== st.done || before.done_at !== st.done_at)))) await recomputeStepDone(ctx, row._id, st.key);
       }
     }
 

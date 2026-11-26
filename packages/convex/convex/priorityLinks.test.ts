@@ -136,6 +136,26 @@ describe("a pass never undoes what tasks and pull requests say", () => {
     expect(await stepOf(t, p1, "s3")).toMatchObject({ done: false, done_set_by: "person" });
   });
 
+  test("a catch-up that builds a priority from tasks closed last week dates each milestone by its tasks' closes, not the pass", async () => {
+    const { t, ada, ct1, ct3, ct4 } = await world();
+    const D = 24 * H;
+    await t.run(async (ctx: any) => {
+      await ctx.db.patch(ct1, { status: "done", closed_at: NOW - 7 * D });
+      await ctx.db.patch(ct3, { status: "done", closed_at: NOW - 6 * D });
+      await ctx.db.patch(ct4, { status: "done", closed_at: NOW - 5 * D });
+    });
+    const done = (key: string, refs: Array<{ kind: "task"; id: string }>) => ({ ...step(key, refs), done: true, done_at: NOW });
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: NOW, from_cursor: 1, cursor_at: 2, model: "m",
+      plan: {
+        creates: [{ ref: "new-1", title: "Last week", summary: "", status: "active", ai_rank: 2, serves: null, steps: [done("s1", [{ kind: "task", id: "ct-1" }]), done("s2", [{ kind: "task", id: "ct-3" }, { kind: "task", id: "ct-4" }]), { ...step("s3"), done: true, done_at: NOW }], last_active_at: NOW, first_seen_at: NOW, pass_at: NOW }],
+        updates: [], merges: [], sessions: [], unmap: [], notes: [], rewritten: [],
+      },
+    });
+    const created = await t.run(async (ctx: any) => (await ctx.db.query("priorities").collect()).find((p: any) => p.title === "Last week"));
+    expect(created.steps.map((s: any) => [s.key, s.done, s.done_at])).toEqual([["s1", true, NOW - 7 * D], ["s2", true, NOW - 5 * D], ["s3", true, NOW]]);
+  });
+
   test("nor its closed task's; a task reopening does reopen it", async () => {
     const { t, ada, p1, ct1 } = await world();
     await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct1), { status: "done", closed_at: NOW - H }));
