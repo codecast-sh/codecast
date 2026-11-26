@@ -343,6 +343,8 @@ export async function recordStationRebaseCore(ctx: any, userId: Id<"users">, arg
   }
   const attempt = runAttempt(run);
   await ctx.db.patch(run._id, { station_rebases: [...(run.station_rebases ?? []), { from: args.from, to: args.to, at: now, attempt }].slice(-10), updated_at: now });
+  // The push's own status may have been worked out before this link was stored, and the review covers `to` only through it.
+  await scheduleRunApprovalPost(ctx, run);
   return { attempt };
 }
 
