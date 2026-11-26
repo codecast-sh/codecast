@@ -105,7 +105,8 @@ describe("priority controls ride dispatch", () => {
     expect(await t.run(async (ctx: any) => (await ctx.db.query("priority_corrections").collect()).length)).toBe(2);
     await t.run(async (ctx: any) => { for (const c of await ctx.db.query("priority_corrections").collect()) if (c.client_key === "ck-2") await ctx.db.delete(c._id); });
     await dispatch(t, ada, "deletePriorityCorrection", [String(row._id)]);
-    expect(await t.run(async (ctx: any) => ctx.db.query("priority_corrections").collect())).toEqual([]);
+    // Deleted is hidden, not erased (an applied one stays an eval case).
+    expect((await t.run(async (ctx: any) => ctx.db.query("priority_corrections").collect())).map((c: any) => !!c.deleted_at)).toEqual([true]);
     await t.run(async (ctx: any) => { for (const j of await ctx.db.system.query("_scheduled_functions").collect()) await ctx.scheduler.cancel(j._id); });
   });
 
