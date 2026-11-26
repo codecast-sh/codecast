@@ -2752,6 +2752,15 @@ export function isForeignRow(s: InboxSession, meId: string | null | undefined): 
   foreignByRow.set(s, { meId, foreign });
   return foreign;
 }
+// The session a cold open adopts from an inbox already in sort order: the
+// viewer's own top row when they have one, else the top row. Top-of-inbox can
+// be a teammate's session (team mode, a shared summary); landing there left a
+// new customer four steps from their own session (ct-101806). Both boot paths
+// call this: the sessions-sync transform and QueuePageClient's adopt effect.
+export function bootLandingSession<T extends InboxSession>(sorted: T[], meId: string | null | undefined): T | undefined {
+  if (!meId) return sorted[0];
+  return sorted.find((s) => !isForeignSession(s, undefined, meId)) ?? sorted[0];
+}
 function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
   // Under the owners model the inbox is exactly what the viewer owns (an owner
@@ -8476,7 +8485,8 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
           ?? draft.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
         declareViewNav("adopt");
-        draft.currentSessionId = (persisted && table[persisted]) ? persisted : (sorted[0]?._id ?? null);
+        const meId = draft.currentUser?._id ? String(draft.currentUser._id) : null;
+        draft.currentSessionId = (persisted && table[persisted]) ? persisted : (bootLandingSession(sorted, meId)?._id ?? null);
       }
     },
   },

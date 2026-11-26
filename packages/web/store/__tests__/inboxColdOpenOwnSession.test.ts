@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { useInboxStore, type InboxSession } from "../inboxStore";
+import { useInboxStore, bootLandingSession, sortSessions, type InboxSession } from "../inboxStore";
 import { _resetViewNavForTests } from "../viewNav";
 
 // ct-101806: a cold open of the inbox (feed home, nothing named in the address,
@@ -68,5 +68,42 @@ describe("inbox cold open picks the viewer's own session (ct-101806)", () => {
     (globalThis as any).window = { location: { pathname: "/inbox", search: "?s=convTeammate" } };
     useInboxStore.getState().syncTable("sessions", [teammateSummary, mine]);
     expect(useInboxStore.getState().currentSessionId).toBe("convTeammate");
+  });
+
+  it("guard: board home shows the fleet and adopts nothing", () => {
+    useInboxStore.setState({ clientState: { ui: { inbox_home: "board" } } } as any);
+    useInboxStore.getState().syncTable("sessions", [teammateSummary, mine]);
+    expect(useInboxStore.getState().currentSessionId).toBeNull();
+    expect(useInboxStore.getState().showMySessions).toBe(true);
+  });
+
+  it("guard: a teammate's session sorting to the top after the first view does not move it", () => {
+    useInboxStore.getState().syncTable("sessions", [mine]);
+    expect(useInboxStore.getState().currentSessionId).toBe("convMine");
+    useInboxStore.getState().syncTable("sessions", [{ ...teammateSummary, updated_at: 500 }]);
+    expect(useInboxStore.getState().currentSessionId).toBe("convMine");
+  });
+});
+
+// QueuePageClient's adopt effect calls the same helper over its sorted list.
+describe("bootLandingSession", () => {
+  const sorted = sortSessions({ convTeammate: teammateSummary, convMine: mine });
+
+  it("picks the viewer's own top row over someone else's above it", () => {
+    expect(sorted[0]._id).toBe("convTeammate");
+    expect(bootLandingSession(sorted, ME)?._id).toBe("convMine");
+  });
+
+  it("falls back to the top row when the viewer has none of their own", () => {
+    expect(bootLandingSession([teammateSummary], ME)?._id).toBe("convTeammate");
+  });
+
+  it("takes the top row when the viewer is unknown", () => {
+    expect(bootLandingSession(sorted, null)?._id).toBe("convTeammate");
+  });
+
+  it("counts a session the viewer co-owns as theirs", () => {
+    const coOwned = { ...teammateSummary, _id: "convCoOwned", owned_by_me: true } as InboxSession;
+    expect(bootLandingSession([coOwned, mine], ME)?._id).toBe("convCoOwned");
   });
 });
