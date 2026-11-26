@@ -258,6 +258,50 @@ describe("flag on: the header's owners segment and menu", () => {
   });
 });
 
+describe("ct-101903: a staged owner change is not dropped when the person goes to another session", () => {
+  const OTHER = "o".repeat(32);
+  beforeEach(() => {
+    seed(true);
+    useInboxStore.setState((s: any) => ({
+      sessions: { ...s.sessions, [OTHER]: { _id: OTHER, session_id: OTHER, title: "Wardrobe one-click buying", user_id: "me", updated_at: 2, owners_model: true, owned_by_me: true, org_role_id: null, owner_session_id: null } },
+      conversations: { ...s.conversations, [OTHER]: { _id: OTHER, title: "Wardrobe one-click buying", user_id: "me" } },
+    }));
+    applySessionOwnersRead(OTHER, {
+      session_owners: true, conversation_id: OTHER, people: [{ user_id: "me", name: me.name, email: null, added_by: "me", added_at: 1 }],
+      role: null, parent_session: null, implicit_starter: null, starter_id: "me", role_started: false, can_edit: true, owners_changed_at: 1,
+    });
+  });
+
+  // The header's segment stays mounted and its conversationId changes when a
+  // sidebar row is clicked: the replay's "click button 'Wardrobe one-click
+  // buying, Needs you'" two seconds after staging an add, with no Save.
+  const page = (id: string) => <><button type="button" data-sidebar-row>Wardrobe one-click buying, Needs you</button><OwnersSegment conversationId={id} /></>;
+
+  test("the add is saved to the session it was staged on, or the person is asked; the new session gets nothing", async () => {
+    await render(page(S));
+    await click($("[data-owners-seg]"));
+    await click($('[data-owner-candidate="p:ashot"] .own-plus'));
+    expect($$("[data-chip-label]").map((c) => c.textContent)).toEqual(["+ Ashot"]);
+    // A press outside the menu on a sidebar row, then the page moves on.
+    const row = $("[data-sidebar-row]")!;
+    await act(async () => {
+      row.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+      row.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true, button: 0 }));
+      row.click();
+    });
+    await render(page(OTHER));
+    await settle();
+    const savedToOrigin = sent.some((x) => x.action === "applySessionOwners" && x.args[0] === S && x.args[1]?.add?.includes("ashot"))
+      && ownerIdsOf(useInboxStore.getState() as any, S).includes("ashot");
+    const asked = $$('[role="alertdialog"], [data-owners-unsaved]').some((el) => /ashot|owner|unsaved|save/i.test(el.textContent ?? ""));
+    expect({ savedToOrigin, asked }).not.toEqual({ savedToOrigin: false, asked: false });
+    // The destination never receives the add, and its menu opens clean.
+    expect(sent.some((x) => x.action === "applySessionOwners" && x.args[0] === OTHER)).toBe(false);
+    expect(ownerIdsOf(useInboxStore.getState() as any, OTHER)).toEqual(["me"]);
+    await render(null);
+  });
+});
+
 describe("a narrow header: Owners in the session menu opens the owners sheet", () => {
   const menu = (open: () => void) => <DropdownMenu open><DropdownMenuContent><OwnersMenuItem conversationId={S} onOpen={open} /></DropdownMenuContent></DropdownMenu>;
 
