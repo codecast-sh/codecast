@@ -184,7 +184,7 @@ export {
   type InboxOverlayDeps,
 } from "./inboxOverlays";
 export { monotonicNow } from "./syncActivity";
-import { cancelDraftWrite } from "../lib/pendingDraftWrites";
+import { cancelDraftWrite, hasPendingDraftWrite } from "../lib/pendingDraftWrites";
 import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
 import { cascadeFromAnswer, permissionRuleKey } from "@codecast/shared/contracts/permissionRules";
@@ -381,7 +381,7 @@ import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./live
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
 import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
-import { createComposeSlice, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
+import { createComposeSlice, composeDraftContent, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -9424,11 +9424,26 @@ function seedSessionRow(draft: Draft, session: InboxSession): InboxSession {
 }
 
 function commitCurrentSession(draft: Draft, id: string) {
+  keepLeftBlankDraft(draft, draft.currentSessionId, id);
   recordSessionView(draft, id, draft.currentSessionId);
   draft.currentSessionId = id;
   draft.viewingDismissedId = null;
   recordCurrentConversationPointer(draft, id);
   syncActiveInboxTabPath(draft, id);
+}
+
+// Moving off a never-sent blank the person typed into (the full new-session
+// page) keeps it, as dismissing the compose popup does: flagged _hasDraft it
+// stays a draft card in NEW and outlives the stub sweep. Without this, focus
+// was all that showed it, so the next new session (Ctrl+N) hid the first one.
+// A debounced keystroke not yet in drafts counts as content.
+function keepLeftBlankDraft(draft: Draft, leavingId: string | null, nextId: string) {
+  if (!leavingId || leavingId === nextId || isConvexId(leavingId)) return;
+  const row = draft.sessions[leavingId];
+  if (!row || row._hasDraft || (row.message_count ?? 0) > 0) return;
+  if (!composeDraftContent(draft, leavingId) && !hasPendingDraftWrite(leavingId)) return;
+  row._hasDraft = true;
+  row.updated_at = Date.now();
 }
 
 // The view-only peek at a hidden (stashed, dismissed) session, or null to end

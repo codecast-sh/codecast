@@ -169,6 +169,8 @@ export type StatusRow = {
   agent_status_updated_at?: number | null;
   daemon_alive_until?: number | null;
   last_role_is_user?: boolean | null;
+  /** A kept new-session draft: a local stub nothing is starting. */
+  _hasDraft?: boolean;
 };
 
 /** Facts a row does not carry, from the store around it. */
@@ -231,7 +233,9 @@ export function statusFailure(row: StatusRow, now: number, live: StatusLive = {}
  *  connection yet. A hosted one is starting until its first reply. */
 export function statusStarting(row: StatusRow, now: number, live: StatusLive = {}, hosted = false): boolean {
   if ((row.message_count ?? 0) > 0) return false;
-  if (live.pendingSend || hosted) return true;
+  if (live.pendingSend) return true;
+  if (row._hasDraft) return false;
+  if (hosted) return true;
   const status = agentStatusAt(row, now);
   if (status && status !== "idle" && !DEAD_AGENT_STATUSES.has(status)) return true;
   return sessionStartupState({ isConnected: !!row.is_connected, ageMs: now - (row.started_at || row.updated_at || now) }) === "starting";
