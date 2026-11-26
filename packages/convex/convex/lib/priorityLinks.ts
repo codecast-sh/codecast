@@ -11,13 +11,16 @@
 // workspace is done once none is open and one merged; only one with neither
 // is marked done by its sessions.
 // Session evidence never reopens a milestone, and a milestone already done
-// keeps its first done time.
+// keeps its first done time. Evidence never touches a milestone the person
+// marked done or not done, or dropped.
 //
 // Links: a session whose milestone is already known gets priority_id and
 // priority_step_key when it is created or bound, and the session counts
 // follow (lib/prioritySessionCount). A link is only ever to the session
 // owner's own priority in the session's own workspace, the one the pass
-// would map it in.
+// would map it in, and, as for the pass, never moves a session the person
+// placed, onto a priority they said it is not part of, or onto a milestone
+// they dropped.
 //
 // Every read is an index lookup: the records' linked sessions, and the
 // newest OWN_READ priorities of the people concerned, read once per person
@@ -137,7 +140,8 @@ async function evidenceFor(ctx: Ctx, p: Priority, step: Step, sessionAt: number 
 /**
  * Recompute one milestone's done state from its evidence and write it when it
  * moved. `sessionAt` is the time of session evidence (an answered decision, a
- * pin declared done) on a session mapped to it. Returns whether it wrote.
+ * pin declared done) on a session mapped to it. Returns whether it wrote;
+ * never for a milestone whose done state the person set, or one they dropped.
  */
 export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, stepKey: string, sessionAt?: number): Promise<boolean> {
   const p: Priority | null = await ctx.db.get(priorityId);
@@ -145,6 +149,7 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
   const i = p.steps.findIndex((s) => s.key === stepKey);
   if (i < 0) return false;
   const step = p.steps[i];
+  if (step.done_set_by === "person" || step.dropped) return false;
   const evidence = await evidenceFor(ctx, p, step, sessionAt);
   if (!evidence) return false;
   const { done_at: _, ...rest } = step;
@@ -196,15 +201,20 @@ export async function sessionEvidence(ctx: Ctx, conv: Pick<Conv, "priority_id" |
 /**
  * Map a session to its owner's priority (and milestone, when it still has
  * that one) in the session's own workspace, keeping both priorities' session
- * counts. Refused (false) for someone else's priority, a merged one, or
- * another workspace; a no-op when the session is already there. It reads the
+ * counts. Refused (false) for a session the person placed, someone else's
+ * priority, a merged one, one the person said the session is not part of, a
+ * milestone they dropped, or another workspace; a no-op when the session is
+ * already there. It reads the
  * priority itself: callers find it in the per-mutation cache (ownPriorities),
  * whose rows may be stale on anything but ids, refs and keys.
  */
 export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined): Promise<boolean> {
+  if (conv.priority_set_by === "person" || (conv.priority_not ?? []).some((id) => String(id) === String(priorityId))) return false;
   const priority: Priority | null = await ctx.db.get(priorityId);
   if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id)) return false;
-  const stepKey = priority.steps.some((s) => s.key === step) ? step : undefined;
+  const target = priority.steps.find((s) => s.key === step);
+  if (target?.dropped) return false;
+  const stepKey = target ? step : undefined;
   if (String(conv.priority_id ?? "") === String(priority._id) && conv.priority_step_key === stepKey) return false;
   if ((await sessionVisibility(ctx).workspaceOf(conv)) !== priority.workspace) return false;
   await ctx.db.patch(conv._id, { priority_id: priority._id, priority_step_key: stepKey });
@@ -224,7 +234,7 @@ export async function linkFromStart(ctx: Ctx, starter: Id<"users">, convId: Id<"
 export async function linkFromTask(ctx: Ctx, conv: Conv, task: Pick<Doc<"tasks">, "short_id">): Promise<boolean> {
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
-    const step = p.steps.find((s) => s.refs.some((r) => r.kind === "task" && r.id === task.short_id));
+    const step = p.steps.find((s) => !s.dropped && s.refs.some((r) => r.kind === "task" && r.id === task.short_id));
     if (step) return linkSession(ctx, conv, p._id, step.key);
   }
   return false;
@@ -245,6 +255,7 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
     for (const s of p.steps) {
+      if (s.dropped) continue;
       const refs = s.refs.filter((r) => r.kind === "task");
       if (refs.length && refs.filter((r) => inPlan.has(r.id)).length * 2 >= refs.length) return linkSession(ctx, conv, p._id, s.key);
     }

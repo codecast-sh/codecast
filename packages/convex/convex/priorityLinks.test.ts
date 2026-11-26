@@ -330,6 +330,55 @@ describe("a known link maps a session at creation, with no pass", () => {
   });
 });
 
+describe("the person's corrections stand against evidence and links", () => {
+  const setStep = (t: any, p: Id<"priorities">, key: string, fields: Record<string, unknown>) => t.run(async (ctx: any) => {
+    const row = await ctx.db.get(p);
+    await ctx.db.patch(p, { steps: row.steps.map((s: any) => (s.key === key ? { ...s, ...fields } : s)) });
+  });
+
+  test("evidence never overwrites a done state the person set", async () => {
+    const { t, p1, ct1, ct5 } = await world();
+    await setStep(t, p1, "s1", { done: true, done_at: NOW - 5 * H, done_set_by: "person" });
+    await setStep(t, p1, "s6", { done: false, done_set_by: "person" });
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct1), { status: "done", closed_at: NOW - H }));
+    expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: NOW - 5 * H });
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct1), { status: "in_progress", closed_at: undefined }));
+    expect(await stepOf(t, p1, "s1")).toMatchObject({ done: true, done_at: NOW - 5 * H });
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct5), { status: "done", closed_at: NOW - H }));
+    expect((await stepOf(t, p1, "s6")).done).toBe(false);
+  });
+
+  test("evidence never touches a milestone the person dropped", async () => {
+    const { t, p1, ct5 } = await world();
+    await setStep(t, p1, "s6", { dropped: true });
+    await t.run(async (ctx: any) => patchTask(ctx, await ctx.db.get(ct5), { status: "done", closed_at: NOW - H }));
+    expect(await stepOf(t, p1, "s6")).toMatchObject({ done: false, dropped: true });
+  });
+
+  test("a link never moves a session the person placed", async () => {
+    const { t, p1, cFree } = await world();
+    await t.run((ctx: any) => ctx.db.patch(cFree, { priority_id: p1, priority_step_key: "s3", priority_set_by: "person" }));
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "in_progress", conversation_id: "sess-jx7free" });
+    expect((await convOf(t, cFree)).priority_step_key).toBe("s3");
+  });
+
+  test("a link never maps a session to a priority the person said it is not part of", async () => {
+    const { t, p1, cFree } = await world();
+    await t.run((ctx: any) => ctx.db.patch(cFree, { priority_not: [p1] }));
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "in_progress", conversation_id: "sess-jx7free" });
+    expect((await convOf(t, cFree)).priority_id).toBeUndefined();
+  });
+
+  test("a link never maps a session to a milestone the person dropped", async () => {
+    const { t, ada, p1, cFree } = await world();
+    await setStep(t, p1, "s1", { dropped: true });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "in_progress", conversation_id: "sess-jx7free" });
+    expect((await convOf(t, cFree)).priority_id).toBeUndefined();
+    expect(await t.run((ctx: any) => linkFromStart(ctx, ada, cFree, "pri-1", "s1"))).toBe(false);
+    expect((await convOf(t, cFree)).priority_id).toBeUndefined();
+  });
+});
+
 describe("an inbound issue sync closing or reopening a task", () => {
   test("recomputes the milestone naming it, at the close's time", async () => {
     const { ctx, tables } = engineCtx({
