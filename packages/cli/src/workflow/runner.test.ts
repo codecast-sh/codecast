@@ -875,6 +875,9 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     // The presenting station is named by its problem: its title is what a person meets in the decision's chat and page.
     expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9", task_title: "Graded sims hidden\nby world runs" }, true)).toBe("Graded sims hidden by world runs");
     expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9" }, true)).toBe("Present · ct-9");
+    // A named task names the station a person talks the fix over with.
+    expect(stationTitle({ id: "present", label: "Present" }, { task_id: "ct-9", task_title: "Bankers, lawyers and accountants are only ever matched to each other", task_name: "Advisor matching" }, true)).toBe("Advisor matching");
+    expect(stationTitle({ id: "prove", label: "Prove" }, { task_id: "ct-9", task_name: "Advisor matching" })).toBe("Prove · ct-9");
   }, 30000);
 
   test("a live hand that reads needs input once, then works on, is not taken as settled", async () => {

@@ -49,6 +49,8 @@ export type QueueItem = {
   sessionTitle?: string;
   // Where the asking session runs, as the decision row recorded it (source "decide").
   projectPath?: string;
+  // The flow run that asked, when a flow's station asked it.
+  runId?: string;
   question: string;
   // Authored payload (source "decide") — otherwise recovered context.
   contextMd?: string;
@@ -312,6 +314,7 @@ export function decisionQueueItems(
       session: sessions[d.conversation_id],
       sessionTitle: d.session_title,
       projectPath: d.project_path,
+      runId: d.workflow_run_id,
       question: d.question,
       contextMd: d.context_md,
       options: d.options,

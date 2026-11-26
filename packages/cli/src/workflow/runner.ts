@@ -1743,9 +1743,11 @@ async function pinnedElsewhere(options: RunOptions): Promise<boolean> {
  * of those sites (ct-49593). `task_source` names where the prose came from, in the fence an agent reads it in
  * (nodePrompt agentFacingContext): "task ct-N · imported from github acme/api#412".
  */
-export function taskProseVars(task: any): { task_title: string; task_source: string; task_description: string } {
+export function taskProseVars(task: any): { task_title: string; task_name: string; task_source: string; task_description: string } {
   return {
     task_title: inlineForeignText(task.title),
+    // The task's generated short name ("Advisor matching"), empty until the naming pass reaches it.
+    task_name: inlineForeignText(task.short_title || ""),
     task_source: foreignTaskSource(task),
     task_description: capForeignText(escapeForeignControlChars(task.description || ""), FOREIGN_TEXT_CAPS.descriptionChars),
   };
@@ -1891,9 +1893,12 @@ async function queueTaskDecision(options: RunOptions, question: string, note: st
 // reads on its own ("Prove · ct-42") instead of a title drawn from the
 // unattended preamble every station's prompt opens with. A station that
 // presents a decision is the session a person talks the fix over with, and its
-// title shows wherever they meet it (the decision's chat, its page's bar): it
-// is named by the problem, in the problem's own words.
+// title shows wherever they meet it (the inbox's decision card, the decision's
+// chat, its page's bar): it carries the problem's short name, the way a person
+// would say it, and the problem itself only until the task has one.
 export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>, presents = false): string {
+  const name = context["task_name"]?.trim();
+  if (presents && name) return name;
   const problem = context["task_title"]?.replace(/\s+/g, " ").trim();
   if (presents && problem) return problem.length > 100 ? `${problem.slice(0, 99).trimEnd()}…` : problem;
   const subject = context["task_id"] || context["plan_id"] || context["goal"];
