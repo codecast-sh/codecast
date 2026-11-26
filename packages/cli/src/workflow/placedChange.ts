@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import { spawnSync } from "../proc.js";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
-import type { FrozenChange } from "./flowChangeFile.js";
+import { writePlacedChange, type FrozenChange } from "./flowChangeFile.js";
 import type { RunHands } from "../lineTrialBranch.js";
 
 /** The words that keep a run on the asking machine, whatever default is set. */
@@ -151,10 +151,7 @@ export function handOffPlacedChange(top: string, runDir: string, change: FrozenC
   change.pushed = true;
   const refused = pushChangeBranch(top, change);
   if (refused) { console.error(refused); process.exit(1); }
-  fs.mkdirSync(runDir, { recursive: true });
-  const file = `${runDir}/placed-change.json`;
-  fs.writeFileSync(file, JSON.stringify(change));
-  return file;
+  return writePlacedChange(runDir, change);
 }
 
 /** `cast flow refreeze <run>`: this session's edits frozen again onto a placed run's branch and pushed (refreezePlacedChange). */
@@ -166,6 +163,9 @@ export async function refreezeRunCommand(runId: string, cwd: string, cliPost: (r
   if (!placed) { console.error(got?.error ? `Could not read run ${runId}: ${got.error}` : `Run ${runId} was not placed on another machine: it freezes the session's edits again on its own`); process.exit(1); }
   try {
     const change = await refreezePlacedChange(top, placed);
+    // The branch's new tip is this run's own freeze: the next `cast flow run` here takes it as such (runBranch.ts).
+    const { lineRunsRoot } = await import("./runDirs.js");
+    writePlacedChange(`${lineRunsRoot(top)}/${change.worktree}`, change);
     console.log(`✓ ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} frozen at ${change.tip.slice(0, 10)} on ${change.branch} and pushed; end your turn and the run fetches it`);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

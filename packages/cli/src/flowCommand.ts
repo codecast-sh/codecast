@@ -469,6 +469,28 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         };
         await claimCheckoutRun(checkoutGitDir, runLive).catch((err) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });
       }
+      // The branch is this run's alone before anything moves or checks it out, and before a task is made for a run
+      // that would be refused (workflow/runBranch.ts, ct-98893). A task not made yet has no branch or tree of its own.
+      if (branch || task) {
+        const { claimRunBranch, liveTreeStates } = await import("./workflow/runBranch.js");
+        const { runHandsVia } = await import("./lineTrialBranch.js");
+        const live = {
+          trees: async () => {
+            const { deviceId } = await import("./remote/device.js");
+            return liveTreeStates(top, await deps.cliPost("/cli/workflow-runs/live-on-device", { device: deviceId() }).catch(() => null));
+          },
+          taskRun: async (t: string) => {
+            const read = await deps.cliPost("/cli/workflow-runs/list", { task_id: t, limit: 1, slim: true });
+            if (!Array.isArray(read?.runs)) throw new Error(read?.error ?? "no answer");
+            const status = String(read.runs[0]?.status ?? "");
+            return ["pending", "running", "paused"].includes(status) ? status : null;
+          },
+        };
+        const own = task ? runSlug(graph, { task_id: task }, "run") : null;
+        const freed = await claimRunBranch(top, own, branch ?? `codecast/${own}`, { task, rewrites: !branch, live, hands: runHandsVia((route, body) => deps.cliPost(route, body)) })
+          .catch((err: Error) => { console.error(err.message); process.exit(1); });
+        if (freed && !opts.json) console.error(dim(`  ${freed}`));
+      }
       if (!task) {
         const made = await cast(["task", "create", changeTitle, "-d", `A change run through the ${found.label} flow (${found.slug}).`, "--found-during", "none"], top);
         task = (made.out + made.err).match(/\bct-\d+\b/)?.[0];
@@ -493,19 +515,6 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (earlier && !placed && (branch || sessionRef || opts.checkout) && earlierOn === (branch ?? `codecast/${worktree}`)) {
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
-      }
-      // The branch is this run's alone before anything moves or checks it out (workflow/runBranch.ts, ct-98893).
-      if (branch || sessionRef || opts.checkout) {
-        const { claimRunBranch } = await import("./workflow/runBranch.js");
-        const { runHandsVia } = await import("./lineTrialBranch.js");
-        const liveTrees = async () => {
-          const [{ deviceId }, { liveRunIdsOf }, { runTreesOf }] = await Promise.all([import("./remote/device.js"), import("./workflow/liveRuns.js"), import("./workflow/runDirs.js")]);
-          const ids = liveRunIdsOf(await deps.cliPost("/cli/workflow-runs/live-on-device", { device: deviceId() }).catch(() => null));
-          return ids && runTreesOf(top, ids);
-        };
-        const freed = await claimRunBranch(top, worktree, branch ?? `codecast/${worktree}`, { task: task!, rewrites: !branch, liveTrees, hands: runHandsVia((route, body) => deps.cliPost(route, body)) })
-          .catch((err: Error) => { console.error(err.message); process.exit(1); });
-        if (freed && !opts.json) console.error(dim(`  ${freed}`));
       }
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();

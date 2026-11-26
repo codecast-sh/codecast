@@ -5,26 +5,41 @@
  * worktree: one started with `--branch` on it. On Nov 21 a session bound to
  * ct-98846 froze other edits onto codecast/change-ct-98846 while the live run
  * of ct-98880 had that branch checked out, replacing the commit it was
- * reviewing, and only then failed "already used by worktree". So before
- * anything moves the branch or checks it out:
- * - a worktree of a live run holding it refuses the run;
- * - one an ended run left holding it (a run that failed keeps its tree) is
- *   released, what it left uncommitted committed onto the branch first
- *   (lineTrialBranch.ts freeBranch), so a rerun needs no hand cleanup;
- * - one no run made (a person's, an agent's) refuses, since it is not ours to move;
- * - a freeze, which replaces the branch's commits, refuses while the branch
- *   holds commits no freeze of this run made and the checkout lacks.
+ * reviewing, and only then failed "already used by worktree". So every check
+ * runs before anything moves, and the run is refused when:
+ * - a run of the same task is live: it reads the branch again itself when its
+ *   subject ends its turn, and a second freeze would move the branch and reset
+ *   its tree under it;
+ * - another worktree holding the branch is not a run's (a person's, an
+ *   agent's), or is a live run's, or one too young to tell (its run may still be
+ *   being created), or one whose liveness or processes cannot be read;
+ * - that worktree holds uncommitted files: a process list is no proof nobody
+ *   edits it, and an ended run's leftovers are not this change's to push;
+ * - a freeze, which replaces the branch's commits, would replace commits no
+ *   freeze of this run made that the checkout lacks.
+ * Only then is a clean worktree an ended run left holding the branch released
+ * (lineTrialBranch.ts freeBranch), so a rerun after a failed run needs no hand
+ * cleanup.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
-import { readFrozenChange } from "./flowChangeFile.js";
+import { readFrozenChange, readPlacedChange } from "./flowChangeFile.js";
 import { readRebaseChain } from "./rebaseRecord.js";
-import { lineRunsRoot, runTreeNames } from "./runDirs.js";
+import { lineRunsRoot, runTreeNames, runTreesOf } from "./runDirs.js";
+import { liveRunIdsOf, type LiveRunsOnDevice } from "./liveRuns.js";
 import type { RunHands } from "../lineTrialBranch.js";
 
-/** The worktree names live runs on this machine work in (worktreeGc.ts RunTreesInUse), or null when that cannot be told. */
-export type LiveRunTrees = () => Promise<ReadonlySet<string> | null>;
+/** What the server and this machine say about live runs. Either read may throw when it cannot be told. */
+export type RunLiveness = {
+  /** The worktree names live runs on this machine work in, each with its run's status; null when that cannot be told. */
+  trees(): Promise<ReadonlyMap<string, string> | null>;
+  /** The status of `task`'s newest run while it is pending, running or paused, else null. */
+  taskRun(task: string): Promise<string | null>;
+};
+
+/** A worktree made this recently may belong to a run the server does not list yet (pending, or not yet created). */
+export const YOUNG_TREE_MS = 3 * 60_000;
 
 const git = (cwd: string, args: string[]) => {
   const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
@@ -32,42 +47,98 @@ const git = (cwd: string, args: string[]) => {
 };
 const real = (p: string) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 
+/** The live trees of `repo` from the server's live runs on this machine, each with its run's status. */
+export function liveTreeStates(repo: string, data: LiveRunsOnDevice | null | undefined): Map<string, string> | null {
+  const ids = liveRunIdsOf(data);
+  if (!ids) return null;
+  const states = new Map<string, string>();
+  for (const id of ids) {
+    const status = data?.runs?.find((r) => String(r.run_id) === id)?.status ?? "running";
+    for (const tree of runTreesOf(repo, [id])) states.set(tree, status);
+  }
+  return states;
+}
+
 /**
- * Make `branch` free for the run whose worktree is `slug`, or throw why it is not. `rewrites`: the run freezes its
- * change onto the branch (a session's or the checkout's edits) rather than running the branch as it stands. Returns a
- * line saying what it released, or null.
+ * Make `branch` free for the run whose worktree is `slug` (null for a task not made yet, which has no tree), or throw
+ * why it is not, having moved nothing. `rewrites`: the run freezes its change onto the branch (a session's or the
+ * checkout's edits) rather than running the branch as it stands. Returns a line saying what it released, or null.
  */
-export async function claimRunBranch(repo: string, slug: string, branch: string, opts: { task: string; rewrites: boolean; liveTrees: LiveRunTrees; hands?: RunHands }): Promise<string | null> {
-  if (git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]) === null) return null;
-  const { worktreeOf, freeBranch } = await import("../lineTrialBranch.js");
-  const holder = worktreeOf(repo, branch);
+export async function claimRunBranch(repo: string, slug: string | null, branch: string, opts: { task?: string; rewrites: boolean; live: RunLiveness; hands?: RunHands; now?: number }): Promise<string | null> {
+  const now = opts.now ?? Date.now();
   const worktrees = real(path.join(repo, ".codecast", "worktrees"));
-  let notice: string | null = null;
-  if (holder && real(holder) !== path.join(worktrees, slug)) {
+  const ownTree = slug ? path.join(worktrees, slug) : null;
+  if (opts.task) {
+    const state = await opts.live.taskRun(opts.task).catch((err: Error) => {
+      throw new Error(`Whether a run of ${opts.task} is still live cannot be told (${err.message.split("\n")[0]}): run this again once the server answers`);
+    });
+    // A tree made moments ago that no run has started from yet is a run on its way to the server.
+    const starting = !state && ownTree && young(ownTree, now) && !ranSince(path.join(lineRunsRoot(repo), slug!), madeAt(ownTree)) ? "starting" : null;
+    if (state || starting) throw new Error(`A run of ${opts.task} is live (${state ?? starting}); it reads the branch again when you end your turn — don't start it again`);
+  }
+  if (git(repo, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]) === null) return null;
+  // A worktree whose directory is gone still holds its branch until pruned; that one is nobody's.
+  git(repo, ["worktree", "prune"]);
+  const { worktreeOf } = await import("../lineTrialBranch.js");
+  const holder = worktreeOf(repo, branch);
+  let release: string | null = null;
+  if (holder && real(holder) !== ownTree) {
     const name = path.dirname(real(holder)) === worktrees ? path.basename(holder) : null;
     if (!name || !runTreeNames(repo).has(name)) {
       throw new Error(`${branch} is checked out in ${holder}, which no run made: switch that worktree off it, or run this change on another branch`);
     }
-    const live = await opts.liveTrees();
-    if (!live) throw new Error(`${branch} is checked out by worktree ${name}, and whether the run there is still live cannot be told (the server did not answer): run this again, or release it with cast ws destroy ${name}`);
-    if (live.has(name)) throw new Error(`${branch} is checked out by worktree ${name}, where a live run works: wait for that run to end, or stop it, then run this change again`);
-    const freed = await freeBranch(repo, name, branch, opts.task, opts.hands);
-    notice = `Released worktree ${name}, which an ended run left holding ${branch}${freed?.committed ? `; what it left uncommitted is committed onto ${branch}` : ""}`;
+    const trees = await opts.live.trees().catch(() => null);
+    if (!trees) throw new Error(`${branch} is checked out by worktree ${name}, and whether the run there is still live cannot be told (the server did not answer): run this again, or release it with cast ws destroy ${name}`);
+    const state = trees.get(name) ?? (young(holder, now) ? "just made" : null);
+    if (state) throw new Error(`${branch} is checked out by worktree ${name}, where a run is live (${state}): wait for that run to end, or stop it, then run this change again`);
+    const { readProcessCwds } = await import("../land/scan.js");
+    const cwds = await readProcessCwds();
+    const tree = real(holder);
+    if (!cwds || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) {
+      throw new Error(`${branch} is checked out by worktree ${name}, ${cwds ? "and a process still works in it" : "and which processes work in it cannot be read"}: stop it, or release the worktree with cast ws destroy ${name}, then run this again`);
+    }
+    const dirty = (git(holder, ["status", "--porcelain", "--untracked-files=all"]) ?? "?").split("\n").filter(Boolean).map((l) => l.slice(3));
+    if (dirty.length) {
+      const shown = dirty.slice(0, 5).join(", ") + (dirty.length > 5 ? `, and ${dirty.length - 5} more` : "");
+      throw new Error(`${branch} is checked out by worktree ${name}, which an ended run left with uncommitted files (${shown}): commit what belongs on ${branch} there and remove the rest, or release it with cast ws destroy ${name}, then run this again`);
+    }
+    release = name;
   }
   if (opts.rewrites) {
     const tip = git(repo, ["rev-parse", `refs/heads/${branch}`])!;
-    if (!frozenTips(repo, slug).has(tip) && !inCheckout(repo, tip)) {
-      throw new Error(`${branch} holds commits no run of ${opts.task} froze (its tip ${tip.slice(0, 10)}), and freezing this change onto it would replace them: run that branch itself (cast flow run --branch ${branch}), or move it aside (git branch -m ${branch} <new name>) and run this again`);
+    if (!(slug && frozenTips(repo, slug).has(tip)) && !inCheckout(repo, tip)) {
+      throw new Error(`${branch} holds commits no run of ${opts.task ?? "this change"} froze (its tip ${tip.slice(0, 10)}), and freezing this change onto it would replace them: run that branch itself (cast flow run --branch ${branch}), or move it aside (git branch -m ${branch} <new name>) and run this again`);
     }
   }
-  return notice;
+  if (!release) return null;
+  // Clean, so nothing is committed on the way: freeBranch only takes the tree away, its branch left as it was.
+  const { freeBranch } = await import("../lineTrialBranch.js");
+  await freeBranch(repo, release, branch, `the run in ${release}`, opts.hands);
+  return `Released worktree ${release}, which an ended run left holding ${branch}`;
 }
 
-/** Every tip a freeze of this run left its branch at: the change as frozen, as origin had it, and each rebase of it. */
+/** When git added worktree `tree`: its `.git` file is written once, then; 0 when there is none. */
+function madeAt(tree: string): number {
+  try { return fs.statSync(path.join(tree, ".git")).mtimeMs; } catch { return 0; }
+}
+
+export function young(tree: string, now: number): boolean {
+  const at = madeAt(tree);
+  return at > 0 && now - at < YOUNG_TREE_MS;
+}
+
+/** Whether a run wrote its checkpoint in `runDir` (runResume.ts checkpointPath) at or after `since`. */
+function ranSince(runDir: string, since: number): boolean {
+  try { return fs.readdirSync(path.join(runDir, "runs")).some((f) => fs.statSync(path.join(runDir, "runs", f)).mtimeMs >= since); } catch { return false; }
+}
+
+/** Every tip a freeze of this run left its branch at: the change as frozen here or placed elsewhere, as origin had it, and each rebase of it. */
 function frozenTips(repo: string, slug: string): Set<string> {
   const runDir = path.join(lineRunsRoot(repo), slug);
-  const change = readFrozenChange(runDir);
-  const tips = new Set([change?.tip, change?.frozen_tip, change?.remote_tip].filter((t): t is string => !!t));
+  const tips = new Set<string>();
+  for (const change of [readFrozenChange(runDir), readPlacedChange(runDir)]) {
+    for (const tip of [change?.tip, change?.frozen_tip, change?.remote_tip]) if (tip) tips.add(tip);
+  }
   for (const link of readRebaseChain(runDir)) tips.add(link.from).add(link.to);
   return tips;
 }

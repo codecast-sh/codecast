@@ -105,6 +105,20 @@ export function readFrozenChange(runDir: string | undefined): FrozenChange | nul
   }
 }
 
+/** Where the asking machine keeps a change it placed on another machine (placedChange.ts), apart from change.json, which a run here reads as its own. */
+const PLACED_CHANGE_FILE = "placed-change.json";
+
+export function writePlacedChange(runDir: string, change: FrozenChange): string {
+  fs.mkdirSync(runDir, { recursive: true });
+  const file = path.join(runDir, PLACED_CHANGE_FILE);
+  fs.writeFileSync(file, JSON.stringify(change));
+  return file;
+}
+
+export function readPlacedChange(runDir: string): FrozenChange | null {
+  try { return JSON.parse(fs.readFileSync(path.join(runDir, PLACED_CHANGE_FILE), "utf-8")) as FrozenChange; } catch { return null; }
+}
+
 /** How the run takes the subject's fix back, as the briefs say it ($change_return): its edits, or the branch it names. */
 export function changeReturnWords(change: Partial<FrozenChange>): string {
   // A placed run (cast flow run --device) cannot read the subject's checkout: the subject freezes its edits again itself,

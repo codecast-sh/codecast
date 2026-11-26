@@ -33,7 +33,13 @@ export function worktreeOf(repo: string, branch: string): string | null {
 
 /** The processes working inside `tree`: every one whose current directory is in it. */
 export function processesIn(tree: string, lsofOut?: string): Array<{ pid: number; command: string }> {
-  const out = lsofOut ?? (spawnSync("lsof", ["-a", "-d", "cwd", "-F", "pcn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 }).stdout ?? "");
+  let out = lsofOut;
+  if (out === undefined) {
+    const r = spawnSync("lsof", ["-a", "-d", "cwd", "-F", "pcn"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024, env: process.env });
+    out = r.stdout ?? "";
+    // No lsof, or one that read nothing (it always lists this process): an unread tree is never taken as empty.
+    if (r.error || !out.trim()) throw new Error(`Could not read which processes sit in ${tree} (lsof ${r.error ? r.error.message : "printed nothing"})`);
+  }
   const found: Array<{ pid: number; command: string }> = [];
   let pid = 0;
   let command = "";

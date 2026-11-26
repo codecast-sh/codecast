@@ -3,11 +3,11 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { claimRunBranch } from "./runBranch.js";
+import { claimRunBranch, YOUNG_TREE_MS, type RunLiveness } from "./runBranch.js";
 import { lineRunDir } from "./runner.js";
-import { writeFrozenChange } from "./flowChangeFile.js";
+import { writeFrozenChange, writePlacedChange, type FrozenChange } from "./flowChangeFile.js";
 
-// Real git: what matters is which worktree git says holds the branch, and that no commit on it is lost.
+// Real git: what matters is which worktree git says holds the branch, and that nothing on it or in it moves on a refusal.
 let repo: string;
 let savedDir: string | undefined;
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -15,7 +15,15 @@ const OURS = "change-ct-1";
 const BRANCH = `codecast/${OURS}`;
 const OTHER = "change-ct-2";
 const treeOf = (name: string) => path.join(repo, ".codecast", "worktrees", name);
-const live = (...names: string[]) => async () => new Set(names);
+/** Runs live on this machine by tree, and the task runs the server holds as live. */
+const live = (trees: Record<string, string> = {}, tasks: Record<string, string> = {}): RunLiveness => ({
+  trees: async () => new Map(Object.entries(trees)),
+  taskRun: async (task) => tasks[task] ?? null,
+});
+/** After a tree made now has stopped being young. */
+const later = () => Date.now() + YOUNG_TREE_MS + 60_000;
+const frozen = (tip: string): FrozenChange => ({ source: "session", base: git(repo, "rev-parse", "main"), tip, branch: BRANCH, worktree: OURS, paths: ["a.txt"], shared: [], held: [] });
+const quiet = async <T>(fn: () => Promise<T>): Promise<T> => { const log = console.log; console.log = () => {}; try { return await fn(); } finally { console.log = log; } };
 
 beforeEach(() => {
   repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "run-branch-")));
@@ -43,75 +51,148 @@ afterEach(() => {
   else process.env.CODECAST_DIR = savedDir;
 });
 
-/** Another run's worktree `name` with `BRANCH` checked out, as `cast flow run --branch` makes it. */
-async function otherRunOn(name: string): Promise<void> {
+/** A run's worktree `name` with `BRANCH` checked out, as `cast flow run --branch` makes it. */
+async function runTreeOn(name: string): Promise<void> {
   const { acquireWorkspace } = await import("../workspace/lifecycle.js");
   await acquireWorkspace(repo, name, { branch: BRANCH, skipPool: true, skipSetup: true, skipHooks: true, noPorts: true });
   fs.mkdirSync(lineRunDir(repo, name), { recursive: true });
 }
 
-describe("a change run claims its branch (ct-98893)", () => {
-  test("a freeze refuses while another live run's worktree has the branch, and moves nothing", async () => {
-    await otherRunOn(OTHER);
+describe("another run's worktree holding the branch (ct-98893)", () => {
+  test("a freeze refuses while a live run's worktree has the branch, and moves nothing", async () => {
+    await runTreeOn(OTHER);
     const tip = git(repo, "rev-parse", BRANCH);
-    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, liveTrees: live(OTHER) }))
-      .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, where a live run works`);
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live({ [OTHER]: "paused" }), now: later() }))
+      .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, where a run is live (paused)`);
     expect(git(repo, "rev-parse", BRANCH)).toBe(tip);
     expect(fs.existsSync(treeOf(OTHER))).toBe(true);
   });
 
-  test("so does a run of the branch as it stands", async () => {
-    await otherRunOn(OTHER);
-    await expect(claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, liveTrees: live(OTHER) }))
-      .rejects.toThrow("where a live run works");
+  test("so does a run of the branch as it stands, and a task not made yet", async () => {
+    await runTreeOn(OTHER);
+    await expect(claimRunBranch(repo, null, BRANCH, { rewrites: false, live: live({ [OTHER]: "running" }), now: later() }))
+      .rejects.toThrow("where a run is live (running)");
+  });
+
+  // A second `cast flow run --branch` seconds after the first: its run may not be listed yet, pending or not made.
+  test("a worktree made moments ago is taken for a run on its way, whatever the server lists", async () => {
+    await runTreeOn(OTHER);
+    await expect(claimRunBranch(repo, null, BRANCH, { rewrites: false, live: live() }))
+      .rejects.toThrow("where a run is live (just made)");
+    expect(fs.existsSync(treeOf(OTHER))).toBe(true);
   });
 
   test("when whether that run is live cannot be told, it refuses rather than guess", async () => {
-    await otherRunOn(OTHER);
-    await expect(claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, liveTrees: async () => null }))
-      .rejects.toThrow("cannot be told");
+    await runTreeOn(OTHER);
+    const unread: RunLiveness = { trees: async () => null, taskRun: async () => null };
+    await expect(claimRunBranch(repo, null, BRANCH, { rewrites: false, live: unread, now: later() })).rejects.toThrow("cannot be told");
   });
 
-  test("an ended run's worktree holding the branch is released, its leftovers committed onto the branch, and the branch checks out again", async () => {
-    await otherRunOn(OTHER);
-    fs.writeFileSync(path.join(treeOf(OTHER), "a.txt"), "left uncommitted\n");
-    const log = console.log;
-    console.log = () => {};
-    let notice: string | null;
-    try {
-      notice = await claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, liveTrees: live() });
-    } finally { console.log = log; }
-    expect(notice!).toContain(`Released worktree ${OTHER}, which an ended run left holding ${BRANCH}; what it left uncommitted is committed onto ${BRANCH}`);
+  test("an ended run's clean worktree is released, the branch left as it was, and the branch checks out again", async () => {
+    await runTreeOn(OTHER);
+    const tip = git(repo, "rev-parse", BRANCH);
+    const notice = await quiet(() => claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later() }));
+    expect(notice).toBe(`Released worktree ${OTHER}, which an ended run left holding ${BRANCH}`);
     expect(fs.existsSync(treeOf(OTHER))).toBe(false);
-    expect(git(repo, "show", `${BRANCH}:a.txt`)).toBe("left uncommitted");
+    expect(git(repo, "rev-parse", BRANCH)).toBe(tip);
     const { acquireWorkspace } = await import("../workspace/lifecycle.js");
     const ws = await acquireWorkspace(repo, "change-ct-3", { branch: BRANCH, skipPool: true, skipSetup: true, skipHooks: true, noPorts: true });
     expect(git(ws.workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
   }, 60_000);
 
+  // H1: the leftovers were committed onto the branch and the tree trashed, then the freeze refused on that very commit.
+  test("an ended run's worktree with uncommitted files refuses, naming them, and nothing moves: no commit, the tree kept", async () => {
+    writeFrozenChange(lineRunDir(repo, OURS), frozen(git(repo, "rev-parse", BRANCH)));
+    await runTreeOn(OTHER);
+    fs.writeFileSync(path.join(treeOf(OTHER), "scratch-debug.log"), "junk\n");
+    const tip = git(repo, "rev-parse", BRANCH);
+    for (const rewrites of [true, false]) {
+      await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites, live: live(), now: later() }))
+        .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, which an ended run left with uncommitted files (scratch-debug.log)`);
+    }
+    expect(git(repo, "rev-parse", BRANCH)).toBe(tip);
+    expect(fs.readFileSync(path.join(treeOf(OTHER), "scratch-debug.log"), "utf8")).toBe("junk\n");
+  });
+
+  test("a freeze over foreign commits refuses before releasing the worktree that holds them", async () => {
+    await runTreeOn(OTHER);
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live(), now: later() }))
+      .rejects.toThrow(`${BRANCH} holds commits no run of ct-1 froze`);
+    expect(fs.existsSync(treeOf(OTHER))).toBe(true);
+  });
+
   test("a worktree no run made holding the branch refuses: it is not the run's to move", async () => {
     git(repo, "worktree", "add", "-q", path.join(repo, "mine"), BRANCH);
-    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: false, liveTrees: live() }))
-      .rejects.toThrow(`which no run made`);
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: false, live: live(), now: later() }))
+      .rejects.toThrow("which no run made");
     expect(git(path.join(repo, "mine"), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
   });
 
-  test("the run's own earlier worktree holding the branch is its own to reuse", async () => {
+  test("a worktree whose directory is gone holds nothing: it is pruned and the branch is free", async () => {
+    git(repo, "worktree", "add", "-q", path.join(repo, "gone"), BRANCH);
+    fs.rmSync(path.join(repo, "gone"), { recursive: true, force: true });
+    expect(await claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live() })).toBeNull();
+    expect(git(repo, "worktree", "list")).not.toContain("gone");
+  });
+});
+
+describe("a run of the same task (ct-98893)", () => {
+  // H2: a rerun while the run waited on its subject moved the branch and reset the live run's tree under it.
+  test("a live one refuses before anything moves, and says the run reads the branch again itself", async () => {
     git(repo, "worktree", "add", "-q", treeOf(OURS), BRANCH);
-    writeFrozenChange(lineRunDir(repo, OURS), { source: "session", base: git(repo, "rev-parse", "main"), tip: git(repo, "rev-parse", BRANCH), branch: BRANCH, worktree: OURS, paths: ["a.txt"], shared: [], held: [] });
-    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, liveTrees: live(OURS) })).toBeNull();
+    writeFrozenChange(lineRunDir(repo, OURS), frozen(git(repo, "rev-parse", BRANCH)));
+    for (const state of ["paused", "pending", "running"]) {
+      await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live({}, { "ct-1": state }), now: later() }))
+        .rejects.toThrow(`A run of ct-1 is live (${state}); it reads the branch again when you end your turn — don't start it again`);
+    }
   });
 
-  test("a freeze refuses while the branch holds commits no freeze of this run made", async () => {
-    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, liveTrees: live() }))
+  test("one whose tree was made moments ago and has not started yet is live too; once it has run, its tree is the rerun's", async () => {
+    git(repo, "worktree", "add", "-q", treeOf(OURS), BRANCH);
+    writeFrozenChange(lineRunDir(repo, OURS), frozen(git(repo, "rev-parse", BRANCH)));
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() })).rejects.toThrow("is live (starting)");
+    fs.mkdirSync(path.join(lineRunDir(repo, OURS), "runs"), { recursive: true });
+    fs.writeFileSync(path.join(lineRunDir(repo, OURS), "runs", "run1.json"), "{}");
+    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() })).toBeNull();
+  });
+
+  test("when whether it is live cannot be told, it refuses", async () => {
+    const unread: RunLiveness = { trees: async () => new Map(), taskRun: async () => { throw new Error("offline"); } };
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: unread })).rejects.toThrow("cannot be told (offline)");
+  });
+
+  test("an ended one's own worktree is the rerun's to reuse", async () => {
+    git(repo, "worktree", "add", "-q", treeOf(OURS), BRANCH);
+    writeFrozenChange(lineRunDir(repo, OURS), frozen(git(repo, "rev-parse", BRANCH)));
+    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live(), now: later() })).toBeNull();
+  });
+});
+
+describe("a freeze onto the task's branch (ct-98893)", () => {
+  test("refuses while the branch holds commits no freeze of this run made", async () => {
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() }))
       .rejects.toThrow(`${BRANCH} holds commits no run of ct-1 froze`);
   });
 
-  test("a freeze goes ahead over its own earlier freeze, over a branch the checkout already holds, and with no branch yet", async () => {
-    writeFrozenChange(lineRunDir(repo, OURS), { source: "session", base: git(repo, "rev-parse", "main"), tip: git(repo, "rev-parse", BRANCH), branch: BRANCH, worktree: OURS, paths: ["a.txt"], shared: [], held: [] });
-    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, liveTrees: live() })).toBeNull();
+  test("goes ahead over its own earlier freeze, over a branch the checkout already holds, and with no branch yet", async () => {
+    writeFrozenChange(lineRunDir(repo, OURS), frozen(git(repo, "rev-parse", BRANCH)));
+    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() })).toBeNull();
     git(repo, "branch", "codecast/change-ct-4", "main");
-    expect(await claimRunBranch(repo, "change-ct-4", "codecast/change-ct-4", { task: "ct-4", rewrites: true, liveTrees: live() })).toBeNull();
-    expect(await claimRunBranch(repo, "change-ct-5", "codecast/change-ct-5", { task: "ct-5", rewrites: true, liveTrees: live() })).toBeNull();
+    expect(await claimRunBranch(repo, "change-ct-4", "codecast/change-ct-4", { task: "ct-4", rewrites: true, live: live() })).toBeNull();
+    expect(await claimRunBranch(repo, "change-ct-5", "codecast/change-ct-5", { task: "ct-5", rewrites: true, live: live() })).toBeNull();
+  });
+
+  // H3: a placed run's freeze is recorded in placed-change.json, which the run here never reads as its own change.
+  test("goes ahead over the freeze of a run placed on another machine, and over its refreeze", async () => {
+    writePlacedChange(lineRunDir(repo, OURS), { ...frozen(git(repo, "rev-parse", BRANCH)), pushed: true });
+    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() })).toBeNull();
+    // `cast flow refreeze <run>` moves the branch and records the new tip the same way (placedChange.ts refreezeRunCommand).
+    git(repo, "worktree", "add", "-q", path.join(repo, "scratch"), BRANCH);
+    fs.writeFileSync(path.join(repo, "scratch", "a.txt"), "the fix\n");
+    git(path.join(repo, "scratch"), "commit", "-qam", "the fix");
+    git(repo, "worktree", "remove", "--force", path.join(repo, "scratch"));
+    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() })).rejects.toThrow("holds commits no run of ct-1 froze");
+    writePlacedChange(lineRunDir(repo, OURS), { ...frozen(git(repo, "rev-parse", BRANCH)), pushed: true });
+    expect(await claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live() })).toBeNull();
   });
 });
