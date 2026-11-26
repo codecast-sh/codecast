@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Keyboard } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { InboxView } from '@/app/(tabs)/inbox';
 import { goToTab } from '@/lib/tabNavigation';
+import { bindFocusedUndoBarOpen } from '@/lib/undoBar';
 
 const DrawerContext = createContext<{ open: () => void } | null>(null);
 
@@ -37,6 +38,10 @@ export function ConversationSlideOut({ id, children }: { id: string; children: R
     if (conversationId === idRef.current && !messageId) return;
     router.setParams({ id: conversationId, message: messageId, focus: undefined } as never);
   }, [router]);
+
+  // Close advice's Open, while this conversation is on screen: the same swap
+  // as a picked row, so it never stacks a second session screen over this one.
+  useFocusEffect(useCallback(() => bindFocusedUndoBarOpen(openSession), [openSession]));
 
   const exit = useCallback(() => goToTab(router, '/(tabs)/inbox'), [router]);
 

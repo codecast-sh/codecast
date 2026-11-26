@@ -257,14 +257,27 @@ export function showUndo(label: string, entryId: string) {
 
 // ── Close advice ──
 
-let openSession: ((id: string, messageId?: string) => void) | null = null;
+type OpenSession = (id: string, messageId?: string) => void;
+let openSession: OpenSession | null = null;
 /** The bar's host binds how a session opens (its native screen). */
-export function bindUndoBarOpen(open: ((id: string, messageId?: string) => void) | null) {
+export function bindUndoBarOpen(open: OpenSession | null) {
   openSession = open;
 }
 
+const focusedOpeners: OpenSession[] = [];
+/** A focused conversation opens a session its own way (a swap in place that
+ *  closes its slide-out), so Open never stacks a second session screen over
+ *  it. Over the host's; the latest wins; the returned function takes it back. */
+export function bindFocusedUndoBarOpen(open: OpenSession): () => void {
+  focusedOpeners.push(open);
+  return () => {
+    const i = focusedOpeners.lastIndexOf(open);
+    if (i >= 0) focusedOpeners.splice(i, 1);
+  };
+}
+
 function openAtLastMessage(id: string) {
-  openSession?.(id, lastMessageId(id));
+  (focusedOpeners.at(-1) ?? openSession)?.(id, lastMessageId(id));
 }
 
 /** Close advice's second answer for a Close or a Kill that ran: bring back
