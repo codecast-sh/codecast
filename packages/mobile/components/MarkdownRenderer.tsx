@@ -48,6 +48,8 @@ import { LinkText, HighlightedCodeText, useLinkLongPress } from './CodeText';
 import { OutsideMessage, useMessageLongPress } from './MessageLongPress';
 
 export { LinkText, linkifyPlainText, HighlightedCodeText } from './CodeText';
+import { CodeBlockFullscreen } from './CodeBlockFullscreen';
+export { CodeBlockFullscreen } from './CodeBlockFullscreen';
 
 // Trailing "<name> <entity-id>" inside an @[…] mention — same shape web's
 // MENTION_RE extracts (the id renders as a pill; the name is its fallback).
@@ -220,47 +222,6 @@ function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
       if ('children' in node) return <React.Fragment key={k}>{renderInline(node.children as Nodes[], ctx, k)}</React.Fragment>;
       return 'value' in node && typeof node.value === 'string' ? node.value : null;
   }
-}
-
-export function CodeBlockFullscreen({ content, language, visible, onClose }: { content: string; language: string; visible: boolean; onClose: () => void }) {
-  const Theme = useTheme();
-  const [copied, setCopied] = useState(false);
-  const lines = content.split('\n');
-  if (!visible) return null;
-  return (
-<OutsideMessage>
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <RNView style={{ flex: 1, backgroundColor: '#002b36' }}>
-        <RNView style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 60, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.1)' }}>
-          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <RNText style={{ fontSize: 12, color: '#93a1a1', fontFamily: 'JetBrainsMono-Regular', fontWeight: '500' }}>{language}</RNText>
-            <RNText style={{ fontSize: 10, color: Theme.textDim }}>{lines.length} lines</RNText>
-          </RNView>
-          <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <TouchableOpacity onPress={() => { copyToClipboard(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
-              {copied ? <FontAwesome name="check" size={14} color={Theme.green} /> : <FontAwesome name="clipboard" size={14} color="#657b83" />}
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onClose} activeOpacity={0.6}>
-              <FontAwesome name="close" size={16} color="#93a1a1" />
-            </TouchableOpacity>
-          </RNView>
-        </RNView>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12 }}>
-          <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-            <RNView style={{ flexDirection: 'row' }}>
-              <RNView style={mdStyles.lineNumberGutter}>
-                {lines.map((_, i) => (
-                  <RNText key={i} style={[mdStyles.lineNumber, { lineHeight: 20, color: '#657b83' }]}>{i + 1}</RNText>
-                ))}
-              </RNView>
-              <HighlightedCodeText content={content} style={[mdStyles.codeText, { lineHeight: 20 }]} />
-            </RNView>
-          </ScrollView>
-        </ScrollView>
-      </RNView>
-    </Modal>
-    </OutsideMessage>
-  );
 }
 
 const CODE_BLOCK_PREVIEW_LINES = 12;
@@ -858,23 +819,6 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: Theme.borderLight,
     marginVertical: 6,
-  },
-  lineNumberGutter: {
-    paddingRight: 8,
-    marginRight: 8,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: 'rgba(255,255,255,0.1)',
-  },
-  lineNumber: {
-    fontSize: 10,
-    fontFamily: 'JetBrainsMono-Regular',
-    textAlign: 'right',
-    minWidth: 24,
-  },
-  codeText: {
-    fontSize: 12,
-    fontFamily: 'JetBrainsMono-Regular',
-    color: '#93a1a1',
   },
   hScroll: {
     flexGrow: 0,
