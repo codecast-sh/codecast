@@ -80,6 +80,7 @@ import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { SLASH_QUERY_RE, SLASH_TRIGGER_RE, matchSlashSkills } from "../lib/sessionSkills";
 import { parseSideQuestion, withSideQuestionCommand } from "../lib/builtinCommands";
 import { useSharedDraft } from "../hooks/useSharedDraft";
+import { useSessionMachineWarning } from "../hooks/useSessionMachineWarning";
 import { SharedCarets } from "./SharedCarets";
 import { useFileSearch } from "../lib/fsBrowse";
 import { findSecrets, type FoundSecret } from "@codecast/shared/contracts/secretShapes";
@@ -384,6 +385,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const hostedLast = useInboxStore((s): HostedLast => (hostedConversation ? hostedLastExchange(s.messages[conversationId], s.sessionDecisions, conversationId, Date.now()) : null));
   const [stuckBannerRaised, setShowStuckBanner] = useState(false);
   const showStuckBanner = stuckBannerRaised && !hostedConversation;
+  // The machine carrying this session's messages cannot deliver one now: the
+  // status line says so before the send, in the header chip's words.
+  const machineWarning = useSessionMachineWarning(hostedConversation ? null : conversationId);
   const [isResuming, setIsResuming] = useState(false);
   // Distinct from isResuming: true only while a destructive kill+restart is in flight, so the
   // footer can say "Killing & restarting" instead of the gentler "Waiting for connection".
@@ -2717,6 +2721,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       Processing...
                     </span>
                   )
+                ) : machineWarning && !showStuckBanner ? (
+                  <span data-composer-machine-warning className="flex items-center gap-1.5" style={{ color: `var(${machineWarning.colorVar})` }} title={machineWarning.detail}>
+                    <span className="w-2 h-2 rounded-full" style={{ background: `var(${machineWarning.colorVar})` }} />
+                    {machineWarning.label} · messages will wait
+                  </span>
                 ) : limitPhase.phase === "recovering" && !showStuckBanner ? (
                   <span className="flex items-center gap-1.5 text-sol-cyan">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan animate-pulse" />
