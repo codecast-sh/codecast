@@ -2025,7 +2025,8 @@ function SessionListPanelImpl({
     ? `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities)}|${s.currentUser?._id ?? ""}`
     : "";
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(s.priorities, s.currentUser?._id) : null), [priorityKey]);
+  // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
+  const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(s.priorities, s.currentUser?._id, useInboxStore.getState().sessions) : null), [priorityKey]);
   const byPriority = useCallback((rows: InboxSession[]) => (priorityPlaceOf ? sortByPriority(rows, priorityPlaceOf) : rows), [priorityPlaceOf]);
   const statusPinned = filteredPinned;
   const statusNew = useMemo(() => byPriority(filteredNew), [byPriority, filteredNew]);

@@ -19,7 +19,7 @@ import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
-import { COARSE_TALL, TOUCH_AREA, type SessionLine } from "../../lib/priorityList";
+import { COARSE_TALL, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { MilestoneBox } from "./parts";
 
@@ -346,6 +346,7 @@ export function LooksDone({ row, step }: { row: PriorityRow; step: Pick<Priority
   const writes = usePriorityWrites();
   const look = "inline-flex shrink-0 items-center whitespace-nowrap rounded-full border border-sol-border px-1.5 text-mark leading-[18px] text-sol-text-muted";
   if (!row.mine) return <span data-looks-done title="Every task it names is done" className={look}>Looks done?</span>;
+  // The button is the press (44px tall under a coarse pointer); the pill inside it is the look.
   return (
     <button
       type="button"
@@ -353,9 +354,9 @@ export function LooksDone({ row, step }: { row: PriorityRow; step: Pick<Priority
       title="Every task it names is done: mark it done"
       onClick={(e) => { e.stopPropagation(); writes.setStepDone(row.short_id, step.key, true); }}
       onKeyDown={stop}
-      className={cn(look, TOUCH_AREA, "hover:border-sol-text-dim hover:text-sol-text")}
+      className="group/looks inline-flex shrink-0 items-center [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11"
     >
-      Looks done?
+      <span className={cn(look, "group-hover/looks:border-sol-text-dim group-hover/looks:text-sol-text")}>Looks done?</span>
     </button>
   );
 }

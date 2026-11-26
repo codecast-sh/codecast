@@ -185,6 +185,9 @@ test("a milestone's Start opens its brief as the draft and carries the priority,
     },
   }]);
   expect(location.search).toBe("");
+  // The task link's second dismiss lands 500ms on (useComposeLink): let it, so it never lands in the next test's toasts.
+  await act(async () => { await new Promise((r) => setTimeout(r, 520)); });
+  expect(toasts.at(-1)).toBe("dismiss");
 });
 
 test("an unknown folder and an unknown agent are dropped; known ones carry", async () => {

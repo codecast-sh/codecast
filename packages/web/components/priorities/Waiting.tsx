@@ -14,7 +14,6 @@ import { cn } from "../../lib/utils";
 const WIDE_SHOWN = 5;
 const PHONE_SHOWN = 3;
 
-const clip = (t: string, n = 32) => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
 
 export function WaitingRow({ item, now, full, tall }: { item: WaitingItem; now: number; full?: boolean; tall?: boolean }) {
   return (
@@ -22,12 +21,20 @@ export function WaitingRow({ item, now, full, tall }: { item: WaitingItem; now: 
       href={item.session.href}
       data-waiting-item={item.session.conversation_id}
       title={`${item.milestone} · ${item.session.title}`}
-      className={cn("flex min-w-0 items-center gap-1.5 rounded-control px-1.5 text-meta hover:bg-sol-yellow/15", tall ? "h-11 w-full text-ui" : "h-7 [@media(pointer:coarse)]:h-11", full && "w-full")}
+      className={cn("flex min-w-0 items-center gap-1.5 rounded-control px-1.5 text-meta hover:bg-sol-yellow/15", tall ? "h-11 w-full text-ui" : "h-7 max-w-[20rem] [@media(pointer:coarse)]:h-11", full && "w-full max-w-none")}
     >
       <i aria-hidden className="block size-[7px] shrink-0 rounded-full bg-sol-yellow" />
       {item.rank != null && <span className="shrink-0 font-semibold tabular-nums text-sol-text">#{item.rank}</span>}
-      {/* Clipped in the wide box, each part keeps its own share, so two asks on one milestone still read apart. */}
-      <span className="min-w-0 truncate text-sol-text">{full || tall ? item.label : item.who ? `${clip(item.milestone, 18)} · ${clip(item.who, 18)}` : clip(item.label)}</span>
+      {/* Each part ellipsizes by width, so two asks on one milestone still read apart in the wide box. */}
+      {item.who ? (
+        <span data-waiting-label className="flex min-w-0 items-baseline text-sol-text">
+          <span className="min-w-0 truncate">{item.milestone}</span>
+          <span className="shrink-0 px-1 text-sol-text-dim">·</span>
+          <span className="min-w-0 truncate">{item.who}</span>
+        </span>
+      ) : (
+        <span data-waiting-label className="min-w-0 truncate text-sol-text">{item.label}</span>
+      )}
       <span className={cn("shrink-0 pl-1 tabular-nums text-sol-text-dim", (full || tall) && "ml-auto")}>{ago(item.session.last_active_at, now)}</span>
     </Link>
   );

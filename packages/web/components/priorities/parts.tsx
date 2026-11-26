@@ -137,7 +137,7 @@ export function ActionButton({ row, action, tall, showSession = true }: { row: P
 }
 
 /** "in ‹session›": where the action acts, as quiet words that ellipsize where the line is short. */
-function InSession({ s }: { s: SessionLine }) {
+export function InSession({ s }: { s: SessionLine }) {
   const label = useSessionLabel(s);
   return <span data-in-session className="min-w-0 shrink truncate text-meta text-sol-text-dim" title={label}>in <span className="text-sol-text-muted">{label}</span></span>;
 }
@@ -155,13 +155,14 @@ export function PlanChip({ plan, prefix, showSize, className }: { plan: Priority
     >
       <Target className="size-3 shrink-0 text-sol-text-dim" aria-hidden />
       {prefix && <span className="shrink-0 text-sol-text-dim">{prefix}</span>}
-      <span className="min-w-0 truncate">{plan.title}</span>
-      <span aria-hidden className="relative block h-[3px] w-6 shrink-0 overflow-hidden rounded-full bg-sol-text/15">
+      {/* A "Part of" chip keeps 6rem for the title: in a narrow row (a phone) the bar leaves first, then "(N tasks)". */}
+      <span className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>
+      <span aria-hidden data-plan-bar className={cn("relative block h-[3px] w-6 shrink-0 overflow-hidden rounded-full bg-sol-text/15", showSize && "[@container(max-width:24rem)]:hidden")}>
         <span className="absolute inset-y-0 left-0 bg-sol-text-muted" style={{ width: `${pct}%` }} />
       </span>
       <span className="shrink-0 tabular-nums text-sol-text-dim">{plan.done}/{plan.total}</span>
       {/* A big plan a milestone is part of says how big, inside its chip: "Part of Platform program (140 tasks)". */}
-      {showSize && <span data-plan-size className="shrink-0 tabular-nums text-sol-text-dim">({plan.size} tasks)</span>}
+      {showSize && <span data-plan-size className="shrink-0 tabular-nums text-sol-text-dim [@container(max-width:17rem)]:hidden">({plan.size} tasks)</span>}
     </Link>
   );
 }
@@ -198,17 +199,18 @@ export function PrChip({ pr, state }: { pr: string; state?: string }) {
 export type LinkKind = "task" | "pr" | "branch" | "deploy";
 const KIND_COUNT: Record<LinkKind, { Icon: typeof Square; one: string; many: string }> = {
   task: { Icon: Square, one: "task", many: "tasks" },
-  pr: { Icon: GitPullRequest, one: "PR", many: "PRs" },
+  pr: { Icon: GitPullRequest, one: "pull request", many: "pull requests" },
   branch: { Icon: GitBranch, one: "branch", many: "branches" },
   deploy: { Icon: Rocket, one: "deploy", many: "deploys" },
 };
 
-/** How many links of one kind a closed line has ("2 PRs"), where there is no room for each: the open line lists them. */
+/** How many links of one kind a closed line has, as its glyph and a count (the words in its tooltip): the open line lists them. */
 export function KindCount({ kind, n }: { kind: LinkKind; n: number }) {
   const { Icon, one, many } = KIND_COUNT[kind];
+  const words = `${n} ${n === 1 ? one : many}`;
   return (
-    <span data-chip-count={kind} className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sol-text/[0.05] px-1.5 text-meta tabular-nums text-sol-text-muted">
-      <Icon className="size-3 shrink-0" aria-hidden />{n} {n === 1 ? one : many}
+    <span data-chip-count={kind} title={words} aria-label={words} className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sol-text/[0.05] px-1.5 text-meta tabular-nums text-sol-text-muted">
+      <Icon className="size-3 shrink-0" aria-hidden />{n}
     </span>
   );
 }

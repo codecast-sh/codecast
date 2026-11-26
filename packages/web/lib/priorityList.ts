@@ -178,9 +178,11 @@ export function buildModels(
     const critical = row.steps.filter((s) => s.tier === "critical" && s.done && s.done_at).map((s) => s.done_at!);
     const landedDays = new Set(critical.map(localDayKey));
     const last = critical.length ? Math.max(...critical) : null;
-    const quiet = Math.floor((now - (last ?? row.first_seen_at)) / DAY);
+    // Days by the calendar, as "last Nd" counts them.
+    const daysSince = (t: number) => Math.round((startOfDay(now) - startOfDay(t)) / DAY);
+    const quiet = daysSince(last ?? row.first_seen_at);
     const openCritical = row.steps.some((s) => s.tier === "critical" && !s.done);
-    const stalled = row.status === "active" && openCritical && now - row.first_seen_at >= STALL_DAYS * DAY && quiet >= STALL_DAYS;
+    const stalled = row.status === "active" && openCritical && daysSince(row.first_seen_at) >= STALL_DAYS && quiet >= STALL_DAYS;
     return {
       row,
       milestones,
@@ -189,7 +191,7 @@ export function buildModels(
       landed: days.map((d) => landedDays.has(d)),
       today: counts[days.indexOf(todayKey)] ?? 0,
       landed10: critical.filter((t) => daySet.has(localDayKey(t))).length,
-      lastLandedDays: last == null ? null : Math.round((startOfDay(now) - startOfDay(last)) / DAY),
+      lastLandedDays: last == null ? null : daysSince(last),
       stalledDays: stalled ? quiet : null,
       // A teammate's priority offers no action: starting, resuming and answering its work is theirs to do.
       action: row.mine && row.status === "active" ? nextActionOf(milestones) : null,
@@ -226,7 +228,8 @@ export function sessionWords(s: Pick<SessionLine, "title">): string {
   return step ? `${step[1]}: ${step[2] || "work"}` : s.title || "Untitled session";
 }
 
-const wordsOf = (t: string) => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+/** A title's words, lower case, a plural's trailing s dropped: "scorer" and "scorers" are one word. */
+const wordsOf = (t: string) => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w));
 
 /**
  * A session's part of "milestone · session": its title, unless the title
@@ -385,6 +388,25 @@ export function filtersHref(f: ListFilters, params: URLSearchParams | null | und
 }
 
 export type ListLayout = "phone" | "wide";
+
+/**
+ * Which of a milestone line's optional parts fit its row (`room` px, `gap`
+ * between parts), after the parts that always show (`fixed`: the action,
+ * its session's 5rem, "+N"): each kind's count chip in order while it fits,
+ * then the plan only with `planMin` to itself. So with no room the plan
+ * leaves first, then the counts from the end.
+ */
+export function fitLine({ room, gap, fixed, kinds, hasPlan, planMin = 128 }: { room: number; gap: number; fixed: number[]; kinds: number[]; hasPlan: boolean; planMin?: number }): { kinds: number; plan: boolean } {
+  let used = fixed.reduce((sum, w, i) => sum + w + (i ? gap : 0), 0);
+  const step = (w: number) => (used > 0 ? gap : 0) + w;
+  let fits = 0;
+  for (const w of kinds) {
+    if (used + step(w) > room) break;
+    used += step(w);
+    fits++;
+  }
+  return { kinds: fits, plan: hasPlan && used + step(planMin) <= room };
+}
 
 /**
  * Under a coarse pointer (a phone, Daylight), a press area at least 44px each

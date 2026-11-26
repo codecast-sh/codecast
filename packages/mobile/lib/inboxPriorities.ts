@@ -24,8 +24,9 @@ export function priorityInboxSig(s: { sessions: Record<string, Linked>; prioriti
   return `${sessionPriorityLinkSig(s.sessions)}|${priorityRanksSig(s.priorities as any)}|${String(s.currentUser?._id ?? '')}`;
 }
 
-export function priorityInboxView(priorities: Priorities, viewerId: string | null | undefined): PriorityInboxView {
-  const placeOf = priorityPlaceReader(priorities, viewerId);
+/** `sessions`: the store's current rows, which a session's link is read from (a placed row can be an older copy). */
+export function priorityInboxView(priorities: Priorities, viewerId: string | null | undefined, sessions?: Record<string, Linked | undefined>): PriorityInboxView {
+  const placeOf = priorityPlaceReader(priorities, viewerId, sessions);
   return {
     sort: (rows) => sortByPriority(rows, placeOf),
     rankOf: (s) => rankLabelOf(placeOf(s)),

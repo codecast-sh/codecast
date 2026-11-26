@@ -531,6 +531,9 @@ test("Looks done? is the owner's button: it marks the milestone done through set
   try {
     const looks = line("pri-3", "s1").querySelector("[data-looks-done]") as HTMLElement;
     expect(looks.tagName).toBe("BUTTON");
+    // The press itself is 44px under a coarse pointer; the pill inside is the look.
+    for (const c of ["[@media(pointer:coarse)]:min-h-11", "[@media(pointer:coarse)]:min-w-11"]) expect(looks.className).toContain(c);
+    expect(looks.querySelector("span")!.className).toContain("rounded-full");
     await press(looks);
     expect(stored("pri-3").steps[0].done).toBe(true);
     // The press marks it done; it never opens the line.

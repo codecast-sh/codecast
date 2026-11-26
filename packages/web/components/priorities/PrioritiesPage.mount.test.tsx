@@ -28,6 +28,32 @@ const { useInboxStore } = await import("../../store/inboxStore");
 const { default: PrioritiesPage, PrioritiesView, NoPrioritiesYet } = await import("./PrioritiesPage");
 const { default: PrioritiesRoute } = await import("../../app/priorities/page");
 const { lastDays, layoutForWidth, readFilters, filtersHref } = await import("../../lib/priorityList");
+
+// The milestone line's row measures itself (PriorityBlock LineChips). jsdom lays nothing out and the shared
+// stub gives every element 800px, so the row gets a layout of its own, the way a browser lays it out: the
+// action button 65px, "+N" 24px, each kind's count chip 36px, 6px between parts and 12px of left padding,
+// in a chips cell of `lineCell` px (600 unless a test narrows it).
+let lineCell = 600;
+/** A closed line's parts, first to last, as it shows them. */
+const partsOf = (line: Element) => [...line.children].filter((c) => (c as HTMLElement).dataset.fit).map((c) => {
+  const fit = (c as HTMLElement).dataset.fit;
+  if (fit === "fixed") return "action";
+  if (fit === "kind") return `${c.querySelector("[data-chip-count]")!.getAttribute("data-chip-count")} ${c.textContent}`;
+  if (fit === "plan") return "plan";
+  return c.textContent;
+});
+{
+  const proto = (window as any).HTMLElement.prototype;
+  const offset = Object.getOwnPropertyDescriptor(proto, "offsetWidth")!;
+  const client = Object.getOwnPropertyDescriptor(proto, "clientWidth")!;
+  const FIT: Record<string, number> = { fixed: 65, more: 24, kind: 36 };
+  Object.defineProperty(proto, "offsetWidth", { configurable: true, get(this: HTMLElement) { const f = this.dataset?.fit; return f ? FIT[f] ?? 0 : offset.get!.call(this); } });
+  Object.defineProperty(proto, "clientWidth", { configurable: true, get(this: HTMLElement) { return this.hasAttribute?.("data-line-chips") ? lineCell : client.get!.call(this); } });
+  for (const host of [window as any, globalThis as any]) {
+    const real = host.getComputedStyle.bind(host);
+    host.getComputedStyle = (el: Element, pseudo?: string) => (el.hasAttribute?.("data-line-chips") ? { paddingLeft: "12px", paddingRight: "0px", columnGap: "6px" } : real(el, pseudo));
+  }
+}
 const { withLiveRanks } = await import("../../lib/priorities");
 
 const HOUR = 3_600_000;
@@ -510,6 +536,17 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
   } finally {
     await empty.unmount();
   }
+  // On a phone too: the same empty state, its next pass said.
+  const realWidth = window.innerWidth;
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 402 });
+  const phoneEmpty = await mount(<PrioritiesPage />);
+  try {
+    expect(phoneEmpty.text()).toContain("No priorities yet");
+    expect(phoneEmpty.container.querySelector("[data-next-pass]")!.textContent).toMatch(/^Next pass /);
+  } finally {
+    await phoneEmpty.unmount();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: realWidth });
+  }
   answers["priorities:list"] = listOf([], { next_pass_at: Date.now() - 1000 });
   const due = await mount(<PrioritiesPage />);
   try {
@@ -543,16 +580,11 @@ test("with every kind shown, each link is a chip of its own shape, labelled by i
   try {
     expect(describeFailures(page)).toBe("");
     const b = block(page.container, "pri-9");
-    // The closed line, first to last: the action, "+N sessions", the other kinds as counts, the plan. A short line
-    // clips from the end, so "+N sessions" outlasts the counts and the counts the plan.
+    // The closed line, first to last (with room for all of it): the action and its session, "+N", one glyph and
+    // count per other kind (its words in the tooltip), the plan.
     const s1 = b.querySelector('[data-milestone="s1"]')!;
-    const order = [...s1.querySelector("[data-line-chips]")!.children].map((c) =>
-      c.querySelector("[data-action]") ? "action" : c.hasAttribute("data-more-sessions") ? c.textContent : c.hasAttribute("data-line-kinds") ? "kinds" : c.querySelector('[data-chip="plan"]') ? "plan" : "?");
-    expect(order).toEqual(["action", "+1 session", "kinds", "plan"]);
-    const kinds = s1.querySelector("[data-line-kinds]")!;
-    expect([...kinds.querySelectorAll("[data-chip-count]")].map((c) => [c.getAttribute("data-chip-count"), c.textContent])).toEqual([
-      ["task", "1 task"], ["pr", "1 PR"], ["branch", "1 branch"], ["deploy", "1 deploy"],
-    ]);
+    expect(partsOf(s1.querySelector("[data-line-chips]")!)).toEqual(["action", "in Kinds driver", "+1", "task 1", "pr 1", "branch 1", "deploy 1", "plan"]);
+    expect(s1.querySelector('[data-chip-count="pr"]')!.getAttribute("title")).toBe("1 pull request");
     // Open, the line lists each one as its own chip.
     await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
     for (const kind of CHIP_KINDS) expect(b.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
@@ -604,14 +636,14 @@ test("one other kind asked for counts after \"+N sessions\", which stays; none a
   const prs = await mount(view({ rows: [KINDS], filters: readFilters(new URLSearchParams("show=sessions,plans,prs")) }));
   try {
     const s1 = block(prs.container, "pri-9").querySelector('[data-milestone="s1"]')!;
-    expect([...s1.querySelectorAll("[data-line-kinds] [data-chip-count]")].map((c) => c.textContent)).toEqual(["1 PR"]);
-    expect(s1.querySelector("[data-more-sessions]")!.textContent).toBe("+1 session");
+    expect(partsOf(s1.querySelector("[data-line-chips]")!)).toEqual(["action", "in Kinds driver", "+1", "pr 1", "plan"]);
+    expect(s1.querySelector("[data-more-sessions]")!.getAttribute("aria-label")).toBe("1 more session");
   } finally {
     await prs.unmount();
   }
   const plain = await mount(view({ rows: [KINDS] }));
   try {
-    expect(block(plain.container, "pri-9").querySelector('[data-milestone="s1"] [data-more-sessions]')!.textContent).toBe("+1 session");
+    expect(block(plain.container, "pri-9").querySelector('[data-milestone="s1"] [data-more-sessions]')!.textContent).toBe("+1");
   } finally {
     await plain.unmount();
   }
@@ -654,7 +686,7 @@ test("the progress button shows the done critical milestones, and hides them aga
   }
 }, 60_000);
 
-test("every priority says how many landed and how long since, on every layout; a phone's compact line keeps today and drops the strip", async () => {
+test("every priority says how many landed and how long since, on every layout; a phone's compact line is one line, its today and its sparkline in the row", async () => {
   for (const layout of ["wide", "phone"] as const) {
     const page = await mount(view({ layout }));
     try {
@@ -668,11 +700,10 @@ test("every priority says how many landed and how long since, on every layout; a
   try {
     const head = block(compact.container, "pri-1").querySelector("[data-priority-head]")!;
     expect(head.textContent).toContain("4 today");
-    expect(head.querySelector("[data-day-strip]")).toBeNull();
-    // Compact keeps momentum: the words on its meta line.
-    expect(head.querySelector("[data-meta] [data-momentum-words]")!.textContent).toBe("0 landed · none yet");
-    const five = block(compact.container, "pri-5").querySelector("[data-priority-head] [data-meta] [data-momentum-words]")!;
-    expect(five.textContent).toBe("1 landed · last 2d");
+    // One line a priority: the mini sparkline stays in the row, and no meta line of words under it.
+    expect(head.querySelector("[data-day-strip]")).not.toBeNull();
+    expect(head.querySelector("[data-meta]")).toBeNull();
+    expect(head.querySelector("[data-momentum-words]")).toBeNull();
     expect(head.querySelector("[data-action]")).not.toBeNull();
   } finally {
     await compact.unmount();
@@ -750,13 +781,14 @@ test("a milestone line's chips use the today and momentum columns, its today cou
     expect(block(page.container, "pri-1").querySelector('[data-milestone="s2"] [data-line-today]')!.textContent).toBe("3 today");
     // pri-3: the Open action with "in ‹session›" right after the button, ellipsizing inside the chips cell (the
     // group and the words both shrink); the plan last, the chip a narrow line clips (the open line lists it).
-    const chips = [...block(page.container, "pri-3").querySelector('[data-milestone="s1"] [data-line-chips]')!.children];
-    expect(chips[0].querySelector('[data-action="open"]')).not.toBeNull();
-    const words = chips[0].querySelector("[data-in-session]")!;
-    expect(words.textContent).toBe("in Eval cost reduction");
-    for (const c of ["min-w-0", "shrink", "truncate"]) expect(words.className.split(" ")).toContain(c);
-    expect(chips[0].className.split(" ")).toContain("min-w-0");
-    expect(chips.at(-1)!.querySelector('[data-chip="plan"]')).not.toBeNull();
+    const line = block(page.container, "pri-3").querySelector('[data-milestone="s1"] [data-line-chips]')!;
+    expect(partsOf(line)).toEqual(["action", "in Eval cost reduction", "plan"]);
+    // One row that never wraps; the button never shrinks, the session's words ellipsize down to 5rem.
+    expect(line.className.split(" ")).toContain("flex-nowrap");
+    expect(line.querySelector('[data-fit="fixed"]')!.className.split(" ")).toContain("shrink-0");
+    const words = line.querySelector('[data-fit="label"]')!;
+    for (const c of ["min-w-[5rem]", "shrink"]) expect(words.className.split(" ")).toContain(c);
+    expect(words.querySelector("[data-in-session]")!.className.split(" ")).toContain("truncate");
   } finally {
     await page.unmount();
   }
@@ -766,9 +798,7 @@ test("a milestone line's chips use the today and momentum columns, its today cou
   });
   const both = await mount(view({ rows: [two] }));
   try {
-    const kinds = [...block(both.container, "pri-11").querySelector('[data-milestone="s1"] [data-line-chips]')!.children]
-      .map((c) => (c.querySelector("[data-action]") ? `action ${c.querySelector("[data-in-session]")?.textContent}` : c.hasAttribute("data-more-sessions") ? c.textContent : c.querySelector('[data-chip="plan"]') ? "plan" : "?"));
-    expect(kinds).toEqual(["action in First session", "+1 session", "plan"]);
+    expect(partsOf(block(both.container, "pri-11").querySelector('[data-milestone="s1"] [data-line-chips]')!)).toEqual(["action", "in First session", "+1", "plan"]);
   } finally {
     await both.unmount();
   }
@@ -809,6 +839,11 @@ test("\"Part of ‹plan› (140 tasks)\" is one chip; No priority is a real butt
     await act(async () => { (pri3.querySelector('[data-milestone="s2"] [role=button]') as HTMLElement).click(); });
     const chip = [...pri3.querySelectorAll('[data-milestone-detail] [data-chip="plan"]')].find((c) => c.textContent?.includes("Part of"))!;
     expect(chip.querySelector("[data-plan-size]")!.textContent).toBe("(140 tasks)");
+    // In a narrow row (a phone) the title keeps 6rem: the bar leaves first, then the size (container queries on the row).
+    expect(chip.closest("[data-type-row]")!.querySelector(":scope > div")!.className).toContain("[container-type:inline-size]");
+    expect([...chip.children].find((c) => c.textContent === "The whole platform program")!.className).toContain("min-w-[6rem]");
+    expect(chip.querySelector("[data-plan-bar]")!.getAttribute("class")).toContain("[@container(max-width:24rem)]:hidden");
+    expect(chip.querySelector("[data-plan-size]")!.className).toContain("[@container(max-width:17rem)]:hidden");
     expect(pri3.querySelector("[data-milestone-detail]")!.textContent).not.toMatch(/\)\s*140 tasks/);
     expect(page.container.querySelector('[data-today-seg="none"]')!.tagName).toBe("BUTTON");
   } finally {
@@ -842,9 +877,11 @@ test("Waiting on you tells two sessions on one milestone apart: \"milestone · s
   for (const layout of ["wide", "phone"] as const) {
     const page = await mount(view({ rows: [twice], layout }));
     try {
-      const labels = [...page.container.querySelectorAll("[data-waiting-item]")].map((a) => a.textContent);
-      expect(labels[0]).toContain("Ship it · Copy review");
-      expect(labels[1]).toContain("Ship it · Review: the copy");
+      const labels = [...page.container.querySelectorAll("[data-waiting-item] [data-waiting-label]")].map((a) => [...a.children].map((c) => c.textContent).join(" ") || a.textContent);
+      expect(labels[0]).toBe("Ship it · Copy review");
+      expect(labels[1]).toBe("Ship it · Review: the copy");
+      // Each part ellipsizes by width, not by a count of characters.
+      for (const part of page.container.querySelectorAll("[data-waiting-label] > span:not(:nth-child(2))")) expect(part.className).toContain("truncate");
       // A milestone only one session waits on reads as the milestone alone.
       expect(labels[2]).toContain("Tidy it");
       expect(labels[2]).not.toContain("·");
@@ -952,6 +989,57 @@ test("an untouched top-three priority keeps its title's colour and says \"0\" in
       await page.unmount();
     }
   }
+}, 60_000);
+
+// The milestone line's one-row rule, locked across chips-cell widths. Layout is stubbed the way a browser lays
+// the row out: the action button 65px, "+N" 24px, each kind's count chip 36px, 6px between parts, 12px of
+// left padding; the session's words hold 80px (5rem) and the plan needs 128px (8rem) to show.
+/** The chips cell's width at 1280 with the inbox open, measured in the browser on the fixture list. */
+const DESK_INBOX_CELL = 359;
+async function lineAt(cell: number, rows: unknown[], filters = readFilters(new URLSearchParams("show=sessions,plans,tasks,prs")), priority = "pri-14", milestone = "s1") {
+  lineCell = cell;
+  try {
+    const page = await mount(view({ rows, filters }));
+    try {
+      const line = block(page.container, priority).querySelector(`[data-milestone="${milestone}"] [data-line-chips]`)!;
+      return {
+        action: !!line.querySelector("[data-action]"),
+        label: line.querySelector("[data-in-session]")?.textContent ?? null,
+        more: line.querySelector("[data-more-sessions]")?.textContent ?? null,
+        moreLabel: line.querySelector("[data-more-sessions]")?.getAttribute("aria-label") ?? null,
+        kinds: [...line.querySelectorAll("[data-chip-count]")].map((c) => `${c.getAttribute("data-chip-count")} ${c.textContent}`),
+        plan: line.querySelector('[data-chip="plan"]')?.textContent ?? null,
+      };
+    } finally {
+      await page.unmount();
+    }
+  } finally {
+    lineCell = 600;
+  }
+}
+
+test("the line's one row across chips-cell widths: action, its session and +N always; the counts from 300px; the plan from 420px", async () => {
+  const title = "Rework the scorer calibration so session mapping clears 0.75";
+  expect(title.length).toBe(60);
+  const busy = row(14, "Busy line", 1, [step("s1", "Ship the scorer", "critical", false, { refs: [{ kind: "task", id: "ct-8101" }, { kind: "pr", id: "codecast-sh/codecast#4601" }, { kind: "pr", id: "codecast-sh/codecast#4602" }] }), step("s2", "Another", "critical")], {
+    links: [links("s1", [sess("busy1", title, "dormant", 1), ...[2, 3, 4, 5].map((i) => sess(`busy${i}`, `Helper ${i}`, "dormant", i))], { plan: PL_1075 }), links("s2", [])],
+  });
+  const at = async (w: number) => lineAt(w, [busy]);
+  const base = { action: true, label: `in ${title}`, more: "+4", moreLabel: "4 more sessions" };
+  expect(await at(220)).toEqual({ ...base, kinds: [], plan: null });
+  expect(await at(300)).toEqual({ ...base, kinds: ["task 1", "pr 2"], plan: null });
+  for (const w of [420, 600]) {
+    const line = await at(w);
+    expect(line).toMatchObject({ ...base, kinds: ["task 1", "pr 2"] });
+    expect(line.plan).toContain("Every change merges green");
+  }
+}, 60_000);
+
+test("the Done-list case: at the 1280-with-inbox chips cell, \"Deploy drops the eval job\" shows its plan", async () => {
+  const line = await lineAt(DESK_INBOX_CELL, ROWS, FILTERS, "pri-3", "s1");
+  expect(line.action).toBe(true);
+  expect(line.label).toBe("in Eval cost reduction");
+  expect(line.plan).toContain("Every change merges green");
 }, 60_000);
 
 test("the route shows the feature-off landing while the workspace has Priorities off", async () => {

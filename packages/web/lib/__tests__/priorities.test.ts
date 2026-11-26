@@ -8,7 +8,7 @@ import {
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
-import { distinctFrom } from "../priorityList";
+import { buildModels, distinctFrom, lastDays } from "../priorityList";
 
 describe("distinctFrom: a session's part of \"milestone · session\"", () => {
   const M = "Calibrate goal finding and session mapping";
@@ -20,6 +20,30 @@ describe("distinctFrom: a session's part of \"milestone · session\"", () => {
     expect(distinctFrom(M, "Calibrate goal finding: scorer pass", 1)).toBe("scorer pass");
     expect(distinctFrom(M, "Calibrate goal finding", 2)).toBe("session 2");
     expect(distinctFrom("Ship it", "Ship it", 3)).toBe("session 3");
+  });
+  test("a plural and its singular are one word", () => {
+    expect(distinctFrom("Calibrate the scorer", "Calibrate the scorers", 2)).toBe("session 2");
+    expect(distinctFrom("Deploy webhooks", "Deploy webhook retries", 1)).toBe("retries");
+  });
+});
+
+describe("Stalled", () => {
+  const DAY = 86_400_000;
+  const at = (y: number, mo: number, d: number, h: number) => new Date(y, mo, d, h).getTime();
+  const NOW = at(2026, 10, 26, 9);
+  const model = (first_seen_at: number, done_at?: number) => buildModels([row("pri-1", {
+    status: "active", first_seen_at,
+    steps: [{ ...step("s1", "critical"), done: false }, ...(done_at ? [{ ...step("s2", "critical", true), done_at }] : [])],
+  })], undefined, () => undefined, lastDays(10, NOW), NOW)[0];
+  test("a three-day-old priority with nothing landed is not stalled", () => {
+    expect(model(NOW - 3 * DAY).stalledDays).toBeNull();
+  });
+  test("counts calendar days, as \"last Nd\" does", () => {
+    // First seen five calendar days ago late in the evening: under five 24-hour days, five by the calendar.
+    expect(model(at(2026, 10, 21, 23)).stalledDays).toBe(5);
+    // A landing five calendar days ago reads "last 5d" and Stalled 5d together.
+    const m = model(NOW - 20 * DAY, at(2026, 10, 21, 22));
+    expect([m.lastLandedDays, m.stalledDays]).toEqual([5, 5]);
   });
 });
 

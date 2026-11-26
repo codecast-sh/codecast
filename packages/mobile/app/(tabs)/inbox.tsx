@@ -194,7 +194,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const priorityView = useMemo(() => {
     if (!prioritiesSig) return null;
     const st = useInboxStore.getState();
-    return priorityInboxView(st.priorities, st.currentUser?._id);
+    return priorityInboxView(st.priorities, st.currentUser?._id, st.sessions);
   }, [prioritiesSig]);
 
   const { visibleSessions, sorted: sortedAll, subsByParent, questions, pinned, newSessions, needsInput, done, dormant, working, stashed: stashedSessions, dismissed: dismissedOnly, roleSessionsByLead } = placed;

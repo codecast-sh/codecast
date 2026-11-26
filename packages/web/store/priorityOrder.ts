@@ -71,14 +71,20 @@ export function rankLabelWords(rank: PriorityRankLabel): { text: string; touch: 
     : { text: "None", touch: "None", title: "Serves none of your priorities" };
 }
 
-/** The standing reader the Priorities view sorts and labels by, over one state's priorities and viewer. */
+/**
+ * The standing reader the Priorities view sorts and labels by, over one
+ * state's priorities and viewer. `sessions`, when given, is the store's
+ * current rows: a placed row can be an older copy kept while nothing it
+ * draws changed, so a session's link is read from the live row by its id.
+ */
 export function priorityPlaceReader(
   priorities: Record<string, RankedRow> | undefined,
   viewerId: string | null | undefined,
-): (s: PriorityLinked) => PriorityStanding {
+  sessions?: Record<string, PriorityLinked | undefined>,
+): (s: PriorityLinked & { _id?: string }) => PriorityStanding {
   const viewer = viewerId ? String(viewerId) : null;
   const ranks = priorityRanks(priorities);
-  return (s) => sessionPriorityPlace(s, priorities, viewer, ranks);
+  return (s) => sessionPriorityPlace((s._id && sessions?.[s._id]) || s, priorities, viewer, ranks);
 }
 
 /** Stable: ranked rows by rank then milestone, every other row after in its given order. */

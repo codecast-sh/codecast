@@ -6255,7 +6255,7 @@ export function computeVisualOrder(state: {
     collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
     walk: opts.walk,
     projectOf: projectOfFromState(state),
-    priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state.priorities, state.currentUser?._id) : undefined,
+    priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state.priorities, state.currentUser?._id, state.sessions) : undefined,
     messagesOf: (id) => state.messages?.[id],
   });
   if (mode === "bucket") {

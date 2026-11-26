@@ -234,3 +234,25 @@ test("only the sync host feeds the priorities the view sorts by; a follower wind
   expect(await subscribes("follower")).toBe(false);
   useInboxStore.setState({ syncRole: "host" } as any);
 });
+
+test("the view re-sorts when a session's priority changes after it mounted", async () => {
+  seed("priorities");
+  const m = await mountInbox();
+  const order = () => cardOrder(m.host);
+  expect(order().indexOf(FIRST)).toBeLessThan(order().indexOf(UNLINKED));
+  expect(rankOf(m.host, UNLINKED)).toBe("None");
+  // The pass links the unlinked session to #1 and moves the first one to #7.
+  await act(async () => {
+    useInboxStore.setState((s: any) => ({
+      sessions: {
+        ...s.sessions,
+        [UNLINKED]: { ...s.sessions[UNLINKED], priority_id: "p1", priority_step_key: "s1" },
+        [FIRST]: { ...s.sessions[FIRST], priority_id: "p2", priority_step_key: "s1" },
+      },
+    }));
+  });
+  expect(rankOf(m.host, UNLINKED)).toBe("#1");
+  expect(rankOf(m.host, FIRST)).toBe("#7");
+  expect(order().indexOf(UNLINKED)).toBeLessThan(order().indexOf(FIRST));
+  await m.unmount();
+});

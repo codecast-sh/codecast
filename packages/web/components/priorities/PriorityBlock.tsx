@@ -12,18 +12,19 @@
 // milestone's ⋯ and its box as a Done toggle across the line's left gutter,
 // each session's ⋯ in an open milestone, and on a desktop list the rank as a
 // drag handle (arrow keys step it).
-import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { asksPerson, bestSession, isClosedSession } from "@codecast/shared/contracts/priorityDerive";
 import { milestoneHref, pastBadge, rankProvenance, type PriorityRow } from "../../lib/priorities";
-import { LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, lineSession, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { LIST_GRID, POLISH_SLOT, STATE_WORD, TOUCH_AREA, ago, fitLine, lineSession, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { usePriorityWrites } from "../../hooks/usePriorities";
 import type { LinkKind } from "./parts";
-import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
+import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, InSession, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 import { LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
 
 /** A desktop drag of the owner's rank (PrioritiesView): this row's part in it. */
@@ -291,13 +292,12 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         </>
       ) : (
         <>
-          {/* A phone's compact line keeps its width for the title: no strip. */}
-          {!compact && <span className="col-start-4 row-start-1"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>}
+          <span className="col-start-4 row-start-1"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
           <span className={C_MENU_PHONE}><PriorityMenu row={row} touch /></span>
         </>
       )}
-      {/* A phone's meta line: polish (not in compact), a pending correction, and the momentum words, which compact keeps too. */}
-      {!wide && (
+      {/* A phone's meta line: polish, a pending correction and the momentum words. Compact is one line a priority (its strip in the row), so it keeps only a pending correction. */}
+      {!wide && (!compact || pending) && (
         <div data-meta className={cn(C_META, "flex min-h-6 items-center gap-3")}>
           {polish && !compact && (
             <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className="-ml-2 inline-flex h-11 items-center gap-0.5 whitespace-nowrap rounded px-2 text-meta text-sol-text-dim hover:bg-sol-bg-alt">
@@ -306,7 +306,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
             </button>
           )}
           {pending && <PendingMark />}
-          <MomentumWords model={model} className="ml-auto" />
+          {!compact && <MomentumWords model={model} className="ml-auto" />}
         </div>
       )}
       {!wide && plan && (
@@ -328,47 +328,103 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
 }
 
 /**
- * A milestone's chips on a wide line, first to last: the bracket's head
- * session where the driver starts, the priority's action on its line with
- * the session it acts in ("in ‹session›", which ellipsizes), else one session
- * (Answer when it asks); then "+N sessions"; then the other kinds the Show
- * filter asks for, as counts ("1 task", "2 PRs"); then the plan. A chip that
- * would wrap is clipped away, so they give way from the end: the plan first,
- * then the counts, and "+N sessions" never while a count still shows. The
- * open line lists them all.
+ * A milestone's chips on a wide line: one row that never wraps, first to
+ * last: the priority's action (its button, then "in ‹session›", which
+ * ellipsizes down to 5rem), else the bracket's head session or the line's
+ * own session (a chip of at least 5rem); then "+N" more sessions; then one
+ * glyph-and-count chip per other kind the Show filter asks for; then the
+ * plan. The row measures itself (fitLine): with no room the plan leaves
+ * first (it shows only with 8rem to itself), then the counts from the end.
+ * The action, its session and "+N" never leave. The open line lists all.
  */
-function lineChips({ model, m, railed, filters, lookups }: {
+function LineChips({ model, m, railed, filters, lookups }: {
   model: PriorityModel;
   m: MilestoneModel;
   railed: RailPart | null;
   filters: ListFilters;
   lookups: LinkLookups;
-}): ReactNode[] {
+}) {
   const { action } = model;
   // Under the bracket the driver is named once, at its head; the other lines show their own sessions.
   const driver = railed ? model.rail?.session : undefined;
   const own = driver ? m.sessions.filter((s) => s.conversation_id !== driver.conversation_id) : m.sessions;
   const mine = action?.milestone.key === m.key ? action : null;
-  const chips: ReactNode[] = [];
+  const lead: ReactNode[] = [];
   let shown: SessionLine | undefined;
   if (mine) {
-    chips.push(<ActionButton key="act" row={model.row} action={mine} />);
+    lead.push(<span key="act" data-fit="fixed" className="flex shrink-0"><ActionButton row={model.row} action={mine} showSession={false} /></span>);
+    if (mine.session) lead.push(<span key="in" data-fit="label" className="flex min-w-[5rem] shrink items-center overflow-hidden"><InSession s={mine.session} /></span>);
     shown = mine.session;
   } else if (driver && railed === "head") {
-    chips.push(<SessionSlot key="drv" s={driver} className="min-w-[5rem] max-w-[14rem]" />);
+    lead.push(<span key="drv" data-fit="label" className="flex min-w-[5rem] shrink"><SessionSlot s={driver} className="min-w-0 max-w-full" /></span>);
   } else if (filters.show.sessions && !m.done) {
     shown = own.find(asksPerson) ?? bestSession(own);
-    if (shown) chips.push(<SessionSlot key="s" s={shown} className="min-w-[4.5rem] max-w-[15rem]" />);
+    if (shown) lead.push(<span key="s" data-fit="label" className="flex min-w-[5rem] shrink"><SessionSlot s={shown} className="min-w-0 max-w-full" /></span>);
   }
-  const others = own.filter((s) => s !== shown).length + m.more;
-  if (filters.show.sessions && !m.done && others > 0) {
-    chips.push(<span key="o" data-more-sessions className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1.5 text-meta tabular-nums text-sol-text-dim">+{others} {others === 1 ? "session" : "sessions"}</span>);
-  }
+  const others = filters.show.sessions && !m.done ? own.filter((s) => s !== shown).length + m.more : 0;
   const kinds = m.done ? [] : kindCounts(m, filters, lookups);
-  if (kinds.length) chips.push(<span key="k" data-line-kinds className="flex shrink-0 items-center gap-1">{kinds.map((k) => <KindCount key={k.kind} kind={k.kind} n={k.n} />)}</span>);
-  if (filters.show.plans && m.plan) chips.push(<span key="p" className="flex min-w-0 shrink"><PlanChip plan={m.plan} className="min-w-[8rem] max-w-[14rem]" /></span>);
-  return chips;
+  const plan = filters.show.plans ? m.plan : null;
+  // What fits, measured: re-measured whenever the row's width or what it holds changes.
+  const parts = `${lead.length}|${others}|${kinds.map((k) => `${k.kind}${k.n}`).join(",")}|${plan?.short_id ?? ""}`;
+  const [fit, setFit] = useState<{ parts: string; kinds: number; plan: boolean } | null>(null);
+  const width = useRef(0);
+  const row = useRef<HTMLSpanElement | null>(null);
+  const observer = useRef<ResizeObserver | null>(null);
+  const measureRow = useCallback((el: HTMLSpanElement | null) => {
+    row.current = el;
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    observer.current = new ResizeObserver(([entry]) => {
+      const w = Math.round(entry.contentRect.width);
+      if (w === width.current) return;
+      width.current = w;
+      setFit(null);
+    });
+    observer.current.observe(el);
+  }, []);
+  useMountEffect(() => () => observer.current?.disconnect());
+  const measuring = !fit || fit.parts !== parts;
+  useLayoutEffect(() => {
+    if (!measuring || !row.current) return;
+    const el = row.current;
+    // Not laid out (hidden, or no layout engine): nothing to measure, so nothing leaves.
+    if (!(el.clientWidth > 0)) return setFit({ parts, kinds: kinds.length, plan: !!plan });
+    const style = getComputedStyle(el);
+    const room = el.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+    const widths = (kind: string) => [...el.children].filter((c) => (c as HTMLElement).dataset.fit === kind).map((c) => (c as HTMLElement).offsetWidth);
+    setFit({
+      parts,
+      ...fitLine({
+        room,
+        gap: parseFloat(style.columnGap) || 0,
+        // The session's words hold 5rem however long they are.
+        fixed: [...widths("fixed"), ...widths("label").map(() => LABEL_MIN), ...widths("more")],
+        kinds: widths("kind"),
+        hasPlan: !!plan,
+      }),
+    });
+  });
+  const shownKinds = measuring ? kinds : kinds.slice(0, fit!.kinds);
+  return (
+    <span ref={measureRow} data-line-chips className="relative flex h-8 min-w-0 flex-1 flex-nowrap items-center gap-x-1.5 overflow-hidden pl-3 [@media(pointer:coarse)]:h-12">
+      {railed && <span aria-hidden data-rail={railed} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[railed])} />}
+      {lead}
+      {others > 0 && (
+        <span data-fit="more" data-more-sessions title={`${others} more ${others === 1 ? "session" : "sessions"}`} aria-label={`${others} more ${others === 1 ? "session" : "sessions"}`} className="inline-flex h-6 shrink-0 items-center whitespace-nowrap px-1 text-meta tabular-nums text-sol-text-dim">
+          +{others}
+        </span>
+      )}
+      {shownKinds.map((k) => <span key={k.kind} data-fit="kind" className="flex shrink-0"><KindCount kind={k.kind} n={k.n} /></span>)}
+      {plan && (measuring || fit!.plan) && (
+        <span data-fit="plan" className="flex min-w-[8rem] shrink"><PlanChip plan={plan} className="min-w-0 max-w-[14rem]" /></span>
+      )}
+    </span>
+  );
 }
+
+/** The width "in ‹session›" (or a line's session chip) keeps, whatever else the row holds. */
+const LABEL_MIN = 80;
 
 /** The other kinds of link the Show filter asks for that a milestone has, each as its count. */
 function kindCounts(m: MilestoneModel, filters: ListFilters, lookups: LinkLookups): Array<{ kind: LinkKind; n: number }> {
@@ -453,12 +509,9 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
             {/* Title and chips take the line up to its menu: a milestone line has no strip, so its chips use the today and momentum columns too. */}
             <div className="col-start-2 col-end-6 row-start-1 grid min-w-0 grid-cols-[minmax(max(40%,8rem),1fr)_minmax(0,1fr)] items-center gap-x-3">
               {title}
-              {/* Chips that would wrap are clipped away. Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside the clip, and a wrapped row sits far enough below that none of its press area reaches back in. */}
+              {/* One row that never wraps (LineChips). Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside its clip. */}
               <span className="flex min-w-0 items-start gap-1.5">
-                <span data-line-chips className="relative flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-1.5 gap-y-4 overflow-hidden pl-3 pt-1 [@media(pointer:coarse)]:h-12 [@media(pointer:coarse)]:gap-y-6 [@media(pointer:coarse)]:pt-2.5">
-                  {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
-                  {lineChips({ model, m, railed: rail, filters, lookups })}
-                </span>
+                <LineChips model={model} m={m} railed={rail} filters={filters} lookups={lookups} />
                 {m.today > 0 && <span data-line-today className="flex h-8 shrink-0 items-center whitespace-nowrap text-meta tabular-nums text-sol-text-muted [@media(pointer:coarse)]:h-12">{m.today} today</span>}
               </span>
             </div>
@@ -525,7 +578,8 @@ export function TypeRow({ label, children }: { label: string; children: ReactNod
   return (
     <div data-type-row={label} className="flex min-w-0 items-start gap-2 py-0.5">
       <span className="flex h-6 w-20 shrink-0 items-center text-mark font-semibold uppercase tracking-wide text-sol-text-dim">{label}</span>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">{children}</div>
+      {/* A container: a chip in it gives up its extras by the row's width (PlanChip). */}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 [container-type:inline-size]">{children}</div>
     </div>
   );
 }
