@@ -214,8 +214,8 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if (!actor) return;
       const facts = ownerFactsOf(this, conversationId);
       if (!facts) {
-        // Add me on a session whose read has not arrived (an agent the band
-        // lists): a new read row holding only you, which the server's read
+        // Add me on a session whose read has not arrived (an agent not yet
+        // read): a new read row holding only you, which the server's read
         // replaces when it lands.
         if (change.add?.includes(actor) && !this.sessionOwners[conversationId]) {
           this.sessionOwners[conversationId] = {

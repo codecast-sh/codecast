@@ -52,10 +52,6 @@ export type SessionCardViewProps = {
   session: InboxSession;
   /** Every pull request the session links (lib/sessionPullRequests). */
   linkedPrs?: readonly LinkedPr[];
-  /** Running Task subagents whose rows the inbox folds away (the subagent toggle is off). */
-  hiddenRunningSubagents?: number;
-  /** The newest of them, which the count opens. */
-  foldedSubagentId?: string | null;
   /** The project it works in (lib/workProjectSig). */
   workProject?: string;
   isActive: boolean;

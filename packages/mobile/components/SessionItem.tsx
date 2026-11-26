@@ -30,6 +30,8 @@ import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 import { isConvexId } from '@codecast/web/lib/entityLinks';
 import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { CoOwnerFaces } from '@/components/owners/OwnerFace';
+import { SubagentLine } from '@/components/inbox/SubagentLine';
+import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 
 export type SessionData = {
   _id: string;
@@ -217,7 +219,7 @@ function RowWithOwner({ session, line = false, placedBucket, placedState, pendin
   return line ? <RNText style={styles.summaryText} numberOfLines={1}>{lead}</RNText> : lead;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel } & RowPlacementProps) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank, subagents, onOpenSubagent }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel; subagents?: readonly SubagentStateGroup[]; onOpenSubagent?: (conversationId: string) => void } & RowPlacementProps) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   const { projectFilter, showImageThumb } = useRowEnv();
@@ -390,6 +392,8 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         )}
       </RNView>
       ) : null}
+      {/* The card's subagents, folded to a count per state (lib/subagentLine). */}
+      {subagents && onOpenSubagent ? <SubagentLine groups={subagents} onOpen={onOpenSubagent} /> : null}
       </RNView>
       {thumbUrl && (
         <Pressable onPress={() => setThumbZoom(true)} hitSlop={6}>
@@ -405,7 +409,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank }: RowPlacementProps & {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank, subagents }: RowPlacementProps & {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -424,6 +428,9 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   reviveAt?: number;
   /** The inbox's Priorities view only (lib/inboxPriorities): the rank and its other workspace; null, no tag. */
   priorityRank?: PriorityRankLabel;
+  /** The folded subagents line (lib/subagentLine subagentLines); a count
+   *  opens its subagent through onPress. */
+  subagents?: readonly SubagentStateGroup[];
 }) {
   const Theme = useTheme();
   const translateX = useRef(new RNAnimated.Value(0)).current;
@@ -541,7 +548,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} priorityRank={priorityRank} />
+      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} priorityRank={priorityRank} subagents={subagents} onOpenSubagent={onPress} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );

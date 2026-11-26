@@ -125,6 +125,13 @@ recent seat. A row only the escalated window seats costs the scan no reads:
 it skips the children scan and the liveness read, because a current
 escalation waits on a person by definition.
 
+A listed session's children that it still owns (no role, not released) come
+with it as child rows stamped `owner_session_id` and `owned_by_me: false`, at
+no extra read. They are members of nobody's inbox: the client drops them from
+the viewer's scope and nests them under that session's card only
+(`ownedChildrenOf` in web `store/inboxStore.ts`), where the card's subagent
+line and rows draw them.
+
 The scan and `getInboxSessionsByIds` admit an escalated row only through
 `checkConversationAccess` (`privacy.conversationAccessMemo` for the scan, the
 same answer with the team grant memoized). So a row that only fell past the

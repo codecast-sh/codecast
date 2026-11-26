@@ -99,7 +99,6 @@ import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { LocalMirrorChip } from "./LocalMirror";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
 import { useSyncSessionOwners } from "../hooks/useSyncSessionOwners";
-import { SessionAgentsBand } from "./conversation/SessionAgentsBand";
 import { OwnersMenuItem, OwnersSheet } from "./OwnersMenu";
 import { ThreadSuggestions } from "./org/SuggestionSet";
 import { TmuxAttachPill } from "./TmuxAttachPill";
@@ -1236,7 +1235,7 @@ const ConversationViewInner = (
   // timeline.length. Every viewer sees every handoff; the assignee's own
   // "Got it" strip is the header banner.
   const ownersApi = useOwnersFromStore(pendingConvId);
-  // The owners model's read and agents band (session_owners): fed while open.
+  // The owners model's read (session_owners): fed while open.
   useSyncSessionOwners(pendingConvId);
   // The owners menu as a sheet, from the session menu on a narrow header.
   const [ownersSheetOpen, setOwnersSheetOpen] = useState(false);
@@ -5119,8 +5118,6 @@ const ConversationViewInner = (
           </ErrorBoundary>
         )}
         {ownersSheetOpen && conversation?._id && <OwnersSheet conversationId={String(conversation._id)} open onOpenChange={setOwnersSheetOpen} />}
-        {/* Under the owners model: the agents this session owns. */}
-        {conversation && !guest && <SessionAgentsBand conversationId={conversation._id.toString()} />}
         {/* What this session belongs to, on one row: the task it owns (the
             task page carries this session the same way, so each face holds
             the other), then the trigger, plan and workflow strips in

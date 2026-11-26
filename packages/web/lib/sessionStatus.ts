@@ -33,6 +33,7 @@ import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
 import { sessionStartupState } from "./sessionLifecycle";
+import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 
 export const SESSION_STATUSES = ["needs_you", "error", "working", "starting", "done", "dormant", "idle", "stashed", "killed"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
@@ -127,6 +128,9 @@ export function bandOfStatus(status: SessionStatus): StatusBand | null {
 export type StatusRow = {
   message_count?: number | null;
   agent_status?: string | null;
+  is_subagent?: boolean | null;
+  parent_conversation_id?: string | null;
+  spawned_by_conversation_id?: string | null;
   agent_type?: string | null;
   updated_at?: number;
   started_at?: number | null;
@@ -271,6 +275,13 @@ function overlaidBucket(bucket: string, row: StatusRow, now: number, live: Statu
 /** The one state a session shows. */
 export function sessionStatusOf({ row, section, placement, now, live = {}, hosted = false }: SessionStatusInput): SessionStatus {
   const where = section ?? (placement ? sectionOfBucket(overlaidBucket(placement.bucket, row, now, live)) : null);
+  // A Claude Code subagent (the shared isSubagentConversation: the flag, or a
+  // parent pointer on a row that lacks it) runs inside its parent's turn and
+  // hands its result back there, so once it ended (no live status of its own)
+  // it waits on nobody: Done, never Needs you. A section above the row still
+  // decides.
+  const handedBack = !section && isSubagentConversation({ is_subagent: row.is_subagent === true, parent_conversation_id: row.parent_conversation_id })
+    && !row.spawned_by_conversation_id && !row.agent_status && !live.asking;
   switch (where) {
     case "dismissed": return "killed";
     case "stashed": return "stashed";
@@ -280,7 +291,7 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
     case "working": return "working";
     case "done": return "done";
     case "dormant": return "dormant";
-    case "needs_input": return live.stopped || statusFailure(row, now, live) ? "error" : "needs_you";
+    case "needs_input": return live.stopped || statusFailure(row, now, live) ? "error" : handedBack ? "done" : "needs_you";
     case "new": return statusStarting(row, now, live, hosted) ? "starting" : "idle";
   }
   // Pinned, an anchor, a list with no sections, a row the inbox does not
@@ -299,7 +310,7 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   const state = placement?.state ?? workStateOfRow(row, now);
   switch (personStateOf(row, (placement?.bucket ?? state) as InboxBucket, state)) {
     case "working": return "working";
-    case "needs_input": return statusFailure(row, now, live) ? "error" : "needs_you";
+    case "needs_input": return statusFailure(row, now, live) ? "error" : handedBack ? "done" : "needs_you";
     case "done": return "done";
     case "dormant": return "dormant";
     default: return "idle";

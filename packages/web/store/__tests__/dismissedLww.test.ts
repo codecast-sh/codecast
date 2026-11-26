@@ -50,11 +50,11 @@ describe("updateClientUI stamped view keys", () => {
 
   it("stamps inbox-view keys so the toolbar follows the user across devices", () => {
     const before = Date.now();
-    useInboxStore.getState().updateClientUI({ inbox_scope: "team", show_subagents: true });
+    useInboxStore.getState().updateClientUI({ inbox_scope: "team", subagent_rows: "compact" });
     const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
     expect(ui.inbox_scope).toBe("team");
     expect(ui["inbox_scope:ts"]).toBeGreaterThanOrEqual(before);
-    expect(ui["show_subagents:ts"]).toBeGreaterThanOrEqual(before);
+    expect(ui["subagent_rows:ts"]).toBeGreaterThanOrEqual(before);
   });
 
   it("leaves per-device keys unstamped (legacy local_wins semantics)", () => {

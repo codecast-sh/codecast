@@ -60,7 +60,6 @@ function seed(people: unknown[], seat: boolean, orgSeat = false) {
     ...withTeamRoster([me, ashot], { clientState: useInboxStore.getState().clientState }),
     pending: {},
     sessionOwners: {},
-    sessionAgents: {},
     orgTree: { roles: [{ ...roleRow, standing: orgSeat ? { conversation_id: LEAD } : null }, roleTwo], anchors: [], people: [], workspace: { kind: "team", id: "fixture-team" } } as any,
     sessions: {
       [S]: { _id: S, session_id: S, title: "Polish the owners menu", user_id: "me", updated_at: 1, owners_model: true, owned_by_me: true, org_role_id: ROLE, owner_session_id: LEAD } as any,

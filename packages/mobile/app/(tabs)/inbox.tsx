@@ -14,7 +14,7 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type BucketItem,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, resolveShowSubagents, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveInboxOldestFirst, resolveSubagentRows, resolveSubagentFilter, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
@@ -43,6 +43,8 @@ import { AreaBar } from '@/components/nav/AreaBar';
 import { LivePulse } from '@/components/calls/LiveRooms';
 import { HiddenSessionRow } from '@/components/inbox/HiddenSessionRow';
 import { useInboxPriorityView, usePrioritySections } from '@/hooks/useInboxPriorityView';
+import { drawsSubagentLine, filterHoistedSubagents, subagentLines } from '@/lib/subagentLine';
+import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
 // multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
@@ -176,7 +178,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // draft keystroke synced from any device. inbox_manual_order is an array, so
   // its wake rides a stringified key (ref may flip without content change).
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s));
-  const showSubagents = useInboxStore((s) => resolveShowSubagents(s.clientState?.ui));
+  // How cards show their subagents and which ones: the rail's view menu sets
+  // both; the phone has no menu and follows them.
+  const subagentRows = useInboxStore((s) => resolveSubagentRows(s.clientState?.ui));
+  const subagentFilter = useInboxStore((s) => resolveSubagentFilter(s.clientState?.ui));
+  const showSubagents = subagentRows === 'full';
   const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
@@ -359,6 +365,19 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
 
   const openRole = useCallback((roleShortId: string) => router.push(`/org/${roleShortId}`), [router]);
 
+  // Each card's folded subagents line (lib/subagentLine), or none at all.
+  // The previous map rides along so an unchanged line keeps its array and
+  // the memoized row does not re-render.
+  const flatView = viewMode === 'recent' || viewMode === 'time';
+  const subagentLinesRef = useRef<Map<string, SubagentStateGroup[]> | undefined>(undefined);
+  const subagentLinesByParent = useMemo(() => {
+    if (!drawsSubagentLine(subagentRows, flatView)) return null;
+    const all = useInboxStore.getState().sessions;
+    const next = subagentLines([placed.subsByParent, placed.workersNeedingYouByParent], (id) => all[id], coarseNow, subagentFilter, subagentLinesRef.current);
+    subagentLinesRef.current = next;
+    return next;
+  }, [placed, coarseNow, subagentRows, subagentFilter, flatView]);
+
   const renderSessionItem = useCallback((s: InboxSession) => {
     const row = (
     <SwipeableSessionItem
@@ -377,12 +396,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
       placedState={placed.placements.get(s._id)?.work_state}
       pendingSend={pendingSendIds.has(s._id)}
       priorityRank={priorityView ? priorityView.rankOf(s) : undefined}
+      subagents={subagentLinesByParent?.get(s._id)}
     />
     );
     return s._id === heldKillId
       ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
       : row;
-  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId, placed, pendingSendIds, priorityView]);
+  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId, placed, pendingSendIds, priorityView, subagentLinesByParent]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -506,7 +526,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         chipMatches,
         oldestFirst,
       });
-      return renderSection("All", flat, Theme.cyan, "all");
+      // Full rows: the hoisted subagents follow the same filter as the line.
+      const rows = showSubagents ? filterHoistedSubagents(flat, subsByParent, coarseNow, subagentFilter, currentSessionId) : flat;
+      return renderSection("All", rows, Theme.cyan, "all");
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled
@@ -546,7 +568,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
     sections.push(renderSection('Sleeping', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, statusNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, statusNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, subagentFilter, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Closed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

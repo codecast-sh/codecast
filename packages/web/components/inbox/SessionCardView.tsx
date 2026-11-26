@@ -46,7 +46,6 @@ import {
   CardStartupLine,
   CardStatusSignals,
   CommentThreadsChip,
-  FoldedSubagentsMark,
   ForkCorner,
   SessionProjectChip,
   SelectTick,
@@ -98,8 +97,6 @@ export function SessionCardView({
   thumbSrc,
   ship = null,
   linkedPrs = NO_PRS,
-  hiddenRunningSubagents = 0,
-  foldedSubagentId = null,
   onSelect,
   onClose,
   onDefer,
@@ -731,7 +728,6 @@ export function SessionCardView({
             {/* A running workflow renders as its own ↳ WorkflowBar under the
                 card (same family as schedule/monitor bars) — no chip here. */}
             <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
-            <FoldedSubagentsMark count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />
             <CardPinMark session={session} onPin={onPin} />
             <WithOwnerMark withOwner={withOwner} working={isWorking} pendingSend={isPendingSend} />
             <CardStatusSignals

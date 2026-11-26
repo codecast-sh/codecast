@@ -257,6 +257,36 @@ describe("the status vocabulary", () => {
   });
 });
 
+// A Claude Code subagent runs inside its parent's turn and hands its result
+// back there: once its turn ended it waits on nobody. A spawned worker is a
+// session of its own, and one that stopped still waits on the person.
+describe("a subagent whose turn ended", () => {
+  const status = (r: InboxSession, section?: "needs_input") =>
+    sessionStatusOf({ row: r, now: NOW, section: section ?? null, placement: railRowPlacement(r, NOW) });
+
+  test("a finished Claude Code subagent reads Done, not Needs you", () => {
+    const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
+    expect(railRowPlacement(sub, NOW).bucket).toBe("needs_input");
+    expect(status(sub)).toBe("done");
+  });
+
+  test("a spawned worker waiting on the person still reads Needs you", () => {
+    expect(status(row({ is_subagent: true, spawned_by_conversation_id: "jx7parent" }))).toBe("needs_you");
+    expect(status(row({ spawned_by_conversation_id: "jx7parent", agent_status: "idle" }))).toBe("needs_you");
+  });
+
+  test("a subagent with a live status of its own, or a pending ask, keeps it", () => {
+    expect(status(row({ is_subagent: true, agent_status: "idle" }))).toBe("needs_you");
+    const sub = row({ is_subagent: true });
+    expect(sessionStatusOf({ row: sub, now: NOW, placement: railRowPlacement(sub, NOW), live: { asking: true } })).toBe("needs_you");
+    expect(status(row({ is_subagent: true, pending_api_error: true, pending_api_error_kind: "limit" }))).toBe("error");
+  });
+
+  test("a section the row sits in still decides", () => {
+    expect(status(row({ is_subagent: true }), "needs_input")).toBe("needs_you");
+  });
+});
+
 describe("the card's second line", () => {
   test("a failure says what failed", () => {
     const r = row({ agent_status: "idle", pending_api_error: true, pending_api_error_kind: "limit", idle_summary: "Refactor the retry path" });

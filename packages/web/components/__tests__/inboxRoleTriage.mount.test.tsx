@@ -126,7 +126,7 @@ function seed(rows: Record<string, unknown>[]) {
     pendingMessages: {},
     sessionDecisions: {},
     currentUser: { _id: "me", name: "Ashot" },
-    clientState: { ui: { inbox_scope: "mine", show_old: true, show_subagents: true } },
+    clientState: { ui: { inbox_scope: "mine", show_old: true, subagent_rows: "full", subagent_filter: "all" } },
   } as any);
 }
 
@@ -189,7 +189,7 @@ test("a role's sessions are subagent rows under the role's card, with a count on
   await m.unmount();
 
   // The subagent toggle hides them like any other subagent row.
-  useInboxStore.setState({ clientState: { ui: { inbox_scope: "mine", show_old: true, show_subagents: false } } } as any);
+  useInboxStore.setState({ clientState: { ui: { inbox_scope: "mine", show_old: true, subagent_rows: "folded" } } } as any);
   const hidden = await mountInbox();
   for (const sid of [WAITING, WORKING]) expect(cardOf(hidden.host, sid)).toBeNull();
   expect(cardOf(hidden.host, STANDING)).not.toBeNull();

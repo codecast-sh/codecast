@@ -463,8 +463,16 @@ describe("the nested window: released subagents only", () => {
     const { sessions, truncated } = await computeInboxSessions({ db }, ME as any, { includeLiveness: false });
     expect(ids(sessions)).toContain("released");
     expect(truncated).not.toContain("nested");
-    // A subagent its parent owns is never a row of mine.
-    expect(ids(sessions).filter((id) => id.startsWith("busy"))).toEqual([]);
+    // A subagent its parent owns is never mine: it rides the parent's card,
+    // stamped owned by that session, so the client files it nowhere else.
+    const busyRows = sessions.filter((s: any) => String(s._id).startsWith("conversations_busy"));
+    expect(busyRows.length).toBeGreaterThan(0);
+    for (const row of busyRows) {
+      expect(row.owned_by_me).toBe(false);
+      expect(row.owners_model).toBe(true);
+      expect(row.owner_session_id).toBe("conversations_lead");
+      expect(row.implicit_owner).toBeNull();
+    }
   });
 
   test("past its cap the window names itself and keeps the newest releases, the replica's selection", async () => {

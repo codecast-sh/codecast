@@ -2102,6 +2102,8 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   decision_view?: DecisionViewPrefs;
   saved_views?: SavedView[];
+  // LEGACY: superseded by subagent_rows and no longer written; read only as
+  // its default (true = "full") when subagent_rows is unset.
   show_subagents?: boolean;
   // Trigger rows under inbox cards: expanded (full row per trigger — name,
   // last report, countdown, verbs) or folded to a one-line strip that only says
@@ -2116,6 +2118,14 @@ export type ClientUI = {
   // bar as its own row, "hidden" removes them entirely (the same gesture the
   // subagent toggle offers). Absent = show_triggers legacy, then "strip".
   card_bars?: "strip" | "full" | "hidden";
+  // A card's subagents and workers: "folded" is one line of state marks and
+  // counts, "compact" one short row each, "full" a card each, "hidden" none.
+  // Absent = show_subagents ? "full" : "folded" (resolveSubagentRows).
+  subagent_rows?: SubagentRowsMode;
+  // Which of them a card shows (lib/subagentRows SUBAGENT_FILTER_STATES):
+  // "active" the ones working or waiting, "active_done" those and the done
+  // ones, "all" every one. Absent = "active" (resolveSubagentFilter).
+  subagent_filter?: SubagentFilter;
   // The machine you last chose by hand in a new-session picker: where NEW work
   // opens when default_device is absent (machinePicker intendedMachineId).
   // Stamped, so a pick on the laptop holds on the phone too (sd-2611).
@@ -3869,6 +3879,8 @@ export interface PlacedInbox {
   isQuestion: (s: InboxSession) => boolean;
   /** Rows placed in each section: flat cards plus members nested under a same-bucket lead — the header number. A role's nested sessions add to none. */
   counts: Record<InboxSectionKey, number>;
+  /** Each nested row `counts` holds → the section it counts in. A surface that draws only some nested rows (Full rows under a filter) takes the rest off the header. */
+  nestedSectionOf: Map<string, InboxSectionKey>;
   /** The role's standing session id → how many of its sessions ride its card (org-staffing.md S23.3): the count pill. The sessions themselves are never rows. */
   roleSessionsByLead: Map<string, number>;
   /** A card's id → how many spawned workers (isSpawnedWorker) are under it, nested or not: the parent row's workers line. */
@@ -3882,11 +3894,13 @@ export interface PlacedInbox {
 //
 // `counts` is every row PLACED in the bucket — the flat cards plus the members
 // nested under a same-bucket lead. That is the honest number only while those
-// nested rows are on screen. With the subagent toggle off they render nowhere,
-// so the header claimed rows the reader could neither see nor reach: prod on
-// 2026-09-10 showed NEEDS YOU (121) above 33 cards, while the sidebar badge
-// (flat cards only) said 34. A chip filter narrows a section the same way, so a
-// filtered section always reports the cards it shows.
+// nested rows are on screen. Unless subagents are Full rows they render as no
+// card, so the header claimed rows the reader could neither see nor reach:
+// prod on 2026-09-10 showed NEEDS YOU (121) above 33 cards, while the sidebar
+// badge (flat cards only) said 34. Under Full rows the caller passes the count
+// less the nested rows its filter hides (nestedSectionOf). A chip filter
+// narrows a section the same way, so a filtered section always reports the
+// cards it shows.
 export function sectionHeaderCount(
   shown: readonly InboxSession[],
   full: readonly InboxSession[],
@@ -4413,7 +4427,7 @@ function samePlacements(a: Map<string, InboxRowPlacement>, b: Map<string, InboxR
   }
   return true;
 }
-function sameCounts(a: Map<string, number>, b: Map<string, number>): boolean {
+function sameCounts<V>(a: Map<string, V>, b: Map<string, V>): boolean {
   if (a.size !== b.size) return false;
   for (const [k, n] of b) if (a.get(k) !== n) return false;
   return true;
@@ -4476,6 +4490,23 @@ export function lastPlacedInbox(
 ): PlacedInbox | null {
   const scope = opts.scope ?? state.clientState.ui?.inbox_scope ?? "mine";
   return _placedMemo.get(`${scope}\x1f${opts.focusedId ?? ""}`)?.val ?? null;
+}
+
+// Rows a session owns under the owners model (owner_session_id), live and not
+// closed, read once per sessions object: the rail nests them under that
+// session's card even though they are in nobody's inbox.
+const ownedChildrenCache = new WeakMap<object, InboxSession[]>();
+function ownedChildrenOf(sessions: Record<string, InboxSession>): InboxSession[] {
+  const hit = ownedChildrenCache.get(sessions);
+  if (hit) return hit;
+  const out: InboxSession[] = [];
+  for (const id in sessions) {
+    if (!Object.hasOwn(sessions, id)) continue;
+    const s = sessions[id];
+    if (s.owner_session_id && underOwnersModel(s) && !s.inbox_killed_at && !isClosedSession(s)) out.push(s);
+  }
+  ownedChildrenCache.set(sessions, out);
+  return out;
 }
 
 export function placeInboxRows(
@@ -4686,9 +4717,9 @@ export function placeInboxRows(
   // (dismissed card) triages nothing, so its sessions stand on their own facts.
   // A spawned worker (isSpawnedWorker: `cast spawn`, a workflow sub) nests
   // under its present spawner for display only, whatever its own bucket: like
-  // a Task subagent it rides its parent's card, folded until the Sub-agents
-  // and workers option shows it. Nothing waiting on the person folds away: a
-  // `cast spawn` worker that needs you (workerNeedsYou) or that the viewer
+  // a Task subagent it rides its parent's card, drawn as the person's
+  // "Subagents on cards" pick says (resolveSubagentRows). Nothing waiting on
+  // the person folds away: a `cast spawn` worker that needs you (workerNeedsYou) or that the viewer
   // pinned keeps its own row in its own section, and the parent row names it
   // (workersNeedingYouByParent). A workflow sub is never its own member, so it
   // has no row of its own to keep: it nests and the parent names it. A worker
@@ -4747,6 +4778,17 @@ export function placeInboxRows(
     if (stay.length) subsByParent.set(parent, stay); else subsByParent.delete(parent);
     if (!subsByParent.has(top)) subsByParent.set(top, []);
     subsByParent.get(top)!.push(...move);
+  }
+  // Under the owners model a subagent belongs to the session that started it,
+  // so the viewer's scope drops it; it still rides that session's card here.
+  // Display only: it takes no section, count or badge of its own.
+  for (const child of ownedChildrenOf(state.sessions)) {
+    const owner = String(child.owner_session_id);
+    if (!allIds.has(owner) || nestedUnder.has(child._id) || scoped[child._id]) continue;
+    const top = topCardOf(owner);
+    nestedUnder.set(child._id, owner);
+    if (!subsByParent.has(top)) subsByParent.set(top, []);
+    subsByParent.get(top)!.push(child);
   }
   // The open session is always on the list: nested under a sub row (a role's
   // session under a sub-lead under its parent lead's card), it moves up to
@@ -4906,19 +4948,20 @@ export function placeInboxRows(
   for (const [k, list] of [["questions", questions], ["pinned", pinned], ["newSessions", newSessions], ["needsInput", needsInput], ["done", done], ["dormant", dormant], ["working", working]] as const) {
     for (const s of list) sectionOfCard.set(s._id, k);
   }
+  const nestedSectionOf = new Map<string, InboxSectionKey>();
   for (const id of subsWithParent) {
     if (roleRidden.has(id)) continue;
     const worker = scoped[id];
     if (nestWorkers && worker && isSpawnedWorker(worker)) {
       if (!isMemberCandidate(worker)) continue; // a workflow sub is no member, like a Task subagent
       const k = sectionOfCard.get(topCardOf(id));
-      if (k) counts[k]++;
+      if (k) { counts[k]++; nestedSectionOf.set(id, k); }
       continue;
     }
     const b = placements.get(id)?.bucket;
     const row = b === "needs_input" ? state.sessions[id] : undefined;
     const k = b === "needs_input" && row && !waitsOnViewer(row, meId) ? "dormant" : b ? SECTION_OF_BUCKET[b] : undefined;
-    if (k) counts[k]++;
+    if (k) { counts[k]++; nestedSectionOf.set(id, k); }
   }
   // Pinning is manual curation: stable order by pin time, oldest first, so
   // existing pins keep their place when a new one lands.
@@ -4973,6 +5016,7 @@ export function placeInboxRows(
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
     isQuestion,
     counts,
+    nestedSectionOf: prev && sameCounts(prev.nestedSectionOf, nestedSectionOf) ? prev.nestedSectionOf : nestedSectionOf,
     roleSessionsByLead: prev && sameCounts(prev.roleSessionsByLead, roleSessionsByLead) ? prev.roleSessionsByLead : roleSessionsByLead,
     workerCountByParent: prev && sameCounts(prev.workerCountByParent, workerCountByParent) ? prev.workerCountByParent : workerCountByParent,
     workersNeedingYouByParent: reuseArrayMap(prev?.workersNeedingYouByParent, workersNeedingYouByParent),
@@ -5834,9 +5878,24 @@ export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): bo
   return ui?.inbox_show_old ?? true;
 }
 
-// Subagent rows stay folded under their parent until the person turns them on.
-export function resolveShowSubagents(ui: { show_subagents?: boolean } | undefined): boolean {
-  return ui?.show_subagents ?? false;
+// How a card shows its subagents. A person who had the old Subagents toggle
+// on keeps their nested cards; everyone else starts folded.
+export type SubagentRowsMode = "folded" | "compact" | "full" | "hidden";
+type SubagentPrefs = { show_subagents?: boolean; subagent_rows?: SubagentRowsMode; subagent_filter?: SubagentFilter };
+export function resolveSubagentRows(ui: SubagentPrefs | undefined): SubagentRowsMode {
+  return ui?.subagent_rows ?? (ui?.show_subagents ? "full" : "folded");
+}
+
+// Subagents drawn as their own cards (Full rows): what placement, nav and the
+// flat views key on.
+export function resolveShowSubagents(ui: SubagentPrefs | undefined): boolean {
+  return resolveSubagentRows(ui) === "full";
+}
+
+// Which of a card's subagents it shows; the working or waiting ones by default.
+export type SubagentFilter = "active" | "active_done" | "all";
+export function resolveSubagentFilter(ui: SubagentPrefs | undefined): SubagentFilter {
+  return ui?.subagent_filter ?? "active";
 }
 
 // What a cloud worktree starts from, as the composer last picked it: the
@@ -6095,13 +6154,17 @@ export function flatViewSessions(
     nestWorkers?: boolean;
     /** List oldest first (resolveInboxOldestFirst). */
     oldestFirst?: boolean;
+    /** Full rows: the nested rows the person's subagent filter keeps
+     *  (lib/subagentRows); the rest leave the list like folded ones. */
+    keepSub?: (s: InboxSession) => boolean;
   },
 ): InboxSession[] {
-  const subIds = opts.showSubagents
+  const subIds = opts.showSubagents && !opts.keepSub
     ? null
     : nestedSessionIds(subsByParent);
+  const kept = opts.showSubagents ? opts.keepSub : undefined;
   const list = subIds
-    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId)
+    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId || !!kept?.(s))
     : [...sortedSessions];
   list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined, opts.oldestFirst));
   let ordered = list;
@@ -6288,7 +6351,7 @@ export function manualOrderKeysForDrop(rows: InboxSession[], opts: {
 // is what re-plans the inbox warm loop (hooks/inboxWarm.ts). Lives beside the
 // chokepoint so the synced view keys are read inside the store, nowhere else.
 export function visualOrderViewSig(state: {
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean; active_team_id?: string | null } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; show_subagents?: boolean; subagent_rows?: SubagentRowsMode; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean; active_team_id?: string | null } };
   teams?: readonly unknown[] | null;
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
@@ -6377,7 +6440,7 @@ export function computeVisualOrder(state: {
   // Local answered/dismissed marks — same map the panel renders with, so nav
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_sort_oldest_first?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; subagent_rows?: SubagentRowsMode; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
 }, opts: {
   // Only one slice of the rows (InboxWalk), in the same on-screen order; see
   // visualOrderSessions. Every mode honors it, so a jump lands on the first

@@ -9057,6 +9057,31 @@ function spellAbsentAsNull<T extends Record<string, any>>(row: T): T {
 }
 
 // Build a subagent child row (lighter — children carry no AUQ/plan context).
+// A child its listed parent still owns under the owners model: no role took
+// it and nobody released it. Released and role-owned children are seated by
+// their own windows, never under the parent's card.
+function isParentOwnedChild(child: any): boolean {
+  return !child.org_role_id && !child.parent_released_at;
+}
+
+// The owners fields of such a child (inboxOwnerRowFields' shape), read off the
+// child alone: its parent owns it, so it has no implicit owner and costs no
+// owner read.
+function parentOwnedChildFields(child: any, parentId: Id<"conversations">): Record<string, unknown> {
+  return {
+    owners_model: true,
+    implicit_owner: null,
+    owner_session_id: parentId.toString(),
+    role_started: child.role_started ?? null,
+    owners_changed_at: child.owners_changed_at ?? null,
+    parent_released_at: null,
+    wait_up_at: child.wait_up_at ?? null,
+    wait_up_count: child.wait_up_count ?? null,
+    wait_up_person: child.wait_up_person?.toString() ?? null,
+    needs_input_notified_key: child.needs_input_notified_key ?? null,
+  };
+}
+
 async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, parentId: Id<"conversations">, getDoc: (id: any) => Promise<any>) {
   const childDaemon = maps.liveConvIds.has(child._id.toString());
   const childAgentStatus = trustedAgentStatus(
@@ -10053,12 +10078,14 @@ export async function computeInboxSessions(
     // exposing them now would make active buckets pick them up as orphans.
     if (r.dismissed || r.stashed) continue;
     // Under the owners model a child belongs to the session it works for,
-    // not under its card: it is a row only where someone owns it, and the
-    // conversation's agents list (listSessionAgents) shows the rest.
-    if (underOwnersModel(r.conv)) continue;
+    // not to the viewer: it still rides that session's card, carrying its
+    // owner stamps so the client nests it there and files it nowhere else.
+    const parentOwns = underOwnersModel(r.conv);
     for (const child of r.subagentChildren) {
       if (topLevelIds.has(child._id.toString())) continue;
+      if (parentOwns && !isParentOwnedChild(child)) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, r.conv._id, (id) => ctx.db.get(id));
+      if (parentOwns) Object.assign(childRow, parentOwnedChildFields(child, r.conv._id));
       await stampInboxViewerFields(childRow, child, userId, await scan.ownerRowFor(child), getDoc);
       stampChildRow?.(child, childRow);
       childRowIds.add(childRow._id.toString());
@@ -11605,13 +11632,16 @@ export async function collectInboxSessionsPaginated(
     await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
     stripInboxLiveness(row);
     rows.push(row);
-    // Under the owners model a child is no row under its parent (listInboxSessions).
-    if (underOwnersModel(row)) continue;
+    // Under the owners model a child rides its parent's card with its owner
+    // stamps (listInboxSessions).
+    const parentOwns = underOwnersModel(row);
     for (const child of subagentChildren) {
       // An adopted child is a top-level row of its own (shared isAdoptedChild),
       // listed by the scan itself, as listInboxSessions does.
       if (isAdoptedChild(child)) continue;
+      if (parentOwns && !isParentOwnedChild(child)) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, conv._id, (id) => ctx.db.get(id));
+      if (parentOwns) Object.assign(childRow, parentOwnedChildFields(child, conv._id));
       await stampInboxViewerFields(childRow, child, userId, await sessionOwnerRow(ctx, child._id, userId), getDoc);
       stripInboxLiveness(childRow);
       rows.push(childRow);

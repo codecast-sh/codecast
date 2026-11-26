@@ -8,6 +8,10 @@ import { sessionStartupState } from "../../lib/sessionLifecycle";
 import { isClosedSession, isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
+import { SESSION_STATUS } from "../../lib/sessionStatus";
+import { subagentStateGroups, type SubagentRow } from "../../lib/subagentRows";
+import { SchedChildArrow } from "../TriggerRow";
+import { SessionStatusMark } from "./SessionStatusMark";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { SessionCloseTip } from "./SessionCloseTip";
@@ -535,11 +539,11 @@ export function SessionProjectChip({ project, label, directory, className = "", 
   );
 }
 
-/** Under a card whose agent spawned workers (cast spawn, workflow subs): how
- *  many there are, and how many wait on the person. The workers fold under the
- *  card (the Sub-agents and workers view option lists them), so this line is
- *  what keeps them in sight. Quiet ink; only "needs you" takes the accent, and
- *  it opens the first worker waiting. */
+/** Under a card whose agent spawned workers (cast spawn, workflow subs), in
+ *  Full rows: how many there are, and how many wait on the person (those keep
+ *  cards of their own elsewhere in the list). Folded and Compact rows name them
+ *  among the card's subagents instead. Quiet ink; only "needs you" takes the
+ *  accent, and it opens the first worker waiting. */
 export function CardWorkersLine({
   count,
   needsYou,
@@ -553,7 +557,7 @@ export function CardWorkersLine({
   const first = needsYou[0];
   return (
     <div data-sv-workers={count} className="pl-[26px] pr-2 pb-1 text-[12px] leading-tight text-sol-text-muted tabular-nums">
-      <span title={`${count} ${count === 1 ? "session" : "sessions"} this agent spawned; View options › Sub-agents and workers lists them`}>
+      <span title={`${count} ${count === 1 ? "session" : "sessions"} this agent spawned`}>
         {count} {count === 1 ? "worker" : "workers"}
       </span>
       {first && (
@@ -574,35 +578,64 @@ export function CardWorkersLine({
   );
 }
 
-/** On a card whose subagent rows are folded away: how many of them are
- *  running now, in the subagent rows' violet and arrow. Opens the most
- *  recently active.
- *  Silent at zero. */
-export function FoldedSubagentsMark({ count, onOpen, className = "" }: { count: number; onOpen?: () => void; className?: string }) {
-  if (count <= 0) return null;
-  const words = `${count} ${count === 1 ? "subagent" : "subagents"} running`;
-  const look = `inline-flex items-center gap-0.5 shrink-0 px-0.5 rounded text-meta font-semibold tabular-nums text-sol-violet ${className}`;
-  const body = (
-    <>
-      <svg aria-hidden className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.6}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-      </svg>
-      {count}
-    </>
-  );
-  if (!onOpen) return <span data-sv-folded-subagents={count} title={words} aria-label={words} className={look}>{body}</span>;
+/** Folded: under a card, one line of its subagents' states, a mark and a
+ *  count each, most urgent first and no words. A count opens the newest
+ *  subagent in that state. Nothing when the filter kept none. */
+export function CardSubagentsLine({ rows, onOpen }: {
+  rows: readonly SubagentRow[];
+  onOpen: (session: InboxSession, e?: React.MouseEvent) => void;
+}) {
+  if (rows.length === 0) return null;
   return (
-    <button
-      type="button"
-      data-sv-folded-subagents={count}
-      title={`${words}; open the most recently active`}
-      aria-label={`${words}; open the most recently active`}
-      {...KEEP_DRAG_OFF_CARD}
-      onClick={(e) => { e.stopPropagation(); onOpen(); }}
-      className={`${look} hover:bg-sol-violet/10`}
-    >
-      {body}
-    </button>
+    <div data-card-bar data-sv-subagents-line={rows.length} className="flex w-full items-center gap-2.5 pl-2 pr-3 py-[3px] text-meta leading-tight tabular-nums text-sol-text-muted">
+      <SchedChildArrow label="Subagents" className="text-sol-violet/70" />
+      {subagentStateGroups(rows).map((g) => {
+        const words = `${g.count} ${g.count === 1 ? "subagent" : "subagents"} ${SESSION_STATUS[g.status].word.toLowerCase()}`;
+        return (
+          <button key={g.status} type="button" data-sv-subagents-state={g.status} title={`${words}; open the newest`} aria-label={words}
+            {...KEEP_DRAG_OFF_CARD}
+            onClick={(e) => { e.stopPropagation(); onOpen(g.newest, e); }}
+            className="inline-flex items-center gap-1 rounded hover:text-sol-text">
+            <SessionStatusMark status={g.status} size={9} />{g.count}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The rail row that draws a session: its card, or its Compact row under its
+ *  parent's card. The rows keep their own attribute rather than a card's
+ *  data-session-id, which the rail's card styling keys on (app/globals.css). */
+export function railRowSelector(id: string): string {
+  return `[data-session-id="${id}"], [data-sv-subagent-row="${id}"]`;
+}
+
+/** Compact: under a card, one short row per subagent (its state's mark, its
+ *  title, its state's word), marks under the card's own status mark. A row
+ *  opens that subagent; the open one is highlighted. */
+export function CardSubagentRows({ rows, activeSessionId, onOpen }: {
+  rows: readonly SubagentRow[];
+  activeSessionId: string | null | undefined;
+  onOpen: (session: InboxSession, e?: React.MouseEvent) => void;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div data-card-bar data-sv-subagent-rows={rows.length} className="py-[2px]">
+      {rows.map(({ session, status }) => {
+        const meta = SESSION_STATUS[status];
+        const active = String(session._id) === activeSessionId;
+        return (
+          <button key={session._id} type="button" data-sv-subagent-row={session._id} data-active={active || undefined} title={meta.meaning}
+            {...KEEP_DRAG_OFF_CARD}
+            onClick={(e) => { e.stopPropagation(); onOpen(session, e); }}
+            className={`flex w-full min-h-[24px] items-center gap-2 pl-[13px] pr-3 text-left text-meta leading-tight hover:bg-sol-text/[0.04] [@media(pointer:coarse)]:min-h-11 ${active ? "bg-sol-text/[0.06]" : ""}`}>
+            <SessionStatusMark status={status} size={9} />
+            <span className="min-w-0 truncate text-sol-text-secondary">{cleanTitle(sessionCardTitle(session))}</span>
+            <span className={`shrink-0 ${meta.text}`}>{meta.word}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 // The owners UI under the session_owners model, mounted per state with the
-// flag on and off: the header's owners segment and menu, the composer strip,
-// the agents band and the inbox card faces.
+// flag on and off: the header's owners segment and menu, the composer strip
+// and the inbox card faces.
 // Flag off, every piece draws what main draws (nothing new).
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -37,7 +37,6 @@ const { useInboxStore } = await import("../../store/inboxStore");
 const { OwnersSegment, OwnersMenuItem, OwnersSheet } = await import("../OwnersMenu");
 const { DropdownMenu, DropdownMenuContent } = await import("../ui/dropdown-menu");
 const { ComposerOwnerStrip } = await import("../conversation/ComposerOwnerStrip");
-const { SessionAgentsBand } = await import("../conversation/SessionAgentsBand");
 const { CoOwnerFaces } = await import("../inbox/CoOwnerFaces");
 const { coOwnersOf } = await import("../../lib/coOwners");
 const { applySessionOwnersRead } = await import("../../hooks/useSyncSessionOwners");
@@ -46,7 +45,6 @@ const { TmuxAttachPill } = await import("../TmuxAttachPill");
 const { TerminalTitle } = await import("../terminal/ConversationTerminal");
 
 const S = "s".repeat(32);
-const CHILD = "k".repeat(32);
 const ROLE = "r_evals";
 const me = { _id: "me", name: "Jason Benn" };
 const ashot = { _id: "ashot", name: "Ashot Petrosian" };
@@ -70,7 +68,6 @@ function seed(flagOn: boolean, read: Record<string, unknown> = {}) {
     ...withTeamRoster([me, ashot, armen], { clientState: useInboxStore.getState().clientState }),
     pending: {},
     sessionOwners: {},
-    sessionAgents: {},
     orgTree: { roles: [roleRow], anchors: [], people: [], workspace: { kind: "team", id: "fixture-team" } } as any,
     sessions: { [S]: { _id: S, session_id: S, title: "Constitution propagation eval", user_id: "me", updated_at: 1, ...(flagOn ? { owners_model: true, owned_by_me: true, org_role_id: null, owner_session_id: null } : {}) } as any },
     conversations: { [S]: { _id: S, title: "Constitution propagation eval", user_id: "me" } as any },
@@ -96,10 +93,9 @@ const ownersSent = () => sent.filter((x) => x.action === "applySessionOwners").m
 
 describe("flag off: nothing new draws", () => {
   beforeEach(() => seed(false));
-  test("no owners segment state, no strip, no band, no card faces", async () => {
+  test("no owners segment state, no strip, no card faces", async () => {
     await render(<>
       <ComposerOwnerStrip conversationId={S} active />
-      <SessionAgentsBand conversationId={S} />
       <CoOwnerFaces owners={coOwnersOf(useInboxStore.getState() as any, S, "me", [me, ashot])} />
     </>);
     expect(container.innerHTML).toBe("");
@@ -109,7 +105,6 @@ describe("flag off: nothing new draws", () => {
   const everything = () => <>
     <OwnersSegment conversationId={S} />
     <ComposerOwnerStrip conversationId={S} active />
-    <SessionAgentsBand conversationId={S} />
     <CoOwnerFaces owners={coOwnersOf(useInboxStore.getState() as any, S, "me", [me, ashot])} />
   </>;
 
@@ -307,24 +302,7 @@ describe("flag on: the composer strip", () => {
   });
 });
 
-describe("flag on: the agents band and the card faces", () => {
-  test("collapsed it counts; open it lists each agent with Add me", async () => {
-    seed(true);
-    useInboxStore.getState().syncTable("sessionAgents", [{ _id: S, agents: [
-      { _id: CHILD, short_id: "k1", title: "April freeze case", agent_status: "working", updated_at: 2, message_count: 1, owned_by_parent: true, owners: [] },
-      { _id: "d".repeat(32), short_id: "k2", title: "Diff summary", agent_status: "done", updated_at: 1, message_count: 1, owned_by_parent: true, owners: [] },
-    ] }]);
-    applySessionOwnersRead(CHILD, { session_owners: true, conversation_id: CHILD, people: [], role: null, parent_session: { conversation_id: S, short_id: "s1", title: "Constitution propagation eval" }, implicit_starter: null, starter_id: "me", role_started: false, can_edit: true, owners_changed_at: 1 });
-    await render(<SessionAgentsBand conversationId={S} />);
-    expect($("[data-cc-agents-band] > button")!.textContent).toContain("2 agents· 1 working");
-    await click($("[data-cc-agents-band] > button"));
-    expect($$("[data-cc-agent-row]").length).toBe(2);
-    await click($(`[data-agent-add-me="${CHILD}"]`));
-    await settle();
-    expect(ownersSent()).toEqual([{ add: ["me"] }]);
-    expect($(`[data-agent-unwatch="${CHILD}"]`)!.textContent).toContain("In your inbox");
-  });
-
+describe("flag on: the card faces", () => {
   test("a card shows the other owners' faces; a session only you own shows none", async () => {
     seed(true);
     seed(true, { people: [{ user_id: "me", name: me.name, email: null, added_by: "me", added_at: 1 }, { user_id: "ashot", name: ashot.name, email: null, added_by: "me", added_at: 2 }], role: { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" } });

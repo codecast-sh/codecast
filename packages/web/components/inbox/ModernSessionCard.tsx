@@ -28,7 +28,7 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { LinkedPrChips } from "../PrStatusChip";
 import { badgeVariants } from "../ui/badge";
-import { AssignedPingStrip, FoldedSubagentsMark, ForkCorner, SelectTick } from "./SessionCardParts";
+import { AssignedPingStrip, ForkCorner, SelectTick } from "./SessionCardParts";
 import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip, ModernFlowChip } from "./ModernCardParts";
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
 import { CoOwnerFaces } from "./CoOwnerFaces";
@@ -106,8 +106,6 @@ export function ModernSessionCardView({
   thumbSrc,
   ship = null,
   linkedPrs,
-  hiddenRunningSubagents = 0,
-  foldedSubagentId = null,
   onSelect,
   onClose,
   onPin,
@@ -270,7 +268,6 @@ export function ModernSessionCardView({
   }
   if (author && !nested) chips.push(<ModernAuthorChip key="author" author={author} prefs={chrome.prefs} className="shrink min-w-[2.5rem]" />);
   if (viewers.length > 0) chips.push(<ViewerFaces key="viewers" members={viewers} size={16} max={3} className="shrink-0" />);
-  if (hiddenRunningSubagents > 0) chips.push(<FoldedSubagentsMark key="subagents" count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />);
   chips.push(<ModernCommentsChip key="comments" session={session} viewerId={viewerId} onOpenComments={onOpenComments} />);
 
   const lead = nested ? (
