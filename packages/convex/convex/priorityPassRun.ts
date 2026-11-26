@@ -451,10 +451,10 @@ export const applyPlan = internalMutation({
       if (!conv || !priority || refused(conv, priority)) continue;
       const target: Doc<"priorities"> | null = await ctx.db.get(priority);
       if (!target || target.status === "merged") continue;
-      // A step key this write moved or left out: the moved key, or no step.
+      // A step key this write moved: the moved key. One the priority does not hold live as written (left out, or dropped, whether or not this plan touched its steps): no step.
       let step_key = s.step_key ?? undefined;
       if (step_key) step_key = rekeyed.get(s.priority)?.get(step_key) ?? step_key;
-      if (step_key && liveSteps.has(s.priority) && !liveSteps.get(s.priority)!.has(step_key)) step_key = undefined;
+      if (step_key && !target.steps.some((st) => st.key === step_key && !st.dropped)) step_key = undefined;
       await move(conv, priority, step_key);
       counts.mapped_sessions++;
     }

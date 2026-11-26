@@ -704,6 +704,12 @@ async function doMilestone(ctx: Ctx, viewer: Id<"users">, shortId: string, stepK
     next = { ...rest, done: false, done_set_by: "person" };
   }
   await ctx.db.patch(p._id, { steps: p.steps.map((s) => (s.key === step.key ? next : s)), updated_at: now });
+  // A drop takes the milestone off the sessions on it; they keep the priority.
+  if ("drop" in change) {
+    for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).take(SESSION_COUNT_CAP)) {
+      if (conv.priority_step_key === step.key) await ctx.db.patch(conv._id, { priority_step_key: undefined });
+    }
+  }
   return echo(ctx, viewer, p._id);
 }
 

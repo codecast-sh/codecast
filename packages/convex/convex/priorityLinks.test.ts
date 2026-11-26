@@ -339,6 +339,27 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect(await stepOf(t, p1, "s4")).toMatchObject({ done: true, done_at: at });
   });
 
+  test("dropped milestones: the person's drop takes it off its sessions, a pin naming it says so, and the pass maps no session onto it", async () => {
+    const { t, ada, p1, cPin, cFree } = await world();
+    await t.withIdentity({ subject: `${ada}|session` }).mutation((api as any).priorities.dropStep, { short_id: "pri-1", step_key: "s3" });
+    const pinned = await convOf(t, cPin);
+    expect(pinned.priority_id).toBe(p1);
+    expect(pinned.priority_step_key).toBeUndefined();
+    // Mapped to a dropped milestone (an older link): the pin naming it closes nothing and says the session is on no milestone.
+    await t.run((ctx: any) => ctx.db.patch(cPin, { priority_step_key: "s3" }));
+    const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    expect(res.serves_unlinked).toEqual({ serves: "pri-1/s3" });
+    expect((await stepOf(t, p1, "s3")).done).toBe(false);
+    // A plan that writes no steps still maps no session onto the dropped one.
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [], sessions: [{ session: "jx7free", priority: "pri-1", step_key: "s3" }], unmap: [], notes: [], rewritten: [] },
+    });
+    const free = await convOf(t, cFree);
+    expect(free.priority_id).toBe(p1);
+    expect(free.priority_step_key).toBeUndefined();
+  });
+
   test("a done pin naming another milestone, or from a worker, closes nothing", async () => {
     const { t, ada, p1, cPin } = await world();
     await t.run((ctx: any) => ctx.db.insert("conversations", {

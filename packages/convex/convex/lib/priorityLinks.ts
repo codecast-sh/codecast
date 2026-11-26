@@ -260,11 +260,12 @@ export async function unnamedMilestone(ctx: Ctx, conv: Conv): Promise<{ serves: 
   return p && step && !step.done && !step.dropped ? { serves: `${p.short_id}/${step.key}`, title: step.title } : null;
 }
 
-/** The milestone a session is mapped to, as `--serves` names it ("pri-N/sK"), or null when it is mapped to none. */
+/** The live milestone a session is mapped to, as `--serves` names it ("pri-N/sK"), or null when it is mapped to none, or to one the person dropped. */
 export async function mappedMilestone(ctx: Ctx, conv: Conv): Promise<string | null> {
   if (!conv.priority_id || !conv.priority_step_key) return null;
   const p: Priority | null = await ctx.db.get(conv.priority_id);
-  return p ? `${p.short_id}/${conv.priority_step_key}` : null;
+  const step = p?.steps.find((s) => s.key === conv.priority_step_key);
+  return p && step && !step.dropped ? `${p.short_id}/${step.key}` : null;
 }
 
 // ── Links ───────────────────────────────────────────────────────────────────
