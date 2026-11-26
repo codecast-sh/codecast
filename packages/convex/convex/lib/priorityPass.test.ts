@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityPassOutput, PriorityProposal, PriorityStep } from "@codecast/shared/contracts/priorities";
-import { effectivePriorityOrder, placePriority } from "@codecast/shared/contracts/priorities";
+import { effectivePriorityOrder, lastPriorityKey, placePriority, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import {
   PRIORITY_PASS_CAPS,
   PRIORITY_PASS_SCHEMA,
@@ -350,7 +350,7 @@ describe("merging a pass into the list", () => {
     expect(plan.notes).toContain("pri-2: not merged into pri-3, the person set it aside");
   });
 
-  test("a merged priority's sessions move to the survivor, and the survivor takes the place the person gave it", () => {
+  test("a merged priority's sessions move to the survivor, and the survivor keeps the person's place of it, which a later pass never moves", () => {
     const inp = input({
       priorities: [
         priority("pri-3", { person_pos: 2 }),
@@ -364,9 +364,16 @@ describe("merging a pass into the list", () => {
       { session: "b", priority: "pri-1", step_key: "s1" },
       { session: "c", priority: "pri-1", step_key: null },
     ]);
-    expect(plan.updates.find((u) => u.short_id === "pri-1")!.patch).toMatchObject({ ai_rank: 1 });
-    expect(plan.notes).toContain("pri-1: took the place of the placed priority it absorbed");
+    const patch = plan.updates.find((u) => u.short_id === "pri-1")!.patch;
+    expect(patch).toMatchObject({ person_pos: 1 });
+    expect(rankSourceOf({ ...inp.priorities[1], ...patch })).toBe("person");
+    expect(plan.notes).toContain("pri-1: took the person's place of the priority it absorbed");
     expect(orderAfter(inp, plan).filter((id) => id !== "pri-2")).toEqual(["pri-1", "pri-3"]);
+    // The next pass ranks the survivor last: it stays where the person had the priority it absorbed.
+    const next = input({ priorities: [priority("pri-3", { person_pos: 2 }), priority("pri-1", { ...inp.priorities[1], ...patch } as Partial<PassPriority>)] });
+    const later = mergePriorities(next, out([proposal({ short_id: "pri-1", title: "Priority pri-1", rank: 9 })]));
+    expect(Object.keys(later.updates.find((u) => u.short_id === "pri-1")!.patch)).not.toContain("person_pos");
+    expect(orderAfter(next, later)).toEqual(["pri-1", "pri-3"]);
   });
 
   test("a new priority can absorb an existing one", () => {
@@ -580,6 +587,30 @@ describe("rewriting a priority whose sessions left view", () => {
 });
 
 describe("relative rank", () => {
+  test("a renumber keeps a quiet placed priority's place among the others, so it comes back where it was", () => {
+    // A, Q (quiet), B, C, D placed, C and D with no room between them; R restored, last.
+    const rows = [
+      priority("A", { person_pos: 1 }), priority("Q", { person_pos: 1.5, status: "quiet" }), priority("B", { person_pos: 2 }),
+      priority("C", { person_pos: 3 }), priority("D", { person_pos: 3 + 2 * Number.EPSILON }),
+    ];
+    rows.push(priority("R", { ai_rank: lastPriorityKey(rows) }));
+    // A between C and D: no room, so everything with a place is renumbered, Q included.
+    const writes = placePriority(rows, rows[0], 3);
+    for (const w of writes) Object.assign(w.row, w.person_pos !== undefined ? { person_pos: w.person_pos } : { ai_rank: w.ai_rank });
+    expect(writes.map((w) => w.row.short_id)).toEqual(["Q", "B", "C", "A", "D", "R"]);
+    expect(effectivePriorityOrder(rows).map((r) => r.short_id)).toEqual(["B", "C", "A", "D", "R"]);
+    rows[1].status = "active";
+    expect(effectivePriorityOrder(rows).map((r) => r.short_id)).toEqual(["Q", "B", "C", "A", "D", "R"]);
+  });
+
+  test("a pass that runs out of room between two keys slots the pass's priorities again, in the same order", () => {
+    const inp = input({ priorities: [priority("pri-1", { person_pos: 1 }), priority("pri-2", { ai_rank: 1 + Number.EPSILON }), priority("pri-3", { person_pos: 2 })] });
+    const plan = mergePriorities(inp, out([proposal({ title: "Fresh", rank: 2 })]));
+    expect(orderAfter(inp, plan)).toEqual(["pri-1", "new-1", "pri-2", "pri-3"]);
+    expect(plan.creates[0].ai_rank).toBeGreaterThan(1);
+    expect(plan.updates.find((u) => u.short_id === "pri-2")!.patch.ai_rank).toBeGreaterThan(plan.creates[0].ai_rank!);
+  });
+
   const ids = (rows: PassPriority[]) => effectivePriorityOrder(rows).map((p) => p.short_id);
   /** The person moves one priority, as priorities.ts doMove writes it. */
   const move = (rows: PassPriority[], shortId: string, to: number) => {

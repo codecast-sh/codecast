@@ -28,6 +28,7 @@ const { useInboxStore } = await import("../../store/inboxStore");
 const { default: PrioritiesPage, PrioritiesView, NoPrioritiesYet } = await import("./PrioritiesPage");
 const { default: PrioritiesRoute } = await import("../../app/priorities/page");
 const { lastDays, layoutForWidth, readFilters, filtersHref } = await import("../../lib/priorityList");
+const { withLiveRanks } = await import("../../lib/priorities");
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -466,7 +467,7 @@ test("the pin line paints at once for a conversation seen before, and never show
 test("the store's priority actions paint the rows at once", async () => {
   const st = useInboxStore.getState();
   st.syncTable("priorities", ROWS as any);
-  const get = (id: string) => (Object.values(useInboxStore.getState().priorities) as any[]).find((r) => r.short_id === id);
+  const get = (id: string) => withLiveRanks(Object.values(useInboxStore.getState().priorities) as any[]).find((r) => r.short_id === id) as any;
   st.movePriority("pri-3", 1).catch(() => {}); // no dispatch is wired here: the write parks
   expect([get("pri-3").rank, get("pri-1").rank, get("pri-2").rank]).toEqual([1, 2, 3]);
   st.setPriorityAside("pri-2").catch(() => {});

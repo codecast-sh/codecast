@@ -459,4 +459,21 @@ describe("applyPlan", () => {
     expect(await w.t.run((ctx) => ctx.db.get(ranked))).toMatchObject({ title: "Ranked still", person_pos: 2 });
     expect((await w.runs()).at(-1)).toMatchObject({ status: "ok", cursor_at: 5 });
   });
+
+  test("a merge survivor's carried place lands only on a row the person has not placed since", async () => {
+    const w = await world();
+    const insert = (short_id: string, extra: Record<string, unknown>) => w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1, ...extra,
+    }));
+    const open = await insert("pri-60", { ai_rank: 3 });
+    const placed = await insert("pri-61", { person_pos: 4 });
+    const plan: MergePlan = {
+      creates: [],
+      updates: [{ short_id: "pri-60", patch: { person_pos: 1 }, seen_steps: [] }, { short_id: "pri-61", patch: { person_pos: 1 }, seen_steps: [] }],
+      merges: [], sessions: [], unmap: [], notes: [], rewritten: [],
+    };
+    await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: 1, from_cursor: 1, cursor_at: 5, model: "m", plan });
+    expect((await w.t.run((ctx) => ctx.db.get(open)))!.person_pos).toBe(1);
+    expect((await w.t.run((ctx) => ctx.db.get(placed)))!.person_pos).toBe(4);
+  });
 });
