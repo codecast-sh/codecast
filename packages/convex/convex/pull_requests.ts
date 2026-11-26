@@ -604,23 +604,40 @@ export const getPRsForTimeline = query({
     // rows overran the 8 MiB return limit ~1,200 times in 6h (2026-11-23).
     let readBytes = 0;
     const utf8 = new TextEncoder();
-    const prs: Record<string, any>[] = [];
-    for (const membership of memberships) {
-      const newest = ctx.db
-        .query("pull_requests")
-        .withIndex("by_team_updated", (q: any) => q.eq("team_id", membership.team_id))
-        .order("desc");
+    const teams = new Set(memberships.map((m) => String(m.team_id)));
+    const prs = new Map<string, Record<string, any>>();
+    // Every row read counts against the budget, kept or not. Returns whether it was kept.
+    const keep = (pr: Record<string, any>) => {
+      readBytes += utf8.encode(JSON.stringify(pr)).length;
+      if (!teams.has(String(pr.team_id))) return false;
+      const { files: _files, commits: _commits, checks: _checks, ...row } = pr;
+      prs.set(String(pr._id), row);
+      return true;
+    };
+    const overBudget = () => readBytes > TIMELINE_READ_BUDGET;
+
+    if (repository) {
+      // One repository reads only its own rows: its open PRs, then its newest
+      // by number. Filtering a team's newest by repository read every PR of
+      // the team's other repositories first, and those rows went uncounted:
+      // 1,598 rows and 100 MB per call, 128 failures in an hour (2026-11-25).
+      const open = ctx.db.query("pull_requests").withIndex("by_repository_state", (q: any) => q.eq("repository", repository).eq("state", "open"));
+      for await (const pr of open) { keep(pr); if (overBudget()) break; }
+      const newest = ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", repository)).order("desc");
       let taken = 0;
-      for await (const pr of repository ? newest.filter((q: any) => q.eq(q.field("repository"), repository)) : newest) {
-        readBytes += utf8.encode(JSON.stringify(pr)).length;
-        const { files: _files, commits: _commits, checks: _checks, ...row } = pr as Record<string, any>;
-        prs.push(row);
-        if (++taken >= limit || readBytes > TIMELINE_READ_BUDGET) break;
+      if (!overBudget()) for await (const pr of newest) { if (keep(pr)) taken++; if (taken >= limit || overBudget()) break; }
+    } else {
+      for (const membership of memberships) {
+        const newest = ctx.db
+          .query("pull_requests")
+          .withIndex("by_team_updated", (q: any) => q.eq("team_id", membership.team_id))
+          .order("desc");
+        let taken = 0;
+        for await (const pr of newest) { keep(pr); if (++taken >= limit || overBudget()) break; }
+        if (overBudget()) break;
       }
-      if (readBytes > TIMELINE_READ_BUDGET) break;
     }
 
-    prs.sort((a, b) => b.updated_at - a.updated_at);
-    return prs.slice(0, limit);
+    return [...prs.values()].sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
   },
 });

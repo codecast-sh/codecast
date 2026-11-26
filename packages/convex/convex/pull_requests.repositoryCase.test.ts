@@ -44,6 +44,33 @@ describe("pull request repository case", () => {
     expect(inRepo.map((r: any) => r._id)).toEqual(["pr_6", "pr_4"]);
   });
 
+  test("a repository reads only its own rows, not the team's other repositories", async () => {
+    const patch = "x".repeat(1024 * 1024);
+    const busy = Array.from({ length: 40 }, (_, i) => ({
+      _id: `busy_${i}`, team_id: "team_1", repository: "a/busy", number: i, state: "merged", updated_at: 100 + i,
+      files: [{ filename: "f.ts", patch }],
+    }));
+    const pull_requests = [
+      ...busy,
+      { _id: "old_open", team_id: "team_1", repository: "codecast-sh/codecast", number: 1, state: "open", updated_at: 50 },
+      { _id: "newer", team_id: "team_1", repository: "codecast-sh/codecast", number: 2, state: "merged", updated_at: 10 },
+      { _id: "other_team", team_id: "team_2", repository: "codecast-sh/codecast", number: 3, state: "open", updated_at: 60 },
+    ];
+    const ctx = context({ pull_requests });
+    const indexes: string[] = [];
+    const query = ctx.db.query.bind(ctx.db);
+    ctx.db.query = (table: string) => {
+      const q = query(table);
+      const withIndex = q.withIndex.bind(q);
+      q.withIndex = (name: string, range: any) => { indexes.push(name); return withIndex(name, range); };
+      return q;
+    };
+    const rows = await (getPRsForTimeline as any)._handler(ctx, { repository: "codecast-sh/codecast" });
+    expect(rows.map((r: any) => r._id)).toEqual(["old_open", "newer"]);
+    expect(indexes.filter((name) => name.startsWith("by_repository"))).toEqual(["by_repository_state", "by_repository_number"]);
+    expect(indexes).not.toContain("by_team_updated");
+  });
+
   test("the timeline sends list rows, and stops reading past its byte budget", async () => {
     const patch = "x".repeat(1024 * 1024);
     const pull_requests = Array.from({ length: 20 }, (_, i) => ({
