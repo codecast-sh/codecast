@@ -96,4 +96,16 @@ describe("the hold a binding gives or takes", () => {
     expect(row(db, 3).org_role_id).toBe(billing._id);
     expect(row(db, 3).org_role_hold).toBe("bound");
   });
+
+  test("under the owner model a binding files a role's session but never a person's own", async () => {
+    const db = fixtures();
+    db._tables.teams[0].features = { session_owners: true };
+    const ctx = ctxOf(db);
+    const growth = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
+    db._tables.conversations.push(conv(1, { active_task_id: "tasks_growth" }), conv(2, { active_task_id: "tasks_growth", role_started: true }));
+    expect(await applyHoldChange(ctx, "conversations_s1" as any)).toEqual({ change: "keep" });
+    expect(row(db, 1).org_role_id).toBeUndefined();
+    expect(await applyHoldChange(ctx, "conversations_s2" as any)).toEqual({ change: "file", role: "growth" });
+    expect(row(db, 2).org_role_id).toBe(growth._id);
+  });
 });

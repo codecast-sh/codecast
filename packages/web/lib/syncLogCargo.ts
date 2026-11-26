@@ -51,6 +51,10 @@ export const ENRICH_TRIGGER_FIELDS: Record<CargoCollection, ReadonlySet<string>>
   sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id", "owners_changed_at", "org_role_id", "parent_released_at"]),
 };
 
+// The owners triggers refetch only a row under the owners model: off it, no
+// owners field is derived, so a role filing must cost no byIds read.
+const OWNERS_TRIGGER_FIELDS: ReadonlySet<string> = new Set(["owners_changed_at", "org_role_id", "parent_released_at"]);
+
 // Sessions rows rename three raw fields (enrichInboxSessionRow).
 const SESSION_RENAMES: Record<string, string> = {
   has_pending_messages: "has_pending",
@@ -71,7 +75,8 @@ export function planCargoApply(
 ): CargoPlan {
   const raw = cargo.patch ?? {};
   const unsetIn = cargo.unset ?? [];
-  const triggers = ENRICH_TRIGGER_FIELDS[coll];
+  const all = ENRICH_TRIGGER_FIELDS[coll];
+  const triggers = coll === "sessions" && !existing?.owners_model ? new Set([...all].filter((k) => !OWNERS_TRIGGER_FIELDS.has(k))) : all;
   let refetch = !!cargo.partial;
   // A trigger fires on a CHANGED value, never on presence: a coalesced or
   // full cargo re-ships every field it ever carried (plan_id on a task that

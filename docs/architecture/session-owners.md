@@ -23,6 +23,11 @@ A session's owners are:
 The agent owner is the role, else the parent session. Taking a session over
 removes every agent owner and makes the taker an owner.
 
+A role becomes an owner only by a deliberate filing (the owners menu, a drag
+onto the role on the org chart, a scope takeover) or by starting the session.
+A task binding never files a session no role started (`applyHoldChange`), so
+`cast task start` leaves a person's session theirs.
+
 The rules live in one pure module, `packages/shared/contracts/sessionOwners.ts`:
 `ownersOf`, `agentOwnerOf`, `waitAudience`, `mayEditOwners` and
 `applyOwnersChangeTo` with its refusals. The convex writes
@@ -245,7 +250,16 @@ and any admin can turn it off.
    packages/convex/run.sh ownerMigrations:backfillRoleStarted '{"team_id":"<id>","dryRun":true}'
    packages/convex/run.sh ownerMigrations:backfillRoleStarted '{"team_id":"<id>","dryRun":false}'
    ```
-3. Count stale primary-owner caches: sessions whose `owner_user_id` has no
+3. Take a task binding's role off the team's live sessions no role started
+   (`org_role_hold` "bound", not `role_started`): under the model the role
+   would own them and their starter would lose them, and a binding no longer
+   files such a session. Dry run first, then `"dryRun":false`; a rerun
+   releases 0.
+
+   ```bash
+   packages/convex/run.sh ownerMigrations:releaseBindingHolds '{"team_id":"<id>","dryRun":true}'
+   ```
+4. Count stale primary-owner caches: sessions whose `owner_user_id` has no
    owner row behind it, which would list for nobody. It reads the team's
    sessions, then each member's personal sessions, one page per call.
 
@@ -258,7 +272,7 @@ and any admin can turn it off.
    - Stop when `isDone` is true.
    - Add up `stale` across pages; `examples` names the first few. Resolve
      them before going on.
-4. Turn the flag on:
+5. Turn the flag on:
 
    ```bash
    packages/convex/run.sh teamFeatures:setTeamFeatureInternal '{"team_id":"<id>","feature":"session_owners","enabled":true}'

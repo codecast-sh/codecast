@@ -37,4 +37,11 @@ describe("listSessionAgents", () => {
     const agents = await performListSessionAgents({ db: world(false) } as any, ME as any, LEAD as any);
     expect(agents!.map((a) => [a.title, a.owned_by_parent, a.owners.length])).toEqual([["aaaa", true, 0], ["bbbb", false, 0]]);
   });
+  test("a child the viewer cannot read stays out, though they can read the session", async () => {
+    const db = world(true);
+    await db.insert("team_memberships", { user_id: MATE, team_id: TEAM, role: "member", joined_at: 1 });
+    await db.insert("conversations", { user_id: MATE, team_id: TEAM, is_private: true, status: "active", title: "secret", message_count: 1, updated_at: 9, spawned_by_conversation_id: LEAD });
+    const agents = await performListSessionAgents({ db } as any, ME as any, LEAD as any);
+    expect(agents!.map((a) => a.title)).toEqual(["aaaa", "bbbb"]);
+  });
 });
