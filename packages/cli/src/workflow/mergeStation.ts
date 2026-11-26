@@ -30,7 +30,7 @@ import * as fs from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { defaultExec, landedSha, mergePullRequest, undoneChanges, type Exec, type Wait } from "../lineMerge.js";
+import { defaultExec, landedSha, mergePullRequest, sleepSync, undoneChanges, type Exec, type Wait } from "../lineMerge.js";
 import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
@@ -69,6 +69,9 @@ type Outcome = { step: ShipDeployStep; ok: boolean; sha: string; output?: string
 const INTERACTION_MODEL = "claude-sonnet-5-5";
 const DIFF_CAP = 40_000;
 const ROUNDS = 3;
+/** How many times the station tries to make its worktree, and the pause between tries. */
+const TREE_ATTEMPTS = 3;
+const TREE_RETRY_MS = 10_000;
 /** A file whose change means the tree's installed dependencies are stale. */
 const DEPENDENCY_FILE = /(^|\/)(package\.json|bun\.lockb?|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
 
@@ -200,8 +203,14 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   const lostLease = (before: string) => `the lease on ${args.repository}'s deploys was lost before ${before}`;
   try {
     if (!args.scratch) await sweepScratchTrees(repo);
-    try { tree = await (args.scratch ?? acquiredTree)(repo, already ?? head); } catch (err) {
-      return refuse(`could not make a worktree to rebase in: ${message(err)}`);
+    // Making a worktree can be refused for a moment (another acquire holds the machine's port reservations, or a
+    // crashed one's lock is being cleared): tried again a bounded number of times, each refusal in the output.
+    for (let attempt = 1; !tree; attempt++) {
+      try { tree = await (args.scratch ?? acquiredTree)(repo, already ?? head); } catch (err) {
+        if (attempt >= TREE_ATTEMPTS) return refuse(`could not make a worktree to rebase in after ${TREE_ATTEMPTS} tries: ${message(err)}`);
+        log(`could not make a worktree to rebase in (try ${attempt} of ${TREE_ATTEMPTS}): ${message(err)}; trying again in ${TREE_RETRY_MS / 1000}s`);
+        (args.wait ?? sleepSync)(TREE_RETRY_MS);
+      }
     }
     const work = tree;
     const at = work.path;

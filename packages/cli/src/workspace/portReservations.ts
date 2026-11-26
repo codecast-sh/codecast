@@ -51,16 +51,83 @@ function workspaceOperationFile(root: string, name: string): string {
 
 interface ReservationLockOwner {
   pid: number;
+  /** The owner's process group, which whatever it starts joins: how a successor finds what outlived it. */
+  pgid?: number;
   token: string;
   acquired_at: string;
 }
 
-function readReservationLock(file: string): Partial<ReservationLockOwner> & { pid: number } | undefined {
+let ownGroup: number | null | undefined;
+/** This process's group as `ps` reports it, read once; undefined when ps does not answer. */
+function processGroup(): number | undefined {
+  if (ownGroup === undefined) {
+    const r = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+    const pgid = Number(String(r.stdout ?? "").trim());
+    ownGroup = Number.isSafeInteger(pgid) && pgid > 0 ? pgid : null;
+  }
+  return ownGroup ?? undefined;
+}
+
+/**
+ * Whether anything a dead lock owner started may still be running. Its children keep its process group when it dies,
+ * though their parent link goes to init. An owner that led its group (a station, the daemon, a command from a shell)
+ * left something behind exactly when that group still has a member. One that ran inside another's group shares it
+ * with the living, so any orphan in it (a member init adopted, other than the leader) counts as its. Unknown counts
+ * as left behind.
+ */
+function ownerLeftProcesses(holder: { pid: number; pgid?: number }): boolean {
+  const group = holder.pgid ?? holder.pid;
+  if (group === holder.pid) {
+    try {
+      process.kill(-group, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+  const ps = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000 });
+  if (ps.status !== 0) return true;
+  return String(ps.stdout).split("\n").some((line) => {
+    const [pid, ppid, pgid] = line.trim().split(/\s+/).map(Number);
+    return pgid === group && ppid === 1 && pid !== group;
+  });
+}
+
+/** Remove a dead owner's lock, once: under a takeover claim (one waiter at a time), and only while the lock still holds
+ *  what was judged dead, so a lock another waiter took meanwhile is never removed. A claim its maker abandoned is
+ *  cleared once old. */
+function reclaimReservationLock(file: string, judged: string): void {
+  const claim = `${file}.takeover`;
   try {
-    const owner = JSON.parse(fs.readFileSync(file, "utf8"));
+    fs.mkdirSync(claim);
+  } catch {
+    try { if (Date.now() - fs.statSync(claim).mtimeMs > 30_000) fs.rmSync(claim, { recursive: true, force: true }); } catch {}
+    return;
+  }
+  try {
+    let now: string | undefined;
+    try { now = fs.readFileSync(file, "utf8"); } catch {}
+    if (now === judged) fs.unlinkSync(file);
+  } finally {
+    fs.rmSync(claim, { recursive: true, force: true });
+  }
+}
+
+function parseReservationLock(text: string): Partial<ReservationLockOwner> & { pid: number } | undefined {
+  try {
+    const owner = JSON.parse(text);
     const validToken = typeof owner?.token === "string" && owner.token.length > 0;
     const legacy = owner?.token === undefined && typeof owner?.acquired_at === "string" && Number.isFinite(Date.parse(owner.acquired_at));
-    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0 && (validToken || legacy)) return owner;
+    const validGroup = owner?.pgid === undefined || (Number.isSafeInteger(owner.pgid) && owner.pgid > 0);
+    if (Number.isSafeInteger(owner?.pid) && owner.pid > 0 && validGroup && (validToken || legacy)) return owner;
+  } catch {
+    return undefined;
+  }
+}
+
+function readReservationLock(file: string): Partial<ReservationLockOwner> & { pid: number } | undefined {
+  try {
+    return parseReservationLock(fs.readFileSync(file, "utf8"));
   } catch {
     return undefined;
   }
@@ -119,16 +186,24 @@ export async function withPortReservations<T>(
   const directory = path.join(defaultConfigDir(), "workspace-ports");
   fs.mkdirSync(directory, { recursive: true });
   const lock = path.join(directory, ".codecast-capability.lock");
-  const owner = { pid: process.pid, token: randomUUID(), acquired_at: new Date().toISOString() };
+  const pgid = processGroup();
+  const owner = { pid: process.pid, ...(pgid ? { pgid } : {}), token: randomUUID(), acquired_at: new Date().toISOString() };
   const deadline = Date.now() + 30_000;
   while (!tryReservationLock(lock, owner)) {
-    const holder = readReservationLock(lock);
+    let judged: string | undefined;
+    try { judged = fs.readFileSync(lock, "utf8"); } catch {}
+    const holder = judged === undefined ? undefined : parseReservationLock(judged);
     if (holder) {
       try {
         process.kill(holder.pid, 0);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-          throw new Error(`Workspace port reservations have an interrupted owner (pid ${holder.pid}); inspect remaining child processes before manually removing ${lock}`);
+          // A crash leaves its lock behind; it holds every worktree on the machine until removed, so it is removed
+          // here unless something the owner started may still be writing what the lock guards.
+          if (ownerLeftProcesses(holder)) {
+            throw new Error(`Workspace port reservations have an interrupted owner (pid ${holder.pid}); inspect remaining child processes before manually removing ${lock}`);
+          }
+          reclaimReservationLock(lock, judged!);
         }
       }
     }

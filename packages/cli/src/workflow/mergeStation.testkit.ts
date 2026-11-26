@@ -184,6 +184,6 @@ export function setup(opts: { lie?: boolean; advance?: { file: string; text: str
     ".codecast/workspace.toml": `[[ship.deploy]]\nname = "${name}"\nwhen = ["api/**"]\nrun = ${JSON.stringify(run)}\nstage = "before_push"\n`,
     ".codecast/deploy.toml": `[[target]]\nname = "backend"\nship = "${name}"\nlive = "marker"\npolicy = "release"\n`,
   });
-  return { root, work, runDir, origin, git, write, commit, numbered, branch, advanceMain, onMain, profile, ci, proof, answers, posts, logged, run, gh, merged, originMain, originBranch, trees, exec,
+  return { root, work, runDir, origin, git, write, commit, numbered, branch, advanceMain, onMain, profile, ci, proof, answers, posts, logged, run, gh, merged, originMain, originBranch, trees, scratch, exec,
     main: () => mainSha, done: () => rmSync(root, { recursive: true, force: true }) };
 }

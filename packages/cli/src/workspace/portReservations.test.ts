@@ -65,6 +65,7 @@ describe("reservation-specific lock", () => {
     ["negative PID", JSON.stringify({ pid: -1, token: "holder" })],
     ["missing token", JSON.stringify({ pid: process.pid })],
     ["empty token", JSON.stringify({ pid: process.pid, token: "" })],
+    ["invalid group", JSON.stringify({ pid: process.pid, pgid: "x", token: "holder" })],
   ])("does not reclaim a lock with %s metadata", async (_label, contents) => {
     fs.writeFileSync(lock, contents!);
     const inode = fs.statSync(lock).ino;
@@ -182,15 +183,68 @@ describe("reservation-specific lock", () => {
     expect(fs.existsSync(lock)).toBe(false);
   });
 
-  test("a dead owner fails closed with its path for manual recovery", async () => {
+  test("a dead owner that left nothing running is reclaimed, and the caller enters", async () => {
     const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" });
     expect(await child.exited).toBe(0);
-    const contents = JSON.stringify({ pid: child.pid, token: "dead-holder" });
-    fs.writeFileSync(lock, contents);
-    const callback = mock(async () => "entered");
-    await expect(withPortReservations(root, callback)).rejects.toThrow(`inspect remaining child processes before manually removing ${lock}`);
-    expect(callback).not.toHaveBeenCalled();
-    expect(fs.readFileSync(lock, "utf8")).toBe(contents);
+    fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, token: "dead-holder" }));
+    expect(await withPortReservations(root, async () => JSON.parse(fs.readFileSync(lock, "utf8")).pid)).toBe(process.pid);
+    expect(fs.existsSync(lock)).toBe(false);
+    expect(fs.readdirSync(directory)).toEqual(["repositories.json"]);
+  });
+
+  test("a dead owner whose child still runs in its group fails closed with its path for manual recovery", async () => {
+    // The owner leads its group (as a station does) and exits, leaving a child running in that group.
+    const owner = Bun.spawn(["/bin/bash", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"], { stdout: "pipe", stderr: "ignore", detached: true });
+    const survivor = Number((await new Response(owner.stdout).text()).trim());
+    await owner.exited;
+    try {
+      const contents = JSON.stringify({ pid: owner.pid, token: "dead-holder" });
+      fs.writeFileSync(lock, contents);
+      const callback = mock(async () => "entered");
+      await expect(withPortReservations(root, callback)).rejects.toThrow(`inspect remaining child processes before manually removing ${lock}`);
+      expect(callback).not.toHaveBeenCalled();
+      expect(fs.readFileSync(lock, "utf8")).toBe(contents);
+    } finally {
+      process.kill(survivor, "SIGKILL");
+    }
+  });
+
+  test.each([
+    ["holds an orphan, fails closed", "sleep 60 >/dev/null 2>&1 & echo $$", true],
+    ["holds no orphan, is reclaimed", "echo $$", false],
+  ])("a dead owner that ran inside another's living group that %s", async (_label, inner, refused) => {
+    // The group's leader lives on; the owner inside it exits, leaving its child (if any) to init.
+    const leader = Bun.spawn(["/bin/bash", "-c", `bash -c '${inner}'; exec sleep 60 >/dev/null`], { stdout: "pipe", stderr: "ignore", detached: true });
+    const reader = leader.stdout.getReader();
+    const ownerPid = Number(new TextDecoder().decode((await reader.read()).value).trim());
+    reader.releaseLock();
+    try {
+      for (let i = 0; i < 200; i++) {
+        try { process.kill(ownerPid, 0); } catch { break; }
+        await Bun.sleep(25);
+      }
+      const contents = JSON.stringify({ pid: ownerPid, pgid: leader.pid, token: "dead-holder" });
+      fs.writeFileSync(lock, contents);
+      const callback = mock(async () => "entered");
+      if (refused) {
+        await expect(withPortReservations(root, callback)).rejects.toThrow("interrupted owner");
+        expect(callback).not.toHaveBeenCalled();
+        expect(fs.readFileSync(lock, "utf8")).toBe(contents);
+      } else {
+        expect(await withPortReservations(root, callback)).toBe("entered");
+        expect(fs.existsSync(lock)).toBe(false);
+      }
+    } finally {
+      process.kill(-leader.pid, "SIGKILL");
+    }
+  });
+
+  test("records the owner's process group", async () => {
+    await withPortReservations(root, async () => {
+      const owner = JSON.parse(fs.readFileSync(lock, "utf8"));
+      const ps = Bun.spawnSync(["ps", "-o", "pgid=", "-p", String(process.pid)]);
+      expect(owner.pgid).toBe(Number(ps.stdout.toString().trim()));
+    });
   });
 
   test("callback exceptions release only the acquired lock", async () => {
