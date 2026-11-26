@@ -1,6 +1,7 @@
 import { mutation } from "./functions";
 import { v } from "convex/values";
 import { boundSessionsOf } from "./lib/taskOwner";
+import { inheritLink } from "./lib/priorityLinks";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -261,6 +262,8 @@ export async function spawnSessionCore(
   const shortId = conversationId.toString().slice(0, 7);
   await ctx.db.patch(conversationId, { short_id: shortId });
   await retainSessionCreator(ctx, conversationId, userId, runnerUserId);
+  // A worker or a handoff continues its source's work (lib/priorityLinks).
+  await inheritLink(ctx, conversationId, opts.subagentFields?.parent_conversation_id ?? opts.handoffFrom?._id);
   if (opts.handoffFrom) {
     await applyHandoffLink(ctx, userId, opts.handoffFrom, { _id: conversationId, short_id: shortId, agent_type: agentType, model: opts.model });
   }
