@@ -168,6 +168,9 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
   const [error, setError] = useState<string | null>(null);
   const checked = checkedPayload(row.kind, draft);
   const ready = "payload" in checked;
+  // Once something is typed, the rule a value breaks is what keeps Save greyed out, so it shows under the field.
+  const typed = Object.values(draft).some((v) => v !== "");
+  const unmet = typed && "error" in checked ? checked.error : null;
   // Replacing a login lays its lines out in the panel's label column, each blank one keeping its current value.
   const loginReplace = mode === "rotate" && row.kind === "login";
   const save = async () => {
@@ -229,7 +232,7 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
           {actions}
         </div>
       )}
-      {error ? <div className="text-meta text-sol-red">{error}</div> : null}
+      {error ? <div className="text-meta text-sol-red">{error}</div> : unmet ? <div className="text-meta text-sol-text-muted">{unmet}</div> : null}
     </form>
     {reviewing && review && <SwitchReview ledger={review} onClose={() => setReviewing(false)} onConfirm={() => void save()} />}
     </>
