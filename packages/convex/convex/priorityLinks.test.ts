@@ -238,39 +238,35 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s4")).done).toBe(false);
   });
 
-  test("a done pin counts only from a person-driven top-level session that is the milestone's only live one", async () => {
-    const { t, ada, p1, cPin } = await world();
-    const { worker, other } = await t.run(async (ctx: any) => {
-      const make = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
-        user_id: ada, agent_type: "claude_code", session_id: `sess-${short_id}`, short_id, title: short_id, started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
-        priority_id: p1, ...fields,
-      });
-      return {
-        worker: await make("jx7wrk1", { priority_step_key: "s4", parent_conversation_id: cPin }),
-        other: await make("jx7oth1", { priority_step_key: "s3" }),
-      };
-    });
-    const done = (session: string) => t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session, text: "Shipped", status: "done" });
-    // A worker's done pin is not the milestone's.
-    await done("jx7wrk1");
-    expect((await stepOf(t, p1, "s4")).done).toBe(false);
-    // Another live person-driven session still works s3: one finishing is not the milestone finishing.
-    await done("jx7pin1");
+  test("a bare done pin closes nothing (it means the turn was delivered); the reply names the milestone and how to close it", async () => {
+    const { t, p1 } = await world();
+    const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done" });
     expect((await stepOf(t, p1, "s3")).done).toBe(false);
-    // Once the other is done too, its pin closes the milestone.
-    await done("jx7oth1");
-    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: (await convOf(t, other)).thread_state_at });
-    void worker;
+    expect(res.milestone).toEqual({ serves: "pri-1/s3", title: "Milestone s3" });
+    // A working pin, or a done one that names its milestone, gets no hint.
+    expect((await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "More", status: "working" })).milestone).toBeUndefined();
   });
 
-  test("a pin declared done on a mapped session: done_at is the pin, and a later pin keeps it", async () => {
+  test("a done pin serving its milestone closes it at the pin time, and a later one keeps that time", async () => {
     const { t, p1, cPin } = await world();
-    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done" });
+    const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    expect(res.milestone).toBeUndefined();
     const pinnedAt = (await convOf(t, cPin)).thread_state_at;
     expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: pinnedAt });
     await new Promise((r) => setTimeout(r, 5));
-    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped again", status: "done" });
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped again", status: "done", serves: "pri-1/s3" });
     expect((await stepOf(t, p1, "s3")).done_at).toBe(pinnedAt);
+  });
+
+  test("a done pin naming another milestone, or from a worker, closes nothing", async () => {
+    const { t, ada, p1, cPin } = await world();
+    await t.run((ctx: any) => ctx.db.insert("conversations", {
+      user_id: ada, agent_type: "claude_code", session_id: "sess-jx7wrk1", short_id: "jx7wrk1", title: "w", started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, status: "active",
+      priority_id: p1, priority_step_key: "s4", parent_conversation_id: cPin,
+    }));
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7pin1", text: "Shipped", status: "done", serves: "pri-1/s4" });
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7wrk1", text: "Shipped", status: "done", serves: "pri-1/s4" });
+    expect([(await stepOf(t, p1, "s3")).done, (await stepOf(t, p1, "s4")).done]).toEqual([false, false]);
   });
 
   test("a team task linked only from a private session lands on its team milestone", async () => {

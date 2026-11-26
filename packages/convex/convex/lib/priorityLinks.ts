@@ -2,10 +2,12 @@
 // waiting for the pass (Priorities v2 design doc, Backend shape 2 and 3).
 //
 // Evidence: a task a milestone names closing or reopening, a pull request it
-// names merging or closing, and a pin declared done on the milestone's only
-// live person-driven session each recompute that milestone at once, with
+// names merging or closing, and a done pin that names the milestone
+// (`cast state --status done --serves pri-N/sK`, from the person-driven
+// session mapped to it) each recompute that milestone at once, with
 // `done_at` the evidence's own time (the close or drop, the merge, the pin
-// that made it true), never the time a later pass noticed. A decision card
+// that made it true), never the time a later pass noticed. A bare done pin
+// means only "turn delivered": agents pin it every turn. A decision card
 // answered is not evidence: cards are questions asked mid-work.
 // The pass recomputes the same way after it writes a milestone whose done
 // state it changed (priorityPassRun applyPlan), so a stale or wrong plan
@@ -204,20 +206,30 @@ export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Pro
 
 /** A person drives it: a top-level session of their own, not a role's seat, a trigger's run, a workflow's, a worker or a subagent. */
 const personDriven = (c: Conv) => pinsAskForPass(c) && !c.parent_conversation_id && !c.is_subagent;
-/** Still going: not killed or dismissed, and not declared or settled done. */
-const live = (c: Conv) => !c.inbox_killed_at && !c.inbox_dismissed_at && c.thread_state_status !== "done" && c.settle_verdict !== "done";
 
 /**
- * A pin declared done on `conv` at `at`: its milestone, when it is mapped to
- * one, the session is person-driven, and no other live person-driven
- * session works that milestone (one session finishing is not the milestone
- * finishing while another still works it).
+ * A pin declared done on `conv` at `at`, naming what it finished (`serves`,
+ * "pri-N/sK"): evidence for its milestone only when that is the milestone the
+ * session is mapped to and the session is person-driven. Without the name a
+ * done pin closes nothing.
  */
-export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number): Promise<void> {
-  if (!conv?.priority_id || !conv.priority_step_key || !personDriven(conv)) return;
-  const held: Conv[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", conv.priority_id)).take(OWN_READ);
-  if (held.some((c) => String(c._id) !== String(conv._id) && c.priority_step_key === conv.priority_step_key && personDriven(c) && live(c))) return;
+export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, serves: string | undefined): Promise<void> {
+  if (!serves || !conv?.priority_id || !conv.priority_step_key || !personDriven(conv)) return;
+  const p: Priority | null = await ctx.db.get(conv.priority_id);
+  if (!p || serves !== `${p.short_id}/${conv.priority_step_key}`) return;
   await recomputeStepDone(ctx, conv.priority_id, conv.priority_step_key, at);
+}
+
+/**
+ * The open milestone a session is mapped to, for a done pin that did not
+ * name one (`cast state` prints how to: re-pin with --serves). Null when it
+ * is mapped to none, or to one already done, dropped or gone.
+ */
+export async function unnamedMilestone(ctx: Ctx, conv: Conv): Promise<{ serves: string; title: string } | null> {
+  if (!conv.priority_id || !conv.priority_step_key) return null;
+  const p: Priority | null = await ctx.db.get(conv.priority_id);
+  const step = p?.steps.find((s) => s.key === conv.priority_step_key);
+  return p && step && !step.done && !step.dropped ? { serves: `${p.short_id}/${step.key}`, title: step.title } : null;
 }
 
 // ── Links ───────────────────────────────────────────────────────────────────

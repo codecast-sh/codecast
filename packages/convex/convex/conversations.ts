@@ -167,7 +167,7 @@ import {
   toggleFavoriteWithRevision,
 } from "./favoriteViewWrites";
 import { formatSlugAsTitle, generateShareToken, isNonEmptyMessage } from "./lib/conversationBasics";
-import { inheritLink, sessionEvidence } from "./lib/priorityLinks";
+import { inheritLink, sessionEvidence, unnamedMilestone } from "./lib/priorityLinks";
 import { pinsAskForPass, sessionActivity } from "./lib/priorityPassSchedule";
 import { askClassifier } from "./lib/priorityClassifierHook";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
@@ -12497,7 +12497,7 @@ export async function performSetThreadState(
     await askClassifier(ctx, conv, "pin");
   }
   // A pin declaring done is evidence for the milestone the session is mapped to (lib/priorityLinks).
-  if (status === "done") await sessionEvidence(ctx, conv, at);
+  if (status === "done") await sessionEvidence(ctx, conv, at, serves);
   // A `blocked` declaration from a HIDDEN session is a claim on the user's
   // eyes — the same claim `cast trigger complete --needs-attention` makes,
   // cleared the same way (agentTasks.completeTaskRun). If the session is
@@ -12577,7 +12577,9 @@ export const setThreadState = mutation({
 
     const status = parseThreadStateStatus(args.status) ?? "working";
     const { at, resurfaced } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), serves);
-    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced };
+    // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
+    const milestone = status === "done" && !serves ? await unnamedMilestone(ctx, conv) : null;
+    return { ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced, ...(milestone ? { milestone } : {}) };
   },
 });
 

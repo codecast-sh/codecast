@@ -170,6 +170,16 @@ function printState(text: string, provenance: string): void {
   if (provenance) console.log(`  ${fmt.muted(provenance)}`);
 }
 
+/**
+ * A done pin with no --serves closes no milestone (it means the turn was
+ * delivered). When the session is linked to one, the server names it, and
+ * this line says how to close it.
+ */
+export function servesHint(result: { milestone?: { serves: string; title: string } | null }): string | null {
+  const m = result.milestone;
+  return m ? `Linked to ${m.serves} ${m.title}: if this finished it, re-pin with --serves ${m.serves}` : null;
+}
+
 export function registerStateCommand(program: Command, deps: PublishDeps): void {
   program
     .command("state")
@@ -291,5 +301,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       if ((result as { resurfaced?: boolean }).resurfaced) {
         console.log(`${c.yellow}!${c.reset} this session was hidden; declaring ${result.status ?? status} returned it to the user's inbox`);
       }
+      const hint = servesHint(result);
+      if (hint) console.log(fmt.muted(hint));
     });
 }

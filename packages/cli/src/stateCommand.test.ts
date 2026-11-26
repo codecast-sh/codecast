@@ -9,10 +9,22 @@ import {
   describeProvenance,
   staleStateNotice,
   statusTag,
+  servesHint,
   doneAskLabel,
   registerStateCommand,
 } from "./stateCommand.js";
 import { threadStateStampPath } from "./threadStateStamp.js";
+
+describe("servesHint", () => {
+  test("a done pin in a session linked to a milestone, without --serves, says how to close it", () => {
+    expect(servesHint({ milestone: { serves: "pri-3/s2", title: "Grader in CI" } })).toBe("Linked to pri-3/s2 Grader in CI: if this finished it, re-pin with --serves pri-3/s2");
+  });
+
+  test("nothing to say when the server names no milestone (not done, --serves given, or linked to none)", () => {
+    expect(servesHint({})).toBeNull();
+    expect(servesHint({ milestone: null })).toBeNull();
+  });
+});
 
 describe("a Done pin that hands the person something", () => {
   test("doneAskLabel: a Done pin with an ask line the card would show", () => {
