@@ -579,8 +579,14 @@ launchd job; a step that will not stop leaves its tree in place. The next
 station sweeps only trees marked as its own, named `merge-scratch-*`, older
 than three hours and whose maker is gone. A person's workspace named `merge-*`
 is never touched. Each round
-fetches the default branch fresh and rebases onto it. A conflict exits 1,
-naming the files and the default branch's commits that touched them. So does a
+fetches the default branch fresh and rebases onto it. A conflict only in
+files the default branch's `.codecast/generated.toml` lists (each set with the
+command that writes it) is Merge's own: it takes the default branch's side,
+runs their generators over the rebased tree, commits the result, and merges
+that tree, pushed to the branch first since GitHub cannot merge the head; a
+regenerated file is left out of the files a model judges below. Any other
+conflict exits 1, naming the files and the default branch's commits that
+touched them, and so does a generator that fails. So does a
 change that would set the default branch's recent work back (a stale copy
 built on an old tree, lineMerge's `undoneChanges`): the line names each file
 with the commit it would undo and says to rebuild the change on the default

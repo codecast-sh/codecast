@@ -47,6 +47,7 @@ test-results/
 !.codecast/check.toml
 !.codecast/line.toml
 !.codecast/deploy.toml
+!.codecast/generated.toml
 # The project's own line graph and station prompts (docs/architecture/line-map.md LX5)
 !.codecast/line/
 

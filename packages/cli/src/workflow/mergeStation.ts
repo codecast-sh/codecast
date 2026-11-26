@@ -10,7 +10,9 @@
 //
 // Holding the checkout's merge lock (mergeScratch.ts), and from its first
 // before-merge step the repository's lease across machines (land/repoLease.ts),
-// it rebases the head onto the default branch in a worktree of its own, sends
+// it rebases the head onto the default branch in a worktree of its own (a
+// conflict only in files .codecast/generated.toml lists is resolved here: the
+// default branch's side, then their generators, generatedFiles.ts), sends
 // it back to CI when the default branch changed the same files since CI and a
 // model judges the two diffs interact, runs the before-merge deploy steps that
 // the default branch's own line profile names (codecast: convex, from a tree
@@ -37,6 +39,7 @@ import { keepEnds } from "./keepEnds";
 import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink } from "./rebaseRecord";
+import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
 export type MergeStationResult = { code: 0 | 1 | 2 | 3; line: string };
 
@@ -277,18 +280,44 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
 
     let tip = head;
+    // The generators whose files this station regenerated: the tree then differs from any rebase GitHub can make of
+    // the head, so the merge goes out from it.
+    const regenerated: Generator[] = [];
     rounds: for (let round = 1; ; round++) {
       if (round > ROUNDS) return await fail(2, `${into} kept moving under the before-merge steps for ${ROUNDS} rounds`);
       const onto = latest();
       if (!onto) return await fail(2, `git fetch origin ${into} failed`);
-      const rebased = rebaseOnto(exec, at, onto);
+      const generated = readGenerators(exec, at, onto);
+      if (generated.error) log(`${generated.error}: a conflict in generated files goes to the change's session`);
+      const rebased = rebaseOnto(exec, at, onto, generated.generators);
       if ("conflicted" in rebased) {
         const was = git(at, "merge-base", "HEAD", onto).stdout.trim();
         const theirs = lines(git(at, "log", "--format=%h %s", "-n", "5", `${was}..${onto}`, "--", ...rebased.conflicted.map((f) => `:(literal)${f}`)).stdout);
         return await fail(1, `${branch} conflicts with ${into} in ${rebased.conflicted.join(", ")}; ${into}'s commits that touched them: ${theirs.join("; ")}`);
       }
       if ("reason" in rebased) return await fail(2, rebased.reason);
-      tip = rebased.sha;
+      if (rebased.taken.length) {
+        // Conflicts only in files a generator writes: main's side was taken, and the generators write them anew
+        // over the rebased tree, so the change's session is not sent to resolve what no one should edit by hand.
+        const gens = generatorsFor(generated.generators, rebased.taken)!;
+        log(`${branch} conflicts with ${into} only in generated files (${rebased.taken.join(", ")}): took ${into}'s side; regenerating with ${gens.map((g) => g.run).join(", ")}`);
+        await work.setup();
+        setUpFrom ||= rebased.sha;
+        for (const g of gens) {
+          const r = await runStep(g.run, at, log, {}, trackStep);
+          if (r.code !== 0) return await fail(1, `${branch} conflicts with ${into} in ${rebased.taken.join(", ")}, and their generator failed on the rebased tree (${g.run}, exit ${r.code}): ${tail(r.output) || "no output"}`);
+        }
+        const changed = [...new Set(lines(git(at, "ls-files", "-m", "-o", "--exclude-standard").stdout))];
+        const stray = changed.filter((f) => !writtenBy(gens, f));
+        if (stray.length) return await fail(2, `regenerating ${rebased.taken.join(", ")} changed files ${GENERATED_FILE} does not list for its generators: ${stray.slice(0, 5).join(", ")}`);
+        if (changed.length) {
+          git(at, "add", "-A", "--", ...changed.map((f) => `:(literal)${f}`));
+          const commit = git(at, "commit", "-q", "--no-verify", "-m", `Regenerate ${rebased.taken.join(", ")} on ${into}`);
+          if (commit.status !== 0) return await fail(2, `the regenerated ${rebased.taken.join(", ")} could not be committed: ${tail(commit.stderr || commit.stdout)}`);
+        }
+        regenerated.push(...gens);
+      }
+      tip = git(at, "rev-parse", "HEAD").stdout.trim();
       if (tip !== head) log(`rebased ${short(head)} onto ${into} at ${short(onto)}: ${short(tip)}`);
       // A change that sets main's recent work back was built on a stale tree: the conflict route, since the change's
       // session rebuilds it on main as well as anyone could.
@@ -301,7 +330,8 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
 
       if (tested !== onto) {
         const moved = new Set(lines(git(at, "diff", "--name-only", "--no-renames", tested, onto).stdout));
-        const overlap = files.filter((f) => moved.has(f));
+        // A regenerated file follows from its sources: those carry whatever interaction there is.
+        const overlap = files.filter((f) => moved.has(f) && !writtenBy(regenerated, f));
         if (overlap.length) {
           const shared = overlap.map((f) => `:(literal)${f}`);
           const verdict = await diffsInteract(args, { files: overlap, main: git(at, "diff", tested, onto, "--", ...shared).stdout, change: git(at, "diff", onto, tip, "--", ...shared).stdout });
@@ -350,7 +380,16 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
 
     if (!(await leaseHeld())) return await fail(2, lostLease("the merge"));
-    const landed = mergePullRequest(exec, at, { pr: String(pr), branch, head, into, wait: args.wait });
+    // GitHub merges the pull request's head, which still conflicts in the files regenerated here: the branch takes
+    // the resolved tree first.
+    let merging = head;
+    if (regenerated.length) {
+      const push = git(at, "push", `--force-with-lease=refs/heads/${branch}:${head}`, "origin", `${tip}:refs/heads/${branch}`);
+      if (push.status !== 0) return await fail(2, `the regenerated ${branch} could not be pushed for the merge: ${tail(push.stderr)}`);
+      log(`pushed ${branch} at ${short(tip)}, its generated files regenerated on ${into}, to merge`);
+      merging = tip;
+    }
+    const landed = mergePullRequest(exec, at, { pr: String(pr), branch, head: merging, into, wait: args.wait });
     if ("reason" in landed) return await fail(2, landed.reason);
     writeMergeJson(args, url, landed.sha);
     // What the landed commit holds under a step's paths can differ from the tree it deployed (main moved after the
@@ -377,18 +416,35 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   }
 }
 
-/** Rebase the tree's HEAD onto `onto`; a conflict is aborted, leaving the tree as it was. */
-function rebaseOnto(exec: Exec, at: string, onto: string): { sha: string } | { conflicted: string[] } | { reason: string } {
+/** Rebase the tree's HEAD onto `onto`. A stop whose conflicts are all files `generators` write takes `onto`'s side of
+ *  them and goes on (`taken` names them, for their generators to write anew); any other conflict is aborted, leaving
+ *  the tree as it was. */
+function rebaseOnto(exec: Exec, at: string, onto: string, generators: Generator[]): { sha: string; taken: string[] } | { conflicted: string[] } | { reason: string } {
   const git = (...a: string[]) => exec("git", a, at);
+  const taken = new Set<string>();
   if (git("merge-base", "--is-ancestor", onto, "HEAD").status !== 0) {
-    const rebase = git("rebase", "-q", onto);
-    if (rebase.status !== 0) {
+    for (let step = git("rebase", "-q", onto), stops = 0; step.status !== 0; stops++) {
       const conflicted = lines(git("diff", "--name-only", "--diff-filter=U").stdout);
-      git("rebase", "--abort");
-      return conflicted.length ? { conflicted } : { reason: `git rebase failed: ${tail(rebase.stderr || rebase.stdout)}` };
+      // A stop that comes back however often it is resolved is no rebase going forward.
+      if (!conflicted.length || !generatorsFor(generators, conflicted) || stops > 1000) {
+        git("rebase", "--abort");
+        return conflicted.length ? { conflicted } : { reason: `git rebase failed: ${tail(step.stderr || step.stdout)}` };
+      }
+      // In a rebase "ours" is the branch being rebased onto; a file that side deleted stays deleted.
+      for (const f of conflicted) {
+        if (git("cat-file", "-e", `:2:${f}`).status === 0) {
+          git("checkout", "--ours", "--", `:(literal)${f}`);
+          git("add", "--", `:(literal)${f}`);
+        } else {
+          git("rm", "-q", "-f", "--", `:(literal)${f}`);
+        }
+        taken.add(f);
+      }
+      // A commit left with nothing of its own once main's side is taken is dropped.
+      step = git("diff", "--cached", "--quiet").status === 0 ? git("rebase", "--skip") : git("-c", "core.editor=true", "rebase", "--continue");
     }
   }
-  return { sha: git("rev-parse", "HEAD").stdout.trim() };
+  return { sha: git("rev-parse", "HEAD").stdout.trim(), taken: [...taken] };
 }
 
 /** merge.json, written the moment the merge lands, before anything else can stop the station. */
