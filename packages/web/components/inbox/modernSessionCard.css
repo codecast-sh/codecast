@@ -61,16 +61,3 @@
 .modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-rank] {
   display: inline-flex;
 }
-
-/* The hidden buckets' heads (Snoozed, Stashed, Killed: GlobalSessionPanel's
-   renderHiddenBucket) wear the section heads' quiet look (ModernSectionHeader). */
-:root.modern-style [data-sv-rail] [data-sv-hidden-head] {
-  min-height: 32px;
-  background: var(--sol-bg-alt);
-  border-bottom-color: transparent;
-  box-shadow: inset 0 -1px 0 var(--sol-border);
-}
-:root.modern-style [data-sv-rail] [data-sv-hidden-label] {
-  color: var(--sol-text-muted);
-  letter-spacing: 0.06em;
-}
