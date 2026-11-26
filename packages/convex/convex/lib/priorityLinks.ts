@@ -4,11 +4,12 @@
 // Evidence: a task a milestone names closing or reopening, a pull request it
 // names merging, and a decision answered or a pin declared done on a session
 // mapped to it each recompute that milestone at once, with `done_at` the
-// evidence's own time (the task's close, the merge, the answer, the pin),
-// never the time a later pass noticed. The records decide in order: a
-// milestone with tasks follows its tasks alone (as the pass does,
-// lib/priorityPass stepDone); one with pull requests is done once none is
-// open and one merged; only one with neither is marked done by its sessions.
+// evidence's own time (the close or drop, the merge, the answer, the pin
+// that made it true), never the time a later pass noticed. The records
+// decide in order: a milestone with tasks follows its tasks alone (as the
+// pass does, lib/priorityPass stepDone); one with pull requests of its own
+// workspace is done once none is open and one merged; only one with neither
+// is marked done by its sessions.
 // Session evidence never reopens a milestone, and a milestone already done
 // keeps its first done time.
 //
@@ -18,8 +19,9 @@
 // owner's own priority in the session's own workspace, the one the pass
 // would map it in.
 //
-// Every read is an index lookup: the records' linked sessions, and those
-// sessions' owners' newest OWN_READ priorities in their workspaces.
+// Every read is an index lookup: the records' linked sessions, and the
+// newest OWN_READ priorities of the people concerned, read once per person
+// and workspace per mutation.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import type { PriorityRef } from "@codecast/shared/contracts/priorities";
@@ -39,39 +41,66 @@ const LINKED_SESSIONS = 20;
 /** A plan with more tasks than this is never one milestone's plan (the design doc's plan attribution, rule 3). */
 const MILESTONE_PLAN_MAX_TASKS = 40;
 
-async function ownPriorities(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Priority[]> {
-  const rows: Priority[] = await ctx.db
-    .query("priorities")
-    .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
-    .order("desc")
-    .take(OWN_READ);
-  // Active ones first, each group most recently active first.
-  return rows.filter((p) => p.status !== "merged").sort((a, b) => Number(b.status === "active") - Number(a.status === "active"));
+/**
+ * One read per (person, workspace) for the length of a mutation, so a cascade
+ * closing fifty tasks reads each owner's priorities once. Callers use only
+ * what a mutation's own writes here never change (ids, owner, workspace,
+ * status, step keys and refs); recomputeStepDone re-reads the row it writes.
+ */
+const ownReads = new WeakMap<object, Map<string, Promise<Priority[]>>>();
+
+function ownPriorities(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Priority[]> {
+  let reads = ownReads.get(ctx.db);
+  if (!reads) ownReads.set(ctx.db, (reads = new Map()));
+  const key = `${userId}|${workspace}`;
+  if (!reads.has(key)) {
+    reads.set(key, ctx.db
+      .query("priorities")
+      .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+      .order("desc")
+      .take(OWN_READ)
+      // Active ones first, each group most recently active first.
+      .then((rows: Priority[]) => rows.filter((p) => p.status !== "merged").sort((a, b) => Number(b.status === "active") - Number(a.status === "active"))));
+  }
+  return reads.get(key)!;
 }
 
-/** Every milestone naming `ref` among the priorities of the given sessions' owners, in each session's workspace. */
-async function stepsNaming(ctx: Ctx, convIds: Array<Id<"conversations"> | undefined>, ref: PriorityRef): Promise<Array<{ priority: Id<"priorities">; key: string }>> {
-  const vis = sessionVisibility(ctx);
-  const ids = [...new Set(convIds.filter(Boolean).map(String))].slice(0, LINKED_SESSIONS);
-  const pairs = new Set<string>();
+type Place = { user: Id<"users">; workspace: string };
+
+/** Every milestone naming `ref` among each person's priorities in the workspace given with them. */
+async function stepsNaming(ctx: Ctx, places: Place[], ref: PriorityRef): Promise<Array<{ priority: Id<"priorities">; key: string }>> {
+  const seen = new Set<string>();
   const out: Array<{ priority: Id<"priorities">; key: string }> = [];
-  for (const id of ids) {
-    const conv: Conv | null = await ctx.db.get(id as Id<"conversations">);
-    if (!conv) continue;
-    const workspace = await vis.workspaceOf(conv);
-    const pair = `${conv.user_id}|${workspace}`;
-    if (pairs.has(pair)) continue;
-    pairs.add(pair);
-    for (const p of await ownPriorities(ctx, conv.user_id, workspace)) {
+  for (const { user, workspace } of places) {
+    if (seen.has(`${user}|${workspace}`)) continue;
+    seen.add(`${user}|${workspace}`);
+    for (const p of await ownPriorities(ctx, user, workspace)) {
       for (const s of p.steps) if (s.refs.some((r) => r.kind === ref.kind && r.id === ref.id)) out.push({ priority: p._id, key: s.key });
     }
   }
   return out;
 }
 
+/** The sessions behind these ids, at most LINKED_SESSIONS of them. */
+async function sessionsOf(ctx: Ctx, ids: Array<Id<"conversations"> | undefined>): Promise<Conv[]> {
+  const out: Conv[] = [];
+  for (const id of [...new Set(ids.filter(Boolean).map(String))].slice(0, LINKED_SESSIONS)) {
+    const conv: Conv | null = await ctx.db.get(id as Id<"conversations">);
+    if (conv) out.push(conv);
+  }
+  return out;
+}
+
+/** A pull request counts only toward a priority in its own team's workspace, or, with no team, a personal one. */
+const prInWorkspace = (pr: Doc<"pull_requests">, workspace: string) => (pr.team_id ? workspace === `team:${pr.team_id}` : workspace.startsWith("user:"));
+
 type Evidence = { done: true; at: number } | { done: false } | null;
 
-/** What the milestone's records say: done (and since when), not done, or nothing (left to the pass). */
+/**
+ * What the milestone's records say: done (since when its done condition
+ * became true: the latest of the closes, drops and merges that make it so),
+ * not done, or nothing (left to the pass).
+ */
 async function evidenceFor(ctx: Ctx, p: Priority, step: Step, sessionAt: number | undefined): Promise<Evidence> {
   const tasks = step.refs.filter((r) => r.kind === "task");
   if (tasks.length) {
@@ -81,21 +110,26 @@ async function evidenceFor(ctx: Ctx, p: Priority, step: Step, sessionAt: number 
       const t: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", r.id)).first();
       if (!t || t.workspace !== p.workspace) continue;
       status.set(r.id, t.status);
-      if (t.status === "done") at = Math.max(at, t.closed_at ?? t.updated_at);
+      if (t.status === "done" || t.status === "dropped") at = Math.max(at, t.closed_at ?? t.updated_at);
     }
     return stepDone(step.refs, undefined, status) ? { done: true, at } : { done: false };
   }
-  let mergedAt = 0;
+  let at = 0;
+  let merged = false;
   let open = false;
   for (const r of step.refs) {
     const m = r.kind === "pr" ? /^(.+)#(\d+)$/.exec(r.id) : null;
     if (!m) continue;
     const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", m[1]).eq("number", Number(m[2]))).first();
-    if (pr?.state === "merged") mergedAt = Math.max(mergedAt, pr.merged_at ?? pr.updated_at);
-    else if (pr?.state === "open") open = true;
+    if (!pr || !prInWorkspace(pr, p.workspace)) continue;
+    if (pr.state === "open") open = true;
+    else {
+      merged ||= pr.state === "merged";
+      at = Math.max(at, (pr.state === "merged" ? pr.merged_at : pr.closed_at) ?? pr.updated_at);
+    }
   }
   if (open) return null;
-  if (mergedAt) return { done: true, at: mergedAt };
+  if (merged) return { done: true, at };
   if (sessionAt !== undefined && !step.done) return { done: true, at: sessionAt };
   return null;
 }
@@ -122,20 +156,30 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
 
 // ── Evidence hooks ──────────────────────────────────────────────────────────
 
-/** A task closed or reopened (lib/taskWrite patchTask, issueSync): every milestone naming it, among the priorities of the people whose sessions link it. */
-export async function taskStatusChanged(ctx: Ctx, task: Pick<Doc<"tasks">, "_id" | "short_id" | "conversation_ids" | "created_from_conversation">): Promise<void> {
+/**
+ * A task closed or reopened (lib/taskWrite patchTask, issueSync, orgInit
+ * setTaskStatus): every milestone naming it, among the priorities of its
+ * owner and of the people whose sessions link it, in the task's workspace
+ * (the only workspace whose pass can name it, wherever those sessions are).
+ */
+export async function taskStatusChanged(ctx: Ctx, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">): Promise<void> {
+  const workspace = task.workspace;
+  if (!workspace) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
     .query("entity_conversations")
     .withIndex("by_entity", (q: any) => q.eq("entity_type", "task").eq("entity_id", String(task._id)))
     .take(LINKED_SESSIONS);
-  const convs = [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)];
-  for (const { priority, key } of await stepsNaming(ctx, convs, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
+  const sessions = await sessionsOf(ctx, [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)]);
+  const places = [task.user_id, ...sessions.map((c) => c.user_id)].map((user) => ({ user, workspace }));
+  for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
 }
 
-/** A pull request merged (prShepherd patchPullRequest): every milestone naming it, among the priorities of the people whose sessions link it. */
+/** A pull request merged (prShepherd patchPullRequest): every milestone naming it, among the priorities of the people whose sessions link it, in each session's workspace. */
 export async function pullRequestMerged(ctx: Ctx, pr: Doc<"pull_requests">): Promise<void> {
-  const convs = [pr.shepherd_conversation_id, ...pr.linked_session_ids];
-  for (const { priority, key } of await stepsNaming(ctx, convs, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
+  const vis = sessionVisibility(ctx);
+  const places: Place[] = [];
+  for (const c of await sessionsOf(ctx, [pr.shepherd_conversation_id, ...pr.linked_session_ids])) places.push({ user: c.user_id, workspace: await vis.workspaceOf(c) });
+  for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 
 /** A decision answered or a pin declared done on `conv` at `at`: its milestone, when it is mapped to one. */
@@ -201,7 +245,11 @@ export async function linkFromPlan(ctx: Ctx, conv: Conv, plan: Pick<Doc<"plans">
   return false;
 }
 
-/** A fork, subagent or handoff of `parentId` starts under the parent's priority and milestone. */
+/**
+ * A fork, a `cast spawn` worker or a handoff of `parentId` starts under the
+ * parent's priority and milestone. A Task-tool subagent the daemon syncs does
+ * not: it rolls up under its parent and is never counted on its own.
+ */
 export async function inheritLink(ctx: Ctx, childId: Id<"conversations">, parentId: Id<"conversations"> | undefined): Promise<boolean> {
   const parent: Conv | null = parentId ? await ctx.db.get(parentId) : null;
   if (!parent?.priority_id) return false;
