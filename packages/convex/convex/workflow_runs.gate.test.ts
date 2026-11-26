@@ -116,6 +116,16 @@ describe("pauseAtGate asks through the decision rail (the-line.md L4)", () => {
     expect(tables.session_decisions[0].user_id).toBe(MATE);
   });
 
+  test("a nobody's run (a subagent's, or --no-subject) never asks the task's session in place of a spawner (ct-101911)", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].spawner_conversation_id = undefined;
+    tables.workflow_runs[0].no_subject = true;
+    tables.conversations.push(maker({ active_task_id: TASK }));
+    tables.tasks[0].conversation_ids = ["conversations_maker"];
+    await pause(ctx);
+    expect(tables.session_decisions[0].conversation_id).toBe("conversations_primary");
+  });
+
   test("with nobody bound, it asks from the session that handed the task off, linked to the task or not", async () => {
     const { ctx, tables } = await seed({ task_comments: [handoff("conversations_maker")] });
     tables.workflow_runs[0].spawner_conversation_id = undefined;
@@ -481,6 +491,17 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" });
     expect(tables.workflow_runs.find((x) => x._id === r.run_id).spawner_conversation_id).toBe("conversations_spawner");
     expect(r.spawner_conversation_id).toBe("conversations_spawner");
+  });
+
+  test("createFromCli marks a run nobody's when told (a subagent's, or --no-subject), and no run otherwise", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].status = "completed";
+    const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", no_subject: true });
+    expect(tables.workflow_runs.find((x) => x._id === r.run_id).no_subject).toBe(true);
+    const plain = await seed();
+    plain.tables.workflow_runs[0].status = "completed";
+    const p = await (createFromCli as any)._handler(plain.ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" });
+    expect(plain.tables.workflow_runs.find((x) => x._id === p.run_id).no_subject).toBeUndefined();
   });
 
   test("createFromCli refuses a second run while the cause's run is live (LE1.4), and --force overrides", async () => {
