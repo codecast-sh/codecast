@@ -17,6 +17,7 @@ import { variantChanges } from "./flowLibrary.js";
 import { extendsSlug, poolFlows, repoFlowsDir, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
 import { graphExtends, parseWorkflowSource, resolveFlowSource, type FlowSource } from "./workflow/parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
+import { decideStart, startFacts } from "./workflow/startFacts.js";
 import type { WorkflowGraph, WorkflowNode } from "./workflow/types.js";
 import { edgesOf, flowNodeOf } from "./workflow/flowGraphIn.js";
 
@@ -229,7 +230,8 @@ export function pipelineFlow(opts: { slug: string; graph: WorkflowGraph; file: s
 
 /** A flow by its source, parsed where it sits, with the repo files it reads (its extends chain, its prompts and scripts). */
 function flowFrom(slug: string, src: FlowSource, root: string, release?: ReleaseSteps): { flow: PipelineFlow; files: string[] } {
-  const graph = parseWorkflowSource(src.src, src.dir, {}, src.file);
+  // As a run in this checkout decides its start (its ship mode): the pipeline is the path its change takes.
+  const graph = decideStart(parseWorkflowSource(src.src, src.dir, {}, src.file), startFacts(root));
   const repoFile = !!src.file && inside(root, src.file);
   const chain = repoFile ? flowChain(src.src, src.file!, root) : null;
   const flow = pipelineFlow({ slug, graph, file: chain?.file ?? null, root, base: chain?.base ?? null, library: !repoFile, release });

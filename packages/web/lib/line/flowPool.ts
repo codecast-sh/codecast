@@ -116,8 +116,22 @@ export function appPool(pushed: ReadonlyArray<PushedFlowRow> = [], repo: Readonl
   return pool;
 }
 
+/** A checkout's report of a shipped flow with its start decided there (cli workflow/startFacts.ts): only the library's own
+ *  stations and routes, some left out. */
+function cutOf(f: RepoFlow): ShippedFlow | null {
+  const lib = SHIPPED_FLOWS.find((s) => s.slug === f.slug);
+  if (!lib) return null;
+  const nodes = new Map(lib.nodes.map((n) => [n.id, n.label]));
+  const edges = new Set(lib.edges.map((e) => `${e.from}\0${e.to}\0${e.condition ?? ""}`));
+  return f.nodes.every((n) => nodes.has(n.id) && nodes.get(n.id) === n.label) && f.edges.every((e) => edges.has(`${e.from}\0${e.to}\0${e.condition ?? ""}`)) ? lib : null;
+}
+
 function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<RepoFlow>): AppFlow[] {
-  const own: AppFlow[] = repo.map((f) => ({ ...f, ...foldFlow(f.nodes, f.edges), where: "repo" as const, workflowId: null }));
+  // A cut of a shipped flow is that flow as this checkout runs it: the library's, with the path its start takes.
+  const own: AppFlow[] = repo.map((f) => {
+    const lib = cutOf(f);
+    return lib ? { ...lib, nodes: f.nodes, edges: f.edges, ...foldFlow(f.nodes, f.edges), where: "shipped" as const, workflowId: null } : { ...f, ...foldFlow(f.nodes, f.edges), where: "repo" as const, workflowId: null };
+  });
   const ownSlugs = new Set(own.map((f) => f.slug));
   // The shipped template's graph names no label of its own; people read it as the Standard steps.
   const local = [...own, ...SHIPPED_FLOWS.filter((f) => !ownSlugs.has(f.slug)).map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }))];

@@ -452,6 +452,27 @@ PR → (CI ‖ Review) → Verdicts → Merge → Merged → Deploy → Live
  └──── Revise ←── Approval card ←── edits CI
 ```
 
+A repository that ships straight to its default branch says so in its own
+`.codecast/workspace.toml` (`[ship] mode = "direct"`), and the same flow takes
+another path from its start:
+
+```
+Check → Review → Land → Deploy → Live
+  ↑       │
+  └── Fix findings (the session, at most 3 times)
+```
+
+Check runs the line profile's check command in the run's worktree, Review is
+the line's independent reviewer, and Land (the `ship` segment) rebases the
+branch onto origin's default branch and runs the profile's ship command, which
+lands it; with none, Land stops and says to set one, since no pull request may
+land it. There is no pull request, no CI wait and no Merge. The checkout's
+facts decide the start before anything runs (`workflow/startFacts.ts`
+`decideStart`, read by `cast workflow run`, the runner, the pipeline and the
+Ship picker's checkout report), so a direct run carries, and its card and the
+picker draw, only this path; every other repository keeps the library graph as
+it is.
+
 PR (`cast flow pr`, `workflow/prStation.ts`) starts each round: it deletes
 the last round's `ci.json`, `review.json`, `merge.json` and `rebase.json` from
 the run's directory, pushes the run's change branch and opens its pull

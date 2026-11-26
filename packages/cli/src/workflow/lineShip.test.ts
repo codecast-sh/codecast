@@ -33,8 +33,8 @@ describe("line ship station", () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  const ship = (cmd: string) => {
-    const ctx = { worktree: "line-ct-1", task_id: "ct-1", default_branch: "main", run_dir: path.join(tmp, "run"), "line.commands.ship": cmd };
+  const ship = (cmd: string, more: Record<string, string> = {}) => {
+    const ctx = { worktree: "line-ct-1", task_id: "ct-1", default_branch: "main", run_dir: path.join(tmp, "run"), "line.commands.ship": cmd, ...more };
     return spawnSync("bash", ["-c", expandScriptVars(graph.nodes.get("ship")!.script!, ctx)], { cwd: tmp, env: { ...env, ...lineCommandEnv(ctx) }, encoding: "utf-8" }).status;
   };
   const calls = () => fs.readFileSync(log, "utf-8").split("---\n").filter(Boolean).map((c) => c.trimEnd().split("\n"));
@@ -47,6 +47,15 @@ describe("line ship station", () => {
       ["task", "comment", "ct-1", "Not merged: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "blocker"],
       ["task", "comment", "ct-1", "Rebasing again: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "progress"],
     ]);
+  });
+
+  test("a repository that ships straight to main with no ship command opens no pull request: it says what to set", () => {
+    expect(ship("", { ship_mode: "direct" })).toBe(1);
+    const [comment, ...more] = calls();
+    expect(more).toEqual([]);
+    expect(comment.slice(0, 3)).toEqual(["task", "comment", "ct-1"]);
+    expect(comment[3]).toContain("set [line.commands] ship in .codecast/line.toml");
+    expect(comment.slice(4)).toEqual(["-t", "blocker"]);
   });
 
   test("a branch the default branch moved past since the rebase goes back to rebase, three times after the Ship answer", () => {

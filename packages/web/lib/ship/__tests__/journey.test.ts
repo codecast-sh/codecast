@@ -29,7 +29,28 @@ const GREEN = [...ROUND, verdicts("merge", "green", "ship")];
 const MERGED = [...GREEN, st("merge", "completed", 14, { result_preview: '{"sha":"4a6e413b2c","pr":12}' }), st("landed", "completed", 15, { result_preview: "4a6e413b2c" }), st("deploy", "completed", 15)];
 const states = (j: { stages: Array<{ label: string; state: string }> }) => j.stages.map((s) => `${s.label}:${s.state}`);
 
+/** The change graph a run carries in a repository that ships straight to main: its start decided (cli startFacts.ts),
+ *  so only what the direct edge reaches. */
+function directCut(g: { nodes: Array<{ id: string }>; edges: Array<{ from: string; to: string; condition?: string }> }) {
+  const edges = g.edges.filter((e) => e.from !== "start" || e.to === "direct_check");
+  const kept = new Set(["start"]);
+  for (let f = ["start"]; f.length; ) {
+    f = edges.filter((e) => f.includes(e.from) && !kept.has(e.to)).map((e) => e.to);
+    f.forEach((id) => kept.add(id));
+  }
+  return { ...g, nodes: g.nodes.filter((n) => kept.has(n.id)), edges: edges.filter((e) => kept.has(e.from) && kept.has(e.to)) };
+}
+
 describe("journeyStages", () => {
+  test("a direct repository's change reads check, review, land, deploy: no PR, no CI, no Merge, and no card", () => {
+    const s = journeyStages(directCut(change) as any);
+    expect(s.map((x) => x.label)).toEqual(["Check", "Review", "Land", "Deploy", "Live"]);
+    expect(s.map((x) => x.role)).toEqual(["step", "step", "land", "deploy", "live"]);
+    expect(s[0].loops.map((l) => l.id)).toEqual(["direct_fix"]);
+    expect(s[1].loops.map((l) => l.id)).toEqual(["direct_fix"]);
+    expect(approvalOf(directCut(change) as any).kind).toBe("never");
+  });
+
   test("the change flow reads in execution order, its fan-out one stage holding CI and Review", () => {
     const s = journeyStages(change);
     // Verdicts and Merged are bookkeeping (scripts bounded to a minute): CI + Review holds its verdicts, Merge the sha it merged.

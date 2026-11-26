@@ -41,6 +41,13 @@ landed() {
   return 1
 }
 cmd=$line.commands.ship
+if [ -z "$cmd" ] && [ "$ship_mode" = direct ]; then
+  # A repository that ships straight to its default branch opens no pull request, so only its own command lands it.
+  said="this repository ships straight to $default_branch ([ship] mode = \"direct\" in .codecast/workspace.toml), so no pull request lands it, and its line profile names no ship command: set [line.commands] ship in .codecast/line.toml"
+  echo "$said"
+  cast task comment $task_id "Not merged: $said" -t blocker > /dev/null
+  exit 1
+fi
 if [ -z "$cmd" ]; then
   # A change frozen from a session ships as the snapshot the run reviewed: its branch, never the session's live edits.
   frozen=$change_session

@@ -118,6 +118,8 @@ describe("line.cast template", () => {
       "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
       "run_dir", "cause_history", "last_error", "sent_back", "diff_base", ...Object.keys(EMPTY_VARS),
+      // What the checkout says before the run (startFacts.ts).
+      "ship_mode",
       // A change frozen from a session (frozenChangeContext): empty on a run with none.
       "change_session", "change_files",
       // The station running, as the graph names it (runNodeLoop).

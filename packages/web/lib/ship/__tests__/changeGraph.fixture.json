@@ -236,6 +236,14 @@
       "stop": "$merge.output"
     },
     {
+      "id": "direct_fix",
+      "label": "Fix findings",
+      "shape": "box",
+      "type": "agent",
+      "backend": "subject",
+      "max_visits": 3
+    },
+    {
       "id": "decide__decide",
       "label": "Decide",
       "shape": "hexagon",
@@ -333,6 +341,218 @@
       "shape": "diamond",
       "type": "conditional",
       "segment": "deploy",
+      "segment_flow": "deploy",
+      "segment_entry": true
+    },
+    {
+      "id": "direct_check__verify",
+      "label": "Verify",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_check",
+      "segment_flow": "check",
+      "timeout": 3600
+    },
+    {
+      "id": "direct_check__passed",
+      "label": "Passed",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_check",
+      "segment_flow": "check",
+      "segment_exit": "done"
+    },
+    {
+      "id": "direct_check__failed",
+      "label": "Checks failed",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_check",
+      "segment_flow": "check",
+      "segment_exit": "stop",
+      "stop": "The project's check failed on the change: $direct_check__verify.summary"
+    },
+    {
+      "id": "direct_check__unjudged",
+      "label": "Not checked here",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_check",
+      "segment_flow": "check",
+      "segment_exit": "stop",
+      "stop": "This machine could not run the project's check, so the change is not judged yet: $direct_check__verify.summary. Fix the machine, or run the flow again on one that can."
+    },
+    {
+      "id": "direct_check",
+      "label": "Check",
+      "shape": "diamond",
+      "type": "conditional",
+      "segment": "direct_check",
+      "segment_flow": "check",
+      "segment_entry": true
+    },
+    {
+      "id": "direct_review__review",
+      "label": "Review",
+      "shape": "box",
+      "type": "agent",
+      "backend": "session",
+      "segment": "direct_review",
+      "segment_flow": "review"
+    },
+    {
+      "id": "direct_review__approved",
+      "label": "Approved",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_review",
+      "segment_flow": "review",
+      "segment_exit": "done"
+    },
+    {
+      "id": "direct_review__changes",
+      "label": "Changes asked",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_review",
+      "segment_flow": "review",
+      "segment_exit": "stop",
+      "stop": "The reviewer asked for changes. $review_note"
+    },
+    {
+      "id": "direct_review__rejected",
+      "label": "Rejected",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_review",
+      "segment_flow": "review",
+      "segment_exit": "stop",
+      "stop": "The reviewer rejected the change. $review_note"
+    },
+    {
+      "id": "direct_review",
+      "label": "Review",
+      "shape": "diamond",
+      "type": "conditional",
+      "segment": "direct_review",
+      "segment_flow": "review",
+      "segment_entry": true
+    },
+    {
+      "id": "land__rebase",
+      "label": "Rebase",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "land",
+      "segment_flow": "ship",
+      "max_visits": 3,
+      "timeout": 3600
+    },
+    {
+      "id": "land__ship",
+      "label": "Land",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "land",
+      "segment_flow": "ship",
+      "timeout": 4500
+    },
+    {
+      "id": "land__shipped",
+      "label": "Merged",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "land",
+      "segment_flow": "ship",
+      "segment_exit": "done"
+    },
+    {
+      "id": "land__landed",
+      "label": "Already merged",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "land",
+      "segment_flow": "ship",
+      "segment_exit": "done"
+    },
+    {
+      "id": "land__conflict",
+      "label": "Conflict",
+      "shape": "Msquare",
+      "type": "exit",
+      "segment": "land",
+      "segment_flow": "ship",
+      "stop": "The change does not rebase cleanly or fails the check on the default branch. $land__rebase.output"
+    },
+    {
+      "id": "land__unshipped",
+      "label": "Not merged",
+      "shape": "Msquare",
+      "type": "exit",
+      "segment": "land",
+      "segment_flow": "ship",
+      "stop": "The change was not merged. $land__ship.output"
+    },
+    {
+      "id": "land",
+      "label": "Land",
+      "shape": "diamond",
+      "type": "conditional",
+      "segment": "land",
+      "segment_flow": "ship",
+      "segment_entry": true
+    },
+    {
+      "id": "direct_deploy__wait",
+      "label": "Go live",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_deploy",
+      "segment_flow": "deploy",
+      "timeout": 90900
+    },
+    {
+      "id": "direct_deploy__live",
+      "label": "Live",
+      "shape": "parallelogram",
+      "type": "command",
+      "segment": "direct_deploy",
+      "segment_flow": "deploy",
+      "segment_exit": "done"
+    },
+    {
+      "id": "direct_deploy__unmerged",
+      "label": "Not merged",
+      "shape": "Msquare",
+      "type": "exit",
+      "segment": "direct_deploy",
+      "segment_flow": "deploy",
+      "stop": "$direct_deploy__wait.output"
+    },
+    {
+      "id": "direct_deploy__stuck",
+      "label": "Deploy stuck",
+      "shape": "Msquare",
+      "type": "exit",
+      "segment": "direct_deploy",
+      "segment_flow": "deploy",
+      "stop": "$direct_deploy__wait.output"
+    },
+    {
+      "id": "direct_deploy__failed",
+      "label": "Deploy failed",
+      "shape": "Msquare",
+      "type": "exit",
+      "segment": "direct_deploy",
+      "segment_flow": "deploy",
+      "stop": "$direct_deploy__wait.output"
+    },
+    {
+      "id": "direct_deploy",
+      "label": "Deploy",
+      "shape": "diamond",
+      "type": "conditional",
+      "segment": "direct_deploy",
       "segment_flow": "deploy",
       "segment_entry": true
     }
@@ -567,6 +787,16 @@
       "to": "deploy"
     },
     {
+      "from": "start",
+      "to": "direct_check",
+      "label": "straight to main",
+      "condition": "ship_mode = direct"
+    },
+    {
+      "from": "direct_fix",
+      "to": "direct_check"
+    },
+    {
       "from": "brief",
       "to": "pr"
     },
@@ -656,6 +886,156 @@
       "from": "deploy__wait",
       "to": "deploy__failed",
       "condition": "outcome = failure and deploy__wait.exit_code != 4 and deploy__wait.exit_code != 5"
+    },
+    {
+      "from": "direct_check__passed",
+      "to": "direct_review",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "direct_check__failed",
+      "to": "direct_fix",
+      "label": "check failed",
+      "condition": "outcome = failure and direct_check__failed.json.exit = failed and change_conversation"
+    },
+    {
+      "from": "direct_check__unjudged",
+      "to": "direct_fix",
+      "label": "check failed",
+      "condition": "outcome = failure and direct_check__unjudged.json.exit = failed and change_conversation"
+    },
+    {
+      "from": "direct_check",
+      "to": "direct_check__verify"
+    },
+    {
+      "from": "direct_check__verify",
+      "to": "direct_check__passed",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "direct_check__verify",
+      "to": "direct_check__failed",
+      "condition": "outcome = failure and direct_check__verify.exit_code != 2"
+    },
+    {
+      "from": "direct_check__verify",
+      "to": "direct_check__unjudged",
+      "condition": "outcome = failure and direct_check__verify.exit_code = 2"
+    },
+    {
+      "from": "direct_review__approved",
+      "to": "land",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "direct_review__changes",
+      "to": "direct_fix",
+      "label": "changes asked",
+      "condition": "outcome = failure and direct_review__changes.json.exit = changes and change_conversation"
+    },
+    {
+      "from": "direct_review__rejected",
+      "to": "direct_fix",
+      "label": "changes asked",
+      "condition": "outcome = failure and direct_review__rejected.json.exit = changes and change_conversation"
+    },
+    {
+      "from": "direct_review",
+      "to": "direct_review__review"
+    },
+    {
+      "from": "direct_review__review",
+      "to": "direct_review__approved",
+      "condition": "review_verdict = approve"
+    },
+    {
+      "from": "direct_review__review",
+      "to": "direct_review__changes",
+      "condition": "review_verdict = changes"
+    },
+    {
+      "from": "direct_review__review",
+      "to": "direct_review__rejected",
+      "condition": "review_verdict = reject"
+    },
+    {
+      "from": "land__shipped",
+      "to": "direct_deploy",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "land__landed",
+      "to": "direct_deploy",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "land",
+      "to": "land__rebase"
+    },
+    {
+      "from": "land__rebase",
+      "to": "land__ship",
+      "condition": "outcome = success and land__rebase.json.landed != true"
+    },
+    {
+      "from": "land__rebase",
+      "to": "land__landed",
+      "condition": "outcome = success and land__rebase.json.landed = true"
+    },
+    {
+      "from": "land__rebase",
+      "to": "land__conflict",
+      "condition": "outcome = failure and land__rebase.exit_code = 1"
+    },
+    {
+      "from": "land__rebase",
+      "to": "land__ship",
+      "condition": "outcome = failure and land__rebase.exit_code != 1"
+    },
+    {
+      "from": "land__ship",
+      "to": "land__shipped",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "land__ship",
+      "to": "land__rebase",
+      "label": "default branch moved",
+      "condition": "outcome = failure and land__ship.exit_code = 3"
+    },
+    {
+      "from": "land__ship",
+      "to": "land__unshipped",
+      "condition": "outcome = failure and land__ship.exit_code != 3"
+    },
+    {
+      "from": "direct_deploy__live",
+      "to": "exit"
+    },
+    {
+      "from": "direct_deploy",
+      "to": "direct_deploy__wait"
+    },
+    {
+      "from": "direct_deploy__wait",
+      "to": "direct_deploy__live",
+      "condition": "outcome = success"
+    },
+    {
+      "from": "direct_deploy__wait",
+      "to": "direct_deploy__unmerged",
+      "condition": "outcome = failure and direct_deploy__wait.exit_code = 4"
+    },
+    {
+      "from": "direct_deploy__wait",
+      "to": "direct_deploy__stuck",
+      "condition": "outcome = failure and direct_deploy__wait.exit_code = 5"
+    },
+    {
+      "from": "direct_deploy__wait",
+      "to": "direct_deploy__failed",
+      "condition": "outcome = failure and direct_deploy__wait.exit_code != 4 and direct_deploy__wait.exit_code != 5"
     }
   ]
 }

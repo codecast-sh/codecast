@@ -45,7 +45,7 @@
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
 digraph change {
-  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy; the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
+  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy (a repository that ships straight to main: its check, the review, its ship command); the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
   rankdir=LR
   start [shape=Mdiamond]
   pr [label="PR", shape=parallelogram, timeout=600,
@@ -107,6 +107,17 @@ digraph change {
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
   unshipped [shape=Msquare, label="Not merged", stop="$merge.output"]
 
+  // A repository that ships straight to its default branch says so in its own workspace.toml ([ship] mode = "direct"):
+  // no pull request, so no CI on GitHub. Its check stands in for CI, an independent reviewer reads the branch, the
+  // session fixes what they find, and the line profile's ship command lands it. A run carries only the path its start
+  // takes (startFacts.ts), so its card shows no pull request there.
+  direct_check [flow="check"]
+  direct_review [flow="review"]
+  direct_fix [label="Fix findings", backend=subject, max_visits=3, prompt="@change/direct_fix.md"]
+  land [flow="ship"]
+  // Its own Deploy, so the pull request path's stations keep their order.
+  direct_deploy [flow="deploy"]
+
   start -> pr
   pr -> checks [condition="outcome = success"]
   pr -> nopr   [condition="outcome = failure", label="no pull request"]
@@ -156,6 +167,15 @@ digraph change {
   decide -> dropped [condition="outcome = failure and decide.exit = dropped", label="dropped"]
   landed -> deploy
   deploy -> exit
+  // A repository that ships straight to main: its check, the review, its ship command, then Deploy.
+  start -> direct_check [condition="ship_mode = direct", label="straight to main"]
+  direct_check -> direct_review [condition="outcome = success"]
+  direct_check -> direct_fix [condition="outcome = failure and direct_check.exit = failed and change_conversation", label="check failed"]
+  direct_review -> land [condition="outcome = success"]
+  direct_review -> direct_fix [condition="outcome = failure and direct_review.exit = changes and change_conversation", label="changes asked"]
+  direct_fix -> direct_check
+  land -> direct_deploy [condition="outcome = success"]
+  direct_deploy -> exit
   brief -> pr
   fix_conflict -> pr
   ci_conflict -> pr

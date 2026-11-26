@@ -10,7 +10,10 @@ import { execFileAsync } from "../proc.js";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import type { RepoFlow, RepoFlowsReport } from "@codecast/shared/contracts/repoFlows";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
-import { repoFlowsDir } from "./flowPool.js";
+import { joinsPool, repoFlowsDir } from "./flowPool.js";
+import { parseWorkflowSource } from "./parser.js";
+import { decideStart, startFacts } from "./startFacts.js";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { flowSnapshot } from "./shippedFlows.js";
 
 /** How often an unchanged checkout reports anyway (convex repoFlows.ts prunes one silent for two weeks). */
@@ -31,6 +34,16 @@ export function repoFlowsReport(root: string, remote: string | null): RepoFlowsR
     // A graph that does not parse has nothing to draw.
     try { snap = flowSnapshot(f.replace(/\.cast$/, ""), src, "repo", file); } catch { continue; }
     if (!snap.nodes.length) continue;
+    flows.push({ slug: snap.slug, name: snap.name, kind: snap.kind, label: snap.label, description: snap.description, takes: snap.takes, nodes: snap.nodes as RepoFlow["nodes"], edges: snap.edges });
+  }
+  // A shipped flow whose start this checkout decides another way (its ship mode) runs here as that path alone: the
+  // picker shows it so, under the library's own name (web flowPool namedForRepo).
+  const facts = startFacts(root);
+  for (const [slug, src] of Object.entries(BUILTIN_WORKFLOW_TEMPLATES)) {
+    if (flows.some((f) => f.slug === slug) || !joinsPool(slug, src)) continue;
+    const graph = parseWorkflowSource(src);
+    if (decideStart(graph, facts) === graph) continue;
+    const snap = flowSnapshot(slug, src, "repo", null, facts);
     flows.push({ slug: snap.slug, name: snap.name, kind: snap.kind, label: snap.label, description: snap.description, takes: snap.takes, nodes: snap.nodes as RepoFlow["nodes"], edges: snap.edges });
   }
   const hash = createHash("sha256").update(JSON.stringify({ root, repository, flows })).digest("hex").slice(0, 16);

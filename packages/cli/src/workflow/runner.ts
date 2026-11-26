@@ -11,6 +11,7 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
+import { decideStart, startFacts } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
@@ -2194,6 +2195,9 @@ export type WorkflowRunOutcome = "completed" | "failed" | "invalid";
 
 export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<WorkflowRunOutcome> {
   const cwd = options.cwd || process.cwd();
+  // What the checkout says before anything runs (its ship mode): a start it decides runs, and shows, only its own path.
+  const facts = startFacts(cwd);
+  graph = decideStart(graph, facts);
 
   if (options.goalOverride) {
     graph.goal = options.goalOverride;
@@ -2212,6 +2216,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
 
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
+  Object.assign(initialContext, facts);
   initialContext["default_branch"] = detectDefaultBranch(cwd);
   // Where a reviewer's diff starts ($diff_base...$branch): the default branch as the remote has it (a local one can
   // lag), unless the run's change says where it was cut.

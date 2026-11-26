@@ -22502,7 +22502,9 @@ workflow
       post: (route, body) => cliPost(route, body, { throwOnError: true }), task: taskRef ?? undefined, pulseIds: [callingSession(), detectCurrentSessionId()], where: groupDeps().flow.directoryWorkspace });
     if (personalRefused) { console.error(`✗ ${personalRefused}`); process.exit(1); }
     const source = resolved.source;
-    const graph = parseWorkflowSource(source, resolved.dir);
+    // The checkout decides its start before the push, so the run's card draws the path it takes (startFacts.ts).
+    const { decideStart, startFacts } = await import("./workflow/startFacts.js");
+    const graph = decideStart(parseWorkflowSource(source, resolved.dir), startFacts(process.cwd()));
     // A role running the line (org-roles-standing.md T4, the-line.md L3):
     // the review station takes the role's own review backend, and the run is
     // A role whose switch is off starts nothing.

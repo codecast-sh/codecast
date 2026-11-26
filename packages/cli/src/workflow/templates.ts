@@ -44,6 +44,7 @@ import climbPromoteLine from "./templates/climb/promote_line.md" with { type: "t
 import climbRecord from "./templates/climb/record.sh" with { type: "text" };
 import changeReview from "./templates/change/review.md" with { type: "text" };
 import changeBrief from "./templates/change/brief.md" with { type: "text" };
+import changeDirectFix from "./templates/change/direct_fix.md" with { type: "text" };
 import changeConflict from "./templates/change/conflict.md" with { type: "text" };
 import changeCiConflict from "./templates/change/ci_conflict.md" with { type: "text" };
 import personalCast from "./templates/personal.cast" with { type: "text" };
@@ -94,6 +95,7 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   // The change flow's reviewer, and what it sends back to the session a change came from (flows.md FL4).
   "change/review.md": changeReview,
   "change/brief.md": changeBrief,
+  "change/direct_fix.md": changeDirectFix,
   "change/conflict.md": changeConflict,
   "change/ci_conflict.md": changeCiConflict,
   // The personal workspace's Ship (personal.cast): its stations and what it sends back to the session.
