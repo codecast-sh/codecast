@@ -127,7 +127,18 @@ export function paintStatus(rows: PriorityRow[], shortId: string, status: "activ
 }
 
 /** The rows a write paints: the list's, and the detail rows (lib/priorityDetail) a page or a reference opened. */
-export type PaintState = { priorities: Record<string, PriorityRow>; priorityDetails?: Record<string, PriorityDetailRow> };
+/** The inbox's conversation rows, by _id: each carries its own priority link (store/priorityOrder sessionPriorityOf). */
+type ConversationLinks = Record<string, { priority_id?: string | null; priority_step_key?: string | null } | undefined>;
+
+export type PaintState = { priorities: Record<string, PriorityRow>; priorityDetails?: Record<string, PriorityDetailRow>; sessions?: ConversationLinks };
+
+/** A session's own link, painted with the write that moves it, so the inbox's ranks and order follow at once. */
+function relink(s: PaintState, conversationId: string | undefined, priorityId: string | null, stepKey: string | null) {
+  const conv = conversationId ? s.sessions?.[conversationId] : undefined;
+  if (!conv) return;
+  conv.priority_id = priorityId;
+  conv.priority_step_key = stepKey;
+}
 
 const detailOf = (s: PaintState, shortId: string) => Object.values(s.priorityDetails ?? {}).find((d) => d.short_id === shortId);
 
@@ -196,6 +207,11 @@ export function paintMerge(s: PaintState, from: PriorityRow, into: PriorityRow):
   if (into.links) into.links = [...into.links, ...linksOf(s, from).map((l) => ({ ...l, key: remap.get(l.key) ?? l.key }))];
   into.sessions = [...from.sessions.map((x) => ({ ...x, step_key: x.step_key ? remap.get(x.step_key) ?? null : null })), ...into.sessions];
   into.session_count += from.session_count;
+  for (const conv of Object.values(s.sessions ?? {})) {
+    if (conv?.priority_id !== from._id) continue;
+    conv.priority_id = into._id;
+    conv.priority_step_key = conv.priority_step_key ? remap.get(conv.priority_step_key) ?? null : null;
+  }
   from.status = "merged";
   from.status_set_by = "person";
   from.person_pos = null;
@@ -229,11 +245,13 @@ export function paintSessionMove(s: PaintState, session: string, from: PriorityR
   }
   const target = stepKey ? linksOf(s, to).find((l) => l.key === stepKey) : undefined;
   if (target && linked) target.sessions = [{ ...linked, why: ["mapped"] }, ...target.sessions];
+  relink(s, linked?.conversation_id, to._id, stepKey);
 }
 
 /** "Not this priority": the session leaves it, and the pass never maps it there again. */
 export function paintSessionNotThis(s: PaintState, session: string, from: PriorityRow): void {
-  takeSession(s, from, session, false);
+  const { linked } = takeSession(s, from, session, false);
+  relink(s, linked?.conversation_id, null, null);
 }
 
 /** A correction the person wrote: the row reads "correction pending" until a pass reads it, and the page lists it. */

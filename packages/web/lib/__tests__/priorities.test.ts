@@ -4,11 +4,13 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMove, paintStatus, paintTier, pastBadge, prioritySig, withLiveRanks, writeOrRestore,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMerge, paintMove, paintSessionMove, paintSessionNotThis, paintStatus, paintTier, pastBadge, prioritySig,
+  withLiveRanks, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
 import { buildModels, distinctFrom, lastDays } from "../priorityList";
+import { priorityPlaceReader } from "../../store/priorityOrder";
 
 describe("distinctFrom: a session's part of \"milestone · session\"", () => {
   const M = "Calibrate goal finding and session mapping";
@@ -94,6 +96,41 @@ describe("ownerGroups", () => {
     expect(ids(groups[0].active)).toEqual(["pri-1", "pri-3"]);
     expect(ids(groups[0].past)).toEqual(["pri-8", "pri-7", "pri-9"]);
     expect(ids(groups[1].active)).toEqual(["pri-5"]);
+  });
+});
+
+describe("a session's move, \"not this\" and a merge relink its inbox row at once", () => {
+  // The links name each session's conversation; the inbox reads the conversation's own priority_id and step.
+  const linked = (key: string, conv: string) => ({ key, sessions: [{ short_id: `jx7${conv}`, conversation_id: conv, title: conv, state: "dormant", mine: true, workflow: false, why: ["mapped"], last_active_at: 0 }], sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false });
+  const world = () => {
+    const one = row("pri-1", { ai_rank: 1, steps: [step("s1", "critical"), step("s2", "critical")], links: [linked("s1", "c-one") as any, { ...linked("s2", "x"), sessions: [] } as any] });
+    const two = row("pri-2", { ai_rank: 2, steps: [step("s1", "critical")], links: [linked("s1", "c-two") as any], sessions: [{ short_id: "jx7c-two", title: "c-two", step_key: "s1", updated_at: 0 }], session_count: 1 });
+    const sessions: Record<string, any> = { "c-one": { _id: "c-one", priority_id: one._id, priority_step_key: "s1" }, "c-two": { _id: "c-two", priority_id: two._id, priority_step_key: "s1" } };
+    return { one, two, s: { priorities: { [one._id]: one, [two._id]: two }, sessions } };
+  };
+  const rankOf = (w: ReturnType<typeof world>, conv: string) => priorityPlaceReader(w.s.priorities as any, "me", w.s.sessions)(w.s.sessions[conv]) as { rank: number; step: number } | null;
+
+  test("a move puts the conversation on its new priority and milestone: its inbox rank follows before the server echoes", () => {
+    const w = world();
+    expect(rankOf(w, "c-two")?.rank).toBe(2);
+    paintSessionMove(w.s as any, "jx7c-two", w.two, w.one, "s2", 0);
+    expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s2" });
+    expect(rankOf(w, "c-two")).toMatchObject({ rank: 1, step: 1 });
+  });
+
+  test("\"not this priority\" leaves the conversation on none", () => {
+    const w = world();
+    paintSessionNotThis(w.s as any, "jx7c-two", w.two);
+    expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: null, priority_step_key: null });
+    expect(rankOf(w, "c-two")).toBeNull();
+  });
+
+  test("a merge carries every conversation on the merged priority to its new milestone keys", () => {
+    const w = world();
+    paintMerge(w.s as any, w.two, w.one);
+    expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s3" });
+    expect(w.s.sessions["c-one"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s1" });
+    expect(rankOf(w, "c-two")?.rank).toBe(1);
   });
 });
 
