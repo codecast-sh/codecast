@@ -224,6 +224,8 @@ export type DeployWaitIO = {
   /** One blocker on the run's task. */
   block: (text: string) => Promise<void>;
   clock: { load: () => DeployClock | null; save: (c: DeployClock) => void };
+  /** Between polls while no deploy the run sent is out: may move the wait onto a newer installed CLI (stationReexec.ts). */
+  between?: (clock: DeployClock) => Promise<void>;
 };
 
 export type DeployWaitResult = { code: 0 | 1 | 3 | 5; line: string };
@@ -395,6 +397,8 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
     if (next !== line) io.progress((line = next));
     if (input.once) return { code: 3, line };
     await io.sleep(input.intervalMs);
+    // What the run sent lives in this process (its release and how it ended), so a run that sent a deploy stays on this CLI.
+    if (!sent.size) await io.between?.(clock);
   }
 }
 
@@ -440,6 +444,10 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
   const repository = checkoutRepository(cwd);
   const { resolveCastInvocation } = await import("../castInvocation.js");
   const castCmd = resolveCastInvocation();
+  const { stationCli } = await import("./stationReexec.js");
+  const cli = stationCli();
+  // The clock a run on an older CLI handed over: without a merge file there is no clock file to read it back from.
+  const handed = cli.resumed<DeployClock>();
 
   const io: DeployWaitIO = {
     now: () => Date.now(),
@@ -477,9 +485,10 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     },
     block: async (text) => { if (opts.task) await env.cast(["task", "comment", opts.task, text, "-t", "blocker"]); },
     clock: {
-      load: () => { try { return clockFile ? JSON.parse(fs.readFileSync(clockFile, "utf-8")) : null; } catch { return null; } },
+      load: () => { if (handed) return handed; try { return clockFile ? JSON.parse(fs.readFileSync(clockFile, "utf-8")) : null; } catch { return null; } },
       save: (c) => { if (clockFile) fs.writeFileSync(clockFile, `${JSON.stringify(c)}\n`); },
     },
+    between: (c) => cli.between(c),
   };
   const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once }, io);
   console.log(result.line);

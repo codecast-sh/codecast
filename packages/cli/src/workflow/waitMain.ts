@@ -4,6 +4,7 @@
 // change onto it and runs CI once more. It reads the default branch's CI with
 // `gh run list`, so it works for any repository on GitHub Actions.
 import { defaultExec, type Exec } from "../lineMerge.js";
+import { stationCli, type StationCli } from "./stationReexec.js";
 
 type Run = { databaseId: number; workflowName?: string; headSha: string; status: string; conclusion: string | null };
 
@@ -54,12 +55,16 @@ export async function waitForMain(args: {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   say?: (line: string) => void;
+  /** Moves the wait onto a newer installed CLI between polls (stationReexec.ts). */
+  cli?: StationCli;
 }): Promise<{ ok: boolean; line: string }> {
   const exec = args.exec ?? defaultExec;
   const now = args.now ?? Date.now;
   const sleep = args.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const start = now();
-  let redSince = "";
+  const cli = args.cli ?? stationCli();
+  const back = cli.resumed<{ start: number; redSince: string }>();
+  const start = back?.start ?? now();
+  let redSince = back?.redSince ?? "";
   let last: ReturnType<typeof mainCi> | null = null;
   for (;;) {
     last = mainCi(exec, args.cwd, args.base);
@@ -71,6 +76,7 @@ export async function waitForMain(args: {
       ? `Waiting for main CI to go green (${last.reason}; ${spoken(waited)} of ${spoken(args.deadlineMs)})`
       : `Waiting for main CI to go green (${redSince ? `red since ${short(redSince)}` : `running at ${short(last.head)}`}; ${spoken(waited)} of ${spoken(args.deadlineMs)})`);
     await sleep(args.intervalMs);
+    await cli.between({ start, redSince });
   }
   if ("reason" in last) return { ok: false, line: `Main CI never read green in ${spoken(args.deadlineMs)}: ${last.reason}.` };
   const jobs = last.failed.length ? redJobs(exec, args.cwd, last.failed) : [];

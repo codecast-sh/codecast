@@ -358,6 +358,20 @@ describe("awaitDeploy", () => {
     expect((await awaitDeploy({ sha: SHA, base: "main", plan: cliOnly, intervalMs: MIN }, other.io)).code).toBe(0);
   });
 
+  // A newer CLI takes the wait over between polls (stationReexec.ts), handed the clock, but never one with a deploy out.
+  test("between polls the wait may move to a newer CLI with its clock, until it has sent a deploy", async () => {
+    const handed: DeployClock[] = [];
+    const between = async (c: DeployClock) => { handed.push(structuredClone(c)); };
+    const press = fake((tick) => [{ name: "desktop", history: tick >= 3 ? [dp("dp-6", "live")] : [] }], { between });
+    expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["desktop/f.ts"], { held }), intervalMs: MIN }, press.io)).code).toBe(0);
+    expect(handed).toEqual([0, 1, 2].map(() => ({ sha: SHA, start: 0, since: { desktop: 0 } })));
+    handed.length = 0;
+    const sends = fake((tick) => [{ name: "cli", history: tick >= 1 ? [dp("dp-3", tick >= 3 ? "live" : "running")] : [] }], { between });
+    expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, sends.io)).code).toBe(0);
+    expect(sends.sends).toHaveLength(1);
+    expect(handed).toEqual([]);
+  });
+
   test("an after target someone else sends holds its dependent unsent until it is live with the commit", async () => {
     // backend goes out on a press here: mobile waits for it, and the run never sends backend itself.
     const pressed = parseDeployTargets({ target: [

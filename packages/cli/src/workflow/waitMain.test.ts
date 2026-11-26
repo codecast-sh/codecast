@@ -50,6 +50,19 @@ describe("waitForMain", () => {
     expect(r).toEqual({ ok: false, line: "Main CI stayed red for 4h (red since dddddddddd), at dddddddddd: CI: test-cli, CI: typecheck." });
   });
 
+  // A newer CLI takes the wait over between polls (stationReexec.ts): it hands over where the wait began and the red head.
+  test("between polls it hands its place to a newer CLI, and a wait resumed from one keeps its deadline", async () => {
+    const handed: unknown[] = [];
+    const repo = fakeRepo([RED("eeeeeeeeeeee"), GREEN("ffffffffffff")]);
+    await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...repo, cli: { resumed: () => null, between: async (p) => { handed.push(p); } } });
+    expect(handed).toEqual([{ start: 0, redSince: "eeeeeeeeeeee" }]);
+    const resumed = fakeRepo([RED("eeeeeeeeeeee")]);
+    const r = await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 600_000, ...resumed, cli: { resumed: <T,>() => ({ start: -3000_000, redSince: "dddddddddddd" }) as T, between: async () => {} } });
+    // 50 of its 60 minutes were spent on the older CLI: one more 10-minute wait, and red since the head it saw there.
+    expect(r.line).toBe("Main CI stayed red for 1h (red since dddddddddd), at eeeeeeeeee: CI.");
+    expect(resumed.now()).toBe(600_000);
+  });
+
   test("spoken durations", () => {
     expect([spoken(40_000), spoken(23 * 60_000), spoken(65 * 60_000), spoken(4 * 3600_000)]).toEqual(["40s", "23m", "1h 5m", "4h"]);
   });
