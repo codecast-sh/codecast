@@ -294,7 +294,8 @@ it locally: what the branch here holds over the newest commit under it that
 origin is known to have held, and that origin's tip does not hold now. Origin
 held its tip at the last freeze (`remote_tip`), what the run's own stations
 pushed (`pr.json`'s heads and rebases, `rebase.json`'s chain), what this
-checkout fetched since (the remote-tracking branch's reflog), and its tip now.
+checkout fetched since that freeze (the remote-tracking branch's reflog after
+`change.json`'s `frozen_at`; none without one), and its tip now.
 Nothing origin held is replayed, so a commit a force-push or a rewind took off
 origin stays off, and a commit origin already has is not applied twice. A
 branch here that sits on none of those while origin moved (rebased onto newer

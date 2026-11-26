@@ -563,13 +563,14 @@ function pushedHeads(runDir: string, branch: string): string[] {
  * machine, its commit reaching this checkout only through origin. Origin's tip is the change's, with the run's own
  * unpushed work replayed onto it here: what the branch here holds over the newest commit under it that origin is
  * known to have held (`from`), and that origin's tip does not hold now. Origin held: its tip at the last freeze
- * (`remote_tip`), what the run's own stations pushed (pushedHeads), what this checkout fetched since (the
- * remote-tracking branch's reflog), and its tip now. Nothing origin held is replayed, so a commit a force-push or a
- * rewind took off origin stays off, and a commit origin already has is not applied twice. A branch here that sits on
- * none of those, while origin moved off its tip at the last freeze, was rebased: the run cannot tell its own commits
- * from origin's, and refuses. With nothing recorded at all, origin held nothing of the branch, and all the branch here
- * adds over their common commit is the run's own. Nothing is pushed: the PR station pushes the branch. A worktree
- * rewritten off the last freeze is the change as it stands. A conflict refuses, and nothing moves.
+ * (`remote_tip`), what the run's own stations pushed (pushedHeads), what this checkout fetched since that freeze
+ * (the remote-tracking branch's reflog after `frozen_at`), and its tip now. Nothing origin held is replayed, so a
+ * commit a force-push or a rewind took off origin stays off, and a commit origin already has is not applied twice. A
+ * branch here that sits on none of those, while origin moved off its tip at the last freeze, was rebased: the run
+ * cannot tell its own commits from origin's, and refuses. With nothing recorded at all, origin held nothing of the
+ * branch, and all the branch here adds over their common commit is the run's own. Nothing is pushed: the PR station
+ * pushes the branch. A worktree rewritten off the last freeze is the change as it stands. A conflict refuses, and
+ * nothing moves.
  */
 async function branchCarry(root: string, runDir: string, before: FrozenChange, head: string, top: string): Promise<{ tip: string; remote_tip?: string }> {
   const remote = await originTip(root, before.branch);
@@ -577,14 +578,13 @@ async function branchCarry(root: string, runDir: string, before: FrozenChange, h
   const seen = { remote_tip: remote };
   if (!(await isAncestor(root, before.tip, head))) return { tip: top, ...seen };
   const recorded = [...new Set([...(before.remote_tip ? [before.remote_tip] : []), ...pushedHeads(runDir, before.branch)])];
-  // A fetch since the last freeze counts once it builds on what was recorded: an older entry is no news.
-  const fetched = ((await gitTry(root, ["reflog", "show", "-n", "50", "--format=%H", `refs/remotes/origin/${before.branch}`])) ?? "").split("\n").filter(Boolean);
-  const news: string[] = [];
-  for (const f of new Set(fetched)) {
-    let builds = !recorded.length;
-    for (const r of recorded) if (!builds && (await isAncestor(root, r, f))) builds = true;
-    if (builds) news.push(f);
-  }
+  // What this checkout fetched since the last freeze; with no time recorded for it, nothing counts.
+  const since = before.frozen_at ? Math.floor(before.frozen_at / 1000) : Infinity;
+  const fetched = ((await gitTry(root, ["reflog", "show", "-n", "50", "--date=unix", "--format=%H %gd", `refs/remotes/origin/${before.branch}`])) ?? "").split("\n");
+  const news = fetched.flatMap((l) => {
+    const at = Number(/@\{(\d+)\}/.exec(l)?.[1]);
+    return at >= since ? [l.slice(0, l.indexOf(" "))] : [];
+  });
   const candidates = [...new Set([remote, ...recorded, ...news, ...((await isAncestor(root, before.tip, remote)) ? [before.tip] : [])])];
   let from: string | null = null;
   let nearest = Infinity;

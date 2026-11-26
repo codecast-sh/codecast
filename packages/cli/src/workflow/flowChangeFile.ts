@@ -27,6 +27,8 @@ export type FrozenChange = {
   frozen_tip?: string;
   /** The files that carry changes over `frozen_tip`. Kept apart from `paths`, which a checkout's refreeze reads from the shared checkout. */
   carried?: string[];
+  /** When the change was last frozen (ms; writeFrozenChange stamps it): what this checkout fetched of the branch after it is news. */
+  frozen_at?: number;
   /**
    * Set when the change could not be replayed onto upstream, so it stays on HEAD, behind that upstream commit: it
    * `conflict`s there in `conflicts`, or the checkout's history is `unreplayable` (a merge commit). `reason` says it whole.
@@ -80,15 +82,16 @@ export function branchChangePaths(top: string, branch: string): string[] {
 }
 
 /**
- * Leave the change where the run's stations read it: `$run_dir/change.json`. A change written afresh (a run's start,
- * or a refreeze that took the session's edits) ends any brief's record of the worktree: a run directory is reused by
- * the next run of the same flow and task, and a record from a stopped attempt would carry its stations' output.
+ * Leave the change where the run's stations read it: `$run_dir/change.json`, stamped with when (`frozen_at`). A
+ * change written afresh (a run's start, or a refreeze that took the session's edits) ends any brief's record of the
+ * worktree: a run directory is reused by the next run of the same flow and task, and a record from a stopped attempt
+ * would carry its stations' output.
  */
 export function writeFrozenChange(runDir: string, change: FrozenChange): string {
   fs.mkdirSync(runDir, { recursive: true });
   const file = path.join(runDir, CHANGE_FILE);
   fs.rmSync(path.join(runDir, BRIEF_TREE), { force: true });
-  fs.writeFileSync(file, JSON.stringify(change, null, 2) + "\n");
+  fs.writeFileSync(file, JSON.stringify({ ...change, frozen_at: Date.now() }, null, 2) + "\n");
   return file;
 }
 
