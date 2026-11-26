@@ -144,6 +144,37 @@ describe("changeVerdicts", () => {
     expect(JSON.stringify(v).length).toBeLessThan(20_000);
   });
 
+  test("a ship the PR station carried stands with no fresh pin, only while the server holds it on the head CI judged", () => {
+    const carried = { ...PR, reviewed: { verdict: "ship", head_sha: "abc" } };
+    const proof = { review: { verdict: "ship", head_sha: "abc" }, rebases: [] };
+    const d = dir({ "pr.json": carried, "ci.json": GREEN });
+    // The earlier round's pin is what the fan-out kept: not this round's, so the carried ship stands.
+    expect(changeVerdicts(d, pin({ verdict: "ship", round: "r1" }), null, proof)).toMatchObject({ next: "merge", review: "ship", review_result: { reused: true } });
+    expect(read(d, "review.json")).toEqual({ verdict: "ship", findings: [], head_sha: "abc", reused: true });
+    // A pr.json edited to carry a ship the server does not hold, or holds for another head, asks a reviewer.
+    for (const held of [null, { review: null }, { review: { verdict: "changes", head_sha: "abc" } }, { review: { verdict: "ship", head_sha: "old" } }]) {
+      expect(changeVerdicts(dir({ "pr.json": carried, "ci.json": GREEN }), undefined, null, held).next).toBe("rerun_review");
+    }
+    expect(changeVerdicts(dir({ "pr.json": { ...PR, reviewed: { verdict: "ship", head_sha: "old" } }, "ci.json": GREEN }), undefined, null, { review: { verdict: "ship", head_sha: "old" } }).next).toBe("rerun_review");
+    // A fresh pin of this round comes first, whatever was carried.
+    expect(changeVerdicts(dir({ "pr.json": carried, "ci.json": GREEN }), pin({ verdict: "changes", findings: ["x"] }), null, proof)).toMatchObject({ next: "brief", review: "changes", fix: true });
+  });
+
+  test("only a brief that asks for a code change is a fix: CI red on the change, or this round's reviewer asking for changes", () => {
+    const changes = pin({ verdict: "changes", findings: ["high a.ts:1 wrong"] });
+    expect(verdicts({ "ci.json": RED }).fix).toBe(true);
+    expect(verdicts({ "ci.json": GREEN }, changes).fix).toBe(true);
+    // Red with no failure named fails closed: it counts.
+    expect(verdicts({ "ci.json": { ...GREEN, green: false } })).toMatchObject({ next: "brief", fix: true });
+    // A review that never came, with CI green, does not.
+    expect(verdicts({ "ci.json": GREEN }, null)).toMatchObject({ next: "rerun_review", fix: false });
+    expect(changeVerdicts(dir({ "pr.json": { ...PR, review_reruns: 1 }, "ci.json": GREEN }), undefined)).toMatchObject({ next: "brief", fix: false });
+    // CI red only with main's failures counts only for the reviewer's changes beside it.
+    expect(verdicts({ "ci.json": { ...GREEN, green: false, blocked_by_main: true, preexisting: [FAILURE] } }, changes)).toMatchObject({ next: "brief", fix: true });
+    // Never a fix where the run does not go to the session.
+    expect(verdicts({ "ci.json": GREEN }).fix).toBe(false);
+  });
+
   test("this round's rejection ends with the reviewer's reasons; an old round's does not", () => {
     expect(verdicts({ "ci.json": RED }, pin({ verdict: "rejected", findings: ["blocker x.ts:2 not wanted"] }))).toMatchObject({ next: "rejected", why: "blocker x.ts:2 not wanted" });
     expect(verdicts({ "ci.json": GREEN }, pin({ verdict: "rejected", round: "r1" })).next).toBe("rerun_review");

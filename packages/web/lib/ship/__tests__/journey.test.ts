@@ -174,6 +174,22 @@ describe("the fan-out and its verdicts", () => {
     const ciOnly = journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "CI red" }, node_statuses: [...ROUND, verdicts("brief", "red", "ship"), st("brief", "running", 20)] }));
     expect(ciOnly.stages[1].branches!.map((b) => b.state)).toEqual(["back", "done"]);
   });
+  test("the round the card shows is the one the cap counts: a brief that asks for no code change leaves it where it was", () => {
+    // The runner reports Fix findings' visits without the free ones (change.cast free_visit), as the cap counts them.
+    const at = (visits: number) => journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "no verdict" }, node_statuses: [...ROUND, verdicts("brief", "green", "missing"), st("brief", "running", 20, { visits })] })).now;
+    expect(at(0)).toMatchObject({ kind: "session", round: null, max: 3 });
+    expect(at(1)).toMatchObject({ kind: "session", round: 1, max: 3 });
+  });
+  test("a round that kept the reviewer's ship shows Review passed while CI runs, not a reviewer yet to start", () => {
+    // Round 1 reviewed and went back; round 2's PR carried the ship (pr.json `reviewed`), so only CI runs.
+    const kept = '{"url":"u","number":12,"head_sha":"abc1234","branch":"feat","round":"r2","reviewed":{"verdict":"ship","head_sha":"abc1234"}}';
+    const round2 = [st("pr", "completed", 30, { visits: 2, result_preview: kept }), st("checks", "running", 31), st("ci", "running", 31, { result_preview: CI_LAST }), st("review", "completed", 10), st("joined", "completed", 12), verdicts("brief", "red", "ship")];
+    const j = journeyOf(change, run({ current_node_id: "checks", node_statuses: round2 }));
+    expect(j.stages[1].branches!.map((b) => [b.label, b.state])).toEqual([["CI", "active"], ["Review", "done"]]);
+    // Without the carried ship the same statuses read as a review not yet run this round.
+    const fresh = round2.map((n) => (n.node_id === "pr" ? { ...n, result_preview: kept.replace(/,"reviewed".*\}$/, "}") } : n));
+    expect(journeyOf(change, run({ current_node_id: "checks", node_statuses: fresh })).stages[1].branches![1].state).toBe("idle");
+  });
   test("a CI held by main's red waits for main, and the run reads as its wait", () => {
     const j = journeyOf(change, run({ current_node_id: "wait_main", node_statuses: [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "running", 22, { visits: 1, result_preview: "Main CI is red at 9f8e7d6 (red since 1a2b3c4): test-web; looking again in 60s" })] }));
     expect(j.stages[1].branches!.map((b) => [b.label, b.state])).toEqual([["CI", "waiting"], ["Review", "done"]]);

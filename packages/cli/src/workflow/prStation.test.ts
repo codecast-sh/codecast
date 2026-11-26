@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { defaultExec, type Exec } from "../lineMerge";
 import { writeFrozenChange } from "./flowChangeFile";
-import { prStation, rebasePr, refreshPr } from "./prStation";
+import { prStation, rebasePr, refreshPr, standingReview, type MergeProof, type PrStationResult } from "./prStation";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 let sandbox = "";
@@ -150,6 +150,37 @@ describe("cast flow pr", () => {
     expect(prStation({ cwd: w.work, dir: w.dir, branch: "feat", base: "main", title: "T", exec: failing })).toEqual({ ok: false, reason: "gh pr create failed: GraphQL: something went wrong" });
     expect(fs.existsSync(path.join(w.dir, "pr.json"))).toBe(false);
   }, 60_000);
+
+  test("a round on the head the server holds the reviewer's ship for carries it; any file, a changes, a new attempt or a new commit does not", () => {
+    const w = world();
+    const branch = "codecast/change-ct-1";
+    const first = w.freeze(branch, "one\n");
+    writeFrozenChange(w.dir, { source: "session", session: "jx7aaaa", base: "x", tip: first, branch, worktree: "change-ct-1", paths: ["a.txt"], shared: [], held: [], title: "Say one" });
+    const pr = (proof?: MergeProof | null) => prStation({ cwd: w.work, dir: w.dir, branch, base: "main", exec: w.exec, proof }) as Extract<PrStationResult, { ok: true }>;
+    expect(pr().ok).toBe(true);
+    // The session changed nothing: the same head goes up, and the ship the server recorded on it stands.
+    expect(pr({ review: { verdict: "ship", head_sha: first }, rebases: [] }).pr).toMatchObject({ head_sha: first, reviewed: { verdict: "ship", head_sha: first } });
+    // review.json saying ship counts for nothing: only the server's record is carried.
+    fs.writeFileSync(path.join(w.dir, "review.json"), JSON.stringify({ verdict: "ship", findings: [], round: "r1", head_sha: first }));
+    expect(pr(null).pr.reviewed).toBeUndefined();
+    // A changes verdict goes to a fresh reviewer; a new attempt (resume) holds no review the server counts.
+    expect(pr({ review: { verdict: "changes", head_sha: first }, rebases: [] }).pr.reviewed).toBeUndefined();
+    expect(pr({ review: null, rebases: [] }).pr.reviewed).toBeUndefined();
+    const second = w.freeze(branch, "two\n");
+    const moved = pr({ review: { verdict: "ship", head_sha: first }, rebases: [] }).pr;
+    expect(moved.head_sha).toBe(second);
+    expect(moved.reviewed).toBeUndefined();
+  }, 60_000);
+
+  test("a ship stands for a head the run's recorded station rebases made from the one it read, carrying that chain, and no other", () => {
+    const proof = { review: { verdict: "ship", head_sha: "abc" }, rebases: [{ from: "abc", to: "r1b" }, { from: "r1b", to: "r2b" }] };
+    expect(standingReview(proof, "r2b")).toEqual({ reviewed: { verdict: "ship", head_sha: "abc" }, rebases: [{ from: "abc", to: "r1b" }, { from: "r1b", to: "r2b" }] });
+    expect(standingReview(proof, "abc")).toEqual({ reviewed: { verdict: "ship", head_sha: "abc" } });
+    expect(standingReview(proof, "pushed")).toBeNull();
+    expect(standingReview({ ...proof, rebases: [] }, "r1b")).toBeNull();
+    expect(standingReview({ review: { verdict: "rejected", head_sha: "abc" } }, "abc")).toBeNull();
+    expect(standingReview(null, "abc")).toBeNull();
+  });
 
   test("each round starts with no verdict files from the last one", () => {
     const w = world();

@@ -39,21 +39,26 @@ case "$1 $2" in
       --refresh)
         bun -e 'import { refreshPr } from "${prStation}"; const fs = require("fs"); const [dir, st] = process.argv.slice(1); const origin = fs.readFileSync(st + "/origin-head", "utf-8").trim(); const r = refreshPr({ cwd: ".", dir, exec: () => ({ status: 0, stdout: origin + "\\trefs/heads/feat\\n", stderr: "" }) }); console.log(r.ok ? JSON.stringify(r.pr) : r.reason); process.exit(r.ok ? 0 : r.new_round ? 4 : 1)' "$dir" "$FAKE_STATE"; exit $? ;;
       --rebase)
-        bun -e 'import { recordRebase } from "${rebaseRecord}"; const fs = require("fs"); const [dir, st] = process.argv.slice(1); const pr = JSON.parse(fs.readFileSync(dir + "/pr.json", "utf-8")); const origin = fs.readFileSync(st + "/origin-head", "utf-8").trim(); if (origin !== pr.head_sha) { console.log("origin moved: a new round"); process.exit(4); } const to = "onmain" + Math.random().toString(36).slice(2, 8); for (const f of ["ci.json", "merge.json"]) fs.rmSync(dir + "/" + f, { force: true }); fs.writeFileSync(st + "/origin-head", to); await recordRebase({ post: async () => ({}), runId: "run-9", runDir: dir, from: pr.head_sha, to }); const next = { ...pr, head_sha: to, rebases: [...(pr.rebases ?? []), { from: pr.head_sha, to }] }; fs.writeFileSync(dir + "/pr.json", JSON.stringify(next)); console.log(JSON.stringify(next))' "$dir" "$FAKE_STATE"; exit $? ;;
+        bun -e 'import { recordRebase } from "${rebaseRecord}"; const fs = require("fs"); const [dir, st] = process.argv.slice(1); const pr = JSON.parse(fs.readFileSync(dir + "/pr.json", "utf-8")); const origin = fs.readFileSync(st + "/origin-head", "utf-8").trim(); if (origin !== pr.head_sha) { console.log("origin moved: a new round"); process.exit(4); } const to = "onmain" + Math.random().toString(36).slice(2, 8); for (const f of ["ci.json", "merge.json"]) fs.rmSync(dir + "/" + f, { force: true }); fs.writeFileSync(st + "/origin-head", to); await recordRebase({ post: async () => ({}), runId: "run-9", runDir: dir, from: pr.head_sha, to }); const next = { ...pr, head_sha: to, rebases: [...(pr.rebases ?? []), { from: pr.head_sha, to }] }; (await import("${prStation}")).writePr(dir, next); console.log(JSON.stringify(next))' "$dir" "$FAKE_STATE"; exit $? ;;
       *)
-        rm -f "$dir/ci.json" "$dir/review.json" "$dir/merge.json" "$dir/rebase.json"
         want=--branch; branch=$(arg "$@")
         sha=$(git -C "$FAKE_ROOT" rev-parse "$branch"); n=$(wc -l < "$FAKE_STATE/calls.log" | tr -d ' ')
+        # A head someone else pushed is never overwritten: with nothing new here, the round takes origin's.
+        case "$(cat "$FAKE_STATE/origin-head" 2>/dev/null)" in stranger*|outsider) sha=$(cat "$FAKE_STATE/origin-head") ;; esac
         echo "$sha" > "$FAKE_STATE/origin-head"
-        echo "{\\"url\\": \\"https://github.com/acme/app/pull/7\\", \\"number\\": 7, \\"head_sha\\": \\"$sha\\", \\"branch\\": \\"$branch\\", \\"round\\": \\"round$n\\"}" | tee "$dir/pr.json" ;;
+        # As the real station starts a round: the ship the server holds for the head stands (standingReview), and
+        # pr.json is written as the real one writes it.
+        bun -e 'import { standingReview, writePr } from "${prStation}"; const fs = require("fs"); const [dir, sha, branch, round, st] = process.argv.slice(1); let proof = null; try { proof = JSON.parse(fs.readFileSync(st + "/proof.json", "utf-8")); } catch {} for (const f of ["ci.json", "review.json", "merge.json", "rebase.json"]) fs.rmSync(dir + "/" + f, { force: true }); const pr = writePr(dir, { url: "https://github.com/acme/app/pull/7", number: 7, head_sha: sha, branch, round, ...standingReview(proof, sha) }); console.log(JSON.stringify(pr))' "$dir" "$sha" "$branch" "round$n" "$FAKE_STATE"; exit $? ;;
     esac ;;
   "flow ci")
+    # The head to judge as the real command takes it: --head as written, or with --pushed pr.json's on disk.
     want=--head; h=$(arg "$@")
+    case " $* " in *" --pushed "*) [ -n "$h" ] || h=$(bun -e 'import { readPr } from "${prStation}"; console.log(readPr(process.argv[1])?.head_sha ?? "")' "$dir") ;; esac
     line=$(pop ci)
     if [ "$line" = '"pushed"' ]; then
       # Someone pushes while CI waits for the round's head: it never comes, and the station times out on it.
-      echo stranger > "$FAKE_STATE/origin-head"
-      echo '{"green":false,"head_sha":null,"timed_out":true,"pending":[],"failing":[{"job":"ci-station","test":null,"assertion":null,"file":null,"line":null,"excerpt":"CI did not finish within 60m: waiting on the head to be '"$h"' (it is stranger)."}]}' > "$dir/ci.json"
+      s="stranger$(wc -l < "$FAKE_STATE/calls.log" | tr -d ' ')"; echo "$s" > "$FAKE_STATE/origin-head"
+      echo '{"green":false,"head_sha":null,"timed_out":true,"pending":[],"failing":[{"job":"ci-station","test":null,"assertion":null,"file":null,"line":null,"excerpt":"CI did not finish within 60m: waiting on the head to be '"$h"' (it is '"$s"')."}]}' > "$dir/ci.json"
     else
       printf '%s\\n' "$line" | sed "s/@HEAD@/$h/" > "$dir/ci.json"
     fi
@@ -61,7 +66,7 @@ case "$1 $2" in
   "flow verdicts")
     [ -e "$FAKE_STATE/verdicts-crash" ] && { echo "TypeError: cannot read the round" >&2; exit 1; }
     want=--review; review=$(arg "$@")
-    bun -e 'import { changeVerdicts } from "${verdicts}"; const [dir, review, st] = process.argv.slice(1); console.log(JSON.stringify(changeVerdicts(dir, review, require("fs").readFileSync(st + "/origin-head", "utf-8").trim())))' "$dir" "$review" "$FAKE_STATE"; exit $? ;;
+    bun -e 'import { changeVerdicts } from "${verdicts}"; const fs = require("fs"); const [dir, review, st] = process.argv.slice(1); let proof = null; try { proof = JSON.parse(fs.readFileSync(st + "/proof.json", "utf-8")); } catch {} console.log(JSON.stringify(changeVerdicts(dir, review, fs.readFileSync(st + "/origin-head", "utf-8").trim(), proof)))' "$dir" "$review" "$FAKE_STATE"; exit $? ;;
   "flow merge")
     # As the real station clears a merge: green CI, the review saying ship, and the reviewer having read the head CI
     # tested, or one the recorded chain of station rebases leads from.
@@ -87,7 +92,7 @@ case "$1 $2" in
         to="rebased$(wc -l < "$FAKE_STATE/calls.log" | tr -d ' ')"
         bun -e 'import { recordRebase } from "${rebaseRecord}"; const fs = require("fs"); const [d, to] = process.argv.slice(1); await recordRebase({ post: async () => ({}), runId: "run-9", runDir: d, from: JSON.parse(fs.readFileSync(d + "/ci.json", "utf-8")).head_sha, to })' "$dir" "$to" || exit 2
         # Someone pushes to the branch right after Merge's rebase: origin no longer holds what Merge made.
-        if [ "$answer" = retest-pushed ]; then echo stranger; else echo "$to"; fi > "$FAKE_STATE/origin-head"
+        if [ "$answer" = retest-pushed ]; then echo outsider; else echo "$to"; fi > "$FAKE_STATE/origin-head"
         echo "main changed a.txt since CI tested; pushed feat rebased at $to to test again"; exit 3 ;;
     esac ;;
   "flow wait-main")
@@ -148,7 +153,8 @@ type Review = object | "none" | "garbage" | "stale" | "forged" | "dead";
 
 let worlds = 0;
 /** The session committed its change on branch `feat` and ran `cast flow run change --branch feat` from inside itself. */
-function world(answers: { ci: Array<object | "pushed">; review: Review[]; merge?: string[]; wait?: string[]; gate?: string | string[] }) {
+/** `fixes`: whether the session commits a fix for each brief in turn (it does, past the list); false leaves the head as it was. */
+function world(answers: { ci: Array<object | "pushed">; review: Review[]; merge?: string[]; wait?: string[]; gate?: string | string[]; fixes?: boolean[] }) {
   const root = path.join(sandbox, `repo-${++worlds}`);
   const state = path.join(sandbox, `state-${worlds}`);
   fs.mkdirSync(root);
@@ -177,7 +183,7 @@ function world(answers: { ci: Array<object | "pushed">; review: Review[]; merge?
   };
   const calls = () => fs.readFileSync(path.join(state, "calls.log"), "utf-8").trim().split("\n").filter(Boolean).map((l) => l.split(" ").slice(0, /^flow pr --re(fresh|base)/.test(l) ? 3 : 2).join(" "));
   const runDir = lineRunDir(root, runSlug(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change), { task_id: "ct-9" }, "run"));
-  return { root, runDir, commit, calls, reviews: [...answers.review], gate: answers.gate };
+  return { root, runDir, commit, calls, reviews: [...answers.review], gate: answers.gate, fixes: [...(answers.fixes ?? [])] };
 }
 
 /** A message that asks the session to work: not how the run ended, nor a gate's answer, which only inform. */
@@ -217,7 +223,12 @@ function server(w: ReturnType<typeof world>) {
       else if (review === "forged") {
         pin();
         fs.writeFileSync(path.join(w.runDir, "review.json"), JSON.stringify({ ...SHIP, round, head_sha }));
-      } else pin(JSON.stringify({ ...review, round, head_sha }));
+      } else {
+        pin(JSON.stringify({ ...review, round, head_sha }));
+        // And records it on the run (`cast flow review-verdict`): what the server holds for the attempt, merge-proof.
+        const verdict = (review as { verdict?: string }).verdict;
+        if (verdict && ["ship", "changes", "rejected"].includes(verdict)) fs.writeFileSync(path.join(process.env.FAKE_STATE!, "proof.json"), JSON.stringify({ review: { verdict, head_sha }, rebases: [] }));
+      }
       return reply({ conversation_id: id, short_id: `rev${spawned.length}` });
     }
     if (route === "/cli/inbox") {
@@ -226,7 +237,7 @@ function server(w: ReturnType<typeof world>) {
     }
     if (route === "/cli/sessions/state/get") return reply(pins.get(body.session) ?? null);
     if (route === "/cli/messages/send") {
-      if (body.to === CONV && isBrief(body.body)) w.commit();
+      if (body.to === CONV && isBrief(body.body) && w.fixes.shift() !== false) w.commit();
       messages += 3;
       return reply({ ok: true });
     }
@@ -238,6 +249,8 @@ function server(w: ReturnType<typeof world>) {
     sent,
     briefs: () => sent().filter((m) => isBrief(m.body)).map((m) => m.body as string),
     failReason: () => calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed")?.body.fail_reason as string | undefined,
+    /** The round counter the run card reads: Fix findings' visits as each entry into it reported them. */
+    briefRounds: () => calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "brief" && c.body.node_status === "running" && c.body.visits !== undefined).map((c) => c.body.visits as number),
   };
 }
 
@@ -279,7 +292,9 @@ describe("the shipped change flow", () => {
     const ciCall = fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8").split("\n").find((l) => l.startsWith("flow ci "))!;
     const pushed = JSON.parse(fs.readFileSync(path.join(w.runDir, "pr.json"), "utf-8")).head_sha;
     expect(ciCall).toContain("--run run-9 --node ci");
-    expect(ciCall).toContain(`--head ${pushed}`);
+    // It judges the head pr.json holds on disk, read as JSON (a retest moves it), and that is the head ci.json names.
+    expect(ciCall).toContain("--pushed");
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "ci.json"), "utf-8")).head_sha).toBe(pushed);
     expect(s.briefs()).toEqual([]);
     expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
   }, 120_000);
@@ -497,6 +512,52 @@ describe("the shipped change flow", () => {
     expect(s.briefs()).toHaveLength(3);
     expect(w.calls()).not.toContain("flow merge");
     expect(s.sent().at(-1).body).toContain("sent the change back 3 times");
+  }, 120_000);
+
+  test("a rerun on an unchanged head keeps the reviewer's ship: no reviewer, CI on the one pushed head, the round counter still", async () => {
+    // Red CI the session leaves as it was (it is not the change's, it says): the next round is that head again.
+    const w = world({ ci: [RED, GREEN], review: [SHIP], merge: ["merged"], fixes: [false] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(s.spawned).toHaveLength(1);
+    expect(w.calls()).toEqual(["flow pr", "flow ci", "flow verdicts", "flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
+    expect(s.briefRounds()).toEqual([1]);
+    const head = git(w.root, "rev-parse", "feat");
+    // pr.json as the real station writes it, its kept ship naming the head too; CI judged that one head.
+    const onDisk = fs.readFileSync(path.join(w.runDir, "pr.json"), "utf-8");
+    expect(onDisk).toContain('\n  "reviewed": {');
+    expect(JSON.parse(onDisk).reviewed).toEqual({ verdict: "ship", head_sha: head });
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "ci.json"), "utf-8")).head_sha).toBe(head);
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "review.json"), "utf-8"))).toEqual({ verdict: "ship", findings: [], head_sha: head, reused: true });
+  }, 120_000);
+
+  test("a kept ship goes on through a retest: CI judges the rebased head, and the same ship merges it", async () => {
+    const w = world({ ci: [RED, GREEN, GREEN], review: [SHIP], merge: ["retest", "merged"], fixes: [false] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(s.spawned).toHaveLength(1);
+    expect(count(w.calls(), "flow pr --refresh")).toBe(1);
+    expect(count(w.calls(), "flow ci")).toBe(3);
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "ci.json"), "utf-8")).head_sha).toMatch(/^rebased/);
+  }, 120_000);
+
+  test("a changes verdict on an unchanged head is never kept: a fresh reviewer reads it, and that review is a round", async () => {
+    const w = world({ ci: [GREEN, GREEN, GREEN], review: [CHANGES, CHANGES, SHIP], merge: ["merged"], fixes: [false, true] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(s.spawned).toHaveLength(3);
+    expect(s.briefs().some((b) => b.includes('"reused"'))).toBe(false);
+    expect(s.briefRounds()).toEqual([1, 2]);
+    expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "review.json"), "utf-8"))).toMatchObject({ verdict: "ship", head_sha: git(w.root, "rev-parse", "feat") });
+  }, 120_000);
+
+  test("only a brief asking for a code change spends a round: a review that never came does not", async () => {
+    // A round with no review, then three red CIs: four briefs, three of them rounds; a fourth round would stop the run.
+    const w = world({ ci: [GREEN, RED, RED, RED, GREEN], review: ["none", "none", SHIP, SHIP, SHIP, SHIP], merge: ["merged"] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(s.briefs()).toHaveLength(4);
+    expect(s.briefRounds()).toEqual([0, 1, 2, 3]);
   }, 120_000);
 
   test("with no session behind the run, the first finding stops it, saying what CI and the reviewer found", async () => {
