@@ -278,6 +278,16 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect(await stepOf(t, p, "s1")).toMatchObject({ done: true, done_at: NOW - H });
   });
 
+  test("a milestone whose PR is still open stays open when the pass judges it done", async () => {
+    const { t, ada, p1 } = await world();
+    const steps = (await t.run((ctx: any) => ctx.db.get(p1))).steps.map((s: any) => (s.key === "s2" ? { ...s, done: true, done_at: NOW } : s));
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [{ short_id: "pri-1", patch: { steps } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    expect((await stepOf(t, p1, "s2")).done).toBe(false);
+  });
+
   test("a milestone's PRs all closed unmerged: not done, even where the pass judged it done", async () => {
     const { t, p1, pr } = await world();
     await t.run(async (ctx: any) => {
