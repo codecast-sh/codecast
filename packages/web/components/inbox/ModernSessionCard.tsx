@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket, Lock, Users } from "lucide-react";
-import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden, underOwnersModel } from "@codecast/shared/contracts";
 import { shipHref } from "../../lib/ship/sessionShip";
 import { closedBackWords } from "@codecast/shared/contracts/closeKind";
 import { useWatchEffect } from "../../hooks/useWatchEffect";

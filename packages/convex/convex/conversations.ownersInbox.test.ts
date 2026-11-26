@@ -66,11 +66,15 @@ function world(flag: boolean) {
 }
 
 const ids = (rows: any[]) => rows.filter((r) => !r.is_subagent || r.owners_model).map((r) => String(r._id).replace("conversations_", "")).sort();
+// The viewer's inbox members: a child its session owns comes with that
+// session's row for its card only (owned by nobody here), never a member.
+const members = (rows: any[]) => ids(rows.filter((r) => !(r.owner_session_id && !r.owned_by_me && !r.implicit_owner)));
 
 describe("membership: the inbox is the sessions you own", () => {
   test("flag on: own, role-owned with my row, released, added-myself and a plain spawn's peer; not role-started, parent-owned or handed", async () => {
     const { sessions } = await computeInboxSessions({ db: world(true) }, ME as any, { includeLiveness: false });
-    expect(ids(sessions)).toEqual(["added_sub", "own", "peer", "released", "role_hand"]);
+    expect(members(sessions)).toEqual(["added_sub", "own", "peer", "released", "role_hand"]);
+    expect(sessions.find((s: any) => s._id === "conversations_child")).toMatchObject({ owned_by_me: false, implicit_owner: null, owner_session_id: "conversations_own" });
     expect(sessions.find((s: any) => s._id === "conversations_peer")).toMatchObject({ implicit_owner: ME, owner_session_id: null });
     const own = sessions.find((s: any) => s._id === "conversations_own");
     // A row names no owner list: the viewer's claim, and the implicit starter.
