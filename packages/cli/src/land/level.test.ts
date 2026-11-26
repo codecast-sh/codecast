@@ -92,6 +92,19 @@ describe("levelCheckout", () => {
     expect(read(shared, "y.ts")).toBe("y\n");
   });
 
+  // union-mobile sat 354 commits behind for 3 days partly on files holding an older upstream version (Nov 26).
+  test("a copy of a version upstream passed through is replaced by target's, not held as a conflict", async () => {
+    const { shared, upstream } = setup({ "j.json": "[1]\n" });
+    upstream({ "j.json": "[1,\n2]\n" }, "first");
+    upstream({ "j.json": "[0,\n1,\n2,\n3]\n" }, "second");
+    write(shared, "j.json", "[1,\n2]\n");
+    const r = await levelCheckout(shared, "origin/main");
+    expect(r.ok).toBe(true);
+    expect(r.written).toEqual(["j.json"]);
+    expect(read(shared, "j.json")).toBe("[0,\n1,\n2,\n3]\n");
+    expect(status(shared)).toBe("");
+  });
+
   // Acme's main turned two repro scripts from 755 to 644 (Nov 6). The blob was unchanged, so the level absorbed it
   // and every levelled line checkout read the files as changed.
   test("a mode-only change upstream moves the file's mode, and a local mode change stands", async () => {

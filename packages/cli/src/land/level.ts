@@ -59,17 +59,28 @@ type Action =
  * What to do with one path, given what is on disk (`w`) and the content it
  * grew from (`base`); null when only a person can say.
  */
-async function decide(root: string, entry: DiffEntry, w: string | null, base: string | null): Promise<Action | null> {
+async function decide(root: string, entry: DiffEntry, w: string | null, base: string | null, range: { from: string; to: string }): Promise<Action | null> {
   if (w === entry.dst) return { kind: "absorb", entry };
   if (w === base) return { kind: "write", entry, seen: w };
   if (!w || !base || !entry.dst || entry.dstMode === SYMLINK || entry.srcMode === SYMLINK) return null;
   let current: Buffer;
   try { current = fs.readFileSync(path.join(root, entry.path)); } catch { return null; }
   const merged = await mergeFile(root, base, current, entry.dst);
-  if (!merged) return null;
-  // The disk already holds target's change under local edits: nothing to write.
-  if (merged.equals(current)) return { kind: "keep", entry, seen: w };
-  return { kind: "merge", entry, seen: w, content: merged };
+  if (merged) {
+    // The disk already holds target's change under local edits: nothing to write.
+    if (merged.equals(current)) return { kind: "keep", entry, seen: w };
+    return { kind: "merge", entry, seen: w, content: merged };
+  }
+  // A copy of a version upstream committed on its way to target is upstream's own older work (an earlier level
+  // that raced, a session that landed elsewhere), not an edit: target's version replaces it and history keeps it.
+  if (await upstreamHadBlob(root, range, entry.path, w)) return { kind: "write", entry, seen: w };
+  return null;
+}
+
+/** Whether some commit in from..to left `file` with exactly blob `sha`. */
+async function upstreamHadBlob(root: string, range: { from: string; to: string }, file: string, sha: string): Promise<boolean> {
+  const out = await gitTry(root, ["log", "--raw", "--no-abbrev", "--no-renames", "--format=", `${range.from}..${range.to}`, "--", file]);
+  return !!out && out.split("\n").some((l) => l.split(/\s+/)[3] === sha);
 }
 
 /** `git diff-tree -r -z` between two commits, gitlinks dropped. */
@@ -205,7 +216,7 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   const actions: Action[] = [];
   const conflicts: string[] = [];
   for (const entry of entries) {
-    const a = await decide(root, entry, seen.get(entry.path) ?? null, baseOf(entry));
+    const a = await decide(root, entry, seen.get(entry.path) ?? null, baseOf(entry), { from, to });
     if (a) actions.push(a);
     else conflicts.push(entry.path);
   }
@@ -244,7 +255,7 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
     for (let attempt = 0; ; attempt++) {
       const current: string | null = (await worktreeBlobs(root, [a.entry.path])).get(a.entry.path) ?? null;
       if (current === a.seen) break;
-      const again: Action | null = attempt < 3 ? await decide(root, a.entry, current, baseOf(a.entry)) : null;
+      const again: Action | null = attempt < 3 ? await decide(root, a.entry, current, baseOf(a.entry), { from, to }) : null;
       if (!again) { raced.push(a.entry.path); gaveUp = true; a = { kind: "keep", entry: a.entry, seen: current }; break; }
       a = again;
       if (a.kind === "absorb" || a.kind === "keep") break;
