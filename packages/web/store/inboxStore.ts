@@ -354,7 +354,7 @@ import type { PendingComment } from "../lib/quoteFormat";
 import { isRecordedQuote, mirrorQuoteBatch, type QuoteDraftWire } from "../lib/quoteDraftWire";
 import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, sameInboxView, type InboxViewSnapshot } from "../lib/inboxViewHistory";
-import { sessionFocusKind, type SessionFocusKind } from "../lib/inboxRouting";
+import { isInboxRoute, sessionFocusKind, type SessionFocusKind } from "../lib/inboxRouting";
 // Team chat lives in its own slice: four delta-synced collections plus the
 // optimistic writers over them. Spread into the config below, and its state
 // shape is folded into InboxStoreState so the draft type covers it.
@@ -16394,6 +16394,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     if (!changed) return;
     this.tabs = this.tabs.map((t: AppTab) => (t.id === id ? patchedTab(t, patch) : t));
+    // The queue page marks its conversation source "inbox" so a conversation
+    // page opened straight from it still triages like the inbox. Once the
+    // active tab moves anywhere else (Activity, a task, …) that mark is stale:
+    // left in place, a conversation opened from there counted as an inbox view
+    // and Close advanced to the next queue session (ct-102149).
+    if (id === this.activeTabId && patch.path !== undefined && this.currentConversation?.source === "inbox") {
+      const pathname = patch.path.split("?")[0];
+      if (!isInboxRoute(pathname) && !pathname.startsWith("/conversation/")) {
+        this.currentConversation = { ...this.currentConversation, source: undefined };
+      }
+    }
   }),
 
   saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
