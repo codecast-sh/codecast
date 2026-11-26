@@ -1,11 +1,15 @@
 // What a person's press asks a session to do with flows (docs/architecture/flows.md FL4, FL5): the words the
 // session receives, kept beside the other flow libs so the components that send them stay components. Convex's typed-send
 // counters load this file (convex/lib/userSend.ts), so it stays free of DOM, React and web-only dependencies.
+import { CHANGE_FLOW_SLUG, PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
 
 
-/** What the session is asked: run its change through the flow, named after what the change does, and say how it ended. */
+/** What the session is asked: run its change through the flow, named after what the change does, and say how it ended.
+ *  The personal Ship is asked for as `change`: the CLI runs it there only where the directory is established as personal,
+ *  so a session the web reads as personal but whose directory a team shares still ships the team's way. */
 export function runThroughMessage(flow: { slug: string; label: string }): string {
-  return `Run your change through the ${flow.label} flow: \`cast flow run ${flow.slug} --title "<what your change does>"\`. It takes every file this session changed here, so when you changed files that are not part of this change, name the ones that are with --only (check with --dry-run). When it ends, tell me where it stopped or that it passed.`;
+  const slug = flow.slug === PERSONAL_FLOW_SLUG ? CHANGE_FLOW_SLUG : flow.slug;
+  return `Run your change through the ${flow.label} flow: \`cast flow run ${slug} --title "<what your change does>"\`. It takes every file this session changed here, so when you changed files that are not part of this change, name the ones that are with --only (check with --dry-run). When it ends, tell me where it stopped or that it passed.`;
 }
 
 /** What the session that ran a workflow is asked: make its shape a flow of the pool, its prompts free of this one task. */

@@ -9,7 +9,8 @@ import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfil
 import { useInboxStore } from "../../store/inboxStore";
 import { isCause } from "../../lib/lineFlow";
 import { lineSettingsHref } from "../../lib/lineSettings";
-import { projectLineVersions, shortDay, type LineVersion } from "../../lib/line/runReport";
+import { shortDay } from "../../lib/line/runReport";
+import { projectLineVersions, type LineVersion } from "../../lib/line/lineVersions";
 import { LineSetup } from "./LineSetup";
 import { ReportSection } from "./RunReport";
 import { LineWorkspace } from "./workspace/LineWorkspace";

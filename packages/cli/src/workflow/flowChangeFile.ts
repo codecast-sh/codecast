@@ -143,6 +143,9 @@ export function frozenChangeContext(runDir: string | undefined): Record<string, 
       // Where a reviewer's diff starts: a session's change sits on the upstream it was cut onto, which the local default branch may lag.
       ...((change.source === "session" || change.source === "checkout") && change.base ? { diff_base: change.base } : {}),
       change_return: changeReturnWords(change),
+      // A change of uncommitted edits is frozen from the edits alone, so a fix the session commits is gone from them.
+      // Only the personal flow's briefs read it ($change_keep); empty for a change on a branch.
+      ...(change.source === "session" || change.source === "checkout" ? { change_keep: "Leave the fix as uncommitted edits in this checkout, and do not commit or push it: the run commits it itself, and a fix you commit is one it cannot take." } : {}),
     };
   } catch {
     return {};

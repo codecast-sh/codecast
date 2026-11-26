@@ -41,6 +41,15 @@
 .sj-stage[data-state="routed"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
 .sj-stage[data-state="skipped"] .sj-node { border-style: dashed; border-color: var(--sj-rule); }
 .sj-stage[data-state="skipped"] .sj-label { color: var(--sol-text-dim); }
+/* Ran and found nothing to do (its result said skipped): a solid ring with a dash, neither a pass nor never entered. */
+.sj-stage[data-state="nothing"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-stage[data-state="nothing"] .sj-who { color: var(--sol-text-muted); }
+.sj-branch[data-state="nothing"] { color: var(--sol-text-muted); }
+.sj-stage[data-state="unknown"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-unknown { font-size: var(--fs-mark); line-height: 1; }
+.sj-skip { color: var(--sol-text-muted); }
+/* A step a station left to the person: shown under the stage, whole on hover. */
+.sj-left { font-size: var(--fs-meta); line-height: 1.25; color: var(--sj-you, var(--sol-blue)); font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A fan-out's one name: a branch that sent work back, stopped or waits takes that state's color. */
 .sj-branch[data-state="back"] { color: var(--sj-session); }
 .sj-branch[data-state="stopped"] { color: var(--sj-bad); }
@@ -75,6 +84,7 @@
 .sj-sha { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-text); }
 .sj-now > :is(.sj-act, .sj-btn):first-of-type { margin-left: auto; }
 .sj-note { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: var(--sol-text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.sj-note[data-whole] { display: block; -webkit-line-clamp: unset; overflow: visible; }
 .sj-gate { flex-basis: 100%; margin-top: 4px; }
 .sj-act, .sj-btn { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 7px; border: 1px solid var(--sj-rule); background: var(--sj-card); color: var(--sol-text); cursor: pointer; white-space: nowrap; text-decoration: none; }
 .sj-act:hover, .sj-btn:hover { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sj-card)); }
@@ -155,8 +165,12 @@
 .sj-detail-mark { width: 8px; height: 8px; border-radius: 999px; background: var(--sol-text-dim); align-self: center; }
 .sj-detail-mark[data-status="completed"] { background: var(--sj-ok); }
 .sj-detail-mark[data-status="failed"] { background: var(--sj-bad); }
+.sj-detail-mark[data-status="skipped"] { background: transparent; border: 1.5px solid var(--sol-text-dim); }
 .sj-detail-mark[data-status="running"] { background: var(--sol-blue); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-detail-session { color: var(--sol-blue); text-decoration: none; }
+.sj-detail .sj-detail-left { color: var(--sj-you, var(--sol-blue)); font-weight: 600; font-size: 12px; text-decoration: none; }
+a.sj-left:hover, a.sj-detail-left:hover { text-decoration: underline; }
+a.sj-left { text-decoration: none; }
 .sj-detail-session:hover { text-decoration: underline; }
 
 /* A segment's inside, hinted under its stage and opened in place: its passing steps down a spine, each route off a step a

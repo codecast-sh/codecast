@@ -15,8 +15,11 @@ import { CodeBlock } from "../../CodeBlock";
 import { EntityIdPill } from "../../EntityIdPill";
 import { FlowDiagram, type StepPick } from "./FlowDiagram";
 import { WHO } from "../../../lib/line/flowWho";
+import { leftWords } from "../../../lib/ship/stationResult";
+import { stationRun } from "../../../lib/line/stationRun";
+import Link from "next/link";
 
-type RunLike = { node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string; session_id?: string }> | null } & Record<string, any>;
+type RunLike = { node_statuses?: ReadonlyArray<{ node_id: string; status: string; outcome?: string; session_id?: string; result_preview?: string | null }> | null } & Record<string, any>;
 
 /** The drawing, with any step open on a press. Pressing the open step again closes it. */
 export const FlowExplorer = memo(function FlowExplorer({ flow, run = null, compact = false }: { flow: AppFlow; run?: RunLike | null; compact?: boolean }) {
@@ -30,7 +33,8 @@ export const FlowExplorer = memo(function FlowExplorer({ flow, run = null, compa
 });
 
 const TEXT_WORD: Record<StationView["texts"][number]["kind"], string> = { prompt: "Prompt", guide: "Project's guidance", system: "System prompt", script: "Script", doc: "Decision document" };
-const STATUS_WORD: Record<string, string> = { completed: "Done", running: "Running", failed: "Failed", pending: "Waiting" };
+const STATUS_WORD: Record<string, string> = { completed: "Done", running: "Running", failed: "Failed", pending: "Waiting", back: "Sent back", stopped: "Stopped", unknown: "Unknown" };
+
 
 /** One station open under its drawing. `children`: what a host adds about it (a pipeline's when, who and recent runs), under its header.
  *  `inherited`: the prompt is the backbone's, so its tab says so beside the project's guidance. */
@@ -46,7 +50,8 @@ export function FlowStationPanel({ flow, pick, run, onClose, children, after, in
   const wordOf = (kind: keyof typeof TEXT_WORD) => (kind === "prompt" && inherited ? "Inherited prompt" : TEXT_WORD[kind]);
   const text = view.texts[Math.min(tab, view.texts.length - 1)];
   const visits = run?.node_statuses?.filter((n) => n.node_id === view.id) ?? [];
-  const last = visits[visits.length - 1];
+  // What it did on the run (stationRun.ts): in an own-results round, as its round's view says.
+  const line = stationRun(flow, view.id, run);
   return (
     <section className="fsp" data-flow-station={view.id} aria-label={`${view.label}: what this step does`}>
       <header className="fsp-head">
@@ -59,13 +64,18 @@ export function FlowStationPanel({ flow, pick, run, onClose, children, after, in
         <button type="button" className="fsp-close" onClick={onClose} aria-label="Close step"><X aria-hidden strokeWidth={2} /></button>
       </header>
       {children}
-      {last ? (
-        <div className="fsp-run" data-status={last.status}>
-          <span className="fsp-run-state">{STATUS_WORD[last.status] ?? last.status}{visits.length > 1 ? ` · ${visits.length} visits` : ""}</span>
-          {last.outcome ? <span className="fsp-run-outcome">{last.outcome}</span> : null}
-          {last.session_id ? <EntityIdPill shortId={last.session_id} type="session" /> : null}
+      {line ? (
+        <div className="fsp-run" data-status={line.status}>
+          <span className="fsp-run-state">{line.status === "nothing" ? "Skipped" : STATUS_WORD[line.status] ?? line.status}{visits.length > 1 ? ` · ${visits.length} visits` : ""}</span>
+          {line.outcome ? <span className="fsp-run-outcome">{line.outcome}</span> : null}
+          {line.session ? <EntityIdPill shortId={line.session} type="session" /> : null}
         </div>
       ) : null}
+      {line?.note ? <div className="fsp-run-note">{line.note}</div> : null}
+      {/* A step left for the person opens the task it was posted to. */}
+      {line?.left ? (run?.task_short_id
+        ? <Link className="fsp-run-left" href={`/tasks/${run.task_short_id}`}>{leftWords(line.left)}</Link>
+        : <div className="fsp-run-left">{leftWords(line.left)}</div>) : null}
       {view.runsFlow ? (
         <div className="fsp-runs-flow">Runs <EntityIdPill shortId={flowRefOf(view.runsFlow)} type="flow" /></div>
       ) : null}

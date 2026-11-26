@@ -6,8 +6,10 @@
 // team's sessions used. A flow opens its detail in place. On a role's page
 // (/flows/<owner>): that role's flow, drawn, with its facts and its counts.
 import { useContext, useMemo, useState, type ReactNode } from "react";
-import { journeyOf, journeyWords, readableWhy } from "../../../../../lib/ship/journey";
+import { journeyOf } from "../../../../../lib/ship/journey";
+import { journeyWhy, journeyWords, readableWhy } from "../../../../../lib/ship/journeyWords";
 import { blockedWaitOf, runAskOf, type AskRow } from "../../../../../lib/ship/sessionAsk";
+import { roundsOnOwnResults } from "../../../../../lib/ship/ownRound";
 
 /** The run-state tone the pill styles know, for a journey's tone. */
 const JOURNEY_TONE: Record<string, string> = { idle: "running", working: "running", agent: "running", session: "waiting", you: "waiting", wait: "waiting", ok: "passed", bad: "stopped" };
@@ -419,13 +421,16 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
               {pickedRuns.slice(0, 30).map((r) => {
                 const st = flowRunState(r, picked);
                 // A session's change reads as its journey: the words its Ship control shows, not the step's own name.
-                const jw = takesSessionChange(picked) && picked.kind === "line" ? journeyWords(journeyOf(picked, r as any, [], { id: viewerId, decision: (r as any).gate_decision_id ? decisions[(r as any).gate_decision_id] ?? null : null, ask: asks.get(r._id) ?? null })) : null;
+                const journey = takesSessionChange(picked) && picked.kind === "line" ? journeyOf(picked, r as any, [], { id: viewerId, decision: (r as any).gate_decision_id ? decisions[(r as any).gate_decision_id] ?? null : null, ask: asks.get(r._id) ?? null }) : null;
+                const jw = journey ? journeyWords(journey) : null;
+                // A round that routes on its branches' own results (the personal Ship) says its reason whole, as its bar does.
+                const why = journey && roundsOnOwnResults(picked) ? journeyWhy(journey) : readableWhy(st.why);
                 return (
                   <li key={r._id}>
                     <button type="button" className="flv-run" aria-current={openRun?._id === r._id ? "true" : undefined} onClick={() => setOpenRunId(openRun?._id === r._id ? null : r._id)} data-flow-run-row={r._id}>
                       <span className="lw-flow-state" data-tone={jw ? JOURNEY_TONE[jw.tone] : st.tone}>{jw?.words ?? st.words}</span>
                       <span className="flv-run-task">{r.task_title ?? r.task_short_id ?? (r.run_kind === "workflow" ? "in a session" : "no task")}</span>
-                      <span className="flv-run-why">{readableWhy(st.why) ?? ""}</span>
+                      <span className="flv-run-why">{why ?? ""}</span>
                       <span className="flv-run-age">{ageShort(now - r.created_at)}</span>
                     </button>
                     {openRun?._id === r._id ? <FlowRunCard runId={r._id} /> : null}

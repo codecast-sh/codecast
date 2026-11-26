@@ -552,6 +552,10 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-step[data-state="current"] .fd-dot { color: var(--lw-person); background: color-mix(in srgb, var(--lw-person) 22%, transparent); }
 .fd-step[data-state="stopped"] { border-color: var(--lw-bad); background: var(--lw-bad-soft); }
 .fd-step[data-state="stopped"] .fd-dot { color: #fff; background: var(--lw-bad); border-color: var(--lw-bad); }
+.fd-step[data-state="nothing"] .fd-dot { color: var(--sol-text-muted); }
+.fd-step[data-state="unknown"] .fd-dot { color: var(--sol-text-muted); }
+.fd-step[data-state="back"] .fd-dot { color: var(--sol-violet); }
+.fd-session[data-state="current"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-violet) 22%, transparent); }
 
 .fd-seg { display: flex; flex-direction: column; gap: 6px; padding: 7px 7px 7px; border-radius: 11px; position: relative; border: 1px dashed color-mix(in srgb, var(--lw-ink-3) 40%, transparent); background: color-mix(in srgb, var(--lw-card) 55%, transparent); }
 .fd-seg[data-written] { border-style: solid; border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); background: color-mix(in srgb, var(--sol-violet) 6%, var(--lw-card)); }
@@ -709,6 +713,9 @@ button.fd-add:hover > span { color: var(--lw-on-accent); background: var(--sol-c
 .fsp-run[data-status="completed"] .fsp-run-state { color: var(--lw-ok); }
 .fsp-run[data-status="failed"] .fsp-run-state { color: var(--lw-bad); }
 .fsp-run[data-status="running"] .fsp-run-state { color: var(--lw-person); }
+.fsp-run[data-status="nothing"] .fsp-run-state { color: var(--lw-ink-2); }
+.fsp-run-note { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); line-height: 1.45; }
+.fsp-run-left { font-size: var(--lw-fs-xs); font-weight: 600; color: var(--sol-blue); }
 .fsp-run-outcome { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); }
 .fsp-runs-flow { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); display: flex; align-items: center; gap: 6px; }
 .fsp-label { font-size: var(--lw-fs-2xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--lw-ink-3); }

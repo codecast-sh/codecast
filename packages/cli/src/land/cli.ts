@@ -348,19 +348,22 @@ A scan that cannot run prints { "error": "..." } on stdout and exits 1.
     .command("level")
     .description("Move this checkout onto its upstream in place: rewrite only files nobody here changed, keep every local edit")
     .option("--to <ref>", "the commit to level onto (default: the upstream, origin/main)")
+    .option("--checkout <path>", "the checkout to level, a linked worktree included (default: the main checkout of this directory)")
+    .option("--ref-last", "move the branch after the index and files, not before: one cut off midway leaves HEAD where it was, and running it again finishes it (the personal Ship's Land; a commit made meanwhile puts everything back)")
     .option("--no-fetch", "use the upstream ref already on disk")
     .option("--dry-run", "report what would be written, write nothing")
     .option("--json", "machine-readable output")
-    .action(async (opts: { to?: string; fetch?: boolean; dryRun?: boolean; json?: boolean }) => {
+    .action(async (opts: { to?: string; checkout?: string; refLast?: boolean; fetch?: boolean; dryRun?: boolean; json?: boolean }) => {
       const { levelCheckout } = await import("./level.js");
       const { upstreamRef } = await import("./shipCheckout.js");
-      const root = await repoRootOf(process.cwd());
+      // --checkout names the checkout to level (a linked worktree included); else the main checkout of this one.
+      const root = opts.checkout ? path.resolve(opts.checkout) : await repoRootOf(process.cwd());
       const target = opts.to ?? await upstreamRef(root);
       if (!opts.to && opts.fetch !== false) {
         const [remote, ...branch] = target.split("/");
         await execFileAsync("git", ["-C", root, "fetch", "--quiet", remote, branch.join("/")]).catch(() => {});
       }
-      const r = await levelCheckout(root, target, { dryRun: opts.dryRun });
+      const r = await levelCheckout(root, target, { dryRun: opts.dryRun, ...(opts.refLast ? { refLast: true } : {}) });
       if (opts.json) { console.log(JSON.stringify(r, null, 2)); if (!r.ok) process.exitCode = 1; return; }
       if (r.from === r.to) { console.log(`Already level with ${target} (${r.to.slice(0, 9)})`); return; }
       const verb = opts.dryRun ? "Would level" : r.ok ? "Levelled" : "Did not level";

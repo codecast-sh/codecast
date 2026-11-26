@@ -49,6 +49,11 @@ export function isolateCodecastDir(prefix = "cast-test-home-"): IsolatedCodecast
   };
 }
 
+/** Point CODECAST_DIR at `dir`, for a harness that builds one world per test inside its own sandbox. */
+export function pointCodecastDir(dir: string): void {
+  process.env.CODECAST_DIR = dir;
+}
+
 /**
  * Isolate every test in the calling file: a fresh CODECAST_DIR before each, the
  * undo after. For files whose code writes CLI state on every test, such as a

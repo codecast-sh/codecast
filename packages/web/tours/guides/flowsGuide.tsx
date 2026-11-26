@@ -10,6 +10,7 @@ import { Switch } from "../../components/ui/switch";
 import { FlowDiagram } from "../../components/line/widgets/FlowDiagram";
 import { SHIPPED_FLOWS } from "../../lib/line/shippedFlows.generated";
 import { flowDiagram } from "../../lib/line/flowDiagram";
+import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
 import "../../components/line/workspace/workspace.css";
 import { Chip, Count, Dot, Face, Msg, Person, RoleCard, Show, StageButton, Win, Wires, useArrived } from "./kit";
 import type { GuideDef, SceneProps } from "./types";
@@ -37,7 +38,8 @@ const stepCount = () => flowDiagram(CHANGE).steps.length;
 // ------------------------------------------------------------ 1. a flow
 
 function AFlow({ beat }: SceneProps) {
-  const library = [...SHIPPED_FLOWS].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "line" ? -1 : 1));
+  // A team's library: the personal Ship is never one of its flows (workspacePool).
+  const library = SHIPPED_FLOWS.filter((f) => f.slug !== PERSONAL_FLOW_SLUG).sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "line" ? -1 : 1));
   return (
     <div className="gs">
       <div className="absolute" style={{ left: 60, top: 36, width: 920 }}>

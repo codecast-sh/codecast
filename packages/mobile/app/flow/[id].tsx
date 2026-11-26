@@ -35,7 +35,9 @@ import { flowDiagram, routeTail, type DiagramStep, type SideRoute } from '@codec
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { useFlowStations } from '@codecast/web/lib/line/flowStations';
 import { stationView } from '@codecast/web/lib/line/stationView';
-import { journeyOf, journeyWords, readableWhy } from '@codecast/web/lib/ship/journey';
+import { journeyOf } from '@codecast/web/lib/ship/journey';
+import { journeyWhy, journeyWords, readableWhy } from '@codecast/web/lib/ship/journeyWords';
+import { roundsOnOwnResults } from '@codecast/web/lib/ship/ownRound';
 import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 
 type Tone = FlowRunTone;
@@ -298,9 +300,11 @@ function RunRow({ run, flow, now, first, onPress }: { run: FlowRun; flow: AppFlo
   const tones = useToneColor();
   const st = flowRunState(run as any, flow);
   const viewer = useJourneyViewer(run as any);
-  const jw = takesSessionChange(flow) && flow.kind === 'line' ? journeyWords(journeyOf(flow, run as any, [], viewer)) : null;
+  const journey = takesSessionChange(flow) && flow.kind === 'line' ? journeyOf(flow, run as any, [], viewer) : null;
+  const jw = journey ? journeyWords(journey) : null;
   const tone = jw ? JOURNEY_TONE[jw.tone] ?? st.tone : st.tone;
-  const why = readableWhy(st.why);
+  // A round that routes on its branches' own results (the personal Ship) says its reason whole, as its bar does.
+  const why = journey && roundsOnOwnResults(flow) ? journeyWhy(journey) : readableWhy(st.why);
   return (
     <TouchableOpacity style={[styles.runRow, !first && styles.rowRule]} onPress={onPress} activeOpacity={0.6} testID={`flow-run-${run._id}`}>
       <RNView style={[styles.runDot, { backgroundColor: tones[tone] }]} />

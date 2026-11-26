@@ -109,7 +109,10 @@ async function castFlow(cwd: string, args: string[], defaultFlow: string | null 
     subjectSession: async () => undefined,
     realCwd: () => cwd,
     readWorkspace: async (team) => ({ kind: "team", teamId: team ?? "active" }),
-    directoryTeam: async () => { mappedReads++; return mapped ? "dir" : null; },
+    directoryWorkspace: async () => {
+      mappedReads++;
+      return mapped ? { ws: { kind: "team", teamId: "dir" }, ownsDefault: true, personal: false } : { ws: { kind: "team", teamId: "active" }, ownsDefault: false, personal: false };
+    },
     writeWorkspace: async () => ({ kind: "team", teamId: "active" }),
     requireFlows: async (ws) => void gated.push(ws.kind === "team" ? ws.teamId : null),
   };

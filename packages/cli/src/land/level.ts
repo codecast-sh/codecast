@@ -17,6 +17,7 @@
  * moment wins and the level reports that HEAD moved.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -186,7 +187,7 @@ function removeFile(root: string, rel: string): void {
  * typing descends from the frozen blob, so the merge must start there or
  * every later keystroke reads as a conflict with the shipped version.
  */
-export async function levelCheckout(cwd: string, target: string, opts: { rewritten?: boolean; dryRun?: boolean; worktreeBase?: Map<string, string | null> } = {}): Promise<LevelResult> {
+export async function levelCheckout(cwd: string, target: string, opts: { rewritten?: boolean; dryRun?: boolean; worktreeBase?: Map<string, string | null>; refLast?: boolean; onWrite?: (rel: string) => void } = {}): Promise<LevelResult> {
   const root = await git(cwd, ["rev-parse", "--show-toplevel"]);
   const from = await git(root, ["rev-parse", "HEAD"]);
   const to = await git(root, ["rev-parse", `${target}^{commit}`]);
@@ -221,11 +222,16 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   if (conflicts.length) return { ...result, ok: false, reason: `${conflicts.length} file(s) changed here and in ${to.slice(0, 9)} without a clean merge` };
   if (opts.dryRun) return result;
 
-  // The branch first, by compare-and-swap: a commit made in the checkout since
-  // we read HEAD wins, and nothing has been written yet.
-  if ((await gitTry(root, ["update-ref", "-m", `cast land level ${from.slice(0, 9)} -> ${to.slice(0, 9)}`, branch, to, from])) === null) {
+  // The branch by compare-and-swap: a commit made in the checkout since we read HEAD wins. By default it moves first,
+  // before anything is written. With `refLast` (one person's checkout, `cast land level --ref-last`) it moves last, so
+  // a level cut off midway never leaves the branch at `to` over an index and files still at `from` (a staged revert):
+  // at worst some files and the index are at `to` with HEAD still at `from`, which a rerun finishes. A commit made
+  // during that write loses the swap at the end, and everything the level wrote is put back as it was.
+  const moveRef = async () => (await gitTry(root, ["update-ref", "-m", `cast land level ${from.slice(0, 9)} -> ${to.slice(0, 9)}`, branch, to, from])) !== null;
+  if (!opts.refLast && !(await moveRef())) {
     return { ...empty, ok: false, reason: "HEAD moved while levelling; run again" };
   }
+  const before = opts.refLast ? await priorState(root, entries) : null;
 
   // Files next. Each is re-hashed right before its write; one edited since
   // the plan is decided again from what is on disk now, so a keystroke that
@@ -243,11 +249,15 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
       a = again;
       if (a.kind === "absorb" || a.kind === "keep") break;
     }
+    // The bytes a lost swap puts back are the file's as this write found it, so an edit merged in during the loop survives.
+    if (before && (a.kind === "merge" || a.kind === "write")) before.files.set(a.entry.path, fileState(file));
     if (a.kind === "merge") writeAtomic(file, a.content, a.entry.dstMode);
     else if (a.kind === "write") {
       if (a.entry.dst) writeAtomic(file, await blobContent(root, a.entry.dst), a.entry.dstMode);
       else removeFile(root, a.entry.path);
     } else if (!gaveUp) levelMode(file, a.entry);
+    if (before && (a.kind === "merge" || a.kind === "write")) before.wrote.set(a.entry.path, a.kind === "merge" ? blobSha(a.content) : a.entry.dst);
+    opts.onWrite?.(a.entry.path);
   }
 
   // The index last: target's entry for every path that moved, the rest of the
@@ -256,8 +266,65 @@ export async function levelCheckout(cwd: string, target: string, opts: { rewritt
   await withIndexLockRetry(() => git(root, ["update-index", "--index-info"], undefined, info));
   await gitTry(root, ["update-index", "-q", "--refresh"]);
 
+  if (before && !(await moveRef())) {
+    const now = (await gitTry(root, ["rev-parse", "HEAD"]))?.trim() ?? "";
+    await putBack(root, before, from, now);
+    return { ...empty, ok: false, reason: `HEAD moved to ${now.slice(0, 9)} while levelling (a commit was made here), so nothing of ${to.slice(0, 9)} was kept: the index and files are as they were, on that commit; run again once it sits on ${to.slice(0, 9)}'s line` };
+  }
+
   if (raced.length) return { ...result, ok: false, conflicts: raced, reason: `${raced.length} file(s) kept changing during the level; their edits stand but lack ${to.slice(0, 9)}'s change` };
   return result;
+}
+
+/** A blob's object id, as git names the bytes (what `worktreeBlobs` reads back from disk). */
+const blobSha = (bytes: Buffer) => createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+
+/** What a `refLast` level changed, so a lost swap puts it back: each written file's bytes as its write found them, and the index entries. */
+type Prior = { files: Map<string, { link: string } | { bytes: Buffer; mode: number } | null>; index: string; paths: string[]; wrote: Map<string, string | null> };
+
+function fileState(file: string): { link: string } | { bytes: Buffer; mode: number } | null {
+  let st: fs.Stats | null = null;
+  try { st = fs.lstatSync(file); } catch {}
+  return !st ? null : st.isSymbolicLink() ? { link: fs.readlinkSync(file) } : { bytes: fs.readFileSync(file), mode: st.mode & 0o777 };
+}
+
+async function priorState(root: string, entries: DiffEntry[]): Promise<Prior> {
+  const files: Prior["files"] = new Map();
+  const paths = entries.map((e) => e.path);
+  const index = paths.length ? (await execFileAsync("git", ["-C", root, "ls-files", "-s", "-z", "--", ...paths.map((p) => `:(literal)${p}`)], { encoding: "utf-8", maxBuffer: BLOB_MAX_BUFFER })).stdout : "";
+  return { files, index, paths, wrote: new Map() };
+}
+
+/**
+ * Put back what a `refLast` level wrote once a commit made meanwhile (`from` to `now`) won the swap: a file still as the
+ * level left it gets its old bytes, then the index entries. A file that commit touched is the person's and stays as it
+ * is, whatever its bytes (a commit can take the level's own write): its index entry becomes the commit's, never the
+ * level's or the one before it, so nothing reverts the commit.
+ */
+async function putBack(root: string, prior: Prior, from: string, now: string): Promise<void> {
+  const touched = new Set((now ? (await gitTry(root, ["diff", "--name-only", "--no-renames", "-z", from, now])) ?? "" : "").split("\0").filter(Boolean));
+  for (const [rel, wrote] of prior.wrote) {
+    if (touched.has(rel)) continue;
+    if (((await worktreeBlobs(root, [rel])).get(rel) ?? null) !== wrote) continue;
+    const file = path.join(root, rel);
+    const was = prior.files.get(rel) ?? null;
+    if (!was) { removeFile(root, rel); continue; }
+    if ("link" in was) { try { fs.unlinkSync(file); } catch {} fs.symlinkSync(was.link, file); continue; }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, was.bytes);
+    fs.chmodSync(file, was.mode);
+  }
+  // Each entry as `mode sha<TAB>path`: the index's from before the level (ls-files -s), the commit's for what it touched (ls-tree).
+  const entriesOf = (out: string) => new Map(out.split("\0").filter(Boolean).map((l) => {
+    const [meta, p] = [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)];
+    const f = meta.split(" ");
+    return [p, `${f[0]} ${f.length === 3 && f[1] === "blob" ? f[2] : f[1]}`] as const;
+  }));
+  const before = entriesOf(prior.index);
+  const mine = prior.paths.filter((p) => touched.has(p));
+  const committed = mine.length ? entriesOf((await gitTry(root, ["ls-tree", "-z", now, "--", ...mine])) ?? "") : new Map<string, string>();
+  const lines = prior.paths.map((p) => `${(touched.has(p) ? committed : before).get(p) ?? `0 ${NULL_SHA}`}\t${p}`);
+  await withIndexLockRetry(() => git(root, ["update-index", "--index-info"], undefined, lines.join("\n") + "\n"));
 }
 
 /** Retry `fn` while another git process holds an index lock (the daemon snapshots the same checkouts). */

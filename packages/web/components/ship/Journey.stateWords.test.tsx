@@ -31,6 +31,24 @@ describe("states that read without color", () => {
   });
 });
 
+describe("a branch that found nothing to do", () => {
+  const fan = (state: string, check: string) => stage("checks", "Check + Review", state, { role: "parallel", who: "agent", branches: [stage("check", "Check", check), stage("review", "Review", state === "back" ? "back" : "done")] });
+  test("says so beside who acts, never in place of it, and never inside the stage's name", () => {
+    const back = text(renderToStaticMarkup(<JourneyTrack stages={[fan("back", "nothing"), stage("land", "Land", "idle")]} />));
+    expect(back).toContain("Check + Review↩ (sent back), sent back");
+    expect(back).toContain("This session · Check skipped");
+    const waiting = text(renderToStaticMarkup(<JourneyTrack stages={[fan("waiting", "nothing"), stage("land", "Land", "idle")]} />));
+    expect(waiting).toContain("Agent · Check skipped");
+    // A finished run says only what happened.
+    const done = renderToStaticMarkup(<JourneyTrack stages={[fan("done", "nothing"), stage("land", "Land", "done")]} />);
+    expect(text(done)).toContain("Check + Review, doneCheck skipped");
+    expect(done).not.toContain("sj-branch-flag");
+    // A later round's finished stage says its round, then what it skipped, apart.
+    const round2 = renderToStaticMarkup(<JourneyTrack stages={[{ ...fan("done", "nothing"), round: 2 }, stage("land", "Land", "done")]} />);
+    expect(text(round2)).toContain("round 2 · Check skipped");
+  });
+});
+
 const { journeyStages } = await import("../../lib/ship/journey");
 const { appPool, flowBySlug } = await import("../../lib/line/flowPool");
 const { LAND_REPO_FLOW } = await import("../../lib/ship/journeyFixtures");

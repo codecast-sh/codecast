@@ -1109,7 +1109,8 @@ export function* lineModelSteps(rows: LineModelRows, graphKey: string): Sliced<L
     const last = [...read.visits].reverse().find((v) => !v.inferred) ?? null;
     runModels.push({
       id: run._id, caseId: run.task_id ?? null, caseRef, caseTitle, status: run.status, live: isLiveRun(run),
-      outcome: runOutcome(run as ReportRun, task as ReportTask | undefined, rows.now ?? Date.now(), true),
+      // The drawn graph is the run's (a personal Ship's says so): its outcome reads by its rules.
+      outcome: runOutcome(run as ReportRun, task as ReportTask | undefined, rows.now ?? Date.now(), true, { graph: rows.graph as any }),
       at: run.created_at, updatedAt: run.updated_at,
       durationMs: isLiveRun(run) ? null : Math.max(0, run.updated_at - run.created_at),
       at_node: run.current_node_id && run.current_node_id !== "exit" && steps[run.current_node_id] ? run.current_node_id : last?.node ?? null,
@@ -1217,7 +1218,7 @@ export function* lineModelSteps(rows: LineModelRows, graphKey: string): Sliced<L
       ...(rows.forYou ? { forYou: rows.forYou.get(taskId) ?? null } : {}),
       lineFaults: faultsNaming(`${task?.title ?? ""}\n${(task as { description?: string | null } | undefined)?.description ?? ""}`, faults),
       history: causeHistory({
-        task, runs: allRuns, decisions: decisionsOf(taskId, allRuns),
+        task, runs: allRuns, decisions: decisionsOf(taskId, allRuns), graphOf: (r) => (graphKeyOf(r as GraphRun) === key ? rows.graph ?? null : null),
         signals: own, occurrences, deploys: rows.deploys, coverage, said: saidHere, foldFixAt: foldHere, handMerge: rows.handMerges?.get(taskId) ?? null, watchDays: rows.watchDays ?? null, now,
       }),
     };

@@ -1,0 +1,147 @@
+// The Ship of a personal workspace (flows.md FL4): what a person shipping
+// their own project would do by hand. The change is checked the way the
+// project's docs say, read by an independent reviewer, put on the default
+// branch and pushed, then deployed the way the docs say, and the run waits
+// until the landed commit is seen running. There is no pull request, no CI to
+// wait for, no merge authority and no card: the reviewer alone vouches for
+// edits to `.github/**` and `.codecast/**`.
+//
+// Each round starts at Round, which puts the change onto origin's default
+// branch as it is now and names the round with a fresh nonce (round.json: the
+// nonce, the head it made, the main it sits on). Find check reads the docs once
+// a run and pins the commands they name as the gate, or Skipped with what it
+// looked at; it never runs them. Check runs each one in the change's tree and
+// is green only when every exit is 0, beside the reviewer, who pins its verdict
+// with the round's nonce. Verdicts counts the pin only with this round's nonce:
+// a pin missing or from another round asks the reviewer once more. A passing
+// or skipped check and a ship land; a red check or a changes verdict is one
+// brief to the session; a rejection ends the run.
+//
+// Land pushes exactly what the round checked: when main moved since the round,
+// or the push is refused because it just did, the run goes back to Round, at
+// most three times. It records the landed commit as the run's merge, then
+// brings the person's checkout up to it when that checkout is on the default
+// branch (`cast land level`), and says why when not. Deploy reads the docs,
+// runs the documented deploy from the landed commit and confirms that commit
+// is running; a step only a person can do is done with computer use when its
+// grants are in place, else left as one step for them, on the node and the
+// task. A documented deploy that fails goes back to the session, which fixes
+// the script and the doc: a fix in the repository comes round again, and one
+// that leaves nothing new to land (it lives outside the repository) sends the
+// run straight back to Deploy. Deploy runs in the run's worktree at the landed
+// commit. The run ends Live only when Deploy saw that commit running; a deploy
+// it could not see ends Deployed, unverified, and no documented deploy ends
+// Landed. A session that puts its change on the default branch itself, when
+// briefed, goes on to Deploy from origin's head, unchecked by this run.
+//
+// The session the change came from is the run's subject: every brief reaches
+// it in its own thread, at most three times each, and the run freezes its
+// change again when it ends its turn.
+//
+//   cast flow run change            # in a personal workspace, this flow
+//   cast flow run personal --task ct-N
+digraph personal {
+  graph [kind="line", label="Ship", description="Check as the docs say beside an independent review, land on main, deploy as the docs say; the session fixes what they find, and nobody is asked", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
+  rankdir=LR
+  start [shape=Mdiamond]
+  // Prints round.json alone: exit 1 is a conflict with main, 2 a machine fault.
+  round [label="Round", shape=parallelogram, timeout=600, fold=true, script="@personal/round.sh"]
+  // output="json": the node shows the JSON the station pinned (its outcome, its note, a step left for the person).
+  find_check [label="Find check", backend=session, agent=claude, output="json", fold=true, prompt="@personal/find_check.md"]
+  checks [label="Check and review", shape=component]
+  // Always exits 0 once it ran the commands; its verdict is check.json's outcome.
+  check [label="Check", shape=parallelogram, timeout=5400,
+    script="wt=\"$(cast ws path $worktree)\" || exit 2; cast flow check --spec \"$find_check.json\" --tree \"$wt\" --dir \"$run_dir\""]
+  review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@personal/review.md"]
+  joined [label="Both done", shape=tripleoctagon]
+  verdicts [label="Verdicts", shape=parallelogram, timeout=60, fold=true, script="@personal/verdicts.sh"]
+  // Exit 3: main moved since the round, so a new round checks the change on it.
+  land [label="Land", shape=parallelogram, timeout=900, script="@personal/land.sh"]
+  // What the session's last turn left on origin (land.sh): the run's own landing again, origin's head when the session
+  // put the change there itself, a new round for a fix still to land (exit 4), or a stop when nothing of it reached origin.
+  outside [label="Landed outside", shape=parallelogram, timeout=900, script="@personal/land.sh"]
+  // Named for the runner (runner.ts, the run's end): a stop past here tells the session its change is on main. Deploy
+  // reads the landed commit here, whichever of Land and Landed outside put it there.
+  landed [label="Landed", shape=parallelogram, timeout=60, fold=true, script="cat \"$run_dir/landed-$run_id.json\""]
+  deploy [label="Deploy", backend=session, agent=claude, output="json", prompt="@personal/deploy.md"]
+  left [label="Left for you", shape=parallelogram, timeout=120, fold=true,
+    script="cast task comment \"$task_id\" \"One step left for you: $deploy.json.left_for_you\" -t review >/dev/null 2>&1; echo \"One step left for you: $deploy.json.left_for_you\""]
+  // Live only on what Deploy saw: the landed commit running.
+  exit [shape=Msquare, label="Live"]
+  unverified [shape=Msquare, label="Deployed, unverified"]
+  nodeploy [shape=Msquare, label="Landed"]
+
+  brief [label="Fix findings", backend=subject, max_visits=3, prompt="@personal/brief.md"]
+  fix_conflict [label="Resolve conflict", backend=subject, max_visits=3, prompt="@personal/conflict.md"]
+  deploy_fix [label="Fix deploy", backend=subject, max_visits=3, prompt="@personal/deploy_fix.md"]
+
+  conflicted [shape=Msquare, label="Conflict", stop="The change conflicts with the default branch, and no session made it to fix it: $round.output"]
+  noround   [shape=Msquare, label="No round", machine=true, stop="$round.output"]
+  nofinder  [shape=Msquare, label="No check found", machine=true, stop="Find check left no answer the run can read: $find_check.output"]
+  checkless [shape=Msquare, label="Check did not run", machine=true, stop="The check station failed: $check.output"]
+  unreviewed [shape=Msquare, label="Review never finished", machine=true, stop="The reviewer gave no verdict for this round, also when asked again."]
+  rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change: $review.json"]
+  found     [shape=Msquare, label="Found work", stop="The check or the reviewer found work, and no session made this change to fix it: $verdicts.output"]
+  moving    [shape=Msquare, label="Main keeps moving", stop="Main keeps moving under this change: a new round checked it 3 times and main moved again. $land.output"]
+  unlanded  [shape=Msquare, label="Not landed", stop="$last_error"]
+  undeployed [shape=Msquare, label="Deploy never finished", machine=true, stop="The deploy station never finished: $last_error"]
+  deploy_failed [shape=Msquare, label="Deploy failed", stop="The documented deploy failed, and no session made this change to fix it: $deploy.json.note"]
+  unclear   [shape=Msquare, label="Deploy unclear", stop="The deploy station left no outcome the run can read: $deploy.output"]
+
+  start -> round
+  round -> find_check   [condition="outcome = success and find_check.visits = 0"]
+  round -> checks       [condition="outcome = success"]
+  round -> fix_conflict [condition="outcome = failure and round.exit_code = 1 and change_conversation", label="conflicts with main"]
+  round -> conflicted   [condition="outcome = failure and round.exit_code = 1", label="conflicts with main, no session"]
+  round -> outside      [condition="outcome = failure and round.exit_code = 4", label="already on main"]
+  round -> noround      [condition="outcome = failure"]
+  find_check -> checks   [condition="outcome = success and (find_check.json.outcome = found or find_check.json.outcome = skipped)"]
+  find_check -> nofinder
+  checks -> check
+  checks -> review
+  check -> joined
+  // The fan-out continues at the first target of each branch's first edge; a review asked again alone goes on from here.
+  review -> joined   [condition="outcome = success"]
+  review -> verdicts [condition="outcome = failure"]
+  joined -> verdicts [condition="outcome = failure"]
+  joined -> verdicts
+  // Only a pin with this round's nonce counts. The reviewer is asked once more in a round (round.json's verdicts_at).
+  verdicts -> checkless [condition="check.outcome = failure"]
+  verdicts -> review    [condition="(review.outcome = failure or review.json.round != round.json.round or (review.json.verdict != ship and review.json.verdict != changes and review.json.verdict != rejected)) and verdicts.visits = round.json.verdicts_at", label="no verdict this round"]
+  verdicts -> rejected  [condition="review.json.round = round.json.round and review.json.verdict = rejected", label="rejected"]
+  verdicts -> land      [condition="review.json.round = round.json.round and review.json.verdict = ship and (check.json.outcome = pass or check.json.outcome = skipped)"]
+  verdicts -> brief     [condition="(check.json.outcome = fail or (review.json.round = round.json.round and review.json.verdict = changes)) and change_conversation", label="check red or changes asked"]
+  verdicts -> found     [condition="check.json.outcome = fail or (review.json.round = round.json.round and review.json.verdict = changes)", label="found work, no session"]
+  verdicts -> unreviewed
+  land -> landed   [condition="outcome = success"]
+  land -> round    [condition="outcome = failure and land.exit_code = 3 and land.visits < 4", label="main moved"]
+  land -> moving   [condition="outcome = failure and land.exit_code = 3", label="main keeps moving"]
+  land -> unlanded [label="not landed"]
+  outside -> landed  [condition="outcome = success"]
+  outside -> round   [condition="outcome = failure and outside.exit_code = 4", label="a fix to land"]
+  outside -> unlanded
+  landed -> deploy
+  // Live needs the landed commit seen running: a live without the landed sha or what showed it ends unverified.
+  deploy -> left       [condition="outcome = success and deploy.json.left_for_you and deploy.json.left_for_you != null and (deploy.json.outcome = live or deploy.json.outcome = unverified or deploy.json.outcome = skipped)", label="a step left for you"]
+  deploy -> exit       [condition="outcome = success and deploy.json.outcome = live and deploy.json.sha = landed.json.sha and deploy.json.seen_live and deploy.json.seen_live != null"]
+  deploy -> unverified [condition="outcome = success and (deploy.json.outcome = live or deploy.json.outcome = unverified)", label="not seen running"]
+  deploy -> nodeploy   [condition="outcome = success and deploy.json.outcome = skipped", label="no deploy documented"]
+  deploy -> deploy_fix [condition="outcome = success and deploy.json.outcome = failed and change_conversation", label="deploy failed"]
+  deploy -> deploy_failed [condition="outcome = success and deploy.json.outcome = failed", label="deploy failed, no session"]
+  deploy -> undeployed [condition="outcome = failure"]
+  deploy -> unclear
+  left -> exit       [condition="deploy.json.outcome = live and deploy.json.sha = landed.json.sha and deploy.json.seen_live and deploy.json.seen_live != null"]
+  left -> unverified [condition="deploy.json.outcome = live or deploy.json.outcome = unverified"]
+  left -> nodeploy
+  // A session that put its change on the default branch itself has nothing left to check here: Deploy goes on from
+  // origin's head. These edges also keep the runner from ending the run done there (runner.ts landedExitOf).
+  brief -> outside [condition="change_landed", label="landed outside the run"]
+  brief -> round
+  fix_conflict -> outside [condition="change_landed", label="landed outside the run"]
+  fix_conflict -> round
+  // After a fix, Landed outside reads origin against what this run landed: the same landing when nothing new is
+  // there (the fix lived outside the repository), origin's head when the session put its fix there itself, a new
+  // round for a fix still to land. The edge on change_landed keeps the runner from ending the run done here.
+  deploy_fix -> outside [condition="change_landed", label="on main"]
+  deploy_fix -> outside [label="what the fix left"]
+}

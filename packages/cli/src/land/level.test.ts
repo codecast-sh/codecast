@@ -243,3 +243,87 @@ describe("a checkout diverged only by commits upstream already holds", () => {
     expect(read(shared, "later.ts")).toBe("l\n");
   });
 });
+
+describe("a level that moves the branch last (--ref-last, the personal Ship's Land)", () => {
+  test("cut off midway, it leaves HEAD where it was, and run again it finishes, keeping every edit", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n", "d.txt": "d\n", "x.txt": "x\n" });
+    upstream({ "a.txt": "A\n", "b.txt": "B\n", "c.txt": "C\n", "d.txt": null });
+    const from = sh(shared, "rev-parse", "HEAD");
+    const to = sh(shared, "rev-parse", "origin/main");
+    // The person's own work: an edit in a file the landing does not touch, and a file staged on its own.
+    write(shared, "x.txt", "my edit\n");
+    write(shared, "y.txt", "staged\n");
+    sh(shared, "add", "y.txt");
+    let writes = 0;
+    await expect(levelCheckout(shared, "origin/main", { refLast: true, onWrite: () => { if (++writes === 2) throw new Error("killed"); } })).rejects.toThrow("killed");
+    // Never a staged revert: the branch did not move, whatever was written.
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(from);
+    expect(sh(shared, "rev-parse", "main")).toBe(from);
+    const again = await levelCheckout(shared, "origin/main", { refLast: true });
+    expect(again.ok).toBe(true);
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(to);
+    expect([read(shared, "a.txt"), read(shared, "b.txt"), read(shared, "c.txt")]).toEqual(["A\n", "B\n", "C\n"]);
+    expect(fs.existsSync(path.join(shared, "d.txt"))).toBe(false);
+    expect(read(shared, "x.txt")).toBe("my edit\n");
+    expect(execFileSync("git", ["-C", shared, "status", "--porcelain"], { encoding: "utf-8", env: ENV })).toBe(" M x.txt\nA  y.txt\n");
+  });
+
+  test("a commit made while it writes wins the swap, and everything it wrote is put back as it was", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n", "b.txt": "b\n" });
+    upstream({ "a.txt": "A\n", "b.txt": "B\n" });
+    write(shared, "w.txt", "staged\n");
+    sh(shared, "add", "w.txt");
+    let committed = "";
+    const r = await levelCheckout(shared, "origin/main", { refLast: true, onWrite: () => {
+      if (committed) return;
+      write(shared, "z.txt", "z\n");
+      sh(shared, "add", "z.txt");
+      execFileSync("git", ["-C", shared, "commit", "-qm", "mine", "--", "z.txt"], { env: ENV });
+      committed = sh(shared, "rev-parse", "HEAD");
+    } });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toContain(`HEAD moved to ${committed.slice(0, 9)} while levelling (a commit was made here), so nothing of`);
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(committed);
+    expect([read(shared, "a.txt"), read(shared, "b.txt")]).toEqual(["a\n", "b\n"]);
+    expect(execFileSync("git", ["-C", shared, "status", "--porcelain"], { encoding: "utf-8", env: ENV })).toBe("A  w.txt\n");
+  });
+
+  test("a commit made while it writes keeps every file it touched, on disk and in the index; only the rest is put back", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n", "b.txt": "b\n", "c.txt": "c\n" });
+    upstream({ "a.txt": "A\n", "b.txt": "B\n", "c.txt": "C\n" });
+    write(shared, "w.txt", "staged\n");
+    sh(shared, "add", "w.txt");
+    let committed = "";
+    const r = await levelCheckout(shared, "origin/main", { refLast: true, onWrite: (rel) => {
+      if (rel !== "c.txt") return;
+      // Once every file is written: the person edits a.txt on top of what the level wrote there, and commits it with
+      // c.txt exactly as the level wrote it.
+      write(shared, "a.txt", "A\nmine\n");
+      execFileSync("git", ["-C", shared, "commit", "-qm", "mine", "--", "a.txt", "c.txt"], { env: ENV });
+      committed = sh(shared, "rev-parse", "HEAD");
+    } });
+    expect(r.ok).toBe(false);
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(committed);
+    // The commit's files stand as committed; b.txt, which it left alone, is put back.
+    expect([read(shared, "a.txt"), read(shared, "b.txt"), read(shared, "c.txt")]).toEqual(["A\nmine\n", "b\n", "C\n"]);
+    // Nothing staged or unstaged against the person's commit but their own staged file: no revert of it anywhere.
+    expect(execFileSync("git", ["-C", shared, "status", "--porcelain"], { encoding: "utf-8", env: ENV })).toBe("A  w.txt\n");
+  });
+  test("an edit merged in during the write survives a lost swap: what is put back is the file as its write found it", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n", "b.txt": "one\ntwo\nthree\n" });
+    upstream({ "a.txt": "A\n", "b.txt": "ONE\ntwo\nthree\n" });
+    let committed = "";
+    const r = await levelCheckout(shared, "origin/main", { refLast: true, onWrite: (rel) => {
+      // After a.txt is written and before b.txt is, the person edits b.txt's last line, so the loop merges it.
+      if (rel === "a.txt") { write(shared, "b.txt", "one\ntwo\nthree mine\n"); return; }
+      // Then a commit of another file wins the swap.
+      write(shared, "z.txt", "z\n");
+      execFileSync("git", ["-C", shared, "add", "z.txt"], { env: ENV });
+      execFileSync("git", ["-C", shared, "commit", "-qm", "mine", "--", "z.txt"], { env: ENV });
+      committed = sh(shared, "rev-parse", "HEAD");
+    } });
+    expect(r.ok).toBe(false);
+    expect(sh(shared, "rev-parse", "HEAD")).toBe(committed);
+    expect([read(shared, "a.txt"), read(shared, "b.txt")]).toEqual(["a\n", "one\ntwo\nthree mine\n"]);
+  });
+});

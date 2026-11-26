@@ -18,6 +18,7 @@ import { ChangeCardView, answererNameOf } from "../../../../components/decisions
 import { DecisionDiscussion } from "../../../../components/decisions/DecisionDiscussion";
 import { CauseRunList, ReportChip, ReportSection, RunOutcomeText, RunPathView, answerTone, useCauseRuns } from "../../../../components/line/RunReport";
 import { runPath, cardName, choiceWords, shortDay, type ReportRun, type ReportTask } from "../../../../lib/line/runReport";
+import { readsAsPath } from "../../../../lib/line/personalReport";
 import { SHIPPED_LINE } from "../../../../lib/line/shippedLine.generated";
 import { costParts, costUsd, isLineRun } from "@codecast/shared/contracts/changeCard";
 import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useSyncDecisionDetail";
@@ -188,8 +189,9 @@ function RunDetailContent({ runId }: { runId: string }) {
 
   // The run's name, state, facts and share, drawn by whichever header is up.
   const runTitle = run.task_title ?? task?.title ?? flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name });
+  // A line run and a personal Ship say their state in their outcome sentence, never the engine's "Failed".
   const statusChip = (
-    line ? null : (
+    readsAsPath(run as ReportRun, workflow as any) ? null : (
       <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${st.color} ${st.bg}`}>
         <StatusIcon className={`w-3 h-3 ${run.status === "running" ? "animate-spin" : ""}`} />
         {runStatusWords(run.status)}
@@ -248,7 +250,7 @@ function RunDetailContent({ runId }: { runId: string }) {
           {/* What the run did and what is true now, then where each fact lives. */}
           <section data-run-report-head>
             <p className="text-[17px] leading-snug font-medium">
-              <RunOutcomeText run={run as ReportRun} task={task} ask={ask} />
+              <RunOutcomeText run={run as ReportRun} task={task} graph={workflow as any} ask={ask} />
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               {!line && hostHref && <ReportChip href={hostHref} title="The session that ran this workflow">Ran in {hostTitle ?? "its session"}</ReportChip>}
@@ -330,8 +332,8 @@ function RunDetailContent({ runId }: { runId: string }) {
             </div>
           )}
 
-          {line ? (
-            <ReportSection title="The path">
+          {readsAsPath(run as ReportRun, workflow as any) ? (
+            <ReportSection title={line ? "The path" : "Steps"}>
               <RunPathView phases={phases} ended={ended} />
             </ReportSection>
           ) : (
@@ -353,7 +355,7 @@ function RunDetailContent({ runId }: { runId: string }) {
 
           {earlier.length > 0 && (
             <ReportSection title={`${earlier.some((r) => r.created_at > run.created_at) ? "Other" : "Earlier"} runs on ${taskRef ?? "this problem"}`}>
-              <CauseRunList runs={earlier} current={run._id} newest={Math.max(run.created_at, ...earlier.map((r) => r.created_at))} />
+              <CauseRunList runs={earlier} current={run._id} newest={Math.max(run.created_at, ...earlier.map((r) => r.created_at))} graphOf={(r) => (r.workflow_id && r.workflow_id === run.workflow_id ? (workflow as any) : null)} />
             </ReportSection>
           )}
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { flowDiagram, runReached, stepStates } from "../flowDiagram";
+import { flowDiagram, runReached, stepResult, stepStates } from "../flowDiagram";
 import { appPool, flowBySlug, pushedFlow } from "../flowPool";
 import { flowRunState, readFlowFence, runStatusWords } from "../flowFence";
 import { flowCommandTarget } from "../flowCommandOutput";
@@ -70,6 +70,21 @@ describe("a flow as a diagram", () => {
     const stopped = stepStates(d, { status: "failed", current_node_id: "check__failed", node_statuses: [{ node_id: "check__verify", status: "failed" }] });
     expect(stopped.get("check")).toBe("stopped");
     expect(runReached({ status: "failed", current_node_id: "check__failed" }, "check__failed")).toBe(true);
+  });
+
+  test("a step of any flow but an own-results round reads as it ran, whatever its result's outcome says", () => {
+    const d = flowDiagram(quick);
+    const r = { status: "completed", current_node_id: "exit", node_statuses: [
+      { node_id: "check", status: "completed", started_at: 1 },
+      { node_id: "check__verify", status: "completed", started_at: 2, result_preview: '{"outcome":"skipped","note":"No checks documented"}' },
+      { node_id: "review__review", status: "completed", started_at: 3, result_preview: '```json\n{"outcome":"ship","left_for_you":"Tag the release"}\n```' },
+    ] };
+    const states = stepStates(d, r);
+    expect([states.get("check"), states.get("check__verify"), states.get("review__review")]).toEqual(["done", "done", "done"]);
+    expect(stepResult(r, "check")).toEqual({ outcome: "skipped", note: "No checks documented", leftForYou: null });
+    // A step that exits 0 and says it failed passed all the same: only the personal Ship reads its stations' words.
+    expect(stepStates(d, { status: "running", current_node_id: "review__review", node_statuses: [{ node_id: "check__verify", status: "completed", result_preview: '{"outcome":"fail","note":"2 tests failed"}' }] }).get("check")).toBe("done");
+    expect(stepStates(d, { status: "failed", current_node_id: "check__failed", node_statuses: [{ node_id: "check__verify", status: "failed", result_preview: '{"outcome":"skipped"}' }] }).get("check")).toBe("stopped");
   });
 });
 

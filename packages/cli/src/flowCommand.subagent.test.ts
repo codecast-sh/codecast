@@ -9,7 +9,8 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { registerFlowCommands, spawnerArgs, type FlowDeps } from "./flowCommand";
+import { registerFlowCommands, type FlowDeps } from "./flowCommand";
+import { spawnerArgs } from "./flowRunSubject";
 
 const PARENT = "00000000-0000-4000-8000-000000000002";
 const tmp: string[] = [];
@@ -55,7 +56,7 @@ async function run(args: string[], subagent: boolean) {
     subjectSession: async () => (subagent ? false : PARENT),
     realCwd: () => cwd,
     readWorkspace: async () => ({ kind: "personal" }),
-    directoryTeam: async () => null,
+    directoryWorkspace: async () => ({ ws: { kind: "personal" }, ownsDefault: false, personal: false }),
     writeWorkspace: async () => ({ kind: "personal" }),
     requireFlows: async () => {},
   };

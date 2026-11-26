@@ -3,7 +3,8 @@
 // instead of failing with "This run's change came from no session". From a plain
 // shell, the session that owns the task is.
 import { describe, expect, test } from "bun:test";
-import { callingSubject, landedOutput } from "./flowCommand";
+import { landedOutput } from "./flowCommand";
+import { callingSubject } from "./flowRunSubject";
 import { changeReturnWords } from "./workflow/flowChangeFile";
 
 const FULL = "jx756fbmcg1nk6fckmvf4xvhsh8hj4bw";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { teamForDirectory } from "./directoryTeam";
+import { listedTeam } from "./directoryTeam";
 
 describe("the team a directory's work belongs to", () => {
   const projects = [
@@ -9,13 +9,13 @@ describe("the team a directory's work belongs to", () => {
     { path: "/src/secret", team_id: "codecast", private: true },
   ];
   test("the longest mapping covering the directory wins", () => {
-    expect(teamForDirectory(projects, "/src/acme/server/backend")).toBe("server");
-    expect(teamForDirectory(projects, "/src/acme/web")).toBe("acme");
-    expect(teamForDirectory(projects, "/src/codecast")).toBe("codecast");
+    expect(listedTeam(projects, "/src/acme/server/backend")).toBe("server");
+    expect(listedTeam(projects, "/src/acme/web")).toBe("acme");
+    expect(listedTeam(projects, "/src/codecast")).toBe("codecast");
   });
   test("no mapping, a sibling with a shared prefix, or a locked folder names no team", () => {
-    expect(teamForDirectory(projects, "/src/elsewhere")).toBeNull();
-    expect(teamForDirectory(projects, "/src/codecast-old")).toBeNull();
-    expect(teamForDirectory(projects, "/src/secret/x")).toBeNull();
+    expect(listedTeam(projects, "/src/elsewhere")).toBeNull();
+    expect(listedTeam(projects, "/src/codecast-old")).toBeNull();
+    expect(listedTeam(projects, "/src/secret/x")).toBeNull();
   });
 });

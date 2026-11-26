@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { describeFlow, joinsPool, type PoolWhere } from "./flowPool";
 import { parseWorkflowSource } from "./parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
+import { sourceSaysOwnResults } from "@codecast/shared/contracts/ownResults";
 
 export const SHIPPED_FLOWS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlows.generated.ts";
 
@@ -30,7 +31,10 @@ export function flowSnapshot(slug: string, src: string, where: PoolWhere, file: 
 }
 
 export function shippedFlowsSnapshot() {
-  return Object.entries(BUILTIN_WORKFLOW_TEMPLATES).filter(([slug, src]) => joinsPool(slug, src)).map(([slug, src]) => flowSnapshot(slug, src, "shipped", null));
+  // A personal Ship says so (`graph [own_results=true]`): the web reads its stations' results as it rounds on them
+  // (web lib/ship/ownRound.ts). A repository's report has no field for it, so only a shipped or pushed flow carries it.
+  return Object.entries(BUILTIN_WORKFLOW_TEMPLATES).filter(([slug, src]) => joinsPool(slug, src))
+    .map(([slug, src]) => ({ ...flowSnapshot(slug, src, "shipped", null), ...(sourceSaysOwnResults(src) ? { own_results: true } : {}) }));
 }
 
 export const SHIPPED_FLOW_STATIONS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlowStations.generated.ts";

@@ -707,6 +707,16 @@ export function renderGalleryMessages(now: number): Row[] {
   asst(`A finished run of a library flow:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.libraryRun}"}\n\`\`\``);
   asst(`A flow that is one segment, its findings sent back to this session (press Land to see inside it):\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLandBack}"}\n\`\`\``);
   asst(`The same flow at the person's card inside Land:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLandCard}"}\n\`\`\``);
+  asst(`A personal Ship that ended Live, with one step left for you:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonal}"}\n\`\`\``);
+  asst(`The same flow ending Landed, with no deploy documented:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalNoDeploy}"}\n\`\`\``);
+  asst(`The same flow in its second round, after the session fixed its red Check:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalRound2}"}\n\`\`\``);
+  asst(`The same flow at Land:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalLanding}"}\n\`\`\``);
+  asst(`The same flow at Deploy:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalDeploying}"}\n\`\`\``);
+  asst(`The same flow with a red Check, sent back to this session:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalRed}"}\n\`\`\``);
+  asst(`The same flow landed, its deploy failed, and this session fixes the deploy:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalDeployFix}"}\n\`\`\``);
+  asst(`The same flow ending Deployed, unverified:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalUnverified}"}\n\`\`\``);
+  asst(`The same flow stopped at Not landed:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalUnlanded}"}\n\`\`\``);
+  asst(`The same flow stopped after its rounds, main moving under it each time:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipPersonalMovingStop}"}\n\`\`\``);
 
   section("Pipeline");
   sh(EDIT_ADD.command, EDIT_ADD.output);

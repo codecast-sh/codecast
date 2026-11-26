@@ -6,7 +6,7 @@
 // `cast flow pipeline` prints it; every deploy targets publish sends it.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { foldFlow, segmentTopOf } from "@codecast/shared/contracts/flowPool";
+import { foldFlow, segmentTopOf, shipFlowSlug, workspacePool } from "@codecast/shared/contracts/flowPool";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { EMPTY_RECENT, ownWords, packRecent, PIPELINE_RECENT_MAX, runsWords, type PipelineRecent, type PipelineFlow, type PipelineOwn, type PipelinePublish, type PipelineStation, type PipelineTarget, type PipelineWho } from "@codecast/shared/contracts/pipeline";
 import type { DeployTarget } from "@codecast/shared/contracts/deployTargets";
@@ -31,6 +31,8 @@ export type PipelineInputs = {
   pushed?: ReadonlyArray<PushedPoolRow>;
   /** The slug the team set as its default flow (teams.default_flow). */
   teamDefault?: string | null;
+  /** No team shares the checkout: its Ship is the personal one (workspacePool). */
+  personal?: boolean;
   /** `[line.deploy]` as the line runs it (lineDeploy withDeclaredTarget): the step commands of a release with no target to send. */
   deploy?: Partial<LineDeployProfile> | null;
   targets?: ReadonlyArray<DeployTarget>;
@@ -43,13 +45,17 @@ export type PipelineInputs = {
 };
 
 
-/** The change flow a session's Ship runs in this checkout: the repo's `change`, else the team's default when it takes a session's change, else the shipped `change`. */
-export function changeFlowOf(pool: ReadonlyArray<PoolFlow>, teamDefault?: string | null): PoolFlow | null {
+/** The change flow a session's Ship runs in this checkout: the repo's `change`, else the team's default when it takes a
+ *  session's change, else the shipped `change`, which in a personal workspace is the personal Ship (workspacePool). */
+export function changeFlowOf(pool: ReadonlyArray<PoolFlow>, teamDefault?: string | null, personal = false): PoolFlow | null {
   const takesChange = (f: PoolFlow | undefined) => (f && !f.errors.length && f.takes.includes("branch") ? f : null);
   const repo = pool.find((f) => f.slug === CHANGE_FLOW_SLUG && f.where === "repo");
   // A repo `change` shadows every other: one that does not parse is what Ship meets, so it is the answer, said.
   if (repo?.errors.length) throw new Error(`${repo.file ?? CHANGE_FLOW_SLUG} does not parse, so Ship has no flow here: ${repo.errors[0]}`);
-  return takesChange(repo) ?? (teamDefault ? takesChange(pool.find((f) => f.slug === teamDefault)) : null) ?? takesChange(pool.find((f) => f.slug === CHANGE_FLOW_SLUG)) ?? null;
+  // The workspace's own pool: a team's never holds the shipped personal Ship, whatever its default names.
+  const offered = workspacePool(pool, personal);
+  const ship = shipFlowSlug(offered, CHANGE_FLOW_SLUG);
+  return takesChange(repo) ?? (teamDefault ? takesChange(offered.find((f) => f.slug === teamDefault)) : null) ?? takesChange(offered.find((f) => f.slug === ship)) ?? null;
 }
 
 const inside = (root: string, file: string) => !path.relative(root, file).startsWith("..") && !path.isAbsolute(path.relative(root, file));
@@ -242,7 +248,7 @@ export const pipelineTarget = (t: DeployTarget): PipelineTarget => {
 /** The pipeline of a checkout, as `cast flow pipeline` prints it and a publish sends it, with the repo files it was read from. */
 export function buildPipeline(i: PipelineInputs): { pipeline: PipelinePublish; files: string[] } {
   const pool = poolFlows(i.root, null, i.pushed ?? [], i.cacheRoot);
-  const change = changeFlowOf(pool, i.teamDefault);
+  const change = changeFlowOf(pool, i.teamDefault, i.personal);
   if (!change) throw new Error(`No change flow resolves in ${i.root}: neither .codecast/flows/change.cast, the team's default, nor the shipped change parses`);
   const changeSrc: FlowSource = change.file ? { src: fs.readFileSync(change.file, "utf-8"), dir: path.dirname(change.file), file: change.file } : { src: BUILTIN_WORKFLOW_TEMPLATES[change.slug] };
   const flowsDir = repoFlowsDir(i.root) ?? path.join(i.root, ".codecast", "flows");

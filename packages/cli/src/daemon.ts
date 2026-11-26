@@ -42,7 +42,7 @@ import * as os from "os";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, refuseKeychainCallsWhileLocked, spawn, spawnSync, whichBin } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFileAsync as _execFileAsync, refuseKeychainCallsWhileLocked, spawn, spawnSync, whichBin } from "./proc.js";
 import { isProcessRunning, readPidFile, releasePidFileIfOwned, tryAcquirePidFileLock } from "./pidFileLock.js";
 export { releasePidFileIfOwned, tryAcquirePidFileLock };
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
@@ -101,7 +101,8 @@ import {
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
 import { folderFetchGate } from "./folderFetchGate.js";
-import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
+import { execGitIn, getGitLocation, repoCheckoutRoot } from "./gitLocation.js";
+import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthPushGroups, keptLoginNote, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
 import { dialRemoteHost, dialsWithoutWaking, hostForDevice, noteDialError, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
@@ -10720,12 +10721,6 @@ async function transcriptGitInfo(projectPath: string | undefined, sessionId: str
   return cloud?.remoteUrl ? { remoteUrl: cloud.remoteUrl, branch: cloud.gitBranch } : undefined;
 }
 
-/** The checkout a session's repository is: a worktree's main checkout, a move clone's host checkout, else the toplevel. */
-function repoCheckoutRoot(commonDir: string | undefined, toplevel: string | undefined): string | undefined {
-  const root = commonDir?.endsWith("/.git") ? commonDir.slice(0, -5) : toplevel;
-  return root && checkoutOfMoveClone(root);
-}
-
 const GIT_DIFF_CAP = 100_000;
 
 /**
@@ -10737,27 +10732,6 @@ const GIT_DIFF_CAP = 100_000;
  */
 function uploadableGitText(text: string | undefined, cap = Infinity): string | undefined {
   return text ? redactSecrets(text.slice(0, cap + SECRET_PAYLOAD_MAX)).slice(0, cap) : undefined;
-}
-
-function execGitIn(projectPath: string, args: string): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile("git", args.split(" "), {
-      cwd: projectPath,
-      encoding: "utf-8",
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 60_000,
-    }, (err, stdout) => resolve(err ? undefined : String(stdout).trim()));
-  });
-}
-
-/** Where a checkout sits: its root, its main checkout's root and its origin. Two git calls, no status or diff. */
-export async function getGitLocation(projectPath: string): Promise<{ root: string; repoRoot: string | undefined; remoteUrl: string | undefined } | undefined> {
-  const [paths, remoteUrl] = await Promise.all([
-    execGitIn(projectPath, "rev-parse --show-toplevel --path-format=absolute --git-common-dir"),
-    execGitIn(projectPath, "remote get-url origin"),
-  ]);
-  const [root, commonDir] = paths?.split("\n") ?? [];
-  return root ? { root, repoRoot: repoCheckoutRoot(commonDir, root), remoteUrl } : undefined;
 }
 
 export async function getGitInfo(projectPath: string): Promise<GitInfo | undefined> {

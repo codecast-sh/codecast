@@ -46,6 +46,18 @@ import changeReview from "./templates/change/review.md" with { type: "text" };
 import changeBrief from "./templates/change/brief.md" with { type: "text" };
 import changeConflict from "./templates/change/conflict.md" with { type: "text" };
 import changeCiConflict from "./templates/change/ci_conflict.md" with { type: "text" };
+import personalCast from "./templates/personal.cast" with { type: "text" };
+import personalRound from "./templates/personal/round.sh" with { type: "text" };
+import personalFindCheck from "./templates/personal/find_check.md" with { type: "text" };
+import personalReview from "./templates/personal/review.md" with { type: "text" };
+import personalVerdicts from "./templates/personal/verdicts.sh" with { type: "text" };
+import personalLand from "./templates/personal/land.sh" with { type: "text" };
+import personalAfterFix from "./templates/personal/after_fix.sh" with { type: "text" };
+import personalLanded from "./templates/personal/landed.sh" with { type: "text" };
+import personalDeploy from "./templates/personal/deploy.md" with { type: "text" };
+import personalBrief from "./templates/personal/brief.md" with { type: "text" };
+import personalConflict from "./templates/personal/conflict.md" with { type: "text" };
+import personalDeployFix from "./templates/personal/deploy_fix.md" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
@@ -84,6 +96,18 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "change/brief.md": changeBrief,
   "change/conflict.md": changeConflict,
   "change/ci_conflict.md": changeCiConflict,
+  // The personal workspace's Ship (personal.cast): its stations and what it sends back to the session.
+  "personal/round.sh": personalRound,
+  "personal/find_check.md": personalFindCheck,
+  "personal/review.md": personalReview,
+  "personal/verdicts.sh": personalVerdicts,
+  "personal/land.sh": personalLand,
+  "personal/after_fix.sh": personalAfterFix,
+  "personal/landed.sh": personalLanded,
+  "personal/deploy.md": personalDeploy,
+  "personal/brief.md": personalBrief,
+  "personal/conflict.md": personalConflict,
+  "personal/deploy_fix.md": personalDeployFix,
   // What the blind risk judge reads (judge.cast).
   "judge/risk.md": judgeRisk,
   // What the intent segment's model reads (intent.cast).
@@ -134,6 +158,8 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   deploy: deployCast,
   "prove-implement": inlineTemplateFiles(proveImplementCast, LINE_TEMPLATE_FILES),
   change: inlineTemplateFiles(changeCast, LINE_TEMPLATE_FILES),
+  // The change line of a personal workspace: check and review, land on main, deploy as the docs say.
+  personal: inlineTemplateFiles(personalCast, LINE_TEMPLATE_FILES),
   // Hill-climbing one goal metric through its environments (flows.md FL10).
   climb: inlineTemplateFiles(climbCast, LINE_TEMPLATE_FILES),
   feature: featureCast,

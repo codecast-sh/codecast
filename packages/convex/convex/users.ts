@@ -3886,6 +3886,7 @@ export const getProjectsWithTeamsForCLI = query({
           team_name: m.team_id ? team?.name ?? "Unknown" : null,
           private: m.private ?? false,
           share_since: m.share_since ?? null,
+          repository: m.repository,
         };
       })
     );
@@ -3918,7 +3919,9 @@ export const getProjectsWithTeamsForCLI = query({
         };
       });
 
-    return { projects };
+    // Every folder rule, whatever the projects window kept: the CLI resolves a directory's team from these by the rule
+    // that stamps a session's (privacy.ts resolveTeamForPath), the repository rule included (cli directoryTeam.ts).
+    return { projects, mappings: mappingsWithTeams.map((m) => ({ path_prefix: m.path_prefix, team_id: m.team_id, private: m.private, ...(m.repository ? { repository: m.repository } : {}) })) };
   },
 });
 

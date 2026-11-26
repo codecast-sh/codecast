@@ -1,8 +1,10 @@
-import { internalMutation, mutation, query } from "./functions";
+import { internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { ConvexError, v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
+import { normalizeRepository } from "./lib/gitRefs";
+import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { LINE_SLUG_RE } from "@codecast/shared/contracts/orgProposal";
@@ -289,6 +291,63 @@ export const poolForCli = query({
     };
   },
 });
+
+/**
+ * What `cast flow` needs to tell a personal checkout (cli directoryTeam.ts): the workspace the calling session is
+ * stamped into (its team_id, which the web's Ship reads; null when there is no session or the caller owns none by that
+ * ref), and whether any team the caller belongs to already knows the checkout's repository, whatever folder it sits in:
+ * a teammate's published checkout of it (repo_sources), a pull request of it the team holds (pull_requests), a
+ * commit of it the team's sessions made (commits), or a share rule of a member's that names it (directory_team_mappings). `in_team`
+ * says whether the caller belongs to any team: one who belongs to none has nobody to share a checkout with. Internal:
+ * only the http route /cli/workflows/workspace-facts runs it, for the caller its token names.
+ */
+export const workspaceFactsForCli = internalQuery({
+  args: { api_token: v.string(), session: v.optional(v.string()), repository: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const result = await verifyApiToken(ctx, args.api_token);
+    if (!result) return { error: "Unauthorized" };
+    const conv = args.session ? await findConversationByAnyRef(ctx, args.session, result.userId) : null;
+    // A session the server bound to an open team task (tasks.spawnSessionForTask) works for that team, whatever its
+    // own stamp: its change is never personal.
+    const bound: any = conv?.active_task_id ? await ctx.db.get(conv.active_task_id) : null;
+    const teamTask = bound?.team_id && bound.status !== "done" && bound.status !== "dropped" ? bound.team_id : null;
+    const workspace = conv ? (conv.team_id ? `team:${conv.team_id}` : teamTask ? `team:${teamTask}` : "personal") : null;
+    const membership = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", result.userId)).first();
+    return {
+      workspace,
+      team_repository: args.repository ? await teamKnowsRepository(ctx, result.userId, normalizeRepository(args.repository)) : false,
+      in_team: !!membership,
+    };
+  },
+});
+
+/** Whether any of the caller's own teams knows a repository (teamKnowsRepository): the web's Ship picker asks it so its
+ *  preview of the personal Ship matches what `cast flow run change` decides (web lib/line/flowPool.ts previewsPersonal).
+ *  One boolean about the caller's own memberships; signed out reads as known, which previews the team's flow. */
+export const repositoryKnownToTeams = query({
+  args: { repository: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return true;
+    return await teamKnowsRepository(ctx, userId, normalizeRepository(args.repository));
+  },
+});
+
+async function teamKnowsRepository(ctx: { db: any }, userId: Id<"users">, repository: string): Promise<boolean> {
+  const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+  for (const m of memberships) {
+    const source = await ctx.db.query("repo_sources").withIndex("by_team_repository", (q: any) => q.eq("team_id", m.team_id).eq("repository", repository)).first();
+    if (source) return true;
+    const pr = await ctx.db.query("pull_requests").withIndex("by_team_repository", (q: any) => q.eq("team_id", m.team_id).eq("repository", repository)).first();
+    if (pr) return true;
+    const commit = await ctx.db.query("commits").withIndex("by_team_repository", (q: any) => q.eq("team_id", m.team_id).eq("repository", repository)).first();
+    if (commit) return true;
+    // A teammate's share rule on a checkout of it, auto-shared or not: the team works in it, privately or openly.
+    const rules = await ctx.db.query("directory_team_mappings").withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id)).collect();
+    if (rules.some((r: any) => !r.private && r.repository && normalizeRepository(r.repository) === repository)) return true;
+  }
+  return false;
+}
 
 // Rows from before keys stay their owner's (flows.md FL2): stamped personal,
 // and the team tag the old insert copied from the user is dropped, so both

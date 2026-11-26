@@ -4656,7 +4656,9 @@ export default defineSchema({
   })
     .index("by_user_root", ["user_id", "root"])
     .index("by_repository", ["repository"])
-    .index("by_team_id", ["team_id"]),
+    .index("by_team_id", ["team_id"])
+    // Whether a team holds a checkout of a repository (workflows.ts workspaceFactsForCli).
+    .index("by_team_repository", ["team_id", "repository"]),
 
   // A read the repo pages asked for that only a teammate's checkout can
   // answer: no installation covers the repository and the daemon has not

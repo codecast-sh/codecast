@@ -254,6 +254,121 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "1" }, false],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "4" }, true],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "1" }, false],
+    // personal.cast (flows.md FL4): Round, Find check once a run, the round's nonce on the review, Land's exit codes, Deploy's pin.
+    ["outcome = success and find_check.visits = 0", { outcome: "success" }, true],
+    ["outcome = success and find_check.visits = 0", { outcome: "success", "find_check.visits": "1" }, false],
+    ["outcome = failure and round.exit_code = 1 and change_conversation", { outcome: "failure", "round.exit_code": "1", change_conversation: "conv_1" }, true],
+    ["outcome = failure and round.exit_code = 1 and change_conversation", { outcome: "failure", "round.exit_code": "1", change_conversation: "" }, false],
+    ["outcome = failure and round.exit_code = 1", { outcome: "failure", "round.exit_code": "1" }, true],
+    ["outcome = failure and round.exit_code = 1", { outcome: "failure", "round.exit_code": "2" }, false],
+    ["outcome = failure and round.exit_code = 4", { outcome: "failure", "round.exit_code": "4" }, true],
+    ["outcome = failure and round.exit_code = 4", { outcome: "failure", "round.exit_code": "1" }, false],
+    ["outcome = success and (find_check.json.outcome = found or find_check.json.outcome = skipped)", { outcome: "success", "find_check.json": JSON.stringify({ outcome: "skipped", note: "no check documented" }) }, true],
+    ["outcome = success and (find_check.json.outcome = found or find_check.json.outcome = skipped)", { outcome: "success", "find_check.json": JSON.stringify({ outcome: "found", commands: ["bun test"] }) }, true],
+    ["outcome = success and (find_check.json.outcome = found or find_check.json.outcome = skipped)", { outcome: "success" }, false],
+    ["check.outcome = failure", { "check.outcome": "failure" }, true],
+    ["check.outcome = failure", { "check.outcome": "success" }, false],
+    ...((): Array<[string, Record<string, string>, boolean]> => {
+      const round = JSON.stringify({ round: "n2", head_sha: "5ca1ab1e", verdicts_at: 2 });
+      const at = (review: Record<string, unknown> | null, check: Record<string, unknown> | null, more: Record<string, string> = {}) => ({
+        "round.json": round, ...(review ? { "review.json": JSON.stringify(review) } : {}), ...(check ? { "check.json": JSON.stringify(check) } : {}), ...more,
+      });
+      const again = "(review.outcome = failure or review.json.round != round.json.round or (review.json.verdict != ship and review.json.verdict != changes and review.json.verdict != rejected)) and verdicts.visits <= round.json.verdicts_at";
+      const reject = "review.json.round = round.json.round and review.json.verdict = rejected";
+      const land = "review.json.round = round.json.round and review.json.verdict = ship and (check.json.outcome = pass or check.json.outcome = skipped)";
+      const brief = "(check.json.outcome = fail or (review.json.round = round.json.round and review.json.verdict = changes)) and change_conversation";
+      const found = "check.json.outcome = fail or (review.json.round = round.json.round and review.json.verdict = changes)";
+      return [
+        [again, at({ round: "n1", verdict: "ship" }, null, { "verdicts.visits": "1" }), true],
+        [again, at({ round: "n2", verdict: "maybe" }, null, { "verdicts.visits": "1" }), true],
+        [again, at(null, null, { "review.outcome": "failure", "verdicts.visits": "2" }), true],
+        [again, at({ round: "n1", verdict: "ship" }, null, { "verdicts.visits": "3" }), false],
+        [again, at({ round: "n2", verdict: "changes" }, null, { "verdicts.visits": "1" }), false],
+        [reject, at({ round: "n2", verdict: "rejected" }, null), true],
+        [reject, at({ round: "n1", verdict: "rejected" }, null), false],
+        [land, at({ round: "n2", verdict: "ship" }, { outcome: "pass" }), true],
+        [land, at({ round: "n2", verdict: "ship" }, { outcome: "skipped" }), true],
+        [land, at({ round: "n2", verdict: "ship" }, { outcome: "fail" }), false],
+        [land, at({ round: "n1", verdict: "ship" }, { outcome: "pass" }), false],
+        [brief, at({ round: "n2", verdict: "ship" }, { outcome: "fail" }, { change_conversation: "conv_1" }), true],
+        [brief, at({ round: "n2", verdict: "changes" }, { outcome: "pass" }, { change_conversation: "conv_1" }), true],
+        [brief, at({ round: "n2", verdict: "changes" }, { outcome: "pass" }, { change_conversation: "" }), false],
+        [brief, at({ round: "n1", verdict: "changes" }, { outcome: "pass" }, { change_conversation: "conv_1" }), false],
+        [found, at({ round: "n2", verdict: "changes" }, { outcome: "pass" }), true],
+        [found, at({ round: "n2", verdict: "ship" }, { outcome: "fail" }), true],
+        [found, at({ round: "n2", verdict: "ship" }, { outcome: "pass" }), false],
+      ];
+    })(),
+    ["outcome = success or land.exit_code = 5", { outcome: "failure", "land.exit_code": "5" }, true],
+    ["outcome = success or land.exit_code = 5", { outcome: "failure", "land.exit_code": "3" }, false],
+    ["outcome = failure and land.exit_code = 3 and land.json.moves < 4", { outcome: "failure", "land.exit_code": "3", "land.json": JSON.stringify({ moves: 3 }) }, true],
+    ["outcome = failure and land.exit_code = 3 and land.json.moves < 4", { outcome: "failure", "land.exit_code": "3", "land.json": JSON.stringify({ moves: 4 }) }, false],
+    ["outcome = failure and land.exit_code = 3", { outcome: "failure", "land.exit_code": "3" }, true],
+    ["outcome = failure and land.exit_code = 3", { outcome: "failure", "land.exit_code": "4" }, false],
+    ["outcome = failure and land.exit_code = 4", { outcome: "failure", "land.exit_code": "4" }, true],
+    ["outcome = failure and land.exit_code = 4", { outcome: "failure", "land.exit_code": "6" }, false],
+    ["outcome = failure and land.exit_code = 6", { outcome: "failure", "land.exit_code": "6" }, true],
+    ["outcome = failure and land.exit_code = 6", { outcome: "success", "land.exit_code": "6" }, false],
+    // Land cut off before it pinned any JSON of its own.
+    ["outcome = failure and not land.json.outcome", { outcome: "failure" }, true],
+    ["outcome = failure and not land.json.outcome", { outcome: "failure", "land.json": JSON.stringify({ outcome: "refused", note: "push refused" }) }, false],
+    ["land.json.note", { "land.json": JSON.stringify({ outcome: "refused", note: "push refused" }) }, true],
+    ["land.json.note", { "land.json": JSON.stringify({ outcome: "refused", note: "" }) }, false],
+    ["land.exit_code = 5", { "land.exit_code": "5" }, true],
+    ["land.exit_code = 5", { "land.exit_code": "0" }, false],
+    ["landed.json.outcome = moved", { "landed.json": JSON.stringify({ outcome: "moved", note: "a newer commit is on top" }) }, true],
+    ["landed.json.outcome = moved", { "landed.json": JSON.stringify({ outcome: "on_top" }) }, false],
+    ...((): Array<[string, Record<string, string>, boolean]> => {
+      const pin = (deploy: Record<string, unknown>, outcome = "success") => ({ outcome, "landed.json": JSON.stringify({ sha: "5ca1ab1e" }), "deploy.json": JSON.stringify(deploy) });
+      const left = "outcome = success and deploy.json.left_for_you and deploy.json.left_for_you != null and (deploy.json.outcome = live or deploy.json.outcome = unverified or deploy.json.outcome = skipped)";
+      const live = "outcome = success and deploy.json.outcome = live and deploy.json.sha = landed.json.sha and deploy.json.seen_live and deploy.json.seen_live != null";
+      const liveAfterLeft = "deploy.json.outcome = live and deploy.json.sha = landed.json.sha and deploy.json.seen_live and deploy.json.seen_live != null";
+      const unverified = "outcome = success and (deploy.json.outcome = live or deploy.json.outcome = unverified)";
+      const unverifiedAfterLeft = "deploy.json.outcome = live or deploy.json.outcome = unverified";
+      const seen = { outcome: "live", sha: "5ca1ab1e", seen_live: "GET /version says 5ca1ab1e" };
+      return [
+        [left, pin({ outcome: "skipped", left_for_you: "Approve the release in the store" }), true],
+        [left, pin({ outcome: "live", left_for_you: "Flip the flag" }), true],
+        // A JSON null reads as the text "null", which alone is truthy: the `!= null` clause is what refuses it.
+        [left, pin({ outcome: "live", left_for_you: null }), false],
+        [left, pin({ outcome: "failed", left_for_you: "Fix the token" }), false],
+        [live, pin(seen), true],
+        [live, pin({ ...seen, sha: "0ddba11" }), false],
+        [live, pin({ ...seen, seen_live: null }), false],
+        [live, pin({ outcome: "live", sha: "5ca1ab1e" }), false],
+        [liveAfterLeft, pin(seen, "failure"), true],
+        [liveAfterLeft, pin({ ...seen, seen_live: "" }), false],
+        [unverified, pin({ outcome: "unverified" }), true],
+        [unverified, pin({ outcome: "live" }), true],
+        [unverified, pin({ outcome: "skipped" }), false],
+        [unverifiedAfterLeft, pin({ outcome: "unverified" }), true],
+        [unverifiedAfterLeft, pin({ outcome: "failed" }), false],
+        ["outcome = success and deploy.json.outcome = skipped", pin({ outcome: "skipped" }), true],
+        ["outcome = success and deploy.json.outcome = skipped", pin({ outcome: "live" }), false],
+        ["outcome = success and deploy.json.outcome = failed and change_conversation", { ...pin({ outcome: "failed" }), change_conversation: "conv_1" }, true],
+        ["outcome = success and deploy.json.outcome = failed and change_conversation", { ...pin({ outcome: "failed" }), change_conversation: "" }, false],
+        ["outcome = success and deploy.json.outcome = failed", pin({ outcome: "failed" }), true],
+        ["outcome = success and deploy.json.outcome = failed", pin({ outcome: "failed" }, "failure"), false],
+      ];
+    })(),
+    ["outcome = failure and last_error contains \"Could not freeze\"", { outcome: "failure", last_error: "Could not freeze the change: index.lock exists" }, true],
+    ["outcome = failure and last_error contains \"Could not freeze\"", { outcome: "failure", last_error: "the session timed out" }, false],
+    ["change_landed", { change_landed: "true" }, true],
+    ["change_landed", { change_landed: "" }, false],
+    ["outcome = success and after_fix.json.next = deploy", { outcome: "success", "after_fix.json": JSON.stringify({ next: "deploy" }) }, true],
+    ["outcome = success and after_fix.json.next = deploy", { outcome: "success", "after_fix.json": JSON.stringify({ next: "round" }) }, false],
+    ["outcome = success and after_fix.json.next = round", { outcome: "success", "after_fix.json": JSON.stringify({ next: "round" }) }, true],
+    ["outcome = success and after_fix.json.next = round", { outcome: "failure", "after_fix.json": JSON.stringify({ next: "round" }) }, false],
+    ["outcome = success and after_fix.json.next = unpushed", { outcome: "success", "after_fix.json": JSON.stringify({ next: "unpushed", note: "committed, not pushed" }) }, true],
+    ["outcome = success and after_fix.json.next = unpushed", { outcome: "success", "after_fix.json": JSON.stringify({ next: "moved" }) }, false],
+    ["outcome = success and after_fix.json.next = moved", { outcome: "success", "after_fix.json": JSON.stringify({ next: "moved" }) }, true],
+    ["outcome = success and after_fix.json.next = moved", { outcome: "success", "after_fix.json": JSON.stringify({ next: "deploy" }) }, false],
+    ["outcome = success and committed.json.next = unpushed", { outcome: "success", "committed.json": JSON.stringify({ next: "unpushed" }) }, true],
+    ["outcome = success and committed.json.next = unpushed", { outcome: "success" }, false],
+    ["outcome = success and landcut.json.outcome = landed", { outcome: "success", "landcut.json": JSON.stringify({ outcome: "landed", sha: "5ca1ab1e" }) }, true],
+    ["outcome = success and landcut.json.outcome = landed", { outcome: "success", "landcut.json": JSON.stringify({ outcome: "unknown", sha: "5ca1ab1e" }) }, false],
+    ["outcome = success and landcut.json.outcome = unknown", { outcome: "success", "landcut.json": JSON.stringify({ outcome: "unknown", sha: "5ca1ab1e" }) }, true],
+    ["outcome = success and landcut.json.outcome = unknown", { outcome: "failure", "landcut.json": JSON.stringify({ outcome: "unknown" }) }, false],
     // intent.cast (flows.md FL4): only a read that ships, in scope, citing a session, a line and a quote, goes on to Verify.
     ...[INTENT_CLEAR].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
       const read = "read.json";

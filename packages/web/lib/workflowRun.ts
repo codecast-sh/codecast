@@ -4,6 +4,7 @@
 // conversation card. Pure, so the ordering and the counts have one home.
 
 import { stripMarkdown } from "./notificationText";
+import { roundsOnOwnResults } from "./ship/ownRound";
 
 export type RunNodeStatus = "pending" | "running" | "completed" | "failed";
 
@@ -120,7 +121,9 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
     });
   };
   for (const n of graph) push(n.id, n.label, n.type);
-  for (const ns of statuses) push(ns.node_id, ns.label, undefined);
+  // An own-results round's ends (the personal Ship's Live, Landed, Not landed) are named by their labels, never their ids.
+  const endLabel = workflow && roundsOnOwnResults(workflow) ? new Map<string, string>((workflow.nodes ?? []).map((n: any) => [n.id, n.label])) : null;
+  for (const ns of statuses) push(ns.node_id, ns.label ?? endLabel?.get(ns.node_id), undefined);
   return rows;
 }
 

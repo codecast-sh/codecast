@@ -4,7 +4,8 @@ import { SHIPPED_LINE } from "../shippedLine.generated";
 import { union57382Run, union57467Run } from "./unionLineRuns.fixture";
 import { ct57659Run2, ct57659Run3, ct57659Run5 } from "./ct57659Runs.fixture";
 import { NEVER_STARTED_CAUSE, stationEnd, stopWords } from "../runReport";
-import { LINE_PHASES, approvalScope, closedDecisionWords, cardName, fileStepLabel, plainStepWords, stepLabel, causeRunEntries, causeWhere, gateAnswer, lineVersions, newestClose, projectLineVersions, runEnd, runOutcome, runPath, scriptLine, shortDay, stationWords, failCause, stepFailWords, stoppedOnPurpose, versionChange, type ReportRun } from "../runReport";
+import { LINE_PHASES, approvalScope, closedDecisionWords, cardName, fileStepLabel, plainStepWords, stepLabel, causeRunEntries, causeWhere, gateAnswer, newestClose, runEnd, runOutcome, runPath, scriptLine, shortDay, stationWords, failCause, stepFailWords, stoppedOnPurpose, type ReportRun } from "../runReport";
+import { lineVersions, projectLineVersions, versionChange } from "../lineVersions";
 
 const T0 = 1_790_000_000_000;
 const HOUR = 3_600_000;
@@ -159,9 +160,9 @@ describe("runOutcome", () => {
     // Its session asks a person (ct-99051): the run waits for the answer, it never reads as working or stopped.
     const asking = { ...shippedRun, status: "running", current_node_id: "implement", waiting_on_session: { blocked: true } } as ReportRun;
     expect(runOutcome(asking)).toMatchObject({ tone: "waiting", text: "Waiting for an answer to the session's question." });
-    expect(runOutcome(asking, null, Date.now(), false, { mine: true, open: true }).text).toBe("Waiting for your answer to the session's question.");
+    expect(runOutcome(asking, null, Date.now(), false, { ask: { mine: true, open: true } }).text).toBe("Waiting for your answer to the session's question.");
     // Its card answered: the session works on the answer, and so does the run.
-    expect(runOutcome(asking, null, Date.now(), false, { mine: true, open: false }).text).toBe("Working: at Implement.");
+    expect(runOutcome(asking, null, Date.now(), false, { ask: { mine: true, open: false } }).text).toBe("Working: at Implement.");
     expect(runOutcome({ ...shippedRun, status: "paused", gate_node_id: "decide" }).text).toBe("Waiting for your decision.");
     expect(runOutcome({ ...stopped, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)" }).text).toBe("Stopped at Prove: Prove ended without a report; start again or close the problem.");
     expect(runOutcome({ ...stopped, status: "failed", current_node_id: "prove", fail_reason: "no outgoing edge from prove (outcome success, review_verdict none)", node_statuses: [{ node_id: "prove", status: "failed", session: { _id: "s", state: "Reproduced the miss." } }] } as never).text).toBe("Stopped at Prove: Prove finished; review it or close the problem.");

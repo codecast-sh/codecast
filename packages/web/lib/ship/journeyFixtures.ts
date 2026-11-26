@@ -18,8 +18,11 @@
 //   the same graph as Union's checkout reports it (repoFlows, parsed), which
 //   the Ship picker reads there: the card's gate carries it.
 //
-// Hand-written, so a flow rewritten in the library does not move what they show.
+// Hand-written, so a flow rewritten in the library does not move what they show. PERSONAL_FLOW is the one
+// exception: the shipped personal Ship's own graph as a pushed row, so the gallery draws what the template runs.
 // Pure and free of the `@/` alias: the phone's bundle imports the gallery.
+
+import { SHIPPED_FLOWS } from "../line/shippedFlows.generated";
 
 type Node = { id: string; label: string; type: string; shape: string; timeout?: number };
 type Edge = { from: string; to: string; label?: string; condition?: string };
@@ -326,6 +329,24 @@ export const LAND_FLOW: FixtureFlowRow = {
     { from: "land__card__decide", to: "land__card__revise", label: "[R] Revise :: Your note goes to the session that made it; the change comes back through review" },
     { from: "land__card__decide", to: "land__card__dropped", label: "[D] Drop :: Closes it without merging; the session hears your reason" },
   ],
+};
+
+/** The personal Ship as the gallery's pushed row: the shipped template's own graph (templates/personal.cast, through
+ *  shippedFlows.generated), never a hand-written copy, with a source that carries its stations' settings as a pushed
+ *  row's does (pushedFlow reads backends, visit limits, folds and stops from it). */
+const SHIPPED_PERSONAL = SHIPPED_FLOWS.find((f) => f.slug === "personal")!;
+const settingsOf = (n: (typeof SHIPPED_PERSONAL.nodes)[number]) => [
+  n.backend ? `backend=${n.backend}` : null, n.max_visits ? `max_visits=${n.max_visits}` : null, n.fold ? "fold=true" : null,
+  n.machine ? "machine=true" : null, n.stop ? `stop="${n.stop.replace(/"/g, "'")}"` : null,
+].filter(Boolean).join(", ");
+export const PERSONAL_FLOW: FixtureFlowRow = {
+  slug: "gallery-personal",
+  name: "gallery-personal",
+  label: SHIPPED_PERSONAL.label,
+  kind: "line",
+  source: `digraph personal {\n  graph [kind="line", label="${SHIPPED_PERSONAL.label}", takes="task,branch", own_results=true]\n${SHIPPED_PERSONAL.nodes.filter((n) => settingsOf(n)).map((n) => `  ${n.id} [${settingsOf(n)}]`).join("\n")}\n}`,
+  nodes: SHIPPED_PERSONAL.nodes.map((n) => node(n.id, n.label, n.type, n.timeout ? { timeout: n.timeout } : {})),
+  edges: SHIPPED_PERSONAL.edges.map((e) => ({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}), ...(e.condition ? { condition: e.condition } : {}) })),
 };
 
 /** What makes Union's Land ask a person: the `asks_if` on its card (land.cast). */
