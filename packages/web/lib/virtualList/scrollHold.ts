@@ -23,6 +23,7 @@ export type HoldTarget =
 type HoldVirtualizer = {
   options: { count: number };
   getTotalSize: () => number;
+  getSize: () => number;
   scrollToIndex: (index: number, o?: { align?: "start" | "center" | "end" | "auto"; behavior?: "auto" | "smooth" }) => void;
   getOffsetForIndex: (index: number, align?: "start" | "center" | "end" | "auto") => readonly [number, string] | undefined;
   scrollOffset?: number | null;
@@ -70,18 +71,28 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
   };
 
-  const apply = () => {
+  // `measured: false` aims from the virtualizer's believed sizes alone and
+  // reads no geometry: the first aim of a hold runs inside React's commit,
+  // where a read lays out the page the commit just wrote (ct-101552). The
+  // hold's ResizeObserver reports right after the frame's own layout and
+  // before it paints, and its apply reads the real geometry there.
+  const apply = (measured = true) => {
     const h = hold;
     const sc = getEl();
     if (!h || !sc) return;
     if (!charge(h) || h.bail?.()) { stop(); return; }
-    if (holdSatisfied(sc, v, h.target)) return;
+    if (measured && holdSatisfied(sc, v, h.target)) return;
     const count = v.options.count;
     if (h.target === "bottom") {
-      if (count > 0) v.scrollToIndex(count - 1, { align: "end" });
-      sc.scrollTop = sc.scrollHeight;
+      // scrollToIndex clamps its target to the scroller's real scroll height,
+      // a read; the believed end needs none.
+      if (!measured) sc.scrollTop = Math.max(0, v.getTotalSize() - v.getSize());
+      else {
+        if (count > 0) v.scrollToIndex(count - 1, { align: "end" });
+        sc.scrollTop = sc.scrollHeight;
+      }
     } else if (h.target === "top") {
-      if (count > 0) v.scrollToIndex(0, { align: "start" });
+      if (measured && count > 0) v.scrollToIndex(0, { align: "start" });
       sc.scrollTop = 0;
     } else {
       v.scrollToIndex(Math.min(h.target.index, Math.max(0, count - 1)), { align: h.target.align });
@@ -99,14 +110,16 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
     if (!hidden()) apply();
   }
 
+  /** Observes `sc`; true when a fresh observation will report before paint. */
   const watch = (sc: HTMLElement) => {
-    if (observed === sc) return;
+    if (observed === sc) return false;
     ro?.disconnect();
     observed = sc;
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") return false;
     ro ??= new ResizeObserver(() => apply());
     ro.observe(sc);
     for (const child of Array.from(sc.children)) ro.observe(child);
+    return true;
   };
 
   return {
@@ -117,8 +130,7 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
       if (!hold && typeof document !== "undefined") document.addEventListener("visibilitychange", onVisibility);
       hold = { target, bail: o.bail, budget: o.holdMs, since: hidden() ? null : Date.now() };
       lastTotal = v.getTotalSize();
-      watch(sc);
-      apply();
+      apply(!watch(sc));
     },
     /** Feed the virtualizer's onChange here. Re-aims only when sizes moved,
      *  in a microtask: onChange fires inside React's commit (a row's measure

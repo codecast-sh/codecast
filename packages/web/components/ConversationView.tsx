@@ -227,6 +227,7 @@ import { useScrollSeek } from "../hooks/useScrollSeek";
 import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 import type { MountedRows } from "../lib/virtualList/coverage";
 import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
+import { observeRectAfterLayout } from "../lib/virtualList/observeRectAfterLayout";
 import { lazyNamed } from "../lib/lazyNamed";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
@@ -1901,6 +1902,8 @@ const ConversationViewInner = (
     // under a reader's scroll only, are scrollSync's.
     useFlushSync: false,
     ...(VLIST_LEGACY ? {} : { observeElementOffset: scrollSync.observeElementOffset, scrollToFn: scrollSync.scrollToFn }),
+    // Sized without a layout read while it mounts (lib/virtualList/observeRectAfterLayout).
+    observeElementRect: observeRectAfterLayout,
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -2755,9 +2758,13 @@ const ConversationViewInner = (
   useMountEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
-    let lastHeight = sc.clientHeight;
+    // The starting height comes from the observer's initial callback: reading
+    // it here, in the mount commit, forced a layout inside React's task on
+    // the inbox's first paint (ct-101552).
+    let lastHeight: number | null = null;
     const ro = new ResizeObserver(() => {
       const h = sc.clientHeight;
+      if (lastHeight === null) { lastHeight = h; return; }
       if (h === 0 && lastHeight > 0) {
         hiddenFreezeRef.current = { scrollTop: lastScrollTopRef.current, pinned: isNearBottomRef.current };
       } else if (h > 0 && lastHeight === 0 && hiddenFreezeRef.current) {
