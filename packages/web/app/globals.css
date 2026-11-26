@@ -7423,15 +7423,17 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
    reads in the sans at 15/24, each text block held to about 80 characters
    (68ch of Instrument Sans) inside the one column token (.conv-col); code,
    tables and images keep the column's width. [data-sv-feed] lifts these
-   above simple view's own sizes, which Modern sits on. */
+   above simple view's own sizes, which Modern sits on. A run card (.sj) drawn
+   in a reply keeps its own lists and spacing: a prose indent on its stages
+   put step names under their marks. */
 .modern-style [data-sv-feed] [data-cc-prose] {
   font-size: var(--fs-read);
   line-height: 24px;
 }
-.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, dl) {
+.modern-style [data-sv-feed] [data-cc-prose] :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, dl):where(:not(.sj *)) {
   max-width: 68ch;
 }
-.modern-style [data-sv-feed] [data-cc-prose] p {
+.modern-style [data-sv-feed] [data-cc-prose] p:where(:not(.sj *)) {
   margin: 0 0 12px;
 }
 .modern-style [data-sv-feed] [data-cc-prose] :is(h1, h2, h3, h4, h5, h6) {
@@ -7448,11 +7450,11 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   line-height: 20px;
   color: var(--sol-text-secondary);
 }
-.modern-style [data-sv-feed] [data-cc-prose] :is(ul, ol) {
+.modern-style [data-sv-feed] [data-cc-prose] :is(ul, ol):where(:not(.sj *)) {
   margin: 0 0 12px;
   padding-left: 22px;
 }
-.modern-style [data-sv-feed] [data-cc-prose] li {
+.modern-style [data-sv-feed] [data-cc-prose] li:where(:not(.sj *)) {
   margin: 4px 0;
   padding-left: 2px;
 }
