@@ -21,3 +21,22 @@ export function buildPrefillText(raw: string | null | undefined): string | null 
   const quote = toBlockquote(raw.slice(0, PREFILL_MAX_LENGTH));
   return quote ? `${quote}\n\n` : null;
 }
+
+/** Text seeded into an existing session's composer. `fill` (a link's quote, a
+ *  cancelled send) only ever fills an empty composer; `add` is text to
+ *  continue (`?compose=`, lib/composeLink), typed after `fill`, or under a
+ *  draft already there. */
+export type ComposerSeed = { fill: string; add: string };
+
+/** The composer's text once a seed lands on `current` (what is typed or kept
+ *  as the draft), or null to leave the composer alone. A draft or an attached
+ *  image outranks `fill`, which is dropped; `add` goes under the draft after a
+ *  blank line, and a second click of the same link adds nothing. */
+export function seedComposer(current: string, hasImages: boolean, seed: ComposerSeed): string | null {
+  if (!current.trim() && !hasImages) return seed.fill + seed.add || null;
+  if (!seed.add) return null;
+  if (!current.trim()) return seed.add;
+  const kept = current.trimEnd();
+  const add = seed.add.trimEnd();
+  return kept === add || kept.endsWith(`\n\n${add}`) ? current : `${kept}\n\n${seed.add}`;
+}
