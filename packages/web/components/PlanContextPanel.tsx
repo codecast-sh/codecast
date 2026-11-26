@@ -3,60 +3,21 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { computePlanProgress } from "../lib/liveEntities";
-import { RailChip, RailDetail, RailProgress } from "./ContextRail";
-import {
-  Circle,
-  CircleDot,
-  CheckCircle2,
-  CircleDotDashed,
-  XCircle,
-  Target,
-  ArrowUp,
-  Minus,
-  ArrowDown,
-  AlertTriangle,
-} from "lucide-react";
+import { RailProgress, railChipClass } from "./ContextRail";
+import { Target } from "lucide-react";
 
 const api = _api as any;
 
-const STATUS_ICON: Record<string, any> = {
-  draft: CircleDotDashed,
-  open: Circle,
-  in_progress: CircleDot,
-  in_review: CircleDot,
-  done: CheckCircle2,
-  dropped: XCircle,
-};
-
-const STATUS_COLOR: Record<string, string> = {
-  draft: "text-sol-text-dim",
-  open: "text-sol-blue",
-  in_progress: "text-sol-yellow",
-  in_review: "text-sol-violet",
-  done: "text-sol-green",
-  dropped: "text-sol-text-dim",
-};
-
-const PRIORITY_ICON: Record<string, any> = {
-  urgent: AlertTriangle,
-  high: ArrowUp,
-  medium: Minus,
-  low: ArrowDown,
-};
-
-const PRIORITY_COLOR: Record<string, string> = {
-  urgent: "text-sol-red",
-  high: "text-sol-orange",
-  medium: "text-sol-text-dim",
-  low: "text-sol-text-dim",
-};
-
+/** The plan a session belongs to, as one rail chip that opens the plan page.
+ *  A person pressing the plan chip wants the plan: it used to open a summary
+ *  (the goal cut to two lines and the task titles) with the plan one more
+ *  link away, and people pressed the chip again and again without getting
+ *  there (ct-101660). The plan page carries the goal and the task list whole. */
 export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
   const queryPlan = useQueryNoThrow(api.plans.webPlanContext, { plan_id: planId }).data;
-  const [expanded, setExpanded] = useState(false);
 
   // Local-first first paint: the strip used to pop in a round-trip after the
   // conversation rendered, on every open. The store's plan row + task rows
@@ -80,59 +41,18 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
 
   return (
     <div data-cc-context-panel className="contents">
-      <RailChip data-cc-rail-item="plan" open={expanded} onToggle={() => setExpanded(!expanded)} title={`${plan.title} · ${plan.short_id ?? ""}`}>
+      <Link
+        href={`/plans/${plan.short_id ?? plan._id}`}
+        data-cc-rail-item="plan"
+        title={`${plan.title} · ${plan.short_id ?? ""}`}
+        className={railChipClass(false)}
+      >
         <Target className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
         <span className="min-w-0 truncate font-medium text-sol-cyan">{plan.title}</span>
         <span data-rail-full className="flex-shrink-0"><ShortId id={plan.short_id} className="text-sol-text-dim" /></span>
         <span className="ml-auto" />
         <RailProgress done={progress.done} total={progress.total} bar="bg-sol-green" />
-      </RailChip>
-
-      {expanded && (
-        <RailDetail data-cc-context-panel="">
-        <div className="px-4 py-2 space-y-2">
-          <div className="flex items-center gap-2 text-xs">
-            <span className="font-medium text-sol-text">{plan.title}</span>
-            <ShortId id={plan.short_id} className="text-sol-text-dim" />
-          </div>
-          {plan.goal && (
-            <p className="text-meta text-sol-text-muted line-clamp-2">{plan.goal}</p>
-          )}
-
-          <div className="space-y-0.5">
-            {plan.tasks.map((task: any) => {
-              const Icon = STATUS_ICON[task.status] || Circle;
-              const color = STATUS_COLOR[task.status] || "text-sol-text-dim";
-              const PIcon = PRIORITY_ICON[task.priority];
-              const pColor = PRIORITY_COLOR[task.priority];
-
-              return (
-                <Link
-                  key={task._id}
-                  href={`/tasks/${task._id}`}
-                  className="flex items-center gap-2 py-1 px-1.5 rounded text-xs hover:bg-sol-bg-alt/50 transition-colors group"
-                >
-                  <Icon className={`w-3 h-3 flex-shrink-0 ${color}`} />
-                  <span className={`truncate ${task.status === "done" ? "line-through text-sol-text-dim" : "text-sol-text-muted group-hover:text-sol-text"}`}>
-                    {task.title}
-                  </span>
-                  {PIcon && pColor && (
-                    <PIcon className={`w-3 h-3 ml-auto flex-shrink-0 ${pColor}`} />
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-
-          <Link
-            href={`/plans/${plan.short_id}`}
-            className="block text-meta text-sol-cyan hover:underline pt-1"
-          >
-            View full plan
-          </Link>
-        </div>
-        </RailDetail>
-      )}
+      </Link>
     </div>
   );
 }
