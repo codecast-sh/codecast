@@ -2,7 +2,7 @@ import { permissionRemovalValidator } from "./lib/permissionRemoval";
 import { isTeamOwnedConversation } from "./lib/viewerTriage";
 import { recordTeamAnswer } from "./lib/teamSessionAnswer";
 import { listSessionPartyIds } from "./sessionOwners";
-import { adminAnswersPrompts, settlePermissionProposals, viewerSeesDetail } from "./teamSuggestions";
+import { settlePermissionProposals, viewerSeesDetail } from "./teamSuggestions";
 import { redactSecrets } from "./redact";
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
@@ -188,15 +188,8 @@ export const updatePermissionStatus = mutation({
       throw new Error("Conversation not found");
     }
 
-    // The runner answers, and so does an admin of the session's team
-    // (teamSuggestions.ts). An admin approves or denies only: keeping a rule
-    // writes the runner's own settings, and the admin's card never offers it.
-    const runner = conversation.user_id.toString() === userId.toString();
-    if (!runner && !(await adminAnswersPrompts(ctx, userId, conversation))) {
+    if (conversation.user_id.toString() !== userId.toString()) {
       throw new Error("Unauthorized: can only manage permissions for your own conversations");
-    }
-    if (!runner && args.remember) {
-      throw new Error("Only the session's runner can keep a rule");
     }
 
     if (permission.status !== "pending") {
@@ -339,8 +332,8 @@ export const cancelPendingPermissions = mutation({
 export const getPendingPermissions = query({
   args: {
     conversation_id: v.id("conversations"),
-    // A client that draws non-runners' rows (web teamProposals, and a team
-    // admin's own answer stack) asks for them; any other client keeps getting only the runner's, so
+    // A client that draws proposals for non-runners (web teamProposals) asks
+    // for their rows; any other client keeps getting only the runner's, so
     // it never draws an Approve its viewer cannot press.
     as_proposer: v.optional(v.boolean()),
   },
@@ -357,8 +350,7 @@ export const getPendingPermissions = query({
 
     // The runner answers. A team member or owner who can open the session
     // sees the same rows so they can propose an answer the runner presses
-    // (teamSuggestions.proposePermissionFor), or, as an admin of its team,
-    // answer them directly. A share link's viewer does not.
+    // (teamSuggestions.proposePermissionFor). A share link's viewer does not.
     const runner = conversation.user_id.toString() === userId.toString();
     // A bot-run session's prompts are answered from that account's own view,
     // which never shows a person's proposal, so nobody is offered one.
@@ -383,16 +375,6 @@ export const getPendingPermissions = query({
       .filter((p) => p.created_at > cutoff)
       .sort((a, b) => a.created_at - b.created_at);
     if (runner) return live;
-    // An admin of the session's team answers, so reads what the runner reads
-    // (the safety check, removals, intent, subagent) without the rule data:
-    // keeping a rule is the runner's alone (updatePermissionStatus). The
-    // command's secrets stay redacted, as in the transcript everyone reads.
-    if (await adminAnswersPrompts(ctx, userId, conversation)) {
-      return live.map(({ rule_request: _rules, suggestions: _suggestions, ...row }) => ({
-        ...row,
-        arguments_preview: redactSecrets(row.arguments_preview),
-      }));
-    }
     // What a proposer needs to pick an answer, with secrets in the command
     // redacted the way the transcript's own tool inputs are.
     return live.map((p) => ({
