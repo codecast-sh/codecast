@@ -326,6 +326,18 @@ and any admin can turn it off.
    packages/convex/run.sh teamFeatures:setTeamFeatureInternal '{"team_id":"<id>","feature":"session_owners","enabled":true}'
    ```
 
+6. Give the team's older bot-spawned peers an owner. A session another one
+   only spawned, on an agent account with no human of its own, takes its
+   spawner's owner at spawn (`ownPeerByItsSpawnersHuman`); one spawned before
+   the flag was on has none and lists for nobody. It runs after the flag,
+   since the owner rule reads it. Dry run first: it names each peer and the
+   owner it would get. Pass back `next` until it is null; a real run pages on
+   its own, and a rerun owns 0.
+
+   ```bash
+   packages/convex/run.sh ownerMigrations:backfillPeerOwners '{"team_id":"<id>","dryRun":true}'
+   ```
+
 Turning it off is the same call with `"enabled":false`, never a code revert.
 It restores the behaviour, but not the data the model wrote: owner rows
 (an implicit starter's, a taker's, a starter row on a move), roles a takeover

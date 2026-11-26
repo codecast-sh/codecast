@@ -211,35 +211,40 @@ export async function humanStarterUser(
 // spawned has no human by its own fields, so it takes its spawner's: the
 // spawner's people (its implicit starter included) get owner rows, or, when a
 // role alone owns the spawner (a role's standing session or hand), the peer
-// is that role's start. Otherwise it would be in nobody's inbox. Returns
-// whether it wrote anything.
-export async function ownPeerByItsSpawnersHuman(
+// is that role's start. Otherwise it would be in nobody's inbox. The owner it
+// would get, or null when it needs none or none can be found.
+export async function peerOwnerFromSpawner(
   ctx: { db: any },
   child: { _id: Id<"conversations">; user_id: Id<"users">; author_user_id?: Id<"users">; team_id?: Id<"teams">; org_role_id?: unknown; parent_conversation_id?: unknown },
   spawner: any | null,
-): Promise<boolean> {
-  if (!spawner || child.parent_conversation_id || child.org_role_id || (await humanStarterUser(ctx, child)) || !(await ownersModelOn(ctx, child))) return false;
+): Promise<{ people: string[] } | { role: string } | null> {
+  if (!spawner || child.parent_conversation_id || child.org_role_id || (await humanStarterUser(ctx, child)) || !(await ownersModelOn(ctx, child))) return null;
   // A spawner that is itself a worker has only its parent session: climb to
   // the first session in the chain with people or a role.
   let at = spawner;
   for (let hops = 0; at && hops < PEER_OWNER_HOPS; hops++) {
     const owners = ownersOf(await sessionOwnerFactsOf(ctx, at));
     const people = owners.people.length ? owners.people : owners.implicitStarter ? [owners.implicitStarter] : [];
-    if (people.length) {
-      for (const id of people) await addSessionOwnerRow(ctx, child._id, id as Id<"users">, id as Id<"users">);
-      await syncPrimaryOwnerCache(ctx, child._id);
-      return true;
-    }
-    if (owners.role) {
-      // A role is filed only in its own team: a peer elsewhere stays unowned
-      // and its waits reach the fallback person.
-      if (String(at.team_id ?? "") !== String(child.team_id ?? "")) return false;
-      await ctx.db.patch(child._id, { org_role_id: owners.role, org_role_hold: "filed", role_started: true, owners_changed_at: Date.now() });
-      return true;
-    }
+    if (people.length) return { people };
+    // A role is filed only in its own team: a peer elsewhere stays unowned
+    // and its waits reach the fallback person.
+    if (owners.role) return String(at.team_id ?? "") === String(child.team_id ?? "") ? { role: owners.role } : null;
     at = owners.parentSession ? await ctx.db.get(owners.parentSession) : null;
   }
-  return false;
+  return null;
+}
+
+/** Gives a peer its spawner's owner (peerOwnerFromSpawner); whether it wrote anything. */
+export async function ownPeerByItsSpawnersHuman(ctx: { db: any }, child: Parameters<typeof peerOwnerFromSpawner>[1], spawner: any | null): Promise<boolean> {
+  const owner = await peerOwnerFromSpawner(ctx, child, spawner);
+  if (!owner) return false;
+  if ("role" in owner) {
+    await ctx.db.patch(child._id, { org_role_id: owner.role, org_role_hold: "filed", role_started: true, owners_changed_at: Date.now() });
+    return true;
+  }
+  for (const id of owner.people) await addSessionOwnerRow(ctx, child._id, id as Id<"users">, id as Id<"users">);
+  await syncPrimaryOwnerCache(ctx, child._id);
+  return true;
 }
 const PEER_OWNER_HOPS = 8;
 

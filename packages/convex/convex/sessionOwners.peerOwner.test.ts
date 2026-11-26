@@ -3,6 +3,7 @@ import { computeInboxSessions } from "./conversations";
 import { inboxEpoch } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import { ownPeerByItsSpawnersHuman } from "./sessionOwners";
+import { backfillPeerOwnersPage } from "./ownerMigrations";
 
 // A peer (a session another one only spawned) has no parent to own it. Under
 // the owners model, one a bot-run session spawned takes its spawner's owners:
@@ -102,5 +103,36 @@ describe("a bot-run spawner's peer belongs to the spawner's human", () => {
     const on = world(true);
     expect(await ownPeerByItsSpawnersHuman({ db: on } as any, await on.get("conversations_peer"), null)).toBe(false);
     expect((await on.query("session_owners").collect()).filter((r: any) => r.conversation_id === "conversations_peer")).toEqual([]);
+  });
+});
+
+// ownerMigrations:backfillPeerOwners: peers a bot-run session spawned before
+// the spawn did it, or before the team's flag was on, get the same owner.
+describe("backfillPeerOwners", () => {
+  const run = async (db: any, dryRun: boolean) => {
+    const owned: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const res: any = await backfillPeerOwnersPage({ db } as any, { team_id: TEAM, dryRun, cursor, numItems: 3 });
+      owned.push(...res.owned.map((o: any) => o.session));
+      cursor = res.next;
+    } while (cursor);
+    return owned.sort();
+  };
+  const rowsOf = async (db: any) => (await db.query("session_owners").collect()).length;
+
+  test("a dry run names each unowned peer and writes nothing; a real run owns them; a rerun owns 0", async () => {
+    const db = world(true);
+    const peers = ["conversations_peer", "conversations_taken_peer", "conversations_teammate", "conversations_worker_peer"];
+    expect(await run(db, true)).toEqual(peers);
+    expect(await rowsOf(db)).toBe(1);
+    expect(await run(db, false)).toEqual(peers);
+    expect(await inboxIds(db)).toContain("conversations_peer");
+    expect((await db.get("conversations_teammate")).org_role_id).toBe("org_roles_r");
+    expect(await run(db, false)).toEqual([]);
+  });
+
+  test("flag off: it owns nothing", async () => {
+    expect(await run(world(false), false)).toEqual([]);
   });
 });

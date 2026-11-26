@@ -1169,8 +1169,11 @@ export const rerouteMemberEscalations = internalMutation({
 });
 
 export const releaseDeadParentChildren = internalMutation({
-  args: { parent_id: v.string(), released_at: v.number(), cursor: v.optional(v.union(v.string(), v.null())) },
-  handler: (ctx, args) => performReleaseDeadParentChildren(ctx, args),
+  // `spawned` is a deploy-window alias (ct-102140): a page the previous
+  // build queued over the spawned peers, which no parent owns now. Its cursor
+  // is another index's, so it ends here.
+  args: { parent_id: v.string(), released_at: v.number(), spawned: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: (ctx, { spawned, ...args }) => (spawned ? Promise.resolve({ released: 0, rechecked: 0 }) : performReleaseDeadParentChildren(ctx, args)),
 });
 
 // A session's agent owner (its role, or the session it works for) passes
