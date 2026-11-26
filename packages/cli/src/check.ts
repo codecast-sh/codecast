@@ -130,47 +130,8 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
   });
 }
 
-/**
- * Repo-relative paths in a project's program, read from its watcher's build
- * info (tsc writes every file of the program there). Before the project's
- * first pass on this tree (a worktree a line run just made), the list comes
- * from another checkout of the same repository whose watcher has one: the
- * program is the same give or take what a change adds, so a file one project
- * imports from another's folder still counts for it. Null when no checkout has
- * one.
- */
-export function programFiles(root: string, project: CheckProject): Set<string> | null {
-  return builtProgramFiles(root, project) ?? otherCheckouts(root).map((tree) => builtProgramFiles(tree, project)).find(Boolean) ?? null;
-}
-
-/** The repository's other checkouts, its main one first (git worktree list). */
-function otherCheckouts(root: string): string[] {
-  try {
-    const self = fs.realpathSync(root);
-    return gitLines(root, ["worktree", "list", "--porcelain"])
-      .filter((l) => l.startsWith("worktree "))
-      .map((l) => l.slice("worktree ".length))
-      .filter((t) => fs.existsSync(t) && fs.realpathSync(t) !== self);
-  } catch {
-    return [];
-  }
-}
-
-function builtProgramFiles(root: string, project: CheckProject): Set<string> | null {
-  const dir = watchDir(root, project.name);
-  const program = readBuildInfo(dir);
-  if (!program) return null;
-  const files = new Set<string>();
-  for (const name of program.fileNames) {
-    if (typeof name !== "string") continue;
-    const rel = path.relative(root, path.resolve(dir, name));
-    if (!rel.startsWith("..")) files.add(rel.split(path.sep).join("/"));
-  }
-  return files;
-}
-
 /** The program a watcher's last pass recorded: its files, and what tsc knew of each. */
-function readBuildInfo(dir: string): { fileNames: unknown[]; fileInfos: unknown[]; root: unknown[] } | null {
+export function readBuildInfo(dir: string): { fileNames: unknown[]; fileInfos: unknown[]; root: unknown[] } | null {
   type Program = { fileNames?: unknown; fileInfos?: unknown; root?: unknown };
   try {
     const info = JSON.parse(fs.readFileSync(buildInfoPath(dir), "utf-8")) as Program & { program?: Program };
@@ -180,22 +141,6 @@ function readBuildInfo(dir: string): { fileNames: unknown[]; fileInfos: unknown[
   } catch {
     return null;
   }
-}
-
-/**
- * The projects a set of changed files can affect: a project whose program
- * holds one of them, or, for a file no program has seen yet (new, or a
- * project never built here), one whose tsconfig sits above it.
- */
-export function projectsTouching(root: string, projects: CheckProject[], changed: string[]): CheckProject[] {
-  const code = changed.filter((f) => /\.(m|c)?[jt]sx?$|(^|\/)(tsconfig[^/]*|package)\.json$/.test(f));
-  if (!code.length) return [];
-  return projects.filter((p) => {
-    const files = programFiles(root, p);
-    const dir = path.dirname(p.tsconfig);
-    const under = (f: string) => dir === "." || f.startsWith(`${dir}/`);
-    return code.some((f) => files?.has(f) || ((!files || !files.has(f)) && under(f) && !otherProjectOwns(root, projects, p, f)));
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -317,11 +262,6 @@ export function gitLines(root: string, args: string[]): string[] {
   const r = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8" });
   if (r.status !== 0) throw new Error(String(r.stderr || `git ${args[0]} failed`).trim());
   return String(r.stdout).split("\n").filter(Boolean);
-}
-
-/** Another project's program already holds `f`, so a nested project's tsconfig above it says nothing. */
-function otherProjectOwns(root: string, projects: CheckProject[], self: CheckProject, f: string): boolean {
-  return projects.some((q) => q !== self && !!programFiles(root, q)?.has(f));
 }
 
 /** How often a waiting asker refreshes `askedAt`, and how long without one leaves a running pass unwanted. */
@@ -1052,14 +992,15 @@ export function stopWatchersIn(tree: string, kill: (pid: number) => void = (pid)
 }
 
 /**
- * Every watcher start, eviction, stop and idle exit on this machine, one line each.
- * A program stopped to make room is rebuilt whole on its next ask, so this is
- * the cost the cap trades against memory, and the record that shows a cap
- * too small for the trees sharing it.
+ * Every watcher start, eviction, stop and idle exit on this machine, one line each,
+ * and every `cast check` ask: the projects it resolved to (the project field, comma
+ * separated) and what it named. A program stopped to make room is rebuilt whole on
+ * its next ask, so this is the cost the cap trades against memory, and the record
+ * that shows a cap too small for the trees sharing it.
  */
 export const eventsPath = (): string => path.join(checkHome(), "events.log");
 
-export function logWatcherEvent(event: "start" | "evict" | "stop" | "idle-exit", w: { project: string; root: string }, detail = ""): void {
+export function logWatcherEvent(event: "ask" | "start" | "evict" | "stop" | "idle-exit", w: { project: string; root: string }, detail = ""): void {
   try {
     fs.mkdirSync(checkHome(), { recursive: true });
     fs.appendFileSync(eventsPath(), `${new Date().toISOString()} ${event} ${w.project} ${w.root}${detail ? ` ${detail}` : ""}\n`);

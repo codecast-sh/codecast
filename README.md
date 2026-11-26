@@ -427,7 +427,8 @@ To switch back to a released build, run `setup` and `restart --wait` using the i
 ### Type check
 
 ```bash
-cast check          # every program in .codecast/check.toml, through one shared tsc watcher each
+cast check          # the programs in .codecast/check.toml this checkout's changes reach, through one shared tsc watcher each
+cast check --all    # every program
 cast check web      # one program
 ```
 
