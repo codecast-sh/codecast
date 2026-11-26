@@ -10,11 +10,21 @@
 // session, one chip on the page. The menu still lists every session, with
 // what each was sent. The chips that do show are led by "sent to", so a
 // session never reads as one of the people in the call beside it.
+//
+// Beside them, each teammate in the call who has a session open right now
+// gets a chip led by their name ("Samvit in Company wiki planning"), one click
+// to that conversation, so the person on the call reaches what they are
+// discussing without searching for it. It reads the roster's
+// viewing_conversation_id (the server only reports sessions the viewer may
+// open) and follows it live; the viewer, offline teammates and a session the
+// call already shows get no chip.
 
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { callExcerptHref, callLinkHow } from "@codecast/shared/contracts";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { teamMembersOf } from "../../lib/activeTeam";
+import { teammateWhereabouts } from "../presence/memberPresence";
 import { SessionFace } from "../identity";
 import { fmtClock } from "../triggerCadence";
 import { FeedChip } from "./FeedChip";
@@ -32,24 +42,70 @@ const SHOWN = 3;
 
 const openSession = (id: string) => useInboxStore.getState().openSidePanel(id);
 
+type TeammateSession = { id: string; name: string; conversationId: string; title: string | undefined };
+
+/** The call's teammates who have a session open now, from the roster. */
+function teammateSessionsOf(s: any, participantIds: ReadonlySet<string>): TeammateSession[] {
+  if (participantIds.size === 0) return [];
+  const viewerId = s.currentUser?._id ? String(s.currentUser._id) : null;
+  return teammateWhereabouts(teamMembersOf(s), viewerId, "", s.sessions)
+    .filter((w) => w.conversationId && participantIds.has(w.id))
+    .map((w) => ({
+      id: w.id,
+      name: w.name,
+      conversationId: w.conversationId!,
+      title: w.title,
+    }));
+}
+
+const firstName = (name: string) => name.split(" ")[0] || name;
+
 export function CallSessionChips({
   callId,
   sessions,
   inThread,
+  participants,
 }: {
   callId: string;
   sessions: any[];
   /** Sessions the thread's head already shows as chips. */
   inThread?: ReadonlySet<string>;
+  /** The people in the call (identity is the user id). */
+  participants?: { id: string; name?: string }[];
 }) {
   const router = useRouter();
-  if (sessions.length === 0) return null;
+  const participantIds = new Set((participants ?? []).map((p) => String(p.id)));
+  // Re-render only when what a chip shows changes, not on every roster tick.
+  const st = useTrackedStore([
+    (s) =>
+      teammateSessionsOf(s, participantIds)
+        .map((t) => `${t.id}:${t.conversationId}:${t.title ?? ""}:${t.name}`)
+        .join("|"),
+  ]);
+  const reached = new Set(sessions.map((s) => String(s.conversation_id)));
+  const teammates = teammateSessionsOf(st, participantIds).filter(
+    (t) => !reached.has(t.conversationId) && !inThread?.has(t.conversationId),
+  );
+  if (sessions.length === 0 && teammates.length === 0) return null;
   const own = sessions.filter((s) => !inThread?.has(String(s.conversation_id)));
   const shown = own.slice(0, SHOWN);
   const hidden = own.length - shown.length;
   const anyExcerpts = sessions.some((s) => s.excerpts.length > 0);
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+      {teammates.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          onClick={() => openSession(t.conversationId)}
+          className="flex max-w-[260px] items-center gap-1 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-meta leading-4 text-sol-text-muted hover:text-sol-text"
+          title={`${t.name} is working in ${t.title ?? "a session"}`}
+        >
+          <span className="shrink-0 text-sol-text">{firstName(t.name)}</span>
+          <span className="shrink-0 text-sol-text-dim">in</span>
+          <span className="truncate">{t.title ?? "their session"}</span>
+        </button>
+      ))}
       {shown.length > 0 && <span className="text-meta text-sol-text-dim">sent to</span>}
       {shown.map((s) => (
         <FeedChip

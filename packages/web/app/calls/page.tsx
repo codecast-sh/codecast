@@ -751,6 +751,8 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
             sessions={call.sessions || []}
             // The thread's head shows the sessions the call feeds: once is enough.
             inThread={recording ? undefined : new Set((call.routes || []).filter((r: any) => r.kind === "session").map((r: any) => String(r.target)))}
+            // While the call is live, each teammate in it links the session they are in now.
+            participants={live ? call.participants : undefined}
           />
           {/* The call's board (callStage): what the room and its agents drew
               together, kept after the call. */}
