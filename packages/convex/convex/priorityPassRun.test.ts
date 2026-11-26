@@ -6,7 +6,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { MergePlan } from "./lib/priorityPass";
 import { LATE_MARGIN_MS } from "./priorityPassInputs";
-import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, catchUpSpent, runBlocker } from "./priorityPassRun";
+import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { api } from "./_generated/api";
 
@@ -375,6 +375,33 @@ describe("what a pass may read, and how far", () => {
     expect(await w.t.action(pass.runNow, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: `Passes here spent today's $${PRIORITY_PASS_DAILY_USD.toFixed(2)}; the next one can run tomorrow.` });
     expect(model.prompts).toHaveLength(0);
     expect((await w.runs()).at(-1)).toMatchObject({ status: "skipped", error: "daily ceiling" });
+  });
+
+  test("whether a pair has an ok run is one indexed read on its status, however many runs it has", async () => {
+    const w = await world();
+    const run = (i: number, status: string) => ({ user_id: w.ana, workspace: w.team, started_at: w.now - i * 60_000, finished_at: w.now - i * 60_000, status, cursor_at: 1, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    await w.t.run(async (ctx) => { for (let i = 0; i < 600; i++) await ctx.db.insert("priority_pass_runs", run(i + 10, "skipped") as any); });
+    const read = async () => {
+      const used: string[] = [];
+      let found = false;
+      await w.t.run(async (ctx: any) => {
+        const db = new Proxy(ctx.db, {
+          get(target: any, prop: string) {
+            if (prop === "query") return (table: string) => {
+              const q = target.query(table);
+              return new Proxy(q, { get(qt: any, p: string) { if (p === "withIndex") return (name: string, fn: any) => (used.push(name), qt.withIndex(name, fn)); if (p === "filter") return () => { throw new Error("hasOkRun scanned with filter"); }; const v = qt[p]; return typeof v === "function" ? v.bind(qt) : v; } });
+            };
+            const value = target[prop];
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        found = await hasOkRun({ db }, w.ana, w.team);
+      });
+      return { used, found };
+    };
+    expect(await read()).toEqual({ used: ["by_user_workspace_status"], found: false });
+    await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", run(5000, "ok") as any));
+    expect((await read()).found).toBe(true);
   });
 
   test("the catch-up allowance counts the newest runs: hundreds of old cheap runs cannot hide the dear ones that spent it", async () => {

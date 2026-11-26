@@ -93,8 +93,7 @@ export const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: stri
 export async function hasOkRun(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
   return !!(await ctx.db
     .query("priority_pass_runs")
-    .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
-    .filter((q: any) => q.eq(q.field("status"), "ok"))
+    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "ok"))
     .first());
 }
 

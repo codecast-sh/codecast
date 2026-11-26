@@ -116,7 +116,10 @@ export const priorityTables = {
     repeats: v.optional(v.boolean()),
     /** A run of the pair's first catch-up: spent from PRIORITY_PASS_FIRST_USD, never from the daily ceiling. */
     catch_up: v.optional(v.boolean()),
-  }).index("by_user_workspace_started", ["user_id", "workspace", "started_at"]),
+  })
+    .index("by_user_workspace_started", ["user_id", "workspace", "started_at"])
+    // Whether a pair has finished an ok run (priorityPassRun hasOkRun): one indexed read, however many runs it has.
+    .index("by_user_workspace_status", ["user_id", "workspace", "status"]),
 
   // The one pending pass of a (person, workspace) that their activity asked
   // for (lib/priorityPassSchedule.ts). `token` names the job that owns it (a
