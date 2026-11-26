@@ -829,11 +829,13 @@ async function settleGateRun(ctx: Ctx, row: DecisionRow, verdict: Verdict, now: 
 // web's generic dispatch patch (settleClientResolution), so the two paths
 // cannot drift. Returns whether a run consumed the answer as its open gate.
 /**
- * An answered card's session asks for its owner's priorities pass. The flag
- * first: with priorities on in none of its owner's workspaces, the session
- * is never read.
+ * A card its owner answered asks for their priorities pass; a role's or a
+ * policy's answer, or a teammate's, is not the owner's activity and asks for
+ * nothing. The flag first: with priorities on in none of its owner's
+ * workspaces, the session is never read.
  */
-export async function answerAsksForPass(ctx: { db: any; scheduler?: any }, row: Pick<DecisionRow, "conversation_id" | "user_id">): Promise<void> {
+export async function answerAsksForPass(ctx: { db: any; scheduler?: any }, row: Pick<DecisionRow, "conversation_id" | "user_id">, by: Pick<AnsweredBy, "kind" | "id" | "user_id">): Promise<void> {
+  if (by.kind !== "user" || String(by.user_id ?? by.id) !== String(row.user_id)) return;
   if (!(await prioritiesOn(ctx, `user:${row.user_id}`))) return;
   const conv = await ctx.db.get(row.conversation_id);
   if (conv && pinsAskForPass(conv)) await sessionActivity(ctx, conv);
@@ -862,8 +864,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await settleCardApproval(ctx as any, row as any, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
-  // An answer asks for its owner's priorities pass, unless a machine's session asked it. It closes no milestone: a card is a question asked mid-work.
-  if (verdict.status === "answered") await answerAsksForPass(ctx, row);
+  // The owner's own answer asks for their priorities pass, unless a machine's session asked it. It closes no milestone: a card is a question asked mid-work.
+  if (verdict.status === "answered") await answerAsksForPass(ctx, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).

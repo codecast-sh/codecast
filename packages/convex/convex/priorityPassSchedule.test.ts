@@ -360,6 +360,18 @@ describe("who never asks for a pass", () => {
     await pinAt(w, fork, Date.now(), "Picked the grader work back up");
     expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(1);
   });
+
+  test("a card a role, a policy or a teammate answered asks for nothing; its owner's own answer asks", async () => {
+    const w = await world();
+    for (const by of [{ kind: "role", id: "or-1" }, { kind: "policy", id: "pol-1" }, { kind: "user", id: String(w.ben), user_id: w.ben }] as const) {
+      await w.t.run((ctx) => answerAsksForPass(ctx, { conversation_id: w.teamConv, user_id: w.ana }, by));
+    }
+    await settle(w);
+    expect(await scheduleOf(w, w.ana, w.team)).toBeNull();
+    await w.t.run((ctx) => answerAsksForPass(ctx, { conversation_id: w.teamConv, user_id: w.ana }, { kind: "user", id: String(w.ana), user_id: w.ana }));
+    await settle(w);
+    expect(await scheduleOf(w, w.ana, w.team)).not.toBeNull();
+  });
 });
 
 describe("with priorities off, a pin, title, PR close or link costs about a read", () => {
@@ -464,7 +476,7 @@ describe("with priorities off, a pin, title, PR close or link costs about a read
       });
       await fn({ ...ctx, db });
     });
-    await recorded((ctx) => answerAsksForPass(ctx, { conversation_id: carlConv, user_id: carl }));
+    await recorded((ctx) => answerAsksForPass(ctx, { conversation_id: carlConv, user_id: carl }, { kind: "user", id: String(carl) }));
     expect(gets).not.toContain(String(carlConv));
     expect(queries.filter((q) => q !== "team_memberships")).toEqual([]);
     // A PR with no team: its linking sessions' owners are read, then each owner's flag; no milestone read.
