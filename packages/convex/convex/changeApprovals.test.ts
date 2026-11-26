@@ -8,7 +8,7 @@ import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
 import { changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
-import { withdrawCore } from "./sessionDecisions";
+import { answerCore, withdrawCore } from "./sessionDecisions";
 
 const REPO = "union-ai/union-mobile";
 const HEAD = "a".repeat(40);
@@ -458,7 +458,9 @@ describe("the approval card", () => {
   const run = (over: Record<string, any> = {}) => ({ _id: "run1", user_id: "host", team_id: "team1", status: "running", created_at: 1, task_id: "t1", primary_conversation_id: "c_log", pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 }, ...reviewed(false), ...over });
   const users = [{ _id: "u_jason", name: "Jason Benn" }, { _id: "u_ashot", name: "Ashot" }, { _id: "u_cam", name: "Cameron" }, { _id: "host", name: "Host" }];
   const memberships = users.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id }));
-  const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" }];
+  // Each person's own session too: a card no run is behind is asked only there.
+  const conversations = [{ _id: "c_log", session_id: "wf-run1", user_id: "host", title: "Change" }, { _id: "c_rev", session_id: "rev", user_id: "host", title: "Review" }, { _id: "c_anchor", session_id: "anchor", user_id: "host", title: "Agent" },
+    ...["u_jason", "u_ashot", "u_cam"].map((u) => ({ _id: `c_own_${u}`, session_id: `own-${u}`, user_id: u, title: "Own", updated_at: 1 }))];
   const world = (tables: Record<string, any[]> = {}) => {
     // Every world gets its own copies: the fake db patches rows in place.
     const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], users, team_memberships: memberships, conversations, anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [{ _id: "tc1", task_id: "t1", comment_type: "review", text: "Verdict: ship. It edits land.cast.", created_at: 5 }], pending_messages: [], workflow_runs: [run()], ...tables }));
@@ -554,10 +556,10 @@ describe("the approval card", () => {
     expect(cards(w.db)[0].asked_user_ids).toEqual(["u_jason"]);
   });
 
-  test("a pull request no codecast run is behind asks the area's owner from the team agent's session", async () => {
-    const w = world({ workflow_runs: [] });
+  test("a pull request no codecast run is behind asks the area's owner in their own session, never the team agent's or the pull request's", async () => {
+    const w = world({ workflow_runs: [], pull_requests: [{ ...prRow, linked_session_ids: ["c_log"] }] });
     expect(await (settle as any)._handler(w.ctx, noAnswer)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review could not answer (the team's model budget has no room for it)" });
-    expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_anchor", approval: { reason: "review" } });
+    expect(cards(w.db)[0]).toMatchObject({ asked_user_ids: ["u_ashot"], conversation_id: "c_own_u_ashot", approval: { reason: "review" } });
   });
 
   test("with no session and no team agent, the card is asked from its person's own; with none at all they are told (second review, finding 2)", async () => {
@@ -755,7 +757,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     github_app_installations: [installation], pull_requests: [{ ...prRow, approval: undefined }], workflow_runs: [], change_approvals: [], users: people,
     // Ashot is the workspace's admin; Jason a member.
     team_memberships: people.map((u, i) => ({ _id: `m${i}`, team_id: "team1", user_id: u._id, role: i === 0 ? "admin" : "member", joined_at: i })),
-    team_budgets: [budget()], conversations: [{ _id: "c_anchor", session_id: "anchor", user_id: "u_jason", title: "Agent" }],
+    team_budgets: [budget()], conversations: [{ _id: "c_anchor", session_id: "anchor", user_id: "u_jason", title: "Agent" }, { _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1 }],
     anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [], ...tables,
   }));
   const evaluateNow = (db: any, ctx = actionCtx(db).ctx) => (evaluate as any)._handler(ctx, { repository: REPO, pr_number: 7, post: true });
@@ -764,6 +766,9 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
   const stored = (db: any) => db._tables.pull_requests[0].approval?.automatic;
   const NEXT = "c".repeat(40);
   const ctxOf = (db: any) => ({ db, scheduler: { runAfter: async () => {} } });
+  /** A person answers a card through the real answer path (sessionDecisions.answerCore): on the web, or from a session. */
+  const answerAs = (db: any, card: any, userId: string, o: { session_id?: string; for_human?: boolean; answer_index?: number } = {}) =>
+    answerCore(ctxOf(db) as any, { userId: userId as any }, { decision_id: card.short_id, answer_index: o.answer_index ?? 0, ...(o.session_id ? { session_id: o.session_id } : {}), ...(o.for_human ? { for_human: true } : {}) });
 
   test("no judged file and not a mechanism goes green with no person; the model read the diff, its files and the repo's definition, never the title, body or commits", async () => {
     stubs();
@@ -802,8 +807,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
       expect(card.asked_user_ids).toEqual(["u_ashot"]);
       expect(card.approval.reason).toBe("objection");
       expect(card.context_md).toContain("pins a version with a known RCE");
-      db._tables.session_decisions[0].status = "answered";
-      await settleCardApproval(ctxOf(db) as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_ashot" as any }, 20);
+      expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
       expect(await evaluateNow(db)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
       expect(prompts).toHaveLength(1);
       routes = [];
@@ -875,8 +879,7 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
       expect(card.approval.reason).toBe("objection");
       expect(card.context_md).toContain("**Held:** the automatic review of aaaaaaaaaa called it a mechanism");
       // Only a person's card clears it: after their Approve merge, head 2's own answer decides again.
-      db._tables.session_decisions.find((d: any) => d._id === card._id).status = "answered";
-      await settleCardApproval(ctxOf(db) as any, card, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_ashot" as any }, 20);
+      expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
       expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
       expect(await (settle as any)._handler(ctxOf(db), at(NEXT, undefined))).toMatchObject({ state: "success", description: "no judged paths; the automatic review: not a mechanism" });
       // Re-settling head 2's kept answer never re-sets the hold.
@@ -889,6 +892,80 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
     const db = world({ workflow_runs: [run], pull_requests: [{ ...prRow, approval: { head_sha: HEAD, state: "pending", description: "x", held: "the automatic review of bbbbbbbbbb called it a mechanism" } }] });
     expect(await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", whole_key: "w1" })).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
     expect(cards(db)).toHaveLength(1);
+  });
+
+  // Jason opened the pull request (jason-gh); Ashot owns its area. A held pull request's card is Ashot's to answer.
+  const heldWorld = (tables: Record<string, any[]> = {}) => world({
+    pull_requests: [{ ...prRow, author_github_username: "jason-gh", approval: { head_sha: HEAD, state: "pending", description: "x", held: "the automatic review of bbbbbbbbbb called it a mechanism", automatic: { head_sha: HEAD, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: 1 } } }],
+    conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 1 }, { _id: "c_jason", session_id: "jason", user_id: "u_jason", title: "Jason's own", updated_at: 2 }],
+    ...tables,
+  });
+  const heldArgs = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", whole_key: "w1", people: { title: "Bump", author_login: "jason-gh", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [] } };
+  const approvals = (db: any) => db._tables.change_approvals.filter((a: any) => !a.revoked_at);
+
+  test("the author cannot approve their own held pull request, in their own session or on the web; the card is never in a session they read (round 3, finding 1)", async () => {
+    const db = heldWorld();
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
+    const [card] = cards(db);
+    expect(card.conversation_id).toBe("c_ashot");
+    // From the author's own session, for their human: no person's answer, and nothing approved.
+    await answerAs(db, card, "u_jason", { session_id: "jason", for_human: true });
+    // On the web: the author is not asked and cannot read Ashot's session.
+    await answerAs(db, card, "u_jason");
+    expect(approvals(db)).toEqual([]);
+    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending" });
+    // Even an answer the author could give, as one of the people asked, is not counted.
+    const both = heldWorld();
+    await (settle as any)._handler(ctxOf(both), heldArgs);
+    const [shared] = cards(both);
+    both._tables.session_decisions.find((d: any) => d._id === shared._id).asked_user_ids = ["u_ashot", "u_jason"];
+    expect(await answerAs(both, { ...shared }, "u_jason")).not.toHaveProperty("error");
+    expect(approvals(both)).toEqual([]);
+    expect(both._tables.pull_requests[0].approval.held).toBeDefined();
+  });
+
+  test("an answer a session gives for its person clears no hold and approves nothing (round 3, finding 2)", async () => {
+    // Another of Ashot's sessions answers for him (`cast decide answer --for-human`): the card is in his newest one.
+    const db = heldWorld({ conversations: [{ _id: "c_ashot", session_id: "ashot", user_id: "u_ashot", title: "Ashot's own", updated_at: 2 }, { _id: "c_ashot_other", session_id: "ashot-other", user_id: "u_ashot", title: "Another", updated_at: 1 }] });
+    await (settle as any)._handler(ctxOf(db), heldArgs);
+    const [card] = cards(db);
+    expect(await answerAs(db, card, "u_ashot", { session_id: "ashot-other", for_human: true })).not.toHaveProperty("error");
+    expect(db._tables.session_decisions[0].answered_by).toMatchObject({ kind: "user", via: "c_ashot_other" });
+    expect(approvals(db)).toEqual([]);
+    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+  });
+
+  test("a mechanism that settles second holds the pull request, after a ship or after a stale claim's failure (round 3, finding 3)", async () => {
+    const mech = { head_sha: HEAD, mechanism: true, verdict: "ship", reason: "A bulk delete.", at: 2 };
+    for (const first of [
+      { head_sha: HEAD, mechanism: false, verdict: "ship", reason: "Rewords a doc.", at: 1 },
+      { head_sha: HEAD, failed: true, reason: "the automatic review that took this head never finished", at: 1 },
+    ]) {
+      const db = world();
+      await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", automatic: first });
+      expect(await (settle as any)._handler(ctxOf(db), { repository: REPO, pr_number: 7, head_sha: HEAD, judged: [], key: "none", automatic: mech })).toMatchObject({ state: "pending" });
+      // The first answer stands as the head's record; the second's mechanism holds the pull request.
+      expect(stored(db)).toMatchObject({ reason: first.reason });
+      expect(db._tables.pull_requests[0].approval.held).toBe("the automatic review of aaaaaaaaaa called it a mechanism");
+    }
+  });
+
+  test("a codecast run its author attaches to a held pull request cannot clear the hold with its own Ship card (round 3, finding 4)", async () => {
+    const run = { _id: "run1", user_id: "u_jason", status: "running", created_at: 1, primary_conversation_id: "c_jason", node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, mechanism: false, at: 3, attempt: 1 }, pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
+    const shipCard = { _id: "sd_ship", short_id: "sd-77", status: "pending", workflow_run_id: "run1", conversation_id: "c_jason", user_id: "u_jason", asked_user_ids: ["u_jason"], question: "Ship it?", kind: "single", options: [{ label: "Ship" }, { label: "Revise" }], approval: { repository: REPO, pr_number: 7, judged_key: "none", whole_key: "whole:w1", files: [] }, created_at: 1 };
+    const db = heldWorld({ workflow_runs: [run], session_decisions: [shipCard] });
+    expect(await answerAs(db, shipCard, "u_jason")).not.toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeDefined();
+    // The run's review said ship, and the author's Ship approved the whole diff: the hold still asks Ashot, not Jason.
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "pending", description: "needs a review by Ashot: the automatic review of bbbbbbbbbb called it a mechanism" });
+    const card = cards(db).at(-1);
+    expect(card.asked_user_ids).toEqual(["u_ashot"]);
+    expect(card.conversation_id).toBe("c_ashot");
+    // Ashot's own answer clears it.
+    expect(await answerAs(db, card, "u_ashot")).not.toHaveProperty("error");
+    expect(db._tables.pull_requests[0].approval.held).toBeUndefined();
+    expect(await (settle as any)._handler(ctxOf(db), heldArgs)).toMatchObject({ state: "success" });
   });
 
   test("a pull request codecast keeps no row for is never sent to the model: it fails closed to the installer (round 2, finding 3)", async () => {

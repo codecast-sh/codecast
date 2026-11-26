@@ -102,8 +102,8 @@ export async function cardPeople(ctx: { db: any }, a: {
   const press: any = a.run?.pressed_approval_id ? await ctx.db.get(a.run.pressed_approval_id) : null;
   const presser = press ? await personOf(ctx, press.user_id) : null;
   const engineer = (p: Person | null) => !!p?.user_id && a.engineers.some((e) => e.user_id === String(p.user_id));
-  // On a pull request no run is behind, the author is asked nothing: whoever wrote it, codecast's user or not.
-  const writer = a.run ? null : await anyUserByLogin(ctx, a.author_login);
+  // On a pull request no run is behind, or about its hold, the author is asked nothing: whoever wrote it, codecast's user or not.
+  const writer = await anyUserByLogin(ctx, a.author_login);
   const notWriter = (p: Person | null) => (p && writer && String(p.user_id) === String(writer) ? null : p);
   const areaOwner = notWriter(owner);
   // No owner: the author when they are on the team (with a run behind it), else the workspace's admins (a bot's pull
@@ -111,7 +111,8 @@ export async function cardPeople(ctx: { db: any }, a: {
   const admins = areaOwner ? [] : (await workspaceAdmins(ctx, a.teamId)).filter((p) => notWriter(p));
   const adminCard: Person | null = admins.length ? { ...admins[0], also: admins.slice(1).map((p) => p.user_id!) } : null;
   const installer = notWriter(a.installer ? await personOf(ctx, a.installer) : null);
-  const area = a.run ? owner ?? author ?? adminCard ?? installer ?? nobody : areaOwner ?? adminCard ?? installer ?? nobody;
+  const runless = areaOwner ?? adminCard ?? installer ?? nobody;
+  const area = a.run ? owner ?? author ?? adminCard ?? installer ?? nobody : runless;
   if (a.camAsked) {
     const firstEngineer = a.engineers.length ? (await personOf(ctx, a.engineers[0].user_id)) ?? { user_id: null, name: a.engineers[0].name } : null;
     const camOwner = owner && !isCam(owner) ? owner : null;
@@ -123,7 +124,8 @@ export async function cardPeople(ctx: { db: any }, a: {
   const judged = presser ?? asker ?? (spawner ? await personOf(ctx, spawner.user_id) : null) ?? area;
   const mechanism = engineer(presser) ? presser! : area;
   // The change read whole: with no run, the area's owner; a run whose review never answered, whoever reads a mechanism.
-  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area, objection: area };
+  // A hold (an objection) is the automatic review's, so it goes by the rule for a pull request no run is behind.
+  return { judged, mechanism, review: a.run ? mechanism : area, unreadable: area, objection: runless };
 }
 
 /** The review's own words on the run's task, newest first, cut to fit a card. */
@@ -136,10 +138,16 @@ async function reviewWords(ctx: { db: any }, run: any | null): Promise<string | 
 }
 
 /**
- * Where the card is asked from: the run's own log, else the pull request's session, else the team's agent's session,
- * where the team's other approval cards with no run go; else its person's own agent, else their newest session.
+ * Where the card is asked from: the run's own log, else the pull request's session, else the team's agent's session;
+ * else its person's own agent, else their newest session. A card the author must not answer (`own`: a pull request no
+ * run is behind, or its hold) is asked only from its person's own, never a session the author can read.
  */
-async function askingConversation(ctx: { db: any }, run: any | null, pr: any | null, holder: Id<"users">): Promise<any | null> {
+async function askingConversation(ctx: { db: any }, run: any | null, pr: any | null, holder: Id<"users">, own: boolean): Promise<any | null> {
+  if (own) {
+    const anchor: any = await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", holder)).first();
+    const mine = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+    return mine ?? (await ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", holder)).order("desc").first());
+  }
   for (const id of [run?.primary_conversation_id, pr?.shepherd_conversation_id, ...(pr?.linked_session_ids ?? [])]) {
     const c = id ? await ctx.db.get(id) : null;
     if (c) return c;
@@ -208,7 +216,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     if (open.some((d) => d.approval_card && d.approval?.repository === a.repository && d.approval?.pr_number === a.pr_number && cardKeyOf(d.approval.judged_key, d.approval.reason) === card_key)) return null;
   }
   const asked = [a.to.user_id, ...(a.to.also ?? [])];
-  const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id);
+  const conversation = await askingConversation(ctx, a.run, a.pr, a.to.user_id, !a.run || a.reason === "objection");
   if (!conversation) {
     // Nowhere to ask from (its person has no session at all): they are told, once per question, so it still lands.
     await emitNotification(ctx as any, {

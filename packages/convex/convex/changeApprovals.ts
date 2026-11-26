@@ -125,7 +125,9 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
     return { state: "pending", description: fit(`needs a review by ${f.needs.review}: ${f.review_failed ? `the automatic review could not answer (${f.review_failed})` : "the review gave no mechanism answer"}`) };
   }
   if (f.objection) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: the automatic review ${f.objection === "rejected" ? "rejected it" : "asked for changes"}`) };
-  if (f.held && !f.mechanism) return f.card ? approved(f.card) : { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: ${f.held}`) };
+  // A hold waits for a person to clear it on its card (changeApprovalRows mayClearHold): no other approval answers it,
+  // a run's own Ship card included. An automatic answer that is itself a mechanism or objection asks its own card.
+  if (f.held && !(f.automatic && (f.mechanism || f.objection))) return { state: "pending", description: fit(`needs a review by ${f.needs.objection ?? f.needs.review}: ${f.held}`) };
   if (!f.judged.length && !f.mechanism) return { state: "success", description: f.automatic ? "no judged paths; the automatic review: not a mechanism" : "no judged paths; the review: not a mechanism" };
   if (f.card) return approved(f.card);
   if (f.mechanism) return { state: "pending", description: fit(`needs ${f.needs.mechanism}: the review called it a mechanism`) };
@@ -141,12 +143,15 @@ export function decide(f: ApprovalFacts): ApprovalVerdict | null {
  * waits for the automatic review's answer. A review that can no longer answer is a person's card.
  */
 export function cardReason(f: ApprovalFacts): CardReason | null {
-  if (!f.opted || f.card) return null;
-  if ("unreadable" in f) return "unreadable";
+  if (!f.opted) return null;
+  if ("unreadable" in f) return f.card ? null : "unreadable";
   if (f.captain_revert) return null;
   if (!f.run) return null;
-  if (f.mechanism === null) return f.run === "ended" ? "review" : null;
-  if (f.objection || (f.held && !f.mechanism)) return "objection";
+  if (f.mechanism === null) return !f.card && f.run === "ended" ? "review" : null;
+  // A hold is asked on its own card whatever else approved the change (decide).
+  if (f.held && !(f.automatic && (f.mechanism || f.objection))) return "objection";
+  if (f.card) return null;
+  if (f.objection) return "objection";
   if (f.mechanism) return "mechanism";
   return f.judged.length && !f.press ? "judged" : null;
 }
@@ -670,7 +675,9 @@ export const settle = internalMutation({
     const auto = !run ? answer : undefined;
     // The pull request's hold only grows: a mechanism or objection newly given sets it, whatever its head and whether or
     // not a run is behind the pull request now; only a person's card clears it (changeApprovalRows clearHold).
-    const newHold = !settledBefore ? holdOf(given) : undefined;
+    // Only a fresh answer arrives as `given` (an evaluation that claimed the head, or found its claim stale): a second
+    // answer for a head counts toward the hold though it never replaces the first.
+    const newHold = holdOf(given);
     const held = before?.held ?? newHold;
     const mechanism = run ? mechanismOf(run, args.head_sha) : auto && !auto.failed && typeof auto.mechanism === "boolean" ? auto.mechanism : null;
     // A reviewer records its answer only while its run is pending or running (orgLineMerge.recordReviewVerdictCore).

@@ -177,7 +177,7 @@ export async function settleCardApproval(
   ctx: { db: any; scheduler: any },
   row: { _id: Id<"session_decisions">; workflow_run_id?: Id<"workflow_runs">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval?: { repository: string; pr_number: number; judged_key: string; whole_key?: string; files: string[]; run_id?: Id<"workflow_runs"> }; approval_card?: boolean; trial?: boolean },
   verdict: { status: string; answer_index?: number },
-  by: { kind: string; user_id?: Id<"users"> },
+  by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
 ): Promise<void> {
   if (verdict.status === "withdrawn") return;
@@ -193,7 +193,8 @@ export async function settleCardApproval(
     // Ship approves nothing, and the status asks again. The run's card read the change whole, so its Ship also binds to
     // the whole diff it showed, which covers a mechanism until any code changes.
     const a = row.approval;
-    if (a) await clearHold(ctx, a.repository, a.pr_number);
+    // The run's own card clears a hold only by the same rule as the hold's card: an asked person, in person, not the author.
+    if (a && (await mayClearHold(ctx, { asked_user_ids: (row as any).asked_user_ids, repository: a.repository, pr_number: a.pr_number }, by))) await clearHold(ctx, a.repository, a.pr_number);
     if (a) for (const key of new Set([a.judged_key, ...(a.whole_key ? [a.whole_key] : [])])) {
       await ctx.db.insert("change_approvals", {
         repository: a.repository,
@@ -216,9 +217,27 @@ export async function settleCardApproval(
   await scheduleRunApprovalPost(ctx, run);
 }
 
+/** The codecast user who opened the pull request on GitHub, when codecast knows them (a bot account included). */
+async function prAuthor(ctx: { db: any }, repository: string, prNumber: number): Promise<Id<"users"> | null> {
+  const pr: any = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", prNumber)).first();
+  if (!pr?.author_github_username) return null;
+  const u: any = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", pr.author_github_username)).first();
+  return u?._id ?? null;
+}
+
 /**
- * A person approved the pull request on a card: the hold an automatic review's mechanism or objection put on it is
- * cleared (changeApprovals.settle). Nothing else clears it.
+ * Whether an answer may approve where the author must not: a person's own (no session answering for them, `via`), one
+ * the card asked, and not the pull request's author.
+ */
+async function mayClearHold(ctx: { db: any }, card: { asked_user_ids?: Id<"users">[]; repository: string; pr_number: number }, by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> }): Promise<boolean> {
+  if (by.kind !== "user" || !by.user_id || by.via) return false;
+  if (!(card.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id))) return false;
+  return String(await prAuthor(ctx, card.repository, card.pr_number)) !== String(by.user_id);
+}
+
+/**
+ * A person approved the pull request on a card (mayClearHold): the hold an automatic review's mechanism or objection put
+ * on it is cleared (changeApprovals.settle). Nothing else clears it.
  */
 async function clearHold(ctx: { db: any }, repository: string, prNumber: number): Promise<void> {
   const rows: Doc<"pull_requests">[] = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", prNumber)).collect();
@@ -284,18 +303,23 @@ export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">
  * A person settled an approval card codecast posted for a pull request (changeApprovals.ts): Approve merge is the
  * approval of the judged diff the card showed; Revise, Drop or a dismissal revokes what approved that pull request's
  * run (or, with no run, that diff). Anyone else's answer changes nothing. The status is worked out again either way.
+ * An approval counts only from a person the card asked, in person: an answer a session gave for them (`via`) approves
+ * nothing, and on a pull request no run is behind, or a card about its hold, neither does its author's.
  */
 async function settleApprovalCard(
   ctx: { db: any; scheduler: any },
-  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs"> } },
+  row: { _id: Id<"session_decisions">; options: Array<{ label: string }>; task_id?: Id<"tasks">; conversation_id: Id<"conversations">; asked_user_ids?: Id<"users">[]; approval: { repository: string; pr_number: number; judged_key: string; files: string[]; run_id?: Id<"workflow_runs">; reason?: string } },
   verdict: { status: string; answer_index?: number },
-  by: { kind: string; user_id?: Id<"users"> },
+  by: { kind: string; user_id?: Id<"users">; via?: Id<"conversations"> },
   now: number,
 ): Promise<void> {
   if (by.kind !== "user" || !by.user_id) return;
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
-    await clearHold(ctx, a.repository, a.pr_number);
+    const asked = (row.asked_user_ids ?? []).some((id) => String(id) === String(by.user_id));
+    const authorBarred = !a.run_id || a.reason === "objection";
+    if (by.via || !asked || (authorBarred && String(await prAuthor(ctx, a.repository, a.pr_number)) === String(by.user_id))) return;
+    if (await mayClearHold(ctx, { asked_user_ids: row.asked_user_ids, repository: a.repository, pr_number: a.pr_number }, by)) await clearHold(ctx, a.repository, a.pr_number);
     await ctx.db.insert("change_approvals", {
       repository: a.repository, pr_number: a.pr_number, judged_key: a.judged_key, files: a.files, user_id: by.user_id, source: "card",
       conversation_id: row.conversation_id, ...(a.run_id ? { workflow_run_id: a.run_id } : {}), ...(row.task_id ? { task_id: row.task_id } : {}),
