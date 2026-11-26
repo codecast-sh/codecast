@@ -2755,9 +2755,13 @@ const ConversationViewInner = (
   useMountEffect(() => {
     const sc = containerRef.current;
     if (!sc) return;
-    let lastHeight = sc.clientHeight;
+    // The starting height comes from the observer's initial callback: reading
+    // it here, in the mount commit, forced a layout inside React's task on
+    // the inbox's first paint (ct-101552).
+    let lastHeight: number | null = null;
     const ro = new ResizeObserver(() => {
       const h = sc.clientHeight;
+      if (lastHeight === null) { lastHeight = h; return; }
       if (h === 0 && lastHeight > 0) {
         hiddenFreezeRef.current = { scrollTop: lastScrollTopRef.current, pinned: isNearBottomRef.current };
       } else if (h > 0 && lastHeight === 0 && hiddenFreezeRef.current) {
