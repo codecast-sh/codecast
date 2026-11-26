@@ -79,7 +79,8 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     if ("reason" in landing) return { kind: "left", reason: landing.reason };
     const undone = undoneChanges(exec, cwd, exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim(), landing.sha, { head: sha });
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
-    const push = exec("git", ["push", "origin", `${landing.sha}:refs/heads/${into}`], cwd);
+    // CODECAST_SHIP_PUSH tells the repository's pre-push hook this is the line's own landing, not a hand push.
+    const push = exec("git", ["push", "origin", `${landing.sha}:refs/heads/${into}`], cwd, { CODECAST_SHIP_PUSH: "1" });
     if (push.status === 0) {
       exec("git", ["push", "origin", "--delete", branch], cwd);
       return { kind: "merged", sha: landing.sha, into, via: "push" };

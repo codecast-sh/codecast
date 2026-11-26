@@ -690,7 +690,8 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
 
 async function gitPush(root: string, remote: string, refspec: string): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    await execFileAsync("git", ["-C", root, "push", "--quiet", remote, refspec], { encoding: "utf-8" });
+    // CODECAST_SHIP_PUSH tells the repository's pre-push hook this is the ship's own push, not a hand push.
+    await execFileAsync("git", ["-C", root, "push", "--quiet", remote, refspec], { encoding: "utf-8", env: { ...process.env, CODECAST_SHIP_PUSH: "1" } });
     return { ok: true };
   } catch (err) {
     const text = String((err as { stderr?: string })?.stderr || (err as Error)?.message || err).trim();

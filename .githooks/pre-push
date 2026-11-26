@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Warns when a push updates main on codecast's GitHub remote: a change that goes
+# straight to main skips the change flow's CI and review. It never refuses a
+# push, and always exits 0. Installed by `bun install` (scripts/install-githooks.sh).
+#
+# Silent for codecast's own landing machinery, which sets CODECAST_SHIP_PUSH=1
+# on the push it makes (cast ship checkout in direct mode, cast line merge's
+# fast forward), and on GitHub Actions. CODECAST_ALLOW_MAIN_PUSH=1 silences it
+# for a push someone means to make.
+set -u
+
+url=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+to_main=""
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] && to_main=1
+done
+
+case "$url" in
+  *codecast-sh/codecast | *codecast-sh/codecast.git | *codecast-sh/codecast/) ;;
+  *) exit 0 ;;
+esac
+[ -n "$to_main" ] || exit 0
+[ -n "${CODECAST_SHIP_PUSH:-}${CODECAST_ALLOW_MAIN_PUSH:-}${GITHUB_ACTIONS:-}" ] && exit 0
+
+cat >&2 <<'MSG'
+warning: this push goes straight to main, which skips the change flow's CI and
+review. Ship with `cast flow run change` (or the Ship button), which lands the
+change on green. This push goes through anyway.
+MSG
+exit 0
