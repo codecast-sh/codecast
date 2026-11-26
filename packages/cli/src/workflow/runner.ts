@@ -1102,6 +1102,8 @@ async function waitOnStation(
       // A hand of the run's own that pinned blocked waits on a person: the run
       // stops here, whatever its json says: the loop checks this before any edge.
       context["station_blocked"] = node.id;
+      // A subject or writer gets here only killed (a live one waits above): the run ends with no wait open.
+      if (subject) context["station_blocked_killed"] = node.id;
       return "failure";
     }
     if (answersByHandoff) {
@@ -2746,7 +2748,7 @@ async function runNodeLoop(
         ? findFanin(current, graph)
         : resolveHumanGateTarget(current, graph, state.context)
           || resolveNextNode(graph, current, state.context);
-    if (stationBlocked && next) delete state.context["station_blocked"];
+    if (stationBlocked && next) { delete state.context["station_blocked"]; delete state.context["station_blocked_killed"]; }
     // A gate's answer reaches the session the change came from, unless where it routes says it anyway: a station the
     // session does (a Revise note) or a stop (the run's end message). A question back to the reviewer is no answer.
     if (current.type === "human" && outcome !== "failure" && next && next.backend !== "subject" && next.segment_exit !== "stop" && !state.context["human.gate.question"] && state.context["human.gate.label"]) {
@@ -2755,7 +2757,8 @@ async function runNodeLoop(
     if (stationBlocked && !next) {
       console.log(`\n${c.yellow}  '${current.label}' is waiting on a person; the run stops here${c.reset}`);
       state.failed = true;
-      state.failReason = `${current.id} is waiting on a person`;
+      // A killed session waits on nobody any more: its reason says so in the past tense (web runReport reads both).
+      state.failReason = state.context["station_blocked_killed"] === current.id ? `${current.id} stopped: its session was killed while it waited on a person` : `${current.id} is waiting on a person`;
       break;
     }
 

@@ -29,8 +29,8 @@ export const outcomeToneClass = (tone: OutcomeTone) => TONE[tone];
 /** The run's outcome in one sentence, in its tone. `muted` draws a run that
  *  no longer speaks for the cause (a later run followed it): red is kept for
  *  the cause's state now. `brief` is a row's version (runOutcome). */
-export function RunOutcomeText({ run, task, className, muted, brief }: { run: ReportRun; task?: ReportTask | null; className?: string; muted?: boolean; brief?: boolean }) {
-  const o = runOutcome(run, task, undefined, brief);
+export function RunOutcomeText({ run, task, className, muted, brief, ask }: { run: ReportRun; task?: ReportTask | null; className?: string; muted?: boolean; brief?: boolean; ask?: { mine: boolean; open: boolean } | null }) {
+  const o = runOutcome(run, task, undefined, brief, ask ?? null);
   return <span className={cn(muted ? "text-sol-text-dim" : TONE[o.tone], className)} data-run-outcome={o.end ?? run.status}>{o.text}</span>;
 }
 

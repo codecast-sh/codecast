@@ -11,6 +11,7 @@ import { deploysFocusHref, runTeam } from "../deploys/focus";
 import { entityRoute } from "@codecast/shared/entities";
 import { canAnswer, deployHold, gateOpen, gateWaitWords, holderOf, holdWords, type GateDecision, type TargetState } from "./journey";
 import { landedSha as mergedSha } from "./runRecord";
+import { runAskOf, type AskRow, type SessionAsk } from "./sessionAsk";
 
 export type ShipTone = "working" | "agent" | "session" | "you" | "ok" | "bad" | "wait";
 /** `sha`: the commit the run landed on main, and `team` the run's team, so a word about deploying it opens that team's Deploys page at the commit. */
@@ -32,7 +33,7 @@ type Run = {
   user_id?: string | null;
   current_node_id?: string | null;
   current_node_label?: string | null;
-  waiting_on_session?: { node_id: string; blocked?: boolean } | null;
+  waiting_on_session?: { node_id: string; conversation_id?: string; since?: number; blocked?: boolean } | null;
   gate_decision_id?: string | null;
   gate_decision_status?: string | null;
   gate_prompt?: string | null;
@@ -83,17 +84,21 @@ export function reachShip(reach: Pick<DeployReach, "state" | "targets">, run: st
 
 /**
  * Where one run of a change flow stands, in a card's words, with no graph: the station's own label (the run row carries
- * it), "Fixing" while the run waits on the session ("Waiting for a person" while that session waits on one), "Your call" only for an open card the viewer may answer (its
+ * it), "Fixing" while the run waits on the session ("Waiting on you" while that session asks the viewer with a card
+ * (`ask`, sessionAsk.ts), "Waiting for a person" while it asks anyone else, "Fixing" again once its card is answered), "Your call" only for an open card the viewer may answer (its
  * decision, when the store holds it), landed only with a merged sha on the run (journey.ts landedSha), and not landed
  * only for a run that ended at Deploy without one.
  * The deploy segment and the run's end are the runner's own node ids.
  */
-export function runShip(run: Run, viewer: string | null = null, decision: GateDecision | null = null): SessionShip | null {
+export function runShip(run: Run, viewer: string | null = null, decision: GateDecision | null = null, ask: SessionAsk | null = null): SessionShip | null {
   const top = segmentTopOf(run.current_node_id ?? "");
   const live = run.status === "running" || run.status === "paused" || run.status === "pending";
   const sha = mergedSha(run);
   if (run.status === "pending") return { words: "Starting", tone: "working", run: run._id };
-  if (live && run.waiting_on_session) return run.waiting_on_session.blocked ? { words: "Waiting for a person", tone: "wait", run: run._id } : { words: "Fixing", tone: "session", run: run._id };
+  if (live && run.waiting_on_session) {
+    if (!run.waiting_on_session.blocked || ask?.open === false) return { words: "Fixing", tone: "session", run: run._id };
+    return ask?.mine ? { words: "Waiting on you", tone: "you", run: run._id } : { words: "Waiting for a person", tone: "wait", run: run._id };
+  }
   if (live && gateOpen(run)) return canAnswer(decision, viewer) ? { words: "Your call", tone: "you", run: run._id } : { words: gateWaitWords(holderOf(decision)), tone: "wait", run: run._id };
   if (live && top === "deploy") {
     // "Deploying" only while a deploy carries it; held on main CI or waiting for a person otherwise, as the Deploy line says.
@@ -159,7 +164,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
   const onlyReach = new Set<string>();
   const after = new Map<string, number>();
   for (const [id, r] of newestRun) {
-    const s = runShip(r, viewer, r.gate_decision_id ? decisions[r.gate_decision_id] ?? null : null);
+    const s = runShip(r, viewer, r.gate_decision_id ? decisions[r.gate_decision_id] ?? null : null, runAskOf(r as any, decisions as Record<string, AskRow>, viewer));
     const sha = landedSha(r);
     if (sha) {
       onlyReach.add(id);

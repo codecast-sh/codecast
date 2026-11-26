@@ -122,6 +122,15 @@ describe("journeyStages", () => {
     // The session is back at work (the runner clears `blocked`): an old answered card says nothing.
     const working = journeyOf(g, asking({ waiting_on_session: { node_id: "brief", conversation_id: "conv1", since: 30, note: "x" } }), [], { id: ME, ask });
     expect(working.now).toMatchObject({ kind: "session", blocked: false, ask: null });
+    // A dismissed card is no answer (sessionAsk reads none): the run still waits for a person, its pin the note.
+    const dismissed = journeyOf(g, asking(), [], { id: ME, ask: null });
+    expect(dismissed.now).toMatchObject({ kind: "session", blocked: true, ask: null, note: "Waiting for Jason: keep the old flag?" });
+    expect(journeyWords(dismissed)).toEqual({ words: "Waiting for a person", tone: "wait" });
+    // A killed session's blocked pin ends the run: said in the past tense, by no station id, as is an older row's.
+    const killed = journeyOf(g, asking({ status: "failed", fail_reason: "brief stopped: its session was killed while it waited on a person", waiting_on_session: null }));
+    expect(killed.now).toMatchObject({ kind: "failed", why: "Its session was killed while it waited on a person" });
+    const older = journeyOf(g, asking({ status: "failed", fail_reason: "fix_check is waiting on a person", waiting_on_session: null }));
+    expect((older.now as any).why).toBe("Its session asked a person, and the run stopped");
     // Once the run ends, nothing claims an open wait, whatever the row still carries.
     for (const status of ["completed", "failed"]) {
       const ended = journeyOf(g, asking({ status, fail_reason: status === "failed" ? "Cancelled" : undefined }), [], { id: ME, ask });

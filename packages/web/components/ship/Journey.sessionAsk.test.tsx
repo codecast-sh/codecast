@@ -27,6 +27,8 @@ describe("the bar of a run whose session asks a person", () => {
     expect(text(html)).toContain("Waiting on you Keep the old flag?");
     expect(html).toContain('data-kind="you"');
     expect(html).toContain('data-run-gate="d1"');
+    // The session's own words stay beside the card: a card can be about something else.
+    expect(text(html)).toContain("Waiting for Jason: keep the old flag?");
     expect(html).not.toContain("data-again");
     expect(text(html)).not.toMatch(/Failed|Stopped/);
   });

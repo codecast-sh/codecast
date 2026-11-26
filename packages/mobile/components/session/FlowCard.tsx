@@ -131,7 +131,7 @@ function NowLine({ now, run }: { now: JourneyNow; run: RunRow }) {
       case 'idle': return ['', null, Theme.textMuted];
       case 'starting': return ['Starting', null, Theme.blue];
       case 'working': return [now.stage, waits(now.waits, now.stage), now.who === 'agent' ? Theme.orange : Theme.blue];
-      case 'session': return [sentBackWords(now), now.ask?.question ?? (now.note || null), now.blocked ? Theme.yellow : Theme.violet];
+      case 'session': return [sentBackWords(now), [now.ask?.question, now.note].filter(Boolean).join('\n') || null, now.blocked ? Theme.yellow : Theme.violet];
       case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder, now.who), now.prompt ?? now.stage, Theme.yellow];
       case 'landed': return [`Merged ${now.sha.slice(0, 7)} · ${holdWords(now.hold).words}`, waits(now.waits, 'Deploy') ?? now.line, Theme.green];
       case 'merged': return [`Merged ${now.sha.slice(0, 7)}`, null, Theme.green];
@@ -244,13 +244,14 @@ export function FlowEditCard({ edit, diff = null, dryRun = false }: { edit: Flow
   const runs = useSessionFlowRuns(conversationId);
   const run = useMemo(() => (dryRun ? null : editRun(edit, runs ?? [], madeAt)), [edit, runs, madeAt, dryRun]);
   const { flow: runFlow } = useRunFlow(run);
-  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run) : null), [run, runFlow]);
+  const viewer = useJourneyViewer(run as any);
+  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run, [], viewer) : null), [run, runFlow, viewer]);
   const live = journey?.now.kind === 'live';
   const { flow: base } = useNamedFlow(edit.graph ? null : edit.base);
   const drawing = useMemo(() => editDrawing(edit, { base: base ?? null, live }), [edit, base, live]);
   const lines = useMemo(() => editLines(edit), [edit]);
   const [fileOpen, setFileOpen] = useState(false);
-  const ship = run ? runShip(run as any) : null;
+  const ship = run ? runShip(run as any, viewer.id, null, viewer.ask ?? null) : null;
   const dp = journey && 'line' in journey.now ? liveDeploy(journey.now.line) : null;
   const stateColor = !run ? Theme.textMuted : live ? Theme.green : ship?.tone === 'bad' ? Theme.red : ship?.tone === 'you' || ship?.tone === 'wait' ? Theme.yellow : Theme.blue;
   const sign = (l: string) => (l.startsWith('+ ') ? ['+', Theme.green] : l.startsWith('~ ') ? ['~', Theme.cyan] : l.startsWith('- ') ? ['−', Theme.red] : ['·', Theme.textMuted]) as [string, string];

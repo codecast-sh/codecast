@@ -13,6 +13,8 @@ mock.module("../../../../hooks/useFlowObject", () => ({ useRunFlow: () => ({ flo
 const realJourney = await import("../../../../lib/ship/journey");
 mock.module("../../../../lib/ship/journey", () => ({ ...realJourney, journeyOf: () => journey }));
 mock.module("../../../ship/Journey", () => ({ JourneyView: () => null }));
+const detailHook = { ...(await import("../../../../hooks/useSyncDecisionDetail")) };
+mock.module("../../../../hooks/useSyncDecisionDetail", () => ({ ...detailHook, useSyncDecisionDetail: () => ({ ready: true, missing: false }) }));
 
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { FlowEditCard } = await import("../FlowEditCard");

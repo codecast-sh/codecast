@@ -40,7 +40,7 @@ export type ReportRun = {
   gate_decision_short_id?: string;
   gate_decision_status?: string;
   /** The run waits on its session; `blocked`: that session asks a person (flows.md FL4). */
-  waiting_on_session?: { blocked?: boolean } | null;
+  waiting_on_session?: { node_id?: string; conversation_id?: string; since?: number; note?: string; blocked?: boolean } | null;
   card_billed_usd?: number;
   card_list_usd?: number;
   graph_hash?: string;
@@ -114,6 +114,9 @@ export const closedGate = (run: Pick<ReportRun, "gate_decision_status" | "gate_a
   !run.gate_answer && (run.gate_decision_status === "withdrawn" || run.gate_decision_status === "dismissed") ? run.gate_decision_status : null;
 /** The runner itself was stopped (a signal), so the station it was at never gave its verdict. */
 const RUNNER_STOP = /\brunner was stopped \((SIG[A-Z]+)\)(?: at (\S+))?/;
+/** A session that pinned blocked and was then killed (runner.ts): the run ended, and nobody waits on that ask any more.
+ *  Rows from before it said "<station> is waiting on a person" for this too. */
+export const KILLED_ASKING = /^(\S+) stopped: its session was killed while it waited on a person$/;
 const interrupted = (run: Pick<ReportRun, "status" | "fail_reason">) => run.status === "failed" && RUNNER_STOP.test(run.fail_reason ?? "");
 
 // ── a station's result, in one line ──────────────────────────────────────────
@@ -759,7 +762,8 @@ export { runEnd };
  *  An end with its reason, never a failure to retry. */
 export const stoppedOnPurpose = (run: Pick<ReportRun, "status" | "fail_reason">) => run.status === "failed" && /^Stopped:/.test(run.fail_reason?.trim() ?? "");
 
-export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.now(), brief = false): RunOutcome {
+/** `ask`: what the session the run waits on asks a person, when the caller knows it (lib/ship/sessionAsk.ts). */
+export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.now(), brief = false, ask: { mine: boolean; open: boolean } | null = null): RunOutcome {
   const ended = runEnd(run);
   const end = ended?.kind ?? null;
   const at = labelOf(run, run.current_node_id);
@@ -771,8 +775,9 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
   }
   // Ship answered and the runner has not moved on: approved, waiting on the ship step, not working.
   if (run.status === "running" && run.current_node_id === CARD_GATE_NODE_ID && run.gate_answer && optionIsShip(choiceWords(run.gate_answer))) return { tone: "waiting", end, text: APPROVED_WORDS };
-  // The session the run waits on asked a person: the run waits for that answer, it did not stop.
-  if (run.status === "running" && run.waiting_on_session?.blocked) return { tone: "waiting", end, text: "Waiting for an answer to the session's question." };
+  // The session the run waits on asked a person: the run waits for that answer, it did not stop. Once its card is
+  // answered the session works on, and so does the run.
+  if (run.status === "running" && run.waiting_on_session?.blocked && ask?.open !== false) return { tone: "waiting", end, text: ask?.mine ? "Waiting for your answer to the session's question." : "Waiting for an answer to the session's question." };
   if (run.status === "running") return { tone: "live", end, text: `Working: at ${at}.` };
   // A Workflow tool run has no end of its own to name: its last agent is just the last to finish.
   if (run.run_kind === "workflow" && run.status === "completed") {
@@ -1009,6 +1014,7 @@ export function failCause(run: Pick<ReportRun, "fail_reason" | "current_node_id"
     return { key: `killed:${step ?? ""}`, step, label: m[3] ? `No work for ${spanWords(Number(m[3]))}` : `Out of time, ${spanWords(Number(m[1]))}`, raw, check };
   }
   if ((m = raw.match(/^gate (dismissed|withdrawn)$/))) return out(`gate-${m[1]}`, at, `Card ${m[1]}`);
+  if ((m = raw.match(KILLED_ASKING))) return out("asks-killed", m[1], "Session killed while it waited on a person");
   if ((m = raw.match(/^(\S+) is waiting on a person$/))) {
     // The engine says "waiting on a person" for any station that pinned blocked; its own pin says what it waits on. A
     // spend cap waits on time, not on anyone.
@@ -1134,6 +1140,7 @@ export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)
   if (looped) return `Stopped: ${labelOf(run, looped.node)} looped ${TIMES[looped.times] ?? `${looped.times} times`}.`;
   if ((m = why.match(HAND_KILLED))) return `Stopped: ${labelOf(run, m[2] ?? run.current_node_id)}'s session ${m[3] ? `showed no work for ${m[3]} minutes` : "ran out of time"}.`;
   if ((m = why.match(/^gate (dismissed|withdrawn)$/))) return run.gate_node_id === CARD_GATE_NODE_ID || run.current_node_id === CARD_GATE_NODE_ID ? `Stopped: the decision was ${m[1]}.` : `Stopped: the question was ${m[1]}.`;
+  if ((m = why.match(KILLED_ASKING))) return `Stopped at ${labelOf(run, m[1])}: its session was killed while it waited on a person.`;
   if ((m = why.match(/^(\S+) is waiting on a person$/))) {
     const cap = runSpendCap(run, m[1]);
     if (cap) return `Stopped at ${labelOf(run, m[1])}: a spend limit refused its work (${spendCapWords(cap)}).`;

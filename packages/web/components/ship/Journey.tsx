@@ -318,8 +318,9 @@ function AskBar({ ask, note, since, conversation, now_ms, children }: { ask: Ses
         : !ask && conversation && conversation !== here ? <Link className="sj-act" href={`/conversation/${conversation}`} data-journey-open-session>Open session</Link>
         : null}
       {children}
-      {ask?.mine ? <div className="sj-gate"><RunGate run={{ gate_decision_id: ask.id, gate_decision_short_id: ask.short_id ?? undefined }} className="w-full" /></div>
-        : !ask && note ? <p className="sj-note" data-journey-note>{note}</p> : null}
+      {/* The session's own words on what it waits for: a card can be about something else. */}
+      {note ? <p className="sj-note" data-journey-note>{note}</p> : null}
+      {ask?.mine ? <div className="sj-gate"><RunGate run={{ gate_decision_id: ask.id, gate_decision_short_id: ask.short_id ?? undefined }} className="w-full" /></div> : null}
     </div>
   );
 }

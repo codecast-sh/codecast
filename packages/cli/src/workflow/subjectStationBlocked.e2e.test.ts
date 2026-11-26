@@ -92,7 +92,7 @@ describe("a subject that pins blocked at its own station: the run waits for a pe
     const p = asksAPerson(edit, { killedAfter: 0 });
     const { outcome } = await start(root);
     expect(outcome).toBe("failed");
-    expect(failReasons(p.s).at(-1)).toBe("fix_check is waiting on a person");
+    expect(failReasons(p.s).at(-1)).toBe("fix_check stopped: its session was killed while it waited on a person");
     expect(waits(p.s).some((w) => w?.blocked)).toBe(false);
     expect(p.s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
   }, 60_000);
@@ -104,7 +104,7 @@ describe("a subject that pins blocked at its own station: the run waits for a pe
     expect(outcome).toBe("failed");
     expect(waits(p.s).find((w) => w?.blocked)).toMatchObject({ note: PIN, blocked: true });
     expect(p.parkedReads()).toBeGreaterThanOrEqual(6);
-    expect(failReasons(p.s).at(-1)).toBe("fix_check is waiting on a person");
+    expect(failReasons(p.s).at(-1)).toBe("fix_check stopped: its session was killed while it waited on a person");
   }, 60_000);
 
   test("a session that never comes back is waited for past its station's limit and quiet window; only a cancel ends the run", async () => {

@@ -323,6 +323,14 @@ export function stagesHolding(graph: Graph, nodeIds: ReadonlyArray<string>): str
 
 const LIVE_STATUSES = new Set(["pending", "running", "paused"]);
 
+/** A run that stopped on its session's ask, in the past tense: the run ended, so nobody waits on it any more. Older
+ *  runners said "<station> is waiting on a person" for a killed session's ask too. */
+export function askStopWhy(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  if (/^\S+ stopped: its session was killed while it waited on a person$/.test(raw)) return "Its session was killed while it waited on a person";
+  return /^\S+ is waiting on a person$/.test(raw) ? "Its session asked a person, and the run stopped" : null;
+}
+
 /** A stop reason a person can read: its leading "Stopped:" and any JSON or a trailing cut word taken off. */
 export function readableWhy(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -620,7 +628,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : "again";
     // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
     if (!sha && stage?.role === "deploy") now = { kind: "unlanded", why: readableWhy(run.fail_reason) ?? "The run ended with no merge recorded", waits: [] };
-    else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && walked.some((id) => id !== at && byId.get(id)?.type !== "exit") ? exit?.label ?? null : null };
+    else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: askStopWhy(run.fail_reason) ?? readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && walked.some((id) => id !== at && byId.get(id)?.type !== "exit") ? exit?.label ?? null : null };
   } else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
   else if (!plan.some((s) => s.role === "land")) now = { kind: "passed" };
   // A finished run with no merge on it (a merge nobody recorded) says it finished, never that it did not land.

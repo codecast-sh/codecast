@@ -131,7 +131,11 @@ export default function RunScreen() {
   const line = isLineRun(run as any);
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'pending';
   const ended = run.status === 'completed' || run.status === 'failed';
-  const outcome = runOutcome(run, task, now);
+  const outcome = runOutcome(run, task, now, false, ask);
+  // The session the run waits on asks a person: whom it waits on and what, as the run's card says it.
+  const asking = live && run.waiting_on_session?.blocked && ask?.open !== false
+    ? { head: ask?.mine ? 'Waiting on you' : 'Waiting for a person', body: [ask?.question, run.waiting_on_session.note].filter(Boolean).join('\n') }
+    : null;
   const st = statusVisual(run.status, Theme);
   const flow = flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name });
   const title = run.task_title ?? task?.title ?? flow;
@@ -190,6 +194,12 @@ export default function RunScreen() {
         </RNView>
 
         <RNText style={[styles.outcome, { color: outcomeColor(outcome.tone, Theme) }]} testID="run-outcome">{outcome.text}</RNText>
+        {asking ? (
+          <RNView style={[styles.gate, { borderColor: Theme.yellow + '55', backgroundColor: Theme.yellow + '10' }]} testID="run-session-asks">
+            <RNText style={[styles.gatePrompt, { fontWeight: '600' }]}>{asking.head}</RNText>
+            {asking.body ? <RNText style={styles.gatePrompt}>{asking.body}</RNText> : null}
+          </RNView>
+        ) : null}
 
 
         {run.status === 'paused' && run.gate_prompt && !run.gate_decision_id ? (

@@ -114,7 +114,7 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
     // the viewer's answer, and the card is answered right on the run's.
     { ...fan, _id: GALLERY_FLOW.shipAsks, status: "running", current_node_id: "brief",
       waiting_on_session: { node_id: "brief", conversation_id: conversationId, since: now - 90_000, note: "Waiting for you: ship the mobile renderer behind a flag?", blocked: true },
-      node_statuses: [...round, verdicts("brief", "green", "changes", "The reviewer asked for changes"), { ...status("brief", "running"), visits: 1 }] },
+      node_statuses: [...round, verdicts("brief", "green", "changes", "The reviewer asked for changes"), { ...status("brief", "running"), started_at: now - 150_000, visits: 1 }] },
     // Another person's card: the viewer reads who it waits on, never "You".
     { ...branching, ...card, _id: GALLERY_FLOW.shipDecide, user_id: "galleryuser0000000000002", gate_decision_id: "gallerydecision000000009", gate_decision_short_id: "sd-90009",
       node_statuses: [...routed, { ...status("decide__decide", "running"), started_at: now - 20_000 }] },

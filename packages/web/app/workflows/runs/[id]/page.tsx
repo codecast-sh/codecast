@@ -10,6 +10,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { RunSessionAsk } from "../../../../components/ship/Journey";
+import { useJourneyViewer } from "../../../../hooks/useJourneyViewer";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from "../../../../lib/workflowRun";
 import { WorkflowGraphView, type WFNode, type NodeStatus } from "../../../../components/WorkflowGraphView";
@@ -111,6 +112,8 @@ function RunDetailContent({ runId }: { runId: string }) {
   const causeRuns = useCauseRuns(run?.task_id);
   // Re-render each minute so the outcome's watch day stays true.
   const nowMs = useCoarseNow(60_000);
+  // What the session the run waits on asks a person, so the outcome line and the bar below say the same.
+  const ask = useJourneyViewer(run as any).ask ?? null;
   // Who answered the card, named in the path's Decide row.
   const answeredBy = detail?.decision?.status === "answered" ? answererNameOf(detail, meId) : null;
   const phases = useMemo(() => (run ? runPath(run as ReportRun, workflow, task, { answeredBy }) : []), [run, workflow, task, answeredBy]);
@@ -245,7 +248,7 @@ function RunDetailContent({ runId }: { runId: string }) {
           {/* What the run did and what is true now, then where each fact lives. */}
           <section data-run-report-head>
             <p className="text-[17px] leading-snug font-medium">
-              <RunOutcomeText run={run as ReportRun} task={task} />
+              <RunOutcomeText run={run as ReportRun} task={task} ask={ask} />
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-1.5">
               {!line && hostHref && <ReportChip href={hostHref} title="The session that ran this workflow">Ran in {hostTitle ?? "its session"}</ReportChip>}
