@@ -750,28 +750,28 @@ function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }
   );
 }
 
-// Who may walk in, named the way the start dialog names it. Team is the
-// default, so it sits quiet; locked and private are the exceptions and light
-// up. Private is chosen when the huddle starts (it also keeps the record
-// private), so the menu lists it only while it is the room's state: opening
-// the room is the way out of it.
+// Who may walk in: the same three rows every time, in one order, the room's
+// own marked. Team is the default, so its chip sits quiet; locked and private
+// light up. Private is chosen when the huddle starts (it also keeps the record
+// private), so it can be left (open the room) but not entered mid-call, and a
+// private room has no "locked but listed" to step down to.
+const DOOR_ORDER: RoomDoor[] = ["team", "locked", "private"];
 const DOOR_CHROME: Record<RoomDoor, { icon: typeof Users; label: string; hint: string }> = {
-  team: { icon: Users, label: "team", hint: "Any teammate can walk in" },
-  locked: { icon: Lock, label: "locked", hint: "Teammates see it and knock" },
-  private: { icon: EyeOff, label: "private", hint: "Hidden from the team. Only people rung in" },
+  team: { icon: Users, label: "team", hint: "Teammates walk in" },
+  locked: { icon: Lock, label: "locked", hint: "Teammates knock" },
+  private: { icon: EyeOff, label: "private", hint: "Hidden. Ring people in" },
 };
 
 function DoorMenu({ roomKey }: { roomKey: string }) {
   const { door, setDoor } = useRoomDoor(roomKey);
   const now = DOOR_CHROME[door];
-  const options: RoomDoor[] = door === "private" ? ["private", "team"] : ["team", "locked"];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <StageChromeButton
           active={door !== "team"}
           accent="violet"
-          title={`Who can join: ${now.hint.toLowerCase()}`}
+          title={`Who can join: ${now.label}`}
           aria-label={`Who can join: ${now.label}`}
           className="data-[state=open]:bg-sol-text/10"
         >
@@ -784,14 +784,16 @@ function DoorMenu({ roomKey }: { roomKey: string }) {
         align="start"
         sideOffset={6}
         collisionPadding={8}
-        className="w-[240px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-sol-text/[0.08]"
+        className="w-[200px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-sol-text/[0.08]"
       >
-        {options.map((key) => {
+        {DOOR_ORDER.map((key) => {
           const chrome = DOOR_CHROME[key];
           const current = key === door;
+          const reachable = current || key === "team" || (key === "locked" && door === "team");
           return (
             <DropdownMenuItem
               key={key}
+              disabled={!reachable}
               onSelect={() => key !== "private" && setDoor(key)}
               className="items-start gap-2.5 rounded-md px-2 py-1.5 text-left focus:bg-sol-text/[0.06] [&>svg]:size-3.5"
             >
