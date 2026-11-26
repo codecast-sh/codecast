@@ -245,6 +245,20 @@ fi
   }
 }
 
+describe("the build it made (ct-102056)", () => {
+  test("CLI commits landing on main after the build commit never refuse the release", () => {
+    for (const { name, run } of runs) {
+      expect(run, name).not.toMatch(/git diff --name-only "\$SOURCE_COMMIT"\.\.HEAD/);
+      expect(run, name).not.toContain("head-cli-package.json");
+    }
+    expect(step("Revalidate main and atomically publish version commit and tag").run).toContain('git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD');
+  });
+
+  test("a version already public from another source commit is refused", () => {
+    expect(step("Validate immutable release identity and source").run).toContain('"$public_version" == "$RELEASE_VERSION" && "$public_source" != "$SOURCE_COMMIT"');
+  });
+});
+
 describe("public release publication", () => {
   test("publishes verified immutable bytes when legacy URLs stay stale", async () => {
     const result = await runPublicRelease();

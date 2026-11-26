@@ -171,18 +171,10 @@ jobs:
             exit 1
           fi
 
-          git show "$SOURCE_COMMIT:packages/cli/package.json" |
-            jq -S 'del(.version)' > /tmp/source-cli-package.json
-          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
-          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
-          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
-            packages/cli packages/shared bun.lock package.json |
-            grep -v '^packages/cli/package.json$' || true)
-          if [[ -n "$source_changes" ]]; then
-            echo "::error::CLI/shared build inputs changed after the binary build commit"
-            printf '%s\n' "$source_changes"
-            exit 1
-          fi
+          # The release is the build it made: latest.json names SOURCE_COMMIT and the
+          # binaries are checked against that commit's manifest, CI and fallback build.
+          # CLI commits that landed on main after it are not carried; they go out with
+          # the next release, cut at the new head (ct-102056).
 
           current=$(jq -r '.version' packages/cli/package.json)
           if [[ "$current" != "$PREVIOUS_VERSION" && "$current" != "$RELEASE_VERSION" ]]; then
@@ -198,6 +190,11 @@ jobs:
           if [[ "$public_version" != "$PREVIOUS_VERSION" &&
             "$public_version" != "$RELEASE_VERSION" ]]; then
             echo "::error::public latest.json is neither the predecessor nor the recovery target"
+            exit 1
+          fi
+          public_source=$(jq -r '.sourceCommit // ""' <<<"$public_latest")
+          if [[ "$public_version" == "$RELEASE_VERSION" && "$public_source" != "$SOURCE_COMMIT" ]]; then
+            echo "::error::$RELEASE_VERSION is already public from $public_source, not $SOURCE_COMMIT"
             exit 1
           fi
 
@@ -607,18 +604,6 @@ jobs:
           git pull --ff-only origin main
           git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD
 
-          git show "$SOURCE_COMMIT:packages/cli/package.json" |
-            jq -S 'del(.version)' > /tmp/source-cli-package.json
-          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
-          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
-          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
-            packages/cli packages/shared bun.lock package.json |
-            grep -v '^packages/cli/package.json$' || true)
-          if [[ -n "$source_changes" ]]; then
-            echo "::error::CLI/shared build inputs changed while the release was staging"
-            printf '%s\n' "$source_changes"
-            exit 1
-          fi
 
           current=$(jq -r '.version' packages/cli/package.json)
           created_commit=false
