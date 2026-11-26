@@ -54,6 +54,8 @@ export const RESERVATION_TTL_MS = 15 * MINUTE;
 
 export type PassInputs = {
   input: PriorityPassInput;
+  /** Every session name the input uses, to its conversation: applyPlan and the replays resolve a name here, never by short id (sessionNames). */
+  conversations: Record<string, Id<"conversations">>;
   /** Where this run started reading. */
   cursor_at: number;
   /** More moved since the cursor than was read: another run picks it up. */
@@ -69,22 +71,57 @@ export type PassInputs = {
 };
 
 /**
- * A session's id as the pass, its replays and step refs name it: its short id,
- * or, when other conversations share that 7-character prefix of the id, the
- * shortest longer prefix of its own id none of them shares (the form `cast
- * read` prints for a collision, jx7137jn). findConversationByAnyRefWhere then
- * lands on this one; a bare short id would land on whichever collider it
- * accepts first, often a workflow's station agent of the same person.
+ * How a step ref stores a session: its short id, or, when other conversations
+ * share that 7-character prefix of the id, the shortest longer prefix of its
+ * own id none of them shares (the form `cast read` prints for a collision,
+ * jx7137jn), so a later read (findConversationByAnyRefWhere, oldest first)
+ * lands on this one. applyPlan writes it, for the few refs a plan holds.
  */
-export async function sessionId(ctx: { db: any }, conv: Doc<"conversations">): Promise<string> {
+export async function storedSessionId(ctx: { db: any }, conv: Doc<"conversations">): Promise<string> {
   const own = String(conv._id);
   if (!conv.short_id) return own;
   const others = (await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", conv.short_id)).take(16))
     .map((c: Doc<"conversations">) => String(c._id))
     .filter((id: string) => id !== own);
-  if (!others.length) return conv.short_id;
-  for (let n = conv.short_id.length + 1; n < own.length; n++) if (!others.some((id: string) => id.startsWith(own.slice(0, n)))) return own.slice(0, n);
+  return longerThanRivals(conv.short_id, own, others);
+}
+
+/** `base`, or the shortest longer prefix of `own` that no rival id starts with. */
+function longerThanRivals(base: string, own: string, rivals: string[]): string {
+  if (!rivals.length) return base;
+  for (let n = base.length + 1; n < own.length; n++) if (!rivals.some((id) => id.startsWith(own.slice(0, n)))) return own.slice(0, n);
   return own;
+}
+
+/**
+ * Names the conversations one pass input shows, with no reads: each by its
+ * short id, or, when one named before it shares that short id (about a
+ * quarter of sessions share theirs with some conversation, often a workflow
+ * station agent of the same person), by the shortest longer prefix of its id.
+ * `ids` maps every name back to its conversation. `ref` reads a stored step
+ * ref as a name: itself when named here, else the one named conversation it
+ * can mean (a short id, or a longer prefix of its id), else as stored.
+ */
+export function sessionNames() {
+  const ids: Record<string, Id<"conversations">> = {};
+  const named = new Map<string, { name: string; short: string }>();
+  const name = (conv: Doc<"conversations">): string => {
+    const own = String(conv._id);
+    const had = named.get(own);
+    if (had) return had.name;
+    const short = conv.short_id ?? own;
+    const rivals = [...named].filter(([, n]) => n.short === short).map(([id]) => id);
+    const out = conv.short_id ? longerThanRivals(short, own, rivals) : own;
+    named.set(own, { name: out, short });
+    ids[out] = conv._id;
+    return out;
+  };
+  const ref = (stored: string): string => {
+    if (ids[stored]) return stored;
+    const can = [...named].filter(([own, n]) => n.short === stored || (stored.length > n.short.length && own.startsWith(stored)));
+    return can.length === 1 ? can[0]![1].name : stored;
+  };
+  return { ids, name, ref };
 }
 /** The person's own session, counting in this workspace (lib/prioritySessionVisibility: its team's only while listed there). */
 export const inWorkspace = async (vis: SessionVisibility, conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
@@ -260,12 +297,12 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
 }
 
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
-async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">): Promise<Pick<PassSession, "kind" | "parent">> {
+async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">, name: (conv: Doc<"conversations">) => string): Promise<Pick<PassSession, "kind" | "parent">> {
   if (isStandingSession(conv)) return { kind: "role" };
   // A fork (parent_message_uuid) is the person's own session from that point on, not a worker.
   if (!conv.parent_conversation_id || conv.parent_message_uuid) return { kind: "session" };
   const parent: Doc<"conversations"> | null = await ctx.db.get(conv.parent_conversation_id);
-  return { kind: "worker", parent: parent ? await sessionId(ctx, parent) : String(conv.parent_conversation_id) };
+  return { kind: "worker", parent: parent ? name(parent) : String(conv.parent_conversation_id) };
 }
 
 /**
@@ -433,12 +470,13 @@ export const passInputs = internalQuery({
     const oldestFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
     const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
     const shortId = shortIds(ctx);
+    const names = sessionNames();
     const sessions: PassSession[] = [];
     for (const t of oldestFirst) {
       const conv = t.conv;
       sessions.push({
-        id: await sessionId(ctx, conv),
-        ...(await sessionKind(ctx, conv)),
+        id: names.name(conv),
+        ...(await sessionKind(ctx, conv, names.name)),
         title: conv.title ?? "",
         first_prompt: conv.first_prompt ?? "",
         pin: await pinAsOf(ctx, conv, args.now ?? null),
@@ -491,17 +529,18 @@ export const passInputs = internalQuery({
         serves: p.serves ?? null,
         steps: p.steps,
         last_active_at: p.last_active_at,
-        // Only an active priority's sessions get the collision check: the pass maps into no other, and the reads stay bounded.
-        sessions: await Promise.all(readable.map(async (c) => ({
-          id: p.status === "active" ? await sessionId(ctx, c) : c.short_id ?? String(c._id), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
+        sessions: readable.map((c) => ({
+          id: names.name(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
           ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
-        }))),
+        })),
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
         ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),
       });
       for (const s of p.steps) for (const r of s.refs) if (r.kind === "task") stepTaskIds.add(r.id);
     }
+    // Once every shown session is named: a stored step ref reads as the name of the session it means.
+    for (const pp of priorities) pp.steps = pp.steps.map((st) => ({ ...st, refs: st.refs.map((r) => (r.kind === "session" ? { ...r, id: names.ref(r.id) } : r)) }));
     const step_tasks: PassTask[] = [];
     for (const short_id of stepTaskIds) {
       const t: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first();
@@ -529,6 +568,7 @@ export const passInputs = internalQuery({
         calls,
         corrections: corrections.input,
       },
+      conversations: names.ids,
       cursor_at,
       more: stopAt !== null,
       read_to: stopAt !== null ? Math.max(cursor_at, Math.max(stopAt, cursor_at) - 1) : until,

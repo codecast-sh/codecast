@@ -105,7 +105,7 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
   const standing = new Set(golden.standing_sessions);
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   // Out of scope only when it has sessions and the golden set labels none of them; a sessionless one (from calls, or emptied) is scored.
-  const unlabeled = produced.filter((p) => p.sessions.length > 0 && !p.sessions.some((s) => labeled.has(s))).map((p) => p.key);
+  const unlabeled = produced.filter((p) => p.sessions.length > 0 && !p.sessions.some((s) => labeled.has(labelId(s)))).map((p) => p.key);
   const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(s)).length / p.sessions.length > 0.5).map((p) => p.key);
   // Out of the golden set's scope: never offered to the judge, so one cannot take a labeled priority's slot.
   const candidates = produced.filter((p) => !standingLike.includes(p.key) && !unlabeled.includes(p.key));
@@ -235,9 +235,24 @@ export function modelJudge(apiKey: string) {
 
 // ---------------------------------------------------------------- the classifier's score
 
-/** A golden label names a session by its 7-character short id; a run names one whose short id collides by a longer prefix of its id (priorityPassInputs sessionId). */
+/**
+ * A golden label names a session by its 7-character short id; a run names it by
+ * that, a longer prefix of its id (priorityPassInputs sessionNames) or its
+ * whole id (the classifier replay). A label two read sessions share cannot say
+ * which it meant, so it is left out, as if not read.
+ */
 const labelId = (id: string) => id.slice(0, 7);
-const byLabelId = (read: Map<string, string>) => new Map([...read].map(([id, title]) => [labelId(id), title] as [string, string]));
+function byLabelId(read: Map<string, string>): Map<string, string> {
+  const out = new Map<string, string>();
+  const shared = new Set<string>();
+  for (const [id, title] of read) {
+    const label = labelId(id);
+    if (out.has(label)) shared.add(label);
+    out.set(label, title);
+  }
+  for (const label of shared) out.delete(label);
+  return out;
+}
 
 /** The golden priorities held out of a classifier replay's seed: every `every`th (none at 0). */
 export function heldOut(golden: Golden, every: number): Set<string> {
@@ -488,7 +503,7 @@ function runClassifier(golden: Golden, goldenPath: string, arg: (name: string, f
       result.sessions_read.push(...r.sessions_read);
       resume = r.resume;
     } while (resume);
-    const scored = scope !== 'all' || result.sessions_read.some((s) => labeled.has(s.id));
+    const scored = scope !== 'all' || result.sessions_read.some((s) => labeled.has(labelId(s.id)));
     runs.push({ ...w, result, scored });
     const tally = (f: (c: unknown) => boolean) => result.placements.filter((p) => f(p.choice)).length;
     console.error(`${w.name}: ${result.sessions_read.length} sessions, ${result.placements.length} classified (${tally((c) => !!c && c !== 'new')} placed, ${tally((c) => c === 'new')} new, ${tally((c) => !c)} unreadable), $${result.cost_usd.toFixed(3)}${scored ? '' : ' (no golden sessions: not scored)'}`);
@@ -513,18 +528,18 @@ function readClassifierFacts(user_id: string, workspace: string, window_start: n
   const facts: ClassifierFacts = { person: '', sessions: [], tasks: [], sessions_read: [] };
   let cursor = window_start;
   for (;;) {
-    const read = convexRun<{ input: { person: string; sessions: Array<{ id: string; title: string; kind?: string; typed: Array<{ at: number }>; pin_events: Array<{ at: number }>; last_active: number }> }; more: boolean; read_to: number }>(
+    const read = convexRun<{ input: { person: string; sessions: Array<{ id: string; title: string; kind?: string; typed: Array<{ at: number }>; pin_events: Array<{ at: number }>; last_active: number }> }; conversations: Record<string, string>; more: boolean; read_to: number }>(
       'priorityPassInputs:passInputs', { user_id, workspace, now, window_start: cursor });
     facts.person = read.input.person;
     const firstAt = (s: (typeof read.input.sessions)[number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
     const chunk = convexRun<{ sessions: EvalSession[]; tasks: ClassifierTask[] }>('priorityClassifierEval:evalFacts', {
       workspace,
-      sessions: read.input.sessions.filter((s) => s.kind !== 'role').map((s) => ({ id: s.id, first_at: firstAt(s) })),
+      sessions: read.input.sessions.filter((s) => s.kind !== 'role').map((s) => ({ conversation_id: read.conversations[s.id], first_at: firstAt(s) })),
       tasks: facts.tasks.length ? [] : taskIds,
     });
     if (!facts.tasks.length) facts.tasks = chunk.tasks;
     facts.sessions.push(...chunk.sessions);
-    facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: s.id, title: s.title })));
+    facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: read.conversations[s.id] ?? s.id, title: s.title })));
     if (!read.more || read.read_to <= cursor) return facts;
     cursor = read.read_to;
   }
@@ -595,7 +610,7 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
       placements.push({ session: s.id, title: s.title, choice, asks, ...(inherited ? { inherited_from: s.parent! } : {}) });
       if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
     }
-    const scored = saved.args.workspace !== 'all' || w.facts.sessions_read.some((s) => labeled.has(s.id));
+    const scored = saved.args.workspace !== 'all' || w.facts.sessions_read.some((s) => labeled.has(labelId(s.id)));
     return { workspace: w.workspace, name: w.name, scored, sessions_read: w.facts.sessions_read, priorities, placements };
   }));
   const scoredRuns = runs.filter((r) => r.scored);
@@ -641,7 +656,7 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
       resume = r.resume;
     } while (resume);
     // With every workspace, one that holds none of the golden set's sessions is not scored: its priorities are outside the set.
-    const scored = scope !== 'all' || result.sessions_read.some((s) => labeled.has(s.id));
+    const scored = scope !== 'all' || result.sessions_read.some((s) => labeled.has(labelId(s.id)));
     runs.push({ ...w, result, scored });
     console.error(`${w.name}: ${result.sessions_read.length} sessions, ${result.priorities.length} priorities, $${result.cost_usd.toFixed(2)}${scored ? '' : ' (no golden sessions: not scored)'}`);
   }

@@ -241,10 +241,10 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     const id = ctx.db.normalizeId("conversations", ref);
     return id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   });
-  // A step's session ref is a short id, a 7-character prefix other conversations share: it means the priority owner's own.
+  // A step's session ref is the priority owner's own conversation; it was stored unshared then (storedSessionId), so oldest first.
   const ownedConvs = memo((key): Promise<Doc<"conversations"> | null> => {
     const [owner, ref] = key.split(" ");
-    return findConversationByAnyRefWhere(ctx, ref, (c) => String(c.user_id) === owner);
+    return findConversationByAnyRefWhere(ctx, ref, (c) => String(c.user_id) === owner, (c) => c._creationTime);
   });
   return {
     conv: convs,

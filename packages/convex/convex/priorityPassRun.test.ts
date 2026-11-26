@@ -5,7 +5,7 @@
 // the person's own places and tiers survive the next pass.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { MergePlan } from "./lib/priorityPass";
-import { LATE_MARGIN_MS } from "./priorityPassInputs";
+import { LATE_MARGIN_MS, sessionNames } from "./priorityPassInputs";
 import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { api, internal } from "./_generated/api";
@@ -139,29 +139,65 @@ describe("runPass", () => {
 });
 
 describe("a short id other conversations share", () => {
-  test("the pass names the person's session by a prefix no other conversation shares, and maps that one, not an older one of someone else's", async () => {
-    const w = await world();
-    const [theirs, mine, shortId] = await w.t.run(async (ctx) => {
-      const base = { agent_type: "claude_code", title: "dupe", first_prompt: "dupe", started_at: w.now - DAY, updated_at: w.now - H, message_count: 3, status: "active" };
-      const theirs = await ctx.db.insert("conversations", { ...base, user_id: w.carl, team_id: w.other, session_id: "carl-dupe", short_id: "tmp" } as any);
-      const mine = await ctx.db.insert("conversations", { ...base, user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full", session_id: "ana-dupe", short_id: "tmp" } as any);
-      // As in production, a short id is the first 7 characters of the id; here both carry Ana's.
-      const shortId = String(mine).slice(0, 7);
-      for (const id of [theirs, mine]) await ctx.db.patch(id, { short_id: shortId });
-      return [theirs, mine, shortId] as const;
+  // As in production, a conversation's short id is the first 7 characters of its id; `dupes` gives every listed one the first's.
+  const dupes = (w: Awaited<ReturnType<typeof world>>, rows: Array<Record<string, unknown>>) =>
+    w.t.run(async (ctx) => {
+      const base = { agent_type: "claude_code", title: "dupe", first_prompt: "dupe", started_at: w.now - DAY, updated_at: w.now - H, message_count: 3, status: "active", short_id: "tmp" };
+      const ids = [];
+      for (const [i, r] of rows.entries()) ids.push(await ctx.db.insert("conversations", { ...base, session_id: `dupe-${i}`, ...r } as any));
+      const shortId = String(ids[0]).slice(0, 7);
+      for (const id of ids) await ctx.db.patch(id, { short_id: shortId });
+      return { ids, shortId };
     });
-    await w.send(w.ana, mine, w.now - 2 * H, "get grader faults under ten percent");
-    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
-    const named = input.sessions.find((s: any) => s.id.startsWith(shortId)).id;
-    // A prefix of Ana's id longer than the short id, which Carl's id does not share.
-    expect(named.length).toBeGreaterThan(shortId.length);
-    expect(String(mine).startsWith(named)).toBe(true);
-    expect(String(theirs).startsWith(named)).toBe(false);
-    model.reply = () => JSON.stringify({ priorities: [proposal({ steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [] }], sessions: [{ session: named, step: "s1" }] })], unassigned: [] });
+  const mapTo = (session: string) => () =>
+    JSON.stringify({ priorities: [proposal({ steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [{ kind: "session", id: session }] }], sessions: [{ session, step: "s1" }] })], unassigned: [] });
+
+  test("the pass maps the conversation it showed, not an older one of someone else's, and stores the step ref unshared", async () => {
+    const w = await world();
+    const { ids: [theirs, mine], shortId } = await dupes(w, [{ user_id: w.carl, team_id: w.other }, { user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full" }]);
+    await w.send(w.ana, mine!, w.now - 2 * H, "get grader faults under ten percent");
+    const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    expect(read.input.sessions.map((s: any) => s.id)).toContain(shortId);
+    expect(read.conversations[shortId]).toBe(mine);
+    model.reply = mapTo(shortId);
     expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
     const [created] = await w.priorities();
-    expect(await w.conversation(mine)).toMatchObject({ priority_id: created._id, priority_step_key: "s1" });
-    expect((await w.conversation(theirs)).priority_id).toBeUndefined();
+    expect(await w.conversation(mine!)).toMatchObject({ priority_id: created._id, priority_step_key: "s1" });
+    expect((await w.conversation(theirs!)).priority_id).toBeUndefined();
+    // Stored as a prefix of Ana's id that Carl's does not share, so a later read lands on hers.
+    const stored = created.steps[0].refs[0].id;
+    expect(String(mine).startsWith(stored) && !String(theirs).startsWith(stored)).toBe(true);
+  });
+
+  test("a stored step ref reads as the name of the one shown session it can mean, and stays as stored when it can mean two", () => {
+    const names = sessionNames();
+    const conv = (id: string, short_id: string) => ({ _id: id, short_id }) as any;
+    expect(names.name(conv("jx7abcd1x", "jx7abcd"))).toBe("jx7abcd");
+    expect(names.name(conv("jx7abcd2y", "jx7abcd"))).toBe("jx7abcd2");
+    expect(names.name(conv("jx7zzzz9q", "jx7zzzz"))).toBe("jx7zzzz");
+    expect(names.ids).toEqual({ jx7abcd: "jx7abcd1x", jx7abcd2: "jx7abcd2y", jx7zzzz: "jx7zzzz9q" });
+    expect(names.ref("jx7abcd2")).toBe("jx7abcd2");
+    expect(names.ref("jx7abcd1")).toBe("jx7abcd");
+    expect(names.ref("jx7zzzz")).toBe("jx7zzzz");
+    expect(names.ref("jx7nope")).toBe("jx7nope");
+  });
+
+  test("two of the person's own sessions sharing a short id get two names, and each maps to its own conversation", async () => {
+    const w = await world();
+    const shared = { user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full" };
+    const { ids: [first, second], shortId } = await dupes(w, [shared, shared]);
+    await w.send(w.ana, first!, w.now - 3 * H, "first");
+    await w.send(w.ana, second!, w.now - 2 * H, "second");
+    const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    const names = read.input.sessions.map((s: any) => s.id).filter((id: string) => read.conversations[id] === first || read.conversations[id] === second);
+    expect(new Set(names).size).toBe(2);
+    const secondName = names.find((n: string) => read.conversations[n] === second)!;
+    expect(secondName.length).toBeGreaterThan(shortId.length);
+    model.reply = mapTo(secondName);
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const [created] = await w.priorities();
+    expect((await w.conversation(second!)).priority_id).toBe(created._id);
+    expect((await w.conversation(first!)).priority_id).toBeUndefined();
   });
 });
 

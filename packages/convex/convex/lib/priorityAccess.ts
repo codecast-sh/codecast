@@ -100,8 +100,8 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     if (!shown.has(key)) {
       shown.set(key, (async () => {
         if (ref.kind === "session") {
-          // A short id other conversations share: it means the priority owner's own.
-          const conv: Doc<"conversations"> | null = await findConversationByAnyRefWhere(ctx, ref.id, (c) => String(c.user_id) === owner);
+          // The priority owner's own conversation; the ref was stored unshared then (storedSessionId), so oldest first.
+          const conv: Doc<"conversations"> | null = await findConversationByAnyRefWhere(ctx, ref.id, (c) => String(c.user_id) === owner, (c) => c._creationTime);
           return !!conv && (await listed(conv));
         }
         if (ref.kind === "task") {
