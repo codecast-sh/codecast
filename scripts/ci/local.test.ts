@@ -7,12 +7,14 @@ import {
   CAST_CHECK_REPLACES,
   DEFAULT_DROPS,
   localJobs,
+  matrixOf,
   planJobs,
   REACHED_STEPS,
   RUNNER_SETUP,
   runnerEnv,
   selectTests,
   stepFailures,
+  stepRuns,
   suiteWideBy,
   sweepTmux,
   typecheckFailures,
@@ -149,16 +151,33 @@ describe("planJobs", () => {
     expect(cli.every((s) => s.argv.includes("--parallel=4"))).toBe(true);
   });
 
-  test("--full runs each gated job's ci.yml steps, typecheck still through cast check", () => {
+  test("--full runs each gated job's ci.yml steps once per matrix runner, typecheck still through cast check by program", () => {
     const p = plan(["packages/web/lib/x.ts", "packages/cli/src/x.ts"], true);
-    expect(argvs(p.typecheck)).toEqual([["cast", "check", "cli", "web", "sim", "convex", "evals", "playground", "--json"]]);
+    expect(argvs(p.typecheck)).toEqual([["cast", "check", "web", "cli", "evals", "convex", "sim", "playground", "--json"]]);
     const web = p["test-web"].steps;
-    expect(web.map((s) => s.name)).toEqual(["Unit tests (web package)", "Perf budgets (web)"]);
-    expect(web[0].argv.at(-1)).toContain("bun test --isolate --shard=$shard/4");
-    expect(web[0].cwd).toBe(join(ROOT, "packages/web"));
-    expect(web[0].env?.SIM_OUT).toBe("/tmp/x/sim");
-    expect(p["test-cli"].steps[0].argv.at(-1)).toContain("bun test src/ --parallel=4 --bail=5");
+    expect(web.map((s) => s.name)).toEqual([1, 2, 3, 4].map((n) => `Unit tests (web package) [${n}]`).concat("Perf budgets (web) [1]"));
+    expect(web.map((s) => !!s.shard)).toEqual([true, true, true, true, false]);
+    expect(web[1].argv.at(-1)).toContain("test-shards.ts packages/web 2/4");
+    expect(web[1].argv.at(-1)).toContain("bun test --parallel=4 --reporter=junit --reporter-outfile=/tmp/x/test-web.2/junit.xml");
+    expect(web[1].cwd).toBe(join(ROOT, "packages/web"));
+    expect(web[1].env).toMatchObject({ SIM_OUT: "/tmp/x/test-web.2/sim", RUNNER_TEMP: "/tmp/x/test-web.2" });
+    const cli = p["test-cli"].steps.map((s) => s.name);
+    expect(cli).toEqual(["Unit tests (cli package) [1/3]", "Unit tests (cli package) [2/3]", "Unit tests (cli package) [3/3]", "Unit tests (evals package) [e2e]", "E2E messaging pipeline (real tmux + fake-claude shim) [e2e]"]);
+    expect(p["test-cli"].steps[0].argv.at(-1)).toContain("bun test --parallel=4 --bail=5");
+    expect(p["test-cli"].steps[3].argv.at(-1)).toBe("bun test --parallel=4 src/");
     expect(p.build.steps.map((s) => s.name)).toEqual(["Build"]);
+  });
+
+  test("by default a sharded --parallel suite runs in CI's shard count, each shard on four workers", () => {
+    const p = plan(["packages/web/store/inboxStore.ts", "packages/cli/src/daemon.ts"]);
+    const web = p["test-web"].steps;
+    expect(web.length).toBe(4);
+    expect(web.every((s) => s.shard && s.argv.slice(0, 3).join(" ") === "bun test --parallel=4")).toBe(true);
+    const cli = p["test-cli"].steps.filter((s) => s.cwd === join(ROOT, "packages/cli"));
+    expect(cli.length).toBe(3);
+    // Every reached file runs once.
+    const files = web.flatMap((s) => s.argv.slice(3));
+    expect(new Set(files).size).toBe(files.length);
   });
 
   test("an unclassified path gates every job on, as CI does", () => {
@@ -171,6 +190,32 @@ describe("planJobs", () => {
     expect(localJobs()).toEqual(jobs);
     const p = plan(["scripts/new-thing.ts"], true);
     for (const job of jobs) expect(p[job].steps.length).toBeGreaterThan(0);
+  });
+});
+
+describe("ci.yml's conditions, read for one matrix runner", () => {
+  const flags = { run_test_injection: true };
+  test.each([
+    ["matrix.part != 'e2e'", { part: "1/3" }, true],
+    ["matrix.part != 'e2e'", { part: "e2e" }, false],
+    ["matrix.shard == 1", { shard: 1 }, true],
+    ["matrix.shard == 1", { shard: 2 }, false],
+    ["matrix.part == 'e2e' && needs.code_paths.outputs.run_test_injection == 'true'", { part: "e2e" }, true],
+    ["github.event_name == 'push' && success()", {}, false],
+    ["always() && matrix.part != 'e2e'", { part: "2/3" }, true],
+  ])("%s on %p is %p", (cond, matrix, holds) => {
+    expect(stepRuns(cond, flags, matrix, "test")).toBe(holds);
+  });
+
+  test("an expression it cannot read fails loudly", () => {
+    expect(() => stepRuns("contains(github.ref, 'release')", flags, {}, "test")).toThrow("no local reading");
+  });
+
+  test("a matrix is one entry per runner: a list's values, or its include rows", () => {
+    expect(matrixOf("test-web").map((m) => m.shard)).toEqual([1, 2, 3, 4]);
+    expect(matrixOf("test-cli").map((m) => m.part)).toEqual(["1/3", "2/3", "3/3", "e2e"]);
+    expect(matrixOf("typecheck").map((m) => m.key)).toEqual(["web", "cli-evals", "convex-sim-playground"]);
+    expect(matrixOf("lint")).toEqual([{}]);
   });
 });
 

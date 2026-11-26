@@ -22,8 +22,10 @@
 // of the run's own (TMUX_TMPDIR), so ci.yml's bare `tmux kill-server` never
 // reaches the person's. cast check keeps the person's environment. Jobs run
 // one after another: the laptop runs out of memory running them at once.
-// Within a job a one-process suite is cut into up to four shards that run
-// together, as CI shards web. Each step's output goes to a log file rather
+// Within a job, a step CI runs on several matrix runners (web's and cli's
+// shards) runs once per runner, side by side, each `--parallel` on a runner's
+// four workers; reached tests split the same way, by test-times.json. A
+// one-process suite is cut into up to four shards. Each step's output goes to a log file rather
 // than a pipe (quiet-watchdog.sh says why) and is read the way the change
 // flow's CI station reads a red job's log (shared/contracts/ciFailures.ts).
 //
@@ -44,6 +46,7 @@ import { parseFailures, type CiFailure } from "../../packages/shared/contracts/c
 import { alwaysRunFiles, SUITES } from "./always-run-tests";
 import { ADVISORY_JOBS, classifyChangedPaths, computerScope, injectionScope } from "./changed-path-scope";
 import { importClosure, jobTestFiles } from "./test-reach";
+import { shard as byTime } from "./test-shards";
 
 const ROOT = join(import.meta.dir, "..", "..");
 export const WORKFLOW = Bun.YAML.parse(readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8")) as any;
@@ -73,16 +76,20 @@ export const DEFAULT_DROPS: Record<string, Record<string, string>> = {
     "Injection suites (captured frames; real-client cells skip without agent binaries)": "the cli step already ran the inject suites the change reaches; three attempts absorb runner flake",
   },
 };
-/** CI's typecheck steps, which cast check stands in for in both modes: they run a bare tsc per package. */
-export const CAST_CHECK_REPLACES = ["Typecheck (cli + web + sim + convex + evals + playground)"];
-const TYPECHECK_PROJECTS = ["cli", "web", "sim", "convex", "evals", "playground"];
+/** CI's typecheck steps, which cast check stands in for in both modes: they run a bare tsc per program. */
+export const CAST_CHECK_REPLACES = ["Typecheck"];
+/** The programs CI's typecheck matrix checks, which --full asks cast check for by name. */
+export const TYPECHECK_PROJECTS: string[] = (WORKFLOW.jobs.typecheck.strategy?.matrix?.include ?? []).flatMap((entry: any) => String(entry.programs).split(/\s+/));
 /** `cast check` exits with no verdict: a watcher that died or answered stale (restart with --fresh), or a pass that outlived the wait (ask again). */
 const CHECK_RESTART = new Set([70, 75]);
 const CHECK_STILL_RUNNING = 124;
-/** Files per `bun test` process: an isolated file's global lives until its process exits. */
-const CHUNK = 300;
-/** Shards of a one-process suite that run at once. */
+/**
+ * Shards that run at once. A suite CI shards over runners (a matrix) gets as many shards as CI runs it on; a
+ * one-process suite is cut into up to this many, since one process uses one core.
+ */
 const SHARDS = 4;
+/** The time each test file took on a recent CI run, by package (test-shards.ts), to balance shards by. */
+const TEST_TIMES: Record<string, Record<string, number>> = JSON.parse(readFileSync(join(import.meta.dir, "test-times.json"), "utf8"));
 /** Below this many files a second process costs more than it saves. */
 const MIN_SHARD = 50;
 /** Output standing still this long is a hung run, as in quiet-watchdog.sh. */
@@ -194,7 +201,7 @@ const sources = new Map<string, string>();
 const repoSource = (test: string) => sources.get(test) ?? sources.set(test, readFileSync(join(ROOT, test), "utf8")).get(test)!;
 
 /** One suite's reached test files, one `bun test` per chunk, from its package directory with its job's flags. */
-function reachedSteps(job: string, dir: string, changed: string[]): { steps: Step[]; narrowed?: Narrowed; wide?: string } {
+function reachedSteps(job: string, dir: string, changed: string[], ciShards: number): { steps: Step[]; narrowed?: Narrowed; wide?: string } {
   const suite = SUITES.find((s) => s.job === job && s.dir === dir);
   if (!suite) throw new Error(`no suite in always-run-tests.ts for ${job} in ${dir}`);
   const roots = suite.roots.map((root) => `${join(suite.dir, root)}/`);
@@ -206,15 +213,18 @@ function reachedSteps(job: string, dir: string, changed: string[]): { steps: Ste
   const chosen = wide ? { picked: tests, reached: tests.length } : selectTests(tests, changed, repoClosure, repoSource);
   const picked = chosen.picked.map((file) => `./${relative(suite.dir, file)}`);
   const flags = suite.flags;
-  const shard = !flags.some((flag) => flag.startsWith("--parallel"));
-  const size = shard ? Math.min(CHUNK, Math.ceil(picked.length / Math.min(SHARDS, Math.ceil(picked.length / MIN_SHARD)))) : CHUNK;
-  const steps: Step[] = [];
-  for (let i = 0; i < picked.length; i += size) {
-    const files = picked.slice(i, i + size);
-    const part = picked.length > size ? ` part ${i / size + 1}` : "";
-    const what = wide ? `${files.length} of all ${tests.length} files (${wide} changed)` : `${files.length} reached files`;
-    steps.push({ name: `bun test ${[...flags, ""].join(" ")}in ${suite.dir}: ${what}${part}`, cwd: join(ROOT, suite.dir), argv: ["bun", "test", ...flags, ...files], shard });
-  }
+  // A --parallel suite runs as CI's matrix shards do, each on a runner's four workers; one-process suites in up
+  // to SHARDS processes. Either way never a shard of fewer than MIN_SHARD files.
+  const most = flags.some((flag) => flag.startsWith("--parallel")) ? ciShards : SHARDS;
+  const count = Math.max(1, Math.min(most, Math.ceil(picked.length / MIN_SHARD)));
+  const shards = picked.length ? byTime(picked.map((file) => file.slice(2)), TEST_TIMES[dir] ?? {}, count) : [];
+  const what = wide ? `of all ${tests.length} files (${wide} changed)` : "reached files";
+  const steps: Step[] = shards.map((files, i) => ({
+    name: `bun test ${[...flags, ""].join(" ")}in ${suite.dir}: ${files.length} ${what}${shards.length > 1 ? `, shard ${i + 1}/${shards.length}` : ""}`,
+    cwd: join(ROOT, suite.dir),
+    argv: ["bun", "test", ...flags, ...files.map((file) => `./${file}`)],
+    shard: true,
+  }));
   const narrowed = chosen.picked.length < chosen.reached ? { suite: dir, selected: chosen.picked.length, total: chosen.reached } : undefined;
   return { steps, narrowed, wide: wide ?? undefined };
 }
@@ -230,20 +240,48 @@ function jobGate(job: string): string | null {
   return flag[1];
 }
 
-function stepRuns(cond: unknown, flags: Record<string, boolean>, where: string): boolean {
+type Matrix = Record<string, string | number>;
+
+/**
+ * Whether a ci.yml `if:` holds for one matrix entry. A local run stands in for a pull request: `github.event_name`
+ * is never `push`, so the build-cache saves and the main-only lanes do not run.
+ */
+export function stepRuns(cond: unknown, flags: Record<string, boolean>, matrix: Matrix, where: string): boolean {
   if (cond === undefined) return true;
-  const text = String(cond).replace(/^\$\{\{\s*|\s*\}\}$/g, "").trim();
-  const flag = /^needs\.code_paths\.outputs\.(\w+) == 'true'$/.exec(text);
-  if (flag) return flags[flag[1]] === true;
-  if (text === "!cancelled()") return true;
-  if (text === "failure()") return false;
-  throw new Error(`ci.yml ${where}: no local reading of its if: ${cond}`);
+  return String(cond)
+    .replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .split("&&")
+    .every((term) => {
+      const text = term.trim();
+      const flag = /^needs\.code_paths\.outputs\.(\w+) == 'true'$/.exec(text);
+      if (flag) return flags[flag[1]] === true;
+      const cmp = /^(matrix\.([\w-]+)|github\.event_name) (==|!=) '?([^']*)'?$/.exec(text);
+      if (cmp) {
+        const value = cmp[2] ? String(matrix[cmp[2]]) : "pull_request";
+        return (value === cmp[4]) === (cmp[3] === "==");
+      }
+      if (text === "!cancelled()" || text === "always()" || text === "success()") return true;
+      if (text === "failure()") return false;
+      throw new Error(`ci.yml ${where}: no local reading of its if: ${cond}`);
+    });
 }
 
-/** One ci.yml step under GitHub's default bash, with `${{ runner.temp }}` at the run's own directory. */
-function ciStep(job: string, step: any, temp: string): Step {
+/** A job's matrix entries, one per runner CI starts for it ([{}] for a job without a matrix). */
+export function matrixOf(job: string, workflow = WORKFLOW): Matrix[] {
+  const matrix = workflow.jobs[job].strategy?.matrix;
+  if (!matrix) return [{}];
+  if (matrix.include) return matrix.include;
+  return Object.entries(matrix).reduce<Matrix[]>((rows, [key, values]) => rows.flatMap((row) => (values as any[]).map((value) => ({ ...row, [key]: value }))), [{}]);
+}
+
+/**
+ * One ci.yml step for one matrix entry under GitHub's default bash, with `${{ runner.temp }}` and RUNNER_TEMP at a
+ * directory of the entry's own (each runner has its own), and `${{ matrix.* }}` at the entry's values.
+ */
+function ciStep(job: string, step: any, temp: string, matrix: Matrix = {}): Step {
   const expand = (text: string) => {
-    const out = text.replaceAll("${{ runner.temp }}", temp);
+    let out = text.replaceAll("${{ runner.temp }}", temp);
+    for (const [key, value] of Object.entries(matrix)) out = out.replaceAll(`\${{ matrix.${key} }}`, String(value));
     const left = /\$\{\{[^}]*\}\}/.exec(out);
     if (left) throw new Error(`ci.yml ${job} › ${step.name}: no local value for ${left[0]}`);
     return out;
@@ -252,7 +290,8 @@ function ciStep(job: string, step: any, temp: string): Step {
   let run = expand(step.run).replace(/--parallel(?=\s|$)/g, `--parallel=${RUNNER_CORES}`);
   if (process.platform !== "linux") run = run.replace(/^xvfb-run -a /m, "");
   const env = Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => [key, expand(String(value))]));
-  return { name: step.name, cwd: join(ROOT, step["working-directory"] ?? "."), argv: ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run], env };
+  const label = Object.keys(matrix).length ? ` [${Object.values(matrix).join(", ")}]` : "";
+  return { name: `${step.name}${label}`, cwd: join(ROOT, step["working-directory"] ?? "."), argv: ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run], env: { ...env, RUNNER_TEMP: temp } };
 }
 
 /** The jobs a run plans: ci.yml's, without the classifier, the verdict and the advisory lanes. */
@@ -296,18 +335,25 @@ function planJob(job: string, changed: string[], flags: Record<string, boolean>,
     return { ...plan, steps: [{ name: argv.join(" "), cwd: ROOT, argv, typecheck: true }] };
   }
   const dropped: string[] = [];
+  const entries = matrixOf(job);
   for (const step of WORKFLOW.jobs[job].steps) {
-    if (!step.run || RUNNER_SETUP[step.name] || !stepRuns(step.if, flags, `${job} › ${step.name}`)) continue;
+    if (!step.run || RUNNER_SETUP[step.name]) continue;
+    // The matrix entries (runners) this step runs on; a step on several runs them side by side.
+    const on = entries.map((matrix, i) => ({ matrix, i })).filter(({ matrix }) => stepRuns(step.if, flags, matrix, `${job} › ${step.name}`));
+    if (on.length === 0) continue;
     const suite = o.full ? undefined : REACHED_STEPS[job]?.[step.name];
     if (suite) {
-      const reached = reachedSteps(job, suite, changed);
+      const reached = reachedSteps(job, suite, changed, on.length);
       plan.steps.push(...reached.steps);
       if (reached.narrowed) plan.narrowed.push(reached.narrowed);
       if (reached.wide) plan.wide.push(`${suite} (${reached.wide})`);
     } else if (!o.full && DEFAULT_DROPS[job]?.[step.name]) {
       dropped.push(step.name);
     } else {
-      plan.steps.push(ciStep(job, step, o.temp));
+      for (const { matrix, i } of on) {
+        const temp = entries.length > 1 ? join(o.temp, `${job}.${i + 1}`) : o.temp;
+        plan.steps.push({ ...ciStep(job, step, temp, matrix), shard: on.length > 1 });
+      }
     }
   }
   plan.files = plan.steps.reduce((n, step) => n + step.argv.filter((arg) => arg.startsWith("./")).length, 0) || undefined;
@@ -493,6 +539,7 @@ let stepEnv: Record<string, string | undefined> = ownEnv;
 
 /** One step, its output written to its own log file (cast check's JSON answer to a second one). */
 async function runStep(step: Step, log: string): Promise<{ code: number; output: string; stdout: string; stopped: string | null }> {
+  if (step.env?.RUNNER_TEMP) mkdirSync(step.env.RUNNER_TEMP, { recursive: true });
   const fd = openSync(log, "w");
   const out = step.typecheck ? openSync(`${log}.json`, "w") : fd;
   const proc = Bun.spawn(step.argv, { cwd: step.cwd, env: { ...(step.typecheck ? ownEnv : stepEnv), ...step.env }, stdin: "ignore", stdout: out, stderr: fd });
