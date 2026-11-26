@@ -234,6 +234,31 @@ describe("judge, on what GitHub said about two real runs", () => {
     expect(await w.t.run(async (ctx) => (await ctx.db.get(row))?.state)).toBe("rerunning");
   });
 
+  test("a red run whose only unpassed job was cancelled is never rerun: unproven on that job, and the next run passing it recovers it", async () => {
+    const w = await connected();
+    await w.base();
+    await w.commitAt(recorded.RED_SHA, 1002, "Find stations of hosted runs", "bo", w.boConv);
+    await w.commitAt(recorded.FLAKE_SHA, 1003, "next");
+    // The flake run's jobs with test-web cancelled (a person, or its timeout): `verify`, which needs it, still fails.
+    const cancelled = { ...recorded.FLAKE_JOBS_A1, jobs: recorded.FLAKE_JOBS_A1.jobs.map((j: any) => (j.name === "test-web" ? { ...j, conclusion: "cancelled" } : j)) };
+    let run: any = cancelled;
+    const gh = github({ jobs: () => run, logs: recorded.FLAKE_LOGS_A1 });
+    try {
+      const first = await w.finish(recorded.RED_RUN, recorded.RED_SHA, 1, "failure");
+      expect(first).toMatchObject({ state: "unproven", failed: ["test-web"] });
+      expect(first!.rerun_refused).toBe("every job that did not pass was cancelled (test-web), which proves nothing");
+      // No rerun, and no log read for a job that never failed.
+      expect(gh.calls.filter((c) => c.startsWith("POST") || c.includes("/logs"))).toEqual([]);
+      run = recorded.FLAKE_JOBS_A2;
+      expect(await w.finish(991, recorded.FLAKE_SHA, 1, "success")).toMatchObject({ state: "green" });
+    } finally {
+      gh.restore();
+    }
+    expect(await w.t.run(async (ctx) => (await ctx.db.query("main_ci_runs").collect()).find((r) => r.run_id === String(recorded.RED_RUN))?.state)).toBe("recovered");
+    expect(await w.events("main_red")).toHaveLength(0);
+    expect(await w.events("ci_flake")).toHaveLength(0);
+  });
+
   test("a rerun GitHub cancelled is lost: it holds nothing and names nobody", async () => {
     const w = await connected();
     const gh = github({ jobs: () => recorded.FLAKE_JOBS_A1, logs: recorded.FLAKE_LOGS_A1, run: { id: recorded.FLAKE_RUN, status: "completed", conclusion: "cancelled", run_attempt: 2 } });
