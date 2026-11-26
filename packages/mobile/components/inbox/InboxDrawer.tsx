@@ -13,7 +13,7 @@ import { useInboxFilterCounts } from '@/components/inbox/InboxLensBar';
 import { DrawerHeading as Heading, DrawerRow as Row } from '@/components/nav/DrawerRow';
 import { Places } from '@/components/nav/Places';
 import {
-  useInboxStore, sortLabels, resolveInboxViewMode, type InboxViewMode,
+  useInboxStore, sortLabels, resolveInboxViewMode, resolveInboxOldestFirst, type InboxViewMode,
 } from '@codecast/web/store/inboxStore';
 
 /** The inbox lenses, the same names and availability rules as web's
@@ -42,6 +42,7 @@ export function InboxDrawer() {
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const oldestFirst = useInboxStore((s) => resolveInboxOldestFirst(s.clientState?.ui));
   const [find, setFind] = useState('');
 
   const active = useMemo(() => placed.sorted.filter((s) => !s.is_deferred), [placed.sorted]);
@@ -136,6 +137,18 @@ export function InboxDrawer() {
             onPress: () => pick(() => store().setInboxViewMode(o.key)),
           })))}
         />
+        {(viewMode === 'recent' || viewMode === 'time') && (
+          <Row
+            icon={<Feather name={oldestFirst ? 'arrow-up' : 'arrow-down'} size={16} color={Theme.textMuted} />}
+            name="Sort"
+            detail={oldestFirst ? 'Oldest first' : 'Newest first'}
+            onPress={() => showActionSheet('Sort', [false, true].map((oldest) => ({
+              label: oldest ? 'Oldest first' : 'Newest first',
+              selected: oldest === oldestFirst,
+              onPress: () => pick(() => store().setInboxOldestFirst(oldest)),
+            })))}
+          />
+        )}
       </View>
     </SafeAreaView>
   );
