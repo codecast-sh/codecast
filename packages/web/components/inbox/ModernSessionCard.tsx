@@ -12,7 +12,7 @@ import { formatModel } from "../../lib/conversationProcessor";
 import { formatDateFull } from "../../lib/utils";
 import { sessionIdentity } from "../../lib/sessionIdentity";
 import { SESSION_STATUS, sessionStatusOf, type StatusSection } from "../../lib/sessionStatus";
-import { sessionCardLine } from "../../lib/sessionCardLine";
+import { sessionCardLine, stashCauseTarget } from "../../lib/sessionCardLine";
 import { getProjectName, isFork, showsBlockedBadge, railRowPlacement } from "../../store/inboxStore";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import { ImageLightbox } from "../ImageGallery";
@@ -167,6 +167,8 @@ export function ModernSessionCardView({
     hosted,
     stashHidden: isStashed && isStashHidden(session),
   });
+  // A stash the system set opens what set it: a fork's origin, a run's trigger.
+  const stashTarget = status === "stashed" ? stashCauseTarget(session) : null;
 
   const [thumbZoom, setThumbZoom] = useState(false);
   const [thumbBroken, setThumbBroken] = useState(false);
@@ -355,7 +357,11 @@ export function ModernSessionCardView({
           <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
             <SessionStatusWord status={status} word={withOwner} title={withOwner ? "" : meta.meaning} className="font-medium" />
-            {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{line.reason}</span>}
+            {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{stashTarget ? (
+              "session" in stashTarget
+                ? <button type="button" data-mc-stash-cause title="Open the session it was forked from" onClick={(e) => { e.stopPropagation(); onOpenParent?.(stashTarget.session); }} className="underline decoration-dotted underline-offset-2 hover:text-sol-text">{line.reason}</button>
+                : <Link href={stashTarget.href} data-mc-stash-cause title={stashTarget.label} onClick={(e) => e.stopPropagation()} className="underline decoration-dotted underline-offset-2 hover:text-sol-text">{line.reason}</Link>
+            ) : line.reason}</span>}
             {line.text && (
               <span className="text-sol-text-muted">
                 <span aria-hidden className="text-sol-text-dim"> · </span>

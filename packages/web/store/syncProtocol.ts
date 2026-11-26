@@ -36,6 +36,8 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_stashed_at",
   "inbox_snoozed_until",
   "inbox_stash_hidden",
+  // The stash's cause clears with the stamp (shared stashCause).
+  "inbox_stash_cause",
   "inbox_pinned_at",
   "inbox_killed_at",
   // A Close's marker: written by the close, cleared by its undo, unset by the server.

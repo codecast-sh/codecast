@@ -77,7 +77,7 @@ export const INBOX_ROW_FIELDS = [
   "is_subagent", "is_workflow_sub", "is_workflow_primary", "agent_team_name", "agent_name",
   "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
   "implementation_session",
-  "inbox_pinned_at", "is_pinned", "inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden",
+  "inbox_pinned_at", "is_pinned", "inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_stash_cause",
   "inbox_snoozed_until", "inbox_killed_at", "inbox_closed_at", "inbox_adopted_at", "headless_launch", "is_deferred", "inbox_deferred_at", "inbox_rest", "inbox_rest_at", "user_rest",
   "settle_verdict", "is_favorite",
   "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error", "hosted_stop",

@@ -6,6 +6,7 @@
 // the one that says the most and leaves the rest to the line's tooltip.
 
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
+import { stashCauseOf } from "@codecast/shared/contracts";
 import { NOTICE_ROW_WORD } from "./hostedNotice";
 import { sessionStartupState } from "./sessionLifecycle";
 import { statusFailure, type SessionStatus, type StatusLive, type StatusRow } from "./sessionStatus";
@@ -16,6 +17,7 @@ export type CardLineRow = StatusRow & {
   subagent_slot?: string | null;
   merge_back?: { state: string } | null;
   implementation_session?: unknown;
+  inbox_stash_cause?: string | null;
 };
 
 export type CardLineInput = {
@@ -42,6 +44,18 @@ export type CardLineInput = {
   /** Stashed and hidden: trigger wakes do not bring it back. */
   stashHidden?: boolean;
 };
+
+const HIDDEN_TITLE = "Stashed and hidden: trigger wakes don't bring it back; only an ask does";
+
+/** A stashed row's reason: who or what set it aside (shared stashCause), then
+ *  "Hidden" when the stash survives wakes. A stash from before causes were
+ *  recorded names none, as before. */
+function stashReason(row: CardLineRow, hidden: boolean): { reason: string | null; reasonTitle?: string } {
+  const cause = stashCauseOf(row);
+  const words = [cause?.word, hidden ? "Hidden" : null].filter(Boolean);
+  if (words.length === 0) return { reason: null };
+  return { reason: words.join(" · "), reasonTitle: [cause?.title, hidden ? HIDDEN_TITLE : null].filter(Boolean).join("\n") };
+}
 
 export type CardLine = {
   /** Said right after the word, in the word's weight. */
@@ -114,7 +128,7 @@ function reasonOf(input: CardLineInput): { reason: string | null; reasonTitle?: 
       if (row.user_rest === "done") return { reason: "Filed by you", reasonTitle: "Filed as done until the next wake" };
       return { reason: null };
     case "stashed":
-      return input.stashHidden ? { reason: "Hidden", reasonTitle: "Stashed and hidden: trigger wakes don't bring it back; only an ask does" } : { reason: null };
+      return stashReason(row, !!input.stashHidden);
     case "killed":
       return { reason: null };
   }
@@ -133,4 +147,19 @@ export function sessionCardLine(input: CardLineInput): CardLine {
   if (input.stateLine && input.summary && text !== input.summary) rest.push(input.summary.trim());
   if (prompt && text !== prompt) rest.push(`> ${prompt}`);
   return { reason, reasonTitle, text, prompt: !draft && !about && !!prompt, rest };
+}
+
+/** What a system stash points at, for the card to open in one step: a fork's
+ *  origin session, or the run's trigger or workflow run. Read off the row's
+ *  own pointers; null for the person's own stash and for an unknown target. */
+export function stashCauseTarget(row: CardLineRow & {
+  forked_from?: string | null;
+  agent_task_id?: string | null;
+  workflow_run_id?: string | null;
+}): { session: string } | { href: string; label: string } | null {
+  const cause = stashCauseOf(row)?.cause;
+  if (cause === "fork" && row.forked_from) return { session: row.forked_from };
+  if (cause === "run_log" && row.workflow_run_id) return { href: `/workflows/runs/${row.workflow_run_id}`, label: "Open the workflow run" };
+  if ((cause === "run_folded" || cause === "run_superseded" || cause === "run_repeating") && row.agent_task_id) return { href: `/triggers/${row.agent_task_id}`, label: "Open the trigger" };
+  return null;
 }

@@ -71,7 +71,7 @@ export async function restoreToInbox(
   conv: Pick<ConversationDoc, "_id" | "inbox_stashed_at" | "inbox_dismissed_at" | "inbox_killed_at">,
 ): Promise<boolean> {
   if (conv.inbox_killed_at || !(conv.inbox_stashed_at || conv.inbox_dismissed_at)) return false;
-  await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_dismissed_at: undefined });
+  await ctx.db.patch(conv._id, { inbox_stashed_at: undefined, inbox_stash_cause: undefined, inbox_dismissed_at: undefined });
   return true;
 }
 

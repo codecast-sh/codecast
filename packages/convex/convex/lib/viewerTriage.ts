@@ -68,6 +68,8 @@ function pickTriage(row: any): ViewerTriage {
 export function overlayViewerTriage(row: any, triage: ViewerTriage | undefined): void {
   for (const k of VIEWER_TRIAGE_FIELDS) row[k] = triage?.[k] ?? null;
   row.is_pinned = !!triage?.inbox_pinned_at;
+  // Only a person's own gesture writes viewer triage, so its stash is theirs.
+  row.inbox_stash_cause = triage?.inbox_stashed_at ? "person" : null;
 }
 
 /** A team session's visibility patch with anything that would hide it from

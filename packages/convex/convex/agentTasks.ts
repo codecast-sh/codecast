@@ -1560,7 +1560,7 @@ export async function settleRunConversation(
     // Folded = out of the way, NOT retired: the run's history is living state,
     // so the fold writes the stash stamp (Stashed bucket) rather than the
     // legacy dismissed stamp that files rows under Killed.
-    await ctx.db.patch(runConv._id, { inbox_stashed_at: now });
+    await ctx.db.patch(runConv._id, { inbox_stashed_at: now, inbox_stash_cause: "run_folded" });
   }
   return ownerNotified;
 }
@@ -1923,7 +1923,7 @@ export const linkRunConversation = mutation({
       ) {
         // Same fold, same stamp as completeTaskRun above: superseded runs are
         // set aside, not killed.
-        await ctx.db.patch(prev._id, { inbox_stashed_at: Date.now() });
+        await ctx.db.patch(prev._id, { inbox_stashed_at: Date.now(), inbox_stash_cause: "run_superseded" });
       }
     }
     return { linked: true, retry: false };

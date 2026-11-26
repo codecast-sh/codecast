@@ -891,15 +891,17 @@ export function isStashHidden(
 export function wakeHideFields(
   row: ClosedFields & Parameters<typeof closeHidesThroughWakes>[0] & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null },
   wake: { machine: boolean; now: number },
-): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true } {
+): { inbox_dismissed_at?: undefined; inbox_killed_at?: undefined; inbox_stashed_at?: number | undefined; inbox_stash_hidden?: true; inbox_stash_cause?: "close_wake" | undefined } {
   const out: ReturnType<typeof wakeHideFields> = {};
   if (row.inbox_dismissed_at) out.inbox_dismissed_at = undefined;
   if (row.inbox_killed_at) out.inbox_killed_at = undefined;
   if (wake.machine && isClosedSession(row) && closeHidesThroughWakes(row)) {
     out.inbox_stashed_at = wake.now;
     out.inbox_stash_hidden = true;
+    out.inbox_stash_cause = "close_wake";
   } else if (row.inbox_stashed_at && !(wake.machine && isStashHidden(row))) {
     out.inbox_stashed_at = undefined;
+    out.inbox_stash_cause = undefined;
   }
   return out;
 }

@@ -16,6 +16,7 @@ describe("daemonForkFields", () => {
       fork_copied: 1,
       fork_cutoff_timestamp: 1_790_000_000_000,
       inbox_stashed_at: NOW,
+      inbox_stash_cause: "fork",
     } as any);
   });
 

@@ -51,6 +51,9 @@ export const CONVERSATION_FIELDS = {
   inbox_dismissed_at: { send: true, dispatch: true, patch: true, triage: true, visibility: true },
   inbox_stashed_at: { send: true, dispatch: true, triage: true, visibility: true },
   inbox_stash_hidden: { send: true, dispatch: true, visibility: true },
+  // Who or what set the stash (contracts/stashCause.ts). Server-written beside
+  // every stamp write, so the client reads it and never writes it.
+  inbox_stash_cause: { send: true },
   // A Close (closedSession.ts): written with the dismissed stamp it equals, so a
   // close is a close on any rail (a stub re-key flush, a deferred batch).
   inbox_closed_at: { send: true, dispatch: true, triage: true },
