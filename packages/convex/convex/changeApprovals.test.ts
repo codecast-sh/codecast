@@ -1294,6 +1294,14 @@ describe("codecast's automatic review of a pull request no run is behind (ct-100
   });
 });
 
+test("an api-token answer to a --run card is refused, Don't run included, as on main: the asking agent holds that token too", async () => {
+  const card = { _id: "sd_run", short_id: "sd-501", status: "pending", conversation_id: "c_me", user_id: "u_me", asked_user_ids: ["u_me"], question: "Grant ads spend?", kind: "single", options: [{ label: "Approve" }, { label: "Decline" }], run: { argv: ["role", "authority"], state: "waiting", device_id: "dev", cwd: "/repo" }, created_at: 1 };
+  const db = makeFakeDb(structuredClone({ session_decisions: [card], conversations: [{ _id: "c_me", session_id: "me", user_id: "u_me" }], users: [{ _id: "u_me", name: "Me" }], decision_inbox: [] }));
+  const out = await answerCore({ db, scheduler: { runAfter: async () => {} } } as any, { userId: "u_me" as any }, { decision_id: "sd-501", answer_index: 1 });
+  expect(out).toEqual({ error: expect.stringContaining("runs a command in your name") });
+  expect(db._tables.session_decisions[0].status).toBe("pending");
+});
+
 test("Ship's list: the pull request's judged diff and the checkout's uncommitted judged files, each by the sessions that wrote it", async () => {
   const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], judges: ["outreach/line/change/", "outreach/deploy.sh"] }] };
   const pr = (id: string, over: Record<string, any>) => ({ ...prRow, _id: id, linked_session_ids: ["c_me", "c_other"], approval: { head_sha: HEAD, state: "pending", description: "x", judged_key: "k", judged_files: ["outreach/line/change/land.cast"] }, ...over });

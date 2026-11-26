@@ -2066,11 +2066,13 @@ export async function answerCore(
   const now = Date.now();
   const by = await answererFor(ctx, auth, row, args.session_id, now, !!args.for_human);
   if ("error" in by) return by;
+  const refusal = await answerRefusal(ctx, row, by);
+  if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
-  // Refused before anything closes: the card stays open for whoever may answer it.
-  const refusal = await answerRefusal(ctx, row, by, verdict);
-  if (refusal) return { error: refusal };
+  // An approval card's refusal turns on the answer (an author's Approve): refused before anything closes it.
+  const cardRefusal = await approvalCardRefusal(ctx, row as any, by, verdict);
+  if (cardRefusal) return { error: cardRefusal };
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });
   return { id: row._id, short_id: row.short_id, ...result, answered_by: { kind: by.kind, id: by.id, ...(by.via ? { via: by.via } : {}) } };
 }
