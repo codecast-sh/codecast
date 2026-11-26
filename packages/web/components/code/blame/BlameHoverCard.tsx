@@ -7,13 +7,11 @@ import { EntityIdPill } from "../../EntityIdPill";
 import { AgentTypeIcon, formatAgentType } from "../../AgentTypeIcon";
 import { Button } from "../../ui/button";
 import { useInboxStore } from "../../../store/inboxStore";
-import { blameViaLabel, type BlameVia } from "../../../lib/repoView";
+import { blameViaLabel, isBlameVia } from "../../../lib/repoView";
 import { copyToClipboard, formatDateFull, formatRelative } from "../../../lib/utils";
 import { openBlameMessage, openBlameSession } from "../../../lib/code/blame/actions";
 import { closeBlameHover, type BlameHover } from "../../../lib/code/blame/hover";
 import { runName } from "../../../lib/code/blame/model";
-
-const VIAS: readonly string[] = ["edit", "trailer", "nearby", "commit", "hash", "subject", "overlap"];
 
 export function BlameHoverCard({ hover }: { hover: BlameHover }) {
   const { run, hue } = hover;
@@ -23,7 +21,7 @@ export function BlameHoverCard({ hover }: { hover: BlameHover }) {
   const agent = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.agent_type : undefined)) ?? session?.agent;
   const [copied, setCopied] = useState(false);
   const lines = run.toLine - run.fromLine + 1;
-  const via = session?.via && VIAS.includes(session.via) ? blameViaLabel(session.via as BlameVia) : undefined;
+  const via = isBlameVia(session?.via) ? blameViaLabel(session.via) : undefined;
 
   return (
     <div className="relative flex flex-col gap-2 py-2.5 pl-4 pr-3 text-xs" style={{ "--blame-hue": hue } as React.CSSProperties}>
@@ -44,9 +42,8 @@ export function BlameHoverCard({ hover }: { hover: BlameHover }) {
             {formatAgentType(agent)}
           </span>
         )}
-        {(session?.author_name || (!session && hunk?.author && !hunk.uncommitted)) && (
-          <span className="truncate">{session?.author_name ?? hunk?.author}</span>
-        )}
+        {/* A plain commit's title is already its author. */}
+        {session?.author_name && <span className="truncate">{session.author_name}</span>}
         {run.kind === "edited" ? (
           <span className="shrink-0 text-sol-text-dim">edited now</span>
         ) : hunk?.time ? (
@@ -61,6 +58,18 @@ export function BlameHoverCard({ hover }: { hover: BlameHover }) {
         {hunk?.sha ? (
           <>
             <span className="shrink-0 font-mono text-sol-text">{hunk.sha.slice(0, 7)}</span>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="-mx-1 shrink-0 text-sol-text-dim"
+              title={copied ? "Copied" : "Copy sha"}
+              aria-label="Copy sha"
+              onClick={() => {
+                void copyToClipboard(hunk.sha!).then(() => setCopied(true));
+              }}
+            >
+              {copied ? <Check /> : <Copy />}
+            </Button>
             <span className="truncate" title={hunk.summary}>{hunk.summary}</span>
           </>
         ) : (
@@ -71,21 +80,19 @@ export function BlameHoverCard({ hover }: { hover: BlameHover }) {
         </span>
       </div>
 
-      {(conversationId || hunk?.sha) && (
+      {conversationId && (
         <div className="flex items-center gap-1.5 pt-0.5">
-          {conversationId && (
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => {
-                openBlameSession(session);
-                closeBlameHover();
-              }}
-            >
-              <Columns2 /> Open beside
-            </Button>
-          )}
-          {conversationId && session?.message_id && (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              openBlameSession(session);
+              closeBlameHover();
+            }}
+          >
+            <Columns2 /> Open beside
+          </Button>
+          {session?.message_id && (
             <Button
               size="xs"
               variant="ghost"
@@ -96,18 +103,6 @@ export function BlameHoverCard({ hover }: { hover: BlameHover }) {
               }}
             >
               <CornerDownRight /> At message
-            </Button>
-          )}
-          {hunk?.sha && (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="ml-auto"
-              onClick={() => {
-                void copyToClipboard(hunk.sha!).then(() => setCopied(true));
-              }}
-            >
-              {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy sha"}
             </Button>
           )}
         </div>

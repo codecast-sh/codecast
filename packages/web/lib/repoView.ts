@@ -92,7 +92,12 @@ export function startsBlameRange(range: RepoBlameRange | undefined, line: number
 // per sha and per line text; folding that back onto the file's lines is pure
 // and happens here.
 
-export type BlameVia = "trailer" | "commit" | "hash" | "subject" | "overlap" | "edit" | "nearby";
+export const BLAME_VIAS = ["trailer", "commit", "hash", "subject", "overlap", "edit", "nearby"] as const;
+export type BlameVia = (typeof BLAME_VIAS)[number];
+
+export function isBlameVia(v: unknown): v is BlameVia {
+  return (BLAME_VIAS as readonly unknown[]).includes(v);
+}
 
 /**
  * A session as the reader may see it. Signed in, every session named here is

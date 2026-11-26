@@ -21,6 +21,8 @@ const CLOSE_MS = 200;
 
 let current: BlameHover | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
+/** The target an open timer will show. */
+let pending: BlameHover | null = null;
 const listeners = new Set<() => void>();
 
 function set(next: BlameHover | null): void {
@@ -32,6 +34,7 @@ function set(next: BlameHover | null): void {
 function cancel(): void {
   if (timer) clearTimeout(timer);
   timer = null;
+  pending = null;
 }
 
 export function getBlameHover(): BlameHover | null {
@@ -43,7 +46,17 @@ export function subscribeBlameHover(fn: () => void): () => void {
   return () => listeners.delete(fn);
 }
 
-const sameRun = (a: BlameHover | null, b: BlameHover) => !!a && a.view === b.view && a.run.fromLine === b.run.fromLine && a.run.hunk === b.run.hunk;
+const sameRun = (a: BlameHover | null, b: Pick<BlameHover, "view" | "run">) => !!a && a.view === b.view && a.run.fromLine === b.run.fromLine && a.run.hunk === b.run.hunk;
+
+/** The pointer moved within `run`. True when the card needs nothing new (it
+ *  is this run's, on its way, or pinned), so the gutter measures nothing. */
+export function hoverStays(view: EditorView, run: BlameRun): boolean {
+  if (sameRun(current, { view, run })) {
+    cancel();
+    return true;
+  }
+  return sameRun(pending, { view, run }) || !!current?.pinned;
+}
 
 /** The pointer is over a run: show its card after a moment (at once when a
  *  card is already up, so moving down the gutter reads hunk after hunk). */
@@ -55,7 +68,13 @@ export function hoverBlameRun(target: BlameHover): void {
   if (current?.pinned) return;
   cancel();
   if (current) set(target);
-  else timer = setTimeout(() => set(target), OPEN_MS);
+  else {
+    pending = target;
+    timer = setTimeout(() => {
+      pending = null;
+      set(target);
+    }, OPEN_MS);
+  }
 }
 
 /** Open a run's card now and keep it until dismissed (a click on the bar). */

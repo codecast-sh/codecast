@@ -6,13 +6,14 @@
 // This module is small and rides the editor chunk. The gutter, the inline
 // text and the fetch (gutter.ts) load the first time either turns on.
 
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { useVaultStore } from "../../../store/vaultStore";
 import { registerCodeCommand } from "../commands";
 import { editorSetting, onEditorSettingsChange } from "../editorSettings";
 import { featureContext, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "../features";
 import { useGitStatusStore } from "../git/status";
 import { blameAvailability } from "./data";
+import { blameGutterStandIn } from "../gutterSlots";
 
 type GutterModule = typeof import("./gutter");
 
@@ -62,19 +63,30 @@ export function setBlameGutter(on: boolean): void {
 
 function blameFeature(_ctx: EditorFeatureContext) {
   const opts = { gutter: gutterOn, inline: editorSetting("inlineBlame") };
-  if (!opts.gutter && !opts.inline) return null;
-  if (gutterModule) return gutterModule.blameExtension(opts);
-  return loadGutter().then((m) => m.blameExtension(opts));
+  // The chip's look rides along even when blame is off: it is always shown.
+  if (!opts.gutter && !opts.inline) return chipTheme;
+  if (gutterModule) return [chipTheme, gutterModule.blameExtension(opts)];
+  return loadGutter().then((m) => [chipTheme, m.blameExtension(opts)]);
 }
 
-/** Why the file in `view` cannot be blamed, or null when it can (or may). */
+/** Why the file in `view` cannot be blamed, or null when it can (or may).
+ *  A failure that may pass (the daemon away, a timeout) is not a reason: the
+ *  gutter asks again on its own, and blameRetryReason says what it waits on. */
 export function blameUnavailableReason(view: EditorView): string | null {
   const ctx = view.state.facet(featureContext);
   if (!ctx) return "No file";
   const avail = blameAvailability(ctx.vaultId);
   if (avail.ok === false) return avail.reason;
   const value = gutterModule?.blameValue(view.state);
-  return value?.status === "unavailable" ? (value.reason ?? "Blame unavailable") : null;
+  return value?.status === "unavailable" && !value.transient ? (value.reason ?? "Blame unavailable") : null;
+}
+
+/** The passing failure the gutter is retrying after, or null. */
+export function blameRetryReason(view: EditorView): string | null {
+  const value = gutterModule?.blameValue(view.state);
+  if (!value) return null;
+  if (value.status === "unavailable" && value.transient) return value.reason ?? null;
+  return value.retry ?? null;
 }
 
 // ── status bar chip ─────────────────────────────────────────────────────────
@@ -82,21 +94,16 @@ export function blameUnavailableReason(view: EditorView): string | null {
 const BLAME_SVG =
   '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h3M4 12h3M4 19h3"/><path d="M11 5h9M11 12h6M11 19h8"/></svg>';
 
-const CHIP_CSS = `
-.cm-blame-chip { padding: 0 6px; border-radius: 3px; }
-.cm-blame-chip[data-on] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-cyan) 14%, transparent); }
-.cm-blame-chip[data-state=loading] svg { animation: cm-blame-pulse 1.2s ease-in-out infinite; }
-.cm-blame-chip:disabled { opacity: 0.45; cursor: default !important; }
-@keyframes cm-blame-pulse { 50% { opacity: 0.35; } }`;
-let chipCssAdded = false;
+const chipTheme = EditorView.theme({
+  ".cm-blame-chip": { padding: "0 6px", borderRadius: "3px" },
+  ".cm-blame-chip[data-on]": { color: "var(--sol-text)", background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" },
+  ".cm-blame-chip[data-state=loading] svg": { animation: "cm-blame-pulse 1.2s ease-in-out infinite" },
+  ".cm-blame-chip[data-state=retry] svg": { color: "var(--sol-yellow)" },
+  ".cm-blame-chip:disabled": { opacity: "0.45", cursor: "default" },
+  "@keyframes cm-blame-pulse": { "50%": { opacity: "0.35" } },
+});
 
 function blameChip(view: EditorView): StatusItemView {
-  if (!chipCssAdded && typeof document !== "undefined") {
-    chipCssAdded = true;
-    const style = document.createElement("style");
-    style.textContent = CHIP_CSS;
-    document.head.append(style);
-  }
   const dom = document.createElement("button");
   dom.type = "button";
   dom.className = "cm-blame-chip";
@@ -105,17 +112,36 @@ function blameChip(view: EditorView): StatusItemView {
   dom.setAttribute("aria-label", "Session blame");
   dom.onmousedown = (e) => e.preventDefault();
   dom.onclick = () => toggleFrom(view);
-  let lastStatus: string | undefined;
+  let lastSig: string | undefined;
+  const sigOf = (state: typeof view.state) => {
+    const v = gutterModule?.blameValue(state);
+    return `${v?.status}|${v?.transient ? 1 : 0}|${v?.retry ?? ""}`;
+  };
   const render = () => {
+    // Blame that is on can always be turned off; only turning it on waits
+    // for a file that can be blamed.
     const reason = blameUnavailableReason(view);
+    const retry = blameRetryReason(view);
     const status = gutterModule?.blameValue(view.state)?.status;
-    lastStatus = status;
-    dom.disabled = !!reason;
-    dom.toggleAttribute("data-on", gutterOn && !reason);
-    dom.setAttribute("aria-pressed", String(gutterOn && !reason));
-    if (status === "loading" && gutterOn) dom.dataset.state = "loading";
+    lastSig = sigOf(view.state);
+    const on = gutterOn && !reason;
+    dom.disabled = !!reason && !gutterOn;
+    dom.toggleAttribute("data-on", on);
+    dom.setAttribute("aria-pressed", String(on));
+    if (gutterOn && retry) dom.dataset.state = "retry";
+    else if (status === "loading" && gutterOn) dom.dataset.state = "loading";
     else delete dom.dataset.state;
-    dom.title = reason ? `Session blame: ${reason}` : status === "loading" && gutterOn ? "Reading blame" : gutterOn ? "Hide session blame" : "Show which session wrote each line";
+    dom.title = reason
+      ? gutterOn
+        ? `Session blame: ${reason}. Click to hide`
+        : `Session blame: ${reason}`
+      : gutterOn && retry
+        ? `Session blame: ${retry}, retrying. Click to hide`
+        : status === "loading" && gutterOn
+          ? "Reading blame"
+          : gutterOn
+            ? "Hide session blame"
+            : "Show which session wrote each line";
   };
   render();
   const offGit = useGitStatusStore.subscribe((s, prev) => {
@@ -130,8 +156,7 @@ function blameChip(view: EditorView): StatusItemView {
     dom,
     update(u) {
       // Only transitions: the field's status, the file, a reconfiguration.
-      const status = gutterModule?.blameValue(u.state)?.status;
-      if (status !== lastStatus || u.startState.facet(featureContext) !== u.state.facet(featureContext)) render();
+      if (sigOf(u.state) !== lastSig || u.startState.facet(featureContext) !== u.state.facet(featureContext)) render();
     },
     destroy() {
       offGit();
@@ -142,8 +167,9 @@ function blameChip(view: EditorView): StatusItemView {
 }
 
 function toggleFrom(view: EditorView | undefined): boolean {
-  // A file that cannot be blamed keeps the toggle where it is: the chip says why.
-  if (view && blameUnavailableReason(view)) return true;
+  // Off is always allowed. On waits for a file that can be blamed: the
+  // chip, disabled, says why.
+  if (!gutterOn && view && blameUnavailableReason(view)) return true;
   setBlameGutter(!gutterOn);
   return true;
 }
@@ -155,7 +181,7 @@ let registered = false;
 export function registerBlameFeature(): void {
   if (registered) return;
   registered = true;
-  registerEditorFeature(FEATURE, blameFeature, { needsVault: true });
+  registerEditorFeature(FEATURE, blameFeature, { needsVault: true, placeholder: () => (gutterOn ? [chipTheme, blameGutterStandIn] : null) });
   registerStatusItem({ id: "blame.toggle", side: "left", order: 25, priority: 25, needsVault: true, create: blameChip });
   registerCodeCommand("blame.toggle", (_args, ctx) => toggleFrom(ctx.view));
   let inline = editorSetting("inlineBlame");

@@ -227,3 +227,31 @@ describe("labels", () => {
     expect(hueOf(null, hues)).toBe(NEUTRAL_HUE);
   });
 });
+
+describe("label grouping", () => {
+  test("back-to-back runs of one session or one author share the first label", async () => {
+    const { buildMarkers } = await import("../gutter");
+    const doc = EditorState.create({ doc: "a\nb\nc\nd\ne\nf\n" }).doc;
+    const A2: CodeBlameHunk = { ...A, start: 3, end: 3, sha: "c".repeat(40), summary: "again" };
+    const L1: CodeBlameHunk = { start: 4, end: 4, sha: "d".repeat(40), author: "Lin", time: 1 };
+    const L2: CodeBlameHunk = { start: 5, end: 5, sha: "e".repeat(40), author: "Lin", time: 2 };
+    const M: CodeBlameHunk = { start: 6, end: 6, sha: "f".repeat(40), author: "Max", time: 3 };
+    const hunks = [A, A2, L1, L2, M];
+    const runs = blameRuns(placeHunks(hunks, doc), [], doc);
+    expect(runs.length).toBe(5);
+    const labels: (string | null)[] = [];
+    buildMarkers(runs, sessionHues(hunks), doc, 10_000).between(0, doc.length, (_f, _t, m) => {
+      labels.push((m as unknown as { label: { name: string } | null }).label?.name ?? null);
+    });
+    expect(labels).toEqual(["Fix the auth race", null, null, "Lin", null, "Max"]);
+  });
+});
+
+describe("cache", () => {
+  test("an answer that may still gain sessions is provisional", async () => {
+    const { isProvisional } = await import("../data");
+    expect(isProvisional({ path: "x", hunks: [A, B] })).toBe(false);
+    expect(isProvisional({ path: "x", hunks: [A, C] })).toBe(true);
+    expect(isProvisional({ path: "x", hunks: [B] })).toBe(true);
+  });
+});
