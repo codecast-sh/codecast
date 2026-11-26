@@ -52,4 +52,12 @@ describe("the PR page's links into Deploys", () => {
     expect(hrefs(html)).toEqual(["/deploys?team=T1&repo=acme%2Fapp&target=production&pr=101"]);
     expect(html).toContain("Not live yet on production");
   });
+
+  test("a reader outside the team sees the chip but no link to a Deploys page they cannot open", () => {
+    const Chip = ({ children }: any) => <span>{children}</span>;
+    const model: any = { ...base, teamId: null, merged: true, open: false, shipsTo: null, declares: true, dormant: [], headline: { state: "live", words: "Live on web" }, rows: [{ target: "web", state: "live" }] };
+    const html = renderToStaticMarkup(<PRReachChip model={model} Chip={Chip} />);
+    expect(hrefs(html)).toEqual([]);
+    expect(html).toContain("Live on web");
+  });
 });

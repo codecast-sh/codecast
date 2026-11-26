@@ -12,6 +12,9 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 
 const HIDE = ["live", "closed"] as const;
 
+/** Where a linked change stands on its way: moving toward main, parked there, or not drawn in this grid. */
+export type FocusComing = "coming" | "parked" | null;
+
 type Filters = DeployFilters["coming"];
 
 export function OnItsWay({ repository, filters, onFilters, me, focus, onFocusFound }: {
@@ -20,8 +23,8 @@ export function OnItsWay({ repository, filters, onFilters, me, focus, onFocusFou
   onFilters: (f: Filters) => void;
   me: ChangeViewer;
   focus: DeployFocus | null;
-  /** Whether the thing a link points at is on its way here, so the page's chip can say so. */
-  onFocusFound?: (found: boolean) => void;
+  /** Where the thing a link points at stands in this grid, so the page's chip can say so: on its way, parked, or not drawn here. */
+  onFocusFound?: (found: FocusComing) => void;
 }) {
   const { ready, changes } = useRepoChanges(repository);
   // What has landed waits on main, listed beside it by session: this grid is what has yet to get there.
@@ -35,12 +38,14 @@ export function OnItsWay({ repository, filters, onFilters, me, focus, onFocusFou
     const mineRows = filterChanges(rows, { mine: filters.mine, group: null }, me, now, focused);
     return new Map(PICKABLE_GROUPS.map((id) => [id, mineRows.filter((r) => groupOf(r, now) === id).length]));
   }, [rows, filters.mine, me, now, focused]);
-  // Only a row really coming counts (a parked one is still open): a closed or live one is not on its way.
-  const found = !!focused && shown.some((r) => focused(r) && isComing(r));
-  // eslint-disable-next-line no-restricted-syntax -- reports a match up to the page's focus chip, which draws outside this grid
-  useEffect(() => onFocusFound?.(found), [found, onFocusFound]);
   // What is really on its way: not live, not closed, and not parked.
   const coming = rows.filter((r) => isComing(r) && !isParked(r, now)).length;
+  // A linked row counts only where the grid draws it: on its way, or parked (still open, nothing moving it); a closed
+  // or live one is not on its way, and with nothing coming the grid draws nothing.
+  const hit = focused && coming ? shown.find((r) => focused(r) && isComing(r)) : undefined;
+  const found: FocusComing = !hit ? null : isParked(hit, now) ? "parked" : "coming";
+  // eslint-disable-next-line no-restricted-syntax -- reports a match up to the page's focus chip, which draws outside this grid
+  useEffect(() => onFocusFound?.(found), [found, onFocusFound]);
   if (ready && !coming) return null;
   const pickGroup = (group: Filters["group"]) => onFilters({ ...filters, group });
   return (

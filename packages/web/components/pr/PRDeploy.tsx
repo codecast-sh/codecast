@@ -22,13 +22,18 @@ export function PRReachChip({ model, Chip }: { model: PrDeployModel; Chip: (p: {
   if (!h) return null;
   const look = REACH_LOOK[h.state];
   const Icon = REACH_ICON[h.state];
+  const chip = (
+    <Chip accent={TONE_ACCENT[look.tone]} title={model.teamId ? "Open on the Deploys page" : "Where this change runs in production"}>
+      <Icon className={`w-3.5 h-3.5 ${h.state === "failed" ? FAILED_ICON : ""}`} />
+      {h.words}
+    </Chip>
+  );
+  // A reader outside the team (a public PR) has no Deploys page to open.
+  if (!model.teamId) return <span data-pr-reach-chip={h.state} className="contents">{chip}</span>;
   // The target that needs the reader first (the band's first row), so the page opens where the headline is about.
   return (
     <Link href={deploysHrefOf(model, model.rows[0]?.target ?? null)} data-pr-reach-chip={h.state} className="no-underline rounded-full transition-[filter] hover:brightness-95 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-blue">
-      <Chip accent={TONE_ACCENT[look.tone]} title="Open on the Deploys page">
-        <Icon className={`w-3.5 h-3.5 ${h.state === "failed" ? FAILED_ICON : ""}`} />
-        {h.words}
-      </Chip>
+      {chip}
     </Link>
   );
 }

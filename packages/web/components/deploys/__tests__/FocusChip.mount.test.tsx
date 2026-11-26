@@ -83,7 +83,7 @@ test("a branch keeps its plain name", () => {
 
 // A link to something on neither the queue nor a deploy: when it is on its way (an open change, found in the left
 // column) the chip says so and reads as waiting; otherwise it is not on this target.
-function mountWhere(coming: boolean) {
+function mountWhere(coming: "coming" | "parked" | null) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -92,15 +92,21 @@ function mountWhere(coming: boolean) {
 }
 
 test("a change on its way, on no deploy yet, reads as on its way and waiting", () => {
-  const { host, unmount } = mountWhere(true);
+  const { host, unmount } = mountWhere("coming");
   const chip = host.querySelector(".dpp-focus")!;
   expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("on its way");
   expect(chip.getAttribute("data-state")).toBe("waiting");
   unmount();
 });
 
+test("a parked change says so, never that it is moving", () => {
+  const { host, unmount } = mountWhere("parked");
+  expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("parked on its way");
+  unmount();
+});
+
 test("a change neither coming nor deployed is not on this target", () => {
-  const { host, unmount } = mountWhere(false);
+  const { host, unmount } = mountWhere(null);
   const chip = host.querySelector(".dpp-focus")!;
   expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("not on this target");
   expect(chip.getAttribute("data-state")).toBe("missing");

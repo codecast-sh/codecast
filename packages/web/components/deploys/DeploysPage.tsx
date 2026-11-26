@@ -5,7 +5,7 @@
 // and every deploy with the sessions it carried and a way back. Reads the
 // store only (hooks/useSyncDeployTargets); a press paints at once and the
 // confirm flow (components/consequential) carries its weight.
-import { OnItsWay } from "../changes/OnItsWay";
+import { OnItsWay, type FocusComing } from "../changes/OnItsWay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, CircleDashed, Loader2, Pause, RotateCcw, X } from "lucide-react";
@@ -269,7 +269,7 @@ function TargetPane({ target: t, production, deploys, now, onPress, onPause, onR
   const focusDeploys = !focus ? [] : held ? n.history.filter((d) => d.short_id === held.short_id) : n.history.filter((d) => deployMatches(d, focus));
   const focusOpen = focusWaiting ? null : focusDeploys[0]?.short_id ?? null;
   // An open change is on neither the queue nor a deploy, only on its way (the left column says so).
-  const [focusComing, setFocusComing] = useState(false);
+  const [focusComing, setFocusComing] = useState<FocusComing>(null);
   const [open, setOpen] = useState<string | null>(openDeploy ?? focusOpen);
   // Reach lands after the first paint: once the deploy that took the linked thing is known here, open it, once.
   // Later moves (the commit going out while the page is open) never move the page on their own.
@@ -633,10 +633,11 @@ function LabelSwitch({ labels, onToggle }: { labels: DeployLabel[]; onToggle: (l
 }
 
 /** The thing the link pointed at, and where it is on this target: waiting, live in a deploy, on its way out, or not here. */
-export function FocusChip({ focus, repository, waiting, coming = false, deploys, live, onClear }: { focus: DeployFocus; repository: string; waiting: boolean; coming?: boolean; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
+export function FocusChip({ focus, repository, waiting, coming = null, deploys, live, onClear }: { focus: DeployFocus; repository: string; waiting: boolean; coming?: FocusComing; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
   const d = deploys[0];
   const where = waiting ? "waiting"
-    : !d && coming ? "on its way"
+    : !d && coming === "coming" ? "on its way"
+    : !d && coming === "parked" ? "parked on its way"
     : !d ? "not on this target"
     : focus.kind === "deploy" ? (d._id === live?._id ? "live now" : d.status)
     : d._id === live?._id ? `live in ${d.short_id}` : d.status === "live" ? `went out in ${d.short_id}` : `${d.status} in ${d.short_id}`;
