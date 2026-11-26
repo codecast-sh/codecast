@@ -647,7 +647,13 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
   const plan = mergePriorities(input, output);
-  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
+  // A plan that fails to land still cost the call: record it (the day's ceiling counts it), and a repeat failure steps the cursor past after FAILURES_BEFORE_STEP.
+  let counts: Counts | null;
+  try {
+    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
+  } catch (e) {
+    return fail(`applying the plan failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), true);
+  }
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;

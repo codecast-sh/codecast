@@ -6,7 +6,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { MergePlan } from "./lib/priorityPass";
 import { LATE_MARGIN_MS } from "./priorityPassInputs";
-import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
+import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { api } from "./_generated/api";
 
@@ -332,6 +332,25 @@ describe("what a pass may read, and how far", () => {
     expect(runs[2].error).toContain("stepped past");
     expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toEqual({ status: "skipped", reason: "nothing_new" });
     expect(model.prompts).toHaveLength(3);
+  });
+
+  test("a plan that throws as it lands records the call's cost, and the third such failure steps past", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    const real = (applyPlan as any)._handler;
+    (applyPlan as any)._handler = async () => { throw new Error("write limit reached"); };
+    try {
+      for (let i = 0; i < 3; i++) expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("error");
+    } finally {
+      (applyPlan as any)._handler = real;
+    }
+    const runs = await w.runs();
+    expect(runs.map((r: any) => [r.status, r.repeats, r.cost_usd > 0])).toEqual([["error", true, true], ["error", true, true], ["error", true, true]]);
+    expect(runs[0].error).toContain("applying the plan failed: write limit reached");
+    expect(runs[0].cursor_at).toBe(runs[1].cursor_at);
+    expect(runs[2].cursor_at).toBeGreaterThan(runs[0].cursor_at);
+    expect(runs[2].error).toContain("stepped past");
   });
 
   test("an overloaded model three times in a row loses no work: the cursor stays until a pass goes through", async () => {
