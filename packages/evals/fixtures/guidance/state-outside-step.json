@@ -1,0 +1,16 @@
+{
+  "asOf": "2026-11-26T12:00:00.000Z",
+  "notes": "A step the person must take outside the session is handed to them: the pin is blocked, not done.",
+  "label": {
+    "want": [
+      "cast\\s+state\\b[^\\n]*--status[ =]blocked"
+    ],
+    "avoid": [
+      "cast\\s+state\\b[^\\n]*--status[ =]done"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-11-26T12:00:00.000Z",
+    "request": "My Mac keeps resolving an old IP address for a domain. Tell me the command that flushes the DNS cache. I'll run it in my own terminal, so don't run it here."
+  }
+}
