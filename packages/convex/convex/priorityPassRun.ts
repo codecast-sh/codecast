@@ -527,7 +527,7 @@ export const applyPlan = internalMutation({
 
     for (const id of corrections ?? []) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
-      if (c?.status === "pending" && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
+      if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
         await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at } });
       }
     }

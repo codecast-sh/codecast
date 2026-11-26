@@ -173,6 +173,8 @@ export const priorityTables = {
     snapshot: v.object({ short_id: v.string(), title: v.string(), summary: v.string(), status: v.string(), steps: v.array(priorityStep) }),
     /** The writer's own key for this correction: a retried write (the web outbox re-drives it until acknowledged) stores it once. */
     client_key: v.optional(v.string()),
+    /** The person deleted it: no pass, list or pending mark reads it again; one a pass applied stays an eval case (priorities exportCases). */
+    deleted_at: v.optional(v.number()),
   })
     .index("by_user_client_key", ["user_id", "client_key"])
     .index("by_user_workspace_created", ["user_id", "workspace", "created_at"])

@@ -217,6 +217,7 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
     .query("priority_corrections")
     .withIndex("by_user_workspace_created", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
     .order("desc")
+    .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
     .take(PRIORITY_PASS_CAPS.corrections);
   const input: PassCorrection[] = [];
   const pending: Id<"priority_corrections">[] = [];
@@ -230,6 +231,7 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
     const waiting: Doc<"priority_corrections">[] = await ctx.db
       .query("priority_corrections")
       .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "pending"))
+      .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
       .take(SUPERSEDED_READ + read.size);
     for (const c of waiting) if (!read.has(String(c._id))) pending.push(c._id);
   }

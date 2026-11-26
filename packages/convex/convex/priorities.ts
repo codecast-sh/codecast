@@ -158,7 +158,7 @@ async function ownerNames(ctx: Ctx, rows: Priority[]): Promise<Map<string, strin
 const CORRECTIONS_READ = 50;
 async function correctionsOf(ctx: Ctx, viewer: Id<"users">, p: Priority, limit = CORRECTIONS_READ): Promise<Doc<"priority_corrections">[]> {
   if (!isOwner(viewer, p)) return [];
-  return await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", p._id)).order("desc").take(limit);
+  return await ctx.db.query("priority_corrections").withIndex("by_priority_created", (q: any) => q.eq("priority_id", p._id)).order("desc").filter((q: any) => q.eq(q.field("deleted_at"), undefined)).take(limit);
 }
 
 const correctionOut = (c: Doc<"priority_corrections">): PriorityCorrection => ({ _id: c._id, step_key: c.step_key ?? null, text: c.text, status: c.status, created_at: c.created_at });
@@ -166,7 +166,7 @@ const correctionOut = (c: Doc<"priority_corrections">): PriorityCorrection => ({
 /** Whether the owner has a correction on it no pass has read: one indexed read. */
 async function correctionPending(ctx: Ctx, viewer: Id<"users">, p: Priority): Promise<boolean> {
   if (!isOwner(viewer, p)) return false;
-  return !!(await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).first());
+  return !!(await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).filter((q: any) => q.eq(q.field("deleted_at"), undefined)).first());
 }
 
 /**
@@ -267,7 +267,7 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     // Corrections are their owner's alone: no one else learns one is waiting.
     pending: async (p) => {
       if (!isOwner(r.viewer, p)) return new Set();
-      const rows = await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).take(50);
+      const rows = await ctx.db.query("priority_corrections").withIndex("by_priority_status", (q: any) => q.eq("priority_id", p._id).eq("status", "pending")).filter((q: any) => q.eq(q.field("deleted_at"), undefined)).take(50);
       return new Set(rows.map((c: any) => c.step_key ?? ""));
     },
   };
@@ -897,7 +897,8 @@ async function doCorrectionDelete(ctx: Ctx, viewer: Id<"users">, ref: string): P
       ? await ctx.db.query("priority_corrections").withIndex("by_user_client_key", (q: any) => q.eq("user_id", viewer).eq("client_key", clientKey)).first()
       : null;
   if (!c || String(c.user_id) !== String(viewer)) return { error: `no correction ${ref} of yours` };
-  await ctx.db.delete(c._id);
+  // Kept, marked: a correction a pass applied stays an eval case (exportCases).
+  if (!c.deleted_at) await ctx.db.patch(c._id, { deleted_at: Date.now() });
   return { deleted: c._id };
 }
 

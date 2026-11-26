@@ -419,7 +419,26 @@ describe("corrections", () => {
     await me.mutation(pri.correct, { short_id: "pri-1", text: "Wrong milestone", client_key: "ck-1" });
     await expect(as(w, w.ben).mutation(pri.deleteCorrection, { correction_id: "local-correction-ck-1" })).rejects.toThrow("no correction local-correction-ck-1 of yours");
     await me.mutation(pri.deleteCorrection, { correction_id: "local-correction-ck-1" });
-    expect(await w.t.run((ctx) => ctx.db.query("priority_corrections").collect())).toEqual([]);
+    expect((await w.t.run((ctx) => ctx.db.query("priority_corrections").collect())).map((c) => !!c.deleted_at)).toEqual([true]);
+    expect((await me.query(pri.show, { short_id: "pri-1" })).corrections).toEqual([]);
+  });
+
+  test("a deleted correction is gone from the page, the pending mark, the sweep and the pass; one a pass applied is still an eval case", async () => {
+    const w = await seeded();
+    const me = as(w, w.ana);
+    const exportCases = (internal as any).priorities.exportCases;
+    const applied = await me.mutation(pri.correct, { short_id: "pri-1", text: "Two priorities in one" });
+    model.reply = () => JSON.stringify({ priorities: [], unassigned: [] });
+    await run(w);
+    const waiting = await me.mutation(pri.correct, { short_id: "pri-1", step_key: "s2", text: "Not the grader" });
+    for (const c of [applied, waiting]) await me.mutation(pri.deleteCorrection, { correction_id: c._id });
+    const shown = await me.query(pri.show, { short_id: "pri-1" });
+    expect([shown.corrections, shown.correction_pending]).toEqual([[], false]);
+    expect((await me.query(pri.list, { workspace: w.team })).priorities[0].correction_pending).toBe(false);
+    expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).not.toContainEqual({ user_id: w.ana, workspace: w.team });
+    const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    expect([read.input.corrections, read.corrections]).toEqual([[], []]);
+    expect((await w.t.query(exportCases, {})).cases.map((c: any) => c.id)).toEqual([applied._id]);
   });
 
   test("a pending correction alone puts the pair in the sweep", async () => {

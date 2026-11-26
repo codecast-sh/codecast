@@ -152,6 +152,7 @@ async function correctionPending(ctx: { db: any }, pair: Pair): Promise<boolean>
   return !!(await ctx.db
     .query("priority_corrections")
     .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("status", "pending"))
+    .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
     .first());
 }
 
