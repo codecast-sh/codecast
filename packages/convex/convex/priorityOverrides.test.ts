@@ -171,6 +171,28 @@ describe("a person's merge while a pass reads", () => {
   });
 });
 
+describe("a milestone holding a session the person placed survives the pass", () => {
+  test("the person moves a session onto s3; the next plan leaves s3 out; s3 stays with the session on it", async () => {
+    const w = await seeded();
+    await as(w, w.ana).mutation(pri.moveSession, { session: "jx7old", short_id: "pri-1", step_key: "s3" });
+    await w.send(w.ana, w.teamConv, late(), "grader again");
+    // The reply keeps s1 and s2 and says nothing of s3.
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps: steps.slice(0, 2) })], unassigned: [] });
+    await run(w);
+    const p1 = await byShort(w, "pri-1");
+    expect(p1.steps.filter((s: any) => !s.dropped).map((s: any) => s.key)).toEqual(["s1", "s2", "s3"]);
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: p1._id, priority_step_key: "s3", priority_set_by: "person" });
+
+    // A stale plan written straight to applyPlan without s3 is held the same way.
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [{ short_id: "pri-1", patch: { steps: p1.steps.filter((s: any) => s.key !== "s3") } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    expect((await byShort(w, "pri-1")).steps.map((s: any) => s.key)).toContain("s3");
+    expect((await w.conversation(w.oldConv))?.priority_step_key).toBe("s3");
+  });
+});
+
 describe("session overrides survive the next pass", () => {
   test("a session the person moved stays; one they said is not this never goes back there", async () => {
     const w = await seeded();

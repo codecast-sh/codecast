@@ -386,7 +386,16 @@ export const applyPlan = internalMutation({
           moved.set(st.key, `s${++next}`);
           return { ...st, key: moved.get(st.key)! };
         });
-        patch.steps = holdPersonSteps(row.steps, [...steps, ...unseen]);
+        // A milestone a session the person placed, or a known link, sits on stays: read its sessions only when the plan would remove one.
+        const proposedKeys = new Set([...steps, ...unseen].filter((st) => !st.dropped).map((st) => st.key));
+        const removing = new Set(row.steps.filter((st) => !st.dropped && !proposedKeys.has(st.key)).map((st) => st.key));
+        const anchored = new Set<string>();
+        if (removing.size) {
+          for (const conv of await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", row._id)).take(SESSION_COUNT_CAP)) {
+            if ((conv.priority_set_by === "person" || conv.priority_set_by === "link") && conv.priority_step_key && removing.has(conv.priority_step_key)) anchored.add(conv.priority_step_key);
+          }
+        }
+        patch.steps = holdPersonSteps(row.steps, [...steps, ...unseen], [], "", anchored);
         const live = new Set(patch.steps.filter((st) => !st.dropped).map((st) => st.key));
         liveSteps.set(row.short_id, live);
         const removed = row.steps.filter((st) => !st.dropped && !live.has(st.key)).map((st) => st.key);

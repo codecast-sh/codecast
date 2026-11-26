@@ -680,13 +680,17 @@ export function withPersonFields(step: PriorityStep, was: PriorityStep): Priorit
  * `proposed`, with every person-set field of the step holding the same key
  * laid back over it, none new to the row that repeats a step the person
  * dropped (withoutDroppedRepeats), and every step the person set something on
- * that `proposed` lost, kept. applyPlan runs it against the row as it stands
- * when it writes, so a setting made while the model was reading holds too.
+ * that `proposed` lost, kept, as is every step in `anchored` (one a session
+ * the person placed, or a known link, sits on). applyPlan runs it against the
+ * row as it stands when it writes, so a setting made while the model was
+ * reading holds too.
  */
-export function holdPersonSteps(current: PriorityStep[], proposed: PriorityStep[], notes: string[] = [], target = ""): PriorityStep[] {
-  const held = current.filter(isPersonHeld);
+export function holdPersonSteps(current: PriorityStep[], proposed: PriorityStep[], notes: string[] = [], target = "", anchored: ReadonlySet<string> = new Set()): PriorityStep[] {
+  const held = current.filter((s) => isPersonHeld(s) || (!s.dropped && anchored.has(s.key)));
   const out = withoutDroppedRepeats(current, proposed, notes, target).map((s) => {
     const was = held.find((h) => h.key === s.key);
+    // A drop only the person makes: an anchored step the plan would drop stays as it is.
+    if (was && s.dropped && !was.dropped && !isPersonHeld(was)) return was;
     return was ? withPersonFields(s, was) : s;
   });
   for (const h of held) if (!out.some((s) => s.key === h.key)) out.push(h);
@@ -712,7 +716,10 @@ const keyNumber = (key: string | null | undefined) => {
  */
 function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed: PassPriority[], proposed: PriorityProposal["steps"], taskStatus: Map<string, string>, now: number, notes: string[]): { steps: PriorityStep[]; remap: Map<string, string>; keys: Array<string | null> } {
   const own = prior?.steps ?? [];
+  // A step a session the person placed, or a known link, sits on stays, as a step the person set something on does.
+  const anchored = new Set((prior?.sessions ?? []).filter((s) => s.step_key && (s.by_person || s.linked_by === "link")).map((s) => s.step_key!));
   const ownerOf = new Map<PriorityStep, string>();
+  const holds = (s: PriorityStep) => isPersonHeld(s) || (!s.dropped && !ownerOf.has(s) && anchored.has(s.key));
   const needsRewrite = new Set([prior, ...absorbed].filter((p) => p?.needs_rewrite).map((p) => (p === prior ? target : p!.short_id)));
   for (const p of absorbed) for (const s of p.steps) ownerOf.set(s, p.short_id);
   const pool = [...own, ...ownerOf.keys()];
@@ -740,10 +747,10 @@ function carrySteps(target: PriorityTarget, prior: PassPriority | null, absorbed
     keys.push(step.key);
   }
   for (const s of pool) {
-    if (!isPersonHeld(s) || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
+    if (!holds(s) || matched.includes(s) || needsRewrite.has(ownerOf.get(s) ?? target)) continue; // never carry withheld words
     const from = ownerOf.get(s);
     steps.push(withDone({ ...s, key: keyOf(s) }, s.done, s, taskStatus, now));
-    if (!s.dropped) notes.push(`${target}: kept step ${from ? `${from} ${s.key}` : s.key}, the person set it`);
+    if (!s.dropped) notes.push(`${target}: kept step ${from ? `${from} ${s.key}` : s.key}, ${isPersonHeld(s) ? "the person set it" : "a session the person or a link put there is on it"}`);
   }
   // A matched dropped step stays a tombstone, under its own key.
   for (const s of pool) if (s.dropped && matched.includes(s) && !needsRewrite.has(ownerOf.get(s) ?? target)) steps.push({ ...s, key: keyOf(s) });
