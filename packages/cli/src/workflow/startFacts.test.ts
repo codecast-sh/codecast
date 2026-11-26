@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { repoFlowsReport } from "./repoFlowsReport";
-import { decideStart, keepStart, pinDirectCommands, reviewNodeOf, runGraph, shipModeOf, startFacts, StartFactsError } from "./startFacts";
+import { decideStart, factsFor, keepStart, pinDirectCommands, reviewNodeOf, runGraph, shipModeOf, startFacts, StartFactsError } from "./startFacts";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { evalCondition } from "./condition";
 
@@ -88,10 +88,32 @@ describe("startFacts reads the default branch", () => {
     expect(startFacts(root)).toEqual({ ship_mode: "pr" });
   });
 
-  test("a default branch whose workspace.toml does not parse stops the run, never falls back to a pull request", () => {
+  test("a [ship] mode it cannot read stops a run that routes on it, never falls back to a pull request", () => {
     onMain({ ".codecast/workspace.toml": `[ship]\nmode = "sideways"\n` });
     expect(() => startFacts(root)).toThrow(StartFactsError);
-    expect(() => startFacts(root)).toThrow("ship.mode");
+    expect(() => startFacts(root)).toThrow('[ship] mode = "sideways"');
+    onMain({ ".codecast/workspace.toml": `[ship\nmode = "direct"\n` });
+    expect(() => startFacts(root)).toThrow("invalid TOML");
+  });
+
+  test("keys a newer cast wrote elsewhere in the files are read past: the library change still decides", () => {
+    onMain({
+      ".codecast/workspace.toml": `[future]\nwidget = true\n\n[ship]\nmode = "direct"\nqueue = "merge"\n`,
+      ".codecast/line.toml": `[line]\nfuture_key = 1\n\n[line.commands]\ncheck = "make check"\nship = "scripts/ship.sh"\nfuture = "x"\n`,
+    });
+    expect(startFacts(root)).toEqual({ ship_mode: "direct", land_check: "make check", land_ship: "scripts/ship.sh" });
+    expect(factsFor(change(), root)).toEqual({ ship_mode: "direct", land_check: "make check", land_ship: "scripts/ship.sh" });
+    expect(runGraph(change(), factsFor(change(), root)).nodes.has("pr")).toBe(false);
+  });
+
+  test("a flow whose start routes on no fact never reads the files, so a file it cannot read stops only flows that do", () => {
+    onMain({ ".codecast/workspace.toml": `[ship]\nmode = = "direct"\n` });
+    const line = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    expect(factsFor(line, root)).toEqual({});
+    expect(() => factsFor(change(), root)).toThrow(StartFactsError);
+    // A graph already cut to its direct path still reads them, for the commands it lands with.
+    onMain({ ...DIRECT, ".codecast/workspace.toml": DIRECT[".codecast/workspace.toml"] });
+    expect(factsFor(decideStart(change(), { ship_mode: "direct" }), root)).toMatchObject({ ship_mode: "direct", land_ship: "scripts/ship.sh" });
   });
 });
 

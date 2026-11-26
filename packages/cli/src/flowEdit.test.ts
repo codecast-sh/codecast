@@ -115,7 +115,8 @@ describe("cast flow edit change", () => {
   test("a wrong edit is refused with what to write instead, and nothing is written", () => {
     const root = repo();
     const bad = (req: FlowEditRequest) => () => planFlowEdit(root, "change", req);
-    expect(bad({ op: "add", station: "lint", after: "chek", run: "x" })).toThrow('change has no station "chek"; its stations: pr, checks, ci, review, joined, verdicts, merge, landed, deploy, moved, wait_main, ci_card, ci_conflict, brief, fix_conflict, retest, onto_main, decide');
+    // The direct path's stations (a repository that lands straight on main) are named apart from the pull request path's.
+    expect(bad({ op: "add", station: "lint", after: "chek", run: "x" })).toThrow('change has no station "chek"; its stations: pr, checks, ci, review, joined, verdicts, merge, landed, deploy, moved, wait_main, ci_card, ci_conflict, brief, fix_conflict, retest, onto_main, decide; on the path straight to main: direct_check, direct_review, direct_fix, land, direct_revise, direct_deploy, direct_conflict, direct_ci_red');
     expect(bad({ op: "add", station: "lint", after: "pr" })).toThrow('say what lint does with one of --run "<command>", --agent "<prompt|@file>" or --person "<question>"');
     expect(bad({ op: "add", station: "review", after: "pr", run: "x" })).toThrow("change already has a station review");
     expect(bad({ op: "run", station: "review", cmd: "x" })).toThrow('Review is an agent, not a command: change what it reads with cast flow edit change prompt review "<text>"');

@@ -70,7 +70,9 @@ describe("line.cast template", () => {
     // the blind judge's and the intent read's prompts, read as each segment run alone writes them, and the climb's stations (FL10).
     const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "personal", "judge", "intent", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
     const used = new Set(shipped.flatMap((g) => [...g.nodes.values()].flatMap((n) => [n.prompt, n.script])));
-    for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) expect(used.has(withTemplateIncludes(text, ref, LINE_TEMPLATE_FILES))).toBe(true);
+    // A partial (change/direct_return.md) is used where a used file takes it in with `@include`.
+    const included = new Set(Object.entries(LINE_TEMPLATE_FILES).flatMap(([ref, text]) => [...text.matchAll(/^@include[ \t]+(\S+)[ \t]*$/gm)].map((m) => path.posix.normalize(path.posix.join(path.posix.dirname(ref), m[1])))));
+    for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) expect({ ref, used: used.has(withTemplateIncludes(text, ref, LINE_TEMPLATE_FILES)) || included.has(ref) }).toEqual({ ref, used: true });
   });
 
   test("inlineTemplateFiles writes a DOT string the parser reads back exactly", () => {

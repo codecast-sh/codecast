@@ -4,10 +4,7 @@
 // change cannot pick its own way past pull request, CI and the person's card by editing the files that say so. The
 // library change flow's start routes on it, and that start is decided before the run, so the run carries, and its
 // card draws, only the path it takes.
-import * as path from "node:path";
 import { spawnSync } from "../proc.js";
-import { LineProfileError, parseLineProfileText } from "../lineProfile.js";
-import { ManifestError, MANIFEST_REL_PATH, parseManifestText } from "../workspace/manifest.js";
 import { parseCondition, evalCondition } from "./condition.js";
 import { parseWorkflowSource } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
@@ -45,32 +42,65 @@ function defaultRef(cwd: string): string | null {
   return git(cwd, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]) ? ref : null;
 }
 
+const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+
 /**
- * The facts a checkout gives every run in it, read from its default branch. One it cannot read (no origin, no
- * default branch) is a pull request repository. A direct one also carries the check and ship commands its default
- * branch's line profile names (`land_check`, `land_ship`), which the run uses in place of the working tree's.
- * Throws StartFactsError when the default branch's workspace.toml or line.toml does not parse.
+ * The strings a run needs from one table of a TOML file on the default branch, read past everything else: a key a
+ * newer cast writes elsewhere in the file never stops a run here. Null when the file is not there. Throws
+ * StartFactsError when the file is not TOML, or the table or a key it needs is not what it must be.
+ */
+function readTable(cwd: string, ref: string, rel: string, table: string[], keys: string[], allowed: (key: string, v: string) => boolean = () => true): Record<string, string> | null {
+  const where = `${ref}:${rel}`;
+  const text = git(cwd, ["show", where]);
+  if (text === null) return null;
+  const refuse = (why: string) => new StartFactsError(`${where}: ${why}: fix it on ${ref.replace(/^origin\//, "")} before shipping from here`);
+  let at: unknown;
+  try {
+    at = Bun.TOML.parse(text);
+  } catch (err) {
+    throw refuse(`invalid TOML (${err instanceof Error ? err.message : String(err)})`);
+  }
+  for (const part of table) {
+    if (!isTable(at)) throw refuse(`[${table.join(".")}] must be a table`);
+    at = (at as Record<string, unknown>)[part];
+    if (at === undefined) return {};
+  }
+  if (!isTable(at)) throw refuse(`[${table.join(".")}] must be a table`);
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    const v = at[k];
+    if (v === undefined) continue;
+    if (typeof v !== "string" || !allowed(k, v)) throw refuse(`[${table.join(".")}] ${k} = ${JSON.stringify(v)} is not one this cast can ship by`);
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * The facts a checkout gives a run whose start routes on them, read from its default branch. One it cannot read (no
+ * origin, no default branch) is a pull request repository. A direct one also carries the check and ship commands its
+ * default branch's line profile names (`land_check`, `land_ship`), which the run uses in place of the working tree's.
+ * Only `[ship] mode` and `[line.commands]` are read; a StartFactsError says one of those cannot be.
  */
 export function startFacts(cwd: string): Record<string, string> {
   const ref = defaultRef(cwd);
   if (!ref) return { ship_mode: "pr" };
-  const read = <T>(rel: string, parse: (text: string, where: string) => T): T | null => {
-    const where = `${ref}:${rel}`;
-    const text = git(cwd, ["show", where]);
-    if (text === null) return null;
-    try {
-      return parse(text, where);
-    } catch (err) {
-      if (err instanceof ManifestError || err instanceof LineProfileError) throw new StartFactsError(`${err.message}: fix it on ${ref.replace(/^origin\//, "")} before shipping from here`);
-      throw err;
-    }
-  };
-  const declared = read(MANIFEST_REL_PATH, (t, w) => parseManifestText(t, w).ship?.mode);
+  const declared = readTable(cwd, ref, ".codecast/workspace.toml", ["ship"], ["mode"], (_k, v) => v === "pr" || v === "direct")?.mode;
   const workflows = git(cwd, ["ls-tree", "--name-only", `${ref}:.github/workflows`]) ?? "";
-  const mode = shipModeOf(declared ?? undefined, workflows.split("\n").some((f) => /\.ya?ml$/.test(f.trim())));
+  const mode = shipModeOf(declared, workflows.split("\n").some((f) => /\.ya?ml$/.test(f.trim())));
   if (mode === "pr") return { ship_mode: "pr" };
-  const commands = read(path.join(".codecast", "line.toml"), (t, w) => parseLineProfileText(t, w).values.commands) ?? {};
-  return { ship_mode: "direct", land_check: commands.check ?? "", land_ship: commands.ship ?? "" };
+  const commands = readTable(cwd, ref, ".codecast/line.toml", ["line", "commands"], ["check", "ship"]) ?? {};
+  return { ship_mode: "direct", land_check: commands.check?.trim() ?? "", land_ship: commands.ship?.trim() ?? "" };
+}
+
+/**
+ * The facts a run of this graph starts with: none unless its start routes on one, so a flow that never asks how the
+ * repository lands never reads the files that say so (and a key it cannot read there stops only the flows that do).
+ */
+export function factsFor(graph: WorkflowGraph, cwd: string): Record<string, string> {
+  // A graph already decided (cast workflow run pushed the cut) keeps its start edge's condition, so it reads them too.
+  const start = startOf(graph);
+  return start && graph.edges.some((e) => e.from === start.id && e.condition && readsOnlyFacts(e.condition)) ? startFacts(cwd) : {};
 }
 
 /** The facts for a view that draws a flow (the picker, `cast flow ls`): one the files cannot say decides nothing. */
@@ -183,6 +213,19 @@ export function runGraph(graph: WorkflowGraph, facts: Record<string, string>, op
     throw new StartFactsError(`This repository ships straight to its default branch, so its ${graph.name} flow takes the path with no pull request, and ${names} ${lost.length === 1 ? "hangs" : "hang"} only on the pull request path, where ${lost.length === 1 ? "it" : "they"} would never run. Place ${lost.length === 1 ? "it" : "them"} on the direct path too, after its Check or Review (cast flow edit ${graph.name} add <station> --after direct_review), or take ${lost.length === 1 ? "it" : "them"} out.`);
   }
   return decided;
+}
+
+/**
+ * The stations only one start edge reaches, for each start edge with a label (the change flow's "straight to main"):
+ * a flow whose start routes on facts holds two paths, and a list of its stations names each apart.
+ */
+export function startPaths(graph: WorkflowGraph): Array<{ label: string; ids: Set<string> }> {
+  const start = startOf(graph);
+  const out = start ? graph.edges.filter((e) => e.from === start.id) : [];
+  if (out.length < 2) return [];
+  const via = (e: WorkflowEdge) => new Set([...reach(graph, graph.edges.filter((x) => x.from !== start!.id || x === e), start!.id)].map(topOf));
+  const reached = out.map(via);
+  return out.flatMap((e, i) => (e.label ? [{ label: e.label, ids: new Set([...reached[i]].filter((id) => id !== start!.id && !reached.some((r, j) => j !== i && r.has(id)))) }] : []));
 }
 
 /** The reviewer of the path a graph runs: Review on the pull request path, else the direct path's. */

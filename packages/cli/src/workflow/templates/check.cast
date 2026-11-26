@@ -15,6 +15,6 @@ digraph check {
   start -> verify
   verify -> passed [condition="outcome = success"]
   verify -> nocheck [condition="outcome = failure and not line.commands.check"]
-  verify -> failed [condition="outcome = failure and verify.exit_code != 2"]
-  verify -> unjudged [condition="outcome = failure and verify.exit_code = 2"]
+  verify -> failed [condition="outcome = failure and verify.exit_code != 2 and line.commands.check"]
+  verify -> unjudged [condition="outcome = failure and verify.exit_code = 2 and line.commands.check"]
 }

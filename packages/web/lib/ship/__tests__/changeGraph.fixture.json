@@ -985,12 +985,12 @@
     {
       "from": "direct_check__verify",
       "to": "direct_check__failed",
-      "condition": "outcome = failure and direct_check__verify.exit_code != 2"
+      "condition": "outcome = failure and direct_check__verify.exit_code != 2 and line.commands.check"
     },
     {
       "from": "direct_check__verify",
       "to": "direct_check__unjudged",
-      "condition": "outcome = failure and direct_check__verify.exit_code = 2"
+      "condition": "outcome = failure and direct_check__verify.exit_code = 2 and line.commands.check"
     },
     {
       "from": "land__shipped",

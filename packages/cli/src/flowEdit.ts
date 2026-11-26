@@ -16,6 +16,7 @@ import { generateUnifiedPatch } from "@codecast/shared/diff";
 import { graphExtends, graphHash, parseWorkflowFile, resolveFlowSource, validateWorkflow, type ReadFile } from "./workflow/parser.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { drawnGraphIn } from "./workflow/flowGraphIn.js";
+import { startPaths } from "./workflow/startFacts.js";
 import { dotQuote } from "./lineGraphEdit.js";
 import { recordSessionWrites } from "./land/writeLedger.js";
 import { dropNodeStmt, findNodeStmt, nodeAttrRaw, nodeStmtIds, upsertNodeAttrs } from "./repoLine.js";
@@ -96,7 +97,10 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
   const now = parse(file, reader);
   const tops = [...now.nodes.values()].filter((n) => !n.id.includes(SEGMENT_SEP) && n.type !== "start" && n.type !== "exit");
   const folded = foldFlow([...now.nodes.values()], now.edges).stations;
-  const stationList = () => [...folded.filter((x) => x.main), ...folded.filter((x) => !x.main)].map((x) => x.id).join(", ");
+  // A start that routes two ways (the change flow's direct path) lists each path's own stations apart.
+  const paths = startPaths(now);
+  const ordered = [...folded.filter((x) => x.main), ...folded.filter((x) => !x.main)].map((x) => x.id);
+  const stationList = () => [ordered.filter((id) => !paths.some((p) => p.ids.has(id))).join(", "), ...paths.map((p) => `on the path ${p.label}: ${ordered.filter((id) => p.ids.has(id)).join(", ")}`)].join("; ");
   const label = (id: string) => now.nodes.get(id.split(SEGMENT_SEP)[0])?.label ?? id;
   /** A station named by id or label; a segment's station by its qualified id. */
   const station = (name: string): string => {

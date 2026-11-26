@@ -467,8 +467,10 @@ Both facts are read from the default branch as origin has it, never from a
 working tree or the change's branch, so a change cannot send itself past pull
 request, CI and the person's card. A repository with CI workflows lands by pull
 request on green whatever its mode says (its mode there is how `cast ship
-checkout` pushes); one whose default branch's workspace.toml or line.toml does
-not parse refuses to start. A direct run checks and lands with the check and
+checkout` pushes). Only a flow whose start routes on the ship mode reads these
+files, and it reads only `[ship] mode` and `[line.commands]`, past any other
+key a newer cast wrote; when those cannot be read, that flow refuses to start
+rather than guess. A direct run checks and lands with the check and
 ship commands its default branch's line profile names, never the working
 tree's. Check runs that check command in the run's worktree (none named stops
 at No check command). Review is an independent reviewer told that its approve

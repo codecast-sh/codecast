@@ -22504,10 +22504,11 @@ workflow
     const source = resolved.source;
     // The repository's default branch decides the start before the push, so the run's card draws the path it takes
     // (startFacts.ts).
-    const { reviewNodeOf, runGraph, startFacts, StartFactsError } = await import("./workflow/startFacts.js");
+    const { factsFor, reviewNodeOf, runGraph, StartFactsError } = await import("./workflow/startFacts.js");
     let graph: ReturnType<typeof parseWorkflowSource>;
     try {
-      graph = runGraph(parseWorkflowSource(source, resolved.dir), startFacts(process.cwd()));
+      const parsed = parseWorkflowSource(source, resolved.dir);
+      graph = runGraph(parsed, factsFor(parsed, process.cwd()));
     } catch (err) {
       if (!(err instanceof StartFactsError)) throw err;
       console.error(`✗ ${err.message}`);

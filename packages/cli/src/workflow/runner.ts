@@ -11,7 +11,7 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
-import { pinDirectCommands, runGraph, startFacts, StartFactsError } from "./startFacts";
+import { factsFor, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
@@ -2195,11 +2195,11 @@ export type WorkflowRunOutcome = "completed" | "failed" | "invalid";
 
 export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<WorkflowRunOutcome> {
   const cwd = options.cwd || process.cwd();
-  // What the repository's default branch says before anything runs (its ship mode): a start it decides runs, and
-  // shows, only its own path; a resumed run keeps the start it took.
+  // What the repository's default branch says before anything runs (its ship mode), read only for a flow whose start
+  // routes on it: a start it decides runs, and shows, only its own path; a resumed run keeps the start it took.
   let facts: Record<string, string>;
   try {
-    facts = startFacts(cwd);
+    facts = factsFor(graph, cwd);
     graph = runGraph(graph, facts, options.resume ? { resumeAt: options.resume.current_node_id } : {});
   } catch (err) {
     if (!(err instanceof StartFactsError)) throw err;
