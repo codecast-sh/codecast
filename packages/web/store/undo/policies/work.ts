@@ -799,8 +799,7 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // carries the change that puts it back (args[2]), built from the owners it
   // started from: undo replays that, and its own inverse is the change again.
   // A take-over or a released parent has none: nothing puts a parent back.
-  // An adopt is undone by its old parent again, else a detach, and the
-  // viewer's row back (lib/adoptDrop), when the viewer runs it and so may still edit.
+  // An adopt's inverse comes from lib/adoptDrop (its old parent, else a detach).
   applySessionOwners: {
     spec: {
       label: (ctx) => {
@@ -813,12 +812,9 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
         if (me && change?.add?.length === 1 && change.add[0] === me && !change.remove?.length) return `Added you to ${title}`;
         return `Changed the owners of ${title}`;
       },
-      // Several changes (an adopt's undo by someone who does not run it: rejoin,
-      // then put it back) are sent in order as one entry.
+      // Several changes (rejoin, then put it back) go in order as one entry.
       inverse: (ctx) => {
-        const back = ctx.args[2] as unknown;
-        if (!back) return null;
-        const steps = Array.isArray(back) ? back : [back];
+        const steps = ctx.args[2] ? [ctx.args[2]].flat() : [];
         return steps.length ? steps.map((step, i) => call("applySessionOwners", ctx.args[0], step, i === steps.length - 1 ? ctx.args[1] : null)) : null;
       },
     },
