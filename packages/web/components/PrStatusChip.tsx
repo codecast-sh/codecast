@@ -187,7 +187,9 @@ export function LinkedPrChips({
                 const row = "flex items-center gap-2 px-2 py-1 rounded min-w-0";
                 const body = (
                   <>
-                    <LinkedChip pr={pr} size="card" plain />
+                    {/* "panel" so a merged row reads its reach live, as the chips beside the count do:
+                        the list mounts only while open, so the read is fresh, not a card's stale row. */}
+                    <LinkedChip pr={pr} size="panel" plain />
                     <span className="min-w-0 flex-1 truncate text-[12.5px] text-sol-text-secondary">{pr.title ?? pr.repository}</span>
                   </>
                 );
