@@ -1072,6 +1072,9 @@ export type InboxSession = {
   role_started?: boolean | null;
   owners_changed_at?: number | null;
   parent_released_at?: number | null;
+  // When a person dragged it under its parent: it still runs its own process
+  // (shared isSubagentConversation).
+  adopted_at?: number | null;
   wait_up_at?: number | null;
   wait_up_count?: number | null;
   wait_up_person?: string | null;
@@ -3493,7 +3496,9 @@ export function getSessionRenderKey(
 // The one caveat, same as the server: `cast spawn` from a plain terminal
 // records no spawner and so is treated as human-started.
 export function isSub(s: InboxSession): boolean {
-  return isSubagentConversation(s) || isAgentSpawnedConversation(s);
+  // A session dragged under another (adopted_at) runs its own process but
+  // answers to that session, so it stays silent too.
+  return isSubagentConversation(s) || s.adopted_at != null || isAgentSpawnedConversation(s);
 }
 
 export function isFork(s: InboxSession): boolean {

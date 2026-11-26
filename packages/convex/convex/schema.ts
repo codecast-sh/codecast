@@ -1526,6 +1526,10 @@ export default defineSchema({
     // When a person took it over from the session it works for: the parent
     // (parent_conversation_id) no longer owns it.
     parent_released_at: v.optional(v.number()),
+    // When a person dragged this standalone session under its parent
+    // (parent_conversation_id): it works for the parent but still runs its own
+    // process, so a revive or recovery treats it as top level. Cleared on detach.
+    adopted_at: v.optional(v.number()),
     // Stamped on every owner write under the feature (people, role, parent
     // release), so a client holding the owners refetches them.
     owners_changed_at: v.optional(v.number()),
