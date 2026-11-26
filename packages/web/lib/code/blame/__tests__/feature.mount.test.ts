@@ -4,6 +4,7 @@
 // is not a repo, inline blame, and the frame budget on a 5,000-line file.
 import { expect, mock, test } from "bun:test";
 import { installEditorDom, settle } from "../../../../components/code/__tests__/editorDom";
+import { FRAME_BUDGET_MS } from "../../../../test-helpers/frameBudget";
 
 installEditorDom();
 localStorage.removeItem("codecast.code.blameGutter");
@@ -189,7 +190,7 @@ test("a 5,000-line file draws its gutter inside a frame once the data lands", as
   samples.sort((a, b) => a - b);
   const median = samples[Math.floor(samples.length / 2)];
   console.log(`blame derive, 5000 lines / ${many.length} hunks: median ${median.toFixed(2)} ms, max ${samples[samples.length - 1].toFixed(2)} ms`);
-  expect(median).toBeLessThan(16);
+  expect(median).toBeLessThan(FRAME_BUDGET_MS);
 
   // The whole landing as the editor runs it: the effect through the field,
   // the gutter's DOM for the viewport, and a forced measure.
@@ -210,7 +211,7 @@ test("a 5,000-line file draws its gutter inside a frame once the data lands", as
   landing.sort((a, b) => a - b);
   const landMedian = landing[Math.floor(landing.length / 2)];
   console.log(`blame landing (field + gutter DOM + measure): median ${landMedian.toFixed(2)} ms, max ${landing[landing.length - 1].toFixed(2)} ms`);
-  expect(landMedian).toBeLessThan(16);
+  expect(landMedian).toBeLessThan(FRAME_BUDGET_MS);
 });
 
 test("a daemon that does not answer is asked on a backing-off clock, never in a loop", async () => {

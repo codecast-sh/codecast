@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseQuickOpenQuery, quickOpenIndex, rankFiles } from "./quickOpen";
+import { FRAME_BUDGET_MS } from "../../../test-helpers/frameBudget";
 
 const table = (paths: string[]) => Object.fromEntries(paths.map((p) => [p, { dir: false }]));
 
@@ -60,7 +61,7 @@ describe("rankFiles", () => {
     const p50 = times[Math.floor(times.length / 2)];
     const max = times[times.length - 1];
     console.log(`quick open 20k: p50 ${p50.toFixed(2)}ms, max ${max.toFixed(2)}ms`);
-    expect(max).toBeLessThan(16);
+    expect(max).toBeLessThan(FRAME_BUDGET_MS);
   });
 });
 
@@ -98,6 +99,6 @@ describe("quickOpenIndex", () => {
       expect(ranked[0].target.path).toBe(fresh);
     }
     console.log(`quick open 20k: index + first rank after a new file ${ms.toFixed(2)}ms (best of 3)`);
-    expect(ms).toBeLessThan(16);
+    expect(ms).toBeLessThan(FRAME_BUDGET_MS);
   });
 });
