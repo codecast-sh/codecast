@@ -200,7 +200,18 @@ test("the Status view shows no rank on any card", async () => {
   await m.unmount();
 });
 
-test("Decisions rows carry their rank or None too, sorted by it", async () => {
+// What the stepper walks (useDecisionStep reads useDecisionQueue): its conversations, in order.
+async function stepperOrder(): Promise<string[]> {
+  const { useDecisionQueue } = await import("../../hooks/useDecisionQueue");
+  let seen: string[] = [];
+  const Probe = () => { seen = useDecisionQueue().map((i) => i.conversationId); return null; };
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Probe />));
+  await act(async () => root.unmount());
+  return seen;
+}
+
+test("Decisions rows carry their rank or None too, sorted by it, numbered as the stepper walks them", async () => {
   seed("priorities");
   const ASK_NONE = id("asknone");
   const ASK_SECOND = id("asksecond");
@@ -219,14 +230,19 @@ test("Decisions rows carry their rank or None too, sorted by it", async () => {
   expect(order).toEqual([ASK_FIRST, ASK_SECOND, ASK_NONE]);
   const rankIn = (sid: string) => queue.querySelector(`[data-session-id="${sid}"] [data-priority-rank]`)?.textContent ?? null;
   expect([rankIn(ASK_FIRST), rankIn(ASK_SECOND), rankIn(ASK_NONE)]).toEqual(["#1", "#7", "None"]);
-  // Numbered in the order they show, rank order, not the queue's.
+  // Numbered in the order they show, which is the order the stepper walks: one numbering everywhere.
   expect([...queue.querySelectorAll("[data-decision-queue-row]")].map((r) => r.getAttribute("data-decision-queue-row"))).toEqual(["1", "2", "3"]);
+  expect(await stepperOrder()).toEqual([ASK_FIRST, ASK_SECOND, ASK_NONE]);
   await m.unmount();
   // Outside the Priorities view the Decisions rows carry no rank.
   seed("grouped");
   useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, ...Object.fromEntries(asks.map((r) => [r._id, r])) } }));
   const g = await mountInbox();
   expect(g.host.querySelector("[data-inbox-decision-queue] [data-priority-rank]")).toBeNull();
+  // The queue's own order there, longest waiting first, in the panel and the stepper alike.
+  const plain = [...g.host.querySelectorAll("[data-inbox-decision-queue] [data-session-id]")].map((el) => el.getAttribute("data-session-id"));
+  expect(plain).toEqual([ASK_NONE, ASK_SECOND, ASK_FIRST]);
+  expect(await stepperOrder()).toEqual(plain);
   await g.unmount();
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { computeVisualOrder, placeInboxRows, resolveInboxViewMode, type InboxSession } from "../inboxStore";
-import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority, walkPick } from "../priorityOrder";
+import { priorityPlaceReader, priorityRanks, rankLabelOf, sortByPriority, sortQueueByPriority, walkPick } from "../priorityOrder";
 
 // The inbox's Priorities view: the status sections stay, each sorted by the
 // viewer's priority a session serves (rank, then milestone order), every other
@@ -95,6 +95,14 @@ describe("a stored Priorities view in a workspace with the feature off", () => {
     expect(resolveInboxViewMode({ ...off, clientState: { ui: { inbox_view_mode: "priorities" } } })).toBe("grouped");
     expect(computeVisualOrder(off).map(tag)).toEqual(computeVisualOrder(state("grouped")).map(tag));
     expect(computeVisualOrder(off).map(tag)).not.toEqual(computeVisualOrder(on).map(tag));
+  });
+});
+
+describe("sortQueueByPriority", () => {
+  it("keeps each session's asks together and in order, the sessions by rank, the unranked after in queue order", () => {
+    const place: Record<string, { rank: number; step: number } | null> = { a: null, b: { rank: 2, step: 0 }, c: { rank: 1, step: 0 }, d: null };
+    const queue = [{ conversationId: "a", k: 1 }, { conversationId: "b", k: 2 }, { conversationId: "c", k: 3 }, { conversationId: "b", k: 4 }, { conversationId: "d", k: 5 }];
+    expect(sortQueueByPriority(queue, (id) => place[id]).map((i) => i.k)).toEqual([3, 2, 4, 1, 5]);
   });
 });
 

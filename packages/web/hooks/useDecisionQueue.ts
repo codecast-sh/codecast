@@ -1,5 +1,6 @@
 import { createContext, useMemo } from "react";
-import { useTrackedStore, sessionsWakeSig, filterInboxScope } from "../store/inboxStore";
+import { useTrackedStore, sessionsWakeSig, filterInboxScope, resolveInboxViewMode } from "../store/inboxStore";
+import { priorityPlaceReader, priorityRanksSig, sessionPriorityLinkSig, sortQueueByPriority } from "../store/priorityOrder";
 import { agentStatusAt } from "../lib/liveness";
 import { makeCollectionSig } from "../store/wakeSig";
 import {
@@ -154,12 +155,23 @@ export function useDecisionQueue(): QueueItem[] {
     (st: any) => sessionsWakeSig(st.sessions),
     (st: any) => st.questionResolutions,
     (st: any) => st.currentUser?._id,
+    (st: any) => prioritiesSig(st),
   ]);
+  const byRank = prioritiesSig(s);
 
-  return useMemo(
-    () => buildDecisionQueue(s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id),
-    [s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id],
-  );
+  return useMemo(() => {
+    const queue = buildDecisionQueue(s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id);
+    if (!byRank) return queue;
+    // The inbox's Priorities view: the panel numbers and the stepper walks one order, by rank.
+    const placeOf = priorityPlaceReader(s.priorities, s.currentUser?._id, s.sessions);
+    return sortQueueByPriority(queue, (id) => placeOf(s.sessions[id] ?? {}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- byRank is the signature of the priorities and links the sort reads
+  }, [s.sessionDecisions, s.sessions, s.questionResolutions, s.currentUser?._id, byRank]);
+}
+
+/** While the inbox's Priorities view is up, a signature of what orders the queue by rank (each session's link, each priority's place); "" otherwise. */
+function prioritiesSig(st: any): string {
+  return resolveInboxViewMode(st) === "priorities" ? `${sessionPriorityLinkSig(st.sessions)}|${priorityRanksSig(st.priorities)}|${st.currentUser?._id ?? ""}` : "";
 }
 
 /** Options minus Claude Code's synthetic affordance rows, keeping true indices. */

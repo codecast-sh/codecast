@@ -102,6 +102,23 @@ export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => Priori
 }
 
 /**
+ * The decision queue in the inbox's Priorities view: each session's asks stay
+ * together and in their order, the sessions sorted by the rank of the
+ * viewer's priority they serve as the inbox sorts them (sortByPriority), the
+ * rest after in queue order. The one order the panel numbers and the stepper
+ * walks (hooks/useDecisionQueue).
+ */
+export function sortQueueByPriority<T extends { conversationId: string }>(items: readonly T[], placeOf: (conversationId: string) => PriorityStanding): T[] {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const g = groups.get(item.conversationId);
+    if (g) g.push(item);
+    else groups.set(item.conversationId, [item]);
+  }
+  return sortByPriority([...groups], ([id]) => placeOf(id)).flatMap(([, asks]) => asks);
+}
+
+/**
  * Ctrl+I's pick from one walk (walkOrder). Every view takes its first row. The
  * Priorities view walks on: the first row after the open session, wrapping,
  * and never the open session itself (so a walk holding only it falls through
