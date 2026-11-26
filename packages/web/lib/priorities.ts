@@ -3,10 +3,12 @@
 // after, the paints the store's priority actions make and the restore when
 // the server refuses one, and the pass's timing. What the list page derives
 // from them lives in lib/priorityList.
-import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityList, PriorityMilestoneLinks, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorityDetailRow } from "./priorityDetail";
 import { effectivePriorityOrder, lastPriorityKey, placePriority, priorityPositions, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { composeLinkHref } from "./composeLink";
+import { lookup } from "./liveEntities";
 import { serverErrorText } from "./errorCause";
 
 export type { PriorityRow };
@@ -105,14 +107,152 @@ export function paintTier(row: PriorityRow, stepKey: string, tier: PriorityStepT
   row.counts = criticalCounts(row.steps);
 }
 
-/** Set aside leaves the ranking; restore brings it back active as the pass's, after its owner's ranked ones (lastPriorityKey, as the server does). */
+/**
+ * Set aside leaves the ranking; restore brings it back active as the pass's,
+ * after its owner's ranked ones (lastPriorityKey, as the server does).
+ * Reopening a priority the pass marked done becomes the person's call.
+ */
 export function paintStatus(rows: PriorityRow[], shortId: string, status: "active" | "set_aside"): void {
   const row = rows.find((r) => r.short_id === shortId);
   if (!row) return;
   row.person_pos = null;
   row.ai_rank = status === "active" ? lastPriorityKey(rows.filter((r) => sameOwner(r, row))) : null;
+  if (status === "active") {
+    row.status_set_by = row.status === "done" && row.status_set_by !== "person" ? "person" : "pass";
+    row.done_at = null;
+  }
   row.status = status;
-  if (status === "active") row.done_at = null;
+}
+
+/** The rows a write paints: the list's, and the detail rows (lib/priorityDetail) a page or a reference opened. */
+export type PaintState = { priorities: Record<string, PriorityRow>; priorityDetails?: Record<string, PriorityDetailRow> };
+
+const detailOf = (s: PaintState, shortId: string) => Object.values(s.priorityDetails ?? {}).find((d) => d.short_id === shortId);
+
+/** The priority a write paints: the list's row, else the detail's own copy of one the list does not hold. */
+export function paintedRow(s: PaintState, shortId: string): PriorityRow | undefined {
+  return (lookup(s.priorities, shortId) as PriorityRow | undefined) ?? detailOf(s, shortId)?.base;
+}
+
+/** Its milestones' links where its surfaces read them: the row's, else the detail's (a teammate's or a past priority). */
+function linksOf(s: PaintState, row: PriorityRow): PriorityMilestoneLinks[] {
+  return row.links ?? detailOf(s, row.short_id)?.links ?? [];
+}
+
+/** A move on a priority the list does not hold (the phone opens one page): its own rank steps, as the server's echo will say. */
+export function paintDetachedMove(row: PriorityRow, to: PriorityMove): void {
+  if (row.status !== "active" || row.rank == null) return;
+  row.rank = Math.max(1, to === "up" ? row.rank - 1 : to === "down" ? row.rank + 1 : to);
+  row.rank_source = "person";
+}
+
+/** The person's done or not done on a milestone, which the pass then keeps. */
+export function paintStepDone(row: PriorityRow, stepKey: string, done: boolean, now: number): void {
+  const step = row.steps.find((s) => s.key === stepKey);
+  if (!step) return;
+  step.done = done;
+  step.done_set_by = "person";
+  if (done) step.done_at = step.done_at ?? now;
+  else delete step.done_at;
+  row.counts = criticalCounts(row.steps);
+}
+
+export function paintRename(row: PriorityRow, stepKey: string, title: string): void {
+  const step = row.steps.find((s) => s.key === stepKey);
+  const next = title.trim();
+  if (!step || !next) return;
+  step.title = next;
+  step.title_set_by = "person";
+}
+
+/** A dropped milestone leaves every read (the server keeps it as a tombstone only the pass sees). */
+export function paintDrop(s: PaintState, row: PriorityRow, stepKey: string): void {
+  row.steps = row.steps.filter((st) => st.key !== stepKey);
+  if (row.links) row.links = row.links.filter((l) => l.key !== stepKey);
+  const detail = detailOf(s, row.short_id);
+  if (detail?.links) detail.links = detail.links.filter((l) => l.key !== stepKey);
+  row.counts = criticalCounts(row.steps);
+}
+
+/** The person marks a priority done: it leaves the ranking and the pass keeps it done. */
+export function paintPriorityDone(row: PriorityRow, now: number): void {
+  row.done_at = row.status === "done" ? row.done_at ?? now : now;
+  row.status = "done";
+  row.status_set_by = "person";
+  row.person_pos = null;
+  row.ai_rank = null;
+}
+
+const keyNumber = (key: string) => Number(/^s(\d+)$/.exec(key)?.[1] ?? 0);
+
+/** One priority merged into another of the owner's: its milestones join under new keys, its sessions follow, and it is merged. */
+export function paintMerge(s: PaintState, from: PriorityRow, into: PriorityRow): void {
+  let next = Math.max(0, ...into.steps.map((st) => keyNumber(st.key)));
+  const remap = new Map(from.steps.map((st) => [st.key, `s${++next}`]));
+  into.steps = [...into.steps, ...from.steps.map((st) => ({ ...st, key: remap.get(st.key)! }))];
+  into.counts = criticalCounts(into.steps);
+  if (into.links) into.links = [...into.links, ...linksOf(s, from).map((l) => ({ ...l, key: remap.get(l.key) ?? l.key }))];
+  into.sessions = [...from.sessions.map((x) => ({ ...x, step_key: x.step_key ? remap.get(x.step_key) ?? null : null })), ...into.sessions];
+  into.session_count += from.session_count;
+  from.status = "merged";
+  from.status_set_by = "person";
+  from.person_pos = null;
+  from.ai_rank = null;
+}
+
+/** Takes a session off every milestone of a priority (and, unless it stays on the priority, off the priority). */
+function takeSession(s: PaintState, row: PriorityRow, session: string, stays: boolean) {
+  let linked: PriorityMilestoneLinks["sessions"][number] | undefined;
+  for (const l of linksOf(s, row)) {
+    linked ??= l.sessions.find((x) => x.short_id === session);
+    l.sessions = l.sessions.filter((x) => x.short_id !== session);
+  }
+  const held = row.sessions.find((x) => x.short_id === session);
+  if (!stays) {
+    row.sessions = row.sessions.filter((x) => x.short_id !== session);
+    if (held) row.session_count = Math.max(0, row.session_count - 1);
+  }
+  return { linked, held };
+}
+
+/** The person puts one of their sessions on a priority, on a milestone of it or none: the pass never moves it. */
+export function paintSessionMove(s: PaintState, session: string, from: PriorityRow, to: PriorityRow, stepKey: string | null, now: number): void {
+  const { linked, held } = takeSession(s, from, session, from === to);
+  const entry = { short_id: session, title: held?.title ?? linked?.title ?? "", step_key: stepKey, updated_at: held?.updated_at ?? now, set_by_person: true };
+  const kept = to.sessions.find((x) => x.short_id === session);
+  if (kept) Object.assign(kept, entry);
+  else {
+    to.sessions = [entry, ...to.sessions];
+    to.session_count += 1;
+  }
+  const target = stepKey ? linksOf(s, to).find((l) => l.key === stepKey) : undefined;
+  if (target && linked) target.sessions = [{ ...linked, why: ["mapped"] }, ...target.sessions];
+}
+
+/** "Not this priority": the session leaves it, and the pass never maps it there again. */
+export function paintSessionNotThis(s: PaintState, session: string, from: PriorityRow): void {
+  takeSession(s, from, session, false);
+}
+
+/** A correction the person wrote: the row reads "correction pending" until a pass reads it, and the page lists it. */
+export function paintCorrection(s: PaintState, row: PriorityRow, correction: PriorityCorrection): void {
+  row.correction_pending = true;
+  const link = correction.step_key ? linksOf(s, row).find((l) => l.key === correction.step_key) : undefined;
+  if (link) link.correction_pending = true;
+  const detail = detailOf(s, row.short_id);
+  if (detail) detail.corrections = [correction, ...detail.corrections];
+}
+
+/** A deleted correction leaves the page, and "correction pending" goes with the last one still waiting. */
+export function paintCorrectionDelete(s: PaintState, correctionId: string): void {
+  const detail = Object.values(s.priorityDetails ?? {}).find((d) => d.corrections.some((c) => c._id === correctionId));
+  if (!detail) return;
+  detail.corrections = detail.corrections.filter((c) => c._id !== correctionId);
+  const row = paintedRow(s, detail.short_id);
+  if (!row) return;
+  const waiting = detail.corrections.filter((c) => c.status === "pending");
+  row.correction_pending = waiting.length > 0;
+  for (const l of linksOf(s, row)) l.correction_pending = waiting.some((c) => c.step_key === l.key);
 }
 
 export function criticalCounts(steps: readonly PriorityStep[]): { critical_done: number; critical_total: number } {
@@ -186,9 +326,9 @@ export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_ac
 export function prioritySig(r: PriorityRow): string {
   const steps = r.steps.map((s) => `${s.key}:${s.tier}:${s.done ? 1 : 0}:${s.refs.length}:${s.title}`).join(",");
   const sessions = r.sessions.map((s) => `${s.short_id}:${s.step_key ?? ""}:${s.title}`).join(",");
-  const links = (r.links ?? []).map((l) => `${l.key}:${l.sessions_more}:${l.plan?.short_id ?? ""}:${l.plan?.done ?? ""}:${l.part_of.length}:${l.sessions.map((x) => `${x.short_id}.${x.state}.${x.title}.${x.last_active_at}`).join(";")}`).join(",");
+  const links = (r.links ?? []).map((l) => `${l.key}:${l.correction_pending ? 1 : 0}:${l.sessions_more}:${l.plan?.short_id ?? ""}:${l.plan?.done ?? ""}:${l.part_of.length}:${l.sessions.map((x) => `${x.short_id}.${x.state}.${x.title}.${x.last_active_at}`).join(";")}`).join(",");
   const plan = r.plan ? `${r.plan.short_id}:${r.plan.done}/${r.plan.total}` : "";
-  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, steps, sessions, links, plan].join("|");
+  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.correction_pending, steps, sessions, links, plan].join("|");
 }
 
 /** The person's controls, as the page hands them to its rows. */
@@ -197,6 +337,16 @@ export type PriorityWrites = {
   setStepTier: (shortId: string, stepKey: string, tier: PriorityStepTier) => void;
   setAside: (shortId: string) => void;
   restore: (shortId: string) => void;
+  setStepDone: (shortId: string, stepKey: string, done: boolean) => void;
+  renameStep: (shortId: string, stepKey: string, title: string) => void;
+  dropStep: (shortId: string, stepKey: string) => void;
+  markDone: (shortId: string) => void;
+  merge: (shortId: string, into: string) => void;
+  /** A session (its short id) from the priority it shows on to a priority and a milestone of it, or none. */
+  moveSession: (session: string, from: string, to: string, stepKey: string | null) => void;
+  sessionNotThis: (session: string, from: string) => void;
+  correct: (shortId: string, text: string, stepKey: string | null) => void;
+  deleteCorrection: (correctionId: string) => void;
 };
 
 /**
@@ -205,10 +355,10 @@ export type PriorityWrites = {
  * other failure is a write still on its way (the outbox retries it), so its
  * paint stays.
  */
-export async function writeOrRestore(
+export async function writeOrRestore<T>(
   write: () => Promise<unknown>,
-  before: PriorityRow[],
-  restore: (rows: PriorityRow[]) => void,
+  before: T,
+  restore: (rows: T) => void,
   onError: (message: string) => void,
   refused: (error: unknown) => boolean,
 ): Promise<void> {

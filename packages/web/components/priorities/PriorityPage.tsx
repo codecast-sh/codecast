@@ -7,10 +7,13 @@
 // to its sessions and links, as on the list), everything linked, and the
 // owner's corrections to the pass when there are any. The row is the store's
 // (priorityDetails, fed from priorities.show); typing per day is an
-// enrichment read beside it, as on the list.
+// enrichment read beside it, as on the list. The owner's controls are the
+// list's (components/priorities/controls): Correct… and ⋯ beside Share, each
+// milestone's box as its Done toggle and its own ⋯, each session's ⋯ in an
+// open milestone, and a delete on each correction.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, ChevronRight, PencilLine, Target } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ChevronRight, PencilLine, Target, X } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { PriorityHistory, PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import type { PriorityView } from "../../lib/priorityDetail";
@@ -29,6 +32,8 @@ import { LIST_DAYS, SHOW_KINDS, lastDays, localDayKey, waitingOf, type ListFilte
 import { cn } from "../../lib/utils";
 import { ActionButton, AnswerSecondary, BranchChip, DeployChip, MilestoneBox, PlanChip, PrChip, SessionChip } from "./parts";
 import { MilestoneDetail, PendingMark, SessionRow, TypeRow, WorkflowRuns } from "./PriorityBlock";
+import { CorrectPopover, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu } from "./controls";
+import { usePriorityWrites } from "../../hooks/usePriorities";
 import { CriticalMeter } from "./PriorityRef";
 import { WaitingRow } from "./Waiting";
 
@@ -78,6 +83,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
   const critical = model.milestones.filter((m) => m.tier === "critical");
   const polish = model.milestones.filter((m) => m.tier === "polish");
   const corrections = row.corrections;
+  const writes = usePriorityWrites();
   const why = rankProvenance(row);
   const active = row.status === "active";
 
@@ -102,13 +108,9 @@ function PriorityBody({ row }: { row: PriorityView }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {/* Writing a correction arrives with the override controls (ct-101630). */}
-          {row.mine && (
-            <button type="button" disabled title="Corrections from here are coming soon" className="inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-meta text-sol-text-dim">
-              <PencilLine className="size-3.5" aria-hidden /> <span className="max-sm:hidden">Correct…</span>
-            </button>
-          )}
+          {row.mine && <CorrectButton row={row} />}
           <ShareControl label="priority" path={priorityHref(row.short_id)} />
+          <PriorityMenu row={row} />
         </div>
       </header>
 
@@ -120,7 +122,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
             <>
               <div className="text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Next</div>
               <div className="mt-1 flex min-w-0 items-center gap-2">
-                <MilestoneBox done={false} />
+                <MilestoneToggle row={row} step={action.milestone.step} />
                 <span className="min-w-0 truncate text-body font-medium text-sol-text">{action.milestone.step.title}</span>
               </div>
               <div className="mt-2 flex min-w-0 pl-[22px]"><ActionButton row={row} action={action} /></div>
@@ -166,10 +168,23 @@ function PriorityBody({ row }: { row: PriorityView }) {
             {corrections.map((c) => {
               const about = c.step_key ? row.steps.find((s) => s.key === c.step_key)?.title : null;
               return (
-                <li key={c._id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-ui">
+                <li key={c._id} data-correction={c._id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 text-ui">
                   <span className="w-14 shrink-0 text-meta tabular-nums text-sol-text-dim">{shortDate(c.created_at)}</span>
                   <span className="min-w-0 flex-1">{about && <span className="text-sol-text-muted">{about}: </span>}<span className="text-sol-text">{c.text}</span></span>
                   <span className="shrink-0 text-meta text-sol-text-dim">{c.status === "applied" ? "kept by the pass" : "waits for the next pass"}</span>
+                  {/* A correction still on its way has no id the server knows. */}
+                  {row.mine && !c._id.startsWith("local-") && (
+                    <button
+                      type="button"
+                      data-delete-correction={c._id}
+                      aria-label="Delete this correction"
+                      title="Delete: later passes stop reading it"
+                      onClick={() => writes.deleteCorrection(c._id)}
+                      className="-my-1 flex size-8 shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text max-sm:size-11"
+                    >
+                      <X className="size-3.5" aria-hidden />
+                    </button>
+                  )}
                 </li>
               );
             })}
@@ -181,6 +196,19 @@ function PriorityBody({ row }: { row: PriorityView }) {
 }
 
 const Dot = () => <span aria-hidden>·</span>;
+
+/** "Correct…" beside Share: what the pass got wrong about the whole priority. */
+function CorrectButton({ row }: { row: PriorityView }) {
+  const writes = usePriorityWrites();
+  const [open, setOpen] = useState(false);
+  return (
+    <CorrectPopover open={open} onOpenChange={setOpen} subject={row.title} onSave={(text) => writes.correct(row.short_id, text, null)}>
+      <button type="button" data-correct-priority onClick={() => setOpen(true)} className="inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-meta text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text max-sm:h-11">
+        <PencilLine className="size-3.5" aria-hidden /> <span className="max-sm:hidden">Correct…</span>
+      </button>
+    </CorrectPopover>
+  );
+}
 
 /** Ten days across the page: messages per day, the days a critical milestone landed marked, a date under each. */
 function TenDays({ model, days, todayIndex }: { model: PriorityModel; days: string[]; todayIndex: number }) {
@@ -247,36 +275,45 @@ function Milestones({ model, list, now, lookups }: { model: PriorityModel; list:
   const [openKey, setOpenKey] = useState<string | null>(null);
   return (
     <ul className="divide-y divide-sol-border/40 rounded-lg border border-sol-border/60">
-      {list.map((m) => {
-        const open = openKey === m.key;
-        const toggle = () => setOpenKey(open ? null : m.key);
-        return (
-          <li key={m.key} data-milestone={m.key}>
-            <div
-              role="button"
-              tabIndex={0}
-              aria-expanded={open}
-              onClick={toggle}
-              onKeyDown={(e) => { if (e.key === "Enter") toggle(); }}
-              className={cn("flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1.5 hover:bg-sol-bg-alt/50", open && "bg-sol-bg-alt/50")}
-            >
-              <span className="flex min-w-[12rem] flex-1 items-center gap-2.5">
-                <MilestoneBox done={m.done} />
-                <span className={cn("min-w-0 text-ui", m.done ? "text-sol-text-muted" : "text-sol-text")}>{m.step.title}</span>
-                {m.looksDone && <span data-looks-done className="inline-flex shrink-0 items-center rounded-full border border-sol-border px-1.5 text-mark leading-[18px] text-sol-text-muted">Looks done?</span>}
-                {m.correctionPending && <PendingMark />}
-              </span>
-              {m.done ? (
-                <span className="ml-auto shrink-0 text-meta tabular-nums text-sol-text-dim">{m.step.done_at ? `Landed ${shortDate(m.step.done_at)}` : "Done"}</span>
-              ) : (
-                <span data-line-chips className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5"><MilestoneChips model={model} m={m} /></span>
-              )}
-            </div>
-            {open && <div className="px-3 pb-2"><MilestoneDetail model={model} m={m} filters={ALL_SHOWN} now={now} lookups={lookups} /></div>}
-          </li>
-        );
-      })}
+      {list.map((m) => (
+        <MilestoneRow key={m.key} model={model} m={m} open={openKey === m.key} onToggle={() => setOpenKey((k) => (k === m.key ? null : m.key))} now={now} lookups={lookups} />
+      ))}
     </ul>
+  );
+}
+
+function MilestoneRow({ model, m, open, onToggle, now, lookups }: { model: PriorityModel; m: MilestoneModel; open: boolean; onToggle: () => void; now: number; lookups: LinkLookups }) {
+  const { row } = model;
+  const writes = usePriorityWrites();
+  const [renaming, setRenaming] = useState(false);
+  return (
+    <li data-milestone={m.key}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter") onToggle(); }}
+        className={cn("group/line flex min-h-11 cursor-pointer flex-wrap items-center gap-x-2.5 gap-y-1 px-3 py-1.5 hover:bg-sol-bg-alt/50", open && "bg-sol-bg-alt/50")}
+      >
+        <span className="flex min-w-[12rem] flex-1 items-center gap-2.5">
+          {/* The owner's box takes the row's left edge as its press area, 44px tall. */}
+          {row.mine ? <MilestoneToggle row={row} step={m.step} className="-my-1.5 -ml-3 h-11 pl-3 pr-1" /> : <MilestoneBox done={m.done} />}
+          {renaming
+            ? <MilestoneTitleInput title={m.step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, m.key, next); }} />
+            : <span className={cn("min-w-0 text-ui", m.done ? "text-sol-text-muted" : "text-sol-text")}>{m.step.title}</span>}
+          {m.looksDone && <span data-looks-done className="inline-flex shrink-0 items-center rounded-full border border-sol-border px-1.5 text-mark leading-[18px] text-sol-text-muted">Looks done?</span>}
+          {m.correctionPending && <PendingMark />}
+        </span>
+        {m.done ? (
+          <span className="ml-auto shrink-0 text-meta tabular-nums text-sol-text-dim">{m.step.done_at ? `Landed ${shortDate(m.step.done_at)}` : "Done"}</span>
+        ) : (
+          <span data-line-chips className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5"><MilestoneChips model={model} m={m} /></span>
+        )}
+        {row.mine && <MilestoneMenu row={row} step={m.step} sessions={m.sessions.length + m.more} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" />}
+      </div>
+      {open && <div className="px-3 pb-2"><MilestoneDetail model={model} m={m} filters={ALL_SHOWN} now={now} lookups={lookups} /></div>}
+    </li>
   );
 }
 

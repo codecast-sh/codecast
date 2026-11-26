@@ -19,6 +19,7 @@ import { publicUrl } from "@codecast/shared/entities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
 import { cn } from "../../lib/utils";
 import { ActionButton, MilestoneBox } from "./parts";
+import { MilestoneToggle } from "./controls";
 
 /** The critical path as pips and n/m. `size="inline"` scales with the prose it sits in. */
 export function CriticalMeter({ done, total, size = "card" }: { done: number; total: number; size?: "inline" | "card" }) {
@@ -60,7 +61,8 @@ export function PriorityCard({ row, onOpen, tall }: { row: PriorityRow; onOpen?:
         <div data-priority-next className="mt-2.5 rounded-control border border-sol-border/60 bg-sol-bg-alt/40 px-2.5 py-2">
           <div className="text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Next</div>
           <div className="mt-1 flex min-w-0 items-center gap-2">
-            <MilestoneBox done={false} />
+            {/* The owner marks it done from here; the next one takes its place. */}
+            {row.mine ? <MilestoneToggle row={row} step={action.milestone.step} className={tall ? "-my-3 -ml-2.5 h-11 pl-2.5 pr-1" : undefined} /> : <MilestoneBox done={false} />}
             <span className="min-w-0 flex-1 truncate text-ui font-medium text-sol-text" title={action.milestone.step.title}>{action.milestone.step.title}</span>
           </div>
           <div className="mt-2 flex min-w-0 pl-[22px]"><ActionButton row={row} action={action} tall={tall} /></div>

@@ -17,7 +17,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
-import { usePriorities, usePriorityListMeta, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
+import { usePriorities, usePriorityListMeta, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { Button } from "../ui/button";
@@ -26,14 +26,14 @@ import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { behindLabel, nextPassLabel, ownerGroups, passDue, type PriorityRow } from "../../lib/priorities";
+import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
 import {
   LIST_DAYS, LIST_GRID, SHOW_KINDS, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, localDayKey, readFilters, todayOf, waitingOf,
   type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
 } from "../../lib/priorityList";
 import { useInboxStore, type ClientUI } from "../../store/inboxStore";
 import { cn } from "../../lib/utils";
-import { PriorityBlock } from "./PriorityBlock";
+import { PriorityBlock, type RankDrag } from "./PriorityBlock";
 import { linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
 import { StatsLine } from "./StatsLine";
 import { WaitingOnYou } from "./Waiting";
@@ -193,11 +193,33 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
 
   const lookups = usePriorityLookups();
+  const writes = usePriorityWrites();
+  // A drag of the viewer's rank on a desktop list: which row, and where it would land.
+  const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
 
   const groups = ownerGroups(visible);
   const byId = new Map(models.map((m) => [m.row.short_id, m]));
-  const block = (m: PriorityModel | undefined) => m && (
-    <PriorityBlock key={m.row.short_id} model={m} layout={layout} compact={compact} filters={filters} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} />
+  const dragOf = (g: OwnerGroup, r: PriorityRow): RankDrag | undefined => {
+    if (layout !== "wide" || !g.mine || r.status !== "active") return undefined;
+    const ids = g.active.map((x) => x.short_id);
+    const ours = !!drag && ids.includes(drag.id);
+    return {
+      dragging: drag?.id === r.short_id,
+      accepts: ours && drag!.id !== r.short_id,
+      over: ours && drag!.id !== r.short_id && drag!.over === r.short_id ? (drag!.after ? "after" : "before") : null,
+      start: () => setDrag({ id: r.short_id, over: null, after: false }),
+      end: () => setDrag(null),
+      hover: (after) => setDrag((d) => (d && (d.over !== r.short_id || d.after !== after) ? { ...d, over: r.short_id, after } : d)),
+      drop: (after) => {
+        if (!drag) return;
+        const rest = ids.filter((x) => x !== drag.id);
+        writes.move(drag.id, rest.indexOf(r.short_id) + (after ? 1 : 0) + 1);
+        setDrag(null);
+      },
+    };
+  };
+  const block = (m: PriorityModel | undefined, g: OwnerGroup) => m && (
+    <PriorityBlock key={m.row.short_id} model={m} layout={layout} compact={compact} filters={filters} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} drag={dragOf(g, m.row)} />
   );
   return (
     <div data-priorities data-layout={layout} data-compact={compact || undefined} className="[container-type:inline-size]">
@@ -214,7 +236,7 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
       {groups.map((g) => (
         <section key={g.user_id} data-owner={g.user_id} className={cn(!filters.mine && "mb-6")}>
           {!filters.mine && <h2 className="mb-1 border-b border-sol-border/60 pb-1.5 pt-2 text-ui font-semibold text-sol-text">{g.mine ? "You" : g.owner || "Teammate"}</h2>}
-          <ol>{[...g.active, ...g.past].map((r) => block(byId.get(r.short_id)))}</ol>
+          <ol>{[...g.active, ...g.past].map((r) => block(byId.get(r.short_id), g))}</ol>
         </section>
       ))}
     </div>

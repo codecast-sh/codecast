@@ -6,11 +6,15 @@
 // Store-fed: priorities.show feeds priorityDetails (web hooks/usePriorityDetail);
 // the workspace list's row paints until the detail lands. Every model comes
 // from web's lib/priorityList, so the next action and ordering match web.
-import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+// The owner's controls are web's writes (lib/priorityWrites, the same store
+// actions and overrides): a milestone's box toggles Done, Move up and down
+// step the rank, and Correct… writes a correction. Rename, drop, merge, set
+// aside and a session's move are web-only for now.
+import { useMemo, useRef, useState, type ComponentProps } from 'react';
+import { Alert, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
-import { Text as RNText } from '@/components/Themed';
+import { Text as RNText, TextInput } from '@/components/Themed';
 import { CHROME_FONT_CAP, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
@@ -22,11 +26,15 @@ import type { PriorityHistory, PriorityPlanRef } from '@codecast/shared/contract
 import { ObjectHeader, ObjectMissing, SectionLabel, objectStyles } from '@/components/objects/ObjectParts';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
 import { rankProvenance } from '@codecast/web/lib/priorities';
+import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import type { PriorityView } from '@codecast/web/lib/priorityDetail';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openCompose } from '@/lib/compose';
 
 const api = _api as any;
+
+/** The owner's writes; a refusal puts the paint back and says the server's reason. */
+const writes = priorityWrites((message) => Alert.alert("Couldn't save that", message));
 
 type Row = PriorityView;
 
@@ -142,6 +150,8 @@ function PriorityBody({ row }: { row: Row }) {
           <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaText}>Started {shortDate(row.first_seen_at)}</RNText>
           <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaDim}>{row.short_id}</RNText>
         </RNView>
+
+        {row.mine && <OwnerControls row={row} />}
 
         <DayStrip model={model} />
 
@@ -271,6 +281,59 @@ function DayStrip({ model }: { model: PriorityModel }) {
   );
 }
 
+/** The owner's row of controls: a step up or down in their order, and Correct…, which opens a box for what the pass got wrong. */
+function OwnerControls({ row }: { row: Row }) {
+  const Theme = useTheme();
+  const [correcting, setCorrecting] = useState(false);
+  // Uncontrolled: what was typed is read on Save, so typing re-renders nothing.
+  const text = useRef('');
+  const ranked = row.status === 'active' && row.rank != null;
+  const save = () => {
+    const body = text.current.trim();
+    if (!body) return;
+    writes.correct(row.short_id, body, null);
+    text.current = '';
+    setCorrecting(false);
+  };
+  const chip = (label: string, icon: ComponentProps<typeof Feather>['name'], onPress: () => void, testID: string, disabled = false) => (
+    <TouchableOpacity onPress={onPress} disabled={disabled} style={[styles.control, disabled && styles.disabled]} accessibilityRole="button" accessibilityLabel={label} testID={testID}>
+      <Feather name={icon} size={14} color={Theme.textMuted} />
+      <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.controlText}>{label}</RNText>
+    </TouchableOpacity>
+  );
+  return (
+    <RNView style={styles.controlsWrap}>
+      <RNView style={styles.controls}>
+        {ranked && chip('Move up', 'arrow-up', () => writes.move(row.short_id, 'up'), 'priority-move-up', row.rank === 1)}
+        {ranked && chip('Move down', 'arrow-down', () => writes.move(row.short_id, 'down'), 'priority-move-down')}
+        {chip('Correct…', 'edit-3', () => setCorrecting((c) => !c), 'priority-correct')}
+      </RNView>
+      {correcting && (
+        <RNView style={styles.card} testID="priority-correct-box">
+          <TextInput
+            autoFocus
+            multiline
+            placeholder="What did it get wrong?"
+            placeholderTextColor={Theme.textDim}
+            onChangeText={(t) => { text.current = t; }}
+            style={styles.correctInput}
+            testID="priority-correct-text"
+          />
+          <RNText style={styles.lineMeta}>The next pass keeps this.</RNText>
+          <RNView style={styles.controls}>
+            <TouchableOpacity onPress={() => setCorrecting(false)} style={styles.control} accessibilityRole="button">
+              <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.controlText}>Cancel</RNText>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={save} style={[styles.control, { backgroundColor: Theme.text }]} accessibilityRole="button" testID="priority-correct-save">
+              <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.controlText, { color: Theme.bg, fontWeight: '600' }]}>Save</RNText>
+            </TouchableOpacity>
+          </RNView>
+        </RNView>
+      )}
+    </RNView>
+  );
+}
+
 const VERB = { answer: 'Answer', open: 'Open', resume: 'Resume', start: 'Start' } as const;
 
 /** The priority's one action. Answer wears its own look (a dark fill and a reply glyph) so it reads in grayscale. */
@@ -323,7 +386,22 @@ function Milestones({ label, list, model, onOpen, onSession, testID }: {
           const isAction = model.action?.milestone.key === m.key;
           return (
             <TouchableOpacity key={m.key} style={styles.line} onPress={() => onOpen(m)} activeOpacity={0.6} testID={`priority-step-${m.key}`}>
-              <Feather name={m.done ? 'check-square' : 'square'} size={16} color={m.done ? Theme.green : Theme.textDim} style={styles.lineIcon} />
+              {model.row.mine ? (
+                // The owner's box is its own 44px press: Done or not, never the line's open.
+                <TouchableOpacity
+                  onPress={() => writes.setStepDone(model.row.short_id, m.key, !m.done)}
+                  style={styles.toggle}
+                  hitSlop={{ top: 4, bottom: 4 }}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: m.done }}
+                  accessibilityLabel={m.done ? `Mark ${m.step.title} not done` : `Mark ${m.step.title} done`}
+                  testID={`priority-step-toggle-${m.key}`}
+                >
+                  <Feather name={m.done ? 'check-square' : 'square'} size={18} color={m.done ? Theme.green : Theme.textDim} />
+                </TouchableOpacity>
+              ) : (
+                <Feather name={m.done ? 'check-square' : 'square'} size={16} color={m.done ? Theme.green : Theme.textDim} style={styles.lineIcon} />
+              )}
               <RNView style={styles.lineBody}>
                 <RNText style={[styles.lineTitle, m.done && { color: Theme.textMuted }]} numberOfLines={3}>{m.step.title}</RNText>
                 {m.done ? (
@@ -377,6 +455,13 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   disclosureText: { fontSize: 12, fontWeight: '600', color: Theme.textMuted0, textTransform: 'uppercase', letterSpacing: 0.5 },
   line: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52, paddingHorizontal: Spacing.md, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.bgHighlight },
   lineIcon: { width: 18, textAlign: 'center' },
+  toggle: { width: 44, height: 44, marginLeft: -13, marginRight: -13, alignItems: 'center', justifyContent: 'center' },
+  controlsWrap: { gap: 10, marginBottom: Spacing.lg },
+  controls: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  control: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44, paddingHorizontal: 14, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, backgroundColor: Theme.bgAlt },
+  controlText: { fontSize: 13.5, color: Theme.text },
+  disabled: { opacity: 0.4 },
+  correctInput: { minHeight: 88, fontSize: 16, color: Theme.text, textAlignVertical: 'top', padding: 10, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, backgroundColor: Theme.bg },
   lineBody: { flex: 1, minWidth: 0, gap: 2 },
   lineTitle: { fontSize: 14.5, fontWeight: '500', color: Theme.text, lineHeight: 20 },
   lineMeta: { fontSize: 12, color: Theme.textMuted, fontVariant: ['tabular-nums'] },

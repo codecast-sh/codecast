@@ -1791,6 +1791,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     ctx.runMutation!((api as any).priorities.setStepTier, { short_id: shortId, step_key: stepKey, tier }),
   setPriorityAside: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.setAside, { short_id: shortId }),
   restorePriority: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.restore, { short_id: shortId }),
+  setPriorityStepDone: async (ctx, _userId, [shortId, stepKey, done]: [string, string, boolean]) =>
+    ctx.runMutation!((api as any).priorities.setStepDone, { short_id: shortId, step_key: stepKey, done }),
+  renamePriorityStep: async (ctx, _userId, [shortId, stepKey, title]: [string, string, string]) =>
+    ctx.runMutation!((api as any).priorities.renameStep, { short_id: shortId, step_key: stepKey, title }),
+  dropPriorityStep: async (ctx, _userId, [shortId, stepKey]: [string, string]) =>
+    ctx.runMutation!((api as any).priorities.dropStep, { short_id: shortId, step_key: stepKey }),
+  markPriorityDone: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.markDone, { short_id: shortId }),
+  mergePriority: async (ctx, _userId, [shortId, into]: [string, string]) => ctx.runMutation!((api as any).priorities.merge, { short_id: shortId, into }),
+  // The second argument is the priority the web painted the session off; the mutation reads the session's own.
+  movePrioritySession: async (ctx, _userId, [session, _from, shortId, stepKey]: [string, string, string, string | null]) =>
+    ctx.runMutation!((api as any).priorities.moveSession, { session, short_id: shortId, ...(stepKey ? { step_key: stepKey } : {}) }),
+  prioritySessionNotThis: async (ctx, _userId, [session]: [string, string]) => ctx.runMutation!((api as any).priorities.sessionNotThis, { session }),
+  correctPriority: async (ctx, _userId, [shortId, text, stepKey]: [string, string, string | null]) =>
+    ctx.runMutation!((api as any).priorities.correct, { short_id: shortId, text, ...(stepKey ? { step_key: stepKey } : {}) }),
+  deletePriorityCorrection: async (ctx, _userId, [correctionId]: [string]) => ctx.runMutation!((api as any).priorities.deleteCorrection, { correction_id: correctionId }),
   runPriorities: async (ctx, _userId, [workspace]: [string]) => ctx.runMutation!((api as any).priorities.run, { workspace }),
 
   // A member's level for a whole team (settings, the share-in-full nudge).

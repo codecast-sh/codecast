@@ -54,6 +54,7 @@ const ALLOWED = new Map<string, string>([
   ["store/lineSlice.ts", "the slice that owns lineLabels, finding the viewer's own label by its natural key for a write the server re-authorizes; renders nothing"],
   ["store/orgLens.ts", "project id to goal LOOKUP, read only for the projects of sessions already on screen; renders no goal row"],
   ["store/prioritiesSlice.ts", "the slice that owns priorities, finding the one row a write names by short_id and renumbering its owner's active rows in that row's own workspace; renders nothing"],
+  ["lib/priorityWrites.ts", "copies every loaded priority row before a press so a refused write puts them back exactly; renders nothing"],
   ["store/priorityOrder.ts", "ranks every loaded priority within its own owner and workspace (priorityPositions groups by both) for the inbox's Priorities order; a session reads only the row its priority_id names; renders no row"],
   ["store/trialSlice.ts", "the slice that owns trialCards, marking the cards of the one problem a write names; renders nothing"],
   ["components/consequential/lineStart.tsx", "the problems of one project (they share its workspace), with a short_id LOOKUP of their goals' priority"],

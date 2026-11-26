@@ -5,7 +5,8 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { serverErrorText } from "../lib/errorCause";
-import { listMeta, listRows, prioritySig, withLiveRanks, writeOrRestore, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
+import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
+import { priorityWrites } from "../lib/priorityWrites";
 import { useInboxStore } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { useSyncCollection } from "./useSyncCollection";
@@ -37,31 +38,11 @@ export function usePriorities(): PriorityRow[] {
   return useMemo(() => withLiveRanks(rows), [rows]);
 }
 
-/**
- * The store's priority actions, each put back when the server refuses it: the
- * rows as they were before the press go back through syncTable, as the server
- * still has them, and the reason shows.
- */
-export function usePriorityWrites(rows: PriorityRow[]): PriorityWrites {
-  return useMemo(() => {
-    const run = (write: () => Promise<unknown>) => {
-      const before = structuredClone(rows);
-      void writeOrRestore(
-        write,
-        before,
-        (prior) => useInboxStore.getState().syncTable("priorities", prior as any, { isDelta: true }),
-        (message) => toast.error(message),
-        isRefusedDispatchError,
-      );
-    };
-    const st = () => useInboxStore.getState();
-    return {
-      move: (id, to) => run(() => st().movePriority(id, to)),
-      setStepTier: (id, key, tier) => run(() => st().setPriorityStepTier(id, key, tier)),
-      setAside: (id) => run(() => st().setPriorityAside(id)),
-      restore: (id) => run(() => st().restorePriority(id)),
-    };
-  }, [rows]);
+const WRITES = priorityWrites((message) => toast.error(message));
+
+/** The store's priority actions (lib/priorityWrites), each put back when the server refuses it, the reason shown as a toast. */
+export function usePriorityWrites(): PriorityWrites {
+  return WRITES;
 }
 
 /** A pass reads as running from the press until its rows land, for at most this long. */

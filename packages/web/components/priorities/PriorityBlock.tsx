@@ -7,18 +7,41 @@
 // the open critical milestones heads a bracket down the action column over
 // the lines it covers. A line opens into its sessions (people's first,
 // workflow runs folded) and the links the Show filter asks for. In the
-// compact view a priority is its header alone, its action inside it.
-import { useState, type ReactNode } from "react";
-import { toast } from "sonner";
-import { ChevronRight, MoreHorizontal } from "lucide-react";
+// compact view a priority is its header alone, its action inside it. The
+// owner's controls (components/priorities/controls): the row's ⋯, each
+// milestone's ⋯ and its box as a Done toggle across the line's left gutter,
+// each session's ⋯ in an open milestone, and on a desktop list the rank as a
+// drag handle (arrow keys step it).
+import { useState, type DragEvent, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { asksPerson, bestSession, isClosedSession } from "@codecast/shared/contracts/priorityDerive";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { pastBadge, priorityHref } from "../../lib/priorities";
+import { pastBadge, rankProvenance, type PriorityRow } from "../../lib/priorities";
 import { LIST_GRID, STATE_WORD, ago, runKinds, type ListFilters, type ListLayout, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
+import { usePriorityWrites } from "../../hooks/usePriorities";
 import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, MilestoneBox, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
+import { MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
+
+/** A desktop drag of the owner's rank (PrioritiesView): this row's part in it. */
+export type RankDrag = {
+  /** This row is the one being dragged. */
+  dragging: boolean;
+  /** A drag of one of this owner's other priorities is under way: this row takes a drop. */
+  accepts: boolean;
+  /** Where the dragged one would land against this row. */
+  over: "before" | "after" | null;
+  start: () => void;
+  end: () => void;
+  hover: (after: boolean) => void;
+  drop: (after: boolean) => void;
+};
+
+const lowerHalf = (e: DragEvent<HTMLElement>) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  return e.clientY > r.top + r.height / 2;
+};
 
 const C_RANK = "col-start-1 row-start-1 text-right text-ui font-semibold tabular-nums text-sol-text-dim";
 const C_TITLE = "col-start-2 row-start-1 min-w-0";
@@ -27,7 +50,7 @@ const C_META = "col-start-2 col-end-6 row-start-2 min-w-0";
 const C_MENU = "col-start-6 row-start-1 justify-self-end";
 const C_MENU_PHONE = "col-start-5 row-start-1 justify-self-end";
 
-export function PriorityBlock({ model, layout, compact, filters, todayIndex, peak, now, lookups }: {
+export function PriorityBlock({ model, layout, compact, filters, todayIndex, peak, now, lookups, drag }: {
   model: PriorityModel;
   layout: ListLayout;
   compact: boolean;
@@ -37,6 +60,8 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
   peak: number;
   now: number;
   lookups: LinkLookups;
+  /** Set on the owner's own active rows of a desktop list. */
+  drag?: RankDrag;
 }) {
   const { row } = model;
   const [doneOpen, setDoneOpen] = useState(!filters.hideDone);
@@ -65,7 +90,15 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
     />
   );
   return (
-    <li data-priority={row.short_id} data-status={row.status} className={cn("relative border-b border-sol-border/50 pb-1.5 pt-2 last:border-b-0", past && "opacity-70")}>
+    <li
+      data-priority={row.short_id}
+      data-status={row.status}
+      data-dragging={drag?.dragging || undefined}
+      onDragOver={drag?.accepts ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; drag.hover(lowerHalf(e)); } : undefined}
+      onDrop={drag?.accepts ? (e) => { e.preventDefault(); drag.drop(lowerHalf(e)); } : undefined}
+      className={cn("relative border-b border-sol-border/50 pb-1.5 pt-2 last:border-b-0", past && "opacity-70", drag?.dragging && "opacity-40")}
+    >
+      {drag?.over && <span aria-hidden data-drop-at={drag.over} className={cn("pointer-events-none absolute inset-x-0 z-10 h-0.5 rounded-full bg-sol-blue", drag.over === "before" ? "-top-px" : "-bottom-px")} />}
       <PriorityHeader
         model={model}
         layout={layout}
@@ -73,6 +106,7 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
         filters={filters}
         todayIndex={todayIndex}
         peak={peak}
+        drag={drag}
         polish={polish.length ? { done: polish.filter((m) => m.done).length, total: polish.length, open: polishOpen, toggle: () => setPolishOpen((o) => !o) } : null}
         onProgress={critical.some((m) => m.done) ? () => setDoneOpen((o) => !o) : undefined}
       />
@@ -145,23 +179,39 @@ function Momentum({ model, todayIndex, peak, layout }: { model: PriorityModel; t
   );
 }
 
-/** The row's ⋯: always shown and 44px on a phone. Copy link for now; the overrides come with their own controls. */
-function RowMenu({ label, shortId, layout }: { label: string; shortId: string; layout: ListLayout }) {
+/**
+ * The rank, with who placed it on hover ("ranked by AI" or "you placed it";
+ * the row's ⋯ says it too, for a finger). On the owner's desktop list it is a
+ * drag handle, and the arrow keys step it.
+ */
+function Rank({ row, drag }: { row: PriorityRow; drag?: RankDrag }) {
+  const writes = usePriorityWrites();
+  const why = rankProvenance(row);
+  const said = row.rank == null ? undefined : `#${row.rank}${why ? ` · ${why}` : ""}`;
+  if (!drag || row.rank == null) return <span className={C_RANK} title={said} data-rank-source={row.rank == null ? undefined : row.rank_source}>{row.rank ?? ""}</span>;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button type="button" aria-label={label} onClick={(e) => e.stopPropagation()} className={cn("flex items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text", layout === "phone" ? "size-11" : "size-6")}>
-          <MoreHorizontal className="size-3.5" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-        <DropdownMenuItem data-copy-link onSelect={() => { void navigator.clipboard?.writeText(window.location.origin + priorityHref(shortId)); toast("Link copied"); }}>Copy link</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <button
+      type="button"
+      draggable
+      data-rank-handle={row.short_id}
+      data-rank-source={row.rank_source}
+      title={`${said}. Drag to move, or use the arrow keys.`}
+      aria-label={`Rank ${row.rank}, ${why}: drag to move, or use the arrow keys`}
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", row.short_id); drag.start(); }}
+      onDragEnd={drag.end}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+        e.preventDefault();
+        writes.move(row.short_id, e.key === "ArrowUp" ? "up" : "down");
+      }}
+      className={cn(C_RANK, "-mx-1 cursor-grab rounded px-1 hover:bg-sol-bg-alt hover:text-sol-text active:cursor-grabbing")}
+    >
+      {row.rank}
+    </button>
   );
 }
 
-function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, polish, onProgress }: {
+function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, polish, onProgress, drag }: {
   model: PriorityModel;
   layout: ListLayout;
   compact: boolean;
@@ -170,6 +220,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
   peak: number;
   polish: { done: number; total: number; open: boolean; toggle: () => void } | null;
   onProgress?: () => void;
+  drag?: RankDrag;
 }) {
   const { row } = model;
   const wide = layout === "wide";
@@ -178,7 +229,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
   const plan = filters.show.plans && !compact ? model.plan : null;
   return (
     <div data-priority-head className={cn(LIST_GRID[layout], "gap-y-0.5")}>
-      <span className={C_RANK}>{row.rank ?? ""}</span>
+      <Rank row={row} drag={drag} />
       <span className={cn(C_TITLE, "flex min-w-0 items-center gap-2")}>
         <span title={row.summary || row.title} className={cn("min-w-0 font-semibold", wide ? "truncate text-body" : "line-clamp-2 text-ui", untouched ? "text-sol-text-muted" : "text-sol-text")}>
           {row.title}
@@ -203,12 +254,12 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         <>
           <span data-today className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text">{model.today > 0 ? model.today : ""}</span>
           <span className="col-start-5 row-start-1 justify-self-start"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
-          <span className={C_MENU}><RowMenu label={`More for ${row.title}`} shortId={row.short_id} layout={layout} /></span>
+          <span className={C_MENU}><PriorityMenu row={row} touch={false} /></span>
         </>
       ) : (
         <>
           <span className="col-start-4 row-start-1"><Momentum model={model} todayIndex={todayIndex} peak={peak} layout={layout} /></span>
-          <span className={C_MENU_PHONE}><RowMenu label={`More for ${row.title}`} shortId={row.short_id} layout={layout} /></span>
+          <span className={C_MENU_PHONE}><PriorityMenu row={row} touch /></span>
         </>
       )}
       {!wide && polish && !compact && (
@@ -288,14 +339,22 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
   lookups: LinkLookups;
 }) {
   const { step } = m;
+  const { row } = model;
   const wide = layout === "wide";
+  const writes = usePriorityWrites();
+  const [renaming, setRenaming] = useState(false);
   const title = (
     <span className="flex min-w-0 items-center gap-2">
-      <MilestoneBox done={step.done} />
-      <span title={step.title} className={cn("min-w-0 text-ui", wide ? "truncate" : "line-clamp-2", step.done ? "text-sol-text-dim line-through decoration-sol-text-dim/40" : m.tier === "polish" ? "text-sol-text-muted" : "text-sol-text")}>
-        {step.title}
-      </span>
-      {wide && <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />}
+      {/* The owner's box takes the line's whole left gutter as its press area: the box stays where it is drawn. */}
+      {row.mine ? <MilestoneToggle row={row} step={step} className={wide ? "-my-1 -ml-[34px] h-8 pl-[34px]" : "-my-1 -ml-[30px] h-11 pl-[30px]"} /> : <MilestoneBox done={step.done} />}
+      {renaming ? (
+        <MilestoneTitleInput title={step.title} onDone={(next) => { setRenaming(false); if (next) writes.renameStep(row.short_id, step.key, next); }} />
+      ) : (
+        <span title={step.title} className={cn("min-w-0 text-ui", wide ? "truncate" : "line-clamp-2", step.done ? "text-sol-text-dim line-through decoration-sol-text-dim/40" : m.tier === "polish" ? "text-sol-text-muted" : "text-sol-text")}>
+          {step.title}
+        </span>
+      )}
+      {wide && !renaming && <ChevronRight aria-hidden className={cn("size-3 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />}
       {m.looksDone && <span data-looks-done title="Every task it names is done" className="inline-flex shrink-0 items-center rounded-full border border-sol-border px-1.5 text-mark leading-[18px] text-sol-text-muted">Looks done?</span>}
       {m.correctionPending && <PendingMark />}
     </span>
@@ -320,15 +379,19 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
               </span>
             </div>
             <span className="col-start-4 row-start-1 justify-self-center text-meta tabular-nums text-sol-text-muted">{m.today > 0 ? m.today : ""}</span>
+            {row.mine && <MilestoneMenu row={row} step={step} sessions={m.sessions.length + m.more} onRename={() => setRenaming(true)} touch={false} reveal="group-hover/line:opacity-100" className={C_MENU} />}
           </>
         ) : (
-          <div className="col-start-2 col-end-6 row-start-1 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3">
-            {title}
-            <span className="flex justify-end">{phoneTrail(model, m)}</span>
-          </div>
+          <>
+            <div className={cn("col-start-2 row-start-1 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3", row.mine ? "col-end-5" : "col-end-6")}>
+              {title}
+              <span className="flex justify-end">{phoneTrail(model, m)}</span>
+            </div>
+            {row.mine && <MilestoneMenu row={row} step={step} sessions={m.sessions.length + m.more} onRename={() => setRenaming(true)} touch className={C_MENU_PHONE} />}
+          </>
         )}
       </div>
-      {open && <div className={wide ? "pl-[26px]" : "pl-[22px]"}><MilestoneDetail model={model} m={m} filters={filters} now={now} lookups={lookups} /></div>}
+      {open && <div className={wide ? "pl-[26px]" : "pl-[22px]"}><MilestoneDetail model={model} m={m} filters={filters} now={now} lookups={lookups} touch={wide ? undefined : true} /></div>}
     </li>
   );
 }
@@ -343,22 +406,23 @@ function phoneTrail(model: PriorityModel, m: MilestoneModel): ReactNode {
   return best ? <span className="text-meta text-sol-text-dim">{STATE_WORD[best.state]}</span> : null;
 }
 
-/** One session in an open milestone: Answer when it asks, else its chip; its state in words and its age. */
-export function SessionRow({ s, now }: { s: SessionLine; now: number }) {
+/** One session in an open milestone: Answer when it asks, else its chip; its state in words and its age; the owner's ⋯ to fix its link. */
+export function SessionRow({ s, now, menu }: { s: SessionLine; now: number; menu?: ReactNode }) {
   const asks = asksPerson(s);
   return (
-    <li data-session-row={s.conversation_id} className="flex min-w-0 items-center gap-2 py-0.5">
+    <li data-session-row={s.conversation_id} className="group/session flex min-w-0 items-center gap-2 py-0.5">
       {asks ? <AnswerSecondary s={s} /> : <SessionChip s={s} className="max-w-[22rem]" />}
       <span className="shrink-0 whitespace-nowrap text-meta text-sol-text-dim">
         {/* A closed session's chip already says so. */}
         {!asks && !isClosedSession(s) && <span className="text-sol-text-muted">{STATE_WORD[s.state]} · </span>}
         {ago(s.last_active_at, now)}{ago(s.last_active_at, now) === "just now" ? "" : " ago"}
       </span>
+      {menu}
     </li>
   );
 }
 
-export function WorkflowRuns({ runs, now }: { runs: SessionLine[]; now: number }) {
+export function WorkflowRuns({ runs, now, menu }: { runs: SessionLine[]; now: number; menu?: (s: SessionLine) => ReactNode }) {
   const [open, setOpen] = useState(false);
   if (runs.length === 0) return null;
   const waiting = runs.filter(asksPerson).length;
@@ -369,7 +433,7 @@ export function WorkflowRuns({ runs, now }: { runs: SessionLine[]; now: number }
         {waiting > 0 && <span className="font-semibold text-sol-text"> · {waiting} waiting</span>}
         <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
       </button>
-      {open && <ul className="pl-3">{runs.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} />)}</ul>}
+      {open && <ul className="pl-3">{runs.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} menu={menu?.(s)} />)}</ul>}
     </div>
   );
 }
@@ -383,8 +447,9 @@ export function TypeRow({ label, children }: { label: string; children: ReactNod
   );
 }
 
-/** An open milestone: its sessions (people's first, workflow runs folded), then the links the Show filter asks for. */
-export function MilestoneDetail({ model, m, filters, now, lookups }: { model: PriorityModel; m: MilestoneModel; filters: ListFilters; now: number; lookups: LinkLookups }) {
+/** An open milestone: its sessions (people's first, workflow runs folded), each with the owner's ⋯ when the session is theirs too, then the links the Show filter asks for. */
+export function MilestoneDetail({ model, m, filters, now, lookups, touch }: { model: PriorityModel; m: MilestoneModel; filters: ListFilters; now: number; lookups: LinkLookups; touch?: boolean }) {
+  const menu = (s: SessionLine) => (model.row.mine && s.mine ? <SessionMenu row={model.row} s={s} stepKey={m.key} touch={touch} /> : undefined);
   const people = m.sessions.filter((s) => !s.workflow);
   const runs = m.sessions.filter((s) => s.workflow);
   const plans: Array<{ plan: PriorityPlanRef; prefix?: string }> = [
@@ -407,8 +472,8 @@ export function MilestoneDetail({ model, m, filters, now, lookups }: { model: Pr
   ].filter(Boolean);
   return (
     <div data-milestone-detail className="mb-2 ml-2 border-l border-sol-border/60 pl-3 pt-1">
-      {people.length > 0 && <ul>{people.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} />)}</ul>}
-      <WorkflowRuns runs={runs} now={now} />
+      {people.length > 0 && <ul>{people.map((s) => <SessionRow key={s.conversation_id} s={s} now={now} menu={menu(s)} />)}</ul>}
+      <WorkflowRuns runs={runs} now={now} menu={menu} />
       {m.more > 0 && <div className="py-0.5 text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</div>}
       {rows.length > 0 && <div className="mt-1">{rows}</div>}
       {m.sessions.length === 0 && rows.length === 0 && <div className="py-1 text-meta text-sol-text-dim">Nothing linked yet</div>}
