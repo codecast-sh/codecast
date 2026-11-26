@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { composeLinkHref, parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "./composeLink";
+import { composeLinkHref, conversationLinkDraft, parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "./composeLink";
 import { PREFILL_MAX_LENGTH } from "./composerPrefill";
 
 const parse = (qs: string) => parseComposeLink(new URLSearchParams(qs));
@@ -252,5 +252,25 @@ describe("composeLinkHref", () => {
     expect(href.startsWith("/inbox?")).toBe(true);
     expect(parse(href.slice("/inbox?".length))).toEqual({ draft: "Trusted evals: Grader faults & 10% #2", task: "ct-123" });
     expect(parse(composeLinkHref("A: b").slice("/inbox?".length))).toEqual({ draft: "A: b" });
+  });
+});
+
+describe("conversationLinkDraft", () => {
+  test("compose is text to continue, as written", () => {
+    expect(conversationLinkDraft(null, "About in-22 Infrastructure: ")).toEqual({ text: "About in-22 Infrastructure: ", append: true });
+  });
+  test("prefill alone is the notification's quote, unchanged", () => {
+    expect(conversationLinkDraft("ping Jamie", null)).toEqual({ text: "> ping Jamie\n\n", append: false });
+  });
+  test("both: the quote, then the text to continue under it", () => {
+    expect(conversationLinkDraft("ping Jamie", "No, ")).toEqual({ text: "> ping Jamie\n\nNo, ", append: true });
+  });
+  test("compose is cleaned and capped like a new-session link's draft", () => {
+    expect(conversationLinkDraft(null, "\n! rm -rf ~\u0007")).toEqual({ text: "rm -rf ~", append: true });
+    expect(conversationLinkDraft(null, "x".repeat(PREFILL_MAX_LENGTH + 50))!.text).toHaveLength(PREFILL_MAX_LENGTH);
+  });
+  test("nothing to seed is null", () => {
+    expect(conversationLinkDraft(null, null)).toBeNull();
+    expect(conversationLinkDraft("", " \n ")).toBeNull();
   });
 });

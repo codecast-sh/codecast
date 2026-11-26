@@ -6,11 +6,13 @@
 // the viewer could have picked by hand or is dropped, and the composer still
 // opens with the draft.
 //
-// `?prefill=` (lib/composerPrefill) is the existing-session sibling: it quotes
-// its text for a notification reply. This one types the text as written.
+// An existing session takes the same `compose` param
+// (`/conversation/<id>?compose=<text>`, conversationLinkDraft below): text to
+// continue, where `?prefill=` (lib/composerPrefill) quotes its text for a
+// notification reply.
 
 import { fromConvexAgentType, toConvexAgentType, type ConvexAgentType } from "@codecast/shared/contracts";
-import { PREFILL_MAX_LENGTH } from "./composerPrefill";
+import { PREFILL_MAX_LENGTH, buildPrefillText, type ComposerSeed } from "./composerPrefill";
 
 export const COMPOSE_LINK_PARAMS = ["compose", "task", "agent", "project"] as const;
 
@@ -147,17 +149,32 @@ function knownAgent(raw: string | null): ConvexAgentType | undefined {
   return v === id || v === convex ? convex : undefined;
 }
 
+/** A link's draft as plain text, capped. No leading "!": an agent that takes
+ *  typed keys (Gemini's CLI) reads "!" in an empty input as its shell, and the
+ *  line would run as a command. Leading blanks and line breaks go with it: the
+ *  composer trims them on send, which would put the "!" first again. */
+function cleanDraft(raw: string): string {
+  return cleanText(raw, PREFILL_MAX_LENGTH).replace(LEADING_BANG, "");
+}
+
+/** What a link into an existing session (`/conversation/<id>`) puts in its
+ *  composer: `prefill` quoted, then `compose` as text to continue. Only the
+ *  quote waits for an empty composer; text to continue is added after a draft
+ *  already there (seedComposer). Null when the link carries neither. */
+export function conversationLinkDraft(prefill: string | null, compose: string | null): ComposerSeed | null {
+  const quote = buildPrefillText(prefill) ?? "";
+  const draft = compose ? cleanDraft(compose) : "";
+  if (!quote && !draft) return null;
+  return { text: quote + draft, append: !!draft };
+}
+
 /** The link's parameters, or null when the address carries no compose link.
  *  A repeated parameter takes its first value. A task alone is a link too. */
 export function parseComposeLink(params: Pick<URLSearchParams, "get" | "has">): ComposeLink | null {
   const rawTask = params.get("task")?.trim().toLowerCase();
   const task = rawTask && TASK_SHORT_ID.test(rawTask) ? rawTask : undefined;
   if (!params.has("compose") && !task) return null;
-  // No leading "!": an agent that takes typed keys (Gemini's CLI) reads "!" in
-  // an empty input as its shell, and the line would run as a command. Leading
-  // blanks and line breaks go with it: the composer trims them on send, which
-  // would put the "!" first again.
-  const draft = cleanText(params.get("compose") ?? "", PREFILL_MAX_LENGTH).replace(LEADING_BANG, "");
+  const draft = cleanDraft(params.get("compose") ?? "");
   const agent = knownAgent(params.get("agent"));
   const project = cleanText(params.get("project") ?? "", PROJECT_MAX_LENGTH).replace(/\s+/g, " ").trim() || undefined;
   return { draft, ...(task ? { task } : {}), ...(agent ? { agent } : {}), ...(project ? { project } : {}) };
