@@ -8,7 +8,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { query } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { checkConversationAccess } from "./privacy";
+import { checkConversationAccess, conversationAccessMemo } from "./privacy";
 import { ownersModelOnMemo } from "./lib/inboxOwners";
 import { sessionOwnerFactsOf } from "./sessionOwners";
 import { ownersOf } from "@codecast/shared/contracts/sessionOwners";
@@ -43,7 +43,10 @@ export async function performListSessionAgents(ctx: { db: any }, viewerId: Id<"u
     if (c.inbox_killed_at || isRunLog(c) || c.parent_message_uuid === "plan-handoff") continue;
     byId.set(String(c._id), c);
   }
-  const children = [...byId.values()].sort((a, b) => b.updated_at - a.updated_at).slice(0, SESSION_AGENTS_CAP);
+  // Each child is checked on its own: access to the parent grants nothing on a private child.
+  const canRead = conversationAccessMemo(ctx as any, viewerId);
+  const readable = await Promise.all([...byId.values()].map(async (c) => ((await canRead(c)) ? c : null)));
+  const children = readable.filter((c): c is any => c !== null).sort((a, b) => b.updated_at - a.updated_at).slice(0, SESSION_AGENTS_CAP);
   const users = new Map<string, Promise<any>>();
   const userOf = (id: string) => {
     let hit = users.get(id);

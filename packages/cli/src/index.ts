@@ -7687,7 +7687,8 @@ program
     let seenAny = false;
     const emit = (ev: { event: string; id: string; session_id: string | null; title: string | null; from: string | null; to: string | null; is_pinned?: boolean; is_live?: boolean; label?: string | null; with_owner?: string | null }) => {
       if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), ...ev, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live, label: ev.label ?? null, with_owner: ev.with_owner ?? null }));
-      else console.log(formatSessionChangeLine({ id: ev.id, title: ev.title, from: ev.from, to: ev.to, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live }));
+      // An owner-only change keeps its state, so the text line would read "x → x": JSON carries it.
+      else if (ev.event !== "transition" || ev.from !== ev.to) console.log(formatSessionChangeLine({ id: ev.id, title: ev.title, from: ev.from, to: ev.to, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live }));
     };
     const onSessions = (sessions: any[]) => {
       if (process.env.CAST_DEBUG) process.stderr.write(`[push: ${sessions.length} sessions]\n`);
