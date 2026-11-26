@@ -52,6 +52,42 @@ export const PAGE_APP_LIMITS = {
 export const APP_ICON_SIZES = [16, 32, 64, 128, 256, 512, 1024] as const;
 export const APP_ICON_DEFAULT_SIZE = 512;
 
+/** Width and height from a PNG's IHDR chunk (its first 24 bytes), or null when the bytes are not a PNG. */
+export function pngDimensions(head: Uint8Array): { width: number; height: number } | null {
+  const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+  if (head.byteLength < 24 || SIG.some((b, i) => head[i] !== b)) return null;
+  if (String.fromCharCode(head[12], head[13], head[14], head[15]) !== "IHDR") return null;
+  const view = new DataView(head.buffer, head.byteOffset, 24);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+/** The smallest app icon a host can build its Dock and taskbar icons from. */
+export const APP_ICON_MIN_PX = 512;
+
+/**
+ * The manifest's icons must be PNG files the bundle carries, and the app icon
+ * a square PNG of at least APP_ICON_MIN_PX. `head` reads a file's first bytes
+ * (the server reads an upload, the CLI the local file), so both refuse alike.
+ */
+export async function appIconProblem<F extends { path: string; content_type: string }>(
+  app: PageApp | undefined,
+  files: F[],
+  head: (file: F) => Promise<Uint8Array | null>,
+): Promise<string | null> {
+  for (const [field, path] of [["app.icon", app?.icon], ["app.tray.icon", app?.tray?.icon]] as const) {
+    if (!path) continue;
+    const file = files.find((f) => f.path === path);
+    if (!file || file.content_type !== "image/png") return `"${field}" names ${path}, which is not a PNG file in the bundle`;
+    if (field !== "app.icon") continue;
+    const bytes = await head(file);
+    const size = bytes ? pngDimensions(bytes) : null;
+    if (!size) return `"app.icon" names ${path}, which is not a valid PNG`;
+    if (size.width !== size.height) return `"app.icon" must be square; ${path} is ${size.width}x${size.height}`;
+    if (size.width < APP_ICON_MIN_PX) return `"app.icon" must be at least ${APP_ICON_MIN_PX}x${APP_ICON_MIN_PX}; ${path} is ${size.width}x${size.height}`;
+  }
+  return null;
+}
+
 export interface PageAppWindow {
   width?: number;
   height?: number;

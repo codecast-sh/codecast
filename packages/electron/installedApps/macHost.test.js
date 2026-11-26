@@ -10,7 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createMacHost, pageUrlFor } = require("./macHost");
-const { createEngine, HOST_METHODS } = require("./engine");
+const { createEngine, HOST_METHODS, MAIN_METHODS } = require("./engine");
 const { readInfo, dataPaths } = require("../appshim/install");
 const { writeSolidPng } = require("../appshim/fixtures");
 
@@ -88,7 +88,11 @@ function rig({ records, signedIn = true } = {}) {
     onClosed: (slug) => { if (!host.isOpen(slug)) engine.release(slug); },
     onFocus: (slug) => focused.push(slug),
     signedIn: () => isSignedIn, onStatus: (slug) => statuses.push(slug),
-    uninstallApp: async (slug) => { calls.push(["uninstall", slug]); },
+    uninstallApp: async (slug) => {
+      calls.push(["uninstall", slug]);
+      if (slug === "other") throw new Error("the bundle is locked");
+      return true;
+    },
     openInCodecast: async (slug) => { calls.push(["open", slug]); },
     register: false, home: path.join(dir, "home"),
   });
@@ -96,25 +100,25 @@ function rig({ records, signedIn = true } = {}) {
     consent: async (req) => { calls.push(["consent", req]); return [...req.granted, ...req.requested]; },
     "agent.ask": async (ctx, prompt) => { calls.push(["agent.ask", ctx.slug, prompt]); return { answer: `re: ${prompt}` }; },
     "shell.open": async () => null,
+    "app.openInCodecast": async () => null,
     emit: (slug, event, data) => host.emit(slug, event, data),
   };
   for (const key of HOST_METHODS) if (typeof host[key] === "function") adapter[key] = host[key];
   engine = createEngine({
     registry,
-    page: () => ({ version: 3, relation: "own", policy: { install: true, fullAccess: false }, requested: [] }),
+    page: () => ({ version: 3, relation: "owner", policy: { install: true, fullAccess: false }, requested: [] }),
     adapter, ops: { watch: () => "w1", unwatch: () => null, unwatchAll: (slug) => released.push(slug) }, platform: "darwin",
   });
   return { dir, socketPath, host, engine, store, calls, statuses, focused, released, setSignedIn: (v) => { isSignedIn = v; host.setSignedIn(v); } };
 }
 
-test("the platform answers every shim-owned engine method with null and leaves agent.ask and shell.open to host.js", () => {
+test("the platform answers every shim-owned engine method with null and leaves the main-process methods to host.js", () => {
   const r = rig();
-  for (const key of [...HOST_METHODS.filter((k) => k !== "agent.ask" && k !== "shell.open"),
+  for (const key of [...HOST_METHODS.filter((k) => !MAIN_METHODS.has(k)),
     "window.setVisibleOnAllWorkspaces", "window.setIgnoreMouseEvents"]) {
     assert.equal(r.host[key]({ slug: "vitals" }), null, key);
   }
-  assert.equal(r.host["agent.ask"], undefined);
-  assert.equal(r.host["shell.open"], undefined);
+  for (const key of MAIN_METHODS) assert.equal(r.host[key], undefined, key);
   assert.equal(r.host.name, "mac");
 });
 
@@ -189,7 +193,7 @@ test("each shim hears Codecast's sign-in state when it connects and whenever it 
   }
 });
 
-test("host actions: report, open in Codecast, uninstall answered before it runs; a connection keeps its app", async () => {
+test("host actions: report, open in Codecast, uninstall answered after it ran; a connection keeps its app", async () => {
   const r = rig();
   await r.host.serve();
   const shim = fakeShim(r.socketPath, "vitals");
@@ -208,9 +212,8 @@ test("host actions: report, open in Codecast, uninstall answered before it runs;
     assert.equal((await shim.host("open-in-codecast")).ok, true);
     const reply = await shim.host("uninstall");
     assert.equal(reply.ok, true);
-    await new Promise((res) => setImmediate(res));
-    await new Promise((res) => setImmediate(res));
     assert.deepEqual(r.calls, [["open", "vitals"], ["uninstall", "vitals"]]);
+    assert.equal(shim.events.some((e) => e.event === "host-quit"), false, "the asking shim is not told to quit; it exits on the reply");
     assert.equal((await shim.host("explode")).code, "unknown-method");
     const hijack = await shim.raw({ app: "other", frame: {}, msg: { module: "app", method: "info", args: [] } });
     assert.equal(hijack.code, "denied");
@@ -227,6 +230,22 @@ test("host actions: report, open in Codecast, uninstall answered before it runs;
   await r.host.stop();
 });
 
+test("an uninstall the shim asked for that fails answers with the reason", async () => {
+  const r = rig();
+  await r.host.serve();
+  const shim = fakeShim(r.socketPath, "other");
+  await shim.ready;
+  try {
+    const reply = await shim.host("uninstall");
+    assert.equal(reply.ok, false);
+    assert.equal(reply.code, "failed");
+    assert.match(reply.message, /the bundle is locked/);
+  } finally {
+    await shim.close();
+    await r.host.stop();
+  }
+});
+
 test("the page URL carries host=app and only the gate keys", () => {
   assert.equal(pageUrlFor("k3j2h4", { k: "abc", m: "t/1", i: "secret-identity" }),
     "https://a.codecast.sh/k3j2h4?host=app&k=abc&m=t%2F1");
@@ -241,9 +260,9 @@ function bundleRig() {
   fs.copyFileSync("/usr/bin/true", shim);
   const png = writeSolidPng(path.join(dir, "icon.png"), 1024);
   const fetched = [];
-  const make = (hostVersion, shimPath = shim) => createMacHost({
+  const make = (hostVersion, shimPath = shim, registry = null) => createMacHost({
     socketPath: path.join(dir, "apps.sock"), hostVersion, shimBinaryPath: shimPath, root: path.join(dir, "Apps"),
-    register: false, home: path.join(dir, "home"),
+    register: false, home: path.join(dir, "home"), registry,
     fetchIcon: async (url) => { fetched.push(url); return fs.readFileSync(png); },
   });
   const info = (slug, name, extra = {}) => ({
@@ -309,6 +328,30 @@ test("resealAll skips current bundles and re-seals ones from another Codecast or
   execFileSync("codesign", ["--verify", "--strict", a.bundlePath]);
 });
 
+test("install writes the window options; resealAll applies changed ones from the registry's facts", { skip: !mac, timeout: 60_000 }, async () => {
+  const b = bundleRig();
+  const window = { width: 420, height: 640, minWidth: 320, minHeight: 400, resizable: false, titleBar: "hidden" };
+  const first = b.make("1.2.3");
+  const { bundlePath } = await first.install({ record: { slug: "aaa" }, info: b.info("aaa", "Vitals", { app: { name: "Vitals", window } }) });
+  let plist = readInfo(bundlePath);
+  assert.equal(plist.CodecastMinWidth, 320);
+  assert.equal(plist.CodecastResizable, false);
+  assert.equal(plist.CodecastTitleBar, "hidden");
+
+  const facts = { aaa: { slug: "aaa", facts: { app: { window } } } };
+  const host = b.make("1.2.3", b.shim, { get: (slug) => facts[slug] || null });
+  assert.deepEqual(host.resealAll().map((r) => r.resealed), [false], "same seal, same options");
+  facts.aaa.facts.app.window = { width: 420, height: 640, minWidth: 360, resizable: true };
+  assert.deepEqual(host.resealAll().map((r) => r.resealed), [true]);
+  plist = readInfo(bundlePath);
+  assert.equal(plist.CodecastMinWidth, 360);
+  assert.equal(plist.CodecastResizable, true);
+  assert.equal("CodecastTitleBar" in plist, false);
+  assert.equal("CodecastMinHeight" in plist, false);
+  execFileSync("codesign", ["--verify", "--strict", bundlePath]);
+  assert.deepEqual(host.resealAll().map((r) => r.resealed), [false]);
+});
+
 test("uninstall asks a running app to quit, then removes the bundle and the data kept for its bundle id", { skip: !mac, timeout: 60_000 }, async () => {
   const b = bundleRig();
   const dir = b.dir;
@@ -333,6 +376,34 @@ test("uninstall asks a running app to quit, then removes the bundle and the data
   for (const p of data) assert.equal(fs.existsSync(p), false, p);
   assert.equal(host.bundleFor("aaa"), null);
   assert.equal(await host.uninstall("aaa"), false);
+  await host.stop();
+});
+
+test("an uninstall the app's own shim asked for removes everything, then sweeps what it wrote before exiting", { skip: !mac, timeout: 60_000 }, async () => {
+  const b = bundleRig();
+  const socketPath = path.join(b.dir, "apps.sock");
+  const home = path.join(b.dir, "home");
+  let host = null;
+  host = createMacHost({
+    socketPath, hostVersion: "1.2.3", shimBinaryPath: b.shim, root: b.root, register: false, home,
+    call: (_slug, _frame, msg) => ({ id: msg.id, ok: true, value: null }),
+    fetchIcon: async () => fs.readFileSync(writeSolidPng(path.join(b.dir, "i.png"))),
+    // host.js's uninstall without a record answers false; the bundle still goes.
+    uninstallApp: async () => false,
+  });
+  await host.serve();
+  const installed = await host.install({ record: { slug: "aaa" }, info: b.info("aaa", "Vitals") });
+  const shim = fakeShim(socketPath, "aaa");
+  await shim.ready;
+  assert.equal((await shim.host("uninstall")).ok, true);
+  assert.equal(fs.existsSync(installed.bundlePath), false);
+  assert.equal(shim.events.some((e) => e.event === "host-quit"), false);
+  // The shim's process writes its data on the way out; once it is gone the host removes it again.
+  const data = dataPaths("aaa", home);
+  for (const p of data) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, "x"); }
+  await shim.close();
+  for (let i = 0; i < 100 && data.some((p) => fs.existsSync(p)); i++) await new Promise((r) => setTimeout(r, 20));
+  for (const p of data) assert.equal(fs.existsSync(p), false, p);
   await host.stop();
 });
 

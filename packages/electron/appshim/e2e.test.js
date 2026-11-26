@@ -17,7 +17,7 @@ const { execFileSync } = require("node:child_process");
 const { install, uninstall } = require("./install");
 const { startTestEngine, defaultAnswer } = require("./testServer");
 const { fail } = require("../installedApps/protocol");
-const { writeSolidPng } = require("./fixtures");
+const { writeSolidPng, countColorPixels } = require("./fixtures");
 
 // A same-origin subframe that skips the page client and posts to the handler directly.
 const FRAME = `<!doctype html><script>
@@ -283,6 +283,34 @@ test("the shim works against the real engine through host.js and macHost.js",
 
       const out = await next("result");
       pid = Number(/"pid"=(\d+)/.exec(execFileSync("lsappinfo", ["info", "-only", "pid", "sh.codecast.app." + slug]).toString())?.[1]);
+      // The menus as built (AppKit's Edit extras once each, read after its later passes: a snapshot rewrites menu.txt), and the Dock menu.
+      process.kill(pid, "SIGUSR2");
+      const snapped = Date.now() + 5000;
+      while (!/snapshot window-frame/.test(fs.readFileSync(stderr, "utf8")) && Date.now() < snapped) await new Promise((r) => setTimeout(r, 100));
+      const menu = fs.readFileSync(path.join(dir, "menu.txt"), "utf8").split("\n").map((l) => l.trim());
+      for (const title of ["Start Dictation…", "Emoji & Symbols", "Settings…", "Show in Codecast", "Reload Page", "Zoom In", "Zoom Out", "Enter Full Screen"]) {
+        assert.equal(menu.filter((l) => l === title).length, 1, title);
+      }
+      assert.ok(!menu.includes("Show Tab Bar"), "window tabbing is off");
+      assert.deepEqual(fs.readFileSync(path.join(dir, "dock-menu.txt"), "utf8").split("\n"), ["Show in Codecast"]);
+
+      // About shows the app's own icon (the bundle's app.icns, orange here), not Codecast's.
+      fs.writeFileSync(path.join(dir, "pick.txt"), "About");
+      const logBefore = fs.readFileSync(stderr, "utf8").length;
+      process.kill(pid, "SIGINFO");
+      const shown = Date.now() + 5000;
+      while (!/pick About/.test(fs.readFileSync(stderr, "utf8").slice(logBefore)) && Date.now() < shown) await new Promise((r) => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 800));
+      process.kill(pid, "SIGUSR2");
+      let aboutShot;
+      const aboutBy = Date.now() + 5000;
+      while (!aboutShot && Date.now() < aboutBy) {
+        await new Promise((r) => setTimeout(r, 100));
+        // The About panel is the captured window with no title.
+        aboutShot = /captured (screen-\d+\.png)  layer/.exec(fs.readFileSync(stderr, "utf8").slice(logBefore))?.[1];
+      }
+      assert.ok(aboutShot, "the About panel was captured");
+      assert.ok(countColorPixels(path.join(dir, aboutShot), [230, 120, 30], 24) > 4000, "the About panel shows the app's icon");
       assert.match(out.ua, / CodecastApp\/9\.8\.7 \(host-e2e-app\)$/);
       assert.match(loads[0].ua, / CodecastApp\/9\.8\.7 \(host-e2e-app\)$/, "the document request carries the user agent too");
       assert.match(loads[0].url, /host=app/);

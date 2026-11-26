@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildPublishPayload, describeEvidence, pathsToUpload, publishRequestBody, showsManageLink, walkBundleDir } from "./publish";
+import { buildPublishPayload, describeEvidence, localAppIconProblem, pathsToUpload, publishRequestBody, showsManageLink, walkBundleDir } from "./publish";
 import { findChrome, thumbArgs } from "./publishThumb";
 
 let dir: string;
@@ -220,5 +220,44 @@ describe("showsManageLink", () => {
   it("prints nothing when there is no owner key", () => {
     expect(showsManageLink({ url, manage_url: url })).toBe(false);
     expect(showsManageLink({ url })).toBe(false);
+  });
+});
+
+/** A PNG's signature and IHDR chunk: all the icon check reads. */
+const pngHead = (w: number, h: number) => {
+  const b = Buffer.alloc(33);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]).copy(b);
+  b.write("IHDR", 12, "latin1");
+  b.writeUInt32BE(w, 16);
+  b.writeUInt32BE(h, 20);
+  return b;
+};
+
+describe("localAppIconProblem", () => {
+  const bundle = (icon: Buffer | string | null, app: Record<string, unknown> = { icon: "icon.png" }) => {
+    write("index.html", "<html><body>hi</body></html>");
+    if (icon !== null) write("icon.png", icon);
+    write("cast-data.json", JSON.stringify({ app }));
+    return buildPublishPayload(dir);
+  };
+
+  it("passes a square icon of 512 or more, and a page without an app block", async () => {
+    expect(await localAppIconProblem(bundle(pngHead(1024, 1024)))).toBeNull();
+    write("cast-data.json", JSON.stringify({ queries: {} }));
+    expect(await localAppIconProblem(buildPublishPayload(dir))).toBeNull();
+  });
+
+  it("refuses with the server's words", async () => {
+    expect(await localAppIconProblem(bundle(pngHead(1024, 512)))).toBe('cast-data.json: "app.icon" must be square; icon.png is 1024x512');
+    expect(await localAppIconProblem(bundle(pngHead(256, 256)))).toBe('cast-data.json: "app.icon" must be at least 512x512; icon.png is 256x256');
+    expect(await localAppIconProblem(bundle("not a png"))).toBe('cast-data.json: "app.icon" names icon.png, which is not a valid PNG');
+    fs.rmSync(path.join(dir, "icon.png"));
+    expect(await localAppIconProblem(buildPublishPayload(dir))).toBe('cast-data.json: "app.icon" names icon.png, which is not a PNG file in the bundle');
+  });
+
+  it("checks the tray icon is in the bundle", async () => {
+    expect(await localAppIconProblem(bundle(pngHead(512, 512), { icon: "icon.png", tray: { icon: "tray.png" } }))).toBe(
+      'cast-data.json: "app.tray.icon" names tray.png, which is not a PNG file in the bundle',
+    );
   });
 });

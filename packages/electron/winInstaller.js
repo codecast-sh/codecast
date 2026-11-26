@@ -17,8 +17,12 @@
 const EXPECTED_PUBLISHER = null;
 
 // A PowerShell single-quoted literal: nothing inside is interpreted.
+// PowerShell's tokenizer takes the curly quotes U+2018 to U+201B as single
+// quotes too, so each of them is doubled like ' or it would end the literal
+// (a username like O’Brien, or a page's notification title, could then
+// break out into the script).
 function psQuote(s) {
-  return `'${String(s).replace(/'/g, "''")}'`;
+  return `'${String(s).replace(/['\u2018-\u201B]/g, "$&$&")}'`;
 }
 
 function powershell(script) {

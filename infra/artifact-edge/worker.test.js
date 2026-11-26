@@ -285,6 +285,19 @@ describe("artifact edge cache", () => {
     expect(sentUa.at(-1)).toBe(HOST_UA);
   });
 
+  test("the page's version header and its CORS exposure reach the host and a browser, held or not", async () => {
+    stubOrigin({ headers: { "X-Cast-Version": "7", "Access-Control-Expose-Headers": "X-Cast-Version", "Content-Security-Policy": "sandbox allow-scripts allow-same-origin" } });
+    const host = await getAs("/abcdefghijkl/?host=app", HOST_UA);
+    expect(host.headers.get("X-Cast-Version")).toBe("7");
+    expect(host.headers.get("Access-Control-Expose-Headers")).toBe("X-Cast-Version");
+    expect(host.headers.get("Content-Security-Policy")).toBe("sandbox allow-scripts allow-same-origin");
+    await get("/abcdefghijkl/?host=app");
+    const held = await get("/abcdefghijkl/?host=app");
+    expect(held.headers.get("X-Edge-Cache")).toBe("HIT");
+    expect(held.headers.get("X-Cast-Version")).toBe("7");
+    expect(held.headers.get("Access-Control-Expose-Headers")).toBe("X-Cast-Version");
+  });
+
   test("a host user agent naming another page is a browser here", async () => {
     stubOrigin();
     await get("/zzzzzzzzzzzz");

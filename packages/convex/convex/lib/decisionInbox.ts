@@ -1,7 +1,7 @@
 // A decision's queue rows (decision_inbox), one per person it is asked of.
 // A leaf, so every module that moves a decision between people imports it
 // without closing a cycle through sessionDecisions.ts.
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import { announceDecisionWaiting } from "./decisionPush";
 import { settleDecisionWaiting } from "./decisionRing";
 
@@ -53,4 +53,28 @@ export async function syncDecisionInbox(
     added.push(userId);
   }
   if (opts.announce !== false) await announceDecisionWaiting(ctx, decisionId, added, now);
+}
+
+/**
+ * The decisions a person's pending queue rows point at: each pending
+ * decision_inbox row's decision while it still asks them (asked_user_ids is
+ * the people set), then their own cards from before the inbox existed. The
+ * rows come back in any status; a caller that wants only open asks keeps
+ * status "pending". The Decisions queue (listForUserCore) and the page
+ * reader `waiting` both read through here, so they agree on what waits.
+ */
+export async function pendingQueueDecisions(ctx: Ctx, userId: Id<"users">): Promise<Doc<"session_decisions">[]> {
+  const out: Doc<"session_decisions">[] = [];
+  const inboxRows = await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).collect();
+  for (const r of inboxRows) {
+    const d: Doc<"session_decisions"> | null = await ctx.db.get(r.decision_id);
+    if (!d) continue;
+    // A stale inbox row from before assignment must not keep the card on the previous person's stack.
+    if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id) => String(id) === String(userId))) continue;
+    out.push(d);
+  }
+  const legacy = await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).collect();
+  const seen = new Set(out.map((d) => String(d._id)));
+  for (const d of legacy as Doc<"session_decisions">[]) if (d.asked_user_ids === undefined && !seen.has(String(d._id))) out.push(d);
+  return out;
 }

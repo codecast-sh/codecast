@@ -2,17 +2,15 @@
 // app's cast.app.permissions.request, and the re-ask after a new version
 // (docs/architecture/installed-apps.md "Desktop bridge for the web app"). It
 // is the shared consequential review: the page's address heads it, then the
-// app as the person will see it in their Dock, then one switch per thing the
+// app as the person will see it in their Dock or taskbar, then one switch per thing the
 // moment asks for, and the confirm names the act.
 import { useState } from "react";
 import type { AppPermission } from "@codecast/shared/contracts/pageApp";
 import { pageShareUrl } from "@codecast/shared/entities";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
-import { consentGrants, consentLedger, consentToggles, madeBy, pageAddress, type ConsentRequest } from "../../lib/installedApps";
+import { consentGrants, consentLedger, consentToggles, currentPlatform, installBlocked, madeBy, pageAddress, type ConsentRequest } from "../../lib/installedApps";
 import { AppIcon } from "./AppIcon";
 import { PermissionToggles } from "./PermissionToggles";
-
-const currentPlatform = () => (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent) ? "win32" : "darwin");
 
 export function ConsentSheet({ req, onAnswer, fill = true }: {
   req: ConsentRequest;
@@ -23,7 +21,8 @@ export function ConsentSheet({ req, onAnswer, fill = true }: {
   const [toggles] = useState(() => consentToggles(req));
   const [chosen, setChosen] = useState<Set<AppPermission>>(() => new Set(toggles.filter((t) => t.on).map((t) => t.perm)));
   const { info } = req;
-  const ledger = consentLedger(req, chosen, pageAddress(pageShareUrl(info.slug)));
+  const platform = currentPlatform();
+  const ledger = consentLedger(req, chosen, pageAddress(pageShareUrl(info.slug)), platform);
   const rows = toggles.map((t) => ({ ...t, on: chosen.has(t.perm) }));
   const flip = (perm: AppPermission, on: boolean) => setChosen((prev) => {
     const next = new Set(prev);
@@ -47,10 +46,10 @@ export function ConsentSheet({ req, onAnswer, fill = true }: {
           <span className="text-meta tabular-nums text-sol-text-dim">v{info.version}</span>
         </div>
       </div>
-      {rows.length > 0 && (
+      {rows.length > 0 && !installBlocked(req) && (
         <PermissionToggles
           rows={rows}
-          platform={currentPlatform()}
+          platform={platform}
           onFlip={flip}
           idPrefix={`consent-${req.id}`}
         />

@@ -14,14 +14,24 @@ enum UrlPolicy {
 
     /// Main-frame navigation stays on the page's origin and under its path.
     /// Paths compare percent-encoded and dot-segment free, so `/slug%2F..`
-    /// and `/slug/../other` do not pass as `/slug/...`.
+    /// and `/slug/../other` do not pass as `/slug/...`. `%2e` counts as a dot
+    /// there, because WebKit's URL parser reads `/slug/%2e%2e/other` as
+    /// `/other` while Foundation's `standardized` leaves it alone.
     static func navigable(_ url: URL, page: URL) -> Bool {
         let scheme = url.scheme?.lowercased() ?? ""
         if ["about", "blob", "data"].contains(scheme) { return true }
         guard scheme == page.scheme?.lowercased(), url.host?.lowercased() == page.host?.lowercased(),
               url.port == page.port else { return false }
         func path(_ u: URL) -> String {
-            URLComponents(url: u.standardized, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? ""
+            let raw = URLComponents(url: u, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? ""
+            var out: [Substring] = []
+            for seg in raw.replacingOccurrences(of: "%2e", with: ".", options: .caseInsensitive)
+                .split(separator: "/", omittingEmptySubsequences: false) {
+                if seg == "." { continue }
+                if seg == ".." { if out.count > 1 { out.removeLast() }; continue }
+                out.append(seg)
+            }
+            return out.joined(separator: "/")
         }
         var base = path(page)
         if base.hasSuffix("/") { base.removeLast() }

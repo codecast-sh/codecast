@@ -1,6 +1,7 @@
 // Builds, seals and registers one installed app's macOS bundle:
 //   <root>/<Name>.app            root defaults to ~/Applications/Codecast Apps
 //     Contents/Info.plist        bundle id sh.codecast.app.<slug>, Codecast* keys the shim reads
+//                                (windowKeys: the manifest's window options)
 //     Contents/MacOS/<Name>      the shim, copied from Codecast.app's Resources
 //     Contents/Resources/app.icns
 //     Contents/Resources/client.js the page client (window.cast.app), injected at document start
@@ -68,6 +69,24 @@ ${body}
 `;
 }
 
+/**
+ * The Info.plist keys for the manifest's `window` options, which the shim
+ * applies to its window: size, minimum size, resizable, and the title bar
+ * (`default` or `hidden`). An option the manifest leaves out is left out here
+ * and the shim uses its default.
+ */
+function windowKeys(window = {}) {
+  const num = (v) => (Number.isFinite(v) && v > 0 ? Math.round(v) : undefined);
+  return {
+    CodecastWindowWidth: num(window.width),
+    CodecastWindowHeight: num(window.height),
+    CodecastMinWidth: num(window.minWidth),
+    CodecastMinHeight: num(window.minHeight),
+    CodecastResizable: typeof window.resizable === "boolean" ? window.resizable : undefined,
+    CodecastTitleBar: window.titleBar === "hidden" || window.titleBar === "default" ? window.titleBar : undefined,
+  };
+}
+
 function infoPlist({ slug, name, pageUrl, hostBundleId, socketPath, hostVersion, sealKey, window = {}, tray = {}, version = "1" }) {
   return plist({
     CFBundleIdentifier: bundleId(slug),
@@ -89,8 +108,7 @@ function infoPlist({ slug, name, pageUrl, hostBundleId, socketPath, hostVersion,
     CodecastSocketPath: socketPath,
     CodecastHostVersion: hostVersion,
     CodecastSealKey: sealKey,
-    CodecastWindowWidth: window.width,
-    CodecastWindowHeight: window.height,
+    ...windowKeys(window),
     CodecastTrayWidth: tray.width,
     CodecastTrayHeight: tray.height,
   });
@@ -184,13 +202,20 @@ function listBundles(root = defaultRoot()) {
 
 /**
  * Puts the current shim binary and page client into an installed bundle and
- * re-seals it (Codecast updated). `plist` sets string keys in its Info.plist
- * first (the host version and seal key that changed with it).
+ * re-seals it (Codecast updated). `plist` sets keys in its Info.plist first
+ * (the host version and seal key that changed with it, the window keys):
+ * strings, integers and booleans keep their type; null removes the key.
  */
 function reseal({ appPath, shimBinaryPath, plist: keys = {}, register = true }) {
   const plistPath = path.join(appPath, "Contents", "Info.plist");
   for (const [key, value] of Object.entries(keys)) {
-    if (value !== undefined && value !== null) execFileSync("plutil", ["-replace", key, "-string", String(value), plistPath]);
+    if (value === undefined) continue;
+    if (value === null) {
+      try { execFileSync("plutil", ["-remove", key, plistPath], { stdio: "ignore" }); } catch {}
+      continue;
+    }
+    const type = typeof value === "boolean" ? "-bool" : typeof value === "number" ? "-integer" : "-string";
+    execFileSync("plutil", ["-replace", key, type, typeof value === "number" ? String(Math.round(value)) : String(value), plistPath]);
   }
   const info = execFileSync("plutil", ["-extract", "CFBundleExecutable", "raw", plistPath]).toString().trim();
   const target = path.join(appPath, "Contents", "MacOS", info);
@@ -233,5 +258,5 @@ function uninstall({ appPath: given, name, slug, root = defaultRoot(), register 
 
 module.exports = {
   install, uninstall, reseal, readInfo, listBundles, dataPaths, bundlePath, freeBundlePath, bundleName, bundleId,
-  defaultRoot, infoPlist, LSREGISTER,
+  defaultRoot, infoPlist, windowKeys, LSREGISTER,
 };

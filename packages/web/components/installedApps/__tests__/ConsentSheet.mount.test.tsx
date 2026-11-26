@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "bun:test";
+import { setDefaultTimeout, test } from "bun:test";
 import { resolvePageApp, type AppPermission } from "@codecast/shared/contracts/pageApp";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import type { AppInfo, ConsentRequest } from "../../../lib/installedApps";
@@ -16,6 +16,9 @@ const info = (o: Partial<AppInfo> = {}): AppInfo => ({
   policy: { install: true, fullAccess: true },
   ...o,
 });
+// The first mount imports jsdom, React and the sheet cold: well under a second alone, past bun's 5 s default on a loaded machine.
+setDefaultTimeout(60_000);
+
 const install = (i: AppInfo): ConsentRequest => ({ id: "c1", kind: "install", info: i, asked: i.app.permissions, current: [], added: i.app.permissions });
 
 async function mount(req: ConsentRequest) {
@@ -80,7 +83,10 @@ test("install: full access the team does not allow is locked with the reason, an
   try {
     const full = q('[data-permission="full-access"]')!;
     assert.equal(full.dataset.permissionBlock, "Off for your team");
-    assert.equal(full.querySelector("[role=switch]"), null, "no switch to press");
+    assert.match(full.querySelector("[data-permission-reason]")!.textContent!, /Off for your team/);
+    const locked = full.querySelector("[role=switch]") as HTMLButtonElement;
+    assert.equal(locked.disabled, true, "the switch is locked off");
+    assert.equal(locked.getAttribute("aria-checked"), "false");
     await React.act(async () => q("[data-switch-cancel]")!.click());
     assert.deepEqual(answers, [{ approve: false, grants: [] }]);
   } finally {

@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="codecast:height" content="560">
+<title>Needs you</title>
+<style>
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-SemiBold.ttf"); font-weight: 600; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono-Bold.ttf"); font-weight: 700; }
+
+:root {
+  --paper: #f6f4ee;
+  --paper-2: #ece8de;
+  --rule: rgba(20, 36, 176, .08);
+  --ink: #141a33;
+  --muted: #5d6380;
+  --dim: #9297ad;
+  --blue: #1f35e0;
+  --blue-soft: rgba(31, 53, 224, .09);
+  --red: #ec3a2a;
+  --decision: #1f35e0;
+  --session: #0f8f6b;
+  --task: #b5620b;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0d1020;
+    --paper-2: #151a31;
+    --rule: rgba(150, 165, 255, .08);
+    --ink: #eceefa;
+    --muted: #a1a6c4;
+    --dim: #61678a;
+    --blue: #8d9bff;
+    --blue-soft: rgba(141, 155, 255, .12);
+    --decision: #8d9bff;
+    --session: #45d6a8;
+    --task: #f2a54a;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 14px/1.4 "Instrument Sans", system-ui, sans-serif;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, var(--blue-soft), transparent 180px),
+    repeating-linear-gradient(180deg, transparent 0 27px, var(--rule) 27px 28px),
+    var(--paper);
+  -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+
+.top { padding: 22px 22px 12px; display: flex; align-items: flex-end; gap: 22px; }
+.count {
+  font: 700 84px/.8 var(--mono); letter-spacing: -.06em; color: var(--blue);
+  font-variant-numeric: tabular-nums; position: relative;
+}
+.count.hot::after {
+  content: ""; position: absolute; top: -4px; right: -16px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--red); box-shadow: 0 0 0 3px var(--paper);
+}
+.count.clear { color: var(--dim); }
+.what { padding-bottom: 2px; min-width: 0; }
+.what b { display: block; font-size: 17px; font-weight: 600; }
+.what span { color: var(--muted); font-size: 12.5px; }
+
+.kinds { display: flex; gap: 4px; padding: 6px 16px 10px; }
+.kind {
+  flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  padding: 8px 10px; border-radius: 10px; cursor: pointer;
+  background: transparent; border: 1px solid transparent; text-align: left;
+  transition: background .15s, border-color .15s;
+}
+.kind:hover { background: var(--blue-soft); }
+.kind[aria-pressed="true"] { background: var(--paper-2); border-color: var(--rule); }
+.kind .n { font: 700 20px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.kind .l { color: var(--muted); font-size: 12px; }
+.kind[data-kind="decision"] .n { color: var(--decision); }
+.kind[data-kind="session"] .n { color: var(--session); }
+.kind[data-kind="task"] .n { color: var(--task); }
+.kind.zero .n { color: var(--dim); }
+
+.list { flex: 1; overflow-y: auto; padding: 2px 8px 12px; scrollbar-width: thin; }
+.item {
+  display: grid; grid-template-columns: 3px 1fr auto; gap: 2px 12px; align-items: start;
+  padding: 10px 12px 10px 10px; border-radius: 10px; position: relative; cursor: pointer;
+  transition: background .15s;
+}
+.item:hover { background: var(--blue-soft); }
+.item .bar { grid-row: 1 / 3; align-self: stretch; border-radius: 2px; background: var(--c); }
+.item[data-kind="decision"] { --c: var(--decision); }
+.item[data-kind="session"] { --c: var(--session); }
+.item[data-kind="task"] { --c: var(--task); }
+.item .t { font-weight: 500; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.item .age { font: 500 12px/1.6 var(--mono); color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.item .m { grid-column: 2 / 4; display: flex; gap: 8px; min-width: 0; font-size: 12px; color: var(--muted); }
+.item .m .ref { font: 500 11.5px/1.5 var(--mono); color: var(--c); flex: none; }
+.item .m .d { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.item.new .age { color: var(--red); }
+.item.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0% { background: color-mix(in srgb, var(--c) 22%, transparent); } 100% { background: transparent; } }
+
+.empty { margin: 24px 14px; text-align: center; color: var(--muted); }
+.empty b { display: block; font-size: 15px; color: var(--ink); margin-bottom: 2px; }
+.err { margin: 0 16px 10px; padding: 9px 12px; border-radius: 10px; background: rgba(236, 58, 42, .1); color: var(--red); font-size: 12.5px; }
+
+.foot { display: flex; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid var(--rule); }
+.foot[hidden] { display: none; }
+.switch {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 8px; border-radius: 999px; cursor: pointer;
+  background: var(--paper-2); border: 1px solid var(--rule); font-size: 12.5px; color: var(--muted);
+}
+.switch .dot { width: 22px; height: 13px; border-radius: 999px; background: var(--dim); opacity: .5; position: relative; transition: background .2s, opacity .2s; }
+.switch .dot::after { content: ""; position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; border-radius: 50%; background: var(--paper); transition: transform .2s; }
+.switch[aria-checked="true"] { color: var(--ink); }
+.switch[aria-checked="true"] .dot { background: var(--blue); opacity: 1; }
+.switch[aria-checked="true"] .dot::after { transform: translateX(9px); }
+.switch[data-refused] { color: var(--red); }
+
+/* Menu bar popover: the same page, tighter. */
+body.tray .top { padding: 16px 16px 8px; gap: 18px; }
+body.tray .count { font-size: 58px; }
+body.tray .count.hot::after { right: -13px; width: 10px; height: 10px; }
+body.tray .what b { font-size: 15px; }
+body.tray .kinds { padding: 4px 10px 8px; }
+body.tray .list { padding: 0 4px 8px; }
+body.tray .foot { display: none; }
+
+.reveal { animation: up .4s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 36ms); }
+@keyframes up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .reveal, .item.flash { animation: none; } }
+</style>
+</head>
+<body>
+<header class="top reveal">
+  <div class="count" id="count">·</div>
+  <div class="what"><b id="headline">Checking</b><span id="checked">&nbsp;</span></div>
+</header>
+<nav class="kinds reveal" style="--i:1" id="kinds">
+  <button class="kind" data-kind="decision" aria-pressed="false"><span class="n">–</span><span class="l">Decisions</span></button>
+  <button class="kind" data-kind="session" aria-pressed="false"><span class="n">–</span><span class="l">Sessions</span></button>
+  <button class="kind" data-kind="task" aria-pressed="false"><span class="n">–</span><span class="l">Tasks</span></button>
+</nav>
+<div id="error"></div>
+<main class="list" id="list"></main>
+<footer class="foot" id="foot" hidden>
+  <button class="switch" id="sw-alerts" role="switch" aria-checked="false"><span class="dot"></span><span class="lbl">Alerts</span></button>
+  <button class="switch" id="sw-tray" role="switch" aria-checked="false"><span class="dot"></span><span class="lbl">Menu bar</span></button>
+</footer>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const app = window.cast?.app;
+const info = app ? await app.info().catch(() => null) : null;
+const surface = info?.surface ?? "browser";
+if (surface === "tray") document.body.classList.add("tray");
+
+const KIND = { decision: "Decision", session: "Session", task: "Task" };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const ago = (t) => {
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+};
+const keyOf = (item) => `${item.kind}:${item.ref}`;
+
+// What this install already told the person about, shared by the window and
+// the menu bar popover (one storage per install), so neither repeats it.
+const SEEN = "needs-you:seen";
+const seen = () => { try { return JSON.parse(localStorage.getItem(SEEN)); } catch { return null; } };
+const remember = (keys) => { try { localStorage.setItem(SEEN, JSON.stringify(keys)); } catch {} };
+const muted = () => localStorage.getItem("needs-you:muted") === "1";
+const trayOff = () => localStorage.getItem("needs-you:tray") === "off";
+
+// Only one surface tells the person: the window while it is open (it holds a
+// lock for its lifetime), else the popover. The other only paints.
+const WINDOW_LOCK = "needs-you:window";
+if (surface === "window" && navigator.locks) navigator.locks.request(WINDOW_LOCK, () => new Promise(() => {}));
+async function isNotifier() {
+  if (surface === "window") return true;
+  if (surface !== "tray" || !navigator.locks) return false;
+  const { held } = await navigator.locks.query();
+  return !held.some((l) => l.name === WINDOW_LOCK);
+}
+
+// Opens an item in Codecast's own window when the host can, else its codecast.sh
+// address: a link the installed host hands to the default browser.
+async function openItem(item) {
+  if (app?.openInCodecast) {
+    const u = new URL(item.url);
+    try { return void (await app.openInCodecast(u.pathname + u.search + u.hash)); } catch {}
+  }
+  // Inside an installed app, leaving the page goes to the default browser; a browser tab opens a new one.
+  if (app) location.assign(item.url);
+  else window.open(item.url, "_blank", "noopener");
+}
+
+let grants = new Set(info?.grants ?? []);
+let items = null;
+let at = 0;
+let error = null;
+let filter = null;
+let fresh = new Set();
+let firstPaint = true;
+
+function render() {
+  const total = items ? items.length : null;
+  const count = $("count");
+  count.textContent = total === null ? "·" : total;
+  count.className = "count" + (total > 0 ? " hot" : total === 0 ? " clear" : "");
+  $("headline").textContent = total === null ? "Checking" : total === 0 ? "Nothing waits on you" : "waiting on you";
+  $("checked").textContent = at ? `Checked ${ago(at) === "now" ? "just now" : ago(at) + " ago"}` : " ";
+  $("error").innerHTML = error ? `<div class="err">${esc(error)}</div>` : "";
+  for (const btn of document.querySelectorAll(".kind")) {
+    const n = items ? items.filter((i) => i.kind === btn.dataset.kind).length : null;
+    btn.querySelector(".n").textContent = n === null ? "–" : n;
+    btn.classList.toggle("zero", n === 0);
+    btn.setAttribute("aria-pressed", String(filter === btn.dataset.kind));
+  }
+  const list = $("list");
+  if (!items) return;
+  const shown = filter ? items.filter((i) => i.kind === filter) : items;
+  if (!shown.length) {
+    list.innerHTML = `<div class="empty reveal"><b>${filter ? `No ${KIND[filter].toLowerCase()}s wait on you` : "You're clear"}</b>Asks, parked sessions and reviews show here as they arrive.</div>`;
+    return;
+  }
+  list.innerHTML = shown.map((i, n) => `
+    <a class="item${fresh.has(keyOf(i)) ? " new" : ""}${firstPaint ? " reveal" : ""}" style="--i:${2 + n}" data-kind="${i.kind}" data-key="${esc(keyOf(i))}" href="${esc(i.url)}" target="_blank" rel="noopener">
+      <span class="bar"></span>
+      <span class="t">${esc(i.title)}</span>
+      <span class="age">${ago(i.since)}</span>
+      <span class="m"><span class="ref">${esc(i.ref)}</span><span class="d">${esc(i.detail || KIND[i.kind])}</span></span>
+    </a>`).join("");
+  firstPaint = false;
+}
+
+$("list").addEventListener("click", (e) => {
+  const row = e.target.closest(".item");
+  if (!row) return;
+  e.preventDefault();
+  const item = items?.find((i) => keyOf(i) === row.dataset.key);
+  if (item) openItem(item);
+});
+$("kinds").addEventListener("click", (e) => {
+  const btn = e.target.closest(".kind");
+  if (!btn) return;
+  filter = filter === btn.dataset.kind ? null : btn.dataset.kind;
+  render();
+});
+
+// ── live data: the `waiting` reader, as the page's publisher (you, on your own install) ──
+function onWaiting(ans) {
+  if (ans.error) { error = ans.error; return render(); }
+  const col = Object.fromEntries(ans.columns.map((c, i) => [c, i]));
+  items = ans.rows.map((r) => ({ kind: r[col.kind], ref: r[col.ref], title: r[col.title], detail: r[col.detail], since: Date.parse(r[col.since]), url: r[col.url] }));
+  at = ans.refreshed_at;
+  error = null;
+  changed();
+}
+
+// Each change: repaint, carry the count to the Dock and the menu bar, and
+// notify once per item the person has not heard of. One change at a time, so
+// two pushes never read the same "seen" and both notify.
+let changing = Promise.resolve();
+const changed = () => (changing = changing.then(changedNow, changedNow));
+async function changedNow() {
+  if (!items) return render();
+  const before = seen();
+  const arrived = before ? items.filter((i) => !before.includes(keyOf(i))) : [];
+  const live = new Set(items.map(keyOf));
+  fresh = new Set([...fresh, ...arrived.map(keyOf)].filter((k) => live.has(k)));
+  render();
+  if (!app) return;
+  const total = items.length;
+  app.badge(total).catch(() => {});
+  if (grants.has("menu-bar") && !trayOff()) {
+    const by = (k) => { const n = items.filter((i) => i.kind === k).length; return `${n} ${KIND[k].toLowerCase()}${n === 1 ? "" : "s"}`; };
+    const tooltip = total ? `${by("decision")} · ${by("session")} · ${by("task")}` : "Nothing waits on you";
+    app.tray.set({ title: total ? String(total) : "", tooltip }).catch(() => {});
+  }
+  if (!(await isNotifier())) return;
+  if (before && grants.has("notifications") && !muted()) {
+    for (const i of arrived.slice(0, 3)) notify({ title: `${KIND[i.kind]} waiting on you`, body: i.title, tag: keyOf(i) });
+    if (arrived.length > 3) notify({ title: `${arrived.length - 3} more waiting on you`, body: "Open Needs you to see them", tag: "more" });
+  }
+  remember([...live]);
+}
+const notify = (n) => app.notify(n).catch((e) => showRefusal("alerts", e));
+
+if (window.cast?.subscribe) window.cast.subscribe("waiting", onWaiting);
+else { error = "Live data runs on a published page (cast publish)."; items = []; render(); }
+setInterval(render, 30_000);
+
+// ── the installed app's own controls ──
+if (app && surface === "window") {
+  $("foot").hidden = false;
+  paintSwitches();
+  $("sw-alerts").onclick = () => {
+    if (!grants.has("notifications")) return ask(["notifications"], "alerts");
+    localStorage.setItem("needs-you:muted", muted() ? "0" : "1");
+    paintSwitches();
+  };
+  $("sw-tray").onclick = () => {
+    if (!grants.has("menu-bar")) return ask(["menu-bar"], "tray");
+    if (trayOff()) { localStorage.removeItem("needs-you:tray"); changed(); }
+    else { localStorage.setItem("needs-you:tray", "off"); app.tray.remove().catch(() => {}); }
+    paintSwitches();
+  };
+}
+function paintSwitches() {
+  $("sw-alerts").setAttribute("aria-checked", String(grants.has("notifications") && !muted()));
+  $("sw-tray").setAttribute("aria-checked", String(grants.has("menu-bar") && !trayOff()));
+  for (const id of ["sw-alerts", "sw-tray"]) delete $(id).dataset.refused;
+  $("sw-alerts").querySelector(".lbl").textContent = "Alerts";
+  $("sw-tray").querySelector(".lbl").textContent = "Menu bar";
+}
+async function ask(perms, which) {
+  try {
+    grants = new Set(await app.permissions.request(perms));
+    paintSwitches();
+    changed();
+  } catch (e) { showRefusal(which, e); }
+}
+// A refusal names its reason on the control that asked.
+const REASONS = { denied: "declined", "not-allowed-by-team": "off for your team", "needs-consent": "needs approval", "mixed-version": "reloading" };
+function showRefusal(which, e) {
+  const el = $(which === "tray" ? "sw-tray" : "sw-alerts");
+  if (!el) return;
+  el.dataset.refused = "";
+  el.querySelector(".lbl").textContent = `${which === "tray" ? "Menu bar" : "Alerts"}: ${REASONS[e?.code] ?? e?.message ?? "failed"}`;
+}
+
+if (app) {
+  app.on("grants", (g) => { grants = new Set(g.grants); paintSwitches(); changed(); });
+  // A notification's click opens what it was about in Codecast; the summary one shows the list.
+  app.on("notification-click", ({ tag }) => {
+    const item = items?.find((i) => keyOf(i) === tag);
+    if (item) return void openItem(item);
+    app.window.focus().catch(() => {});
+  });
+}
+// Seen once on screen, an item stops being new.
+window.addEventListener("focus", () => setTimeout(() => { fresh = new Set(); render(); }, 4000));
+</script>
+</body>
+</html>

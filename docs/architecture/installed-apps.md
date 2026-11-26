@@ -17,7 +17,9 @@ needs to differ, change this document first.
 - **macOS bundle**: `~/Applications/Codecast Apps/<Name>.app`, with bundle id
   `sh.codecast.app.<slug>`.
 - **Windows shortcut**:
-  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Codecast Apps\<Name>.lnk`.
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Codecast Apps\<Name>.lnk`,
+  or `<Name> (<slug>).lnk` when another installed app already holds that
+  name. A device name (`CON`, `NUL`, `COM1` and the like) gets a `_`.
   - AppUserModelID: `Codecast.App.<slug>`.
   - Arguments: `--codecast-app=<slug>`.
   - Target: the stable Codecast executable path that survives updates,
@@ -27,7 +29,8 @@ needs to differ, change this document first.
   Each record holds:
   - `{slug, name, iconPath, installedAt, grantedVersion, grants: string[], bounds, trayBounds, gate}`.
   - `gate` holds the page's gate keys. Secrets inside it are encrypted with
-    Electron `safeStorage`.
+    Electron `safeStorage`. The stored facts carry no keys: appInfo's icon
+    URLs are kept without them and get them back where main hands facts on.
 
 ## The manifest
 
@@ -52,8 +55,10 @@ with no `app` block installs with the defaults.
 - **`tray.icon`**: a monochrome PNG used as a macOS template image. Without
   one, a dot is drawn from the app icon.
 - **`titleBar`**: `default` or `hidden`. With `hidden` the page draws its own
-  title bar and marks drag regions with `-webkit-app-region: drag`. On macOS
-  the traffic lights stay.
+  title bar. On Windows it marks drag regions with `-webkit-app-region: drag`.
+  On macOS the traffic lights stay, and since `WKWebView` ignores that CSS,
+  the top 28 px of the window is a drag strip over the page instead; the page
+  keeps that band free of controls.
 - **`permissions`**: what the app will ask for. The install sheet shows them
   up front. An app can still ask later through `cast.app.permissions.request`.
 - Each published version records the parsed manifest (`artifact_versions.app`)
@@ -136,8 +141,8 @@ is `convex/lib/appIcon.ts`.
 
 | Tier | Grant | What it allows |
 |---|---|---|
-| Default | always | Everything a browser tab can do, plus `cast.app.window.*`, `cast.app.badge`, `cast.app.info`, `cast.app.permissions.*`, `cast.app.on(...)` |
-| App permission | each granted separately | `notifications`: native notifications under the app's name and icon. `menu-bar`: a menu bar (macOS) or tray (Windows) item with a popover. `shortcuts`: global shortcuts, which need at least two modifiers and are ignored while the screen is locked. `overlay`: always on top, visible on all workspaces, click-through. `agent`: ask the person's agent a question (runs as them and counts toward their usage). `login`: open at login. |
+| Default | always | Everything a browser tab can do, plus `cast.app.window.*`, `cast.app.badge`, `cast.app.openInCodecast`, `cast.app.info`, `cast.app.permissions.*`, `cast.app.on(...)` |
+| App permission | each granted separately | `notifications`: native notifications under the app's name and icon. `menu-bar`: a menu bar (macOS) or tray (Windows) item with a popover. `shortcuts`: global shortcuts, which need at least two modifiers, are never a chord the system keeps (Force Quit, screenshots, lock, log out, Task Manager, Ctrl+Alt+Delete, Snip), and are ignored while the screen is locked. `overlay`: always on top, visible on all workspaces, click-through. `agent`: ask the person's agent a question (runs as them through their `cast exec --agent claude --answer-only`, from their home directory, with a first line naming the app; answer-only is claude with no built-in tools and no MCP servers, in dontAsk, ignoring their configured agent args, default params and claude settings, so it can answer but cannot run commands, read or edit files, whatever their own permission mode is; a cast too old for the flag refuses it; at most 5 minutes; counts toward their usage). `login`: open at login. |
 | Full access | `full-access` | `cast.app.fs.*` (read, write, list, stat, remove, watch, anywhere the person can reach), `cast.app.process.run` (run a program with args, cwd, env and a timeout; returns exit code, stdout and stderr), `cast.app.shell.open` (open a path or URL with its default app) |
 
 Rules:
@@ -160,7 +165,10 @@ Rules:
     `teamAppsPolicy`).
 - **Mixed versions.** A window still showing version N while version N+1 is
   current is reloaded before any non-default call runs. The engine refuses
-  that call with `mixed-version`.
+  that call with `mixed-version`. It also refuses a window showing a version
+  newer than the facts until the facts confirm it: the frame version comes
+  from a response header a page's own service worker can forge, so grants
+  are only ever recorded for a version the server published.
 - **Remote content.** Anything the page loads from another origin runs inside
   the page's own sandbox. Nothing outside the page's document reaches the
   bridge.
@@ -187,6 +195,7 @@ so on) alone.
 
 ```js
 cast.app.info()                       // {slug, name, version, surface: "window"|"tray", platform, grants, requested}
+                                      //   + on macOS {notifications, notificationSettingsUrl}
 cast.app.permissions.request(["notifications"])  // shows the host's consent sheet; resolves to the new grants
 cast.app.notify({title, body, tag, silent})      // click focuses the app; fires cast.app.on("notification-click", {tag})
 cast.app.tray.set({title, tooltip, badge})       // shows the item; clicking it opens the popover (the same page at surface "tray")
@@ -196,6 +205,7 @@ cast.app.window.setAlwaysOnTop(true)             // overlay; setSize, setTitle, 
 cast.app.window.setVisibleOnAllWorkspaces(true)  // overlay
 cast.app.window.setIgnoreMouseEvents(true)       // overlay: click-through; the host restores it when the window is focused from the Dock/taskbar or the tray
 cast.app.badge(3)                                // Dock badge, or taskbar overlay on Windows; 0 clears it
+cast.app.openInCodecast("/tasks/ct-12")          // shows a codecast path in Codecast's window and brings it forward
 cast.app.agent.ask(prompt)                       // {answer}
 cast.app.login.set(true)                         // login: open at login
 cast.app.fs.readText(path) / writeText(path, text) / stat(path) / remove(path)
@@ -209,7 +219,7 @@ cast.app.on(event, cb) / off(event, cb)          // on() returns an off function
 On the wire, every call is a message `{id, module, method, args}`, answered
 with `{id, ok: true, value}` or `{id, ok: false, code, message}`. `module` is
 the namespace under `cast.app`; the top-level calls (`info`, `notify`,
-`badge`) use module `app`. `fs.watch` answers with a watch id, and the
+`badge`, `openInCodecast`) use module `app`. `fs.watch` answers with a watch id, and the
 client's `stop()` sends `fs.unwatch(watchId)`. The method table, with each
 method's tier, is `packages/electron/installedApps/tiers.json`; each method's
 argument schema is `ARGS` in `engine.js`.
@@ -220,6 +230,17 @@ timeout (30 s by default, 10 min at most) and resolves at once with the
 output so far, and keeps at most 4 MB of each output stream. `fs.readText`
 reads only regular files and fails past 16 MB read, whatever the file's stat
 size says. An app holds at most 64 watches.
+
+`openInCodecast` takes a path inside codecast's web app (`/conversation/<id>`,
+`/decisions/<sd-N>`, `/tasks/<ct-N>`): one leading slash, no host, no
+whitespace or backslash, at most 2048 characters. A page holding a full
+`https://codecast.sh/...` URL passes its path, query and hash. It needs no
+grant, because all it can do is show the person their own Codecast. Like
+`agent.ask` and `shell.open` it runs in Codecast's main process on both
+platforms (`engine.MAIN_METHODS`, answered by `host.js`); the shim forwards
+it and performs nothing itself. An older Codecast answers `unknown-method`,
+and the page then opens the URL, which the host hands to the default
+browser.
 
 Error codes:
 
@@ -278,7 +299,18 @@ implement the same adapter interface, documented at the top of
 - Navigation is locked to `https://a.codecast.sh/<slug>` and paths under it.
   Everything else opens in the default browser.
 - Notifications are toasts shown through the app's AUMID, so they carry the
-  app's name and icon.
+  app's name and icon. Each app shows one toast at a time (one PowerShell process),
+  keeps at most three waiting (the oldest is dropped), and may call
+  `notify` at most ten times a minute; past that the call fails with
+  "too many notifications". A toast process still alive after 45 seconds
+  is killed so the next one can show. The title is cut to 256 characters,
+  the body to 1024 and the tag to 64, never inside a character, and
+  characters XML cannot hold are dropped, so a toast always fits the
+  PowerShell command line and always parses.
+- Open at login is a `HKCU\...\Run` value named `CodecastApp-<slug>`:
+  the quoted Codecast exe, then (from source only) the quoted app path, then
+  `--codecast-app=<slug>`.
+- The badge is a taskbar overlay, set again each time the app's window shows.
 - The tray item is an Electron `Tray` with the app's icon. Its popover is a
   frameless window anchored to the tray.
 
@@ -290,7 +322,12 @@ implement the same adapter interface, documented at the top of
   - a generated `Info.plist` with `CodecastAppSlug` and `CodecastHostBundleId`,
     plus optional `CodecastPageUrl` (defaults to `https://a.codecast.sh/<slug>`),
     `CodecastSocketPath` (defaults to `<userData>/apps.sock`),
-    `CodecastWindowWidth`/`Height` and `CodecastTrayWidth`/`Height`;
+    `CodecastHostVersion` and `CodecastSealKey` (what re-sealing compares),
+    `CodecastTrayWidth`/`Height`, and the manifest's window options:
+    `CodecastWindowWidth`/`Height`, `CodecastMinWidth`/`MinHeight`,
+    `CodecastResizable` (a boolean) and `CodecastTitleBar` (`default` or
+    `hidden`). An option the manifest leaves out has no key, and the shim uses
+    its default;
   - a generated `app.icns`;
   - `Resources/client.js`, the page client (`protocol.clientSource()`), which
     the shim injects at document start in the main frame.
@@ -300,17 +337,67 @@ implement the same adapter interface, documented at the top of
 - The bundle is sealed ad hoc at install time and registered with Launch
   Services. Files Codecast writes carry no quarantine flag.
 - The shim owns its process. That gives it its own Dock tile, Cmd-Tab entry,
-  menu bar (About, Hide, Quit, Edit, Window), and notifications through
-  `UNUserNotificationCenter` under its own bundle id. It also owns its tray
-  item (`NSStatusItem` with an `NSPopover`), its global shortcuts and its
-  window level.
+  menu bar (About, Settings…, Show in Codecast, Uninstall, Services, Hide,
+  Quit; File > Close Window; Edit; View > Reload Page, Actual Size, Zoom In,
+  Zoom Out, Enter Full Screen; Window), a Dock menu with Show in Codecast,
+  and notifications through `UNUserNotificationCenter` under its own
+  bundle id. It also owns its tray item (`NSStatusItem` with a panel under it),
+  its global shortcuts and its window level. The Edit menu carries its own
+  Start Dictation and Emoji & Symbols, with AppKit's automatic copies turned
+  off (`NSDisabledDictationMenuItem`, `NSDisabledCharacterPaletteMenuItem`),
+  because AppKit appends those on several passes after launch and repeats them.
+- Settings… (Cmd-,) opens Codecast's Settings > Installed apps on this app
+  through `codecast://open/settings/installed-apps?app=<slug>`, which also
+  starts Codecast when it is not running; the page scrolls to that app's row
+  and marks it. About shows the app's name and
+  icon, the page version it loaded (else the installed one), the page's address without its query (the
+  gate keys) and "Made with Codecast". Page zoom (Cmd-+, Cmd--, Cmd-0) is kept
+  per app. Window tabbing is off.
+- The first launch centers the window on the screen under the pointer; after
+  that it opens where it was left (the frame autosave), unless that place is
+  on no screen. The web view stays transparent over the window's
+  background, which is the color the page had last time (WebKit's theme
+  color, else the page's canvas color read once it loads, kept in the app's
+  preferences) and the system window color the first time, so the window
+  never flashes white or gray before the page's first frame.
+  When that color suits the system's light or dark look, the title bar wears
+  it too.
+- When the page itself does not load, the window is covered the same way:
+  "You're offline" when this Mac has no connection, "The page didn't load"
+  otherwise, with Try Again. The shim retries every 4 seconds and when the
+  app comes forward, and the cover goes once the page loads. Codecast's own
+  state (not installed, not running, signed out) takes the cover first.
+- The tray page sits in a borderless panel under the menu bar item (an
+  `NSPanel` created with `.nonactivatingPanel`, not an `NSPopover`, whose
+  window AppKit owns), at the manifest's tray size. It takes the keyboard
+  while another app stays in front, and the app's main window stays where it
+  is. It closes on Esc, a click anywhere outside it, or a second click on the
+  item.
+- The window follows the manifest's window options: its size, minimum size
+  and resizability. With `titleBar: "hidden"` the page fills the window under
+  a transparent title bar (`fullSizeContentView`, no title), the traffic
+  lights stay, and a 28 px strip across the top moves the window and zooms it
+  on a double click.
+- The shim sets `applicationNameForUserAgent`, so WebKit's own user agent
+  ends in ` CodecastApp/<CodecastHostVersion> (<slug>)` on every request,
+  the document's included.
 - The shim renders the page in a `WKWebView`. It reaches the engine in
   Codecast's main process over a Unix socket at
   `<userData>/apps.sock` (mode 0600, newline-delimited JSON,
   `protocol.serveSocket`). It sends
   `{app, frame: {version, surface}, msg: {id, module, method, args}}` and
   reads the reply envelope; host events arrive as `{event, data}` lines on
-  the same connection. For what the shim owns (notifications, tray,
+  the same connection. The shim's own requests go as
+  `{app, host: <action>, data, msg: {id}}`, a shape only the shim builds (the
+  page reaches the socket only through calls the shim wraps in the first
+  envelope). The actions are `report` (notification authorization, the
+  window's frame, which Codecast centers the consent sheet on, and that the
+  app came forward), `open-in-codecast`, and `uninstall`. Three host events
+  stay with the shim and never reach the page: `host-state` `{signedIn}`
+  (sent when it connects and whenever sign-in changes; signed out covers the
+  page), `host-reload` (after a new version's `version` event), and
+  `host-quit` (Codecast is uninstalling the app and removes its data once the
+  process is gone). For what the shim owns (notifications, tray,
   shortcuts, window, badge) it asks the engine, then performs the OS action
   itself when the engine allows it. Files, programs, `agent.ask` and consent
   run in Codecast's main process.
@@ -331,9 +418,22 @@ implement the same adapter interface, documented at the top of
   `app.info` at once, because the host learns which app a connection belongs
   to only from its first message, and hands the page a `grants` event with
   the reply's `grants` and `version`. With Codecast signed out, it says so and offers to open Codecast.
+  That cover, like "isn't running" and "isn't installed", shows the app's
+  own icon in color, one line, and the one button that fixes it.
+- `app.info` gains two fields only the shim knows: `notifications`, macOS's
+  answer for this bundle (`not-determined`, `denied`, `authorized`,
+  `provisional` or `ephemeral`), and `notificationSettingsUrl`, the
+  Notifications pane of System Settings opened at this app.
+- Uninstall from the app's own menu asks once in a native alert, hides the
+  window and asks Codecast, which removes the bundle, data and record and
+  replies when that is done. On success the shim exits at once, and Codecast
+  removes the data again once the process is gone, in case it wrote any on
+  the way out. On a failure the window comes back with the reason in an
+  alert.
 - When Codecast updates, every installed bundle gets the new shim binary and
   page client and is re-sealed on Codecast's next launch, before any app
-  connects.
+  connects. A bundle whose window keys no longer match its app's manifest is
+  rewritten and re-sealed at the same point.
 - macOS keeps each app's data under its bundle id, outside the bundle:
   `~/Library/WebKit/<id>`, `Caches/<id>`, `HTTPStorages/<id>`, `Saved
   Application State/<id>.savedState` and its preferences, which hold the window
@@ -352,7 +452,8 @@ An installed app is the page itself, not the page inside codecast's chrome.
 
 - **Who the server serves as a host.** Both hosts send a user agent that
   ends in ` CodecastApp/<desktop version> (<slug>)`: Electron through the
-  partition's `setUserAgent`, the shim through `WKWebView.customUserAgent`. A
+  partition's `setUserAgent`, the shim through
+  `WKWebViewConfiguration.applicationNameForUserAgent`. A
   web page cannot set the user agent of a navigation or a frame, so a
   browser never gets the host response. The edge
   (`infra/artifact-edge/worker.js`) bypasses its cache for that user agent.
@@ -383,6 +484,10 @@ process has no sign-in, but the web app it hosts does.
   window alive, it falls back to `?app=1` with the stored gate keys (relation
   then comes from the stored identity token; with none it is `anonymous` and
   full access is refused) every 60 s while an app is open, and on focus.
+  A fallback answer may lower the relation and tighten the policy the
+  shell's last answer gave, never raise or loosen them: it proves no one at
+  this computer (a forwarded `m` link names the member it was minted for,
+  who may be the page's owner).
 - A version change sends the `version` event to every open surface of that
   app, then reloads it.
 
@@ -394,19 +499,30 @@ app. `packages/web/lib/desktop.ts` wraps it as `desktopApps()`, which returns
 null elsewhere.
 
 ```ts
-apps.list(): Promise<InstalledApp[]>          // {slug, name, iconUrl, version, grantedVersion, grants, requested, needsReview, platform}
+apps.list(): Promise<InstalledApp[]>          // {slug, name, iconUrl, version, grantedVersion, grants, requested, needsReview, platform, gate}
+                                              //   + on macOS {running, notifications, notificationSettingsUrl}
 apps.install(info: AppInfo): Promise<void>    // opens the install sheet for that page; resolves when the sheet closes
 apps.open(slug): Promise<void>
 apps.uninstall(slug): Promise<void>
 apps.setGrants(slug, grants: string[]): Promise<void>  // for the current version
 apps.facts(slug, info: AppInfo): void         // the facts feed above
-apps.onChange(cb: (apps: InstalledApp[]) => void): () => void
+apps.setSignedIn(signedIn: boolean): void     // Codecast's sign-in, whenever it changes
+apps.onChange(cb: (apps: InstalledApp[]) => void): () => void  // also fires when a shim connects, leaves or reports
 apps.consent: { get(id): Promise<ConsentRequest>, answer(id, {approve, grants}): Promise<void> }
 ```
 
+`gate` holds the install's `k`, `e` and `m`, so the facts feed can read a
+gated page; the identity token stays in main. Main keeps the last
+`setSignedIn` value in `settings.json` (`installedAppsSignedIn`; a computer
+that never heard counts as signed in). While it is false every app covers its
+page with "Codecast is signed out" and an Open Codecast control: the shim's
+own overlay on macOS, a cover page in the app window on the Electron host.
+
 **The consent sheet is one web route** in codecast, `/apps/consent/<id>`,
 shown in a small, focused shell window that main opens over the app asking
-(centered on the app's window, floating, no Dock presence of its own on
+(centered on the app's window, at the screen-saver window level, above every
+level an app can reach with `overlay` or its tray panel, so no app window
+can cover it with click-through decoys; no Dock presence of its own on
 macOS beyond Codecast's). The same route serves all three moments: install,
 `cast.app.permissions.request`, and the re-ask after a new version. A
 `ConsentRequest` is
@@ -414,10 +530,20 @@ macOS beyond Codecast's). The same route serves all three moments: install,
 It renders with the shared consequential flow and answers through
 `apps.consent.answer`. Closing the window counts as a refusal: `denied` for
 a request, nothing installed for an install.
+The window is as tall as the sheet: the route reports its natural height with
+`apps.consent.resize(id, height)`, and main sets that content height, clamped
+to the display's work area (the footer stays pinned while the rest scrolls),
+keeps it centered on the asking app, and shows the window on that first
+report (or after 400 ms for a route that never reports).
 
 `codecast://install/<slug>?k=…&m=…` (from a browser or `cast publish install`)
 makes main ask the shell web app for `appInfo` (the web app handles the deep
 link, fetches the info signed in, and calls `apps.install`).
+`codecast://uninstall/<slug>` is answered in main: Codecast asks with a
+native dialog ("Uninstall Vitals?", Uninstall or Cancel) and uninstalls on
+Uninstall. A link that arrives while Codecast starts waits for the host;
+a repeat link for a slug whose dialog is open is ignored, and a link whose
+path is not a plain slug is refused.
 - An app works only while Codecast is installed and signed in. Uninstalling
   removes the bundle or shortcut, the partition's storage and the registry
   record. It never touches the page's shared state.
@@ -440,6 +566,48 @@ link, fetches the info signed in, and calls `apps.install`).
 - **Settings > Installed apps** lists every app with its icon, version, grants
   (each a toggle), Open, and Uninstall. A pending re-ask shows as a "Review"
   state on its row.
+- A `codecast://uninstall/<slug>` link (from a browser, or
+  `cast publish uninstall`) asks on the desktop with a native "Uninstall
+  <Name>?" dialog before anything is removed.
 - Agents use `cast publish install|uninstall|apps <target>`. Install opens the
   same sheet on the person's desktop, so an agent can never grant a
   permission.
+
+## Proving it end to end
+
+`packages/electron/installedApps/e2e/run.mjs` runs the whole flow on a Mac
+against Codecast's real `main.js` from source, once per host (the macOS shim,
+then the Electron-window host Windows runs), and exits non-zero on any
+failure. `e2e/standin.mjs` plays a.codecast.sh with the examples: the bundle
+redirect to `/<slug>/`, the host user agent rule, `X-Cast-Version`, the gate's
+answers without a key, `?app=1` (relation and policy settable, so a team that
+turned installs off can be shown), icons through the `codecast.sh/a/<slug>`
+redirect, the generated monogram, live data and a republish.
+`packages/convex/convex/installedAppsStandin.test.ts` sends the same requests
+to the stand-in and to the real serve route and requires the same status,
+headers and body, so the stand-in cannot drift from the server unnoticed. The
+edge worker in front of the real server has its own tests
+(`infra/artifact-edge/worker.test.js`: the host user agent forwarded and never
+cached, `?app=1` never held, the version header passed through).
+
+A small local page plays the web app and calls `apps.*` the way the install
+sheet and the facts hook do; the consent route itself is not served, so the
+harness answers each consent window through `apps.consent.get/answer`.
+`e2e/probe.js` lets it run code in the page under either host. From source,
+main.js takes `CODECAST_APPS_PAGE_ORIGIN`, `CODECAST_APPS_ROOT` (where bundles
+go) and `CODECAST_APPS_HOST_BUNDLE_ID` (the host a shim checks for and
+launches) from the environment, so a run never touches
+`~/Applications/Codecast Apps` or the installed Codecast; a packaged build
+takes none of them (`installedApps/sourceOverrides.js`).
+
+A notification asked for is not a notification delivered. The run reports
+delivery as a blocked gate, never a pass: macOS delivers a shim's
+notifications only for a bundle in an Applications folder that a person
+allowed. `--real-root` installs as "E2E <name>" in `~/Applications/Codecast
+Apps` and makes delivery a check that fails until it is allowed;
+`--await-grant <min>` keeps the app installed and re-asks while the person
+allows it in System Settings > Notifications. Everything is removed after.
+`--strict` exits non-zero while any gate is blocked. After a deploy,
+`run.mjs --prod --slug <slug> [--k <key>]` checks the real server and edge and
+installs that page in both hosts; until that has passed, the server half is
+proven against the stand-in only.

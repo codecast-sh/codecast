@@ -217,6 +217,30 @@ export interface ExecFlags {
   jsonSchema?: string;
   bare?: boolean;
   isolated?: boolean;
+  /** Answer from the prompt alone (ANSWER_ONLY_ARGS): claude with no tools, whatever the person's setup allows. */
+  answerOnly?: boolean;
+}
+
+// ─── --answer-only ──────────────────────────────────────────────────────────
+//
+// The agent answers from the prompt alone, for prompts that may come from
+// someone else (an installed app's cast.app.agent.ask, whose page anyone may
+// have written). What it can do must not follow the person's own setup: their
+// configured agent args, their default params and their claude settings'
+// defaultMode (auto, bypassPermissions) would otherwise apply, and with them
+// commands and file reads a page could steer by prompt injection. So it runs
+// claude with no built-in tools and no MCP servers, in dontAsk, and ignores
+// configured args, default params and agent definitions. A claude that does
+// not know these flags refuses to start, which fails closed.
+export const ANSWER_ONLY_PERMISSION = "--permission-mode dontAsk";
+export const ANSWER_ONLY_ARGS = ["--strict-mcp-config", "--tools", ""];
+
+/** Why `--answer-only` cannot run as asked, or null. */
+export function answerOnlyProblem(agent: AgentClientId, flags: ExecFlags, definition: AgentDefinitionSpec | undefined): string | null {
+  if (agent !== "claude") return `--answer-only runs claude, not ${agent}`;
+  if (definition) return "--answer-only does not combine with --as: a definition brings its own flags";
+  if (flags.resumeId || flags.continueLast) return "--answer-only starts a fresh run; it does not resume one";
+  return null;
 }
 
 interface ResolvedLaunch {
@@ -247,11 +271,17 @@ function resolveLaunch(prompt: string, flags: ExecFlags, definition: AgentDefini
     if (dropped) warnings.push(dropped);
   }
 
+  if (flags.answerOnly) {
+    const problem = answerOnlyProblem(agent, flags, definition);
+    if (problem) throw new Error(problem);
+  }
   const config = readSharedConfig(CONFIG_DIR);
-  const configuredArgs = getConfiguredAgentArgs(agent, config);
-  const permFlags = flags.permissionMode
-    ? permissionFlagsForMode(agent, flags.permissionMode, configuredArgs)
-    : getPermissionFlags(agent, config);
+  const configuredArgs = flags.answerOnly ? "" : getConfiguredAgentArgs(agent, config);
+  const permFlags = flags.answerOnly
+    ? ANSWER_ONLY_PERMISSION
+    : flags.permissionMode
+      ? permissionFlagsForMode(agent, flags.permissionMode, configuredArgs)
+      : getPermissionFlags(agent, config);
 
   const appendParts = [defFlags?.appendSystemPrompt, flags.appendSystemPrompt].filter(Boolean) as string[];
   const childSessionId = agent === "claude" && !flags.resumeId && !flags.continueLast ? randomUUID() : undefined;
@@ -260,7 +290,7 @@ function resolveLaunch(prompt: string, flags: ExecFlags, definition: AgentDefini
     prompt,
     configuredArgs,
     permFlags,
-    defaultFlags: getDefaultParamFlags(agent, config),
+    defaultFlags: flags.answerOnly ? null : getDefaultParamFlags(agent, config),
     modelAlias: resolvePrintModelAlias(agent, resolved.model),
     requestedEffort: effort && efforts.length > 0 ? effort : undefined,
     outputFormat: flags.outputFormat,
@@ -273,7 +303,7 @@ function resolveLaunch(prompt: string, flags: ExecFlags, definition: AgentDefini
     bare: flags.bare,
     worktree: flags.isolated || resolved.isolated ? true : undefined,
     autoApprove: flags.permissionMode !== "default",
-    extraArgs: defFlags?.args,
+    extraArgs: flags.answerOnly ? ANSWER_ONLY_ARGS : defFlags?.args,
     assignedClaudeSessionId: childSessionId,
   });
   for (const flag of ignored) warnings.push(`${agent} does not support ${flag}; ignoring`);
@@ -476,6 +506,7 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
     .option("--isolated", "Start in a git worktree (grok, cursor, gemini native --worktree)")
     .option("--timeout <duration>", "Kill the run after this long (30s, 2m, 10m)")
     .option("--quiet", "Parallel and chain runs: no progress on stderr")
+    .option("--answer-only", "Answer from the prompt alone: claude with no tools or MCP servers, ignoring configured agent args and permission settings")
     .option("--dry-run", "Print the resolved command and exit without running it")
     .action(async (rawParts: string[], options: Record<string, unknown>) => {
       let explicitAgent: AgentClientId | undefined;
@@ -535,6 +566,7 @@ export function registerExecCommand(program: Command, deps: GroupDeps): void {
         jsonSchema: options.jsonSchema ? String(options.jsonSchema) : undefined,
         bare: !!options.bare,
         isolated: !!options.isolated,
+        answerOnly: !!options.answerOnly,
       };
       const quiet = !!options.quiet;
       const say = (line: string) => { if (!quiet) process.stderr.write(line + "\n"); };

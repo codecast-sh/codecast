@@ -108,6 +108,8 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     uninstall: (slug) => ipcRenderer.invoke("apps:uninstall", slug),
     setGrants: (slug, grants) => ipcRenderer.invoke("apps:set-grants", slug, grants),
     facts: (slug, info) => ipcRenderer.send("apps:facts", slug, info),
+    // Codecast's sign-in, from the web app: installed apps cover their page while signed out.
+    setSignedIn: (on) => ipcRenderer.send("apps:signed-in", !!on),
     onChange: (cb) => {
       const handler = (_event, apps) => cb(apps);
       ipcRenderer.on("apps:changed", handler);
@@ -116,6 +118,8 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     consent: {
       get: (id) => ipcRenderer.invoke("apps:consent-get", id),
       answer: (id, answer) => ipcRenderer.invoke("apps:consent-answer", id, answer),
+      // The route's natural height: main fits the window to it (consentWindow.js).
+      resize: (id, height) => ipcRenderer.send("apps:consent-resize", id, height),
     },
   },
   // The CLI and daemon on this machine (daemonSetup.js). getDaemonSetup:

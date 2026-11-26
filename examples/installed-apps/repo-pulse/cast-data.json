@@ -1,0 +1,8 @@
+{
+  "app": {
+    "name": "Repo pulse",
+    "icon": "icon.png",
+    "window": { "width": 820, "height": 640, "minWidth": 420, "minHeight": 380, "titleBar": "hidden" },
+    "permissions": ["full-access"]
+  }
+}

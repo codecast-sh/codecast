@@ -17,6 +17,7 @@ import { APP_PERMISSIONS } from "../../shared/contracts/pageApp";
 const METHODS: Record<string, string> = {
   "app.info": "default",
   "app.badge": "default",
+  "app.openInCodecast": "default",
   "permissions.request": "default",
   "window.setSize": "default",
   "window.setTitle": "default",
@@ -29,6 +30,8 @@ const METHODS: Record<string, string> = {
   "shortcuts.register": "shortcuts",
   "shortcuts.unregister": "shortcuts",
   "window.setAlwaysOnTop": "overlay",
+  "window.setVisibleOnAllWorkspaces": "overlay",
+  "window.setIgnoreMouseEvents": "overlay",
   "agent.ask": "agent",
   "login.set": "login",
   "fs.readText": "full-access",

@@ -13,6 +13,11 @@ struct ShimConfig {
     /// The Codecast version that wrote or last re-sealed this bundle.
     let hostVersion: String
     let windowSize: NSSize
+    /// The manifest's window.minWidth / minHeight; zero leaves AppKit's minimum.
+    let minSize: NSSize
+    let resizable: Bool
+    /// window.titleBar "hidden": the page runs under a transparent title bar.
+    let titleBarHidden: Bool
     let traySize: NSSize
 
     static func load(_ info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> ShimConfig {
@@ -32,6 +37,9 @@ struct ShimConfig {
             pageUrl: page, socketPath: socket,
             hostVersion: info["CodecastHostVersion"] as? String ?? "0",
             windowSize: size("CodecastWindowWidth", "CodecastWindowHeight", 1000, 720),
+            minSize: size("CodecastMinWidth", "CodecastMinHeight", 0, 0),
+            resizable: (info["CodecastResizable"] as? NSNumber)?.boolValue ?? true,
+            titleBarHidden: info["CodecastTitleBar"] as? String == "hidden",
             traySize: size("CodecastTrayWidth", "CodecastTrayHeight", 360, 480))
     }
 
@@ -54,19 +62,30 @@ func shimLog(_ line: String) {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandlerWithReply,
-    WKNavigationDelegate, WKUIDelegate, UNUserNotificationCenterDelegate {
+    WKNavigationDelegate, WKUIDelegate, UNUserNotificationCenterDelegate, NSMenuItemValidation {
     let config: ShimConfig
     var window: NSWindow!
     var webView: WKWebView!
     var trayWebView: WKWebView?
     var statusItem: NSStatusItem?
-    let popover = NSPopover()
+    var trayPanel: TrayPanel?
     var engine: EngineSocket!
     var debugSources: [DispatchSourceSignal] = []
     /// The page version each surface loaded, from the X-Cast-Version response header.
     var loadedVersion: [String: Int] = [:]
     var hostState: HostState = .ready
+    /// Why the page itself did not load (offline, its server down); nil once it loads.
+    var pageState: HostState?
+    /// What the cover shows now: HostState.cover of the two above.
+    var coverState: HostState = .ready
+    var pageRetry: Timer?
     var statusView: StatusOverlay?
+    var pageColorObservations: [NSKeyValueObservation] = []
+    /// When the tray panel last closed: the status item click that closed it must not reopen it.
+    var trayClosedAt = Date.distantPast
+    var trayShownAt = Date.distantPast
+    /// Under a hidden title bar: the strip at the top that moves the window.
+    var dragStrip: DragStrip?
     lazy var clientScript: String? = Bundle.main.url(forResource: "client", withExtension: "js")
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
 
@@ -106,18 +125,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         Hotkeys.shared.onFire = { [weak self] accelerator in
             self?.dispatch("shortcut", ["accelerator": accelerator])
         }
+        NSWindow.allowsAutomaticWindowTabbing = false
         NSApp.mainMenu = buildMenu()
         installDebugSignals()
 
         webView = makeWebView(surface: "window")
-        window = NSWindow(contentRect: NSRect(origin: .zero, size: config.windowSize),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = config.name
-        window.contentView = webView
+        webView.pageZoom = UserDefaults.standard.object(forKey: Self.zoomKey) as? Double ?? 1
+        makeWindow()
         window.delegate = self
         window.isReleasedWhenClosed = false
-        window.center()
-        window.setFrameAutosaveName("CodecastAppWindow")
+        placeWindow()
+        observePageColor()
         webView.load(URLRequest(url: config.url(surface: "window")))
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -125,15 +143,141 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         shimLog("ready \(config.slug) pid=\(getpid())")
     }
 
+    /// The app's window from the manifest's window options: its size, minimum
+    /// size and resizability, and with titleBar "hidden" a transparent title
+    /// bar over the page with the traffic lights kept. WKWebView ignores
+    /// `-webkit-app-region`, so under a hidden title bar a 28 px strip across
+    /// the top (DragStrip, above the page) moves the window and zooms it on a
+    /// double click; the page keeps that band free of controls.
+    func makeWindow() {
+        var style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
+        if config.resizable { style.insert(.resizable) }
+        if config.titleBarHidden { style.insert(.fullSizeContentView) }
+        window = NSWindow(contentRect: NSRect(origin: .zero, size: config.windowSize),
+                          styleMask: style, backing: .buffered, defer: false)
+        window.title = config.name
+        // Until the page paints, the window shows the color the page had last
+        // time (the system's window color the first time), never white.
+        window.backgroundColor = Self.rememberedPageColor ?? .windowBackgroundColor
+        // WebKit paints its own under-page layer when the page commits; until
+        // the page paints, that is the same color (nil after: the page's own).
+        webView.underPageBackgroundColor = window.backgroundColor
+        if config.resizable { window.collectionBehavior.insert(.fullScreenPrimary) }
+        if config.minSize.width > 0 || config.minSize.height > 0 {
+            window.contentMinSize = NSSize(width: max(config.minSize.width, 1), height: max(config.minSize.height, 1))
+        }
+        let content = NSView(frame: NSRect(origin: .zero, size: config.windowSize))
+        webView.frame = content.bounds
+        webView.autoresizingMask = [.width, .height]
+        content.addSubview(webView)
+        if config.titleBarHidden {
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            let strip = DragStrip(frame: NSRect(x: 0, y: content.bounds.height - DragStrip.height,
+                                                width: content.bounds.width, height: DragStrip.height))
+            strip.autoresizingMask = [.width, .minYMargin]
+            content.addSubview(strip)
+            dragStrip = strip
+        }
+        window.contentView = content
+        tintTitleBar()
+    }
+
+    static let frameName = "CodecastAppWindow"
+
+    /// The first time, centered on the screen the person is working on (the
+    /// one under the pointer), a little above the middle as NSWindow.center
+    /// does. After that where they left it, which AppKit keeps under the
+    /// frame autosave name, unless that place is on no screen now.
+    func placeWindow() {
+        let restored = window.setFrameUsingName(Self.frameName)
+        if !restored || !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(window.frame) }) {
+            let pointer = NSEvent.mouseLocation
+            if let area = (NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main)?.visibleFrame {
+                var frame = window.frame
+                frame.size.width = min(frame.width, area.width)
+                frame.size.height = min(frame.height, area.height)
+                frame.origin.x = area.midX - frame.width / 2
+                frame.origin.y = area.minY + (area.height - frame.height) * 2 / 3
+                window.setFrame(frame.integral, display: false)
+            }
+        }
+        window.setFrameAutosaveName(Self.frameName)
+    }
+
+    // MARK: Page color
+
+    static let pageColorKey = "CodecastPageColor"
+    static let zoomKey = "CodecastPageZoom"
+
+    static var rememberedPageColor: NSColor? {
+        guard let c = UserDefaults.standard.array(forKey: pageColorKey) as? [Double], c.count == 3 else { return nil }
+        return NSColor(srgbRed: c[0], green: c[1], blue: c[2], alpha: 1)
+    }
+
+    /// The page's own color (its theme-color, else its background), as
+    /// WebKit reports it once the page paints. The window takes it as its
+    /// background and keeps it for the next launch.
+    func observePageColor() {
+        let changed = { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.pageColorChanged() } }
+        }
+        pageColorObservations = [
+            webView.observe(\.themeColor) { _, _ in changed() },
+            webView.observe(\.underPageBackgroundColor) { _, _ in changed() },
+            window.observe(\.effectiveAppearance) { [weak self] _, _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.tintTitleBar() } }
+            },
+        ]
+    }
+
+    func pageColorChanged() {
+        // Before the first paint WebKit reports its own default, not the page's.
+        guard pagePainted, let color = (webView.themeColor ?? webView.underPageBackgroundColor as NSColor?)?.usingColorSpace(.sRGB),
+              color.alphaComponent > 0.99 else { return }
+        window.backgroundColor = color
+        UserDefaults.standard.set([color.redComponent, color.greenComponent, color.blueComponent].map(Double.init),
+                                  forKey: Self.pageColorKey)
+        tintTitleBar()
+    }
+
+    var pagePainted = false
+
+    /// The title bar takes the page's color when that color suits the
+    /// system's light or dark look (a dark page in dark mode), so title and
+    /// page read as one surface and the title stays legible; otherwise it is
+    /// the standard title bar.
+    func tintTitleBar() {
+        guard !config.titleBarHidden, let color = window.backgroundColor.usingColorSpace(.sRGB),
+              window.backgroundColor != .windowBackgroundColor else { return }
+        let luminance = 0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+        let systemDark = window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        window.titlebarAppearsTransparent = (luminance < 0.5) == systemDark
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // A Dock click is how the person gets a click-through overlay back.
+        // A Dock click is how the person gets a click-through overlay back,
+        // and a closed window (the app kept by its menu bar item) comes back.
         restoreMouseEvents()
+        if NSApp.isHidden { NSApp.unhide(nil) }
         if !flag { window.makeKeyAndOrderFront(nil) }
         return true
     }
 
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "Show in Codecast", action: #selector(openInCodecast), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+        return menu
+    }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         reportStatus(active: true)
+        // Coming back to a window that could not load tries again at once.
+        if pageState != nil { retryPage() }
     }
 
     func windowDidMove(_ notification: Notification) { reportStatus() }
@@ -152,17 +296,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         guard state != hostState else { return }
         shimLog("host state \(state)")
         hostState = state
+        refreshCover()
+    }
+
+    /// Puts up the cover for what is wrong now (HostState.cover), or takes it down.
+    func refreshCover() {
+        let state = HostState.cover(host: hostState, page: pageState)
+        guard state != coverState else { return }
+        coverState = state
         statusView?.removeFromSuperview()
         statusView = nil
         guard state != .ready, let content = window.contentView else { return }
-        let overlay = StatusOverlay(state: state, appName: config.name, target: self, action: #selector(statusAction))
+        let pageColored = window.titlebarAppearsTransparent && !config.titleBarHidden
+        let overlay = StatusOverlay(state: state, appName: config.name, background: pageColored ? window.backgroundColor : nil,
+                                    target: self, action: #selector(statusAction))
         overlay.frame = content.bounds
         overlay.autoresizingMask = [.width, .height]
-        content.addSubview(overlay)
+        // Over the page; under the drag strip when there is one, so a covered
+        // window still moves. (`.below` relative to nil would put it under the page.)
+        if let dragStrip { content.addSubview(overlay, positioned: .below, relativeTo: dragStrip) }
+        else { content.addSubview(overlay) }
         statusView = overlay
     }
 
     @objc func statusAction() {
+        if coverState == .offline || coverState == .pageFailed { retryPage(); return }
         if hostState == .missing {
             if hostInstalled { openHost(); engine.connect(timeout: 30) } else { NSWorkspace.shared.open(HostState.downloadUrl) }
             return
@@ -227,6 +385,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         view.navigationDelegate = self
         view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = false
+        // Transparent, so what shows before the page paints is the window's
+        // color, not WebKit's white (see didFinish).
+        view.setValue(false, forKey: "drawsBackground")
         if #available(macOS 13.3, *) { view.isInspectable = true }
         return view
     }
@@ -258,6 +419,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             loadedVersion[surface(of: webView)] = Int(http.value(forHTTPHeaderField: "X-Cast-Version") ?? "") ?? 0
         }
         decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // The web view stays transparent: turning WebKit's own background on
+        // here showed the window gray for a few frames, since didFinish comes
+        // before the page's first frame reaches the screen. A page without a
+        // background of its own shows the browser's canvas color all the
+        // same, through the window color set below.
+        guard webView === self.webView else { return }
+        if !pagePainted {
+            // Handing the under-page layer back to WebKit (nil) shows its
+            // default gray for a few frames before it reads the page's, so it
+            // gets the page's own canvas color instead: the root's
+            // background, else the body's (CSS carries it to the canvas),
+            // else the browser's canvas for the page's color scheme.
+            let canvas = """
+                (() => { const c = (e) => e ? getComputedStyle(e).backgroundColor : ''; const clear = /^rgba\\(.*, 0\\)$/;
+                  for (const e of [document.documentElement, document.body]) { const v = c(e); if (v && !clear.test(v)) return v; }
+                  const d = document.createElement('div'); d.style.background = 'Canvas'; document.documentElement.appendChild(d);
+                  const v = c(d); d.remove(); return v; })()
+                """
+            webView.evaluateJavaScript(canvas) { [weak self] value, _ in
+                guard let self else { return }
+                let rgb = ShimText.opaqueCssColor(value as? String ?? "") ?? [1, 1, 1]
+                webView.underPageBackgroundColor = NSColor(srgbRed: rgb[0], green: rgb[1], blue: rgb[2], alpha: 1)
+                self.pagePainted = true
+                self.pageColorChanged()
+            }
+        } else {
+            pageColorChanged()
+        }
+        if pageState != nil {
+            shimLog("page loaded")
+            pageState = nil
+            pageRetry?.invalidate()
+            pageRetry = nil
+            refreshCover()
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        pageLoadFailed(webView, error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        pageLoadFailed(webView, error)
+    }
+
+    /// The window's page did not load: the cover says why, and the shim keeps
+    /// trying every few seconds (and at once when the person comes back to
+    /// the app), so it recovers by itself when the connection returns.
+    func pageLoadFailed(_ view: WKWebView, _ error: Error) {
+        let e = error as NSError
+        guard view === webView, let state = HostState.pageLoad(errorDomain: e.domain, code: e.code) else { return }
+        if pageState != state { shimLog("page did not load (\(e.domain) \(e.code)): \(state)") }
+        pageState = state
+        refreshCover()
+        if pageRetry == nil {
+            pageRetry = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.retryPage() }
+            }
+        }
+    }
+
+    func retryPage() {
+        guard !webView.isLoading else { return }
+        webView.load(URLRequest(url: config.url(surface: "window")))
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
@@ -353,7 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case ("tray", "remove"):
             if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
             statusItem = nil
-            popover.close()
+            trayPanel?.dismiss("removed")
             ok()
         case ("shortcuts", "register"):
             guard let accelerator = first as? String else { return fail("bad-args", "an accelerator string") }
@@ -393,7 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             window.miniaturize(nil)
             ok()
         case ("window", "close"):
-            if surface == "tray" { popover.close() } else { window.performClose(nil) }
+            if surface == "tray" { trayPanel?.dismiss("page") } else { window.performClose(nil) }
             ok()
         default:
             done(nil)
@@ -466,9 +694,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     func notify(_ opts: [String: Any], done: @escaping ([String: Any]?) -> Void) {
         let center = UNUserNotificationCenter.current()
         let name = config.name
+        let tag = opts["tag"] as? String ?? UUID().uuidString
+        shimLog("notify \(tag)")
         center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             guard granted else {
                 let why = error?.localizedDescription ?? "notifications are off for \(name) in System Settings"
+                shimLog("notify \(tag) denied: \(why)")
                 DispatchQueue.main.async { done(["ok": false, "code": "denied", "message": why]) }
                 return
             }
@@ -476,9 +707,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             content.title = opts["title"] as? String ?? name
             content.body = opts["body"] as? String ?? ""
             if opts["silent"] as? Bool != true { content.sound = .default }
-            let tag = opts["tag"] as? String ?? UUID().uuidString
             content.userInfo = ["tag": tag]
             center.add(UNNotificationRequest(identifier: tag, content: content, trigger: nil)) { error in
+                shimLog("notify \(tag) \(error.map { "failed: \($0.localizedDescription)" } ?? "posted")")
                 DispatchQueue.main.async {
                     if let error { done(["ok": false, "code": "failed", "message": error.localizedDescription]) }
                     else { done(["ok": true, "value": ["tag": tag]]) }
@@ -518,25 +749,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let badge = (opts["badge"] as? NSNumber).map { " \($0)" } ?? ""
         button.title = (opts["title"] as? String ?? "") + badge
         button.toolTip = opts["tooltip"] as? String ?? config.name
+        shimLog("tray title \"\(button.title)\" tooltip \"\(button.toolTip ?? "")\"")
         button.target = self
         button.action = #selector(toggleTray(_:))
     }
 
     @objc func toggleTray(_ sender: NSStatusBarButton) {
         restoreMouseEvents()
-        if popover.isShown { popover.performClose(sender); return }
-        if trayWebView == nil {
+        if let panel = trayPanel, panel.isVisible { panel.dismiss("item click"); return }
+        // The click on the item that closed the panel (any click outside it
+        // closes it) arrives here next; it closes, it does not reopen.
+        if Date().timeIntervalSince(trayClosedAt) < 0.3 { return }
+        let panel = trayPanel ?? {
             let view = makeWebView(surface: "tray")
             trayWebView = view
-            let controller = NSViewController()
-            controller.view = view
-            popover.contentViewController = controller
-            popover.contentSize = config.traySize
-            popover.behavior = .transient
+            let panel = TrayPanel(content: view, size: config.traySize)
+            panel.onClose = { [weak self] reason in
+                shimLog("tray closed (\(reason)) after \(String(format: "%.1f", Date().timeIntervalSince(self?.trayShownAt ?? Date()))) s, front \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"), last click \(String(format: "%.2f", CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!))) s ago")
+                self?.trayClosedAt = Date()
+            }
             view.load(URLRequest(url: config.url(surface: "tray")))
-        }
-        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+            trayPanel = panel
+            return panel
+        }()
+        panel.show(under: sender)
+        trayShownAt = Date()
+        shimLog("tray shown (front: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"), app active: \(NSApp.isActive), key: \(panel.isKeyWindow), main window on top: \(window.isVisible && NSApp.orderedWindows.first === window))")
         dispatch("tray-click", [:])
     }
 
@@ -559,15 +797,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             i.keyEquivalentModifierMask = mods
             return i
         }
-        let openInHost = item("Open in Codecast", #selector(openInCodecast))
-        openInHost.target = self
-        let remove = item("Uninstall \(name)…", #selector(uninstallApp))
-        remove.target = self
+        func mine(_ i: NSMenuItem) -> NSMenuItem { i.target = self; return i }
+        let services = item("Services", nil)
+        services.submenu = NSMenu(title: "Services")
+        NSApp.servicesMenu = services.submenu
         _ = submenu(name, [
-            item("About \(name)", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            mine(item("About \(name)", #selector(showAbout))),
             .separator(),
-            openInHost,
-            remove,
+            mine(item("Settings…", #selector(openSettings), ",")),
+            .separator(),
+            mine(item("Show in Codecast", #selector(openInCodecast))),
+            mine(item("Uninstall \(name)…", #selector(uninstallApp))),
+            .separator(),
+            services,
             .separator(),
             item("Hide \(name)", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
@@ -575,6 +817,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             .separator(),
             item("Quit \(name)", #selector(NSApplication.terminate(_:)), "q"),
         ])
+        _ = submenu("File", [
+            item("Close Window", #selector(NSWindow.performClose(_:)), "w"),
+        ])
+        // AppKit's own Start Dictation and Emoji & Symbols are turned off (main,
+        // below): it appends them on several passes after launch and repeats
+        // them each time. These two are the only copies.
         _ = submenu("Edit", [
             item("Undo", Selector(("undo:")), "z"),
             item("Redo", Selector(("redo:")), "z", [.command, .shift]),
@@ -583,20 +831,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             item("Copy", #selector(NSText.copy(_:)), "c"),
             item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
+            .separator(),
+            item("Start Dictation…", Selector(("startDictation:"))),
+            item("Emoji & Symbols", #selector(NSApplication.orderFrontCharacterPalette(_:)), " ", [.command, .control]),
         ])
-        let reload = item("Reload", #selector(reloadPage), "r")
-        reload.target = self
-        _ = submenu("View", [reload])
+        // Cmd-= zooms in too, as in Safari: a hidden twin of Zoom In.
+        let zoomInEquals = mine(item("Zoom In", #selector(zoomIn), "="))
+        zoomInEquals.isHidden = true
+        zoomInEquals.allowsKeyEquivalentWhenHidden = true
+        _ = submenu("View", [
+            mine(item("Reload Page", #selector(reloadPage), "r")),
+            .separator(),
+            mine(item("Actual Size", #selector(actualSize), "0")),
+            mine(item("Zoom In", #selector(zoomIn), "+")),
+            zoomInEquals,
+            mine(item("Zoom Out", #selector(zoomOut), "-")),
+            .separator(),
+            item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
+        ])
         let windowMenu = submenu("Window", [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
             item("Zoom", #selector(NSWindow.performZoom(_:))),
-            item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            .separator(),
+            item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
         ])
         NSApp.windowsMenu = windowMenu
         return main
     }
 
-    @objc func reloadPage() { webView.reload() }
+    @objc func reloadPage() {
+        if pageState != nil { retryPage() } else { webView.reload() }
+    }
+
+    @objc func actualSize() { setPageZoom(1) }
+    @objc func zoomIn() { setPageZoom(ShimText.zoom(from: webView.pageZoom, by: 1)) }
+    @objc func zoomOut() { setPageZoom(ShimText.zoom(from: webView.pageZoom, by: -1)) }
+
+    /// The window page's zoom, kept for the next launch.
+    func setPageZoom(_ zoom: Double) {
+        webView.pageZoom = zoom
+        UserDefaults.standard.set(zoom, forKey: Self.zoomKey)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(actualSize): return webView.pageZoom != 1
+        case #selector(zoomIn): return webView.pageZoom < ShimText.zoomSteps.last!
+        case #selector(zoomOut): return webView.pageZoom > ShimText.zoomSteps.first!
+        case #selector(openSettings): return hostInstalled
+        default: return true
+        }
+    }
+
+    /// Codecast's Settings > Installed apps, on this app, through Codecast's
+    /// own link (which also starts Codecast when it is not running).
+    @objc func openSettings() {
+        let link = ShimText.settingsLink(slug: config.slug)
+        guard let host = NSWorkspace.shared.urlForApplication(withBundleIdentifier: config.hostBundleId) else { return }
+        // The test aid never hands links to the person's own Codecast.
+        if ProcessInfo.processInfo.environment["CODECAST_APPSHIM_DEBUG_DIR"] != nil {
+            shimLog("would open \(link.absoluteString) in \(host.path)")
+            return
+        }
+        NSWorkspace.shared.open([link], withApplicationAt: host, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// The standard About panel with this app's name and icon, the page
+    /// version it shows, its address (without the gate keys) and who made the
+    /// app shell.
+    @objc func showAbout() {
+        let address = ShimText.displayAddress(config.pageUrl)
+        let center = NSMutableParagraphStyle()
+        center.alignment = .center
+        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        let credits = NSMutableAttributedString(string: address, attributes: [
+            .font: font, .paragraphStyle: center, .link: URL(string: address) as Any,
+        ])
+        let spaced = center.mutableCopy() as! NSMutableParagraphStyle
+        spaced.paragraphSpacingBefore = 6
+        credits.append(NSAttributedString(string: "\nMade with Codecast", attributes: [
+            .font: font, .paragraphStyle: spaced, .foregroundColor: NSColor.secondaryLabelColor,
+        ]))
+        // The version the page loaded, else the one installed (the bundle's).
+        let version = loadedVersion["window"].flatMap { $0 > 0 ? String($0) : nil }
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: config.name,
+            .applicationIcon: StatusOverlay.appIcon(),
+            .applicationVersion: version,
+            .version: "",
+            .credits: credits,
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+    }
 
     /// Opens this page in the main Codecast window. Codecast decides where it
     /// goes; without it, Codecast is at least brought forward.
@@ -607,7 +934,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     }
 
     /// Asks once here, then Codecast removes the bundle, its data and its
-    /// record; this process quits so nothing writes the data back.
+    /// record and replies when that finished. Meanwhile the window and menu
+    /// bar item are hidden; on ok this process exits at once (no state saved
+    /// on the way out, and Codecast sweeps the data again after it is gone),
+    /// and on a failure the window comes back with the reason in an alert.
     @objc func uninstallApp() {
         let alert = NSAlert()
         alert.messageText = "Uninstall \(config.name)?"
@@ -616,20 +946,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         alert.addButton(withTitle: "Uninstall")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        engine.hostCall("uninstall") { reply in
+        window.isRestorable = false
+        window.orderOut(nil)
+        trayPanel?.dismiss("uninstall")
+        statusItem?.isVisible = false
+        engine.hostCall("uninstall") { [weak self] reply in
+            guard let self else { return }
             if reply["ok"] as? Bool == true {
-                NSApp.terminate(nil)
-                return
+                shimLog("uninstalled")
+                exit(0)
             }
+            let message = reply["message"] as? String ?? "Codecast did not answer."
+            shimLog("uninstall failed: \(message)")
+            self.statusItem?.isVisible = true
+            self.showWindow()
             let failed = NSAlert()
             failed.messageText = "Couldn't uninstall \(self.config.name)"
-            failed.informativeText = reply["message"] as? String ?? "Codecast did not answer."
-            failed.runModal()
+            failed.informativeText = message
+            failed.alertStyle = .warning
+            failed.beginSheetModal(for: self.window)
         }
     }
 }
 
 signal(SIGPIPE, SIG_IGN)
+// AppKit's automatic Edit menu items, replaced by buildMenu's own (see there).
+UserDefaults.standard.register(defaults: ["NSDisabledDictationMenuItem": true, "NSDisabledCharacterPaletteMenuItem": true])
 let app = NSApplication.shared
 let delegate = MainActor.assumeIsolated { AppDelegate(config: ShimConfig.load()) }
 app.delegate = delegate

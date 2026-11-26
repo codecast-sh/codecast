@@ -14,12 +14,22 @@
 //   createPlatform(d)   builds the platform host from the deps below (d):
 //                         {call(slug, frame, msg), onFocus(slug), onClosed(slug),
 //                          pageUrl(slug, surface), pageOrigin, registry,
-//                          uninstallApp(slug)}
+//                          uninstallApp(slug), signedIn(), onStatus(slug),
+//                          openInCodecast(slug)}
 //   pageOrigin          https://a.codecast.sh (a from-source run may point elsewhere)
 //   appsDir             <userData>/apps: per-app icons
 //   imaging             icons.nativeImaging(nativeImage)
 //   shell               electron.shell (cast.app.shell.open)
-//   askAgent(slug, prompt) -> {answer}  (cast.app.agent.ask); absent refuses
+//   askAgent(slug, prompt, {name}) -> {answer}  (cast.app.agent.ask); absent refuses
+//   openInCodecast(slug) shows the page inside Codecast's main window
+//   openRoute(route)    shows a codecast path (cast.app.openInCodecast) in
+//                       Codecast's window and brings it forward
+//   showCodecast()      brings Codecast's main window forward (a launch for an
+//                       app that is not installed here)
+//   confirmUninstall(name) -> Promise<boolean>  the native "Uninstall <Name>?"
+//                       question a codecast://uninstall/<slug> link asks
+//   settings            settingsFile.js's load/update: keeps the last sign-in
+//                       state the web app reported (installedAppsSignedIn)
 //   shellAlive()        whether a shell window is up to feed facts
 //   fetchImpl           fetch, for the icon and the ?app=1 fallback
 //
@@ -27,12 +37,15 @@
 //   name, emit(slug, event, data), open(slug, {surface}), reload(slug),
 //   isOpen(slug), anchor(slug) -> bounds | null, install({record, info, icons})
 //   -> record patch, uninstall(record), closeAll(), and every engine host
-//   method (engine.HOST_METHODS) except agent.ask and shell.open, which run
-//   here for both. Optional: resealAll(), serve() (the mac host's shim socket,
-//   <userData>/apps.sock, mode 0600), stop(), reregisterShortcuts().
+//   method (engine.HOST_METHODS) except engine.MAIN_METHODS (agent.ask,
+//   shell.open, app.openInCodecast), which run here for both. Optional:
+//   resealAll(), serve() (the mac host's shim socket,
+//   <userData>/apps.sock, mode 0600), stop(), reregisterShortcuts(),
+//   setSignedIn(on) (Codecast's sign-in changed), status(slug) -> {running,
+//   notifications, notificationSettingsUrl, ...} (what Settings shows).
 const fs = require("node:fs");
 const path = require("node:path");
-const { createEngine, grantsFor, HOST_METHODS } = require("./engine");
+const { createEngine, grantsFor, HOST_METHODS, MAIN_METHODS } = require("./engine");
 const { AppError } = require("./protocol");
 const { isSlug } = require("./registry");
 const { resolvePath } = require("./fullAccess");
@@ -40,19 +53,53 @@ const { fetchPng, writeIconSet } = require("./icons");
 
 const APP_ARG = "--codecast-app=";
 const POLL_MS = 60_000;
-
-/** appInfo's relation in the engine's words. */
-const RELATION = { owner: "own", team: "team", other: "outside", anonymous: "outside" };
+const SIGNED_IN_KEY = "installedAppsSignedIn";
+/** What Settings shows from a platform's status(slug), beside the record. */
+const STATUS_FIELDS = ["running", "notifications", "notificationSettingsUrl"];
+const RELATIONS = new Set(["owner", "team", "other", "anonymous"]);
 
 /** The facts the engine decides by, from a stored appInfo answer. */
 function engineFacts(info) {
   if (!info) return null;
   return {
     version: Number(info.version) || 0,
-    relation: RELATION[info.relation] || "outside",
+    relation: RELATIONS.has(info.relation) ? info.relation : "anonymous",
     policy: info.policy && typeof info.policy === "object" ? info.policy : { install: true, fullAccess: false },
     requested: (info.app && Array.isArray(info.app.permissions)) ? info.app.permissions : [],
   };
+}
+
+const RELATION_RANK = { anonymous: 0, other: 1, team: 2, owner: 3 };
+
+/**
+ * A fallback ?app=1 answer held to the facts the shell's signed-in appInfo
+ * last gave. The fallback proves no one at this computer: its viewer is
+ * whoever the stored keys name (a team gate's m token is minted for one
+ * member, and a link the page's owner forwards carries the owner's), so its
+ * relation could say "owner" for a page that is not the person's. It may
+ * lower the relation and tighten the policy, never raise or loosen them; the
+ * shell's next answer sets both again.
+ */
+function heldToStored(info, stored) {
+  const was = (stored && stored.relation) || "anonymous";
+  const now = RELATION_RANK[info.relation] === undefined ? "anonymous" : info.relation;
+  const relation = (RELATION_RANK[now] <= (RELATION_RANK[was] ?? 0)) ? now : was;
+  const a = (info.policy && typeof info.policy === "object") ? info.policy : {};
+  const b = (stored && stored.policy && typeof stored.policy === "object") ? stored.policy : {};
+  return { ...info, relation, policy: { install: a.install !== false && b.install !== false, fullAccess: a.fullAccess === true && b.fullAccess === true } };
+}
+
+/** facts with their icon URLs carrying the install's gate keys again (registry.factsOf keeps them out of settings.json). */
+function withIconKeys(facts, gate) {
+  if (!facts || !facts.icons || typeof facts.icons !== "object") return facts;
+  const icons = {};
+  for (const [size, url] of Object.entries(facts.icons)) {
+    if (typeof url !== "string" || !URL.canParse(url)) continue;
+    const u = new URL(url);
+    for (const k of ["k", "e", "m"]) if (gate[k]) u.searchParams.set(k, gate[k]);
+    icons[size] = u.toString();
+  }
+  return { ...facts, icons };
 }
 
 /** Why an appInfo answer cannot be installed from, or null. */
@@ -72,6 +119,20 @@ function appFromArgv(argv) {
   return isSlug(slug) ? slug : null;
 }
 
+/** The slug a codecast://uninstall/<slug> link names, or null. */
+function uninstallSlugFromUrl(url) {
+  if (typeof url !== "string" || !URL.canParse(url)) return null;
+  const u = new URL(url);
+  if (u.protocol !== "codecast:" || u.hostname !== "uninstall") return null;
+  // A slug is plain [a-z0-9], so the raw segment is checked as it stands:
+  // decoding a malformed escape would throw in the main process.
+  const slug = u.pathname.replace(/^\/+|\/+$/g, "");
+  return isSlug(slug) ? slug : null;
+}
+
+/** The gate keys appInfo takes (k, e, m); the identity token stays in main. */
+const pickGate = (gate) => Object.fromEntries(["k", "e", "m"].filter((k) => gate[k]).map((k) => [k, gate[k]]));
+
 const gateQuery = (gate, keys) => keys.filter((k) => gate[k]).map((k) => `&${k}=${encodeURIComponent(gate[k])}`).join("");
 
 function createAppsHost(deps) {
@@ -80,6 +141,18 @@ function createAppsHost(deps) {
   const reviewAsked = new Map(); // slug -> version a review was opened for
   let engine = null;
   let platform = null;
+  let pendingUrls = [];
+  // The web app reports Codecast's sign-in (apps.setSignedIn). Until it has,
+  // the last value it reported holds, and a computer that never heard counts
+  // as signed in, so a first launch does not cover every app.
+  let signedIn = (() => {
+    try {
+      const stored = deps.settings && deps.settings.load()[SIGNED_IN_KEY];
+      return typeof stored === "boolean" ? stored : true;
+    } catch {
+      return true;
+    }
+  })();
 
   const pageUrl = (slug, surface = "window") =>
     `${pageOrigin}/${slug}?host=app&surface=${surface}${gateQuery(registry.gateOf(slug), ["k", "e", "m"])}`;
@@ -90,7 +163,11 @@ function createAppsHost(deps) {
     emit: (slug, event, data) => platform.emit(slug, event, data),
     "agent.ask": async (ctx, prompt) => {
       if (!deps.askAgent) throw new AppError("failed", "asking your agent is not available in this version of Codecast");
-      return deps.askAgent(ctx.slug, prompt);
+      return deps.askAgent(ctx.slug, prompt, { name: ctx.record.name });
+    },
+    "app.openInCodecast": async (_ctx, route) => {
+      if (typeof deps.openRoute !== "function") throw new AppError("failed", "opening codecast pages is not available in this version of Codecast");
+      await deps.openRoute(route);
     },
     "shell.open": async (_ctx, target) => {
       if (/^(https?|mailto):/i.test(target)) return void (await deps.shell.openExternal(target));
@@ -105,7 +182,7 @@ function createAppsHost(deps) {
     const answer = await consent.ask(
       {
         kind: "request",
-        info: { ...record.facts, version },
+        info: { ...withIconKeys(record.facts, registry.gateOf(slug)), version },
         asked: requested,
         current: granted,
         added: requested.filter((p) => !granted.includes(p)),
@@ -122,11 +199,15 @@ function createAppsHost(deps) {
     return record ? engineFacts(record.facts) : null;
   }
 
-  /** A new appInfo answer for an installed slug, from the shell or the fallback fetch. */
-  function takeFacts(slug, info) {
+  /**
+   * A new appInfo answer for an installed slug, from the shell or (`fallback`)
+   * the ?app=1 fetch, which may not raise what the shell's answer allowed.
+   */
+  function takeFacts(slug, info, { fallback = false } = {}) {
     if (!isSlug(slug) || !info || info.slug !== slug || appInfoProblem(info)) return false;
-    if (!registry.get(slug)) return false;
-    const { changed, prevVersion } = registry.setFacts(slug, info);
+    const record = registry.get(slug);
+    if (!record) return false;
+    const { changed, prevVersion } = registry.setFacts(slug, fallback ? heldToStored(info, record.facts) : info);
     if (!changed) return false;
     const version = Number(info.version) || 0;
     if (prevVersion !== null && version > prevVersion) {
@@ -142,7 +223,7 @@ function createAppsHost(deps) {
     try {
       const res = await fetchImpl(`${pageOrigin}/${slug}?app=1${gateQuery(gate, ["k", "e", "m", "i"])}`, { cache: "no-store" });
       if (!res.ok) return;
-      takeFacts(slug, await res.json());
+      takeFacts(slug, await res.json(), { fallback: true });
     } catch (err) {
       log(`facts fetch for ${slug} failed: ${err.message}`);
     }
@@ -160,7 +241,7 @@ function createAppsHost(deps) {
     const answer = await consent.ask(
       {
         kind: "review",
-        info: record.facts,
+        info: withIconKeys(record.facts, registry.gateOf(slug)),
         asked: [...new Set([...held, ...requested])],
         current: held,
         added: requested.filter((p) => !held.includes(p)),
@@ -171,34 +252,50 @@ function createAppsHost(deps) {
   }
 
   // ── the shell's view: apps.list and onChange ──
+  function statusOf(slug) {
+    if (!platform || typeof platform.status !== "function") return {};
+    try {
+      const status = platform.status(slug) || {};
+      return Object.fromEntries(STATUS_FIELDS.filter((k) => k in status).map((k) => [k, status[k]]));
+    } catch (err) {
+      log(`status for ${slug}: ${err.message}`);
+      return {};
+    }
+  }
+
   function list() {
     return registry.list().map((record) => {
       const facts = record.facts || {};
       const version = Number(facts.version) || 0;
       const grants = Array.isArray(record.grants) ? record.grants : [];
+      const icons = withIconKeys(facts, registry.gateOf(record.slug)).icons || {};
       return {
         slug: record.slug,
         name: record.name,
-        iconUrl: (facts.icons && (facts.icons["512"] || facts.icons["1024"])) || null,
+        iconUrl: icons["512"] || icons["1024"] || null,
         version,
         grantedVersion: Number(record.grantedVersion) || 0,
         grants,
         requested: engineFacts(facts).requested,
         needsReview: grants.length > 0 && (Number(record.grantedVersion) || 0) < version,
         platform: process.platform,
+        // The page's gate keys, so the shell's facts feed can read a gated page.
+        gate: pickGate(registry.gateOf(record.slug)),
+        ...statusOf(record.slug),
       };
     });
   }
 
   let changeQueued = false;
-  registry.onChange(() => {
+  function queueChange() {
     if (changeQueued) return;
     changeQueued = true;
     setImmediate(() => {
       changeQueued = false;
       broadcast("apps:changed", list());
     });
-  });
+  }
+  registry.onChange(queueChange);
 
   // ── install, open, uninstall ──
   async function makeIcons(slug, info) {
@@ -220,6 +317,11 @@ function createAppsHost(deps) {
     if (info.policy && info.policy.install === false) throw new Error("your team does not allow installing apps");
     const slug = info.slug;
     if (registry.get(slug)) {
+      // The new answer may carry rotated gate keys and newer facts.
+      if (info.gate && typeof info.gate === "object" && Object.keys(info.gate).length) {
+        registry.update(slug, { gate: { ...registry.gateOf(slug), ...info.gate } });
+      }
+      takeFacts(slug, info);
       await open(slug);
       return { installed: true, already: true };
     }
@@ -266,6 +368,45 @@ function createAppsHost(deps) {
     return engine.grant(slug, grants, Number(record.facts.version) || 0, engineFacts(record.facts));
   }
 
+  /** The web app reported Codecast's sign-in. Open apps cover or uncover their page. */
+  function setSignedIn(on) {
+    const next = !!on;
+    if (next === signedIn) return;
+    signedIn = next;
+    try {
+      if (deps.settings) deps.settings.update({ [SIGNED_IN_KEY]: next });
+    } catch (err) {
+      log(`saving sign-in state: ${err.message}`);
+    }
+    if (platform && typeof platform.setSignedIn === "function") platform.setSignedIn(next);
+  }
+
+  /** codecast://uninstall/<slug>: ask the person natively, then uninstall. */
+  // One dialog per slug: a repeat link while it is open is ignored.
+  const confirming = new Set();
+  async function confirmAndUninstall(slug) {
+    const record = registry.get(slug);
+    if (!record) return log(`uninstall link for ${slug}: not installed here`);
+    if (typeof deps.confirmUninstall !== "function" || confirming.has(slug)) return;
+    confirming.add(slug);
+    let yes;
+    try {
+      yes = await deps.confirmUninstall(record.name);
+    } finally {
+      confirming.delete(slug);
+    }
+    if (yes) await uninstall(slug);
+  }
+
+  /** A codecast:// link this host answers itself. True when it took the link. */
+  function handleUrl(url) {
+    const slug = uninstallSlugFromUrl(url);
+    if (!slug) return false;
+    if (!engine) pendingUrls.push(url);
+    else confirmAndUninstall(slug).catch((err) => log(`uninstall ${slug}: ${err.message}`));
+    return true;
+  }
+
   // ── wiring ──
   /** Builds the platform host and the engine. Call once, when Electron is ready. */
   function start() {
@@ -274,6 +415,12 @@ function createAppsHost(deps) {
       pageOrigin,
       pageUrl,
       uninstallApp: (slug) => uninstall(slug),
+      signedIn: () => signedIn,
+      onStatus: () => queueChange(),
+      openInCodecast: (slug) => {
+        if (typeof deps.openInCodecast !== "function") throw new Error("Codecast cannot open pages yet");
+        return deps.openInCodecast(slug);
+      },
       call: (slug, frame, msg) => engine.handle(slug, frame, msg),
       onFocus: (slug) => {
         if (!shellAlive()) fetchFacts(slug);
@@ -283,10 +430,11 @@ function createAppsHost(deps) {
       },
     });
     const full = { ...adapter };
-    // The platform's own wins; a method it lacks (other than the shared two)
-    // leaves a gap the engine refuses at startup.
+    // The platform's own wins, except for the methods main answers on every
+    // platform; a method it lacks (other than those) leaves a gap the engine
+    // refuses at startup.
     for (const key of HOST_METHODS) {
-      if (typeof platform[key] === "function") full[key] = (...args) => platform[key](...args);
+      if (!MAIN_METHODS.has(key) && typeof platform[key] === "function") full[key] = (...args) => platform[key](...args);
     }
     engine = createEngine({ registry, page: factsFor, adapter: full, ops: deps.ops });
     if (platform.resealAll) {
@@ -303,6 +451,9 @@ function createAppsHost(deps) {
     }, POLL_MS);
     if (timer.unref) timer.unref();
     if (platform.serve) platform.serve().catch((err) => log(`shim socket: ${err.message}`));
+    const held = pendingUrls;
+    pendingUrls = [];
+    for (const url of held) handleUrl(url);
     return api;
   }
 
@@ -319,15 +470,27 @@ function createAppsHost(deps) {
     ipc.on("apps:facts", (_e, slug, info) => {
       if (engine) takeFacts(slug, info);
     });
+    ipc.on("apps:signed-in", (_e, on) => {
+      if (typeof on === "boolean") setSignedIn(on);
+    });
     ipc.handle("apps:consent-get", (_e, id) => consent.get(id));
     ipc.handle("apps:consent-answer", (_e, id, answer) => consent.answer(id, answer));
+    ipc.on("apps:consent-resize", (_e, id, height) => consent.resize && consent.resize(id, height));
   }
 
-  /** A launch or second instance carrying --codecast-app=<slug>: open it. True when it asked for an app. */
+  /**
+   * A launch or second instance carrying --codecast-app=<slug>: open it. True
+   * when it asked for an app. A slug not installed here (a stale shortcut)
+   * brings Codecast forward instead of leaving it hidden.
+   */
   function handleArgv(argv) {
     const slug = appFromArgv(argv);
     if (!slug) return false;
     if (engine && registry.get(slug)) open(slug).catch((err) => log(`open ${slug}: ${err.message}`));
+    else if (engine) {
+      log(`launch for ${slug}: not installed here`);
+      if (typeof deps.showCodecast === "function") deps.showCodecast();
+    }
     return true;
   }
 
@@ -342,6 +505,11 @@ function createAppsHost(deps) {
     start,
     installIpc,
     handleArgv,
+    handleUrl,
+    setSignedIn,
+    get signedIn() {
+      return signedIn;
+    },
     stop,
     list,
     install,
@@ -361,4 +529,4 @@ function createAppsHost(deps) {
   return api;
 }
 
-module.exports = { createAppsHost, engineFacts, appInfoProblem, appFromArgv, APP_ARG };
+module.exports = { createAppsHost, heldToStored, withIconKeys, engineFacts, appInfoProblem, appFromArgv, uninstallSlugFromUrl, APP_ARG };

@@ -20,6 +20,7 @@ expect(!nav("https://a.codecast.sh/slugger/x"), "longer sibling")
 expect(!nav("https://a.codecast.sh/other"), "other path, same origin")
 expect(!nav("https://a.codecast.sh/slug/../other"), "dot segments out of the path")
 expect(!nav("https://a.codecast.sh/slug%2F..%2Fother"), "encoded slash")
+expect(!nav("https://a.codecast.sh/slug/%2e%2e/other") && !nav("https://a.codecast.sh/slug/%2E%2E/other") && !nav("https://a.codecast.sh/slug/.%2e/other"), "encoded dot segments (WebKit resolves them)")
 expect(!nav("https://evil.example/slug"), "other host")
 expect(!nav("https://a.codecast.sh.evil.example/slug"), "host suffix")
 expect(!nav("http://a.codecast.sh/slug"), "scheme downgrade")
@@ -48,6 +49,7 @@ expect(!bridge(true, "https://a.codecast.sh/slug-evil"), "main frame on a siblin
 expect(!bridge(true, "https://evil.example/slug"), "main frame elsewhere")
 expect(!bridge(true, "about:blank"), "about:blank main frame")
 expect(!bridge(true, "data:text/html,x"), "data main frame")
+expect(!bridge(true, "https://a.codecast.sh/slug/%2e%2e/other"), "bridge: encoded dot segments")
 expect(!bridge(true, nil), "no URL")
 
 if failures > 0 { exit(1) }

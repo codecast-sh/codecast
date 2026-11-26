@@ -42,10 +42,25 @@ function safeStorageSealer(safeStorage) {
   };
 }
 
-/** The appInfo answer as kept in a record: everything but the gate keys. */
+/**
+ * The appInfo answer as kept in a record: everything but the gate keys, which
+ * are also taken off its icon URLs (appInfo appends them there), so no key
+ * sits in settings.json unsealed. host.js puts them back where it hands the
+ * facts on (withIconKeys).
+ */
 function factsOf(info) {
   if (!info || typeof info !== "object") return null;
   const { gate: _gate, ...facts } = info;
+  if (facts.icons && typeof facts.icons === "object") {
+    const icons = {};
+    for (const [size, url] of Object.entries(facts.icons)) {
+      if (typeof url !== "string" || !URL.canParse(url)) continue;
+      const u = new URL(url);
+      for (const k of GATE_KEYS) u.searchParams.delete(k);
+      icons[size] = u.toString();
+    }
+    facts.icons = icons;
+  }
   return facts;
 }
 

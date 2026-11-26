@@ -6,14 +6,16 @@
 // three moments: installing a page, a running app's permissions.request, and
 // the re-ask after a new version. The page reads the request from main, shows
 // the shared review edge to edge, answers once, and closes its window.
-// Closing the window any other way is main's to count as a refusal.
+// Closing the window any other way is main's to count as a refusal. The page
+// reports the review's natural height (apps.consent.resize), so main fits the
+// window to it: a one-row review is a short window, not an empty middle.
 import { useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type { AppPermission } from "@codecast/shared/contracts/pageApp";
 import { useDesktopApps } from "../../../../hooks/useInstalledApps";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { ConsentSheet } from "../../../../components/installedApps/ConsentSheet";
-import type { ConsentRequest } from "../../../../lib/installedApps";
+import type { ConsentRequest, DesktopAppsBridge } from "../../../../lib/installedApps";
 
 type Answered = { approve: boolean; name: string; kind: ConsentRequest["kind"] };
 
@@ -31,6 +33,8 @@ export default function AppConsentPage() {
     apps.consent.get(id).then((r) => { if (live) setReq(r ?? null); }, () => { if (live) setReq(null); });
     return () => { live = false; };
   }, [apps, id]);
+
+  useFitWindow(apps, id, !!req && !answered);
 
   const answer = (approve: boolean, grants: AppPermission[]) => {
     if (!apps || !req || sent.current) return;
@@ -52,6 +56,48 @@ export default function AppConsentPage() {
       )}
     </div>
   );
+}
+
+/**
+ * Tells main the review's natural height: the sum of its parts, which do not
+ * depend on the window's height, so fitting the window never feeds back. Its
+ * parts are watched for size (a full-access line appearing) and for being
+ * added or removed.
+ */
+function useFitWindow(apps: DesktopAppsBridge | null, id: string, live: boolean) {
+  useWatchEffect(() => {
+    const resize = apps?.consent.resize;
+    if (!resize || !live) return;
+    let frame = 0;
+    let last = 0;
+    let review: HTMLElement | null = null;
+    const sizes = new ResizeObserver(() => schedule());
+    const parts = new MutationObserver(() => { watch(); schedule(); });
+    const watch = () => {
+      sizes.disconnect();
+      for (const el of Array.from(review?.children ?? [])) sizes.observe(el);
+    };
+    const report = () => {
+      frame = 0;
+      if (!review) {
+        // The dialog mounts through a portal; wait for it.
+        review = document.querySelector<HTMLElement>("[data-switch-review]");
+        if (!review) { frame = requestAnimationFrame(report); return; }
+        parts.observe(review, { childList: true });
+        watch();
+      }
+      let height = 0;
+      for (const el of Array.from(review.children) as HTMLElement[]) {
+        const pos = getComputedStyle(el).position;
+        if (pos !== "absolute" && pos !== "fixed") height += el.offsetHeight;
+      }
+      height = Math.ceil(height);
+      if (height > 0 && height !== last) { last = height; resize(id, height); }
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(report); };
+    schedule();
+    return () => { cancelAnimationFrame(frame); sizes.disconnect(); parts.disconnect(); };
+  }, [apps, id, live]);
 }
 
 /** What the window shows when there is nothing to answer, or once it has answered and is closing. */

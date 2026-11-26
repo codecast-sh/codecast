@@ -34,7 +34,7 @@ import { headOfPeopleIn, projectLeadRole, userCanAccessRole, userCanAdminRole } 
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateMirror, gateResponseOf, optionMoves } from "./lib/gateChoices";
 import { categoryFor, isHumanOnlyCategory, isProtectedCategory } from "./lib/decisionCategory";
-import { syncDecisionInbox } from "./lib/decisionInbox";
+import { pendingQueueDecisions, syncDecisionInbox } from "./lib/decisionInbox";
 import { settleDecisionWaiting } from "./lib/decisionRing";
 import { answerLabel, normalizeVerdict, verdictOfRow, type Verdict } from "./lib/decisionVerdict";
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
@@ -2582,26 +2582,22 @@ export async function listForUserCore(ctx: Ctx, userId: Id<"users">, now: number
 
   // Pending rows whole; resolved ones only inside the window, by index. Reading
   // every row a person was ever asked, to keep the last day's, cost 12 MB a call.
-  const inboxRows = [
-    ...(await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).collect()),
-    ...(await ctx.db.query("decision_inbox").withIndex("by_user_status_at", (q: any) => q.eq("user_id", userId).eq("status", "done").gte("status_at", cutoff)).collect()),
-  ];
-  for (const r of inboxRows) {
+  const keep = (d: DecisionRow) => d.status === "pending" || (d.resolved_at ?? 0) >= cutoff;
+  for (const d of await pendingQueueDecisions(ctx, userId)) if (keep(d)) out.set(String(d._id), d);
+  const doneRows = await ctx.db.query("decision_inbox").withIndex("by_user_status_at", (q: any) => q.eq("user_id", userId).eq("status", "done").gte("status_at", cutoff)).collect();
+  for (const r of doneRows) {
     const d: DecisionRow | null = await ctx.db.get(r.decision_id);
     if (!d) continue;
     // A stale inbox row from before assignment must not keep the card on
     // the previous person's stack: asked_user_ids is the people set.
     if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id) => String(id) === String(userId))) continue;
-    if (d.status === "pending" || (d.resolved_at ?? 0) >= cutoff) out.set(String(d._id), d);
+    if (keep(d)) out.set(String(d._id), d);
   }
 
-  for (const status of ["pending", "answered", "dismissed", "withdrawn"] as const) {
-    const rows: DecisionRow[] = status === "pending"
-      ? await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status)).collect()
-      : await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", status).gte("resolved_at", cutoff)).collect();
+  for (const status of ["answered", "dismissed", "withdrawn"] as const) {
+    const rows: DecisionRow[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", status).gte("resolved_at", cutoff)).collect();
     for (const r of rows) {
-      if (r.asked_user_ids !== undefined) continue; // an inbox row carries it
-      if (r.status === "pending" || (r.resolved_at ?? 0) >= cutoff) out.set(String(r._id), r);
+      if (r.asked_user_ids === undefined) out.set(String(r._id), r); // otherwise an inbox row carries it
     }
   }
   // A decision escalated to this person comes first (decisionHandoff.ts); the rest keep their order.

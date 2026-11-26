@@ -1,0 +1,12 @@
+{
+  "queries": {
+    "waiting": { "reader": "waiting", "args": { "days": 7 }, "refresh": "1m", "title": "Waiting on you" }
+  },
+  "app": {
+    "name": "Needs you",
+    "icon": "icon.png",
+    "window": { "width": 400, "height": 560, "minWidth": 320, "minHeight": 400 },
+    "tray": { "icon": "tray.png", "width": 360, "height": 480, "tooltip": "Needs you" },
+    "permissions": ["notifications", "menu-bar"]
+  }
+}

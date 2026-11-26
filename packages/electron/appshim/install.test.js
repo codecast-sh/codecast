@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync, spawnSync } = require("node:child_process");
-const { install, uninstall, reseal, bundleName, bundlePath, dataPaths } = require("./install");
+const { install, uninstall, reseal, bundleName, bundlePath, dataPaths, readInfo, windowKeys } = require("./install");
 const { writeSolidPng } = require("./fixtures");
 const { clientSource } = require("../installedApps/protocol");
 
@@ -66,6 +66,30 @@ test("a plist edit after sealing breaks the seal, so changes go through install 
   fs.appendFileSync(path.join(app, "Contents", "Info.plist"), "\n");
   assert.throws(() => execFileSync("codesign", ["--verify", "--strict", app], { stdio: "pipe" }));
   reseal({ appPath: app, shimBinaryPath: f.shim, register: false });
+  execFileSync("codesign", ["--verify", "--strict", app]);
+});
+
+test("the manifest's window options become typed Info.plist keys; ones it leaves out are left out", () => {
+  assert.deepEqual(windowKeys({ width: 420.4, height: 640, minWidth: 320, minHeight: 400, resizable: false, titleBar: "hidden" }), {
+    CodecastWindowWidth: 420, CodecastWindowHeight: 640, CodecastMinWidth: 320, CodecastMinHeight: 400,
+    CodecastResizable: false, CodecastTitleBar: "hidden",
+  });
+  assert.deepEqual(Object.values(windowKeys({ width: -1, titleBar: "glass", resizable: "yes" })).filter((v) => v !== undefined), []);
+});
+
+test("install and reseal write the window keys with their types; reseal removes one set to null", { skip: !mac }, () => {
+  const f = fixture();
+  const { path: app } = install(opts(f, { window: { width: 420, height: 640, minWidth: 320, minHeight: 400, resizable: false, titleBar: "hidden" } }));
+  let info = readInfo(app);
+  assert.equal(info.CodecastMinWidth, 320);
+  assert.equal(info.CodecastMinHeight, 400);
+  assert.equal(info.CodecastResizable, false);
+  assert.equal(info.CodecastTitleBar, "hidden");
+  reseal({ appPath: app, shimBinaryPath: f.shim, register: false, plist: { CodecastResizable: true, CodecastMinWidth: 500, CodecastTitleBar: null } });
+  info = readInfo(app);
+  assert.equal(info.CodecastResizable, true);
+  assert.equal(info.CodecastMinWidth, 500);
+  assert.equal("CodecastTitleBar" in info, false);
   execFileSync("codesign", ["--verify", "--strict", app]);
 });
 

@@ -45,6 +45,10 @@ export type InstalledApp = {
   running?: boolean;
   /** The gate keys stored with the install, so the facts feed can read a gated page. */
   gate?: GateKeys;
+  /** macOS: the app's notification authorization ("authorized", "denied", "notDetermined", …), when its shim reported one. */
+  notifications?: string | null;
+  /** macOS: System Settings › Notifications for this app. */
+  notificationSettingsUrl?: string;
 };
 
 export type ConsentKind = "install" | "request" | "review";
@@ -70,10 +74,14 @@ export type DesktopAppsBridge = {
   uninstall(slug: string): Promise<void>;
   setGrants(slug: string, grants: string[]): Promise<void>;
   facts(slug: string, info: AppInfo): void;
+  /** Whether Codecast is signed in; absent on desktop builds that predate it. */
+  setSignedIn?(signedIn: boolean): void;
   onChange(cb: (apps: InstalledApp[]) => void): () => void;
   consent: {
     get(id: string): Promise<ConsentRequest | null>;
     answer(id: string, answer: { approve: boolean; grants: string[] }): Promise<void>;
+    /** The route's natural content height, so the window fits it; absent on desktop builds that predate it. */
+    resize?(id: string, height: number): void;
   };
 };
 
@@ -83,7 +91,7 @@ export type DesktopAppsBridge = {
 export function permissionEffect(p: AppPermission, platform: string): string {
   switch (p) {
     case "notifications": return "Alerts under its own name";
-    case "menu-bar": return platform === "win32" ? "An icon in the tray" : "An icon in the menu bar";
+    case "menu-bar": return platform === "win32" ? "An icon in the system tray" : "An icon in the menu bar";
     case "shortcuts": return "Keys that work in any app";
     case "overlay": return "Floats above other windows";
     case "agent": return "Runs as you, counts toward your usage";
@@ -92,7 +100,11 @@ export function permissionEffect(p: AppPermission, platform: string): string {
   }
 }
 
-export const permissionLabel = (p: AppPermission) => APP_PERMISSION_LABEL[p];
+/** A permission's name as this computer calls it: the menu bar is the tray on Windows. */
+export const permissionLabel = (p: AppPermission, platform: string) => (p === "menu-bar" && platform === "win32" ? "Tray" : APP_PERMISSION_LABEL[p]);
+
+/** The computer this window runs on, as the installed-app hosts name platforms. */
+export const currentPlatform = (): "win32" | "darwin" => (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent) ? "win32" : "darwin");
 
 /** Why full access cannot be granted to this page, in a word or two; null when it can. Mirrors engine.js fullAccessRefusal. */
 export function fullAccessBlock(info: Pick<AppInfo, "relation" | "policy">): string | null {
@@ -144,22 +156,36 @@ export function consentGrants(req: ConsentRequest, chosen: ReadonlySet<AppPermis
 export const pageAddress = (shareUrl: string) => shareUrl.replace(/^https?:\/\//, "");
 
 /** The consent sheet's review (ConsequentialSwitch SwitchLedger) for one moment and the person's current choices. */
-export function consentLedger(req: ConsentRequest, chosen: ReadonlySet<AppPermission>, address: string): SwitchLedger {
+export function consentLedger(req: ConsentRequest, chosen: ReadonlySet<AppPermission>, address: string, platform: string): SwitchLedger {
   const { info } = req;
+  const names = (ps: AppPermission[]) => ps.map((p) => permissionLabel(p, platform)).join(", ");
   const name = info.app.name;
   const grants = consentGrants(req, chosen);
   const full = grants.includes("full-access");
   const kept = req.current.filter((p) => !req.added.includes(p));
   const rows: SwitchLedger["rows"] = [];
+  // An install the team turned off: nothing to choose, so the sheet names what the app would have asked for and stops.
+  if (installBlocked(req)) {
+    return {
+      name: "Install as app",
+      subject: address,
+      shift: null,
+      figures: [],
+      rows: [{ k: "Asks for", v: req.asked.length ? names(ordered(req.asked)) : "Nothing" }],
+      confirm: `Install ${name}`,
+      keep: "Close",
+      blocked: "Installs are off for your team",
+    };
+  }
   if (req.kind === "install") {
     rows.push({ k: "Window", v: `Its own · ${info.app.window.width}×${info.app.window.height}` });
     rows.push({ k: "Updates", v: "Live, on every publish" });
     rows.push({ k: "Asks again", v: "When a version wants more" });
   } else if (req.kind === "review") {
-    rows.push({ k: "Kept", v: kept.length ? kept.map(permissionLabel).join(", ") : "Nothing granted yet" });
+    rows.push({ k: "Kept", v: kept.length ? names(kept) : "Nothing granted yet" });
     if (!req.added.length) rows.push({ k: "Asks for", v: "Nothing new", tone: "ok" });
   } else {
-    rows.push({ k: "Already has", v: req.current.length ? req.current.map(permissionLabel).join(", ") : "Nothing" });
+    rows.push({ k: "Already has", v: req.current.length ? names(req.current) : "Nothing" });
   }
   // Below the switches, never above: turning full access on must not move the switch under the pointer.
   if (full) rows.push({ k: "Full access", v: "Any file you can reach, any program", tone: "warn" });
@@ -173,9 +199,11 @@ export function consentLedger(req: ConsentRequest, chosen: ReadonlySet<AppPermis
     rows,
     confirm,
     keep: req.kind === "install" ? "Cancel" : req.kind === "request" ? "Don't allow" : "Not now",
-    ...(req.kind === "install" && !info.policy.install ? { blocked: "Installs are off for your team" } : {}),
   };
 }
+
+/** An install the team's policy refuses: the sheet shows no switches, only why. */
+export const installBlocked = (req: Pick<ConsentRequest, "kind" | "info">) => req.kind === "install" && !req.info.policy.install;
 
 /** Turning full access on for an installed app from Settings: the same weight as at install. */
 export function fullAccessLedger(name: string, address: string): SwitchLedger {

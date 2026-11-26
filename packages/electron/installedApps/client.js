@@ -81,6 +81,7 @@
   var app = {
     info: method("app", "info"),
     badge: method("app", "badge"),
+    openInCodecast: method("app", "openInCodecast"),
     notify: method("app", "notify"),
     permissions: { request: method("permissions", "request") },
     tray: { set: method("tray", "set"), remove: method("tray", "remove") },
@@ -92,6 +93,8 @@
       minimize: method("window", "minimize"),
       close: method("window", "close"),
       setAlwaysOnTop: method("window", "setAlwaysOnTop"),
+      setVisibleOnAllWorkspaces: method("window", "setVisibleOnAllWorkspaces"),
+      setIgnoreMouseEvents: method("window", "setIgnoreMouseEvents"),
     },
     agent: { ask: method("agent", "ask") },
     login: { set: method("login", "set") },

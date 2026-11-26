@@ -10,7 +10,8 @@
 //                                   ({slug, name, grantedVersion, grants, ...})
 //   registry.update(slug, patch) -> persists a merge over the record
 //   page(slug)                   -> (promise of) what the host knows about the page now:
-//                                   {version, relation: "own"|"team"|"outside",
+//                                   {version, relation: "owner"|"team"|"other"|"anonymous"
+//                                    (appInfo's own words),
 //                                    policy: {install, fullAccess}, requested: string[]}
 //
 //   adapter: the host. Each method gets (ctx, ...args), ctx = {slug, frame, record, page},
@@ -18,10 +19,12 @@
 //   refuse with a code; anything else thrown becomes `failed`.
 //     "app.notify"({title, body?, tag?, silent?})
 //     "app.badge"(count)                      0 clears
+//     "app.openInCodecast"(route)             a codecast path ("/tasks/ct-1"), shown in Codecast's window
 //     "tray.set"({title?, tooltip?, badge?})  "tray.remove"()
 //     "shortcuts.register"(accelerator)       "shortcuts.unregister"(accelerator)
 //     "window.setSize"(width, height)  "window.setTitle"(title)  "window.focus"()
 //     "window.minimize"()  "window.close"()   "window.setAlwaysOnTop"(on)
+//     "window.setVisibleOnAllWorkspaces"(on)  "window.setIgnoreMouseEvents"(on)
 //     "agent.ask"(prompt) -> {answer}
 //     "login.set"(on)
 //     "shell.open"(pathOrUrl)
@@ -50,6 +53,8 @@ const ENGINE_METHODS = new Set(["app.info", "permissions.request", "fs.watch", "
 const isOps = (key) => key.startsWith("fs.") || key === "process.run";
 /** Methods the host adapter must implement. */
 const HOST_METHODS = Object.keys(TIERS.methods).filter((k) => !ENGINE_METHODS.has(k) && !isOps(k));
+/** Host methods Codecast's main process answers on every platform (host.js), never a platform host or the shim. */
+const MAIN_METHODS = new Set(["agent.ask", "shell.open", "app.openInCodecast"]);
 
 // ── global shortcuts: at least two modifiers and one key ──
 const MODIFIERS = {
@@ -58,6 +63,18 @@ const MODIFIERS = {
   alt: "alt", option: "alt", altgr: "altgr", shift: "shift", super: "super", meta: "super",
 };
 const KEY = /^([a-z0-9]|f([1-9]|1[0-9]|2[0-4])|space|tab|enter|return|backspace|delete|insert|home|end|pageup|pagedown|up|down|left|right|escape|esc|plus|[-=[\];',./`\\])$/i;
+
+// Chords the system keeps for itself or that a person needs to get out of a
+// misbehaving app: Force Quit, screenshots, lock and log out on macOS; Task
+// Manager, the secure attention sequence and Snip on Windows. An app may not
+// hold them even with the shortcuts grant. Modifiers sorted, key lowercase.
+const RESERVED_CHORDS = new Set([
+  "alt+cmd+escape", "alt+cmd+esc",
+  "cmd+shift+3", "cmd+shift+4", "cmd+shift+5", "cmd+shift+6",
+  "cmd+ctrl+q", "cmd+shift+q", "alt+cmd+shift+q",
+  "ctrl+shift+escape", "ctrl+shift+esc", "alt+ctrl+delete",
+  "shift+super+s",
+]);
 
 /** Why an accelerator is unusable as a global shortcut, or null. */
 function acceleratorProblem(accel) {
@@ -71,6 +88,9 @@ function acceleratorProblem(accel) {
   const set = new Set(mods);
   if (set.size !== mods.length || (set.has("cmdorctrl") && (set.has("cmd") || set.has("ctrl")))) return `"${accel}" repeats a modifier`;
   if (set.size < 2) return `"${accel}" needs at least two modifiers`;
+  // CmdOrCtrl is Cmd on macOS and Ctrl elsewhere: reserved if either is.
+  const chords = set.has("cmdorctrl") ? ["cmd", "ctrl"].map((m) => [...set].map((x) => (x === "cmdorctrl" ? m : x))) : [[...set]];
+  if (chords.some((mods) => RESERVED_CHORDS.has([...mods.sort(), key.toLowerCase()].join("+")))) return `"${accel}" is reserved by the system`;
   return null;
 }
 
@@ -88,6 +108,8 @@ const TYPES = {
   boolean: (v) => typeof v === "boolean",
   "string[]": (v) => Array.isArray(v) && v.every((s) => typeof s === "string"),
   record: (v) => !!v && typeof v === "object" && !Array.isArray(v) && Object.values(v).every((s) => typeof s === "string"),
+  // A path inside codecast's web app: one leading slash, no host, no whitespace or backslash.
+  route: (v) => typeof v === "string" && v.length <= 2048 && /^\/(?![/\\])[^\s\\]*$/.test(v),
   path: (v) => typeof v === "string" && (v === "~" || v.startsWith("~/") || v.startsWith("/") || /^[A-Za-z]:[\\/]/.test(v) || v.startsWith("\\\\")),
   permissions: (v) => Array.isArray(v) && v.length > 0 && v.every((p) => TIERS.permissions.includes(p)),
   accelerator: (v) => typeof v === "string" && !acceleratorProblem(v),
@@ -97,6 +119,7 @@ const OPTIONAL = "?";
 const ARGS = {
   "app.info": [],
   "app.badge": ["count"],
+  "app.openInCodecast": ["route"],
   "app.notify": [{ title: "text", body: "string?", tag: "string?", silent: "boolean?" }],
   "permissions.request": ["permissions"],
   "window.setSize": ["size", "size"],
@@ -105,6 +128,8 @@ const ARGS = {
   "window.minimize": [],
   "window.close": [],
   "window.setAlwaysOnTop": ["boolean"],
+  "window.setVisibleOnAllWorkspaces": ["boolean"],
+  "window.setIgnoreMouseEvents": ["boolean"],
   "tray.set": [{ [OPTIONAL]: true, title: "string?", tooltip: "string?", badge: "string|count?" }],
   "tray.remove": [],
   "shortcuts.register": ["accelerator"],
@@ -166,7 +191,7 @@ function grantsFor(record, version) {
 
 /** Whether full access may be offered for this page at all, or the refusal that applies. */
 function fullAccessRefusal(facts) {
-  if (facts.relation !== "own" && facts.relation !== "team") {
+  if (facts.relation !== "owner" && facts.relation !== "team") {
     return new AppError("not-your-page", "full access is only for your own pages and your teams' pages");
   }
   if (!facts.policy || facts.policy.fullAccess !== true) {
@@ -201,11 +226,21 @@ function createEngine({ registry, page, adapter, ops = createFullAccess(), platf
     if (problem) throw new AppError("bad-args", `${key}: ${problem}`);
 
     const frameVersion = Number(frame && frame.version) || 0;
-    const version = Math.max(frameVersion, Number(facts.version) || 0);
+    const factsVersion = Number(facts.version) || 0;
+    const version = Math.max(frameVersion, factsVersion);
     const decided = { key, tier, args, record, facts, version };
     if (tier === DEFAULT && key !== "permissions.request") return decided;
     if (frameVersion < version) {
       throw new AppError("mixed-version", `this window shows version ${frameVersion}; version ${version} is live and loads first`);
+    }
+    // A frame ahead of the server's facts is refused until the facts catch up
+    // (the shell's feed within a second, or the fallback fetch). The frame
+    // version is the page response's X-Cast-Version, which a page's own
+    // service worker can forge; trusting it would record consent for a
+    // version the server never published, and grants given "for v9999" would
+    // then hold across every real republish below it.
+    if (frameVersion > factsVersion) {
+      throw new AppError("mixed-version", `this window shows version ${frameVersion}, which Codecast has not confirmed yet`);
     }
     if (key === "permissions.request") return decided;
     if (tier === FULL) {
@@ -295,26 +330,13 @@ function createEngine({ registry, page, adapter, ops = createFullAccess(), platf
   return { decide, handle, grant, release };
 }
 
-/** A registry over settings.json's `installedApps` key (settingsFile.js's load/update). */
-function settingsRegistry(settings) {
-  const all = () => settings.load().installedApps || {};
-  return {
-    get: (slug) => all()[slug] || null,
-    update(slug, patch) {
-      const apps = all();
-      if (!apps[slug]) throw new AppError("not-installed", `${slug} is not installed on this computer`);
-      settings.update({ installedApps: { ...apps, [slug]: { ...apps[slug], ...patch } } });
-    },
-  };
-}
-
 module.exports = {
   createEngine,
-  settingsRegistry,
   grantsFor,
   acceleratorProblem,
   argsProblem,
   ARGS,
   HOST_METHODS,
+  MAIN_METHODS,
   TIERS,
 };

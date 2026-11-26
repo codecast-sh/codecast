@@ -1,0 +1,13 @@
+{
+  "queries": {
+    "tasks": { "reader": "tasks", "args": { "view": "status", "days": 90, "board": "human" }, "refresh": "1m", "title": "Human board by status" },
+    "incidents": { "reader": "event_groups", "args": { "view": "top", "days": 7, "status": "open" }, "refresh": "1m", "title": "Open issues" }
+  },
+  "app": {
+    "name": "Team queue",
+    "icon": "icon.png",
+    "window": { "width": 400, "height": 580, "minWidth": 320, "minHeight": 420 },
+    "tray": { "icon": "tray.png", "width": 340, "height": 460, "tooltip": "Team queue" },
+    "permissions": ["notifications", "menu-bar"]
+  }
+}

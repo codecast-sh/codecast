@@ -7,9 +7,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { createAppsHost, engineFacts, appFromArgv } = require("./host");
+const { createAppsHost, engineFacts, appFromArgv, uninstallSlugFromUrl } = require("./host");
 const { createRegistry } = require("./registry");
-const { HOST_METHODS } = require("./engine");
+const { HOST_METHODS, MAIN_METHODS } = require("./engine");
 const { createSettingsFile } = require("../settingsFile");
 
 const INFO = {
@@ -23,9 +23,9 @@ const INFO = {
   gate: { k: "key1" },
 };
 
-function rig({ shellAlive = true, fetchImpl } = {}) {
+function rig({ shellAlive = true, fetchImpl, extra = {}, platformExtra = {}, start = true, file: givenFile } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "apps-host-"));
-  const file = path.join(dir, "settings.json");
+  const file = givenFile || path.join(dir, "settings.json");
   const settings = createSettingsFile(() => file);
   const registry = createRegistry({ settings, sealer: { seal: (s) => `S(${s})`, open: (s) => s.replace(/^S\((.*)\)$/, "$1") } });
   const calls = [];
@@ -56,6 +56,8 @@ function rig({ shellAlive = true, fetchImpl } = {}) {
     shellAlive: () => shellAlive,
     fetchImpl: fetchImpl || (async () => ({ ok: false, status: 404 })),
     log: () => {},
+    settings,
+    ...extra,
     createPlatform(d) {
       deps = d;
       const platform = {
@@ -68,24 +70,24 @@ function rig({ shellAlive = true, fetchImpl } = {}) {
         install: async ({ record }) => (calls.push(["install", record.slug]), { shortcutPath: `/start/${record.name}.lnk` }),
         uninstall: async (record) => (open.delete(record.slug), calls.push(["uninstall", record.slug])),
         closeAll: () => calls.push(["closeAll"]),
+        ...platformExtra,
       };
-      for (const key of HOST_METHODS) if (key !== "agent.ask" && key !== "shell.open") platform[key] = (ctx, ...args) => (calls.push([key, ...args]), null);
+      for (const key of HOST_METHODS) if (!MAIN_METHODS.has(key)) platform[key] = (ctx, ...args) => (calls.push([key, ...args]), null);
       return platform;
     },
   });
   host.installIpc();
-  host.start();
+  if (start) host.start();
   const shell = (channel, ...args) => handlers.get(channel)({ sender: {} }, ...args);
-  return { host, registry, consent, asks, calls, open, deps: () => deps, shell, handlers, broadcasts, file, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+  return { host, settings, registry, consent, asks, calls, open, deps: () => deps, shell, handlers, broadcasts, file, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
 
-test("appInfo's relation and policy become the engine's facts", () => {
-  assert.deepEqual(engineFacts(INFO), { version: 7, relation: "own", policy: { install: true, fullAccess: true }, requested: ["notifications", "full-access"] });
-  assert.equal(engineFacts({ ...INFO, relation: "anonymous" }).relation, "outside");
-  assert.equal(engineFacts({ ...INFO, relation: "other" }).relation, "outside");
-  assert.equal(engineFacts({ ...INFO, relation: "team" }).relation, "team");
+test("appInfo's relation and policy are the engine's facts, in the server's words", () => {
+  assert.deepEqual(engineFacts(INFO), { version: 7, relation: "owner", policy: { install: true, fullAccess: true }, requested: ["notifications", "full-access"] });
+  for (const relation of ["owner", "team", "other", "anonymous"]) assert.equal(engineFacts({ ...INFO, relation }).relation, relation);
+  assert.equal(engineFacts({ ...INFO, relation: "boss" }).relation, "anonymous", "an unknown relation is the least trusted one");
 });
 
 test("install asks first, and records nothing when the sheet is closed", async () => {
@@ -116,7 +118,7 @@ test("an approved install records the app, grants what was approved for this ver
   await flush();
   const [channel, list] = r.broadcasts.at(-1);
   assert.equal(channel, "apps:changed");
-  assert.deepEqual(list, [{ slug: "k3j2h4ab", name: "Vitals", iconUrl: INFO.icons[512], version: 7, grantedVersion: 7, grants: ["notifications", "full-access"], requested: ["notifications", "full-access"], needsReview: false, platform: process.platform }]);
+  assert.deepEqual(list, [{ slug: "k3j2h4ab", name: "Vitals", iconUrl: `${INFO.icons[512]}&k=key1`, version: 7, grantedVersion: 7, grants: ["notifications", "full-access"], requested: ["notifications", "full-access"], needsReview: false, platform: process.platform, gate: { k: "key1" } }]);
   // Installing again just opens it.
   assert.deepEqual(await r.shell("apps:install", INFO), { installed: true, already: true });
   r.done();
@@ -243,5 +245,194 @@ test("with no shell window, a focused app asks the server for its facts with its
   assert.deepEqual(urls, ["https://a.codecast.sh/k3j2h4ab?app=1&k=key1"]);
   assert.equal(r.registry.get("k3j2h4ab").facts.version, 9);
   assert.equal(r.registry.get("k3j2h4ab").facts.relation, "anonymous");
+  r.done();
+});
+
+test("a fallback answer cannot raise the relation or loosen the policy the signed-in answer gave", async () => {
+  // An outsider installed a team-gated page from a link carrying its owner's
+  // m token. Signed in, appInfo says "other" with full access off; with the
+  // shell window closed, ?app=1 with that m names the owner. Full access must
+  // stay out of reach until the shell answers again.
+  let answer = { ...INFO, version: 7, relation: "owner", policy: { install: true, fullAccess: true } };
+  const r = rig({ shellAlive: false, fetchImpl: async () => ({ ok: true, json: async () => answer }) });
+  await installed(r);
+  r.host.takeFacts("k3j2h4ab", { ...INFO, relation: "other", policy: { install: true, fullAccess: false } });
+  r.deps().onFocus("k3j2h4ab");
+  await flush();
+  await flush();
+  let facts = r.registry.get("k3j2h4ab").facts;
+  assert.equal(facts.relation, "other");
+  assert.deepEqual(facts.policy, { install: true, fullAccess: false });
+  assert.equal(r.host.engine.grant("k3j2h4ab", ["full-access"], 7, engineFacts(facts)).includes("full-access"), false);
+  // It may lower them: the server now says anonymous and installs off.
+  answer = { ...INFO, version: 8, relation: "anonymous", policy: { install: false, fullAccess: true } };
+  r.deps().onFocus("k3j2h4ab");
+  await flush();
+  await flush();
+  facts = r.registry.get("k3j2h4ab").facts;
+  assert.equal(facts.relation, "anonymous");
+  assert.deepEqual(facts.policy, { install: false, fullAccess: false });
+  // The shell's signed-in answer sets them again.
+  r.host.takeFacts("k3j2h4ab", { ...INFO, version: 8, relation: "team", policy: { install: true, fullAccess: true } });
+  assert.equal(r.registry.get("k3j2h4ab").facts.relation, "team");
+  r.done();
+});
+
+test("gate keys on appInfo's icon URLs never reach settings.json unsealed, and come back where facts leave main", async () => {
+  const keyed = { ...INFO, icons: { 512: "https://a.codecast.sh/k3j2h4ab?icon=512&k=key1", 1024: "https://a.codecast.sh/k3j2h4ab?icon=1024&k=key1" } };
+  const r = rig();
+  r.consent.answers.push({ grants: [] });
+  await r.shell("apps:install", keyed);
+  await flush();
+  assert.doesNotMatch(fs.readFileSync(r.file, "utf8"), /key1(?!\))/, "only the sealed S(key1) may appear");
+  assert.equal(r.registry.get("k3j2h4ab").facts.icons["512"], "https://a.codecast.sh/k3j2h4ab?icon=512");
+  assert.equal(r.host.list()[0].iconUrl, "https://a.codecast.sh/k3j2h4ab?icon=512&k=key1");
+  r.done();
+});
+
+test("installing an installed page again takes its rotated keys and newer facts, then opens it", async () => {
+  const r = rig();
+  await installed(r);
+  r.registry.update("k3j2h4ab", { gate: { k: "key1", i: "ident" } });
+  const again = await r.shell("apps:install", { ...INFO, version: 8, gate: { k: "key2" } });
+  assert.deepEqual(again, { installed: true, already: true });
+  assert.deepEqual(r.registry.gateOf("k3j2h4ab"), { k: "key2", i: "ident" }, "the identity token the answer lacks stays");
+  assert.equal(r.registry.get("k3j2h4ab").facts.version, 8);
+  assert.equal(r.asks.filter((a) => a.request.kind === "install").length, 0, "no second install sheet");
+  assert.deepEqual(r.calls.slice(0, 2), [["emit", "k3j2h4ab", "version", { version: 8 }], ["reload", "k3j2h4ab"]]);
+  assert.ok(r.calls.some((c) => c[0] === "open"));
+  r.done();
+});
+
+test("the web app's sign-in reaches the platform once per change and outlives a restart", async () => {
+  const states = [];
+  const r = rig({ platformExtra: { setSignedIn: (on) => states.push(on) } });
+  assert.equal(r.deps().signedIn(), true, "a computer that never heard counts as signed in");
+  r.handlers.get("apps:signed-in")({}, false);
+  r.handlers.get("apps:signed-in")({}, false);
+  r.handlers.get("apps:signed-in")({}, "no"); // only a boolean counts
+  assert.deepEqual(states, [false]);
+  assert.equal(r.deps().signedIn(), false);
+  assert.equal(r.settings.load().installedAppsSignedIn, false);
+  const again = rig({ file: r.file });
+  assert.equal(again.deps().signedIn(), false, "the last reported state holds until the web app reports again");
+  r.handlers.get("apps:signed-in")({}, true);
+  assert.deepEqual(states, [false, true]);
+  again.done();
+  r.done();
+});
+
+test("a platform's status rides on the list, and a status change tells Settings", async () => {
+  const status = { running: false, notifications: null, notificationSettingsUrl: "x-apple.systempreferences:x", installed: true, path: "/p" };
+  const r = rig({ platformExtra: { status: () => status } });
+  await installed(r);
+  await flush();
+  r.broadcasts.length = 0;
+  status.running = true;
+  status.notifications = "authorized";
+  r.deps().onStatus("k3j2h4ab");
+  await flush();
+  const [channel, list] = r.broadcasts.at(-1);
+  assert.equal(channel, "apps:changed");
+  assert.equal(list[0].running, true);
+  assert.equal(list[0].notifications, "authorized");
+  assert.equal(list[0].notificationSettingsUrl, "x-apple.systempreferences:x");
+  assert.equal(list[0].path, undefined, "only what Settings shows");
+  r.done();
+});
+
+test("codecast://uninstall/<slug> asks natively and uninstalls only on yes", async () => {
+  const answers = [false, true];
+  const asked = [];
+  const r = rig({ extra: { confirmUninstall: async (name) => (asked.push(name), answers.shift()) } });
+  await installed(r);
+  assert.equal(uninstallSlugFromUrl("codecast://uninstall/k3j2h4ab"), "k3j2h4ab");
+  assert.equal(uninstallSlugFromUrl("codecast://uninstall/k3j2h4ab/"), "k3j2h4ab");
+  assert.equal(uninstallSlugFromUrl("codecast://install/k3j2h4ab"), null);
+  assert.equal(uninstallSlugFromUrl("codecast://uninstall/..%2Fx"), null);
+  assert.equal(uninstallSlugFromUrl("codecast://uninstall/%E0%A4%A"), null, "a malformed escape is refused, not thrown");
+  assert.equal(r.host.handleUrl("codecast://uninstall/%E0%A4%A"), false);
+  assert.equal(r.host.handleUrl("codecast://install/k3j2h4ab?k=1"), false, "install stays the web app's");
+  assert.equal(r.host.handleUrl("codecast://uninstall/k3j2h4ab"), true);
+  await flush();
+  assert.deepEqual(asked, ["Vitals"]);
+  assert.ok(r.registry.get("k3j2h4ab"), "Cancel keeps it");
+  r.host.handleUrl("codecast://uninstall/k3j2h4ab");
+  await flush();
+  await flush();
+  assert.equal(r.registry.get("k3j2h4ab"), null);
+  assert.ok(r.calls.some((c) => c[0] === "uninstall"));
+  r.done();
+});
+
+test("a repeat uninstall link while its dialog is open opens no second dialog", async () => {
+  let answer;
+  const asked = [];
+  const r = rig({ extra: { confirmUninstall: (name) => (asked.push(name), new Promise((res) => (answer = res))) } });
+  await installed(r);
+  r.host.handleUrl("codecast://uninstall/k3j2h4ab");
+  r.host.handleUrl("codecast://uninstall/k3j2h4ab");
+  await flush();
+  assert.deepEqual(asked, ["Vitals"]);
+  answer(false);
+  await flush();
+  r.host.handleUrl("codecast://uninstall/k3j2h4ab");
+  await flush();
+  assert.equal(asked.length, 2, "a link after the dialog closed asks again");
+  answer(false);
+  await flush();
+  r.done();
+});
+
+test("an uninstall link that arrives before the host starts waits for it", async () => {
+  const asked = [];
+  const r = rig({ start: false, extra: { confirmUninstall: async (name) => (asked.push(name), false) } });
+  r.registry.add({ slug: "k3j2h4ab", name: "Vitals", gate: {}, facts: INFO });
+  assert.equal(r.host.handleUrl("codecast://uninstall/k3j2h4ab"), true);
+  await flush();
+  assert.deepEqual(asked, []);
+  r.host.start();
+  await flush();
+  assert.deepEqual(asked, ["Vitals"]);
+  r.done();
+});
+
+test("a launch for an app that is not installed here brings Codecast forward", async () => {
+  let shown = 0;
+  const r = rig({ extra: { showCodecast: () => shown++ } });
+  assert.equal(r.host.handleArgv(["x", "--codecast-app=gone1234"]), true);
+  assert.equal(shown, 1);
+  r.done();
+});
+
+test("agent.ask reaches askAgent with the app's name once granted", async () => {
+  const asks = [];
+  const r = rig({ extra: { askAgent: async (slug, prompt, meta) => (asks.push([slug, prompt, meta]), { answer: "42" }) } });
+  await installed(r, ["agent"]);
+  const reply = await r.deps().call("k3j2h4ab", { version: 7 }, { id: 5, module: "agent", method: "ask", args: ["meaning?"] });
+  assert.deepEqual(reply.value, { answer: "42" });
+  assert.deepEqual(asks, [["k3j2h4ab", "meaning?", { name: "Vitals" }]]);
+  r.done();
+});
+
+test("cast.app.openInCodecast needs no grant and runs in main, whatever the platform has", async () => {
+  const routes = [];
+  const r = rig({ extra: { openRoute: async (route) => routes.push(route) }, platformExtra: { "app.openInCodecast": () => routes.push("platform") } });
+  await installed(r, []);
+  const reply = await r.deps().call("k3j2h4ab", { version: 7 }, { id: 6, module: "app", method: "openInCodecast", args: ["/tasks/ct-1"] });
+  assert.equal(reply.ok, true, reply.message);
+  assert.deepEqual(routes, ["/tasks/ct-1"]);
+  const old = rig();
+  await installed(old, []);
+  assert.equal((await old.deps().call("k3j2h4ab", { version: 7 }, { id: 7, module: "app", method: "openInCodecast", args: ["/tasks/ct-1"] })).code, "failed");
+  r.done();
+  old.done();
+});
+
+test("openInCodecast reaches the platform through the host's deps", async () => {
+  const opened = [];
+  const r = rig({ extra: { openInCodecast: (slug) => opened.push(slug) } });
+  await r.deps().openInCodecast("k3j2h4ab");
+  assert.deepEqual(opened, ["k3j2h4ab"]);
   r.done();
 });

@@ -25,6 +25,11 @@ test("a path with a quote or a PowerShell expression stays a literal", () => {
   assert.match(script(signatureCheck("C:\\O'Brien\\setup.exe")), /-LiteralPath 'C:\\O''Brien\\setup\.exe'/);
 });
 
+test("a curly quote, which PowerShell also reads as a single quote, stays inside the literal", () => {
+  assert.equal(psQuote("C:\\Users\\O\u2019Brien\\setup.exe"), "'C:\\Users\\O\u2019\u2019Brien\\setup.exe'");
+  assert.equal(psQuote("\u2018a\u201ab\u201b"), "'\u2018\u2018a\u201a\u201ab\u201b\u201b'");
+});
+
 test("a pid that is not a positive integer is refused", () => {
   for (const pid of [0, -1, 1.5, "4242; calc", undefined]) {
     assert.throws(() => installerLaunch({ pid, installer: "C:\\x\\setup.exe", relaunch: false }), /bad pid/);

@@ -16,13 +16,24 @@
 // AUMID Codecast.App.<slug>), a Start menu shortcut carrying that AUMID, and
 // toasts shown through that AUMID (see `windowsToast`).
 //
+// While Codecast is signed out (deps.signedIn() false; host.js calls
+// setSignedIn on a change) every surface shows a cover saying so, with the
+// shim's words (appshim HostState.signedOut), instead of the page; its one
+// control opens Codecast.
+//
+// Windows toasts are paced per app: one PowerShell toast process at a time,
+// at most TOAST_QUEUE waiting (the oldest dropped), and at most
+// NOTIFY_PER_MINUTE notify calls a minute (refused with failed past that).
+//
 // createElectronHost(deps) returns the platform host host.js expects (see
 // there). deps: {electron, registry, pageUrl, pageOrigin, call, onFocus,
-// onClosed, appVersion, platform?, notify?, showWindows?, log?}
+// onClosed, appVersion, platform?, notify?, showWindows?, log?, signedIn?,
+// openInCodecast?, spawn?}
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { AppError, CHANNELS, fail, appWebPreferences } = require("./protocol");
+const { psQuote } = require("../winInstaller");
 
 const EXTERNAL = /^(https?:|mailto:)/i;
 // What an app's page may ask the browser layer for. Native notifications go
@@ -30,6 +41,27 @@ const EXTERNAL = /^(https?:|mailto:)/i;
 const WEB_PERMISSIONS = new Set(["clipboard-sanitized-write", "fullscreen"]);
 
 const aumid = (slug) => `Codecast.App.${slug}`;
+const NOTIFY_PER_MINUTE = 10;
+const TOAST_QUEUE = 3;
+// The toast script waits 30s for a click, so a process alive well past that
+// is hung; it is killed so the app's later toasts are not held behind it.
+const TOAST_KILL_MS = 45_000;
+/** The cover's one control. It opens a new window, which the open handler takes. */
+const OPEN_CODECAST = "codecast://open/";
+
+const htmlEscape = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** The signed-out cover, as a data URL: the shim's StatusOverlay words for HostState.signedOut. */
+function signedOutCoverUrl(name) {
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${htmlEscape(name)}</title><style>
+:root{color-scheme:light dark;font:14px -apple-system,"Segoe UI",system-ui,sans-serif}
+body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;background:Canvas;color:CanvasText}
+h1{font-size:17px;font-weight:600;margin:0 0 6px}p{margin:0 0 16px;opacity:.7}
+a{display:inline-block;padding:6px 14px;border-radius:6px;background:AccentColor;color:AccentColorText;text-decoration:none}
+</style></head><body><main><h1>Codecast is signed out</h1><p>Sign in to Codecast to use ${htmlEscape(name)}.</p>
+<a href="${OPEN_CODECAST}" target="_blank">Open Codecast</a></main></body></html>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
 
 /**
  * The window and tray an app opens with. appInfo always carries every field
@@ -64,14 +96,44 @@ function castVersionHeader(headers) {
   return null;
 }
 
-/** A Start menu file name from an app's display name. */
-function shortcutFileName(name) {
-  const clean = String(name || "").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").replace(/[. ]+$/, "").trim().slice(0, 80);
-  return `${clean || "App"}.lnk`;
+// Names Windows keeps for devices: "CON.lnk" opens the console, not a file,
+// on Windows 10, whatever the extension.
+const RESERVED_FILE_NAME = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])$/i;
+
+/** A Start menu file name from an app's display name; `suffix` tells two apps of one name apart. */
+function shortcutFileName(name, suffix = "") {
+  let clean = String(name || "").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").trim().slice(0, 80).replace(/[. ]+$/, "");
+  if (!clean) clean = "App";
+  const [head, ...rest] = clean.split(".");
+  if (RESERVED_FILE_NAME.test(head.trimEnd())) clean = [`${head.trimEnd()}_`, ...rest].join(".");
+  return `${clean}${suffix ? ` (${suffix})` : ""}.lnk`;
+}
+
+/**
+ * Where an app's Start menu shortcut goes: its name, or its name and slug when
+ * another installed app already holds that file (NTFS names ignore case).
+ * Sharing one file would hand the first app's toasts to the second app's
+ * AUMID, and uninstalling either would delete the other's shortcut.
+ */
+function shortcutPathFor(dir, record, records) {
+  const plain = path.win32.join(dir, shortcutFileName(record.name));
+  const taken = records.some((r) => r.slug !== record.slug && typeof r.shortcutPath === "string" && path.win32.normalize(r.shortcutPath).toLowerCase() === plain.toLowerCase());
+  return taken ? path.win32.join(dir, shortcutFileName(record.name, record.slug)) : plain;
 }
 
 const xmlEscape = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
+// Characters XML 1.0 refuses (LoadXml throws on them, and the toast is lost):
+// control characters other than tab and newlines, U+FFFE and U+FFFF, and
+// halves of a surrogate pair standing alone.
+const XML_INVALID = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+/** Toast text: XML-safe and at most `max` characters, cut between code points. */
+const toastText = (s, max) => Array.from(String(s).replace(XML_INVALID, "")).slice(0, max).join("");
+// A toast shows a few lines; the caps also keep the encoded script well under
+// Windows' 32767-character command line, past which the spawn fails.
+const TOAST_TITLE_MAX = 256;
+const TOAST_BODY_MAX = 1024;
+// ToastNotification.Tag holds 64 characters at most.
+const TOAST_TAG_MAX = 64;
 
 /**
  * The PowerShell that shows one toast under `appId` and reports what became
@@ -87,7 +149,9 @@ const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
  * the shortcut, which reaches us as --codecast-app=<slug> and focuses the app.
  */
 function windowsToastScript({ appId, title, body, tag, silent }) {
-  const xml = `<toast><visual><binding template="ToastGeneric"><text>${xmlEscape(title)}</text>${body ? `<text>${xmlEscape(body)}</text>` : ""}</binding></visual>${silent ? '<audio silent="true"/>' : ""}</toast>`;
+  const text = body ? toastText(body, TOAST_BODY_MAX) : "";
+  const tagText = tag == null ? "" : toastText(tag, TOAST_TAG_MAX);
+  const xml = `<toast><visual><binding template="ToastGeneric"><text>${xmlEscape(toastText(title, TOAST_TITLE_MAX))}</text>${text ? `<text>${xmlEscape(text)}</text>` : ""}</binding></visual>${silent ? '<audio silent="true"/>' : ""}</toast>`;
   return [
     "$ErrorActionPreference = 'Stop'",
     "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
@@ -95,7 +159,7 @@ function windowsToastScript({ appId, title, body, tag, silent }) {
     "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
     `$xml.LoadXml(${psQuote(xml)})`,
     "$toast = New-Object Windows.UI.Notifications.ToastNotification $xml",
-    tag ? `$toast.Tag = ${psQuote(String(tag).slice(0, 64))}` : "",
+    tagText ? `$toast.Tag = ${psQuote(tagText)}` : "",
     "Register-ObjectEvent -InputObject $toast -EventName Activated -SourceIdentifier act | Out-Null",
     "Register-ObjectEvent -InputObject $toast -EventName Dismissed -SourceIdentifier dis | Out-Null",
     "Register-ObjectEvent -InputObject $toast -EventName Failed -SourceIdentifier fail | Out-Null",
@@ -105,14 +169,39 @@ function windowsToastScript({ appId, title, body, tag, silent }) {
   ].filter(Boolean).join("\n");
 }
 
-function windowsToast(opts, onClick, spawnImpl = spawn) {
+/**
+ * Shows one toast; `onDone` runs once, when its PowerShell process is gone or
+ * after `killMs`, when a hung one is killed.
+ */
+function windowsToast(opts, onClick, spawnImpl = spawn, onDone = () => {}, killMs = TOAST_KILL_MS) {
   const script = windowsToastScript(opts);
-  const child = spawnImpl("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true });
+  let finished = false;
+  let timer = null;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    onDone();
+  };
+  let child;
+  try {
+    child = spawnImpl("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { windowsHide: true });
+  } catch {
+    return finish();
+  }
+  timer = setTimeout(() => {
+    try {
+      child.kill();
+    } catch {}
+    finish();
+  }, killMs);
+  if (typeof timer.unref === "function") timer.unref();
   let out = "";
   child.stdout.on("data", (d) => (out += d));
-  child.on("error", () => {});
+  child.on("error", finish);
   child.on("close", () => {
     if (out.trim().split(/\s+/).pop() === "act") onClick();
+    finish();
   });
 }
 
@@ -169,18 +258,29 @@ function createElectronHost(deps) {
   const showWindows = deps.showWindows !== false;
   const log = deps.log || ((...a) => console.warn("[apps]", ...a));
   const origins = () => [deps.pageOrigin];
+  const signedIn = deps.signedIn || (() => true);
+  const spawnImpl = deps.spawn || spawn;
+  const now = deps.now || Date.now;
   const launchArgs = app.isPackaged ? [] : [app.getAppPath()];
-  const startMenuDir = () => path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Codecast Apps");
+  const startMenuDir = () => path.win32.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs", "Codecast Apps");
+  // Electron joins login item args with spaces as they stand, so a path among
+  // them is quoted here. The exe is left to Electron (no `path`), which quotes
+  // it; a `path` given here would be written unquoted, and a profile folder
+  // with a space in it would then start the wrong program or none.
+  const setLoginItem = (slug, openAtLogin) =>
+    app.setLoginItemSettings({ openAtLogin, args: [...launchArgs.map((a) => `"${a}"`), `--codecast-app=${slug}`], name: `CodecastApp-${slug}` });
 
-  const apps = new Map(); // slug -> {win, popover, tray, shortcuts: Set, ignoreMouse, badge}
-  const surfaces = new Map(); // webContents id -> {slug, surface, wc, frameVersion, loadVersion}
+  const apps = new Map(); // slug -> {win, popover, tray, shortcuts: Set, ignoreMouse, badge, toasts}
+  const surfaces = new Map(); // webContents id -> {slug, surface, wc, frameVersion, loadVersion, covered}
   const sessions = new Set();
   let screenLocked = false;
   powerMonitor?.on?.("lock-screen", () => (screenLocked = true));
   powerMonitor?.on?.("unlock-screen", () => (screenLocked = false));
 
   const stateOf = (slug) => {
-    if (!apps.has(slug)) apps.set(slug, { win: null, popover: null, tray: null, shortcuts: new Set(), ignoreMouse: false, badge: 0 });
+    if (!apps.has(slug)) {
+      apps.set(slug, { win: null, popover: null, tray: null, shortcuts: new Set(), ignoreMouse: false, badge: 0, toasts: { running: false, queue: [], times: [] } });
+    }
     return apps.get(slug);
   };
   const alive = (w) => !!w && !w.isDestroyed();
@@ -240,11 +340,21 @@ function createElectronHost(deps) {
     return ses;
   }
 
+  /** The cover's Open Codecast control, from a covered surface only. True when it took the URL. */
+  function coverAction(wc, slug, url) {
+    const entry = surfaces.get(wc.id);
+    if (!entry || !entry.covered || url !== OPEN_CODECAST) return false;
+    Promise.resolve()
+      .then(() => deps.openInCodecast && deps.openInCodecast(slug))
+      .catch((err) => log(`open Codecast from ${slug}: ${err.message}`));
+    return true;
+  }
+
   function lockNavigation(wc, slug) {
     const guard = (event, url) => {
       if (pageUrlAllowed(url, slug, origins())) return;
       event.preventDefault();
-      openOutside(url);
+      if (!coverAction(wc, slug, url)) openOutside(url);
     };
     wc.on("will-frame-navigate", (event) => {
       if (event.isMainFrame) guard(event, event.url);
@@ -254,7 +364,7 @@ function createElectronHost(deps) {
       if (isMainFrame) guard(event, url);
     });
     wc.setWindowOpenHandler(({ url }) => {
-      openOutside(url);
+      if (!coverAction(wc, slug, url)) openOutside(url);
       return { action: "deny" };
     });
   }
@@ -273,6 +383,23 @@ function createElectronHost(deps) {
     try {
       registry.update(slug, { bounds: win.getNormalBounds ? win.getNormalBounds() : win.getBounds() });
     } catch {}
+  }
+
+  /** Loads the page into a surface, or the signed-out cover while Codecast is signed out. */
+  function loadSurface(slug, surface, win) {
+    const entry = surfaces.get(win.webContents.id);
+    const covered = !signedIn();
+    if (entry) {
+      entry.loadVersion = factsVersion(slug);
+      entry.covered = covered;
+    }
+    win.loadURL(covered ? signedOutCoverUrl((registry.get(slug) || {}).name || slug) : pageUrl(slug, surface));
+  }
+
+  function applyBadge(s) {
+    if (!isWin || !alive(s.win)) return;
+    const count = s.badge;
+    s.win.setOverlayIcon(count > 0 ? nativeImage.createFromBitmap(badgeBitmap(), { width: 16, height: 16 }) : null, count > 0 ? String(count) : "");
   }
 
   function appIcon(record) {
@@ -321,7 +448,7 @@ function createElectronHost(deps) {
     }
     const win = new BrowserWindow(options);
     const wc = win.webContents;
-    const entry = { slug, surface, wc, frameVersion: 0, loadVersion: factsVersion(slug) };
+    const entry = { slug, surface, wc, frameVersion: 0, loadVersion: factsVersion(slug), covered: false };
     surfaces.set(wc.id, entry);
     lockNavigation(wc, slug);
     if (isWin && surface === "window") {
@@ -332,6 +459,9 @@ function createElectronHost(deps) {
         relaunchCommand: [app.getPath("exe"), ...launchArgs, `--codecast-app=${slug}`].map((a) => `"${a}"`).join(" "),
         relaunchDisplayName: record.name,
       });
+      // A badge the app set outlives its window. The taskbar button exists
+      // only once the window is shown, and an overlay set before that is lost.
+      win.once("show", () => applyBadge(s));
     }
     if (surface === "window") {
       let saveTimer = null;
@@ -366,7 +496,7 @@ function createElectronHost(deps) {
       onClosed(slug);
     });
     s[surface === "window" ? "win" : "popover"] = win;
-    win.loadURL(pageUrl(slug, surface));
+    loadSurface(slug, surface, win);
     return win;
   }
 
@@ -448,11 +578,18 @@ function createElectronHost(deps) {
     reload(slug) {
       const s = apps.get(slug);
       if (!s) return;
-      for (const [surface, win] of [["window", s.win], ["tray", s.popover]]) {
-        if (!alive(win)) continue;
-        const entry = surfaces.get(win.webContents.id);
-        if (entry) entry.loadVersion = factsVersion(slug);
-        win.loadURL(pageUrl(slug, surface));
+      for (const [surface, win] of [["window", s.win], ["tray", s.popover]]) if (alive(win)) loadSurface(slug, surface, win);
+    },
+
+    /** Codecast's sign-in changed: open surfaces swap between the page and the cover. */
+    setSignedIn(on) {
+      for (const [slug, s] of apps) {
+        for (const [surface, win] of [["window", s.win], ["tray", s.popover]]) {
+          if (!alive(win)) continue;
+          const entry = surfaces.get(win.webContents.id);
+          if (entry && entry.covered === !on) continue;
+          loadSurface(slug, surface, win);
+        }
       }
     },
 
@@ -460,7 +597,7 @@ function createElectronHost(deps) {
       if (!isWin) return {};
       const dir = startMenuDir();
       fs.mkdirSync(dir, { recursive: true });
-      const shortcutPath = path.join(dir, shortcutFileName(record.name));
+      const shortcutPath = shortcutPathFor(dir, record, registry.list ? registry.list() : []);
       // The target is the running Codecast.exe. A per-user install lives at
       // %LOCALAPPDATA%\Programs\Codecast\Codecast.exe and an update reinstalls
       // it in place, so the shortcut outlives updates. It does not survive
@@ -492,7 +629,7 @@ function createElectronHost(deps) {
       if (isWin) {
         if (record.shortcutPath) fs.rmSync(record.shortcutPath, { force: true });
         try {
-          app.setLoginItemSettings({ openAtLogin: false, path: app.getPath("exe"), args: [...launchArgs, `--codecast-app=${slug}`], name: `CodecastApp-${slug}` });
+          setLoginItem(slug, false);
         } catch {}
       }
       const ses = session.fromPartition(`persist:app-${slug}`);
@@ -522,16 +659,34 @@ function createElectronHost(deps) {
         focusApp(ctx.slug);
         emit(ctx.slug, "notification-click", { tag: tag ?? null });
       };
-      if (isWin) return void windowsToast({ appId: aumid(ctx.slug), title, body, tag, silent }, onClick);
+      const toasts = stateOf(ctx.slug).toasts;
+      const at = now();
+      toasts.times = toasts.times.filter((t) => at - t < 60_000);
+      if (toasts.times.length >= NOTIFY_PER_MINUTE) throw new AppError("failed", "too many notifications");
+      toasts.times.push(at);
+      if (isWin) {
+        const opts = { appId: aumid(ctx.slug), title, body, tag, silent };
+        const next = () => {
+          const job = toasts.queue.shift();
+          if (!job) return void (toasts.running = false);
+          toasts.running = true;
+          windowsToast(job.opts, job.onClick, spawnImpl, next);
+        };
+        toasts.queue.push({ opts, onClick });
+        if (toasts.queue.length > TOAST_QUEUE) {
+          const dropped = toasts.queue.shift();
+          log(`${ctx.slug}: dropped a waiting notification ("${dropped.opts.title}"); ${TOAST_QUEUE} newer ones are queued`);
+        }
+        if (!toasts.running) next();
+        return;
+      }
       if (!deps.notify) throw new AppError("failed", "notifications are not available here");
       deps.notify({ title: title, body: body || "", silent: !!silent }, onClick);
     },
     "app.badge": (ctx, count) => {
       const s = stateOf(ctx.slug);
       s.badge = count;
-      if (isWin && alive(s.win)) {
-        s.win.setOverlayIcon(count > 0 ? nativeImage.createFromBitmap(badgeBitmap(), { width: 16, height: 16 }) : null, count > 0 ? String(count) : "");
-      }
+      applyBadge(s);
     },
     "tray.set": (ctx, opts = {}) => {
       const s = stateOf(ctx.slug);
@@ -575,8 +730,6 @@ function createElectronHost(deps) {
     "window.minimize": (ctx) => surfaceWindow(ctx).minimize(),
     "window.close": (ctx) => surfaceWindow(ctx).close(),
     "window.setAlwaysOnTop": (ctx, on) => surfaceWindow(ctx).setAlwaysOnTop(on, "floating"),
-    // In the contract's overlay set; the engine reaches them once tiers.json,
-    // engine.ARGS and client.js carry them.
     "window.setVisibleOnAllWorkspaces": (ctx, on) => surfaceWindow(ctx).setVisibleOnAllWorkspaces(on, { visibleOnFullScreen: true }),
     "window.setIgnoreMouseEvents": (ctx, on) => {
       const win = surfaceWindow(ctx);
@@ -585,7 +738,7 @@ function createElectronHost(deps) {
     },
     "login.set": (ctx, on) => {
       if (!isWin) throw new AppError("failed", "open at login is set by the macOS host");
-      app.setLoginItemSettings({ openAtLogin: on, path: app.getPath("exe"), args: [...launchArgs, `--codecast-app=${ctx.slug}`], name: `CodecastApp-${ctx.slug}` });
+      setLoginItem(ctx.slug, on);
     },
   };
   return host;
@@ -597,11 +750,19 @@ module.exports = {
   externalAllowed,
   castVersionHeader,
   shortcutFileName,
+  shortcutPathFor,
   windowsToastScript,
   windowsToast,
+  signedOutCoverUrl,
   popoverPosition,
   trayAnchor,
   badgeBitmap,
   aumid,
   WEB_PERMISSIONS,
+  OPEN_CODECAST,
+  NOTIFY_PER_MINUTE,
+  TOAST_QUEUE,
+  TOAST_KILL_MS,
+  TOAST_TITLE_MAX,
+  TOAST_BODY_MAX,
 };

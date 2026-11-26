@@ -193,9 +193,12 @@ Subcommands:
   cast publish comments <slug|path>        Read viewer comments; --resolve <id> | --resolve-all
   cast publish viewers <slug|path>         View count + who opened it (email gate)
   cast publish links <slug|path>           share / manage / edit / source / live URLs
-  cast publish set <slug|path> [flags]     Change gates or title WITHOUT republishing`,
+  cast publish set <slug|path> [flags]     Change gates or title WITHOUT republishing
+  cast publish install <slug|url|path>     Open Codecast's install sheet for a page on this computer
+  cast publish uninstall <slug|url|path>   Open Codecast's confirm to uninstall an installed page
+  cast publish apps                        Pages installed as apps on this computer`,
     load: () => import("./publish.js").then((m) => m.registerPublishCommand),
-    policy: { key: "public_sharing_disabled", allow: ["ls", "rm", "comments", "viewers"] },
+    policy: { key: "public_sharing_disabled", allow: ["ls", "rm", "comments", "viewers", "install", "uninstall", "apps"] },
   },
   {
     token: "cap",

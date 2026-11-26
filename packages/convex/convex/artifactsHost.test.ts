@@ -10,7 +10,7 @@ import { api } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { monogramPng } from "./lib/appIcon";
-import { pngDimensions } from "./artifactsHttp";
+import { pngDimensions } from "@codecast/shared/contracts/pageApp";
 import { isPageHost, pageHostUserAgentSuffix } from "@codecast/shared/contracts";
 
 setDefaultTimeout(120_000);

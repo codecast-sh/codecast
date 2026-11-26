@@ -1,6 +1,6 @@
 import { inHuddle } from "../lib/calls/huddlePresence";
 import { withInboxView } from "../lib/inboxViewHistory";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
@@ -113,7 +113,11 @@ export function DesktopProvider() {
   // reaches a machine whose daemon runs from a source checkout: the daemon
   // command is forced, and forced runs skip the dev-mode gate.
   const shellVersion = useRef(desktopShellVersion()).current;
-  const { isAuthenticated } = useConvexAuth();
+  const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
+  // Installed apps cover themselves while Codecast is signed out (installed-apps.md): main learns it from here.
+  useEffect(() => {
+    if (!authLoading) desktopApps()?.setSignedIn?.(isAuthenticated);
+  }, [authLoading, isAuthenticated]);
   const floor = useQueryNoThrow(api.systemConfig.getMinDesktopVersion, shellVersion ? {} : "skip").data ?? null;
   const belowFloor = isBelowFloor(shellVersion, floor);
 

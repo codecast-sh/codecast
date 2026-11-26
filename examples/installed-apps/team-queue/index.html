@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="codecast:height" content="580">
+<title>Team queue</title>
+<style>
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-SemiBold.ttf"); font-weight: 600; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Bold.ttf"); font-weight: 700; }
+
+:root {
+  --ink: #070c17;
+  --ink-2: #0e1628;
+  --line: rgba(160, 190, 255, .09);
+  --text: #e9eefb;
+  --muted: #8b97b3;
+  --dim: #56627e;
+  --mint: #4ff0c6;
+  --coral: #ff5d4f;
+  --sun: #ffd25e;
+  --r: 14px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 14px/1.4 "Instrument Sans", system-ui, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(120% 60% at 0% 0%, rgba(79, 240, 198, .10), transparent 60%),
+    radial-gradient(90% 50% at 100% 0%, rgba(255, 93, 79, .07), transparent 60%),
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .035) 1px, transparent 0) 0 0 / 14px 14px,
+    var(--ink);
+  -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+a { color: inherit; text-decoration: none; }
+button { font: inherit; color: inherit; }
+
+.top { padding: 22px 22px 14px; display: flex; align-items: flex-end; gap: 26px; }
+.count {
+  font-weight: 700; font-size: 88px; line-height: .82; letter-spacing: -.045em;
+  font-variant-numeric: tabular-nums; position: relative;
+}
+.count.hot::after {
+  content: ""; position: absolute; top: 0; right: -17px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--coral); box-shadow: 0 0 0 4px var(--ink), 0 0 22px rgba(255, 93, 79, .7);
+}
+.count.clear { color: var(--mint); }
+.what { padding-bottom: 4px; }
+.what b { display: block; font-size: 17px; font-weight: 600; }
+.what span { color: var(--muted); font-size: 12.5px; }
+
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 6px 16px 14px; }
+.tile {
+  display: block; padding: 12px 14px; border-radius: var(--r);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .055), rgba(255, 255, 255, .02));
+  border: 1px solid var(--line);
+  transition: border-color .15s, transform .15s;
+}
+.tile:hover { border-color: rgba(79, 240, 198, .35); }
+.tile:active { transform: scale(.98); }
+.tile .n { font-size: 30px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1; }
+.tile .l { color: var(--muted); font-size: 12.5px; margin-top: 6px; display: flex; justify-content: space-between; }
+.tile .l i { font-style: normal; color: var(--dim); }
+.tile.review .n { color: var(--mint); }
+.tile.issues .n { color: var(--coral); }
+.tile.zero .n { color: var(--dim); }
+
+.list-head { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 22px 8px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.list-head a { color: var(--dim); }
+.list-head a:hover { color: var(--text); }
+.list { flex: 1; overflow-y: auto; padding: 0 10px 12px; scrollbar-width: thin; scrollbar-color: #24304a transparent; }
+.item {
+  display: grid; grid-template-columns: 10px 1fr auto; gap: 4px 12px; align-items: start;
+  padding: 11px 12px; border-radius: 12px; position: relative;
+  transition: background .15s;
+}
+.item:hover { background: rgba(255, 255, 255, .045); }
+.item .k { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--coral); box-shadow: 0 0 10px currentColor; color: var(--coral); }
+.item .k.health { background: var(--sun); color: var(--sun); }
+.item .k.other { background: var(--muted); color: transparent; }
+.item .t { font-weight: 500; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.item .age { color: var(--dim); font-size: 12px; white-space: nowrap; padding-top: 2px; font-variant-numeric: tabular-nums; }
+.item .m { grid-column: 2 / 4; color: var(--muted); font-size: 12px; display: flex; gap: 10px; }
+.item .m .id { color: var(--dim); }
+.item.new::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 2px; background: var(--mint); }
+.item.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0% { background: rgba(79, 240, 198, .22); } 100% { background: transparent; } }
+
+.empty { margin: 18px 12px; padding: 22px; border-radius: var(--r); border: 1px dashed var(--line); color: var(--muted); text-align: center; }
+.empty b { display: block; color: var(--mint); font-size: 15px; margin-bottom: 2px; }
+.err { margin: 0 16px 10px; padding: 9px 12px; border-radius: 10px; background: rgba(255, 93, 79, .1); color: #ffb3ab; font-size: 12.5px; }
+
+.bar { display: flex; gap: 6px; padding: 10px 14px 14px; border-top: 1px solid var(--line); background: rgba(7, 12, 23, .6); }
+.bar[hidden] { display: none; }
+.switch {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px 7px 9px; border-radius: 999px; cursor: pointer;
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--line); font-size: 12.5px; color: var(--muted);
+}
+.switch .dot { width: 22px; height: 13px; border-radius: 999px; background: #26314a; position: relative; transition: background .2s; }
+.switch .dot::after { content: ""; position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; border-radius: 50%; background: #8b97b3; transition: transform .2s, background .2s; }
+.switch[aria-checked="true"] { color: var(--text); }
+.switch[aria-checked="true"] .dot { background: rgba(79, 240, 198, .35); }
+.switch[aria-checked="true"] .dot::after { transform: translateX(9px); background: var(--mint); }
+.switch[data-refused] { color: #ffb3ab; }
+.switch:disabled { opacity: .5; cursor: default; }
+
+/* Menu bar popover: the same page, tighter. */
+body.tray .top { padding: 16px 16px 10px; gap: 22px; }
+body.tray .count.hot::after { right: -14px; width: 10px; height: 10px; }
+body.tray .count { font-size: 60px; }
+body.tray .what b { font-size: 15px; }
+body.tray .tiles { padding: 4px 10px 10px; gap: 6px; }
+body.tray .tile { padding: 10px 12px; }
+body.tray .tile .n { font-size: 24px; }
+body.tray .list-head { padding: 2px 16px 6px; }
+body.tray .list { padding: 0 4px 8px; }
+body.tray .item { padding: 9px 12px; }
+body.tray .bar { display: none; }
+
+.reveal { animation: up .42s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 38ms); }
+@keyframes up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .reveal, .item.flash { animation: none; } }
+</style>
+</head>
+<body>
+<header class="top reveal">
+  <div class="count" id="count">·</div>
+  <div class="what"><b id="headline">Checking</b><span id="checked">&nbsp;</span></div>
+</header>
+<nav class="tiles">
+  <a class="tile review reveal" style="--i:1" id="t-review" href="https://codecast.sh/tasks" target="_blank" rel="noopener">
+    <div class="n" id="n-review">–</div><div class="l">In review <i>↗</i></div>
+  </a>
+  <a class="tile issues reveal" style="--i:2" id="t-issues" href="https://codecast.sh/ops/issues" target="_blank" rel="noopener">
+    <div class="n" id="n-issues">–</div><div class="l">Open issues <i>↗</i></div>
+  </a>
+</nav>
+<div id="error"></div>
+<div class="list-head reveal" style="--i:3"><span>Latest issues</span></div>
+<main class="list" id="list"></main>
+<footer class="bar" id="bar" hidden>
+  <button class="switch" id="sw-alerts" role="switch" aria-checked="false"><span class="dot"></span><span class="lbl">Alerts</span></button>
+  <button class="switch" id="sw-tray" role="switch" aria-checked="false"><span class="dot"></span><span class="lbl">Menu bar</span></button>
+</footer>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const app = window.cast?.app;
+const info = app ? await app.info().catch(() => null) : null;
+const surface = info?.surface ?? "browser";
+if (surface === "tray") document.body.classList.add("tray");
+
+const BOARD = "https://codecast.sh/tasks";
+const issueUrl = (id) => `https://codecast.sh/ops/issues/${encodeURIComponent(id)}`;
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const ago = (t) => {
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+};
+
+// What this install has already told the person about, shared by the window
+// and the menu bar popover (one storage per install), so neither repeats it.
+const SEEN = "team-queue:seen";
+const seen = () => { try { return JSON.parse(localStorage.getItem(SEEN)) || null; } catch { return null; } };
+const remember = (s) => { try { localStorage.setItem(SEEN, JSON.stringify(s)); } catch {} };
+const muted = () => localStorage.getItem("team-queue:muted") === "1";
+
+// The window and the menu bar popover are two pages with the same data. Only
+// one of them tells the person and records what they were told: the window
+// while it is open (it holds a lock for its lifetime), else the popover.
+// The other only paints, so it never writes "seen" and never notifies.
+const WINDOW_LOCK = "team-queue:window";
+if (surface === "window" && navigator.locks) navigator.locks.request(WINDOW_LOCK, () => new Promise(() => {}));
+async function isNotifier() {
+  if (surface === "window") return true;
+  if (surface !== "tray" || !navigator.locks) return false;
+  const { held } = await navigator.locks.query();
+  return !held.some((l) => l.name === WINDOW_LOCK);
+}
+
+let grants = new Set(info?.grants ?? []);
+let state = { review: null, issues: null, at: 0, errors: {} };
+let firstPaint = true;
+
+function render() {
+  const { review, issues } = state;
+  const ready = review !== null && issues !== null;
+  const total = ready ? review + issues.length : null;
+  const count = $("count");
+  count.textContent = total === null ? "·" : total;
+  count.className = "count" + (total > 0 ? " hot" : total === 0 ? " clear" : "");
+  $("headline").textContent = total === null ? "Checking" : total === 0 ? "The team's queue is clear" : "waiting on the team";
+  $("checked").textContent = state.at ? `Checked ${ago(state.at) === "now" ? "just now" : ago(state.at) + " ago"}` : " ";
+  setTile("review", review);
+  setTile("issues", issues === null ? null : issues.length);
+
+  const errs = Object.entries(state.errors).filter(([, e]) => e);
+  $("error").innerHTML = errs.map(([id, e]) => `<div class="err">${id === "tasks" ? "Tasks" : "Issues"}: ${esc(e)}</div>`).join("");
+
+  const list = $("list");
+  if (issues === null) return;
+  if (!issues.length) {
+    list.innerHTML = `<div class="empty reveal" style="--i:4"><b>No open issues</b>Errors and failed checks show here as they open.</div>`;
+    return;
+  }
+  const fresh = new Set(state.fresh ?? []);
+  list.innerHTML = issues.map((g, i) => `
+    <a class="item${fresh.has(g.id) ? " new" : ""}${firstPaint ? " reveal" : ""}" style="--i:${4 + i}" data-id="${esc(g.id)}" href="${issueUrl(g.id)}" target="_blank" rel="noopener">
+      <span class="k ${g.kind === "error" ? "" : g.kind === "health" ? "health" : "other"}"></span>
+      <span class="t">${esc(g.title)}</span>
+      <span class="age">${ago(g.last)}</span>
+      <span class="m"><span>${g.count.toLocaleString()} ${g.count === 1 ? "event" : "events"}</span><span class="id">${esc(g.id)}</span></span>
+    </a>`).join("");
+  firstPaint = false;
+}
+function setTile(id, n) {
+  $(`n-${id}`).textContent = n === null ? "–" : n;
+  $(`t-${id}`).classList.toggle("zero", n === 0);
+}
+
+// ── live data ──
+function onTasks(ans) {
+  if (ans.error) return void (state.errors.tasks = ans.error, render());
+  const by = Object.fromEntries(ans.rows.map(([status, n]) => [status, n]));
+  state = { ...state, review: by.in_review ?? 0, at: ans.refreshed_at, errors: { ...state.errors, tasks: null } };
+  changed();
+}
+function onIssues(ans) {
+  if (ans.error) return void (state.errors.incidents = ans.error, render());
+  const col = Object.fromEntries(ans.columns.map((c, i) => [c, i]));
+  const issues = ans.rows.map((r) => ({ id: r[col.group], title: r[col.title], kind: r[col.kind], count: r[col.count], last: Date.parse(r[col.last_seen]) }))
+    .sort((a, b) => b.last - a.last);
+  state = { ...state, issues, at: Math.max(state.at, ans.refreshed_at), errors: { ...state.errors, incidents: null } };
+  changed();
+}
+
+// Each change: repaint, carry the count to the Dock and menu bar, and tell
+// the person about each issue they have not heard of and any rise in review.
+// One change at a time, so two pushes never read the same "seen" and both notify.
+let changing = Promise.resolve();
+const changed = () => (changing = changing.then(changedNow, changedNow));
+async function changedNow() {
+  const { review, issues } = state;
+  if (review === null || issues === null) return render();
+  const before = seen();
+  const fresh = before ? issues.filter((g) => !before.issues.includes(g.id)) : [];
+  state.fresh = [...new Set([...(state.fresh ?? []), ...fresh.map((g) => g.id)])].filter((id) => issues.some((g) => g.id === id));
+  render();
+  if (!app) return;
+  const total = review + issues.length;
+  app.badge(total).catch(() => {});
+  if (grants.has("menu-bar") && localStorage.getItem("team-queue:tray") !== "off") app.tray.set({ title: total ? String(total) : "", tooltip: total ? `${review} in review · ${issues.length} open ${issues.length === 1 ? "issue" : "issues"}` : "The team's queue is clear" }).catch(() => {});
+  if (!(await isNotifier())) return;
+  if (before && grants.has("notifications") && !muted()) {
+    for (const g of fresh.slice(0, 3)) notify({ title: g.kind === "health" ? "Check failing" : "New issue", body: g.title, tag: g.id });
+    if (fresh.length > 3) notify({ title: `${fresh.length - 3} more issues opened`, body: "Open Team queue to see them", tag: "issues" });
+    if (review > before.review) {
+      const n = review - before.review;
+      notify({ title: n === 1 ? "A task reached review" : `${n} tasks reached review`, body: `${review} in review now`, tag: "review" });
+    }
+  }
+  remember({ review, issues: issues.map((g) => g.id) });
+}
+const notify = (n) => app.notify(n).catch((e) => showRefusal("alerts", e));
+
+if (window.cast?.subscribe) {
+  window.cast.subscribe("tasks", onTasks);
+  window.cast.subscribe("incidents", onIssues);
+} else {
+  state.errors.tasks = "Live data runs on a published page (cast publish).";
+  state.review = 0; state.issues = [];
+  render();
+}
+setInterval(render, 30_000);
+
+// ── the installed app's own controls ──
+if (app && surface === "window") {
+  $("bar").hidden = false;
+  paintSwitches();
+  $("sw-alerts").onclick = async () => {
+    if (!grants.has("notifications")) return ask(["notifications"], "alerts");
+    localStorage.setItem("team-queue:muted", muted() ? "0" : "1");
+    paintSwitches();
+  };
+  $("sw-tray").onclick = async () => {
+    if (!grants.has("menu-bar")) return ask(["menu-bar"], "tray");
+    if (localStorage.getItem("team-queue:tray") === "off") {
+      localStorage.removeItem("team-queue:tray");
+      changed();
+    } else {
+      localStorage.setItem("team-queue:tray", "off");
+      app.tray.remove().catch(() => {});
+    }
+    paintSwitches();
+  };
+}
+function paintSwitches() {
+  const alertsOn = grants.has("notifications") && !muted();
+  const trayOn = grants.has("menu-bar") && localStorage.getItem("team-queue:tray") !== "off";
+  $("sw-alerts").setAttribute("aria-checked", alertsOn);
+  $("sw-tray").setAttribute("aria-checked", trayOn);
+  for (const id of ["sw-alerts", "sw-tray"]) { delete $(id).dataset.refused; $(id).disabled = false; }
+  $("sw-alerts").querySelector(".lbl").textContent = "Alerts";
+  $("sw-tray").querySelector(".lbl").textContent = "Menu bar";
+}
+async function ask(perms, which) {
+  try {
+    grants = new Set(await app.permissions.request(perms));
+    paintSwitches();
+    changed();
+  } catch (e) { showRefusal(which, e); }
+}
+// A refusal names its reason on the control that asked.
+const REASONS = { denied: "declined", "not-allowed-by-team": "off for your team", "needs-consent": "needs approval", "mixed-version": "reloading" };
+function showRefusal(which, e) {
+  const el = $(which === "tray" ? "sw-tray" : "sw-alerts");
+  if (!el) return;
+  el.dataset.refused = "";
+  el.querySelector(".lbl").textContent = `${which === "tray" ? "Menu bar" : "Alerts"}: ${REASONS[e?.code] ?? e?.message ?? "failed"}`;
+}
+
+if (app) {
+  app.on("grants", (g) => { grants = new Set(g.grants); paintSwitches(); changed(); });
+  app.on("notification-click", ({ tag }) => {
+    app.window.focus().catch(() => {});
+    const row = tag === "review" ? $("t-review") : document.querySelector(`.item[data-id="${CSS.escape(tag)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+  });
+}
+// Seen once on screen, an issue stops being new.
+window.addEventListener("focus", () => setTimeout(() => { state.fresh = []; render(); }, 4000));
+</script>
+</body>
+</html>

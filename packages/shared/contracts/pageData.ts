@@ -21,6 +21,7 @@ export const PAGE_DATA_READERS = [
   "hogql",
   "connector",
   "sheet",
+  "waiting",
 ] as const;
 export type PageDataReader = (typeof PAGE_DATA_READERS)[number];
 

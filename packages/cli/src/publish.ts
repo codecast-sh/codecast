@@ -46,7 +46,7 @@ import { PAGE_DATA_FILE, parsePageDataDeclaration } from "@codecast/shared/contr
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
 import { captureThumb } from "./publishThumb.js";
 import { appInstallLine, parsePageTarget, runPublishApps, runPublishInstall, runPublishUninstall, type GateKeys } from "./publishApps.js";
-import type { PageApp } from "@codecast/shared/contracts/pageApp";
+import { appIconProblem, type PageApp } from "@codecast/shared/contracts/pageApp";
 
 const WATCH_DEBOUNCE_MS = 400;
 
@@ -636,6 +636,8 @@ export async function publishOnce(
   extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
 ): Promise<{ result: any; title: string; showsVideo: boolean; skipped: NonNullable<PublishPayload["skipped"]>; app: PageApp | null }> {
   const payload = buildPublishPayload(absPath, options.title);
+  const iconProblem = await localAppIconProblem(payload);
+  if (iconProblem) throw new Error(iconProblem);
   await uploadMedia(deps, payload);
   await uploadLargeFiles(deps, payload);
   let thumbB64: string | undefined;
@@ -650,6 +652,28 @@ export async function publishOnce(
   );
   const page = payload.content ?? (payload.entryHtmlPath ? fs.readFileSync(payload.entryHtmlPath, "utf-8") : "");
   return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [], app: declaredApp(payload.data) };
+}
+
+/** The server's icon refusal for this payload, read from the files on disk, so a bad icon fails before anything uploads. */
+export async function localAppIconProblem(payload: Pick<PublishPayload, "data" | "files" | "source_path" | "kind">): Promise<string | null> {
+  const app = declaredApp(payload.data);
+  if (!app) return null;
+  const dir = payload.kind === "bundle" ? payload.source_path : path.dirname(payload.source_path);
+  const files = (payload.files ?? []).map((f) => ({ path: f.path, content_type: /\.png$/i.test(f.path) ? "image/png" : "" }));
+  const problem = await appIconProblem(app, files, async (f) => {
+    try {
+      const fd = fs.openSync(path.join(dir, f.path), "r");
+      try {
+        const head = Buffer.alloc(24);
+        return head.subarray(0, fs.readSync(fd, head, 0, 24, 0));
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  });
+  return problem ? `cast-data.json: ${problem}` : null;
 }
 
 /** The app block a page's declaration carries, checked; null without one. */
@@ -829,7 +853,7 @@ export const PUBLISH_VERB_HELP: Record<string, VerbHelpSpec> = {
     flags: ["--json"],
     note: "The CLI never installs or grants anything. A URL's gate keys (?k=, ?e=, ?m=) go along; your own pages need none.",
   },
-  uninstall: { usage: "cast publish uninstall <slug|url|path> [--json]", summary: "Ask Codecast to remove a page installed as an app; the person confirms there", flags: ["--json"] },
+  uninstall: { usage: "cast publish uninstall <slug|url|path> [--json]", summary: "Open Codecast's confirm to uninstall a page installed as an app; it stays until the person confirms", flags: ["--json"] },
   apps: { usage: "cast publish apps [--json]", summary: "The pages installed as apps on this computer, with the version and permissions each was granted", flags: ["--json"] },
   video: { usage: "cast publish video", summary: "How a page plays video in the cast player: chapters, styling, and hosting", note: "Run it bare to print the guide. A page with a <video> or <cast-player> publishes like any other." },
 };

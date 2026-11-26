@@ -1,8 +1,10 @@
 name: Desktop (Windows)
 
-# Builds the Windows installer, installs it silently the way a person's
+# Runs the installed-apps host end to end from source (install a local page
+# as an app, check its Start menu shortcut's AUMID and a toast through it),
+# builds the Windows installer, installs it silently the way a person's
 # machine would, launches the installed app in --smoke-test mode, and keeps
-# the installer, the screenshot and the report as artifacts. Proves the
+# the installer, the screenshots and the report as artifacts. Proves the
 # Windows build boots on a machine that has never seen it; publishing stays
 # with packages/electron/scripts/release.sh.
 
@@ -34,7 +36,25 @@ jobs:
       - name: Unit tests for the Windows pieces
         shell: bash
         working-directory: packages/electron
-        run: node --test updatePolicy.test.js winInstaller.test.js smokeTest.test.js buildFiles.test.js
+        run: >-
+          node --test updatePolicy.test.js winInstaller.test.js smokeTest.test.js buildFiles.test.js
+          installedApps/electronHost.test.js installedApps/host.test.js installedApps/icons.test.js
+          installedApps/protocol.test.js installedApps/registry.test.js installedApps/engine.test.js
+
+      # main.js from source with its own profile, against local servers that
+      # play the web app and a.codecast.sh: installs a fixture page as an app,
+      # calls cast.app through the sandboxed preload, then on Windows reads the
+      # Start menu shortcut's System.AppUserModel.ID and shows a toast through
+      # it. The app window's screenshot lands in apps-shots.
+      - name: Installed apps end to end (from source)
+        shell: pwsh
+        working-directory: packages/electron
+        run: |
+          $shots = Join-Path $env:RUNNER_TEMP "apps-shots"
+          New-Item -ItemType Directory -Force -Path $shots | Out-Null
+          $env:CODECAST_APPS_SHOTS = $shots
+          node --test installedApps/host.electron.test.js
+          if ($LASTEXITCODE -ne 0) { throw "installed apps end to end failed (exit $LASTEXITCODE)" }
 
       # Unsigned until the signing decision (sd-4722) lands; build-win.sh
       # signs on its own once the AZURE_* secrets are passed here.
@@ -80,5 +100,6 @@ jobs:
             packages/electron/dist/Codecast-*-x64-setup.exe
             packages/electron/dist/latest.yml
             ${{ runner.temp }}/smoke/
+            ${{ runner.temp }}/apps-shots/
           if-no-files-found: warn
           retention-days: 14

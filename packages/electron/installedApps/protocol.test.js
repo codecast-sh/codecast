@@ -61,7 +61,11 @@ function lines(socket) {
   };
 }
 
-test("the shim socket: 0600, one JSON line per message, events pushed, errors answered", async () => {
+// The socket is the macOS shim's channel (macHost.js); Windows apps run in
+// Electron windows and never open it, and a file path is no pipe name there.
+const unixSocket = { skip: process.platform === "win32" && "the macOS shim's unix socket" };
+
+test("the shim socket: 0600, one JSON line per message, events pushed, errors answered", unixSocket, async () => {
   const dir = mkdtempSync(join(os.tmpdir(), "cast-sock-"));
   const path = join(dir, "apps.sock");
   const closed = [];
@@ -96,7 +100,7 @@ test("the shim socket: 0600, one JSON line per message, events pushed, errors an
   }
 });
 
-test("the shim socket replaces a stale socket file left by a crash", async () => {
+test("the shim socket replaces a stale socket file left by a crash", unixSocket, async () => {
   const dir = mkdtempSync(join(os.tmpdir(), "cast-sock-"));
   const path = join(dir, "apps.sock");
   try {

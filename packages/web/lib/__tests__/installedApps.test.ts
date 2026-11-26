@@ -12,6 +12,8 @@ import {
   installedAppState,
   madeBy,
   parseInstallDeepLink,
+  permissionEffect,
+  permissionLabel,
   reviewRequest,
   type AppInfo,
   type ConsentRequest,
@@ -64,19 +66,22 @@ describe("the install sheet", () => {
 
   test("the confirm names the act, and full access adds its line below the switches", () => {
     const r = req("install", info(), info().app.permissions);
-    const plain = consentLedger(r, new Set<AppPermission>(["notifications"]), "codecast.sh/a/k3j2h4");
+    const plain = consentLedger(r, new Set<AppPermission>(["notifications"]), "codecast.sh/a/k3j2h4", "darwin");
     expect(plain.confirm).toBe("Install Vitals");
     expect(plain.alert).toBeUndefined();
     expect(plain.subject).toBe("codecast.sh/a/k3j2h4");
     expect(plain.blocked).toBeUndefined();
-    const full = consentLedger(r, new Set<AppPermission>(["full-access"]), "x");
+    const full = consentLedger(r, new Set<AppPermission>(["full-access"]), "x", "darwin");
     expect(full.alert).toBeUndefined();
     expect(full.rows.find((row) => row.k === "Full access")?.tone).toBe("warn");
   });
 
   test("a team that turned installs off blocks the confirm", () => {
     const r = req("install", info({ policy: { install: false, fullAccess: false } }), ["notifications"]);
-    expect(consentLedger(r, new Set(), "x").blocked).toBe("Installs are off for your team");
+    expect(consentLedger(r, new Set(), "x", "darwin").blocked).toBe("Installs are off for your team");
+    const l = consentLedger(r, new Set(), "x", "darwin");
+    expect(l.rows).toEqual([{ k: "Asks for", v: "Notifications" }]);
+    expect(l.keep).toBe("Close");
   });
 });
 
@@ -86,18 +91,27 @@ describe("a request and a review", () => {
     expect(consentToggles(r)).toEqual([{ perm: "agent", on: true, block: null }]);
     expect(consentGrants(r, new Set<AppPermission>(["agent"]))).toEqual(["notifications", "agent"]);
     expect(consentGrants(r, new Set())).toEqual(["notifications"]);
-    expect(consentLedger(r, new Set(), "x").confirm).toBe("Allow");
+    expect(consentLedger(r, new Set(), "x", "darwin").confirm).toBe("Allow");
   });
 
   test("a review shows only what the version adds; with nothing new it is one tap", () => {
     const r = req("review", info({ version: 8 }), ["notifications", "overlay"], ["notifications"]);
     expect(consentToggles(r).map((t) => t.perm)).toEqual(["overlay"]);
-    expect(consentLedger(r, new Set<AppPermission>(["overlay"]), "x").confirm).toBe("Allow changes");
+    expect(consentLedger(r, new Set<AppPermission>(["overlay"]), "x", "darwin").confirm).toBe("Allow changes");
     const none = req("review", info({ version: 8 }), ["notifications"], ["notifications"]);
     expect(consentToggles(none)).toEqual([]);
-    const l = consentLedger(none, new Set(), "x");
+    const l = consentLedger(none, new Set(), "x", "darwin");
     expect(l.confirm).toBe("Keep using Vitals");
     expect(l.rows.find((row) => row.k === "Asks for")?.v).toBe("Nothing new");
+  });
+
+  test("Windows calls the menu bar the system tray, in the switch and in the ledger", () => {
+    expect(permissionLabel("menu-bar", "win32")).toBe("Tray");
+    expect(permissionEffect("menu-bar", "win32")).toBe("An icon in the system tray");
+    expect(permissionLabel("menu-bar", "darwin")).toBe("Menu bar");
+    const r = req("review", info({ version: 8 }), ["menu-bar", "overlay"], ["menu-bar"]);
+    expect(consentLedger(r, new Set(), "x", "win32").rows.find((row) => row.k === "Kept")?.v).toBe("Tray");
+    expect(consentLedger(r, new Set(), "x", "darwin").rows.find((row) => row.k === "Kept")?.v).toBe("Menu bar");
   });
 
   test("a review drops a held full access the page can no longer have", () => {

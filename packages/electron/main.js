@@ -283,10 +283,13 @@ const { createAppsHost } = require("./installedApps/host");
 const { createRegistry, safeStorageSealer } = require("./installedApps/registry");
 const { createConsentWindows } = require("./installedApps/consentWindow");
 const { nativeImaging } = require("./installedApps/icons");
+const { createAskAgent } = require("./installedApps/agentAsk");
 const APPS_HOST = process.platform === "darwin" && process.env.CODECAST_APPS_HOST !== "electron" ? "mac" : "electron";
-// A from-source run may serve pages from elsewhere (the integration test's
-// local server); a packaged build only ever trusts the real page origin.
-const APPS_PAGE_ORIGIN = (!app.isPackaged && originOf(process.env.CODECAST_APPS_PAGE_ORIGIN)) || "https://a.codecast.sh";
+// A from-source run may serve pages from elsewhere (installedApps/e2e) and
+// keep its bundles and host apart; a packaged build takes none of that from
+// its environment (installedApps/sourceOverrides.js).
+const APPS_OVERRIDES = require("./installedApps/sourceOverrides").appsOverrides({ packaged: app.isPackaged });
+const APPS_PAGE_ORIGIN = APPS_OVERRIDES.pageOrigin;
 // Started with --background (a shim waking Codecast) or for an app
 // (--codecast-app=<slug> from a Start menu shortcut): the main window loads,
 // so the web app can feed facts, but does not come forward.
@@ -315,6 +318,34 @@ const appsHost = createAppsHost({
   imaging: nativeImaging(nativeImage),
   shell,
   shellAlive: () => !!mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isCrashed(),
+  // The last sign-in state the web app reported (apps.setSignedIn).
+  settings: settingsFile,
+  askAgent: createAskAgent(),
+  // There is no in-app route for one published page yet; the gallery holds it.
+  openInCodecast: () => routeToWindow("/pages"),
+  // cast.app.openInCodecast: the click came from the app's own process, so Codecast takes the foreground itself.
+  openRoute: (route) => {
+    const clean = sanitizeTabPath(route);
+    if (!clean) throw new Error("not a codecast path");
+    routeToWindow(clean);
+    if (process.platform === "darwin") app.focus({ steal: true });
+  },
+  showCodecast: () => {
+    launchHidden = false;
+    if (!mainWindow || mainWindow.isDestroyed()) return void createWindow();
+    mainWindow.show();
+    mainWindow.focus();
+  },
+  confirmUninstall: async (name) => {
+    const { response } = await dialog.showMessageBox({
+      type: "question",
+      message: `Uninstall ${name}?`,
+      buttons: ["Uninstall", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    return response === 0;
+  },
   createPlatform: (deps) => {
     if (APPS_HOST === "mac") {
       const { createMacHost, shimBinaryPath } = require("./installedApps/macHost");
@@ -323,11 +354,10 @@ const appsHost = createAppsHost({
         socketPath: path.join(app.getPath("userData"), "apps.sock"),
         hostVersion: app.getVersion(),
         shimBinaryPath: shimBinaryPath({ resourcesPath: process.resourcesPath, packaged: app.isPackaged }),
-        openInCodecast: () => {
-          if (!mainWindow) return;
-          mainWindow.show();
-          mainWindow.focus();
-        },
+        // A from-source run (installedApps/e2e) keeps its bundles out of
+        // ~/Applications/Codecast Apps, and names itself (Electron.app) as the
+        // host its shims check for and launch, never the installed Codecast.
+        ...APPS_OVERRIDES.mac,
       });
     }
     const { createElectronHost } = require("./installedApps/electronHost");
@@ -394,6 +424,8 @@ if (app.isPackaged) {
 // Held until the main window can take it.
 if (process.platform !== "darwin") {
   deepLinkUrl = process.argv.find((a) => a.startsWith("codecast://")) ?? null;
+  // An installed app's own link (codecast://uninstall/<slug>) is main's to answer.
+  if (deepLinkUrl && appsHost.handleUrl(deepLinkUrl)) deepLinkUrl = null;
 }
 
 // The claim can lose quietly: Launch Services may keep links on another copy
@@ -428,6 +460,8 @@ function deepLinkTarget(url) {
 }
 
 function handleDeepLink(url) {
+  // codecast://uninstall/<slug> asks natively in main; install goes on to the web app.
+  if (appsHost.handleUrl(url)) return;
   const appWin = deepLinkTarget(url);
   if (appWin) {
     appWin.show();

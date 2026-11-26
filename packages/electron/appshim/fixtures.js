@@ -1,6 +1,9 @@
 // Test helpers shared by the appshim tests.
 const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const zlib = require("node:zlib");
+const { execFileSync } = require("node:child_process");
 
 /** Writes a solid-color square RGB PNG, enough for sips and iconutil. */
 function writeSolidPng(file, size = 512, [r, g, b] = [40, 120, 220]) {
@@ -26,4 +29,30 @@ function writeSolidPng(file, size = 512, [r, g, b] = [40, 120, 220]) {
   return file;
 }
 
-module.exports = { writeSolidPng };
+/**
+ * How many pixels of a PNG are within `tolerance` of [r, g, b] on every
+ * channel. sips converts it to a 32-bit BMP whose channel masks say where
+ * each color sits.
+ */
+function countColorPixels(pngPath, [r, g, b], tolerance = 12) {
+  const bmpPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "as-px-")), "image.bmp");
+  execFileSync("sips", ["-s", "format", "bmp", pngPath, "--out", bmpPath], { stdio: "pipe" });
+  const bmp = fs.readFileSync(bmpPath);
+  fs.rmSync(path.dirname(bmpPath), { recursive: true, force: true });
+  if (bmp.readUInt16LE(28) !== 32) throw new Error(`expected a 32-bit BMP from sips, got ${bmp.readUInt16LE(28)} bits`);
+  // BI_BITFIELDS (3) carries the masks; plain 32-bit BMP is BGRA.
+  const masks = bmp.readUInt32LE(30) === 3 ? [54, 58, 62].map((o) => bmp.readUInt32LE(o)) : [0xff0000, 0xff00, 0xff];
+  const shifts = masks.map((m) => Math.log2(m & -m));
+  const width = bmp.readInt32LE(18);
+  const height = Math.abs(bmp.readInt32LE(22));
+  const start = bmp.readUInt32LE(10);
+  const want = [r, g, b];
+  let count = 0;
+  for (let i = 0; i < width * height; i++) {
+    const px = bmp.readUInt32LE(start + i * 4);
+    if (want.every((c, k) => Math.abs(((px >>> shifts[k]) & 0xff) - c) <= tolerance)) count++;
+  }
+  return count;
+}
+
+module.exports = { writeSolidPng, countColorPixels };

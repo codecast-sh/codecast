@@ -8,7 +8,8 @@
 //   - Notifications, badge, tray, shortcuts, the window and open-at-login are
 //     the shim's: the engine decides the call, this host answers null, and the
 //     shim performs the OS action when the reply says ok.
-//   - Consent, agent.ask and shell.open run in host.js (shared with Windows);
+//   - Consent and engine.MAIN_METHODS (agent.ask, shell.open, app.openInCodecast)
+//     run in host.js (shared with Windows);
 //     files and programs in the engine itself (fullAccess.js).
 //
 // The socket carries two kinds of request from a shim:
@@ -17,7 +18,8 @@
 // A page can only produce the first: the shim builds every envelope itself.
 // Host actions: "report" (what only the shim knows: notification
 // authorization, its window frame, that it came forward), "open-in-codecast",
-// "uninstall" (the shim already asked the person).
+// "uninstall" (the shim already asked the person; the reply comes once the
+// uninstall finished or failed, and the shim quits on ok or shows the error).
 // Host-only events the shim keeps to itself: "host-state" {signedIn},
 // "host-reload" and "host-quit".
 //
@@ -42,6 +44,7 @@
 //   openInCodecast(slug)    shows the page in Codecast's main window
 //   onStatus(slug)          a shim connected, went away or reported
 //   fetchIcon(url)          -> Buffer of a PNG (default fetch), when no icon file is given
+//   registry                host.js's registry; resealAll reads each app's window options from its facts
 //   register, home          pass-throughs to appshim/install.js (tests)
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -50,11 +53,9 @@ const path = require("node:path");
 const { execFile } = require("node:child_process");
 const installer = require("../appshim/install");
 const { AppError, ok, replyFor, serveSocket, clientSource } = require("./protocol");
-const { HOST_METHODS } = require("./engine");
+const { HOST_METHODS, MAIN_METHODS } = require("./engine");
 const { isSlug } = require("./registry");
 
-/** Calls the main process answers itself; every other host method is the shim's. */
-const MAIN_METHODS = new Set(["agent.ask", "shell.open"]);
 /** Window calls the shim performs that newer engines know (overlay). */
 const SHIM_EXTRA = ["window.setVisibleOnAllWorkspaces", "window.setIgnoreMouseEvents"];
 const GATE_KEYS = ["k", "e", "m"];
@@ -101,6 +102,7 @@ function createMacHost(deps) {
     register = true,
     home = os.homedir(),
     log = () => {},
+    registry = null,
   } = deps;
   const shimPath = deps.shimBinaryPath || shimBinaryPath();
   if (!socketPath) throw new Error("createMacHost needs socketPath");
@@ -114,6 +116,8 @@ function createMacHost(deps) {
   let serving = null;
   const sockets = new Set();
   let lastSignedIn = null;
+  /** Apps whose own shim asked to be uninstalled and is waiting for the reply. */
+  const selfUninstalling = new Set();
 
   function emit(slug, event, data) {
     for (const conn of conns.get(slug) || []) conn.send({ event, data });
@@ -153,11 +157,30 @@ function createMacHost(deps) {
         if (typeof openInCodecast !== "function") throw new AppError("failed", "Codecast cannot open pages yet");
         await openInCodecast(slug);
         return null;
-      case "uninstall":
+      case "uninstall": {
         if (typeof uninstallApp !== "function") throw new AppError("failed", "Codecast cannot uninstall apps yet");
-        // The shim quits on this reply; removing its files waits for that, so it runs after.
-        setImmediate(() => Promise.resolve().then(() => uninstallApp(slug)).catch((err) => log(`uninstall ${slug}: ${err.message}`)));
+        // The shim waits for this reply (its window already hidden), so it is
+        // not asked to quit first; it quits on ok, or shows the error.
+        selfUninstalling.add(slug);
+        try {
+          // No record (a bundle Codecast lost track of) still removes the bundle.
+          if ((await uninstallApp(slug)) === false) await uninstall(slug);
+        } catch (err) {
+          log(`uninstall ${slug}: ${err.message}`);
+          throw new AppError("failed", err.message);
+        } finally {
+          selfUninstalling.delete(slug);
+        }
+        // Whatever the shim's process wrote before it exited goes too.
+        waitForQuit(slug, QUIT_WAIT_MS).then(() => {
+          try {
+            installer.uninstall({ slug, register, home });
+          } catch (err) {
+            log(`uninstall ${slug} data: ${err.message}`);
+          }
+        });
         return null;
+      }
       default:
         throw new AppError("unknown-method", `no host action ${action}`);
     }
@@ -303,7 +326,7 @@ function createMacHost(deps) {
    */
   async function uninstall(recordOrSlug) {
     const slug = typeof recordOrSlug === "string" ? recordOrSlug : recordOrSlug.slug;
-    if (conns.has(slug)) {
+    if (conns.has(slug) && !selfUninstalling.has(slug)) {
       emit(slug, "host-quit", {});
       await waitForQuit(slug, QUIT_WAIT_MS);
     }
@@ -315,9 +338,27 @@ function createMacHost(deps) {
   }
 
   /**
+   * The window keys a bundle should carry, from the app's facts in the
+   * registry, as reseal takes them (null removes a key the manifest dropped);
+   * null when the registry has no facts for it or the bundle already matches.
+   */
+  function windowKeyChanges(slug, info) {
+    const record = registry && typeof registry.get === "function" ? registry.get(slug) : null;
+    const window = record && record.facts && record.facts.app && record.facts.app.window;
+    if (!window) return null;
+    const wanted = installer.windowKeys(window);
+    const changes = {};
+    for (const [k, v] of Object.entries(wanted)) {
+      if (v === undefined ? k in info : info[k] !== v) changes[k] = v === undefined ? null : v;
+    }
+    return Object.keys(changes).length ? changes : null;
+  }
+
+  /**
    * On Codecast's launch: every bundle sealed by another Codecast (another
-   * shim, page client, version or socket) gets the current shim and client and
-   * is re-sealed. Bundles already current are left alone.
+   * shim, page client, version or socket), or whose window options no longer
+   * match the app's manifest, gets the current shim, client and keys and is
+   * re-sealed. Bundles already current are left alone.
    */
   function resealAll() {
     if (!fs.existsSync(shimPath)) {
@@ -327,12 +368,16 @@ function createMacHost(deps) {
     const key = sealKey();
     return bundles().map(({ path: appPath, info }) => {
       const slug = info.CodecastAppSlug;
-      if (info.CodecastSealKey === key) return { slug, path: appPath, resealed: false };
+      const windowChanges = windowKeyChanges(slug, info);
+      if (info.CodecastSealKey === key && !windowChanges) return { slug, path: appPath, resealed: false };
       try {
         installer.reseal({
           appPath,
           shimBinaryPath: shimPath,
-          plist: { CodecastHostVersion: hostVersion, CodecastSocketPath: socketPath, CodecastHostBundleId: hostBundleId, CodecastSealKey: key },
+          plist: {
+            CodecastHostVersion: hostVersion, CodecastSocketPath: socketPath, CodecastHostBundleId: hostBundleId, CodecastSealKey: key,
+            ...windowChanges,
+          },
           register,
         });
         return { slug, path: appPath, resealed: true };

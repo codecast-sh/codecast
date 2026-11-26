@@ -4,15 +4,14 @@ const assert = require("node:assert/strict");
 const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const os = require("node:os");
-const { createEngine, settingsRegistry, acceleratorProblem, ARGS, HOST_METHODS, TIERS } = require("./engine");
+const { createEngine, acceleratorProblem, ARGS, HOST_METHODS, TIERS } = require("./engine");
 const { AppError } = require("./protocol");
-const { createSettingsFile } = require("../settingsFile");
 
 // A host that records every call, a registry in memory, and page facts the
 // test can move.
 function rig({ record = {}, facts = {}, consent = () => null } = {}) {
   const records = { vitals: { slug: "vitals", name: "Vitals", grantedVersion: 3, grants: [], ...record } };
-  const page = { version: 3, relation: "own", policy: { install: true, fullAccess: true }, requested: ["notifications"], ...facts };
+  const page = { version: 3, relation: "owner", policy: { install: true, fullAccess: true }, requested: ["notifications"], ...facts };
   const calls = [];
   const events = [];
   const adapter = { consent: (req) => (calls.push(["consent", req]), consent(req)), emit: (slug, event, data) => events.push([slug, event, data]) };
@@ -91,6 +90,10 @@ test("args are checked per method", async () => {
   refused(await call("permissions", "request", [["camera"]]), "bad-args");
   refused(await call("permissions", "request", [[]]), "bad-args");
   refused(await call("app", "info", "not an array"), "bad-args");
+  // openInCodecast takes a path inside codecast's web app, never a URL or another host.
+  for (const route of ["https://evil.example/x", "//evil.example/x", "/\\evil", "tasks/ct-1", "/tasks/ct 1", "", `/${"x".repeat(2048)}`]) {
+    refused(await call("app", "openInCodecast", [route]), "bad-args");
+  }
   assert.equal(calls.length, 0);
   // Trailing absent args are fine; a missing optional object is fine.
   assert.equal((await call("tray", "set", [], { version: 3 })).code, "needs-consent");
@@ -109,6 +112,13 @@ test("a global shortcut needs at least two distinct modifiers and one key", asyn
     "Hyper+Shift+K": /unknown modifier/,
     "Cmd+Shift": /one key/,
     "Cmd+Shift+KK": /one key/,
+    "Command+Alt+Escape": /reserved/,
+    "Option+Cmd+Esc": /reserved/,
+    "CmdOrCtrl+Shift+3": /reserved/,
+    "Control+Command+Q": /reserved/,
+    "CmdOrCtrl+Shift+Escape": /reserved/,
+    "Ctrl+Alt+Delete": /reserved/,
+    "Super+Shift+S": /reserved/,
   };
   for (const [accel, why] of Object.entries(bad)) assert.match(acceleratorProblem(accel), why, accel);
   const { call } = rig({ record: { grants: ["shortcuts"] } });
@@ -123,6 +133,8 @@ test("default calls run with no grants, even from a window a version behind", as
   const reply = await call("window", "setTitle", ["Hello"], { version: 3 });
   assert.deepEqual(reply, { id: 7, ok: true, value: { done: "window.setTitle", slug: "vitals" } });
   assert.deepEqual(calls, [["window.setTitle", "Hello"]]);
+  assert.equal((await call("app", "openInCodecast", ["/decisions/sd-4?from=app#a"], { version: 3 })).ok, true);
+  assert.deepEqual(calls.at(-1), ["app.openInCodecast", "/decisions/sd-4?from=app#a"]);
 });
 
 test("a non-default call from an older window is mixed-version, before any grant check", async () => {
@@ -131,6 +143,22 @@ test("a non-default call from an older window is mixed-version, before any grant
   refused(await call("permissions", "request", [["notifications"]], { version: 3 }), "mixed-version");
   assert.equal(calls.length, 0);
   assert.equal((await call("app", "notify", [{ title: "t" }], { version: 4 })).ok, true);
+});
+
+test("a frame ahead of the server's facts cannot run or record consent: a forged X-Cast-Version buys no future grants", async () => {
+  // A page's service worker can answer its own navigation with any
+  // X-Cast-Version. The engine trusts only the version the server confirmed.
+  const { call, calls, records } = rig({
+    record: { grantedVersion: 3, grants: ["notifications"] },
+    facts: { version: 3 },
+    consent: () => ["notifications", "agent"],
+  });
+  refused(await call("permissions", "request", [["agent"]], { version: 9999 }), "mixed-version");
+  refused(await call("app", "notify", [{ title: "t" }], { version: 9999 }), "mixed-version");
+  assert.equal(calls.length, 0);
+  assert.equal(records.vitals.grantedVersion, 3);
+  // Default calls still run, and the same window works once facts confirm it.
+  assert.equal((await call("window", "setTitle", ["x"], { version: 4 })).ok, true);
 });
 
 test("an app permission not granted is needs-consent", async () => {
@@ -151,14 +179,15 @@ test("grants given for an older version stop working when the page moves on", as
   assert.deepEqual((await call("app", "info")).value.grants, []);
 });
 
-test("a window newer than the host's last look at the page counts as the current version", async () => {
+test("a window newer than the host's last look at the page keeps no old grants: it waits for the facts to confirm its version", async () => {
   const { call } = rig({ record: { grantedVersion: 3, grants: ["notifications"] }, facts: { version: 3 } });
-  refused(await call("app", "notify", [{ title: "t" }], { version: 4 }), "needs-consent");
+  refused(await call("app", "notify", [{ title: "t" }], { version: 4 }), "mixed-version");
 });
 
 test("full access is refused for outside pages and when the team policy is off", async () => {
   const grants = { grantedVersion: 3, grants: ["full-access"] };
-  refused(await rig({ record: grants, facts: { relation: "outside" } }).call("fs", "list", ["/tmp"]), "not-your-page");
+  refused(await rig({ record: grants, facts: { relation: "other" } }).call("fs", "list", ["/tmp"]), "not-your-page");
+  refused(await rig({ record: grants, facts: { relation: "anonymous" } }).call("fs", "list", ["/tmp"]), "not-your-page");
   refused(
     await rig({ record: grants, facts: { relation: "team", policy: { install: true, fullAccess: false } } }).call("fs", "list", ["/tmp"]),
     "not-allowed-by-team",
@@ -191,12 +220,16 @@ test("full access runs files and programs in the engine's own ops", async () => 
 
 test("fs.watch pushes fs-change through the adapter and release closes it", async () => {
   const dir = mkdtempSync(join(os.tmpdir(), "cast-app-watch-"));
+  const { call, events, engine } = rig({ record: { grants: ["full-access"] } });
   try {
-    const { call, events, engine } = rig({ record: { grants: ["full-access"] } });
     const watchId = (await call("fs", "watch", [dir])).value;
     assert.match(watchId, /^w\d+$/);
-    writeFileSync(join(dir, "c.txt"), "x");
-    for (let i = 0; i < 50 && !events.some((e) => e[1] === "fs-change"); i++) await new Promise((r) => setTimeout(r, 20));
+    // FSEvents starts its stream after watch() returns, so a write before then is never reported, and a loaded Mac
+    // can take seconds to report one: write again every quarter second until a change arrives.
+    for (let i = 0; i < 40 && !events.some((e) => e[1] === "fs-change"); i++) {
+      writeFileSync(join(dir, "c.txt"), String(i));
+      await new Promise((r) => setTimeout(r, 250));
+    }
     const change = events.find((e) => e[1] === "fs-change");
     assert.ok(change, "no fs-change event");
     assert.equal(change[0], "vitals");
@@ -204,8 +237,9 @@ test("fs.watch pushes fs-change through the adapter and release closes it", asyn
     assert.equal((await call("fs", "unwatch", [watchId])).value, true);
     assert.equal((await call("fs", "unwatch", [watchId])).value, false);
     await call("fs", "watch", [dir]);
-    engine.release("vitals");
   } finally {
+    // An open watcher keeps the process alive, so it is closed even when an assertion failed.
+    engine.release("vitals");
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -238,7 +272,7 @@ test("permissions.request is denied when the person says no, and nothing is stor
 });
 
 test("permissions.request for full access follows the page relation and team policy", async () => {
-  refused(await rig({ facts: { relation: "outside" } }).call("permissions", "request", [["full-access"]]), "not-your-page");
+  refused(await rig({ facts: { relation: "other" } }).call("permissions", "request", [["full-access"]]), "not-your-page");
   refused(await rig({ facts: { policy: { install: true, fullAccess: false } } }).call("permissions", "request", [["full-access"]]), "not-allowed-by-team");
   // A sheet that hands back full access where it is not allowed does not store it.
   const r = rig({ facts: { policy: { install: true, fullAccess: false } }, consent: () => ["notifications", "full-access"] });
@@ -272,21 +306,4 @@ test("an adapter's own refusal keeps its code; anything else it throws is failed
   const reply = await call("agent", "ask", ["hi"]);
   refused(reply, "failed");
   assert.equal(reply.message, "usage limit");
-});
-
-test("settingsRegistry reads and writes installedApps in settings.json", () => {
-  const dir = mkdtempSync(join(os.tmpdir(), "cast-app-registry-"));
-  try {
-    const file = join(dir, "settings.json");
-    writeFileSync(file, JSON.stringify({ theme: "dark", installedApps: { vitals: { slug: "vitals", grants: [] } } }));
-    const registry = settingsRegistry(createSettingsFile(() => file));
-    assert.equal(registry.get("none"), null);
-    registry.update("vitals", { grants: ["agent"], grantedVersion: 5 });
-    const fresh = settingsRegistry(createSettingsFile(() => file));
-    assert.deepEqual(fresh.get("vitals"), { slug: "vitals", grants: ["agent"], grantedVersion: 5 });
-    assert.throws(() => fresh.update("none", {}), (e) => e.code === "not-installed");
-    assert.equal(createSettingsFile(() => file).load().theme, "dark");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });

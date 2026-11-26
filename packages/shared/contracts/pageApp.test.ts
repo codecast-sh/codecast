@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { APP_PERMISSIONS, APP_PERMISSION_LABEL, APP_PERMISSION_TIER, appIconSize, newPermissions, parsePageApp, resolvePageApp } from "./pageApp";
+import { APP_PERMISSIONS, APP_PERMISSION_LABEL, APP_PERMISSION_TIER, appIconProblem, appIconSize, newPermissions, parsePageApp, pngDimensions, resolvePageApp } from "./pageApp";
 import { parsePageDataDeclaration } from "./pageData";
 
 const ok = (raw: unknown) => {
@@ -130,5 +130,32 @@ describe("parsePageDataDeclaration with an app block", () => {
 
   test("a declaration with neither queries, state nor app still refuses", () => {
     expect(parsePageDataDeclaration({}).ok).toBe(false);
+  });
+});
+
+describe("app icon checks", () => {
+  const head = (w: number, h: number) => {
+    const b = new Uint8Array(24);
+    b.set([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+    const v = new DataView(b.buffer);
+    v.setUint32(16, w);
+    v.setUint32(20, h);
+    return b;
+  };
+
+  test("pngDimensions reads IHDR and refuses anything else", () => {
+    expect(pngDimensions(head(640, 480))).toEqual({ width: 640, height: 480 });
+    expect(pngDimensions(new Uint8Array(24))).toBeNull();
+    expect(pngDimensions(head(1, 1).subarray(0, 20))).toBeNull();
+  });
+
+  test("appIconProblem wants a square PNG of at least 512 in the bundle", async () => {
+    const files = [{ path: "icon.png", content_type: "image/png" }];
+    const check = (w: number, h: number) => appIconProblem({ icon: "icon.png" }, files, async () => head(w, h));
+    expect(await check(512, 512)).toBeNull();
+    expect(await check(600, 512)).toBe('"app.icon" must be square; icon.png is 600x512');
+    expect(await check(128, 128)).toBe('"app.icon" must be at least 512x512; icon.png is 128x128');
+    expect(await appIconProblem({ icon: "missing.png" }, files, async () => null)).toBe('"app.icon" names missing.png, which is not a PNG file in the bundle');
+    expect(await appIconProblem(undefined, files, async () => null)).toBeNull();
   });
 });

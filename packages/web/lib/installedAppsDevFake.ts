@@ -123,6 +123,11 @@ function makeFake(): DesktopAppsBridge {
     },
     consent: {
       get: (id) => later(load().consents[id] ?? null),
+      // Main fits its window to the route; the dev popup stands in the same way.
+      resize(_id, height) {
+        (window as { __appsFakeHeight?: number }).__appsFakeHeight = height;
+        window.resizeTo(window.outerWidth, Math.min(height + (window.outerHeight - window.innerHeight), screen.availHeight));
+      },
       async answer(id, a) {
         const s = load();
         s.answers.push({ id, ...a });

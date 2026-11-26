@@ -230,7 +230,7 @@ export async function runPublishInstall(
   console.log(fmt.muted("  The person picks its permissions and confirms there; nothing is installed until they do."));
 }
 
-/** `cast publish uninstall`: ask the desktop to remove an installed page, which it confirms with the person. */
+/** `cast publish uninstall`: open Codecast's confirm for removing an installed page; the person removes it there. */
 export async function runPublishUninstall(slug: string, siteUrl: string, json: boolean, appsEnv: AppsEnv = defaultAppsEnv()): Promise<void> {
   const missing = missingDesktopMessage(appsEnv, siteUrl);
   if (missing) fail(missing, json, { download_url: `${siteUrl}/download` });
@@ -245,8 +245,8 @@ export async function runPublishUninstall(slug: string, siteUrl: string, json: b
     console.log(JSON.stringify({ ok: true, slug, action: "uninstall", sheet_opened: true }, null, 2));
     return;
   }
-  console.log(`${fmt.success(icons.check)} Asked Codecast to uninstall ${fmt.highlight(installed.name)}`);
-  console.log(fmt.muted("  The person confirms in Codecast; the app stays until they do."));
+  console.log(`${fmt.success(icons.check)} Opened Codecast's confirm to uninstall ${fmt.highlight(installed.name)}`);
+  console.log(fmt.muted("  The app stays installed until the person confirms there."));
 }
 
 /** `cast publish apps`: the pages installed as apps on this computer. */

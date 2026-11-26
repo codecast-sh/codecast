@@ -66,6 +66,8 @@ A flag the chosen agent cannot honor is ignored, with a warning on stderr.
 
 Permission defaults to bypass, same as a session the daemon launches, so a script does not hang on a TUI prompt. Pass `--permission-mode default` to keep the client's own prompts.
 
+`--answer-only` is for a prompt someone else wrote, such as an installed app's `cast.app.agent.ask`: it runs claude with no built-in tools and no MCP servers, in `dontAsk`, and ignores your configured agent args, default params and claude settings, so the answer comes from the prompt alone whatever your own permission mode is. It refuses other agents, `--as`, `--resume` and `--continue`.
+
 ## Stdin
 
 ```bash

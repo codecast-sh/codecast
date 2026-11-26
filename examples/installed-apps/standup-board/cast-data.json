@@ -1,0 +1,11 @@
+{
+  "state": {
+    "standup": { "write": "signed-in", "own": true }
+  },
+  "app": {
+    "name": "Standup",
+    "icon": "icon.png",
+    "window": { "width": 980, "height": 680, "minWidth": 340, "minHeight": 420 },
+    "permissions": ["notifications", "overlay", "shortcuts"]
+  }
+}

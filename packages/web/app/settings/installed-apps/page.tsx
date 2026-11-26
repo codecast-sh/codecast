@@ -5,6 +5,7 @@
 // desktop's own registry; the page facts that decide whether full access can
 // be had come from api.artifacts.appInfo.
 import { useState } from "react";
+import { useLocation } from "react-router";
 import { useRouter } from "next/navigation";
 import { AppWindow, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
 import type { AppPermission } from "@codecast/shared/contracts/pageApp";
@@ -18,8 +19,10 @@ import { AppIcon } from "../../../components/installedApps/AppIcon";
 import { PermissionToggles } from "../../../components/installedApps/PermissionToggles";
 import { ConsentSheet } from "../../../components/installedApps/ConsentSheet";
 import { DESKTOP_DOWNLOADS } from "../../../lib/nativeApps";
+import { openExternalUrl } from "../../../lib/desktop";
 import { useDesktopApps, useInstalledApps } from "../../../hooks/useInstalledApps";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useInboxStore } from "../../../store/inboxStore";
 import {
   INSTALLED_APP_STATE_LABEL,
@@ -47,6 +50,8 @@ const STATE_TONE: Record<InstalledAppState, string> = {
 export default function InstalledAppsPage() {
   const apps = useDesktopApps();
   const installed = useInstalledApps();
+  // An app's own Settings… (Cmd-,) opens codecast://open/settings/installed-apps?app=<slug>: that row is scrolled to and lit.
+  const focus = new URLSearchParams(useLocation().search).get("app");
   if (!apps) return <SettingsPanel><BrowserSection /></SettingsPanel>;
   const count = installed?.length ?? 0;
   const reviews = installed?.filter((a) => a.needsReview).length ?? 0;
@@ -63,7 +68,7 @@ export default function InstalledAppsPage() {
       >
         {installed === null ? null : count === 0 ? <EmptyState /> : (
           <ul className="divide-y divide-sol-border/60" data-installed-apps>
-            {installed.map((a) => <AppRow key={a.slug} app={a} bridge={apps} />)}
+            {installed.map((a) => <AppRow key={a.slug} app={a} bridge={apps} lit={a.slug === focus} />)}
           </ul>
         )}
       </SettingsSection>
@@ -71,7 +76,7 @@ export default function InstalledAppsPage() {
   );
 }
 
-function AppRow({ app: a, bridge }: { app: InstalledApp; bridge: DesktopAppsBridge }) {
+function AppRow({ app: a, bridge, lit }: { app: InstalledApp; bridge: DesktopAppsBridge; lit: boolean }) {
   const q = useQueryNoThrow(api.artifacts.appInfo, factsArgs(a.slug, a.gate));
   const res = q.data;
   const info = res && !("error" in res) ? (res as AppInfo) : null;
@@ -91,16 +96,39 @@ function AppRow({ app: a, bridge }: { app: InstalledApp; bridge: DesktopAppsBrid
   // Without the page's facts there is nothing new to show, so approving keeps only what the row holds.
   const approve = () => (info ? setReviewing(true) : set(held));
   const address = pageAddress(pageShareUrl(a.slug));
+  const [row, setRow] = useState<HTMLLIElement | null>(null);
+  // The settings dialog mounts its panel a frame after the route: scroll once it is there.
+  useWatchEffect(() => {
+    if (!lit || !row) return;
+    const t = window.setTimeout(() => row.scrollIntoView({ block: "center" }), 60);
+    return () => window.clearTimeout(t);
+  }, [lit, row]);
   return (
-    <li className="flex flex-col gap-2 px-4 py-3.5 sm:px-5" data-installed-app={a.slug} data-installed-state={state}>
+    <li
+      ref={setRow}
+      className={`flex flex-col gap-2 px-4 py-3.5 sm:px-5 ${lit ? "bg-sol-blue/10 shadow-[inset_2px_0_0_var(--sol-blue)]" : ""}`}
+      data-installed-app={a.slug}
+      data-installed-state={state}
+      data-installed-lit={lit ? "true" : undefined}
+    >
       <div className="flex items-center gap-3">
         <AppIcon src={a.iconUrl} name={a.name} size={40} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-sm font-medium text-sol-text">{a.name}</span>
-          <span className="flex min-w-0 items-center gap-2 text-meta">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta [&>*]:whitespace-nowrap">
             <span className="tabular-nums text-sol-text-dim">v{a.version}</span>
             <span className={`rounded-sm px-1.5 py-px font-medium ${STATE_TONE[state]}`} data-installed-state-label>{INSTALLED_APP_STATE_LABEL[state]}</span>
             {state === "review" && <span className="tabular-nums text-sol-text-dim">granted for v{a.grantedVersion}</span>}
+            {notificationsBlocked(a) && (
+              <button
+                type="button"
+                className="rounded-sm bg-sol-red/12 px-1.5 py-px font-medium text-sol-red hover:bg-sol-red/20"
+                onClick={() => openExternalUrl(a.notificationSettingsUrl!)}
+                data-installed-notifications-off
+              >
+                Notifications off in macOS
+              </button>
+            )}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -144,6 +172,11 @@ function AppRow({ app: a, bridge }: { app: InstalledApp; bridge: DesktopAppsBrid
       )}
     </li>
   );
+}
+
+/** Granted in Codecast but refused by macOS: the grant does nothing until the person turns it on there. */
+function notificationsBlocked(a: InstalledApp): boolean {
+  return a.grants.includes("notifications") && a.notifications === "denied" && !!a.notificationSettingsUrl;
 }
 
 /** No apps yet: where installing starts, drawn as the menu entry itself, and the way to the pages. */

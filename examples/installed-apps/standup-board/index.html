@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="codecast:height" content="640">
+<title>Standup</title>
+<style>
+@font-face { font-family: "Newsreader"; src: url("fonts/Newsreader-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "Newsreader"; src: url("fonts/Newsreader-SemiBold.ttf"); font-weight: 600; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/InstrumentSans-SemiBold.ttf"); font-weight: 600; }
+
+:root {
+  --paper: #f6f1e7;
+  --paper-2: #fffcf5;
+  --ink: #1d1a16;
+  --muted: #6f675b;
+  --dim: #a39a8b;
+  --rule: #e4dbc9;
+  --cobalt: #2643d9;
+  --cobalt-soft: #e3e7fb;
+  --tomato: #e8432e;
+  --tomato-soft: #fde4de;
+  --serif: "Newsreader", Georgia, serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font: 14.5px/1.45 "Instrument Sans", system-ui, sans-serif;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, transparent 0 calc(100% - 1px), rgba(38, 67, 217, .05) 0) 0 0 / 44px 100%,
+    radial-gradient(80% 50% at 100% 0%, rgba(232, 67, 46, .06), transparent 70%),
+    var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+kbd {
+  font: 600 11px/1 "Instrument Sans", system-ui; padding: 3px 5px; border-radius: 5px; min-width: 18px; text-align: center; display: inline-block;
+  background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .28); color: inherit;
+}
+
+.top {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 18px 28px 14px; background: linear-gradient(var(--paper) 75%, transparent);
+}
+.day { display: flex; align-items: center; gap: 4px; }
+.day h1 { font: 600 26px/1.1 var(--serif); margin: 0 6px; letter-spacing: -.01em; white-space: nowrap; }
+.nav { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--rule); background: var(--paper-2); display: grid; place-items: center; color: var(--muted); }
+.nav:hover { color: var(--ink); border-color: var(--dim); }
+.nav:disabled { opacity: .35; cursor: default; }
+.chip-today { border: 0; background: none; color: var(--cobalt); font-weight: 600; padding: 4px 6px; }
+.chip-today[hidden] { display: none; }
+.tally { display: flex; gap: 14px; color: var(--muted); font-size: 13px; }
+.tally b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tally .bad b { color: var(--tomato); }
+.spacer { flex: 1; }
+.add {
+  display: inline-flex; align-items: center; gap: 10px; border: 0; border-radius: 999px; padding: 9px 12px 9px 16px;
+  background: var(--cobalt); color: #fff; font-weight: 600; box-shadow: 0 4px 14px rgba(38, 67, 217, .28);
+  transition: transform .12s;
+}
+.add:active { transform: scale(.97); }
+.pin {
+  display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--rule); background: var(--paper-2); border-radius: 999px; padding: 8px 13px; color: var(--muted); font-weight: 500;
+}
+.pin[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.pin[hidden] { display: none; }
+.pin svg { width: 14px; height: 14px; }
+
+.head, .row { display: grid; grid-template-columns: 180px 1fr 1fr 1fr; gap: 0 22px; }
+.head { padding: 6px 28px 8px; color: var(--muted); font-size: 12px; font-weight: 600; border-bottom: 1.5px solid var(--ink); margin: 0 28px; padding-left: 0; padding-right: 0; }
+.head .b { color: var(--tomato); }
+main { padding: 0 28px 40px; }
+.row { padding: 16px 0; border-bottom: 1px solid var(--rule); align-items: start; position: relative; }
+.who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.who .name { font: 600 21px/1.15 var(--serif); letter-spacing: -.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .when { color: var(--dim); font-size: 12px; }
+.row.blocked .who .name::after { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--tomato); margin-left: 8px; vertical-align: 4px; }
+.cell { white-space: pre-wrap; word-break: break-word; min-height: 22px; }
+.cell .label, .fieldlabel { display: none; }
+.cell.empty { color: var(--dim); }
+div.cell.blk:not(.empty) { color: #9a2414; background: var(--tomato-soft); border-radius: 10px; padding: 6px 10px; margin: -6px 0 -6px -10px; }
+.mention { color: var(--cobalt); font-weight: 600; }
+.mention.me { background: var(--cobalt); color: #fff; padding: 0 5px; border-radius: 5px; }
+.blk .mention.me { background: var(--tomato); }
+
+.row.mine { background: linear-gradient(90deg, rgba(38, 67, 217, .05), transparent 70%); margin: 0 -28px; padding-left: 28px; padding-right: 28px; }
+.row.mine::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--cobalt); }
+textarea.cell {
+  width: 100%; resize: none; overflow: hidden; border: 1px solid transparent; border-radius: 10px; background: transparent;
+  font: inherit; color: inherit; padding: 6px 10px; margin: -6px -10px; width: calc(100% + 20px); outline: none; transition: border-color .15s, background .15s;
+}
+textarea.cell:hover { border-color: var(--rule); }
+textarea.cell:focus { border-color: var(--cobalt); background: var(--paper-2); }
+textarea.cell.blk:not(:placeholder-shown) { background: var(--tomato-soft); color: #9a2414; }
+textarea.cell::placeholder { color: var(--dim); }
+.saving { color: var(--dim); font-size: 12px; }
+.saving.err { color: var(--tomato); }
+.row.flash { animation: flash 1.6s ease-out; }
+@keyframes flash { 0% { box-shadow: inset 0 0 0 999px rgba(38, 67, 217, .14); } 100% { box-shadow: inset 0 0 0 999px transparent; } }
+
+.note { margin: 28px 0; padding: 18px 20px; border: 1.5px dashed var(--rule); border-radius: 14px; color: var(--muted); }
+.note b { color: var(--ink); }
+
+/* Narrow (a pinned window, a phone): one card per person, today and blocked only. */
+@media (max-width: 640px) {
+  .top { padding: 14px 16px 10px; gap: 10px; }
+  .day h1 { font-size: 20px; }
+  .tally { order: 3; width: 100%; }
+  .head { display: none; }
+  main { padding: 0 16px 24px; }
+  .row { grid-template-columns: 1fr; gap: 6px; padding: 12px 0; }
+  .row.mine { margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+  .who { flex-direction: row; align-items: baseline; gap: 8px; }
+  .who .name { font-size: 18px; }
+  .cell .label, .fieldlabel { display: inline; color: var(--muted); font-size: 12px; font-weight: 600; margin-right: 6px; }
+  .y { display: none; }
+  .add { padding: 0; width: 36px; height: 36px; justify-content: center; }
+  .add .word, .add kbd { display: none; }
+  .pin { padding: 8px 11px; }
+}
+
+dialog {
+  border: 0; padding: 0; border-radius: 18px; width: min(520px, calc(100vw - 24px)); background: var(--paper-2); color: var(--ink);
+  box-shadow: 0 30px 80px rgba(29, 26, 22, .28), 0 0 0 1px rgba(29, 26, 22, .06);
+}
+dialog::backdrop { background: rgba(29, 26, 22, .28); backdrop-filter: blur(2px); }
+dialog[open] { animation: pop .2s cubic-bezier(.2, .9, .3, 1.2); }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } }
+.qa { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.seg { display: inline-flex; background: var(--paper); border-radius: 999px; padding: 3px; align-self: flex-start; }
+.seg button { border: 0; background: none; padding: 6px 14px; border-radius: 999px; color: var(--muted); font-weight: 600; font-size: 13px; }
+.seg button[aria-checked="true"] { background: var(--ink); color: var(--paper); }
+.seg button[data-f="blocked"][aria-checked="true"] { background: var(--tomato); }
+.qa input {
+  font: 500 18px/1.3 "Instrument Sans", system-ui; border: 0; outline: none; background: none; color: var(--ink); padding: 6px 2px;
+}
+.qa input::placeholder { color: var(--dim); }
+.people { display: flex; flex-wrap: wrap; gap: 6px; min-height: 0; }
+.people button { border: 1px solid var(--rule); background: var(--paper); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; color: var(--muted); }
+.people button:hover { color: var(--cobalt); border-color: var(--cobalt); }
+.qa-foot { display: flex; justify-content: space-between; align-items: center; color: var(--dim); font-size: 12px; }
+.qa-foot kbd { background: var(--paper); border-color: var(--rule); color: var(--muted); }
+.qa-err { color: var(--tomato); font-size: 12.5px; }
+
+.reveal { animation: up .45s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--i, 0) * 45ms); }
+@keyframes up { from { opacity: 0; transform: translateY(10px); } }
+@media (prefers-reduced-motion: reduce) { .reveal, dialog[open], .row.flash { animation: none; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="day">
+    <button class="nav" id="prev" aria-label="Previous day">‹</button>
+    <h1 id="day">Today</h1>
+    <button class="nav" id="next" aria-label="Next day">›</button>
+    <button class="chip-today" id="today" hidden>Today</button>
+  </div>
+  <div class="tally" id="tally"></div>
+  <div class="spacer"></div>
+  <button class="pin" id="pin" aria-pressed="false" hidden><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2h4l-.5 4 2.5 2.5H4L6.5 6z"/><path d="M8 8.5V14"/></svg><span>Pin</span></button>
+  <button class="add" id="add"><span>+ <span class="word">Update</span></span><kbd id="add-key">N</kbd></button>
+</header>
+<div class="head"><span>Person</span><span>Yesterday</span><span>Today</span><span class="b">Blocked</span></div>
+<main id="rows"></main>
+
+<dialog id="quick">
+  <form class="qa" method="dialog" id="qa-form">
+    <div class="seg" role="radiogroup" id="seg">
+      <button type="button" role="radio" data-f="yesterday" aria-checked="false">Yesterday</button>
+      <button type="button" role="radio" data-f="today" aria-checked="true">Today</button>
+      <button type="button" role="radio" data-f="blocked" aria-checked="false">Blocked</button>
+    </div>
+    <input id="qa-text" autocomplete="off" placeholder="What are you working on?">
+    <div class="people" id="people"></div>
+    <div class="qa-foot"><span class="qa-err" id="qa-err"></span><span><kbd>↵</kbd> add · <kbd>esc</kbd> close</span></div>
+  </form>
+</dialog>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const app = window.cast?.app;
+const info = app ? await app.info().catch(() => null) : null;
+let grants = new Set(info?.grants ?? []);
+const store = window.cast?.state?.("standup");
+const me = window.cast?.me ? await window.cast.me().catch(() => null) : null;
+const myName = me?.name ?? null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+const keyFor = (day, name) => `${day}:${slug(name)}`;
+const TODAY = dayKey(new Date());
+const shiftDay = (day, n) => { const d = new Date(`${day}T12:00:00`); d.setDate(d.getDate() + n); return dayKey(d); };
+const dayTitle = (day) => {
+  if (day === TODAY) return "Today";
+  if (day === shiftDay(TODAY, -1)) return "Yesterday";
+  return new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+};
+const timeOf = (t) => new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+// A mention is @ and a name's first word, or the whole name run together.
+const handles = (name) => name ? [name.split(/\s+/)[0], name.replace(/\s+/g, "")].map((h) => h.toLowerCase()) : [];
+const MINE = handles(myName);
+const mentions = (text) => [...String(text ?? "").matchAll(/@([\p{L}][\p{L}\d._-]*)/gu)].map((m) => m[1].toLowerCase());
+const mentionsMe = (text) => mentions(text).some((h) => MINE.includes(h));
+const withMentions = (text) => esc(text).replace(/@([\p{L}][\p{L}\d._-]*)/gu, (m, h) => `<span class="mention${MINE.includes(h.toLowerCase()) ? " me" : ""}">${m}</span>`);
+
+let rows = [];
+let day = TODAY;
+let loaded = false;
+
+function personOf(r) { return r.by?.name ?? r.value?.name ?? "Someone"; }
+function render() {
+  $("day").textContent = dayTitle(day);
+  $("today").hidden = day === TODAY;
+  $("next").disabled = day >= TODAY;
+  const list = rows.filter((r) => r.value?.day === day);
+  const mine = list.find((r) => r.mine);
+  const others = list.filter((r) => !r.mine).sort((a, b) => (!!b.value.blocked - !!a.value.blocked) || personOf(a).localeCompare(personOf(b)));
+  const blocked = list.filter((r) => r.value.blocked?.trim()).length;
+  $("tally").innerHTML = `<span><b>${list.length}</b> posted</span>${blocked ? `<span class="bad"><b>${blocked}</b> blocked</span>` : ""}`;
+
+  const canWrite = !!(store && myName && day === TODAY);
+  let html = "";
+  if (canWrite) html += myRow(mine);
+  else if (mine) html += readRow(mine, 0);
+  html += others.map((r, i) => readRow(r, i + 1)).join("");
+  if (!loaded) html = "";
+  else if (!list.length && !canWrite) html += `<div class="note">Nobody posted ${day === TODAY ? "yet" : "that day"}.</div>`;
+  if (!store) html = `<div class="note"><b>The board runs on a published page.</b> Publish this folder with cast publish to share it with your team.</div>`;
+  else if (!myName && day === TODAY && loaded) html = `<div class="note"><b>Sign in to post your update.</b> You can read everyone's.</div>` + html;
+  const focused = document.activeElement?.dataset?.f;
+  const caret = focused ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  $("rows").innerHTML = html;
+  for (const t of document.querySelectorAll("textarea.cell")) { grow(t); t.oninput = () => { grow(t); queueSave(); }; t.onblur = () => save(); }
+  if (focused) { const t = document.querySelector(`textarea[data-f="${focused}"]`); if (t) { t.focus(); t.setSelectionRange(...caret); } }
+}
+function readRow(r, i) {
+  const v = r.value;
+  const cell = (f, cls, label) => `<div class="cell ${cls}${v[f]?.trim() ? "" : " empty"}"><span class="label">${label}</span>${v[f]?.trim() ? withMentions(v[f]) : "—"}</div>`;
+  return `<section class="row reveal${v.blocked?.trim() ? " blocked" : ""}${r.mine ? " mine" : ""}" style="--i:${i}" data-key="${esc(r.key)}">
+    <div class="who"><span class="name">${esc(personOf(r))}</span><span class="when">${timeOf(r.updated_at)}</span></div>
+    ${cell("yesterday", "y", "Yesterday")}${cell("today", "t", "Today")}${cell("blocked", "blk", "Blocked")}
+  </section>`;
+}
+function myRow(r) {
+  const v = r?.value ?? {};
+  const prev = rows.filter((x) => x.mine && x.value?.day < TODAY).sort((a, b) => (a.value.day < b.value.day ? 1 : -1))[0];
+  const yHint = prev?.value?.today?.trim() ? `Planned: ${prev.value.today.split("\n")[0]}` : "What you got done";
+  const area = (f, cls, ph, label) => `<div class="${cls === "y" ? "y" : ""}"><span class="fieldlabel">${label}</span><textarea class="cell ${cls}" data-f="${f}" rows="1" placeholder="${esc(ph)}">${esc(v[f] ?? "")}</textarea></div>`;
+  return `<section class="row mine reveal" style="--i:0" data-key="${esc(keyFor(TODAY, myName))}">
+    <div class="who"><span class="name">${esc(myName)}</span><span class="when" id="saving">${r ? `Posted ${timeOf(r.updated_at)}` : "Your update"}</span></div>
+    ${area("yesterday", "y", yHint, "Yesterday")}${area("today", "t", "What you're on today", "Today")}${area("blocked", "blk", "Nothing. Waiting on someone? @name them", "Blocked")}
+  </section>`;
+}
+function grow(t) { t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; }
+
+// ── writing my row ──
+let timer = null;
+const queueSave = () => { clearTimeout(timer); timer = setTimeout(save, 700); };
+async function save(patch) {
+  clearTimeout(timer);
+  if (!store || !myName) return;
+  const key = keyFor(TODAY, myName);
+  const current = rows.find((r) => r.key === key)?.value ?? {};
+  const next = { day: TODAY, name: myName, yesterday: current.yesterday ?? "", today: current.today ?? "", blocked: current.blocked ?? "" };
+  for (const t of document.querySelectorAll("textarea.cell")) next[t.dataset.f] = t.value;
+  Object.assign(next, patch);
+  if (["yesterday", "today", "blocked"].every((f) => (next[f] ?? "") === (current[f] ?? "")) && rows.some((r) => r.key === key)) return;
+  if (["yesterday", "today", "blocked"].every((f) => !next[f]?.trim()) && !rows.some((r) => r.key === key)) return;
+  const status = $("saving");
+  if (status) { status.textContent = "Saving"; status.className = "when saving"; }
+  try { await store.set(key, next); }
+  catch (e) { if (status) { status.textContent = e.message || "Not saved"; status.className = "when saving err"; } throw e; }
+}
+
+// ── live rows, and telling me about the ones that name me ──
+const TOLD = "standup:told";
+const told = new Set((() => { try { return JSON.parse(localStorage.getItem(TOLD)) || []; } catch { return []; } })());
+function check(list) {
+  const fresh = [];
+  for (const r of list) {
+    if (r.mine) continue;
+    const sig = `${r.key}@${r.updated_at}`;
+    if (told.has(sig)) continue;
+    told.add(sig);
+    if (loaded) fresh.push(r);
+  }
+  try { localStorage.setItem(TOLD, JSON.stringify([...told].slice(-400))); } catch {}
+  if (!app || !grants.has("notifications") || !MINE.length) return;
+  for (const r of fresh) {
+    const v = r.value ?? {};
+    const who = personOf(r);
+    if (mentionsMe(v.blocked)) app.notify({ title: `${who} is blocked on you`, body: v.blocked.trim(), tag: r.key }).catch(() => {});
+    else if (mentionsMe(v.today) || mentionsMe(v.yesterday)) app.notify({ title: `${who} mentioned you`, body: (mentionsMe(v.today) ? v.today : v.yesterday).trim(), tag: r.key }).catch(() => {});
+  }
+}
+if (store) {
+  store.subscribe((list) => {
+    rows = list;
+    check(list);
+    loaded = true;
+    // Never redraw under the person while they type in their own row.
+    if (!document.activeElement?.matches?.("textarea.cell")) render();
+    if (app) {
+      const waiting = list.filter((r) => r.value?.day === TODAY && !r.mine && mentionsMe(r.value.blocked)).length;
+      app.badge(waiting).catch(() => {});
+    }
+  }, (e) => { $("rows").innerHTML = `<div class="note"><b>Couldn't load the board.</b> ${esc(e.message)}</div>`; });
+} else { loaded = true; render(); }
+document.addEventListener("focusout", () => setTimeout(() => { if (!document.activeElement?.matches?.("textarea.cell")) render(); }, 0));
+
+$("prev").onclick = () => { day = shiftDay(day, -1); render(); };
+$("next").onclick = () => { if (day < TODAY) { day = shiftDay(day, 1); render(); } };
+$("today").onclick = () => { day = TODAY; render(); };
+
+// ── quick add ──
+let field = "today";
+const PH = { yesterday: "What you got done", today: "What are you working on?", blocked: "What's in the way? @name who can unblock it" };
+function setField(f) {
+  field = f;
+  for (const b of $("seg").children) b.setAttribute("aria-checked", b.dataset.f === f);
+  $("qa-text").placeholder = PH[f];
+  const names = [...new Set(rows.filter((r) => !r.mine).map(personOf))].sort();
+  $("people").innerHTML = f === "blocked" ? names.map((n) => `<button type="button" data-n="${esc(n)}">@${esc(n.split(/\s+/)[0])}</button>`).join("") : "";
+}
+function openQuick(f = "today") {
+  if (!store || !myName) return;
+  day = TODAY;
+  render();
+  $("qa-err").textContent = "";
+  setField(f);
+  if (!$("quick").open) $("quick").showModal();
+  $("qa-text").focus();
+}
+$("seg").onclick = (e) => { const f = e.target.closest("button")?.dataset.f; if (f) { setField(f); $("qa-text").focus(); } };
+$("people").onclick = (e) => {
+  const n = e.target.closest("button")?.dataset.n;
+  if (!n) return;
+  const t = $("qa-text");
+  t.value = `${t.value.replace(/\s*$/, "")}${t.value.trim() ? " " : ""}@${n.split(/\s+/)[0]} `;
+  t.focus();
+};
+$("qa-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("qa-text").value.trim();
+  if (!text) return $("quick").close();
+  const current = rows.find((r) => r.key === keyFor(TODAY, myName))?.value ?? {};
+  const was = (current[field] ?? "").trim();
+  try {
+    await save({ [field]: was ? `${was}\n${text}` : text });
+    $("qa-text").value = "";
+    $("quick").close();
+  } catch (err) { $("qa-err").textContent = err.message || "Not saved"; }
+};
+$("add").onclick = () => openQuick();
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.("input, textarea, dialog") || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "n") { e.preventDefault(); openQuick(); }
+  if (e.key === "b") { e.preventDefault(); openQuick("blocked"); }
+  if (e.key === "ArrowLeft") $("prev").click();
+  if (e.key === "ArrowRight") $("next").click();
+});
+
+// ── the installed app: pin on top, a global shortcut, notification clicks ──
+const SHORTCUT = "CmdOrCtrl+Shift+U";
+const shortcutKeys = () => (info?.platform === "darwin" ? ["⌘", "⇧", "U"] : ["Ctrl", "⇧", "U"]);
+async function registerShortcut() {
+  if (!grants.has("shortcuts")) return;
+  try {
+    await app.shortcuts.register(SHORTCUT);
+    $("add-key").outerHTML = shortcutKeys().map((k) => `<kbd>${k}</kbd>`).join("");
+    $("add").title = "Add an update from anywhere";
+  } catch {}
+}
+if (app) {
+  const pin = $("pin");
+  pin.hidden = false;
+  let wide = { width: window.outerWidth, height: window.outerHeight };
+  pin.onclick = async () => {
+    const on = pin.getAttribute("aria-pressed") !== "true";
+    try {
+      if (on && !grants.has("overlay")) grants = new Set(await app.permissions.request(["overlay"]));
+      await app.window.setAlwaysOnTop(on);
+      if (on) { wide = { width: window.outerWidth, height: window.outerHeight }; await app.window.setSize(360, 560); }
+      else await app.window.setSize(wide.width, wide.height);
+      pin.setAttribute("aria-pressed", on);
+      pin.querySelector("span").textContent = on ? "Pinned" : "Pin";
+    } catch (e) {
+      pin.querySelector("span").textContent = { denied: "Pin declined", "not-allowed-by-team": "Pin off for team", "needs-consent": "Pin needs approval" }[e.code] ?? "Can't pin";
+    }
+  };
+  registerShortcut();
+  app.on("shortcut", ({ accelerator }) => {
+    if (accelerator !== SHORTCUT) return;
+    app.window.focus().catch(() => {});
+    openQuick();
+  });
+  app.on("grants", (g) => { grants = new Set(g.grants); registerShortcut(); });
+  app.on("notification-click", ({ tag }) => {
+    app.window.focus().catch(() => {});
+    day = tag.slice(0, 10);
+    render();
+    const row = document.querySelector(`.row[data-key="${CSS.escape(tag)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+  });
+}
+render();
+</script>
+</body>
+</html>

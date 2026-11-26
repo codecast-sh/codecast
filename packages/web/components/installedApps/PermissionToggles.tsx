@@ -1,7 +1,9 @@
 // The grant switches of one app, shared by the consent sheet and Settings >
 // Installed apps: each permission a row with its name, what it does, and its
-// switch. Full access wears the warning color everywhere it appears, and when
-// it cannot be had the switch gives way to the reason.
+// switch. Full access wears the warning color everywhere it appears. When it
+// cannot be had, the reason sits beside its name and the switch stays in its
+// column, locked off (a held grant can still be turned off). What a permission
+// does wraps rather than cuts off, so it reads whole in a narrow column.
 import { Lock, ShieldAlert } from "lucide-react";
 import type { AppPermission } from "@codecast/shared/contracts/pageApp";
 import { Switch } from "../ui/switch";
@@ -18,7 +20,7 @@ export function PermissionToggles({ rows, platform, onFlip, highlight, dense, id
   idPrefix: string;
 }) {
   return (
-    <ul className={dense ? "grid gap-x-8 sm:grid-cols-2" : "flex flex-col border-b border-sol-border/60 py-1"} data-permission-toggles>
+    <ul className={dense ? "grid grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-x-8" : "flex flex-col border-b border-sol-border/60 py-1"} data-permission-toggles>
       {rows.map(({ perm, on, block }) => {
         const full = perm === "full-access";
         const id = `${idPrefix}-${perm}`;
@@ -31,20 +33,26 @@ export function PermissionToggles({ rows, platform, onFlip, highlight, dense, id
             data-permission-block={block ?? undefined}
           >
             <span className="min-w-0 flex-1">
-              <span id={id} className={`flex items-center gap-1.5 text-[13px] ${full && !block ? "font-semibold text-sol-orange" : block ? "text-sol-text-dim" : "text-sol-text"}`}>
+              <span className={`flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[13px] ${full && !block ? "font-semibold text-sol-orange" : block ? "text-sol-text-dim" : "text-sol-text"}`}>
                 {full && <ShieldAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />}
-                <span className="truncate">{permissionLabel(perm)}</span>
-                {highlight?.has(perm) && <span className="rounded-sm bg-sol-blue/15 px-1 text-mark font-semibold text-sol-blue" data-permission-new>New</span>}
+                <span id={id} className="min-w-0 break-words">{permissionLabel(perm, platform)}</span>
+                {highlight?.has(perm) && <span className="shrink-0 rounded-sm bg-sol-blue/15 px-1 text-mark font-semibold text-sol-blue" data-permission-new>New</span>}
+                {block && (
+                  <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-sol-bg-alt px-1.5 py-px text-meta text-sol-text-muted" data-permission-reason>
+                    <Lock className="h-3 w-3" aria-hidden />{block}
+                  </span>
+                )}
               </span>
-              <span className={`block truncate text-meta ${full && !block ? "text-sol-orange/80" : "text-sol-text-muted"}`}>{permissionEffect(perm, platform)}</span>
+              <span className={`block text-pretty text-meta leading-snug ${full && !block ? "text-sol-orange/80" : "text-sol-text-muted"}`}>{permissionEffect(perm, platform)}</span>
             </span>
-            {block ? (
-              <span className="inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-dim" data-permission-reason>
-                <Lock className="h-3 w-3" aria-hidden />{block}
-              </span>
-            ) : (
-              <Switch checked={on} onCheckedChange={(next) => onFlip(perm, next)} aria-labelledby={id} className={full && on ? "!bg-sol-orange" : ""} />
-            )}
+            <Switch
+              checked={on}
+              // Locked off when it cannot be had; one already held can still be turned off.
+              disabled={!!block && !on}
+              onCheckedChange={(next) => onFlip(perm, next)}
+              aria-labelledby={id}
+              className={full && on ? "!bg-sol-orange" : ""}
+            />
           </li>
         );
       })}

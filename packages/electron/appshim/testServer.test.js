@@ -30,7 +30,8 @@ function client(socketPath) {
   return { send: (obj) => sock.write(JSON.stringify(obj) + "\n"), next, end: () => sock.destroy() };
 }
 
-test("the stand-in engine speaks the shim's socket framing", async () => {
+// The shim's socket is a Unix domain socket; Windows has none to test.
+test("the stand-in engine speaks the shim's socket framing", { skip: process.platform === "win32" }, async () => {
   const socketPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "as-")), "apps.sock");
   const engine = startTestEngine({
     socketPath,
