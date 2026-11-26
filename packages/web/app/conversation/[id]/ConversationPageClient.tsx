@@ -23,6 +23,8 @@ import { getShareTokenScope, setShareTokenScope } from "../../../lib/shareTokenS
 import { GuestSuggestComposer } from "../../../components/GuestSuggestComposer";
 import { useLocalAuth } from "../../../lib/localAuth";
 import { parseMessageHash } from "../../../lib/messageHash";
+import { useTabContext } from "../../../lib/tabParams";
+import { QueuePageClient } from "../../inbox/QueuePageClient";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -32,9 +34,17 @@ import { parseMessageHash } from "../../../lib/messageHash";
  * Pre-populates `conversations[id].is_own` so the inbox picks the right UI
  * (owner-only controls hidden for teammate sessions) before
  * getConversationWithMeta resolves. Sets deep-link state (scroll target,
- * highlight) before navigating so QueuePageClient picks it up.
+ * highlight) before the inbox mounts so QueuePageClient picks it up.
+ *
+ * When the address already names this conversation (/conversation/<id>), the
+ * inbox is drawn right here, at that address. Redirecting to /inbox?s=<id>
+ * made every link pay two page changes — out to the inbox route, and back
+ * once the inbox canonicalized the URL — before the conversation showed
+ * (ct-101972). Any other reference (a short id, a session UUID, a share link
+ * resolving under a tab pane) still moves to the inbox, which owns the
+ * resolved id from there.
  */
-function RedirectToInbox({
+function OpenInInbox({
   id,
   isOwn,
   targetMessageId,
@@ -48,15 +58,15 @@ function RedirectToInbox({
   seed?: ComposerSeed | null;
 }) {
   const router = useRouter();
+  // Inside a tab pane the shell owns the address; the pane moves its own tab.
+  const inPane = useTabContext() !== null;
+  const [inPlace] = useState(() => !inPane && window.location.pathname === `/conversation/${id}`);
   useMountEffect(() => {
     const store = useInboxStore.getState();
     // Seed is_own so the inbox picks the right UI before getConversationWithMeta resolves.
     store.syncRecord("conversations", id, { _id: id, is_own: isOwn });
-    // `?prefill=` and `?compose=` ride the store, not the URL: the redirect
-    // below drops the query and the inbox rewrites the address again once the
-    // session resolves. That redirect is also what keeps a refresh from
-    // re-seeding the composer — the param never reaches the address bar the
-    // user ends up on.
+    // `?prefill=` and `?compose=` ride the store, not the URL, and the query
+    // leaves the address bar below: a refresh must not re-seed the composer.
     if (seed) store.setComposerPrefill({ convId: id, ...seed });
     // Deep-link state travels through requestNavigate — target session, scroll
     // target, and highlight in ONE action. Setting pendingScrollToMessageId as
@@ -72,16 +82,32 @@ function RedirectToInbox({
     } else {
       store.navigateToSession(id);
     }
+    if (inPlace) {
+      // The address stays; only its one-shot query (prefill, compose,
+      // highlight, share token) goes, as the redirect used to drop it.
+      if (window.location.search) {
+        window.history.replaceState(window.history.state, "", window.location.pathname + window.location.hash);
+      }
+      return;
+    }
     // Hand the target id to the inbox via its durable `?s=` deep-link param rather
     // than relying solely on the transient `pendingNavigateId` store flag. When this
     // redirect lands inside the dashboard tab shell, the tab swaps its mounted route
     // (conversation → inbox) and the flag can be consumed-and-cleared before the inbox
     // settles, dropping us onto an auto-selected session or a "Not Found". The URL
     // param survives that remount and is re-read on every render, so the inbox reliably
-    // injects and shows the right conversation. navigateToSession above still gives the
-    // instant path for sessions already in the queue.
+    // injects and shows the right conversation.
     router.replace(`/inbox?s=${id}`);
   });
+  if (inPlace) {
+    return (
+      <DashboardLayout>
+        <ErrorBoundary name="Inbox">
+          <QueuePageClient sessionId={id} />
+        </ErrorBoundary>
+      </DashboardLayout>
+    );
+  }
   return <ConversationLoadingSkeleton id={id} />;
 }
 
@@ -285,7 +311,7 @@ export default function ConversationPage() {
   if (effective === undefined || localStub) {
     if (cached) {
       return (
-        <RedirectToInbox
+        <OpenInInbox
           id={id}
           isOwn={cached === "own"}
           targetMessageId={targetMessageId}
@@ -342,7 +368,7 @@ export default function ConversationPage() {
 
   // Every accessible session (owner, team, shared) renders through the inbox — single codepath.
   return (
-    <RedirectToInbox
+    <OpenInInbox
       id={effective.conversation_id}
       isOwn={effective.access_level === "owner"}
       targetMessageId={targetMessageId}
@@ -381,7 +407,7 @@ function RedeemThenRedirect({
   });
   if (!redeemed) return <ConversationLoadingSkeleton id={id} />;
   return (
-    <RedirectToInbox
+    <OpenInInbox
       id={id}
       isOwn={false}
       targetMessageId={targetMessageId}
