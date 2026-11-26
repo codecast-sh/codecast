@@ -99,9 +99,15 @@ const LISTED_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside
  */
 const positionsOf = (rows: Priority[]): Map<string, number> => priorityPositions(rows, (r) => String(r._id));
 
-/** One priority's position, read from its owner's active priorities in its workspace (lib/priorityGroup, the group every rank read orders). */
-async function positionOf(ctx: Ctx, p: Priority): Promise<number | null> {
-  if (p.status !== "active") return null;
+/**
+ * One priority's position, read from its owner's active priorities in its
+ * workspace (lib/priorityGroup, the group every rank read orders): only for
+ * its owner. A teammate gets none, in a list, on the page and on the pin line
+ * alike: a position counts the owner's priorities they cannot see (one that
+ * needs a rewrite), so it would tell of them.
+ */
+async function positionOf(ctx: Ctx, viewer: Id<"users">, p: Priority): Promise<number | null> {
+  if (p.status !== "active" || !isOwner(viewer, p)) return null;
   return positionsOf(await activeGroup(ctx, p.user_id, p.workspace)).get(String(p._id)) ?? null;
 }
 
@@ -362,7 +368,7 @@ async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promis
   const names = await ownerNames(ctx, [p]);
   const r = await readerFor(ctx, viewer);
   const mapped = await mappedSessions(r, p, listRead(viewer, p));
-  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), await r.stepsFor(p), mapped, await correctionPending(ctx, viewer, p), LIST_SESSIONS);
+  return rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, viewer, p), await r.stepsFor(p), mapped, await correctionPending(ctx, viewer, p), LIST_SESSIONS);
 }
 
 /**
@@ -447,7 +453,7 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     const steps = await r.stepsFor(p);
     // Links only on the viewer's own active priorities: the rows a next action is drawn on.
     const linked = isOwner(viewer, p) && p.status === "active" ? await linksFor(r, reads, p, steps, now) : null;
-    const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
+    const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", (isOwner(viewer, p) ? positions.get(String(p._id)) ?? null : null), steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(linked ? { ...row, ...linked } : row);
   }
   return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
@@ -474,7 +480,7 @@ async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): Promise<
   const mapped = await mappedSessions(r, p, SHOW_SESSIONS);
   const steps = await r.stepsFor(p);
   const corrections = await correctionsOf(ctx, viewer, p);
-  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, p), steps, mapped, corrections.some((c) => c.status === "pending"));
+  const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", await positionOf(ctx, viewer, p), steps, mapped, corrections.some((c) => c.status === "pending"));
   const sessions = row.sessions;
   // The page and the reference card draw each step's sessions and plans as the list does, for any priority the viewer can read.
   const linked = await linksFor(r, linkReads(ctx, r), p, steps, Date.now());
@@ -969,7 +975,7 @@ export const pinLine = query({
     return {
       short_id: p.short_id,
       title: p.title,
-      rank: await positionOf(ctx, p),
+      rank: await positionOf(ctx, viewer, p),
       ...criticalCounts(p),
       ...(step ? { step_title: step.title } : {}),
     };

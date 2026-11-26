@@ -369,6 +369,19 @@ describe("reads", () => {
     expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
   });
 
+  test("a teammate reads no rank, in the list, on the page and on the pin line alike, so the owner's hidden #1 leaves no gap", async () => {
+    const { t, as, ada, bea, ws, p1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
+    const pin = await t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7two5")).first())!._id);
+    const listed = (await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
+    expect(listed.rank).toBeNull();
+    expect((await as(bea).query(pri.show, { short_id: "pri-2" })).rank).toBeNull();
+    expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank ?? null).toBeNull();
+    // The owner reads the same rank from all three.
+    const own = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
+    expect([own.rank, (await as(ada).query(pri.show, { short_id: "pri-2" })).rank, (await as(ada).query(pri.pinLine, { conversation_id: pin })).rank]).toEqual([2, 2, 2]);
+  });
+
   test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {
     const { t, as, ada, bea, acme, p1, c1 } = await world();
     await t.run(async (ctx) => {
