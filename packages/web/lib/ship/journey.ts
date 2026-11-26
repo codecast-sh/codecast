@@ -10,7 +10,7 @@
 // merged sha on the run. Pure, with relative imports only: the web's Ship panel
 // and run card, the inbox card and the phone's run card all read a run here.
 import { passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
-import { inGroup, inStage, isSubject, planStages, type FlowStage, type StageRole } from "@codecast/shared/contracts/flowStagePlan";
+import { inGroup, inStage, isSubject, LANDING_STEP, planStages, type FlowStage, type StageRole } from "@codecast/shared/contracts/flowStagePlan";
 import { insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
 import { stationResult } from "./stationResult";
@@ -632,12 +632,15 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : subject ? "session"
       : deliberate ? "run"
       : "again";
+    // A landing step that passed (`ship__shipped`, `landed`) put the change on main even when it reported no sha, unless
+    // Deploy then found it not on main (its `unmerged` stop).
+    const landedStep = !sha && statuses.some((n) => n.status === "completed" && LANDING_STEP.test(n.node_id)) && !statuses.some((n) => /(^|__)unmerged$/.test(n.node_id)) && !/(^|__)unmerged$/.test(at ?? "");
     // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
-    if (!sha && stage?.role === "deploy") now = { kind: "unlanded", why: (own ? stopWhy(run.fail_reason) : readableWhy(run.fail_reason)) ?? "The run ended with no merge recorded", waits: [] };
+    if (!sha && !landedStep && stage?.role === "deploy") now = { kind: "unlanded", why: (own ? stopWhy(run.fail_reason) : readableWhy(run.fail_reason)) ?? "The run ended with no merge recorded", waits: [] };
     // An own-results round's stops are ends of their own, each said by its name with its reason (a result's note, a
     // rejection's findings), never as where on the track it stopped.
     else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: own ? stopWhy(run.fail_reason) : askStopWhy(run.fail_reason) ?? readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && ((own && !!exit?.stop) || walked.some((id) => id !== at && byId.get(id)?.type !== "exit")) ? exit?.label ?? null : null,
-      ...(landedAlready ? { landed: true } : {}), ...(landUnknown ? { mayHaveLanded: true } : {}), ...(resume ? { resume } : {}) };
+      ...(landedAlready || landedStep ? { landed: true } : {}), ...(landUnknown ? { mayHaveLanded: true } : {}), ...(resume ? { resume } : {}) };
   } else if (allLive && shortOfLive) now = sha ? { kind: "merged", sha, at: run.merge?.at ?? null, end: offEnd ?? "Landed", ...(view && deployStage ? { why: shortWhy(statusOf(deployStage.id)?.result_preview, sha) } : {}) } : { kind: "passed" };
   else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
   else if (!plan.some((s) => s.role === "land")) now = { kind: "passed" };

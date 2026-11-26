@@ -43,18 +43,18 @@ export function shipsChange(flow: ChangeGraph): boolean {
   return flow.kind === "line" && takesSessionChange({ takes: flow.takes ?? [] }) && journeyStages(flow as any).some((s) => s.role === "land");
 }
 
-/** The change's stations in its graph, by what each is: CI and Review are the command and the agent a fan-out starts
- *  side by side (and CI any other step under CI's name), Deploy every step of the Deploy stage. */
+/** The change's stations in its graph, each by the mark the station contract gives it at any depth, never by the graph's
+ *  shape (a Lint beside CI in the fan-out is not CI): CI is the command named `ci` (Union's `land__ci`, its CI alone
+ *  `land__ci_alone`) or labelled CI; Review the agent named `review`; Deploy every step of the Deploy stage. */
 export type ChangeStations = { ci: Set<string>; review: Set<string>; deploy: Set<string> };
+const leafOf = (id: string) => id.split(SEGMENT_SEP).pop()!;
 export function changeStations(graph: ChangeGraph): ChangeStations {
-  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const heads = graph.nodes.filter((n) => n.type === "parallel_fanout").flatMap((f) => graph.edges.filter((e) => e.from === f.id).map((e) => byId.get(e.to)).filter(Boolean) as FlowNodeIn[]);
-  const ciLabels = new Set(heads.filter((n) => n.type === "command").map((n) => n.label));
   const deployStage = journeyStages(graph as any).find((s) => s.role === "deploy")?.id;
+  const ids = (keep: (n: FlowNodeIn) => boolean) => new Set(graph.nodes.filter(keep).map((n) => n.id));
   return {
-    ci: new Set(graph.nodes.filter((n) => n.type === "command" && ciLabels.has(n.label)).map((n) => n.id)),
-    review: new Set(heads.filter((n) => n.type === "agent").map((n) => n.id)),
-    deploy: new Set(deployStage ? graph.nodes.filter((n) => n.id === deployStage || n.id.startsWith(`${deployStage}${SEGMENT_SEP}`)).map((n) => n.id) : []),
+    ci: ids((n) => n.type === "command" && (["ci", "ci_alone"].includes(leafOf(n.id)) || n.label === "CI")),
+    review: ids((n) => n.type === "agent" && leafOf(n.id) === "review"),
+    deploy: deployStage ? ids((n) => n.id === deployStage || n.id.startsWith(`${deployStage}${SEGMENT_SEP}`)) : new Set(),
   };
 }
 
@@ -98,9 +98,9 @@ export function deployLine(run: ChangeRun, stations: ChangeStations): string | n
 const ROUTE_ONLY = /^\s*\{\s*"exit"\s*:/;
 
 /** `words`: where the change stands; `waits`: what it waits on, or where and how it stopped, in a station and an outcome
- *  the graph names; `href`: where to act on what it waits on (the session fixing it, the card someone else answers, the
- *  deploy it waits for). A card the viewer answers is on the page already, in the bar under the track. */
-export type ChangeHeadline = { words: string; waits: string | null; href: string | null; tone: JourneyTone };
+ *  the graph names. State only: the objects are the chips under it, and the one action is in the bar under the track
+ *  (changeAction), so the page says each fact once. */
+export type ChangeHeadline = { words: string; waits: string | null; tone: JourneyTone };
 
 /** "web, cli and mobile". */
 const listWords = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -124,12 +124,22 @@ function exitReached(run: ChangeRun, graph: ChangeGraph): string | null {
   return n?.type === "exit" ? n.label : null;
 }
 
+/** The merge station's refusal when the person's merge switch for the flow is off (convex lib/lineMerge.ts), as the
+ *  run's reason carries it, or as the CLI's merge said it ("merge left to a person: merge is off …"). */
+const MERGE_OFF = /^(Stopped:\s*)?(merge left to a person:\s*)?merge is off for this flow\b/;
+export const mergeIsOff = (run: ChangeRun) => MERGE_OFF.test(run.fail_reason ?? "");
+
+/** Whether the change is on main by the run's own record: a sha it landed, or a landing step that passed. */
+const onMainByRun = (run: ChangeRun, j: Journey) => !!landedSha(run) || ((j.now.kind === "stopped" || j.now.kind === "failed") && !!j.now.landed);
+
 /**
  * Where a stop happened, past the stage the bar names: the step inside a segment that failed doing its work ("PR" in
  * Land), then the outcome the graph names, the way out its segment took ("No pull request") or the exit it reached
- * ("Not merged"). Read from the run's last failures only: an earlier round's failure is not this stop.
+ * ("Not merged"). Read from the run's last failures only: an earlier round's failure is not this stop. An outcome that
+ * says there is no pull request is left off when the run recorded one; one that says Not merged is "Merge is off" when
+ * the merge station's switch said so, and a change on main says it landed first.
  */
-function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string): string | null {
+function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: boolean): string | null {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const steps = [...(run.node_statuses ?? [])].filter((n) => byId.get(n.node_id) && byId.get(n.node_id)!.type !== "exit").sort((a, b) => (a.started_at ?? 0) - (b.started_at ?? 0));
   const failed: Status[] = [];
@@ -138,28 +148,27 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string): string |
   const work = failed.find((n) => !ROUTE_ONLY.test(n.result_preview ?? "") && n.node_id.includes(SEGMENT_SEP));
   const inner = said(work ? byId.get(work.node_id)!.label : null);
   const route = failed.find((n) => ROUTE_ONLY.test(n.result_preview ?? ""));
-  const outcome = said(route ? byId.get(route.node_id)!.label : exitReached(run, graph));
-  if (inner && outcome) return `${inner} · ${lower(outcome)}`;
-  return inner ?? outcome;
+  let outcome = said(route ? byId.get(route.node_id)!.label : exitReached(run, graph));
+  if (outcome && /pull request/i.test(outcome) && changePr(run)) outcome = null;
+  if (mergeIsOff(run)) outcome = "Merge is off";
+  const parts = [landed ? "Landed" : null, inner, outcome].filter(Boolean) as string[];
+  return parts.length ? parts.map((p, i) => (i ? lower(p) : p)).join(" · ") : null;
 }
 
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
 export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState } = {}): ChangeHeadline {
   const n = j.now;
   const { tone } = journeyWords(j);
-  const session = (id: string | null | undefined) => (id ? `/conversation/${id}` : null);
-  const head = (words: string, waits: string | null = null, href: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, href: waits ? href : null, tone: t });
+  const head = (words: string, waits: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, tone: t });
   const fixing = (round: number | null, max: number | null) => `Its session is fixing it${round && max ? ` · round ${round} of ${max}` : ""}`;
-  const card = n.kind === "gate" && n.decisionId ? `/decisions/${run.gate_decision_short_id ?? n.decisionId}` : null;
-  const sha = landedSha(run);
   // A finished run ended where its exit says: a pushed flow older than its journey's rules can read Live where it Landed.
   const ended = run.status === "completed" ? exitReached(run, graph) : null;
   if (ended) {
     if (/^live$/i.test(ended)) {
       const on = n.kind === "live" && n.targets.length ? n.targets : targetsFromLine(deployLine(run, changeStations(graph))).map((t) => t.name);
-      return head(on.length ? `Live on ${listWords(on)}` : "Live", null, null, "ok");
+      return head(on.length ? `Live on ${listWords(on)}` : "Live", null, "ok");
     }
-    return head(sha ? `${ended} ${sha.slice(0, 7)}` : ended, null, null, "ok");
+    return head(ended, null, "ok");
   }
   switch (n.kind) {
     case "idle": return head("Not started");
@@ -167,21 +176,16 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
     case "working": {
       // A station the session itself works (its fix) is the session's fix, whatever the track calls the stage.
       const at = graph.nodes.find((x) => x.id === run.current_node_id);
-      if (at?.backend === "subject") return head(foundWords(run, graph) ?? at.label, fixing(null, null), session(run.waiting_on_session?.conversation_id ?? run.spawner_conversation_id), "session");
+      if (at?.backend === "subject") return head(foundWords(run, graph) ?? at.label, fixing(null, null), "session");
       return head(journeyWords(j).words);
     }
     case "session": {
-      const fixer = session(n.conversation ?? run.spawner_conversation_id);
-      if (n.blocked) {
-        if (n.ask?.mine) return head("Waiting on your answer");
-        return head(sentBackWords(n), n.ask ? "Open the card" : "Open its session", n.ask ? `/decisions/${n.ask.short_id ?? n.ask.id}` : fixer);
-      }
+      if (n.blocked) return head(n.ask?.mine ? "Waiting on your answer" : sentBackWords(n));
       const found = n.what ? null : foundWords(run, graph);
-      return head(n.what ?? found ?? sentBackWords(n), fixing(n.round, n.max), fixer, found && /\b(red|rejected)\b/i.test(found) ? "bad" : tone);
+      return head(n.what ?? found ?? sentBackWords(n), fixing(n.round, n.max), found && /\b(red|rejected)\b/i.test(found) ? "bad" : tone);
     }
-    // The viewer's own card is answered in the bar under the track; someone else's opens, its question on the card.
-    case "gate": return n.mine ? head("Waiting on your decision") : head(gateWaitWords(n.holder, n.who), "Open the card", card);
-    case "landed": return head(`Merged ${n.sha.slice(0, 7)}`, holdWords(n.hold).words, deploysHref(run, n.line));
+    case "gate": return head(n.mine ? "Waiting on your decision" : gateWaitWords(n.holder, n.who));
+    case "landed": return head("Merged", holdWords(n.hold).words);
     case "deploying": {
       const going = n.targets.length ? n.targets : targetsFromLine(n.line).filter((t) => t.state !== "live").map((t) => t.name);
       return head(going.length ? `Deploying to ${listWords(going)}` : "Deploying");
@@ -190,48 +194,78 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
       const on = n.targets.length ? n.targets : targetsFromLine(n.line).map((t) => t.name);
       return head(on.length ? `Live on ${listWords(on)}` : "Live");
     }
-    case "merged": return head(`${n.end ?? "Merged"} ${n.sha.slice(0, 7)}`);
+    case "merged": return head(n.end ?? "Merged");
     case "passed": return head("Done");
     // A PR GitHub merged outside the run is on main whatever the run's own exit says.
-    case "unlanded": return head("Not merged", ctx.pr?.merged && !sha ? "PR merged on GitHub" : stopDetail(run, graph, "Not merged"));
+    case "unlanded": return head("Not merged", ctx.pr?.merged ? "PR merged on GitHub" : stopDetail(run, graph, "Not merged", false));
     case "stopped":
     case "failed": {
       const title = stopTitle(n);
-      return head(title, ctx.pr?.merged && !sha ? "PR merged on GitHub" : stopDetail(run, graph, title));
+      return head(title, ctx.pr?.merged && !onMainByRun(run, j) ? "PR merged on GitHub" : stopDetail(run, graph, title, onMainByRun(run, j)));
     }
   }
 }
 
-/** The one way on from a stop: what the run page offers beside it (the bar's place for its fix). */
-export type StopAction = { kind: "newer" | "merge_switch" | "deploys" | "session" | "again" | "card"; label: string; href: string | null };
-
-/** The merge station's refusal when the person's merge switch for the flow is off (convex lib/lineMerge.ts). */
-const MERGE_OFF = /^(Stopped:\s*)?merge is off for this flow\b/;
+/** The one thing the person can do from where the change stands: drawn in the bar under the track on the run's page,
+ *  and as the phone's button. `again` is Ship again; every other kind opens its `href`. */
+export type ChangeAction = { kind: "newer" | "merge_switch" | "deploys" | "session" | "agent" | "again" | "card"; label: string; href: string | null };
 
 /**
- * The way on from a stopped or unmerged change run. A newer run on the same task is where the change went; a merge
- * switched off is a person's switch; a stop at Deploy opens Deploys; one that wants the session's fix opens it. Ship
- * again only for an unplanned stop (fix "again") where another run can land something: never once the change is on
- * main (the run landed it, or its PR was merged) or may be. Otherwise the session that made the change, else the card
- * the run asked. Null for a run that is not stopped.
+ * The way on from where the change stands. While it runs: someone else's card opens, the session fixing it or asking
+ * opens, Deploys opens while it waits on a deploy (the target still waiting); the viewer's own card is answered in the
+ * bar and needs no link. From a stop: a newer run on the same task is where the change went; a merge switched off opens
+ * the role that holds its switch (`mergeRole`), else falls to the session; a stop at Deploy opens Deploys; one that
+ * wants the session's fix opens it. Ship again only for an unplanned stop (fix "again") with nothing on main (the run
+ * landed it, its PR was merged, or it may have). Otherwise the session that made the change, else the card the run asked.
  */
-export function stopAction(j: Journey, run: ChangeRun, ctx: { newer?: string | null; pr?: PrState } = {}): StopAction | null {
+export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { newer?: string | null; pr?: PrState; mergeRole?: string | null } = {}): ChangeAction | null {
   const n = j.now;
-  if (n.kind !== "stopped" && n.kind !== "failed" && n.kind !== "unlanded") return null;
+  const subject = run.spawner_conversation_id ?? null;
+  const openSession = (id: string | null | undefined): ChangeAction | null => (id ? { kind: "session", label: "Open session", href: `/conversation/${id}` } : null);
+  switch (n.kind) {
+    case "gate": return !n.mine && n.decisionId ? { kind: "card", label: "Open the card", href: `/decisions/${run.gate_decision_short_id ?? n.decisionId}` } : null;
+    case "session":
+      if (n.blocked && n.ask?.mine) return null;
+      if (n.blocked && n.ask) return { kind: "card", label: "Open the card", href: `/decisions/${n.ask.short_id ?? n.ask.id}` };
+      return openSession(n.conversation ?? subject);
+    case "working": {
+      if (g.nodes.find((x) => x.id === run.current_node_id)?.backend === "subject") return openSession(run.waiting_on_session?.conversation_id ?? subject);
+      return n.session ? { kind: n.who === "agent" ? "agent" : "session", label: n.who === "agent" ? "Open agent" : "Open session", href: `/conversation/${n.session.id}` } : null;
+    }
+    case "landed":
+    case "deploying": return { kind: "deploys", label: "Open Deploys", href: deploysHref(run, n.line) };
+    case "stopped":
+    case "failed":
+    case "unlanded": break;
+    default: return null;
+  }
   if (ctx.newer) return { kind: "newer", label: "Open the newer run", href: `/workflows/runs/${ctx.newer}` };
   const stop = n.kind === "unlanded" ? null : n;
   // Once GitHub merged the PR, merging is moot: the switch would change nothing for this change.
-  if (MERGE_OFF.test(run.fail_reason ?? "") && !ctx.pr?.merged) return { kind: "merge_switch", label: "Turn merge on", href: "/org" };
+  if (mergeIsOff(run) && !ctx.pr?.merged && ctx.mergeRole) return { kind: "merge_switch", label: "Turn merge on", href: `/org/${ctx.mergeRole}` };
   if (stop?.fix === "deploy") return { kind: "deploys", label: "Open Deploys", href: deploysHref(run, stop.why) };
-  const subject = stop?.session ?? run.spawner_conversation_id ?? null;
-  const session: StopAction | null = subject ? { kind: "session", label: "Open session", href: `/conversation/${subject}` } : null;
+  const session = openSession(stop?.session ?? subject);
   if (stop?.fix === "session" && session) return session;
   // A deliberate stop (fix "run") repeats if run again: its session is the way on. Only an unplanned one runs again.
   const onMain = !!stop?.landed || !!stop?.mayHaveLanded || !!landedSha(run) || !!ctx.pr?.merged;
-  if (!onMain && subject && (n.kind === "unlanded" || stop?.fix === "again")) return { kind: "again", label: "Ship again", href: null };
+  if (!onMain && subject && !mergeIsOff(run) && (n.kind === "unlanded" || stop?.fix === "again")) return { kind: "again", label: "Ship again", href: null };
   if (session) return session;
   const card = run.gate_decision_short_id ?? run.gate_decision_id;
   return card ? { kind: "card", label: "Open the card", href: `/decisions/${card}` } : null;
+}
+
+/**
+ * The track as the run ended: a run that finished at an exit short of Live (Landed with no deploy documented, Deployed
+ * but unverified) never reached Live, and one that ended where it landed never deployed. An older flow's journey can
+ * read those as done; the head says the exit, so the track does too.
+ */
+export function endedStages(j: Journey, run: ChangeRun, g: ChangeGraph): Journey["stages"] {
+  const ended = run.status === "completed" ? exitReached(run, g) : null;
+  if (!ended || /^live$/i.test(ended)) return j.stages;
+  const landedOnly = /^(landed|merged)$/i.test(ended);
+  return j.stages.map((s) => (s.role === "live" && s.state === "done" ? { ...s, state: "skipped" as const }
+    : s.role === "deploy" && landedOnly && s.state === "done" ? { ...s, state: "nothing" as const }
+    : s));
 }
 
 export type ChangeLinkKind = "pr" | "ci" | "review" | "merged" | "deploy";

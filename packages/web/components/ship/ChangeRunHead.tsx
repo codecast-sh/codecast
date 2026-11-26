@@ -1,13 +1,14 @@
 "use client";
 // A change run's page head (lib/ship/changePage.ts): where the change stands and what it waits on, the change's facts
-// as links (its PR, CI, review, merged commit and deploys), then the run card's own journey, whose bar under the track
-// carries the person's part (an answer, the session, Deploys) and, on a stop, the one way on (stopAction).
+// as links (its PR, CI, review, merged commit and deploys), then the run card's own track, under which the bar carries
+// only what the person does (changeAction): each fact on the page once.
 import { useMemo } from "react";
 import Link from "next/link";
 import { journeyOf, type TargetState } from "../../lib/ship/journey";
-import { changeHeadline, changeLinks, changePr, stopAction, type ChangeLink } from "../../lib/ship/changePage";
+import { changeAction, changeHeadline, changeLinks, changePr, endedStages, mergeIsOff, type ChangeLink } from "../../lib/ship/changePage";
 import { landedSha } from "../../lib/ship/runRecord";
 import { reachTargets } from "../../lib/ship/sessionShip";
+import { roleRowsOf } from "../../lib/roleRows";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { useJourneyViewer } from "../../hooks/useJourneyViewer";
 import { usePullRequestMerge } from "../../hooks/useSyncTimeline";
@@ -31,15 +32,18 @@ export function ChangeRunHead({ run, flow, now_ms, chips, newer }: { run: any; f
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const viewer = useJourneyViewer(run);
   const journey = useMemo(() => journeyOf(flow, run, targets, viewer), [flow, run, targets, viewer]);
+  const stages = useMemo(() => endedStages(journey, run, flow), [journey, run, flow]);
+  // The role whose line started the run holds its merge switch: its page, read only when merge was off.
+  const mergeRole = useInboxStore((s) => (run.org_role_id && mergeIsOff(run) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
   const head = changeHeadline(journey, run, flow, { pr: prMerge });
   const links = changeLinks(run, flow, targets, prMerge);
-  const act = stopAction(journey, run, { newer, pr: prMerge });
+  const action = changeAction(journey, run, flow, { newer, pr: prMerge, mergeRole });
   const subject = run.spawner_conversation_id ? String(run.spawner_conversation_id) : null;
   const subjectTitle = useInboxStore((s) => (subject ? ((s.conversations as Record<string, { title?: string }>)[subject]?.title ?? (s.sessions as Record<string, { title?: string }>)[subject]?.title ?? null) : null));
-  const stopAct = !act ? undefined
-    : act.kind === "again" && subject ? <ShipAgainButton flow={flow} conversationId={subject} sessionTitle={subjectTitle ?? run.task_title ?? "its session"} primary />
-    : act.href ? <Link className="sj-act" data-primary href={act.href} data-change-act={act.kind}>{act.label}</Link>
-    : undefined;
+  const act = !action ? null
+    : action.kind === "again" && subject ? <ShipAgainButton flow={flow} conversationId={subject} sessionTitle={subjectTitle ?? run.task_title ?? "its session"} primary />
+    : action.href ? <Link className="sj-act" data-primary href={action.href} data-change-act={action.kind}>{action.label}</Link>
+    : null;
   return (
     <>
       <section data-run-report-head data-change-head={journey.now.kind}>
@@ -47,7 +51,7 @@ export function ChangeRunHead({ run, flow, now_ms, chips, newer }: { run: any; f
           <i className="cr-dot" aria-hidden />
           <span>{head.words}</span>
         </h2>
-        {head.waits ? <p className="cr-waits" data-change-waits>{head.href ? <Link href={head.href} className="cr-waits-link">{head.waits}</Link> : head.waits}</p> : null}
+        {head.waits ? <p className="cr-waits" data-change-waits>{head.waits}</p> : null}
         <div className="mt-3 flex flex-wrap items-center gap-1.5" data-change-links>
           {links.map((l) => (
             <span key={`${l.kind}:${l.label}`} data-change-link={l.kind} className="contents">
@@ -57,7 +61,7 @@ export function ChangeRunHead({ run, flow, now_ms, chips, newer }: { run: any; f
           {chips}
         </div>
       </section>
-      <div className="sj cr-journey"><JourneyView journey={journey} run={run} now_ms={now_ms} targets={reach ? targets : undefined} stopAct={stopAct ?? null} onRunPage /></div>
+      <div className="sj cr-journey"><JourneyView journey={journey} stages={stages} run={run} now_ms={now_ms} targets={reach ? targets : undefined} act={act} onRunPage /></div>
     </>
   );
 }

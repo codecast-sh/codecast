@@ -30,7 +30,8 @@ import {
 import { landingOf, ownGraphOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
 import { journeyOf, type TargetState } from '@codecast/web/lib/ship/journey';
-import { changeHeadline, changeLinks, changePr, shipsChange, stopAction, type ChangeLink, type StopAction } from '@codecast/web/lib/ship/changePage';
+import { changeAction, changeHeadline, changeLinks, changePr, mergeIsOff, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
+import { roleRowsOf } from '@codecast/web/lib/roleRows';
 import { usePullRequestMerge } from '@codecast/web/hooks/useSyncTimeline';
 import { runThroughMessage } from '@codecast/web/lib/line/flowMessages';
 import { approvalOf, shipConfirms } from '@codecast/web/lib/ship/approval';
@@ -60,6 +61,7 @@ type Run = ReportRun & {
   primary_session_id?: string;
   primary_conversation_id?: string;
   spawner_conversation_id?: string;
+  org_role_id?: string;
   goal_override?: string;
   gate_prompt?: string;
   gate_decision_id?: string;
@@ -116,7 +118,7 @@ function toneColor(tone: JourneyTone | ChangeLink['tone'], t: Palette): string {
   }
 }
 
-const STOP_ACT_ICON: Record<StopAction['kind'], IconName> = { newer: 'arrow-right', merge_switch: 'toggle-on', deploys: 'cloud-upload', session: 'comments-o', again: 'rocket', card: 'question-circle' };
+const ACT_ICON: Record<ChangeAction['kind'], IconName> = { newer: 'arrow-right', merge_switch: 'toggle-on', deploys: 'cloud-upload', session: 'comments-o', agent: 'comments-o', again: 'rocket', card: 'question-circle' };
 
 const answerColor = (answer: string | null, t: Palette) =>
   optionIsShip(answer) ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
@@ -168,7 +170,9 @@ export default function RunScreen() {
   const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow, { pr: prMerge }) : null;
   const links = journey && run && changeFlow ? changeLinks(run as any, changeFlow, targets, prMerge) : [];
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
-  const act = journey && run ? stopAction(journey, run as any, { newer, pr: prMerge }) : null;
+  // The role whose line started the run holds its merge switch: its page, read only when merge was off.
+  const mergeRole = useInboxStore((s) => (run?.org_role_id && run && mergeIsOff(run as any) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
+  const act = journey && run && changeFlow ? changeAction(journey, run as any, changeFlow, { newer, pr: prMerge, mergeRole }) : null;
 
   // The run row paints alone; its graph (step labels) fills in when the workflow arrives.
   if (!run) return <ObjectMissing what="Run" loading={run === undefined} />;
@@ -261,11 +265,7 @@ export default function RunScreen() {
               <RNView style={[styles.changeDot, { backgroundColor: toneColor(head.tone, Theme) }]} />
               <RNText style={styles.changeWords} testID="run-change-words">{head.words}</RNText>
             </RNView>
-            {head.waits ? (
-              <TouchableOpacity disabled={!head.href} onPress={() => head.href && void openLink(head.href)} activeOpacity={0.6} testID="run-change-waits">
-                <RNText style={[styles.changeWaits, head.href ? { textDecorationLine: 'underline' } : null]} numberOfLines={3}>{head.waits}</RNText>
-              </TouchableOpacity>
-            ) : null}
+            {head.waits ? <RNText style={styles.changeWaits} numberOfLines={3} testID="run-change-waits">{head.waits}</RNText> : null}
             {links.length ? (
               <RNView style={objectStyles.chips}>
                 {links.map((l) => <FactChip key={`${l.kind}:${l.label}`} label={l.label} color={toneColor(l.tone, Theme)} onPress={() => void openLink(l.href)} link testID={`run-change-${l.kind}`} />)}
@@ -273,10 +273,11 @@ export default function RunScreen() {
             ) : null}
           </RNView>
         ) : <RNText style={[styles.outcome, { color: outcomeColor(outcome.tone, Theme) }]} testID="run-outcome">{outcome.text}</RNText>}
-        {/* A stopped change run's one way on, as the web's run page offers it (changePage stopAction). */}
-        {act ? (
+        {/* A change run's one action, as the web's run page offers it (changePage changeAction); a card the verbs below
+            already open or answer is not offered twice. */}
+        {act && !(act.kind === 'card' && (waitingOnCard || ask?.open)) ? (
           <RNView style={objectStyles.verbs}>
-            <ActionButton icon={STOP_ACT_ICON[act.kind]} label={act.label} color={Theme.blue} filled onPress={act.kind === 'again' ? shipAgain : () => act.href && void openLink(act.href)} testID={`run-change-act-${act.kind}`} />
+            <ActionButton icon={ACT_ICON[act.kind]} label={act.label} color={Theme.blue} filled onPress={act.kind === 'again' ? shipAgain : () => act.href && void openLink(act.href)} testID={`run-change-act-${act.kind}`} />
           </RNView>
         ) : null}
         {asking && !head ? (

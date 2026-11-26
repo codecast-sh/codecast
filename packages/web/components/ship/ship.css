@@ -268,7 +268,5 @@ a.ssc:hover { text-decoration: underline; }
 .cr-head[data-tone="ok"] { --cr: var(--sol-green); }
 .cr-head[data-tone="bad"] { --cr: var(--sol-red); }
 .cr-waits { margin: 4px 0 0 20px; font-size: 14px; line-height: 1.4; color: var(--sol-text-muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.cr-waits-link { color: inherit; text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-underline-offset: 3px; }
-.cr-waits-link:hover { color: var(--sol-blue); text-decoration-color: currentColor; }
 /* The run card's journey, framed as the card in the thread frames it. */
 .cr-journey { border: 1px solid var(--sj-rule); border-radius: 12px; overflow: hidden; background: var(--sj-card); }

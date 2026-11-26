@@ -256,10 +256,16 @@ export function deploysFocusHref(o: { team?: string | null; repository?: string 
 
 /**
  * The Deploys page for a run's team, at the thing the run sent: the deploy its words name ("web dp-12", on that
- * target), else the commit it landed, else its session.
+ * target), else the commit it landed, else its session. A per-target line ("backend: live in dp-12; cli: waiting on main
+ * CI …") opens the target still waiting, never the first deploy it names, which is one already live.
  */
 export function deploysHref(run: any, words?: string | null): string {
   const team = runTeam(run);
+  const waiting = [...(words ?? "").matchAll(/(?:^|;\s*)([a-z][a-z0-9-]{0,31}):\s*([^;]*)/g)].find((m) => !/^live\b/.test(m[2]));
+  if (waiting) {
+    const going = waiting[2].match(/\b(dp-\d+)\b/)?.[1];
+    return deploysFocusHref({ team, target: waiting[1], focus: going ? { kind: "deploy", id: going } : runFocus(run) });
+  }
   const named = words?.match(/(?:\b([a-z][a-z0-9-]{0,31}) )?\b(dp-\d+)/);
   // "going out in dp-13" names a deploy but not its target; the page finds that from the deploy.
   const target = named?.[1] && named[1] !== "in" ? named[1] : null;
