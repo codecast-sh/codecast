@@ -15,8 +15,9 @@
 // prod (Nov 25-26, 26 incremental runs): $0.01 to $0.24 a run, median $0.07,
 // mean $0.10; the heaviest pair's runs cost about $0.20 each and a 3-hour
 // sweep's chain of six cost $1.25, which reached the ceiling in a day. Pins
-// from a role's standing session, a trigger's run or a workflow ask for
-// nothing (pinsAskForPass): they come round the clock.
+// from a role's standing session, a trigger's run, a workflow or a worker ask
+// for nothing (pinsAskForPass): they come round the clock. An agent account
+// (users.is_bot) gets no pass at all (decision qd7eghs: nobody reads it).
 //
 // Leaf: the hot paths call passActivity / sessionActivity, which read the
 // pair's row (and, for a session, its workspace; with no row, whether the
@@ -82,7 +83,7 @@ export async function passActivity(ctx: { db: any; scheduler?: any }, userId: Id
   if (asked.has(key)) return;
   askedIn.set(ctx.db, asked.add(key));
   // The flag first: one read, and off for nearly everyone.
-  if (!(await prioritiesOn(ctx, workspace))) return;
+  if (!(await prioritiesOn(ctx, workspace)) || (await isBot(ctx, userId))) return;
   const row = await scheduleRow(ctx, userId, workspace);
   if (!nextPassDue(row, Date.now(), PASS_DEBOUNCE_MS)) return;
   // A pair with a row had the feature on when it was written; one without is checked here, so the feature off costs reads and no job.
@@ -96,16 +97,31 @@ export async function sessionActivity(ctx: { db: any; scheduler?: any }, conv: D
   await passActivity(ctx, conv.user_id, await sessionVisibility(ctx).workspaceOf(conv));
 }
 
+/** A worker another session started (`cast spawn`, a role's hand included), or a Task-tool subagent: a plan handoff or a fork (parent_message_uuid) is the person's own session from there. */
+export const isWorker = (c: Pick<Doc<"conversations">, "is_subagent" | "parent_conversation_id" | "parent_message_uuid">): boolean =>
+  !!c.is_subagent || (!!c.parent_conversation_id && !c.parent_message_uuid);
+
 /**
  * Whether a session's pins ask for a pass: not a role's standing session, a
- * trigger's run, a workflow's run log or one of its station agents. A person's
- * own session that ran a workflow carries its run id too, and still asks. A
- * role's recurring output never drives priorities; what the person typed
- * there still counts, and the daily sweep (priorityPassSweep.ts) finds it.
+ * trigger's run, a workflow's run log or one of its station agents, nor a
+ * worker (the sessions a known link or a done pin never counts either,
+ * lib/priorityLinks). A person's own session that ran a workflow carries its
+ * run id too, and still asks. A role's recurring output, and its hands', never
+ * drives priorities; what the person typed there still counts, and the daily
+ * sweep (priorityPassSweep.ts) finds it.
  */
-export const pinsAskForPass = (
-  conv: Pick<Doc<"conversations">, "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id" | "is_workflow_primary" | "is_workflow_sub">,
-): boolean => !isStandingSession(conv) && !conv.agent_task_id && !isRunLog(conv) && !conv.is_workflow_sub;
+export const pinsAskForPass = (conv: Pick<Doc<"conversations">, MachineFields | "is_subagent" | "parent_conversation_id" | "parent_message_uuid">): boolean => !machineSession(conv) && !isWorker(conv);
+
+type MachineFields = "standing_role_id" | "anchor_id" | "agent_task_id" | "workflow_run_id" | "is_workflow_primary" | "is_workflow_sub";
+
+/** A machine's session: a role's standing session, a trigger's run, a workflow's run log or one of its station agents. */
+export const machineSession = (conv: Pick<Doc<"conversations">, MachineFields>): boolean =>
+  isStandingSession(conv) || !!conv.agent_task_id || isRunLog(conv) || !!conv.is_workflow_sub;
+
+/** An agent account (users.is_bot): nobody reads its priorities, so it gets no pass and no classifier call (decision qd7eghs). */
+async function isBot(ctx: { db: any }, userId: Id<"users">): Promise<boolean> {
+  return !!((await ctx.db.get(userId)) as Doc<"users"> | null)?.is_bot;
+}
 
 // Each workspace's priorities flag, read once per transaction: one pin asks it from several hooks.
 const flagsIn = new WeakMap<object, Map<string, Promise<boolean>>>();
@@ -131,11 +147,11 @@ export async function prioritiesPossibleFor(ctx: { db: any }, conv: Pick<Doc<"co
   return prioritiesOn(ctx, `user:${conv.user_id}`);
 }
 
-/** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person. */
+/** Whether the priorities feature is on where the pass would write: a team key only for a member, a personal key only for its own person, and never for an agent account. */
 export async function passOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {
   const ws = parseWorkspaceKey(workspace);
   if (!ws) return false;
   // The flag first: one read, and false for nearly everyone.
-  if (ws.type === "team") return (await prioritiesOn(ctx, workspace)) && (await isTeamMember(ctx, userId, ws.teamId));
-  return String(ws.userId) === String(userId) && (await prioritiesOn(ctx, workspace));
+  const on = ws.type === "team" ? (await prioritiesOn(ctx, workspace)) && (await isTeamMember(ctx, userId, ws.teamId)) : String(ws.userId) === String(userId) && (await prioritiesOn(ctx, workspace));
+  return on && !(await isBot(ctx, userId));
 }

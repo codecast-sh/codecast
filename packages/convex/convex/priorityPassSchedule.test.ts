@@ -11,8 +11,8 @@ import crons from "./crons";
 import { performSetThreadState } from "./conversations";
 import { patchTask } from "./lib/taskWrite";
 import { priorityPassRequest } from "./lib/priorityPass";
-import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, sessionActivity } from "./lib/priorityPassSchedule";
-import { askClassifier } from "./lib/priorityClassifierHook";
+import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, passOn, sessionActivity } from "./lib/priorityPassSchedule";
+import { askClassifier, classifierOn } from "./lib/priorityClassifierHook";
 import { inheritLink, linkFromPlan, linkFromTask, linkSession, pullRequestClosed, taskStatusChanged } from "./lib/priorityLinks";
 import { answerAsksForPass } from "./sessionDecisions";
 import { passAllowedAt } from "./priorityPassSchedule";
@@ -318,6 +318,47 @@ describe("each trigger asks for its owner's pass", () => {
     await pinAt(w, caller, Date.now(), "Ran the review workflow; two findings fixed");
     expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(1);
     expect(await scheduleOf(w, w.ana, w.team)).not.toBeNull();
+  });
+});
+
+describe("who never asks for a pass", () => {
+  test("an agent account (is_bot) gets no pass and no classifier call, whatever it does", async () => {
+    const w = await world();
+    const { bot, conv } = await w.t.run(async (ctx) => {
+      const bot = await ctx.db.insert("users", { name: "Union", is_bot: true } as any);
+      await ctx.db.insert("team_memberships", { user_id: bot, team_id: w.acme, role: "member", joined_at: 1 } as any);
+      const conv = await ctx.db.insert("conversations", {
+        user_id: bot, agent_type: "claude_code", session_id: "jx7bot", short_id: "jx7bot", title: "Bot work", started_at: Date.now(), updated_at: Date.now(),
+        message_count: 3, status: "active", team_id: w.acme, is_private: false, team_visibility: "full",
+      } as any);
+      return { bot, conv };
+    });
+    await pinAt(w, conv, Date.now(), "Answered the inbox");
+    expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(0);
+    await w.send(bot, conv, Date.now() - H, "answer the inbox");
+    model.prompts.length = 0;
+    expect((await w.t.action(pass.runPass, { user_id: bot, workspace: w.team, force: true })).status).toBe("skipped");
+    expect(model.prompts).toHaveLength(0);
+    expect(await w.t.run((ctx) => classifierOn(ctx, bot, w.team))).toBe(false);
+    // The person beside it still gets theirs.
+    expect([await w.t.run((ctx) => passOn(ctx, bot, w.team)), await w.t.run((ctx) => passOn(ctx, w.ana, w.team))]).toEqual([false, true]);
+  });
+
+  test("a worker, a role's hand included, pins without asking, as a known link and a done pin never count it; a fork of the person's session asks", async () => {
+    const w = await world();
+    const { hand, fork } = await w.t.run(async (ctx) => {
+      const role = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: Date.now() } as any);
+      const conv = (i: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: w.ana, agent_type: "claude_code", session_id: `jx7${i}`, short_id: `jx7${i}`, title: i, started_at: Date.now(), updated_at: Date.now(),
+        message_count: 3, status: "active", team_id: w.acme, is_private: false, team_visibility: "full", ...fields,
+      } as any);
+      const seat = await conv("seat", { standing_role_id: role });
+      return { hand: await conv("hand", { parent_conversation_id: seat }), fork: await conv("fork", { parent_conversation_id: w.teamConv, parent_message_uuid: "m-1" }) };
+    });
+    await pinAt(w, hand, Date.now(), "Ran the nightly eval for the role");
+    expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(0);
+    await pinAt(w, fork, Date.now(), "Picked the grader work back up");
+    expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(1);
   });
 });
 

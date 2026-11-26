@@ -17,7 +17,7 @@
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { sessionVisibility } from "./prioritySessionVisibility";
-import { passOn, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
+import { machineSession, passOn, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
 import { parseWorkspaceKey } from "./accessKeys";
 import { workspaceHasFeature } from "./teamFeatureGuard";
 import { worstCaseCost } from "./teamBudget";
@@ -45,12 +45,13 @@ const fns = () => (internal as any).priorityClassifier;
 export const CLASSIFY_HOLD_USD = worstCaseCost(PRIORITY_CLASSIFIER_MODEL, CLASSIFIER_CAPS.prompt_chars + PRIORITY_CLASSIFIER_SYSTEM.length, CLASSIFIER_CAPS.max_tokens);
 
 /**
- * The sessions the classifier reads: those whose pins ask for a pass
- * (pinsAskForPass: never a role's standing session, a trigger's run, a
- * workflow's run log or one of its station agents), and never a Task-tool
- * subagent, which rolls up under its parent (lib/priorityLinks inheritLink).
+ * The sessions the classifier reads: never a machine's (machineSession: a
+ * role's standing session, a trigger's run, a workflow's run log or one of its
+ * station agents), nor a Task-tool subagent, which rolls up under its parent
+ * (lib/priorityLinks inheritLink). A worker is read: it takes its parent's
+ * placement when that has one.
  */
-export const classifierReads = (conv: Doc<"conversations">): boolean => pinsAskForPass(conv) && !conv.is_subagent;
+export const classifierReads = (conv: Doc<"conversations">): boolean => !machineSession(conv) && !conv.is_subagent;
 
 /** Whether the classifier may run where it would write: the priorities feature on there (passOn) and the classifier's own flag, by the same rule. */
 export async function classifierOn(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<boolean> {

@@ -40,7 +40,7 @@ import { attributePlans, type PlanFacts } from "@codecast/shared/contracts/prior
 import { stepDone } from "./priorityPassSteps";
 import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
-import { passActivity, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
+import { isWorker, passActivity, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
 import { classifierReads } from "./priorityClassifierHook";
 
 type Ctx = { db: any };
@@ -236,10 +236,8 @@ export async function pullRequestClosed(ctx: Ctx, pr: Doc<"pull_requests">): Pro
   for (const { priority, key } of await stepsNaming(ctx, places, { kind: "pr", id: `${pr.repository}#${pr.number}` })) await recomputeStepDone(ctx, priority, key);
 }
 
-/** A worker another session started (`cast spawn`), or a Task-tool subagent: a plan handoff or a fork (parent_message_uuid) is the person's own session from there. */
-const isWorker = (c: Conv) => !!c.is_subagent || (!!c.parent_conversation_id && !c.parent_message_uuid);
 /** A person drives it: not a role's seat, a trigger's run, a workflow's, a worker or a subagent. */
-const personDriven = (c: Conv) => pinsAskForPass(c) && !isWorker(c);
+const personDriven = pinsAskForPass;
 
 /**
  * What a done pin naming its session's milestone did: closed it, or why not.
@@ -262,8 +260,8 @@ export async function sessionEvidence(ctx: Ctx, conv: Conv | null, at: number, s
   const step = p?.steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
   // With priorities off where the priority is, a pin closes nothing and says nothing.
   if (!p || !step || serves !== `${p.short_id}/${step.key}` || !(await prioritiesOn(ctx, p.workspace))) return null;
-  if (!pinsAskForPass(conv)) return { refused: "machine" };
   if (isWorker(conv)) return { refused: "worker" };
+  if (!pinsAskForPass(conv)) return { refused: "machine" };
   if (step.refs.some((r) => r.kind === "task")) return { decided_by: "tasks" };
   if (step.refs.some((r) => r.kind === "pr")) return { decided_by: "pull_requests" };
   if (step.done_set_by === "person") return { refused: step.done ? "done" : "person" };
