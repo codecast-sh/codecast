@@ -6,6 +6,7 @@
 // `:Rg foo` or `:NERDTreeToggle` in the command line does the same thing.
 
 import { Vim } from "@replit/codemirror-vim";
+import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { runCodeCommand, type CodeCommandId } from "../commands";
 import { resolveVaultPath } from "../vaultPath";
@@ -25,6 +26,9 @@ interface ExAdapter {
   name: string;
   prefix: string;
   resolve: Resolver;
+  /** Acts on lines: a range typed or carried from visual mode (`:'<,'>Ask`)
+   *  becomes the selection before the command runs. */
+  ranged?: boolean;
 }
 
 const adapters: ExAdapter[] = [];
@@ -32,11 +36,11 @@ const run = (command: CodeCommandId, args?: Record<string, unknown>): ExResoluti
 const fixed = (command: CodeCommandId, args?: Record<string, unknown>): Resolver => () => run(command, args);
 const skip = (reason: string): ExResolution => ({ skip: reason });
 
-function ex(names: string, resolve: Resolver) {
+function ex(names: string, resolve: Resolver, opts: { ranged?: boolean } = {}) {
   for (const n of names.split(" ")) {
     // "bn[ext]" names the full command and its shortest abbreviation.
     const m = /^([^[]+)(?:\[([^\]]+)\])?$/.exec(n)!;
-    adapters.push({ name: m[1] + (m[2] ?? ""), prefix: m[1], resolve });
+    adapters.push({ name: m[1] + (m[2] ?? ""), prefix: m[1], resolve, ...opts });
   }
 }
 
@@ -260,6 +264,13 @@ ex("lua", (arg, _, ctx) => {
   return skip("runs lua");
 });
 
+// ── agents ──────────────────────────────────────────────────────────────────
+// The vim way into Cmd-K and Cmd-L, which a vimrc may map to something else:
+// `:Ask` opens the inline instruction box on the selection or line (prefilled
+// with what follows), `:Quote` quotes it to the linked session.
+ex("Ask", (arg) => run("agent.inlineInstruction", arg.trim() ? { text: arg.trim() } : undefined), { ranged: true });
+ex("Quote", fixed("agent.quoteSelection"), { ranged: true });
+
 // ── classification ──────────────────────────────────────────────────────────
 
 /** Commands the vim engine runs itself, as name[abbreviation]. */
@@ -381,8 +392,22 @@ export const EXPAND_EX = "CodecastEx";
 
 let installed = false;
 
-function runAdapter(a: ExAdapter, cm: unknown, argString: string): void {
+/** Vim's 0-based line range as the editor's selection, whole lines. */
+function selectLines(view: EditorView, first: number, last: number): void {
+  const doc = view.state.doc;
+  const clamp = (n: number) => Math.min(doc.lines, Math.max(1, n + 1));
+  const [a, b] = first <= last ? [first, last] : [last, first];
+  view.dispatch({ selection: EditorSelection.range(doc.line(clamp(a)).from, doc.line(clamp(b)).to) });
+}
+
+export interface ExLines {
+  line?: number;
+  lineEnd?: number;
+}
+
+function runAdapter(a: ExAdapter, cm: unknown, argString: string, lines: ExLines = {}): void {
   const view = asVimCM(cm).cm6;
+  if (a.ranged && view && typeof lines.line === "number") selectLines(view, lines.line, typeof lines.lineEnd === "number" ? lines.lineEnd : lines.line);
   const bang = argString.startsWith("!");
   const arg = expandCommandLine(view, bang ? argString.slice(1) : argString);
   const r = a.resolve(arg, bang, { word: () => wordAtCursor(view) });
@@ -392,9 +417,9 @@ function runAdapter(a: ExAdapter, cm: unknown, argString: string): void {
 
 /** Run the adapter `name` would reach if typed, as typing it would; false
  *  when there is none. For an alias that shadowed one and is gone. */
-export function runAdapterNamed(name: string, cm: unknown, argString: string): boolean {
+export function runAdapterNamed(name: string, cm: unknown, argString: string, lines?: ExLines): boolean {
   const a = findAdapter(name);
-  if (a) runAdapter(a, cm, argString);
+  if (a) runAdapter(a, cm, argString, lines);
   return !!a;
 }
 
@@ -402,7 +427,7 @@ export function runAdapterNamed(name: string, cm: unknown, argString: string): b
 export function installExAdapters(): void {
   if (installed) return;
   installed = true;
-  for (const a of adapters) Vim.defineEx(a.name, a.prefix, (cm, params) => runAdapter(a, cm, params.argString ?? ""));
+  for (const a of adapters) Vim.defineEx(a.name, a.prefix, (cm, params) => runAdapter(a, cm, params.argString ?? "", params as ExLines));
   Vim.defineEx(EXPAND_EX, EXPAND_EX, (cm, params) => {
     const view = asVimCM(cm).cm6;
     Vim.handleEx(cm, expandCommandLine(view, params.argString ?? ""));

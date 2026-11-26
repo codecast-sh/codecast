@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { installDom } from "./dom";
 
 installDom();
-const { mount, recordCommands, useHarness } = await import("./harness");
-useHarness();
+const { mount, recordCommands, installHarness } = await import("./harness");
+installHarness();
 
 const { parseVimrc } = await import("../parse");
 const { applyVimConfig } = await import("../apply");
@@ -219,6 +219,85 @@ describe("ex adapters typed in the command line", () => {
     const calls = recordCommands(["file.save", "file.close"]);
     mount("x\n").ex("wq");
     expect(calls.map((c) => c.id)).toEqual(["file.save", "file.close"]);
+  });
+});
+
+const { registerCodeCommands } = await import("../../commands");
+
+describe("the agent's vim ways in", () => {
+  /** Each agent command with the lines selected when it ran. */
+  function recordAgent() {
+    const calls: Array<{ id: string; args: Record<string, unknown> | undefined; lines: [number, number] }> = [];
+    const rec = (id: string) => (args: Record<string, unknown> | undefined, ctx: { view?: InstanceType<typeof EditorView> }) => {
+      const st = ctx.view!.state;
+      const sel = st.selection.main;
+      // A linewise selection ends at the next line's start; that line is not in it.
+      const end = sel.to > sel.from && st.doc.lineAt(sel.to).from === sel.to ? sel.to - 1 : sel.to;
+      calls.push({ id, args, lines: [st.doc.lineAt(sel.from).number, st.doc.lineAt(end).number] });
+    };
+    registerCodeCommands({ "agent.inlineInstruction": rec("agent.inlineInstruction"), "agent.quoteSelection": rec("agent.quoteSelection") });
+    return calls;
+  }
+
+  it(":Ask and :Quote act on the line, a typed range, or the visual selection", () => {
+    apply("");
+    const calls = recordAgent();
+    const doc = "one\ntwo\nthree\nfour\n";
+    const a = mount(doc);
+    a.cursorTo(4);
+    a.ex("Ask make this async");
+    mount(doc).ex("2,3Quote");
+    // (`j` has no layout to move by here, so the visual line is one line.)
+    const c = mount(doc);
+    c.cursorTo(9);
+    c.keys("V");
+    c.ex("'<,'>Ask");
+    expect(calls).toEqual([
+      { id: "agent.inlineInstruction", args: { text: "make this async" }, lines: [2, 2] },
+      { id: "agent.quoteSelection", args: undefined, lines: [2, 3] },
+      { id: "agent.inlineInstruction", args: undefined, lines: [3, 3] },
+    ]);
+  });
+
+  it(":Ask keeps `%` and `#` in its instruction as typed", () => {
+    apply("");
+    const calls = recordAgent();
+    mount("one\n").ex("Ask handle the 50% case and #2");
+    expect(calls.map((c) => c.args)).toEqual([{ text: "handle the 50% case and #2" }]);
+  });
+
+  it("binds <leader>k and <leader>l in normal and visual mode while the vimrc leaves them free", () => {
+    apply("");
+    const calls = recordAgent();
+    mount("one\ntwo\n").keys("\\k");
+    mount("one\ntwo\n").keys("V\\l");
+    expect(calls.map((c) => [c.id, c.lines])).toEqual([
+      ["agent.inlineInstruction", [1, 1]],
+      ["agent.quoteSelection", [1, 1]],
+    ]);
+  });
+
+  it("leaves Cmd-K and the leader keys to a vimrc that maps them, or keys they start", () => {
+    apply("let mapleader = ','\nnoremap <D-k> <C-W>k\nnnoremap ,kk :w<CR>\nnnoremap ,l :NERDTreeToggle<CR>");
+    const calls = recordAgent();
+    const ws = recordCommands(["focus.up", "file.save", "tree.toggle"]);
+    const e = mount("one\n");
+    e.keys("<M-k>");
+    e.keys(",kk");
+    e.keys(",l");
+    expect(ws.map((c) => c.id)).toEqual(["focus.up", "file.save", "tree.toggle"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps the leader keys under a <Nop> Space leader and a `<` visual map", () => {
+    apply("let mapleader = ' '\nnnoremap <Space> <Nop>\nvnoremap < <gv\n");
+    const calls = recordAgent();
+    const ws = recordCommands(["lsp.rename"]);
+    mount("one\ntwo\n").keys("<Space>k");
+    mount("one\ntwo\n").keys("V<Space>l");
+    mount("one\ntwo\n").keys("<Space>rn");
+    expect(calls.map((c) => c.id)).toEqual(["agent.inlineInstruction", "agent.quoteSelection"]);
+    expect(ws.map((c) => c.id)).toEqual(["lsp.rename"]);
   });
 });
 

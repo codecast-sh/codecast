@@ -358,7 +358,7 @@ function schedulePersist() {
         // The cache holds the default scope only: ignored rows are a snapshot
         // the next scan re-derives, and a cached boot with the toggle off must
         // not paint them for a frame.
-        void saveVaultMeta({ id: active, info, files: Object.values(withoutIgnored(s.files)), scannedAt: s.scannedAt });
+        void saveVaultMeta({ id: active, info, files: Object.values(withoutIgnored(s.files)), scannedAt: s.scannedAt, isRepo: s.isRepo });
       }
     }
     for (const [vaultId, rows] of pendingBodyRows) {
@@ -509,6 +509,11 @@ function writeVaultFlag(key: string, vaultId: string, value: boolean): void {
 
 function readShowAllFiles(vaultId: string, vaults: VaultInfo[], isRepo = false): boolean {
   return readVaultFlag(SHOW_ALL_KEY, vaultId) ?? (isRepo || vaults.find((v) => v.id === vaultId)?.kind === "project");
+}
+
+/** What a cached boot knows of the root being a checkout, until the scan says. */
+function cachedRepo(vaultId: string, vaults: VaultInfo[], meta: { isRepo?: boolean }): Partial<Pick<VaultState, "isRepo" | "showAllFiles">> {
+  return meta.isRepo ? { isRepo: true, showAllFiles: readShowAllFiles(vaultId, vaults, true) } : {};
 }
 
 function readShowIgnoredFiles(vaultId: string): boolean {
@@ -1146,6 +1151,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
           files,
           bodies,
           scannedAt: meta.scannedAt,
+          ...cachedRepo(remembered, s.vaults.length ? s.vaults : [meta.info], meta),
           connection: s.connection === "connected" ? s.connection : "cached",
         }));
       })();
@@ -1226,7 +1232,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // selectVault runs for the remembered vault `prev` already equals it — and
     // a project vault would have opened with the toggle off.
     set({
-      showAllFiles: readShowAllFiles(vaultId, get().vaults),
+      showAllFiles: readShowAllFiles(vaultId, get().vaults, prev === vaultId && get().isRepo),
       showIgnoredFiles: readShowIgnoredFiles(vaultId),
       // A vault this path opens is a daemon's, never the mirror openRemoteVault left behind.
       isRemote: false,
@@ -1261,6 +1267,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         files,
         bodies,
         scannedAt: meta.scannedAt,
+        ...cachedRepo(vaultId, s.vaults, meta),
         connection: s.connection === "connected" ? s.connection : "cached",
       }));
     }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { cursorParam, filesHref } from "../vault/vaultHref";
-import { editorHref, editedLineRange, firstChangedLine, gitRefForDiffBase, localCheckoutFile } from "../filesPane";
+import { editorHref, editedLineRange, findTextRange, firstChangedLine, gitRefForDiffBase, localCheckoutFile } from "../filesPane";
 import { parseCursorTarget } from "../code/editorHost";
 import { filePathHref, filePathMention, parseFilePathHref } from "../filePathLinks";
 import { besideSessionId } from "../code/agent/sessions";
@@ -73,6 +73,23 @@ describe("ranges", () => {
     expect(editedLineRange(snippet, "}\nreturn b;")).toEqual({ line: 45, endLine: 46 });
     // A replacement longer than the snippet shows still places by what it shows.
     expect(editedLineRange("    10→a\n    11→b", "b\nc\nd")).toEqual({ line: 11, endLine: 13 });
+  });
+
+  test("findTextRange lands a MultiEdit on the first of its edits the file still holds", () => {
+    const file = "import x;\n\nfunction a() {\n  return 1;\n}\n\nfunction b() {}\n";
+    expect(findTextRange(file, ["function a() {\n  return 1;\n}"])).toEqual({ line: 3, endLine: 5 });
+    // A later edit rewrote the first one's text: the next is tried.
+    expect(findTextRange(file, ["gone now", "function b() {}"])).toEqual({ line: 7 });
+    // Blank candidates and the blank lines around a block don't count.
+    expect(findTextRange(file, ["", "\n  return 1;\n"])).toEqual({ line: 4 });
+    expect(findTextRange(file, ["nowhere"])).toBeUndefined();
+  });
+
+  test("findTextRange prefers an edit whose text occurs once over a repeated one", () => {
+    const file = "function a() {\n  return null;\n}\nfunction b() {\n  const y = 2;\n  return null;\n}\n";
+    expect(findTextRange(file, ["  return null;", "  const y = 2;"])).toEqual({ line: 5 });
+    // Nothing unique: the first found still lands.
+    expect(findTextRange(file, ["  return null;"])).toEqual({ line: 2 });
   });
 
   test("a diff base maps to the git ref the editor diffs against", () => {

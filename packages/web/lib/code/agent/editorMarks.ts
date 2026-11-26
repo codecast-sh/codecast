@@ -115,9 +115,12 @@ function mapRange<T extends { from: number; to: number }>(r: T, changes: ChangeD
   return from === r.from && to === r.to ? r : { ...r, from, to };
 }
 
+/** The lines a range covers. One ending at a line's start (a change that
+ *  took the newline before it) stops above that line. */
 const lineSpan = (doc: Text, r: { from: number; to: number }) => {
   const a = doc.lineAt(Math.min(r.from, doc.length)).number;
-  const b = doc.lineAt(Math.min(Math.max(r.to, r.from), doc.length)).number;
+  const end = Math.min(Math.max(r.to, r.from), doc.length);
+  const b = doc.lineAt(end > r.from && doc.lineAt(end).from === end ? end - 1 : end).number;
   return [a, b] as const;
 };
 

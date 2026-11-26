@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CODE_COMMAND_IDS } from "../code/commands";
-import { EDITOR_PALETTE_COMMANDS } from "../editorPaletteCommands";
+import { EDITOR_PALETTE_COMMANDS, editorCommandsLead } from "../editorPaletteCommands";
 import { formatAcceleratorParts } from "../../shortcuts";
 
 describe("editor palette commands", () => {
@@ -18,5 +18,12 @@ describe("editor palette commands", () => {
     }
     const quote = byId.get("agent.quoteSelection")!;
     expect(formatAcceleratorParts(quote.editorKey!).length).toBe(2);
+  });
+
+  // With Files focused, the words the editor shares with the app's pane
+  // commands lead with the Editor group.
+  test("split, close and search lead with the editor's commands; other words don't", () => {
+    for (const q of ["split", "close", "search", "Quote"]) expect(editorCommandsLead(q)).toBe(true);
+    for (const q of ["inbox", "spl", ""]) expect(editorCommandsLead(q)).toBe(false);
   });
 });

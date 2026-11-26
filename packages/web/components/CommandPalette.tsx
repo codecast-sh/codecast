@@ -13,7 +13,7 @@ import { docTypeIcon } from "../lib/docTypeStyle";
 import { DocTypeMark } from "./docs/DocTypeMark";
 import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import { meetingLinkIn } from "@codecast/shared/contracts/meetingLinks";
-import { sendBotToMeeting } from "./calls/MeetingBotField";
+import { sendBotToMeeting } from "../lib/meetingBots";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { pagePath, palettePages, queryNamesPage } from "../lib/navPages";
 import { useState, useCallback, useMemo, useRef, memo, startTransition, Suspense } from "react";
@@ -44,7 +44,7 @@ import { useVaultStore } from "../store/vaultStore";
 import { filesHref, isFilesPath } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
 import { rankPaletteFiles } from "../lib/paletteFiles";
-import { EDITOR_PALETTE_COMMANDS, runEditorPaletteCommand } from "../lib/editorPaletteCommands";
+import { EDITOR_PALETTE_COMMANDS, editorCommandsLead, runEditorPaletteCommand } from "../lib/editorPaletteCommands";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, lastPlacedInbox, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
@@ -2734,10 +2734,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // bot"): the Create group leads when the query names one of its rows.
   const createLeads = !picking && !!commandQuery && !pageLeads &&
     queryNamesPage(createKinds.map((k) => ({ page: { aliases: [k.noun] }, label: k.label })), commandQuery, 4);
-  // The editor's commands lead the same way while Files has the stage and the
-  // query starts one's name ("quote", "split", "instruct").
-  const editorLeads = !picking && filesFocused && !!commandQuery && !pageLeads &&
-    queryNamesPage(EDITOR_PALETTE_COMMANDS.map((c) => ({ page: {}, label: c.label })), commandQuery, 4);
+  // While Files has the stage, a query that starts an editor command's name
+  // puts the Editor group first, above everything else (editorCommandsLead).
+  const editorLeads = !picking && filesFocused && !!commandQuery && editorCommandsLead(commandQuery);
   const editorGroup = (
     <CommandPrimitive.Group heading="Editor" className={groupClass}>
       {EDITOR_PALETTE_COMMANDS.map((c) => (
@@ -3006,6 +3005,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             data-value, which holds the heading, while it tracks the group by
             its useId), so groups paint in this order whatever their items score. */}
 
+        {editorLeads && editorGroup}
+
         {!standalone && !picking && namedCommands.length > 0 && (
           <CommandPrimitive.Group heading="Commands" className={groupClass}>
             {namedCommands.map(renderCommand)}
@@ -3029,8 +3030,6 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {pageLeads && pagesGroup}
 
         {createLeads && createGroup}
-
-        {editorLeads && editorGroup}
 
         {askLeads && askHostedRow && (
           <CommandPrimitive.Group className={groupClass}>{askHostedRow}</CommandPrimitive.Group>

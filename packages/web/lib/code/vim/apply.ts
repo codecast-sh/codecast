@@ -10,6 +10,7 @@ import type { CodeVimrcResponse } from "@codecast/shared/contracts";
 import { addMap, getMapTimeout, installKeyLayer, removeMap, setMapTimeout, type LayerMap } from "./keyLayer";
 import { installExAdapters, runAdapterNamed } from "./exAdapters";
 import { notify } from "./engine";
+import { splitEngineKeys } from "./keys";
 import { commandKeyName, ensureCommandKeys, installPlugins, DEFAULT_KEYS } from "./plugins";
 import { clipboardSyncEnabled, setClipboardSync } from "./clipboard";
 import { installRuntimeOptions } from "./editorOptions";
@@ -50,7 +51,7 @@ function defineAlias(name: string): void {
   Vim.defineEx(name, name, (cm, params) => {
     const body = aliasBodies.get(name);
     if (!body) {
-      if (!runAdapterNamed(name, cm, params.argString ?? "")) notify(cm, `Not an editor command: ${name}`);
+      if (!runAdapterNamed(name, cm, params.argString ?? "", params)) notify(cm, `Not an editor command: ${name}`);
       return;
     }
     if (aliasDepth > 8) return;
@@ -92,6 +93,8 @@ export function applyVimConfig(parsed: ParsedVimrc): VimConfigReport {
   const state: Applied = { maps: [], aliases: [], engineOptions: new Map() };
   applied = state;
   const mapped = { normal: new Set<string>(), visual: new Set<string>() };
+  // Maps that claim only their own keys: the leader alone, or a <Nop>.
+  const open = new Set<string>();
 
   const sources = parsed.sources.map((src) => {
     const directives: VimDirectiveReport[] = src.directives.map((d) => {
@@ -104,6 +107,7 @@ export function applyVimConfig(parsed: ParsedVimrc): VimConfigReport {
               state.maps.push(addMap(e.lhs, e.rhs, e.context, { noremap: e.noremap, nowait: e.nowait }));
               if (e.context === "normal" || e.context === undefined) mapped.normal.add(e.lhs);
               if (e.context === "visual" || e.context === undefined) mapped.visual.add(e.lhs);
+              if (e.rhs === "" || e.lhs === parsed.leader) open.add(e.lhs);
             } catch (err) {
               status = "skipped";
               detail = `the vim engine refused it: ${(err as Error).message}`;
@@ -148,11 +152,13 @@ export function applyVimConfig(parsed: ParsedVimrc): VimConfigReport {
     };
   });
 
-  // Language, hunk and agent keys, unless the vimrc claims them.
+  // Language, hunk and agent keys, unless the vimrc claims them: the same
+  // keys, or keys either starts with (a default under a map of the person's
+  // would make theirs wait for the timeout).
   for (const d of DEFAULT_KEYS) {
     const lhs = d.lhs.replace("<leader>", parsed.leader);
     const context = d.context ?? "normal";
-    if (mapped[context].has(lhs)) continue;
+    if (keysClaimed(mapped[context], lhs, open)) continue;
     const key = commandKeyName(d.command);
     ensureCommandKeys(key);
     state.maps.push(addMap(lhs, key, context));
@@ -167,6 +173,21 @@ export function applyVimConfig(parsed: ParsedVimrc): VimConfigReport {
     localLeader: parsed.localLeader,
     empty: all.length === 0,
   };
+}
+
+/** `lhs` is taken by a map in `mapped`: the same keys, or one starts the
+ *  other key by key. A map in `open` (the leader alone, or a <Nop>) claims
+ *  only its own keys, so the usual `nnoremap <Space> <Nop>` keeps leader maps. */
+export function keysClaimed(mapped: ReadonlySet<string>, lhs: string, open: ReadonlySet<string> = new Set()): boolean {
+  const want = splitEngineKeys(lhs);
+  for (const m of mapped) {
+    if (m === lhs) return true;
+    if (open.has(m)) continue;
+    const have = splitEngineKeys(m);
+    const n = Math.min(have.length, want.length);
+    if (have.slice(0, n).every((k, i) => k === want[i])) return true;
+  }
+  return false;
 }
 
 /** The built-in bindings with no vimrc at all, until one is applied. */

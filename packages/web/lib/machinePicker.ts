@@ -335,3 +335,10 @@ export function resolveScopedProjects<T extends { path: string }>(opts: {
   if (!routedDevice?.local_project_roots?.length) return [];
   return union.filter((p) => deviceSeesPath(routedDevice, p.path));
 }
+
+/** The pick a new-session picker starts from when it mounts: a machine chosen
+ *  on purpose for a blank stub (its launcher, or an earlier chip click), never
+ *  the default the picker stamped, which keeps following the ladder. */
+export function initialMachinePick(row?: { owner_device_id?: string | null; picked_device_id?: string | null }): string | null {
+  return row?.owner_device_id ? null : (row?.picked_device_id ?? null);
+}

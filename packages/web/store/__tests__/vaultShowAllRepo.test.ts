@@ -80,3 +80,11 @@ test("a person's explicit choice outranks the repo default", async () => {
   expect(useVaultStore.getState().isRepo).toBe(true);
   expect(useVaultStore.getState().showAllFiles).toBe(false);
 });
+
+test("a repo vault hydrated from the cache keeps its code files when selectVault runs for it", () => {
+  globalThis.fetch = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+  // The boot hydrate already painted the cached tree with isRepo from the cache.
+  useVaultStore.setState({ activeVaultId: repo.id, isRepo: true, showAllFiles: true, scannedAt: 1 });
+  void useVaultStore.getState().selectVault(repo.id);
+  expect(useVaultStore.getState().showAllFiles).toBe(true);
+});

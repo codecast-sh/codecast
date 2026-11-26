@@ -58,6 +58,18 @@ describe("external changes", () => {
     view.destroy();
   });
 
+  // A disk write diffs as whole lines with their newlines, so the change ends
+  // at the next line's start: that unchanged line gets no bar or flash.
+  it("a change ending at a line's start marks only the lines it wrote", () => {
+    const view = mount();
+    adopt(view, view.state.doc.line(2).from, view.state.doc.line(3).from, "TWO\nTWO-b\n");
+    const marked = (cls: string) => [...view.dom.querySelectorAll(".cm-line")].map((l, i) => (l.classList.contains(cls) ? i + 1 : 0)).filter(Boolean);
+    expect(marked("cm-agentFlash")).toEqual([2, 3]);
+    const bars = [...view.dom.querySelectorAll(".cm-agentGutter .cm-gutterElement")].filter((g) => g.querySelector(".cm-agentBar"));
+    expect(bars).toHaveLength(2);
+    view.destroy();
+  });
+
   it("an unknown writer gets the neutral color and no session", () => {
     const view = mount(DOC, "src/other.ts");
     adopt(view, 0, 3, "ONE");

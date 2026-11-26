@@ -1,7 +1,8 @@
 import { LogoIcon } from "../Logo";
 import { TeamSessionSwitch } from "./TeamSessionSwitch";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { SegmentedChoice, TEAM_SHARE_MODES } from "../TeamShareModePicker";
+import { SegmentedChoice } from "../TeamShareModePicker";
+import { TEAM_SHARE_MODES } from "../../lib/teamShareModes";
 import type { TeamShareMode } from "../../lib/teamFeedRows";
 import { FolderSyncControl } from "./FolderSyncControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
@@ -53,7 +54,7 @@ import { useHostLoads } from "../../hooks/useHostLoads";
 import { MachineChips } from "../MachineChips";
 import { SharedWithMark } from "../ProjectPathPicker";
 import { ModeSwitch, SessionModeToggles, SessionPlacementMenu, type SessionModeTogglesProps, type SessionPlacement } from "../SessionModeToggles";
-import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../../lib/machinePicker";
+import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, initialMachinePick } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
 import { useSessionMachines } from "../../hooks/useSessionMachines";
 import { useLocalDeviceId } from "../../hooks/useLocalDeviceId";
@@ -140,7 +141,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   const storeSession = useInboxStore(useShallow((s) => {
     const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
     if (!sess) return undefined;
-    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id, cloud_placement: sess.cloud_placement };
+    return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root, owner_device_id: sess.owner_device_id, target_device_id: sess.target_device_id, picked_device_id: sess.picked_device_id, cloud_placement: sess.cloud_placement };
   }));
   const isolatedToggle = useInboxStore((s) => s.isolatedWorktreeMode);
   // The composer's new project switch (NewSessionProjectToggle) words the question.
@@ -193,7 +194,9 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   const devices = useSessionMachines();
   // listDevices comes back sorted by last_seen; chips hold still instead.
   const machineChips = useMemo(() => [...devices].sort(compareMachineChips), [devices]);
-  const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(null);
+  // A machine chosen on purpose for this stub (by its launcher, or a chip click
+  // before a remount) holds over the defaults; a defaulted stamp does not.
+  const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(() => initialMachinePick(storeSession));
   // Machine picker rests as a single pill showing where the session will run;
   // clicking it unfolds the full chip row for an explicit pick.
   const [machinesOpen, setMachinesOpen] = useState(false);
@@ -520,11 +523,14 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   // surface defers its create, so the stamp below is what usually carries the
   // choice — see createSessionFromStub.
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const setSessionTargetDevice = useInboxStore((s) => s.setSessionTargetDevice);
+  const stubId = storeSession?._id || conversation._id;
   const handleMachinePick = useCallback((d: SessionMachine) => {
     // The DROPDOWN is the standing choice: every transition goes through the
     // pure helpers so cloudMode === isCloudHost(picked) holds by construction.
     const next = machineSelectionAfterPick(d);
     setPickedDeviceId(next.pickedDeviceId);
+    setSessionTargetDevice(stubId, next.pickedDeviceId, { picked: true });
     // Remember the choice: it becomes the picker's default for subsequent NEW
     // sessions, which is what makes "explicit every time" cost one click total
     // rather than one click per session. A cloud host is a legitimate standing
@@ -539,7 +545,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
       ? (isCloudHost(d) ? currentPath : d.local_project_roots?.find((r) => repoName(r) === repoName(currentPath)) ?? currentPath)
       : null;
     handleSwitch(remapped, undefined, d.device_id);
-  }, [currentPath, handleSwitch, updateClientUI]);
+  }, [currentPath, handleSwitch, updateClientUI, setSessionTargetDevice, stubId]);
 
   // "Run in the cloud" is THIS composer's override: it moves the component-
   // local pick (on → the cloud host; off → what the ladder picks among the
@@ -550,15 +556,15 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
     const next = machineSelectionAfterCloudToggle(machineChips, machineOpts, !cloudMode);
     if (next.pickedDeviceId === null && !cloudMode) return;
     setPickedDeviceId(next.pickedDeviceId);
+    setSessionTargetDevice(stubId, next.pickedDeviceId, { picked: true });
     handleSwitch(currentPath ?? null, undefined, next.pickedDeviceId);
-  }, [cloudMode, machineChips, machineOpts, currentPath, handleSwitch]);
+  }, [cloudMode, machineChips, machineOpts, currentPath, handleSwitch, setSessionTargetDevice, stubId]);
 
   // Stamp the selection on the stub row so it rides the deferred create — the
   // machine shown in the row is the machine it runs on, whether or not the user
   // touched the picker. Previously only a move OFF the default was stamped, and
   // an unstamped session was re-decided server-side at send time by a
   // `last_seen` tiebreak that flips between idle machines on its own.
-  const setSessionTargetDevice = useInboxStore((s) => s.setSessionTargetDevice);
   useWatchEffect(() => {
     // Never clear on a null. Null now means only "the device roster hasn't
     // loaded yet" — `useDevices()` starts empty, so defaultMachineId returns null

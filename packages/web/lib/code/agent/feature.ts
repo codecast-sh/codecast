@@ -7,14 +7,14 @@
 // The linked session is resolved by AgentLayer (components/code/agent), which
 // the Files workspace mounts; these commands read its answer from agentStore.
 
-import { Prec, type EditorState, type TransactionSpec } from "@codemirror/state";
+import { EditorSelection, Prec, type EditorState, type TransactionSpec } from "@codemirror/state";
 import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { useInboxStore, sessionWorkState, type InboxSession } from "../../../store/inboxStore";
 import { useCodeStore } from "../../../store/codeStore";
 import { codeBuffers, currentState, updateBuffer } from "../buffers";
 import { registerCodeCommands, type CodeCommandContext } from "../commands";
-import { featureContext, registerEditorFeature, registerStatusItem, type StatusItemView } from "../features";
-import { useAgentStore, joinRoot } from "./agentStore";
+import { featureContext, focusedEditorView, registerEditorFeature, registerStatusItem, type StatusItemView } from "../features";
+import { inlineDraft, useAgentStore, joinRoot } from "./agentStore";
 import { codeQuoteComment, fenceLang, newSessionText, type CodeRange } from "./compose";
 import {
   QUOTE_FLASH_MS,
@@ -29,7 +29,7 @@ import {
   setInlineSpot,
   stepAgentEdit,
 } from "./editorMarks";
-import { sessionRow, vaultRootOf, writerNow } from "./live";
+import { composeInVault, sessionRow, vaultRootOf, writerNow } from "./live";
 import { sessionColor, sessionShortTitle, UNKNOWN_WRITER_COLOR } from "./sessions";
 
 const FEATURE = "agent";
@@ -67,21 +67,25 @@ function lineBounds(view: EditorView, r: CodeRange) {
   return { from: doc.line(Math.min(r.startLine, doc.lines)).from, to: doc.line(Math.min(r.endLine, doc.lines)).to };
 }
 
-/** Leave vim's visual mode after acting on its selection. */
+/** Leave vim's visual mode after acting on its selection. An ex command
+ *  (`:'<,'>Ask`) has left visual mode already, but its range is still the
+ *  editor's selection: normal mode gets a cursor on the range's first line. */
 function leaveVisual(view: EditorView): void {
   if (!view.scrollDOM.classList.contains("cm-vimMode")) return;
   void import("@replit/codemirror-vim").then(({ getCM, Vim }) => {
     const cm = getCM(view);
     if (cm?.state.vim?.visualMode) Vim.exitVisualMode(cm as never);
+    else if (cm?.state.vim && !view.state.selection.main.empty) {
+      const line = view.state.doc.lineAt(view.state.selection.main.from);
+      view.dispatch({ selection: EditorSelection.cursor(line.from + (/^\s*/.exec(line.text)?.[0].length ?? 0)) });
+    }
   });
 }
 
 // ── the link ───────────────────────────────────────────────────────────────
 
-let lastView: EditorView | null = null;
-
 function viewFor(ctx: CodeCommandContext): EditorView | null {
-  const v = ctx.view ?? (lastView?.dom.isConnected ? lastView : null);
+  const v = ctx.view ?? focusedEditorView();
   return v && hasAgentMarks(v.state) ? v : null;
 }
 
@@ -142,8 +146,8 @@ function spotHolder(view: EditorView, id: number): { state: EditorState; apply(s
 }
 
 /** Open the inline instruction box under the range, aimed at `sessionId`
- *  (null: the box asks on Enter). */
-export function openInlineInstruction(view: EditorView, sessionId: string | null = null): boolean {
+ *  (null: the box asks on Enter), with `text` already typed (`:Ask fix this`). */
+export function openInlineInstruction(view: EditorView, sessionId: string | null = null, text = ""): boolean {
   const vaultId = vaultOf(view);
   const root = vaultId ? vaultRootOf(vaultId) : null;
   const range = root ? selectedRange(view, root) : null;
@@ -171,6 +175,7 @@ export function openInlineInstruction(view: EditorView, sessionId: string | null
       if (holder?.state === view.state) view.focus();
     },
   });
+  if (text) inlineDraft(id).text = text;
   view.dispatch({ effects: setInlineSpot.of({ id, pos: to, from, to }) });
   leaveVisual(view);
   return true;
@@ -180,8 +185,7 @@ export function newSession(view: EditorView): boolean {
   const vaultId = vaultOf(view);
   const root = vaultId ? vaultRootOf(vaultId) : null;
   const range = root ? selectedRange(view, root) : null;
-  if (!root || !range) return false;
-  useInboxStore.getState().openCompose(newSessionText(range), { projectPath: root });
+  if (!vaultId || !range || !composeInVault(vaultId, newSessionText(range))) return false;
   leaveVisual(view);
   return true;
 }
@@ -314,13 +318,6 @@ export const agentKeys = Prec.high(
   ]),
 );
 
-const tracker = EditorView.domEventHandlers({
-  focus: (_e, view) => {
-    lastView = view;
-    return false;
-  },
-});
-
 let registered = false;
 
 export function registerAgentFeature(): void {
@@ -332,18 +329,17 @@ export function registerAgentFeature(): void {
     labelOf: (id) => (id ? sessionShortTitle(sessionRow(id)) : "an agent (session unknown)"),
     mountInline: (id, host) => useAgentStore.getState().setInlineHost(id, host),
   });
-  registerEditorFeature(FEATURE, () => [agentMarksExtension(), agentKeys, tracker], { needsVault: true });
+  registerEditorFeature(FEATURE, () => [agentMarksExtension(), agentKeys], { needsVault: true });
   registerStatusItem({ id: "agent.link", side: "right", order: 5, priority: 60, needsVault: true, create: chipItem });
   watchConflicts();
 
   const withView = (fn: (view: EditorView, args: Record<string, unknown> | undefined) => boolean) => (args: Record<string, unknown> | undefined, ctx: CodeCommandContext) => {
     const view = viewFor(ctx);
-    if (view) lastView = view;
     return view ? fn(view, args) : false;
   };
   registerCodeCommands({
     "agent.quoteSelection": withView(quoteToLinked),
-    "agent.inlineInstruction": withView((v) => openInlineInstruction(v, linkedOf(v))),
+    "agent.inlineInstruction": withView((v, args) => openInlineInstruction(v, linkedOf(v), typeof args?.text === "string" ? args.text : "")),
     "agent.newSession": withView((v) => newSession(v)),
     "agent.nextEdit": withView((v) => stepAgentEdit(v, 1)),
     "agent.prevEdit": withView((v) => stepAgentEdit(v, -1)),

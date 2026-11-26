@@ -4,10 +4,11 @@
 // take, so the palette's "Diff vs HEAD" and `:Gdiffsplit` are one code path.
 
 import type { ComponentType } from "react";
-import { Columns2, FileSearch, GitCompare, Link2, MessageSquareCode, Quote, Search, Settings2, SquarePlus, SquareTerminal, UserSquare2 } from "lucide-react";
+import { Columns2, FileSearch, GitCompare, Link2, MessageSquareCode, Quote, Rows2, Search, Settings2, SquarePlus, SquareTerminal, SquareX, UserSquare2, X } from "lucide-react";
 import { runCodeCommand, type CodeCommandId } from "./code/commands";
 import type { ShortcutAction } from "../shortcuts/registry";
 import { useInboxStore } from "../store/inboxStore";
+import { queryNamesPage } from "./navPages";
 
 export interface EditorPaletteCommand {
   id: CodeCommandId;
@@ -22,6 +23,13 @@ export interface EditorPaletteCommand {
   args?: Record<string, unknown>;
 }
 
+/** With Files focused, the Editor group paints first when the query starts
+ *  one of its commands' names ("split", "close", "search", "quote"), above the
+ *  app's pane and page commands that share the word. */
+export function editorCommandsLead(query: string): boolean {
+  return queryNamesPage(EDITOR_PALETTE_COMMANDS.map((c) => ({ page: {}, label: c.label })), query, 4);
+}
+
 export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   { id: "quickOpen", label: "Go to file", keywords: "quick open find file ctrlp fzf", icon: FileSearch, shortcut: "code.quickOpen" },
   { id: "search.project", label: "Search in project", keywords: "grep find text ripgrep", icon: Search, shortcut: "vault.search" },
@@ -32,6 +40,9 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   { id: "agent.pickSession", label: "Link session", keywords: "agent conversation folder linked choose", icon: Link2 },
   { id: "agent.newSession", label: "New session here", keywords: "agent start conversation folder", icon: SquarePlus },
   { id: "split.right", label: "Split editor right", keywords: "split group side", icon: Columns2, shortcut: "code.splitRight" },
+  { id: "split.down", label: "Split editor down", keywords: "split group below", icon: Rows2 },
+  { id: "file.close", label: "Close file", keywords: "close tab buffer", icon: X, shortcut: "code.closeTab" },
+  { id: "split.close", label: "Close split", keywords: "close group pane", icon: SquareX },
   { id: "vim.toggle", label: "Toggle vim", keywords: "vim mode keys modal", icon: SquareTerminal },
   { id: "settings.open", label: "Editor settings", keywords: "preferences vimrc options language servers", icon: Settings2 },
 ];

@@ -46,6 +46,9 @@ export interface EditorTarget {
   column?: number;
   /** The last line of a range the editor flashes on arrival. */
   endLine?: number;
+  /** With no `line`: text the file holds, tried in order. The editor lands on
+   *  the first found and flashes it (a MultiEdit's result names no lines). */
+  find?: string[];
   /** The conversation the path was written in, which resolves a relative one. */
   ctx?: FilePathContextValue | null;
 }
@@ -87,6 +90,17 @@ export function openInEditor(target: EditorTarget, opts: OpenInEditorOptions = {
     // nothing takes it (the file is in another vault), the address opens it.
     const args = { path: abs, line: target.line, column: target.column, split: "right" };
     void retryCommand("file.open", () => args).then((ok) => ok || tabNavigate(href, "push"));
+  }
+  if (!target.line && target.find?.length && abs.startsWith("/")) {
+    const find = target.find;
+    void whenEditorShows(abs).then(async (view) => {
+      const doc = (view as { state?: { doc: { toString(): string } } } | null)?.state?.doc;
+      const at = doc ? findTextRange(doc.toString(), find) : undefined;
+      if (!at) return;
+      const { revealTarget } = await import("./code/editorHost");
+      // Flashed even on one line: there is no range in the address to show it.
+      revealTarget(view as never, { line: at.line, endLine: at.endLine ?? at.line });
+    });
   }
   if (opts.diffAgainst) {
     const { ref, label } = opts.diffAgainst;
@@ -205,6 +219,32 @@ export function firstChangedLine(patch: string | undefined): number | undefined 
     if (!row.startsWith("\\")) next++;
   }
   return undefined;
+}
+
+/** Where `candidates` (in order) sit in `text`, as whole lines: the first
+ *  that occurs exactly once, else the first found (a short new text like
+ *  `return null;` can also match lines the edit never wrote). Blank
+ *  candidates are skipped; a candidate's surrounding blank lines don't count
+ *  toward its range. */
+export function findTextRange(text: string, candidates: readonly string[]): { line: number; endLine?: number } | undefined {
+  let fallback: { at: number; want: string } | undefined;
+  let pick: { at: number; want: string } | undefined;
+  for (const raw of candidates) {
+    const want = raw.replace(/^\s*\n/, "").replace(/\n\s*$/, "");
+    if (!want.trim()) continue;
+    const at = text.indexOf(want);
+    if (at < 0) continue;
+    fallback ??= { at, want };
+    if (text.indexOf(want, at + 1) < 0) {
+      pick = { at, want };
+      break;
+    }
+  }
+  const hit = pick ?? fallback;
+  if (!hit) return undefined;
+  const line = text.slice(0, hit.at).split("\n").length;
+  const endLine = line + hit.want.split("\n").length - 1;
+  return endLine > line ? { line, endLine } : { line };
 }
 
 /**

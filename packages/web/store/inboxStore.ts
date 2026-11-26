@@ -1054,6 +1054,11 @@ export type InboxSession = {
   // createSessionFromStub) and routing may still fall back, after which
   // owner_device_id is the truth. Never written to the server as a field.
   target_device_id?: string | null;
+  // LOCAL-ONLY, blank sessions only: the machine someone chose on purpose (a
+  // launcher such as the code editor's folder, or a chip click), as opposed to
+  // the default the picker stamps in target_device_id. The picker starts from
+  // it when it mounts again, so a chosen machine never falls back to the ladder.
+  picked_device_id?: string | null;
   // The session's author (conversation.user_id). The inbox is user-scoped, so a
   // synced row is always the current user's own — but a teammate's session can be
   // INJECTED into this same cache (deep-link / search / command-palette open). The
@@ -7117,7 +7122,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   seedSession: (session: InboxSession) => void;
   preloadForkSessions: (forks: ForkChild[], forkedFrom?: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
-  setSessionTargetDevice: (id: string, deviceId: string | null) => void;
+  /** `picked`: a deliberate choice (picked_device_id), not the picker's default;
+   *  a null pick clears the choice and leaves the stamp. */
+  setSessionTargetDevice: (id: string, deviceId: string | null, opts?: { picked?: boolean }) => void;
   setConversationAgent: (id: string, agentType: string) => void;
   /** Blank session: the definition it launches as (compose "as" pill). */
   setConversationAgentDefinition: (id: string, name: string | null) => void;
@@ -14040,9 +14047,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // The machine row's stamp. Local-only (`sync`): the conversations table has no
   // such column — the value's only job is to survive on the stub row until
   // createSessionFromStub reads it. Null clears a pick the user reverted.
-  setSessionTargetDevice: sync(function (this: Draft, id: string, deviceId: string | null) {
-    if (this.sessions[id]) this.sessions[id].target_device_id = deviceId;
-    if (this.conversations[id]) (this.conversations[id] as any).target_device_id = deviceId;
+  setSessionTargetDevice: sync(function (this: Draft, id: string, deviceId: string | null, opts?: { picked?: boolean }) {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
+      if (!row) continue;
+      if (opts?.picked) row.picked_device_id = deviceId;
+      if (deviceId || !opts?.picked) row.target_device_id = deviceId;
+    }
   }),
 
   setConversationAgent: action(function (this: Draft, id: string, agentType: string) {

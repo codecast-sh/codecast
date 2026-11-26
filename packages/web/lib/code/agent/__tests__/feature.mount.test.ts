@@ -89,6 +89,24 @@ describe("Cmd-L", () => {
     expect(agentMarks(view.state).flashes.map((f) => f.kind)).toEqual(["quote"]);
   });
 
+  // `:'<,'>Quote` leaves visual mode before the verb runs, with its range
+  // still the editor's selection: normal mode must not keep it selected.
+  it("after `:3,5Quote` in vim, the selection collapses to the range's first line", async () => {
+    const { getCM, Vim } = await import("@replit/codemirror-vim");
+    const { createVimExtension } = await import("../../vim");
+    (await import("../feature")).registerAgentFeature();
+    useAgentStore.getState().setLink("v", { sessionId: "s1", source: "folder" });
+    const parent = document.createElement("div");
+    document.body.append(parent);
+    const view = new EditorView({ parent, state: EditorState.create({ doc: DOC, extensions: [createVimExtension(), ...extensions()] }) });
+    Vim.handleEx(getCM(view) as never, "3,5Quote");
+    expect(quotes.map(([, c]) => c.fileLine)).toEqual([5]);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(view.state.selection.main.empty).toBe(true);
+    expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from);
+    view.destroy();
+  });
+
   it("with no linked session, the key asks for one first and quotes once it is picked", () => {
     const view = mount();
     view.contentDOM.dispatchEvent(cmdL());

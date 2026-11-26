@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { useInboxStore } from "./inboxStore";
+import { initialMachinePick } from "../lib/machinePicker";
 
 // The new-session machine row stamps the selected machine on the stub row
 // (setSessionTargetDevice); createSessionFromStub is where that stamp becomes the
@@ -121,5 +122,39 @@ describe("createSessionFromStub target_device_id", () => {
     await useInboxStore.getState().createSessionFromStub(STUB);
 
     expect(createOpts(calls)).not.toHaveProperty("target_device_id");
+  });
+});
+
+// A launcher's machine (openCompose with deviceId) is a pick the picker starts
+// from on every mount; the picker's own defaulted stamp is not, so a remounted
+// plain stub keeps following the default ladder.
+describe("picked vs defaulted machine on a stub", () => {
+  const row = () => useInboxStore.getState().sessions[STUB] as any;
+
+  it("a launcher's pick survives a remount, a defaulted stamp does not", async () => {
+    const { calls } = installFakeDispatch();
+    seedStub(null);
+    useInboxStore.getState().setSessionTargetDevice(STUB, "host", { picked: true });
+    // The remounted picker's default write lands on target_device_id only.
+    expect(initialMachinePick(row())).toBe("host");
+    useInboxStore.getState().setSessionTargetDevice(STUB, "host");
+    expect(initialMachinePick(row())).toBe("host");
+    await useInboxStore.getState().createSessionFromStub(STUB);
+    expect(createOpts(calls).target_device_id).toBe("host");
+  });
+
+  it("a plain stamp is never taken for a pick", () => {
+    seedStub(null);
+    useInboxStore.getState().setSessionTargetDevice(STUB, "laptop");
+    expect(row().target_device_id).toBe("laptop");
+    expect(initialMachinePick(row())).toBeNull();
+  });
+
+  it("clearing the pick (cloud toggle off) keeps the stamp", () => {
+    seedStub(null);
+    useInboxStore.getState().setSessionTargetDevice(STUB, "host", { picked: true });
+    useInboxStore.getState().setSessionTargetDevice(STUB, null, { picked: true });
+    expect(row().target_device_id).toBe("host");
+    expect(initialMachinePick(row())).toBeNull();
   });
 });
