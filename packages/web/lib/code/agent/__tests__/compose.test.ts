@@ -73,14 +73,14 @@ describe("instruction (Cmd-K)", () => {
         calls.push(["optimistic", convId, content]);
         return "client-1";
       },
-      sendMessage: (convId, content, imageIds, clientId) => {
+      sendMessageWhenReady: (convId, content, imageIds, clientId) => {
         calls.push(["send", convId, content, imageIds, clientId]);
       },
     };
     return { port, calls };
   };
 
-  it("sends ONE message through the store: an optimistic bubble, then sendMessage with its client id", () => {
+  it("sends ONE message through the store: an optimistic bubble, then the send with its client id", () => {
     const { port, calls } = stub();
     const id = sendInstruction(port, "sess1", range(3, 5), "rename to sum");
     const text = instructionMessage(range(3, 5), "rename to sum");

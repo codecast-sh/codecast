@@ -74,7 +74,9 @@ export function newSessionText(r: CodeRange): string {
 /** The store calls a send makes; the inbox store satisfies it, tests stub it. */
 export interface SendPort {
   addOptimisticMessage(convId: string, content: string): string;
-  sendMessage(convId: string, content: string, imageIds?: string[], clientId?: string): void;
+  /** sendMessage for a real id; a session still being created sends once it
+   *  exists (the composer's path for a new session). */
+  sendMessageWhenReady(convId: string, content: string, imageIds?: string[], clientId?: string): void;
 }
 
 /**
@@ -83,10 +85,10 @@ export interface SendPort {
  * delivery state renders as for any other message. Returns the client id.
  */
 export function sendInstruction(store: SendPort, sessionId: string, r: CodeRange, instruction: string): string | null {
-  const text = instructionMessage(r, instruction);
   if (!instruction.trim()) return null;
+  const text = instructionMessage(r, instruction);
   const clientId = store.addOptimisticMessage(sessionId, text);
-  store.sendMessage(sessionId, text, undefined, clientId);
+  store.sendMessageWhenReady(sessionId, text, undefined, clientId);
   return clientId;
 }
 
