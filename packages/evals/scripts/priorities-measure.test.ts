@@ -7,7 +7,7 @@
 // of an open golden step.
 import { describe, expect, test } from 'bun:test';
 
-import { score, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
+import { score, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
 
 const golden: Golden = {
   person: 'Ana',
@@ -174,5 +174,22 @@ describe('score', () => {
     expect(s.steps.false_done.map((f) => f.produced_step)).toEqual(['Faults and the rest']);
     expect(s.metrics.false_done).toBe(1);
     expect(s.metrics.step_done).toBe(1 / 3);
+  });
+});
+
+describe('seedState', () => {
+  test('holds every golden priority with its critical steps open, their tasks linked, and no sessions, numbering on from them', () => {
+    const state = seedState(golden, 1000);
+    expect(state.cursor_at).toBe(1000);
+    expect(state.next_id).toBe(4);
+    expect(state.priorities.map((p) => [p.short_id, p.title, p.status, p.sessions.length])).toEqual([
+      ['pri-1', 'Trusted evals', 'active', 0],
+      ['pri-2', 'Simple deploys', 'active', 0],
+      ['pri-3', 'Laptop stops crashing', 'active', 0],
+      ['pri-4', 'Broker changes', 'done', 0],
+    ]);
+    expect(state.priorities[0]!.steps.map((s) => [s.key, s.title, s.done])).toEqual([['s1', 'Cases', false], ['s2', 'Grader faults', false]]);
+    const withTask = seedState({ ...golden, priorities: [{ ...golden.priorities[0]!, critical: [{ title: 'Cases', done: true, task: 'ct-7' }] }] }, 0);
+    expect(withTask.priorities[0]!.steps[0]!.refs).toEqual([{ kind: 'task', id: 'ct-7' }]);
   });
 });

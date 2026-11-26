@@ -9,6 +9,8 @@
 //   bun packages/evals/scripts/priorities-measure.ts --golden ~/.codecast/emergent-goals/golden/jason.json \
 //     --user <email|user id> [--workspace all|personal|team:<id>] [--from 2026-11-10 --to 2026-11-24] [--chunk N] [--system-file <path>] [--out <dir>]
 //     --system-file replays the pass under a candidate system prompt (its sha goes in the result).
+//     --seed-golden starts every workspace's pass holding the golden priorities (titles and critical
+//     steps with their tasks, no sessions, nothing done), so session mapping measures placement given the person's goals.
 //   bun packages/evals/scripts/priorities-measure.ts --rescore <result.json> [--golden <path>] [--out <dir>]
 //     scores a saved run's produced priorities again, without running the pass.
 //
@@ -250,7 +252,7 @@ const castTaskStatus: TaskStatus = async (ids) => {
 };
 
 /** What a run read and produced: from a fresh pass in production, or from a saved result.json (--rescore). */
-type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string } };
+type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string; seed_golden?: boolean } };
 
 async function main() {
   const arg = (name: string, fallback?: string) => {
@@ -323,6 +325,23 @@ async function main() {
   console.error(`wrote ${out}`);
 }
 
+/** The golden priorities as the pass would hold them already: titles and critical steps with their tasks, no sessions, nothing done. */
+export function seedState(golden: Golden, window_start: number) {
+  const priorities: PassPriority[] = golden.priorities.map((g, i) => ({
+    short_id: `pri-${i + 1}`,
+    title: g.title,
+    summary: g.title,
+    status: g.status === 'done' ? 'done' : 'active',
+    rank: null,
+    rank_set_by: 'pass',
+    serves: null,
+    steps: (g.critical ?? []).map((s, j) => ({ key: `s${j + 1}`, title: s.title, tier: 'critical', tier_set_by: 'person', refs: s.task ? [{ kind: 'task', id: s.task }] : [], done: false })),
+    last_active_at: window_start,
+    sessions: [],
+  }));
+  return { cursor_at: window_start, priorities, tasks: [], next_id: priorities.length };
+}
+
 /** Runs evalPass in production for each workspace the user holds, resuming until each window is read. */
 function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallback?: string) => string): PassRun {
   const scope = arg('workspace', 'all');
@@ -343,11 +362,12 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
   const window_start = Date.parse(`${from}T00:00:00Z`);
   const window_end = Date.parse(`${to}T00:00:00Z`) + DAY;
 
+  const seed = process.argv.includes('--seed-golden');
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   const runs: Array<{ workspace: string; name: string; result: EvalResult; scored: boolean }> = [];
   for (const w of workspaces) {
     const result: EvalResult = { outputs: [], priorities: [], cost_usd: 0, sessions_read: [], omitted: [] };
-    let resume: unknown;
+    let resume: unknown = seed ? seedState(golden, window_start) : undefined;
     do {
       console.error(`${w.name}: pass ${resume ? '(resumed)' : ''}…`);
       const r = convexRun<EvalResult>('priorityPassEval:evalPass', { user_id: targets.user_id, workspace: w.workspace, window_start, window_end, ...(chunk ? { chunk } : {}), ...(resume ? { resume } : {}), ...(systemFile ? { system } : {}) });
@@ -379,7 +399,7 @@ function runPasses(golden: Golden, goldenPath: string, arg: (name: string, fallb
     scoredNames: scoredRuns.map((r) => r.name),
     workspaces: runs.map((r) => ({ workspace: r.workspace, name: r.name, scored: r.scored, sessions_read: r.result.sessions_read, omitted: r.result.omitted, cost_usd: r.result.cost_usd, outputs: r.result.outputs })),
     passUsd: runs.reduce((sum, r) => sum + r.result.cost_usd, 0),
-    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk, system_file: systemFile, system_sha },
+    args: { golden: goldenPath, user: arg('user'), workspace: scope, from, to, chunk, system_file: systemFile, system_sha, seed_golden: seed },
   };
 }
 
