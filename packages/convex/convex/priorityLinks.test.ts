@@ -315,6 +315,19 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s3")).done_at).toBe(pinnedAt);
   });
 
+  test("one pass maps an unlinked session onto the milestone its done pin named and judges it done: the pin's time and mark win", async () => {
+    const { t, ada, p1, cFree } = await world();
+    await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
+    const t0 = (await convOf(t, cFree)).thread_state_at;
+    await new Promise((r) => setTimeout(r, 5));
+    const steps = (await t.run((ctx: any) => ctx.db.get(p1))).steps.map((s: any) => (s.key === "s3" ? { ...s, done: true, done_at: Date.now() } : s));
+    await t.mutation((internal as any).priorityPassRun.applyPlan, {
+      user_id: ada, workspace: `user:${ada}`, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [{ short_id: "pri-1", patch: { steps } }], merges: [], sessions: [{ session: "jx7free", priority: "pri-1", step_key: "s3" }], unmap: [], notes: [], rewritten: [] },
+    });
+    expect(await stepOf(t, p1, "s3")).toMatchObject({ done: true, done_at: t0, done_set_by: "evidence" });
+  });
+
   test("a done pin naming a milestone from a session on none is kept, and counts at its own time once the pass or a link puts the session there", async () => {
     const { t, ada, p1, cFree } = await world();
     const res = await t.mutation(api.conversations.setThreadState, { api_token: TOKEN, session: "jx7free", text: "Shipped", status: "done", serves: "pri-1/s3" });
