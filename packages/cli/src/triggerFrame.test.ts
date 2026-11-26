@@ -26,6 +26,12 @@ describe("buildTriggerFrame", () => {
     expect(buildTriggerFrame({ ...task, pending_events: undefined }, at)).not.toContain("What fired this run");
   });
 
+  test("a run wakes its parent only when a human must act; a suggestion rides in the summary, so a repeating monitor stays quiet", () => {
+    const frame = buildTriggerFrame({ _id: "t1", title: "Sweep", prompt: "Look.", mode: "apply" }, Date.UTC(2026, 9, 3, 12));
+    expect(frame).toContain("the summary carries the outcome and any suggestion. If a human must act, add --needs-attention:");
+    expect(frame).not.toContain("even optional");
+  });
+
   test("the golden covers every branch of the frame", () => {
     const names = golden.cases.map((c) => c.name);
     expect(names.filter((n) => n.endsWith("/with-summary")).length).toBeGreaterThanOrEqual(3);

@@ -430,11 +430,10 @@ Subcommands:
   cast state clear               Remove it
   cast state show <session>      Print another session's state
 
---status is your answer to WHO ACTS NEXT, and it decides where the session
-files in the inbox when your turn ends:
+--status answers WHO ACTS NEXT and files the session in the inbox at turn end:
   working   still moving (default)
-  blocked   a human must act to unblock you            → Needs You
-  done      delivered; nothing stalled, review at leisure → Done
+  blocked   a human must act, or you hand them anything, even optional → Needs You
+  done      delivered, nothing for them to do (a You: line is refused) → Done
   dormant   a machine wakes you; name the wake in the text → Sleeping
 done and dormant cover exactly the turn that declares them: after the next
 wake, declare again or the session returns to Needs You.

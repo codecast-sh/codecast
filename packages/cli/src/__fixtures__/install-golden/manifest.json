@@ -100,7 +100,7 @@
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {
-      ".claude/hooks/thread-state.sh": "335a8f85e836a468",
+      ".claude/hooks/thread-state.sh": "55efb3c57f2ca5a5",
       ".claude/settings.json": "6d57b0e7e2769331"
     }
   },

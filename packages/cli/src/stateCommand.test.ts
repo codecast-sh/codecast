@@ -1,5 +1,115 @@
-import { describe, test, expect } from "bun:test";
-import { parseStateArgs, formatAge, describeProvenance, staleStateNotice, statusTag } from "./stateCommand.js";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Command } from "commander";
+import {
+  parseStateArgs,
+  formatAge,
+  describeProvenance,
+  staleStateNotice,
+  statusTag,
+  doneAskLabel,
+  registerStateCommand,
+} from "./stateCommand.js";
+import { threadStateStampPath } from "./threadStateStamp.js";
+
+describe("a Done pin that hands the person something", () => {
+  test("doneAskLabel: a Done pin with an ask line the card would show", () => {
+    const withYou = "Shipped the fix\nYou: pick the rollout day";
+    expect(doneAskLabel("done", withYou)).toBe("You");
+    expect(doneAskLabel("done", "Shipped\n   You: reopen Chrome")).toBe("You");
+    expect(doneAskLabel("done", "Shipped\n- You: pick a day")).toBe("You");
+    expect(doneAskLabel("done", "Shipped\n* You: pick a day")).toBe("You");
+    expect(doneAskLabel("done", "Shipped\n• You: pick a day")).toBe("You");
+    expect(doneAskLabel("done", "Shipped\nBlocked: needs your key")).toBe("Blocked");
+    expect(doneAskLabel("done", "You: pick the rollout day")).toBe("You");
+    expect(doneAskLabel("blocked", withYou)).toBeNull();
+    expect(doneAskLabel("dormant", withYou)).toBeNull();
+    expect(doneAskLabel("working", withYou)).toBeNull();
+    expect(doneAskLabel("done", "Shipped\nDone: tests green")).toBeNull();
+    expect(doneAskLabel("done", "Shipped\nDone: wrote the You: line guidance")).toBeNull();
+  });
+
+  test("doneAskLabel: a station's fenced json report is not an ask, as on the card", () => {
+    expect(doneAskLabel("done", 'Proven\n```json\n{\n"note": "x"\n}\nYou: not a row\n```')).toBeNull();
+  });
+
+  // Drive the real command: fake endpoint, fetch recorded, exit trapped, and
+  // the pulse/stamp files under a throwaway CODECAST_DIR.
+  const session = "fixturesessionaaaa";
+  let dir: string;
+  let posts: string[];
+  let errors: string[];
+  const saved = { fetch: globalThis.fetch, exit: process.exit, error: console.error, log: console.log, dir: process.env.CODECAST_DIR };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "state-refusal-"));
+    process.env.CODECAST_DIR = dir;
+    posts = [];
+    errors = [];
+    globalThis.fetch = (async (url: string) => {
+      posts.push(String(url));
+      return new Response(JSON.stringify({ short_id: "jxfixt1", status: "blocked" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    process.exit = ((code?: number) => { throw new Error(`exit ${code}`); }) as typeof process.exit;
+    console.error = (...a: unknown[]) => { errors.push(a.join(" ")); };
+    console.log = () => {};
+  });
+
+  afterEach(() => {
+    globalThis.fetch = saved.fetch;
+    process.exit = saved.exit;
+    console.error = saved.error;
+    console.log = saved.log;
+    if (saved.dir === undefined) delete process.env.CODECAST_DIR;
+    else process.env.CODECAST_DIR = saved.dir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function runState(...argv: string[]): Promise<string | null> {
+    const program = new Command().exitOverride();
+    registerStateCommand(program, {
+      getCliEndpoint: () => ({ siteUrl: "https://fixture.invalid", apiToken: "t" }),
+      detectCurrentSessionId: () => session,
+    });
+    try {
+      await program.parseAsync(["state", ...argv], { from: "user" });
+      return null;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }
+
+  test("done with a You: line exits non-zero and writes nothing", async () => {
+    expect(await runState("--status", "done", "Shipped the fix\nYou: pick the rollout day")).toBe("exit 1");
+    expect(errors).toEqual([
+      "A You: line means the person acts. Use --status blocked.",
+    ]);
+    expect(posts).toEqual([]);
+    expect(fs.existsSync(threadStateStampPath(session))).toBe(false);
+  });
+
+  test("done with a bulleted Blocked: line is refused with its label", async () => {
+    expect(await runState("--status", "done", "Shipped\n- Blocked: needs your key")).toBe("exit 1");
+    expect(errors).toEqual(["A Blocked: line means the person acts. Use --status blocked."]);
+    expect(posts).toEqual([]);
+    expect(fs.existsSync(threadStateStampPath(session))).toBe(false);
+  });
+
+  test("blocked with a You: line is pinned", async () => {
+    expect(await runState("--status", "blocked", "Waiting on a key\nYou: add it to the secrets")).toBeNull();
+    expect(posts).toEqual(["https://fixture.invalid/cli/sessions/state/set"]);
+    expect(fs.existsSync(threadStateStampPath(session))).toBe(true);
+  });
+
+  test("done without a You: line is pinned, even with You: mid-line", async () => {
+    expect(await runState("--status", "done", "Shipped\nDone: reworded the You: guidance")).toBeNull();
+    expect(errors).toEqual([]);
+    expect(posts).toEqual(["https://fixture.invalid/cli/sessions/state/set"]);
+    expect(fs.existsSync(threadStateStampPath(session))).toBe(true);
+  });
+});
 
 describe("statusTag", () => {
   test("labels each declared status, colored", () => {
