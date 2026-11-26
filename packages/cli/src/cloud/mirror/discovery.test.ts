@@ -32,6 +32,19 @@ test("agent-managed skills and plugin runtime markers do not travel to another h
   expect(inventory.entries.some((entry) => entry.path === ".claude/plugins/cache/org/a/v1/SKILL.md")).toBe(true);
 });
 
+test("withinRoot never walks or sizes a home folder an instruction file names, so a worktree's copy list cannot trip the upload cap", () => {
+  execFileSync("git", ["-C", root, "init", "-q"]);
+  // Sparse: past the 256 MiB cap, no disk spent.
+  write(".local/share/codecast/evals/snapshots/big.json", "");
+  fs.truncateSync(path.join(home, ".local/share/codecast/evals/snapshots/big.json"), 300 * 1048576);
+  fs.writeFileSync(path.join(root, "CLAUDE.local.md"), "Eval data: ~/.local/share/codecast/evals/ and ~/.local/share/codecast/evals/snapshots/big.json\n");
+  const opts = { root, home, includeTracked: false, includeAncestors: false, tolerateMissing: true };
+  expect(() => collectProjectContext(opts)).toThrow(ContextTooLargeError);
+  const within = collectProjectContext({ ...opts, withinRoot: true });
+  expect(within.files.map((f) => `${f.scope}:${f.relativePath}`)).toEqual(["project:CLAUDE.local.md"]);
+  expect(within.skipped.every((s) => s.reason === "reference outside context roots")).toBe(true);
+});
+
 describe("portable context discovery", () => {
   test("every agent namespace keeps symlinked aliases, plugin assets and memory while runtime data stays out", async () => {
     write(".agents/skills/shared/SKILL.md", "[details](references/details.md)");

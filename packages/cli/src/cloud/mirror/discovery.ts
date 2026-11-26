@@ -475,6 +475,15 @@ export interface ProjectContextOptions {
    */
   agentContextOnly?: boolean;
   includeAncestors?: boolean;
+  /**
+   * Walk only inside `root`: a reference to a path outside it, and the
+   * config's cloud_mirror_include, are skipped. For a caller that copies the
+   * project's own files within one machine (a worktree's copy list), which has
+   * no use for home files and must not size a home folder an instruction file
+   * happens to name against the upload cap (a merge once refused to make its
+   * worktree over 5 GB of eval data).
+   */
+  withinRoot?: boolean;
   config?: Pick<Config, "cloud_mirror_include" | "cloud_mirror_exclude"> | null;
   maxBytes?: number;
   /** Records every path the walk touches, so a later tick can ask "did any of it change" with stats alone. */
@@ -678,7 +687,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
         if (required.has(ref) && (securityPaths.has(ref) || securityDenied(ref, true))) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
         if (scanned.has(ref) || scannedDirs.has(ref) || scannedReferences.has(ref) && !required.has(ref)) continue;
         scannedReferences.add(ref);
-        if (homeRelative(ref, root) === null && homeRelative(ref, home) === null) { result.skipped.push({ path: ref, reason: "reference outside context roots" }); continue; }
+        if (homeRelative(ref, root) === null && (opts.withinRoot || homeRelative(ref, home) === null)) { result.skipped.push({ path: ref, reason: "reference outside context roots" }); continue; }
         if (denied(ref, true)) {
           result.skipped.push({ path: ref, reason: "excluded reference or unsupported host dependency" });
           if (required.has(ref)) result.warnings.push(`${logical}: unsupported host dependency ${ref}`);
@@ -709,7 +718,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
       if (dir === home) break;
     }
   }
-  for (const extra of includes) yield* visit(path.resolve(home, extra), new Set(), true);
+  if (!opts.withinRoot) for (const extra of includes) yield* visit(path.resolve(home, extra), new Set(), true);
   if (overflowBytes > 0) {
     const total = result.totalBytes + overflowBytes;
     const leaveOut: typeof candidates = [];
