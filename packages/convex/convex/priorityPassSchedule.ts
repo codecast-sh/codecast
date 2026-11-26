@@ -19,8 +19,10 @@ const pair = { user_id: v.id("users"), workspace: v.string() };
 
 /** Runs that start within this of the run before are one pass: a chain's runs start seconds apart. */
 const PASS_SPAN_MS = 10 * MINUTE;
-/** The share of the daily ceiling automatic passes stay within; the rest is room for a long chain or a manual run. */
+/** The share of the daily ceiling the bucket refills with in a day; the rest is its capacity's room. */
 export const PASS_PACE_SHARE = 0.8;
+/** The bucket holds about this many passes, so a burst of work gets a few hourly passes before the pace sets in. */
+export const PASS_BUCKET_PASSES = 3;
 
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -30,11 +32,16 @@ const median = (xs: number[]) => {
 /**
  * When the pair's next automatic pass may start, from its runs of the last
  * day (newest first): PASS_MIN_GAP_MS after the last run that asked the model
- * or still holds the pair, and once the day's spend plus one more pass (the
- * median of the day's passes, a chain counted as one) fits within
- * PASS_PACE_SHARE of PRIORITY_PASS_DAILY_USD, waiting for older spend to age
- * out of the day when it does not. Catch-up runs spend their own allowance
- * and count only as the last run.
+ * or still holds the pair, and once a token bucket of dollars holds one
+ * expected pass (the median of the day's passes, a chain counted as one).
+ *
+ * The bucket refills at PASS_PACE_SHARE of PRIORITY_PASS_DAILY_USD a day and
+ * holds PASS_BUCKET_PASSES expected passes, but never more than the ceiling
+ * leaves beside a day's refill (capacity + a day's refill <= the ceiling, so
+ * no day's spend reaches it), and never less than one pass (the refill slows
+ * instead). Its level is replayed from the day's runs, full a day ago, so it
+ * needs no stored state. Catch-up runs spend their own allowance and count
+ * only as the last run.
  */
 export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number): number {
   const last = day.find((r) => isPaidRun(r) || (r.status === "running" && r.started_at > now - RESERVATION_TTL_MS));
@@ -47,15 +54,18 @@ export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number): nu
     passes[passes.length - 1] += r.cost_usd ?? 0;
     prev = r.started_at;
   }
-  // Oldest first, the spend that leaves the day until the next pass fits.
-  let over = passes.reduce((a, b) => a + b, 0) + median(passes) - PASS_PACE_SHARE * PRIORITY_PASS_DAILY_USD;
-  let back = -Infinity;
+  const expected = median(passes);
+  const capacity = Math.max(expected, Math.min(PASS_BUCKET_PASSES * expected, (1 - PASS_PACE_SHARE) * PRIORITY_PASS_DAILY_USD));
+  const perMs = Math.min(PASS_PACE_SHARE * PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_DAILY_USD - capacity) / DAY;
+  let level = capacity;
+  let at = now - DAY;
   for (const r of paid) {
-    if (over <= 0) break;
-    over -= r.cost_usd ?? 0;
-    back = r.started_at + DAY;
+    level = Math.min(capacity, level + (r.started_at - at) * perMs) - (r.cost_usd ?? 0);
+    at = r.started_at;
   }
-  return Math.max(last.started_at + PASS_MIN_GAP_MS, back);
+  level = Math.min(capacity, level + (now - at) * perMs);
+  const ready = level >= expected ? now : now + (expected - level) / perMs;
+  return Math.max(last.started_at + PASS_MIN_GAP_MS, ready);
 }
 
 /** When the pair's next pass may start by its spend (passAllowedAt). */

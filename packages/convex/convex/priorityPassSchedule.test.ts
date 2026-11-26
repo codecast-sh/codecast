@@ -124,7 +124,12 @@ describe("rate limit", () => {
     const asAna = w.t.withIdentity({ subject: `${w.ana}|session` });
     expect((await asAna.query((api as any).priorities.list, { workspace: w.team })).next_pass_at).toBe(t0 - 20 * MIN + PASS_MIN_GAP_MS);
   });
-  test("two days of pins from a person and a role, each pass dearer the longer since the last: spend stays under the ceiling and passes stay spread", async () => {
+  /**
+   * Two days of pins from a person (every 20 minutes) and a role (every 5),
+   * with due jobs fired on time and each pass priced by `costOf` (hours since
+   * the last pass): the passes started, as [hours from the start, cost].
+   */
+  async function twoDays(costOf: (hoursSinceLast: number) => number): Promise<Array<[number, number]>> {
     const w = await world();
     const role = await w.t.run(async (ctx) => {
       const seat = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: Date.now() } as any);
@@ -140,40 +145,57 @@ describe("rate limit", () => {
     for (let i = 0, at = t0; at < t0 + 2 * DAY; i++, at += 5 * MIN) {
       for (const job of await jobs(w, "priorityPassSchedule:fire")) {
         if (job.scheduledTime > at) continue;
-        // A pass costs $0.03 plus $0.03 for each hour since the last one (input priced at $2 per million tokens).
-        model.usage = { input_tokens: Math.round((0.03 + (0.03 * (at - lastStart)) / H) * 500_000), output_tokens: 0 };
+        // Input is priced at $2 per million tokens.
+        model.usage = { input_tokens: Math.round(costOf((at - lastStart) / H) * 500_000), output_tokens: 0 };
         if ((await fireAt(w, at)) === "started") lastStart = at;
       }
-      // The role pins every five minutes, the person every twenty.
       await pinAt(w, role, at, `Role tick ${i}`);
       if (i % 4 === 0) await pinAt(w, w.teamConv, at, `Person step ${i}`);
     }
     const runs = (await w.runs()).filter((r) => r.started_at >= t0);
-    const paid = runs.filter((r) => r.status === "ok");
     expect(runs.filter((r) => r.error === "daily ceiling")).toEqual([]);
-    // No day's spend reaches the ceiling, wherever the day starts.
-    for (const r of paid) {
-      const day = paid.filter((x) => x.started_at > r.started_at - DAY && x.started_at <= r.started_at);
-      expect(day.reduce((sum, x) => sum + (x.cost_usd ?? 0), 0)).toBeLessThanOrEqual(PRIORITY_PASS_DAILY_USD);
+    return runs.filter((r) => r.status === "ok").map((r) => [(r.started_at - t0) / H, r.cost_usd ?? 0]);
+  }
+
+  /** No day's spend reaches the ceiling wherever the day starts, and while activity goes on no pass waits more than six hours. */
+  function expectSpread(passes: Array<[number, number]>) {
+    for (const [h] of passes) {
+      const day = passes.filter(([x]) => x > h - 24 && x <= h).reduce((sum, [, c]) => sum + c, 0);
+      expect(day).toBeLessThanOrEqual(PRIORITY_PASS_DAILY_USD);
     }
-    // Spread, not collapsed: on the second day too, passes in every quarter.
-    for (let q = 0; q < 8; q++) expect(paid.some((r) => r.started_at >= t0 + (q * DAY) / 4 && r.started_at < t0 + ((q + 1) * DAY) / 4)).toBe(true);
-    expect(paid.filter((r) => r.started_at >= t0 + DAY).length).toBeGreaterThanOrEqual(8);
+    const times = [0, ...passes.map(([h]) => h), 48];
+    for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeLessThanOrEqual(6);
+  }
+
+  test("two days at a flat $0.23 a pass (the heaviest pair's measured cost): passes come every few hours all day, under the ceiling", async () => {
+    const passes = await twoDays(() => 0.23);
+    expectSpread(passes);
+    expect(passes.length).toBeGreaterThanOrEqual(8);
   }, 600_000);
 
-  test("passAllowedAt: hourly while the day's spend has room, held until older spend leaves the day when it has not", () => {
+  test("two days with each pass dearer the longer since the last ($0.03 + $0.03 an hour): passes stay spread, never collapsing to one a day", async () => {
+    const passes = await twoDays((h) => 0.03 + 0.03 * h);
+    expectSpread(passes);
+    expect(passes.filter(([h]) => h >= 24).length).toBeGreaterThanOrEqual(8);
+  }, 600_000);
+
+  test("passAllowedAt: a token bucket of dollars, refilled at 80% of the ceiling a day, replayed from the day's runs", () => {
     const now = Date.now();
     const at = (ago: number, cost_usd: number, catch_up = false) => ({ started_at: now - ago, status: "ok", cost_usd, ...(catch_up ? { catch_up } : {}) }) as any;
+    // $1.20 a day is $0.05 an hour.
+    const refill = (dollars: number) => (dollars / 0.05) * H;
+    const near = (got: number, want: number) => expect(Math.abs(got - want)).toBeLessThan(1_000);
     expect(passAllowedAt([], now)).toBe(-Infinity);
+    // Cheap passes: the bucket always holds one, so the floor decides.
     expect(passAllowedAt([at(H, 0.01), at(3 * H, 0.01)], now)).toBe(now - H + PASS_MIN_GAP_MS);
-    // A dear pass with room left: still the floor.
-    expect(passAllowedAt([at(H, 0.5)], now)).toBe(now - H + PASS_MIN_GAP_MS);
-    // Four $0.25 passes: $1.00 + $0.25 passes 80% of $1.50, so the next waits for the oldest to leave the day.
-    expect(passAllowedAt([at(2 * H, 0.25), at(3 * H, 0.25), at(4 * H, 0.25), at(5 * H, 0.25)], now)).toBe(now - 5 * H + DAY);
-    // The expected pass is the median: one dear outlier does not hold back cheap ones.
-    expect(passAllowedAt([at(2 * H, 0.05), at(3 * H, 0.05), at(4 * H, 0.9)], now)).toBe(now - 2 * H + PASS_MIN_GAP_MS);
-    // A chain's runs are one pass: two $0.30 passes and a $0.60 chain make the median $0.30, and $1.20 spent + $0.30 waits for the oldest.
-    expect(passAllowedAt([at(H, 0.3), at(H + MIN, 0.3), at(3 * H, 0.3), at(5 * H, 0.3)], now)).toBe(now - 5 * H + DAY);
+    // $0.23 a pass: the bucket holds $0.30 (the ceiling's room beside a day's refill). After one pass $0.12 is left, $0.11 short.
+    near(passAllowedAt([at(H, 0.23)], now), now + refill(0.11));
+    // A chain's runs are one pass.
+    near(passAllowedAt([at(H - MIN, 0.115), at(H, 0.115)], now), now + refill(0.11));
+    // Three in three hours put the bucket $0.24 in debt: the next waits for $0.47.
+    near(passAllowedAt([at(H, 0.23), at(2 * H, 0.23), at(3 * H, 0.23)], now), now + refill(0.47));
+    // A pass dearer than the room holds one pass, and the refill slows to keep the day under the ceiling ($0.90 a day).
+    near(passAllowedAt([at(H, 0.6)], now), now + (0.6 / (0.9 / 24) - 1) * H);
     // A catch-up spends its own allowance.
     expect(passAllowedAt([at(H, 2, true)], now)).toBe(now - H + PASS_MIN_GAP_MS);
   });
