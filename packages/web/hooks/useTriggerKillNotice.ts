@@ -1,14 +1,15 @@
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { useSyncTriggers } from "./useSyncTriggers";
-import { animatedHideSessions } from "../store/undoActions";
+import { animatedHideSessions, restoreWithTriggerNotice } from "../store/undoActions";
+import { closeAdviceTakesTriggers } from "../store/undoStack";
 import { useInboxStore } from "../store/inboxStore";
 import {
   armedInjectTasksFor,
-  killCanceledTasksFor,
   taskDisplayTitle,
   type TaskRow,
 } from "../components/triggerTasks";
+import type { PendingCloseAdvice } from "../lib/closeAdviceBar";
 
 // Killing a session cancels the triggers that inject into it (server side, on
 // the hide transition) and restoring it re-arms them (server side, on the
@@ -16,6 +17,8 @@ import {
 // so — this hook is the one place that says it, shared by every kill/restore
 // surface: the sidebar card buttons, the command palette, the keyboard chords,
 // and the stashed-bucket "Kill all".
+
+let triggerNotices = 0;
 
 export function useTriggerKillNotice() {
   // The triggers a kill cancels and a restore re-arms are read off the store
@@ -30,17 +33,23 @@ export function useTriggerKillNotice() {
   // restoring the session). The undo of the kill itself needs no client hook:
   // the undo patch clears inbox_dismissed_at, and the server's un-hide
   // transition re-arms the stamped triggers authoritatively.
-  const noticeCanceled = useCallback((armed: TaskRow[]) => {
+  const noticeCanceled = useCallback((armed: TaskRow[], advice: PendingCloseAdvice | null) => {
     if (!armed.length) return;
     const revive = () => {
       const { triggerAction } = useInboxStore.getState();
       for (const t of armed) triggerAction(t._id, "reactivate");
     };
+    const line = armed.length === 1
+      ? `Also canceled trigger "${taskDisplayTitle(armed[0])}"`
+      : `Also canceled ${armed.length} triggers bound to this session`;
+    // A kill whose bar says a killed session asked you something shows one
+    // toast: the ask first, this line second (store/undoStack).
+    const id = `kill-triggers-${++triggerNotices}`;
+    if (closeAdviceTakesTriggers(advice, line, id)) return;
     toast(
-      armed.length === 1
-        ? `Also canceled trigger "${taskDisplayTitle(armed[0])}"`
-        : `Also canceled ${armed.length} triggers bound to this session`,
+      line,
       {
+        id,
         description: "Its next fire would have revived the session you just killed. Restoring the session re-arms it.",
         duration: 10000,
         action: {
@@ -63,25 +72,15 @@ export function useTriggerKillNotice() {
   const killManyWithNotice = useCallback((ids: string[]) => {
     if (!ids.length) return;
     const armed = new Map(ids.map((id) => [id, armedInjectTasksFor(storeTasks(), id)]));
-    void animatedHideSessions(ids, "kill").then((killed) => noticeCanceled(killed.flatMap((id) => armed.get(id) ?? [])));
+    void animatedHideSessions(ids, "kill").then(({ ids: killed, advice }) => noticeCanceled(killed.flatMap((id) => armed.get(id) ?? []), advice));
   }, [noticeCanceled]);
   // Kill one session, saying what triggers died with it.
   const killWithNotice = useCallback((id: string) => killManyWithNotice([id]), [killManyWithNotice]);
 
-  // Restore a killed session, saying what triggers came back with it. The
-  // re-arm itself happens server-side on the un-hide transition; this only
-  // makes the side effect visible (a once-trigger whose time has passed
-  // re-arms a minute out — silently reviving it would be a nasty surprise).
+  // Restore a killed session, saying what triggers came back with it
+  // (store/undoActions restoreWithTriggerNotice).
   const restoreWithNotice = useCallback((id: string) => {
-    const revived = killCanceledTasksFor(storeTasks(), id);
-    useInboxStore.getState().restoreSession(id);
-    if (revived.length) {
-      toast.success(
-        revived.length === 1
-          ? `Re-armed trigger "${taskDisplayTitle(revived[0])}" — its kill canceled it`
-          : `Re-armed ${revived.length} triggers the kill canceled`,
-      );
-    }
+    restoreWithTriggerNotice([id], () => useInboxStore.getState().restoreSession(id));
   }, []);
 
   return { killWithNotice, killManyWithNotice, restoreWithNotice };

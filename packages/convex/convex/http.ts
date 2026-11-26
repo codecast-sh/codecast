@@ -3922,9 +3922,7 @@ cliRoute("/cli/calls/bots/cancel", async (ctx, body) => {
 cliRoute("/cli/work/list", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.list, body);
 });
-cliRoute("/cli/work/stranded", async (ctx, body) => {
-  return await ctx.runQuery(api.strandedHandoffs.list, body);
-});
+cliRoute("/cli/work/stranded", async (ctx, body) => ctx.runQuery(api.strandedHandoffs.list, body));
 cliRoute("/cli/work/page", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.listPage, body);
 });
@@ -4331,8 +4329,7 @@ cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversa
 // Retire (a flow run's subject once its change is live, flows.md FL4): a kill that refuses when anything would be
 // lost. body: { api_token, session, expected_message_count }.
 cliRoute("/cli/sessions/retire", async (ctx, body) => ctx.runMutation(api.conversations.cliRetireSession, body));
-// Close advice (cast advise-close <session>), read-only, behind the close_advice team feature. body: { api_token, session }.
-cliRoute("/cli/sessions/advise", async (ctx, body) => ctx.runAction(api.closeAdvice.adviseClose, body));
+cliRoute("/cli/sessions/advise", async (ctx, body) => ctx.runAction(api.closeAdvice.adviseClose, body)); // cast advise-close, read-only
 
 // Resume (cast resume <session> --tmux): bring the agent up in its managed pane
 // without killing a live one. body: { api_token, session }.

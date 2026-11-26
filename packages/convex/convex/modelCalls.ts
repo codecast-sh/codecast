@@ -71,14 +71,17 @@ const BUDGET_CONFLICT = /changed while this mutation was being run/;
  * row, so in a burst the reserve can exhaust Convex's own conflict retries;
  * nothing has been spent then, so it waits a moment and asks again rather
  * than failing the caller (a merge pass died mid-list on this, 2026-10-21).
+ * Past `deadline` it asks no more and throws, so no hold is taken.
  */
-async function reserveBudget(ctx: { runMutation: any }, scope: CallScope, held: number): Promise<boolean> {
+async function reserveBudget(ctx: { runMutation: any }, scope: CallScope, held: number, deadline?: number): Promise<boolean> {
   for (let attempt = 0; ; attempt++) {
+    if (deadline !== undefined && Date.now() >= deadline) throw new Error("the model call ran past its deadline");
     try {
       return await ctx.runMutation(internal.modelCalls.reserve, { workspace: scope.workspace, team_id: scope.team_id, amount: held });
     } catch (err) {
       if (attempt >= 4 || !BUDGET_CONFLICT.test(String(err))) throw err;
-      await new Promise((r) => setTimeout(r, 250 * 2 ** attempt * (1 + Math.random())));
+      const wait = 250 * 2 ** attempt * (1 + Math.random());
+      await new Promise((r) => setTimeout(r, deadline === undefined ? wait : Math.min(wait, Math.max(0, deadline - Date.now()))));
     }
   }
 }
@@ -92,6 +95,9 @@ async function reserveBudget(ctx: { runMutation: any }, scope: CallScope, held: 
  * burst of judging exhausts the conflict retries) goes to the scheduler,
  * which retries it until it lands: a hold left behind keeps the cap full
  * for the rest of the month (364 holds, $65 of a $400 cap, 2026-10-14).
+ * `deadline`: a caller that stops waiting then (close advice after a Close)
+ * takes no hold past it, and settles past it through the scheduler at once,
+ * so its return never waits on a contended budget row.
  */
 export async function withinBudget<T>(
   ctx: { runMutation: any; scheduler: any },
@@ -99,8 +105,9 @@ export async function withinBudget<T>(
   purpose: BudgetPurpose,
   held: number,
   run: (charge: (usd: number) => void) => Promise<T>,
+  deadline?: number,
 ): Promise<{ room: false } | { room: true; value: T }> {
-  const room = await reserveBudget(ctx, scope, held);
+  const room = await reserveBudget(ctx, scope, held, deadline);
   if (!room) return { room: false };
   let cost = 0;
   try {
@@ -108,6 +115,7 @@ export async function withinBudget<T>(
   } finally {
     const settle = { workspace: scope.workspace, purpose, held, cost, project_ids: projectsOf(scope) };
     try {
+      if (deadline !== undefined && Date.now() >= deadline) throw new Error("past the deadline");
       await ctx.runMutation(internal.modelCalls.settle, settle);
     } catch {
       await ctx.scheduler.runAfter(0, internal.modelCalls.settle, settle);
@@ -124,6 +132,7 @@ export async function withinBudget<T>(
  * `budgeted: false`: the workspace keeps no budget (workspaceBudgeted), so the
  * call is codecast's own, like the idle summary's: the same gate and errors,
  * nothing reserved, charged or recorded.
+ * `deadline` (epoch ms): the call stops then, its fetch included (withinBudget).
  */
 export async function runModelCall(
   ctx: { runQuery: any; runMutation: any; scheduler: any },
@@ -132,7 +141,7 @@ export async function runModelCall(
   spec: ModelCallSpec,
   label: string,
   timeoutMs = 60_000,
-  opts: { content?: { conversationId?: string; apiToken?: string }; budgeted?: boolean } = {},
+  opts: { content?: { conversationId?: string; apiToken?: string }; budgeted?: boolean; deadline?: number } = {},
 ): Promise<ModelCallResult> {
   const problem = modelCallProblem(spec);
   if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
@@ -141,7 +150,8 @@ export async function runModelCall(
   const refusal = await vendorRefusalFor(ctx, gate.scope, "anthropic");
   if (refusal) return { ok: false, reason: "failed", error: refusal, cost_usd: 0, model: spec.model };
   const call = async (charge: (usd: number) => void): Promise<ModelCallResult> => {
-    const { reply, usage, error, transient } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
+    const timeout_ms = opts.deadline === undefined ? timeoutMs : Math.max(1, Math.min(timeoutMs, opts.deadline - Date.now()));
+    const { reply, usage, error, transient } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms, gate });
     const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
     charge(cost);
     if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model, ...(transient ? { transient: true } : {}) };
@@ -154,7 +164,7 @@ export async function runModelCall(
   };
   if (opts.budgeted === false) return call(() => {});
   const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);
-  const spent = await withinBudget(ctx, scope, purpose, held, call);
+  const spent = await withinBudget(ctx, scope, purpose, held, call, opts.deadline);
   if (!spent.room) return { ok: false, reason: "budget", error: "the team's model budget for this month has no room", cost_usd: 0, model: spec.model, worst_case_usd: held };
   return spent.value;
 }

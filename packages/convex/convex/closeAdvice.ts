@@ -1,6 +1,8 @@
 // Close advice (`cast advise-close <session>`): whether closing a quiet session
 // loses anything. close, or needs_input naming what the person must do first.
-// It proposes and never acts: nothing here writes.
+// It proposes and never acts: nothing here writes. After a Close or Kill in the
+// app, adviseAfterClose asks the model the same of the sessions the inbox did
+// not file under Needs You, so the undo bar can warn when one asked something.
 //
 // Close is dormancy, not retirement (contracts/closeKind): in-flight work is
 // set aside to finish, and a trigger or a park brings a stopped session back.
@@ -30,9 +32,9 @@
 // message closes a Done session, and a current settle verdict that it asks
 // gives needs_input.
 import { v } from "convex/values";
-import { declaredBlockHolds, isSettleVerdictCurrent, threadStateAskRow, threadStateCardLine, threadStateRows } from "@codecast/shared/contracts";
+import { agentAnswersRow, commandsSession, declaredBlockHolds, isSettleVerdictCurrent, threadStateAskRow, threadStateCardLine, threadStateRows } from "@codecast/shared/contracts";
 import { isArmedInjectTrigger } from "@codecast/shared/contracts/armedTrigger";
-import { closeEffect, closeFactsFrom, closeKindOf, closeSetsAside, type CloseAdvice, type CloseAdviceResult, type CloseFacts } from "@codecast/shared/contracts/closeKind";
+import { AFTER_CLOSE_CALL_MS, AFTER_CLOSE_MAX, closeEffect, closeFactsFrom, closeKindOf, closeSetsAside, killFacts, type AfterCloseResult, type CloseAdvice, type CloseAdviceResult, type CloseFacts } from "@codecast/shared/contracts/closeKind";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
 import { action, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
@@ -41,6 +43,7 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { getAuthenticatedUserId } from "./permissions";
 import { CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { cascadeTakesDown, closeInFlightOnServer } from "./lib/closeAside";
+import { withInboxOwners } from "./lib/inboxOwners";
 import { classifyNamedWorkState } from "./conversations";
 import { userRestOf } from "./inboxFilters";
 import { teamFeatureOffMessage, workspaceHasFeature } from "./lib/teamFeatureGuard";
@@ -203,7 +206,7 @@ export function buildCloseAdvicePrompt(facts: SessionFacts, tail: SettleTailMess
     })
     .join("\n\n");
 
-  return `A person is clearing quiet agent sessions out of their inbox and wants to know whether closing this one loses anything. Closing stops the agent and takes the session out of view; a new message brings it back, but nothing reminds the person of it. Read the facts and the end of its transcript, then decide.
+  return `A person is clearing quiet agent sessions out of their inbox and wants to know whether closing this one loses anything. Closing stops the agent and takes the session out of view; a person's message brings it back, and a wake runs it out of sight until it reports, but nothing reminds the person of it. Read the facts and the end of its transcript, then decide.
 
 ${facts.closeKeeps ? "Closing keeps a wake the system verified (the facts name it), so a line in the transcript about checking back or waiting may have it behind it. Decide whether its end still owes the person something." : "Nothing the system can see will wake this session: the facts list no armed wake. So a line in the transcript about checking back, watching or waiting for something has nothing behind it."}
 
@@ -278,10 +281,17 @@ export async function gatherCloseAdviceInput(ctx: { db: any }, conv: any, now: n
   { advice: CloseAdvice } | { facts: SessionFacts; tail: SettleTailMessage[] }
 > {
   // The header's rules: the inbox's placement (its own classifier) plus what Close itself does.
-  const [{ facts: closeFacts, managed, group }, placed] = await Promise.all([closeFactsOnServer(ctx, conv, now), classifyNamedWorkState(ctx, conv, now)]);
-  const settle = currentSettleVerdict(conv);
-  const decided = adviceFromPlacement(placed.state, placed.agentStatus, closeFacts, conv, settle);
+  const [closed, placed] = await Promise.all([closeFactsOnServer(ctx, conv, now), classifyNamedWorkState(ctx, conv, now)]);
+  const decided = adviceFromPlacement(placed.state, placed.agentStatus, closed.facts, conv, currentSettleVerdict(conv));
   if (decided) return { advice: decided };
+  return modelInputOf(ctx, conv, now, canRead, closed);
+}
+
+/** What the model reads of one conversation, with the Close facts and the
+ *  nested group the Close scan read. */
+async function modelInputOf(ctx: { db: any }, conv: any, now: number, canRead: CanRead, closed: { facts: CloseFacts; managed: any; group: any[] }): Promise<{ facts: SessionFacts; tail: SettleTailMessage[] }> {
+  const { facts: closeFacts, managed, group } = closed;
+  const settle = currentSettleVerdict(conv);
   // What the prompt says of its own word: an older pin is not its word on the transcript's end (rowPinPredatesTurn).
   const predatesTurn = rowPinPredatesTurn({ last_turn_at: conv.last_turn_at, thread_state_at: conv.thread_state_at, last_user_message_at: conv.last_user_message_at });
   // Advice's own declared-dormant rule, deliberately looser than the inbox's (rowWakeInputs), so more goes to the model.
@@ -332,30 +342,57 @@ export async function gatherCloseAdviceInput(ctx: { db: any }, conv: any, now: n
 
 export const FEATURE = "close_advice" as const;
 
+/** What the model call needs. */
+type ModelInput = { conversation_id: string; facts: SessionFacts; tail: SettleTailMessage[]; budget: SessionCallBudget };
+
 type CloseAdviceInput = { short_id: string; conversation_id: string } & (
   | { off: "team" | "personal" }
   | { advice: CloseAdvice }
-  | { facts: SessionFacts; tail: SettleTailMessage[]; budget: SessionCallBudget }
+  | ModelInput
 );
+
+/** The read rule of the signed-in caller (or the token's) over the session
+ *  and what its prompt shows; null when nobody is signed in. */
+async function readerOf(ctx: any, apiToken?: string): Promise<CanRead | null> {
+  const userId = await getAuthenticatedUserId(ctx, apiToken);
+  if (!userId) return null;
+  return (table, doc) =>
+    table === "tasks" ? canAccessTask(ctx, userId, doc) : table === "plans" ? canAccessPlan(ctx, userId, doc) : canAccessConversation(ctx, userId, doc);
+}
+
+const featureOn = (ctx: any, conv: any) => workspaceHasFeature(ctx, { team_id: conv.team_id, user_id: conv.user_id }, FEATURE);
 
 export const closeAdviceInput = internalQuery({
   args: { session: v.string(), api_token: v.optional(v.string()), now: v.number() },
   handler: async (ctx, args): Promise<CloseAdviceInput> => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Not authenticated");
-    const canRead: CanRead = (table, doc) =>
-      table === "tasks" ? canAccessTask(ctx, userId, doc) : table === "plans" ? canAccessPlan(ctx, userId, doc) : canAccessConversation(ctx, userId, doc);
+    const canRead = await readerOf(ctx, args.api_token);
+    if (!canRead) throw new Error("Not authenticated");
     const conv: any = await findConversationByAnyRefWhere(ctx, args.session, (c: any) => canRead("conversations", c));
     if (!conv) throw new Error(`No session found for "${args.session}"`);
     const ids = { short_id: conv.short_id ?? String(conv._id).slice(0, 7), conversation_id: String(conv._id) };
-    if (!(await workspaceHasFeature(ctx, { team_id: conv.team_id, user_id: conv.user_id }, FEATURE))) return { ...ids, off: conv.team_id ? "team" : "personal" };
+    if (!(await featureOn(ctx, conv))) return { ...ids, off: conv.team_id ? "team" : "personal" };
     const gathered = await gatherCloseAdviceInput(ctx, conv, args.now, canRead);
     if ("advice" in gathered) return { ...ids, ...gathered };
     return { ...ids, ...gathered, budget: await sessionCallBudget(ctx, conv) };
   },
 });
 
+/** `cast advise-close` waits on its one call; the app's after-close calls stop sooner (AFTER_CLOSE_CALL_MS). */
 const ADVICE_TIMEOUT_MS = 15_000;
+
+/** The one model call, behind the vendor gate for the session and the caller's token. A workspace that keeps a
+ *  budget pays from it; with none, the call is codecast's own and records nothing (runModelCall `budgeted`). */
+async function adviceFromModel(ctx: any, input: ModelInput, timeoutMs: number, apiToken?: string, deadline?: number): Promise<{ advice: CloseAdvice } | { error: string }> {
+  const request = closeAdviceRequest(input.facts, input.tail);
+  const r = await runModelCall(ctx, input.budget.scope, "judge", { model: request.model, prompt: request.prompt, max_tokens: request.max_tokens, output: "text" }, "Close advice", timeoutMs, {
+    budgeted: input.budget.budgeted,
+    content: { conversationId: input.conversation_id, apiToken: apiToken || undefined },
+    deadline,
+  });
+  if (!r.ok) return { error: r.error };
+  const advice = parseCloseAdvice(r.text);
+  return advice ? { advice } : { error: "the model gave no verdict" };
+}
 
 /** `cast advise-close <session>`: the advice for one session the caller can read. */
 export const adviseClose = action({
@@ -365,15 +402,93 @@ export const adviseClose = action({
     const short_id = input.short_id;
     if ("off" in input) return { short_id, off: input.off, message: teamFeatureOffMessage(FEATURE) };
     if ("advice" in input) return { short_id, advice: input.advice };
-    // The one model call, behind the vendor gate for the session and the caller's token. A workspace that keeps a
-    // budget pays from it; with none, the call is codecast's own and records nothing (runModelCall `budgeted`).
-    const request = closeAdviceRequest(input.facts, input.tail);
-    const r = await runModelCall(ctx, input.budget.scope, "judge", { model: request.model, prompt: request.prompt, max_tokens: request.max_tokens, output: "text" }, "Close advice", ADVICE_TIMEOUT_MS, {
-      budgeted: input.budget.budgeted,
-      content: { conversationId: input.conversation_id, apiToken: args.api_token || undefined },
-    });
-    if (!r.ok) return { short_id, error: r.error };
-    const advice = parseCloseAdvice(r.text);
-    return advice ? { short_id, advice } : { short_id, error: "the model gave no verdict" };
+    return { short_id, ...(await adviceFromModel(ctx, input, ADVICE_TIMEOUT_MS, args.api_token)) };
+  },
+});
+
+// ── After a Close or Kill in the app ────────────────────────────────────────
+
+type AfterCloseInput = { skip: true } | { close: true } | ModelInput;
+
+const gestureArg = v.union(v.literal("close"), v.literal("kill"));
+
+/** One closed session's model input; close for a Close of a turn still
+ *  running; or skip: one the caller does not run or
+ *  own (commandsSession, the app's own "your sessions" rule: a teammate's
+ *  team-visible session is theirs to be asked about), the feature off for its
+ *  workspace, a session whose waits an agent owner answers (the owners
+ *  model files it "With <owner>", agentAnswersRow), or one with no messages
+ *  to read (nothing it said can have asked anything).
+ *  The facts are what the gesture leaves, on purpose, whether or not its
+ *  write has landed (the app asks beside the gesture, and the phone holds a
+ *  Kill behind its bar): a Kill cancels its triggers and wakes (killFacts), so
+ *  a promise to check back has nothing behind it, which is what the warning
+ *  is for; a Close keeps its wake. A current settle "done" never stands in for
+ *  the model: a verdict made under an older settle prompt is still current,
+ *  and those are the rows this net is for. */
+export const afterCloseInput = internalQuery({
+  args: { session: v.string(), gesture: gestureArg, now: v.number() },
+  handler: async (ctx, args): Promise<AfterCloseInput> => {
+    const userId = await getAuthenticatedUserId(ctx);
+    const canRead = await readerOf(ctx);
+    const conv: any = canRead && (await findConversationByAnyRefWhere(ctx, args.session, (c: any) => canRead("conversations", c)));
+    if (!conv || !commandsSession(conv, userId) || !(await featureOn(ctx, conv)) || agentAnswersRow(await withInboxOwners(ctx, conv))) return { skip: true };
+    const closed = await closeFactsOnServer(ctx, conv, args.now);
+    // A Close of a turn still running sets it aside: it has asked nothing yet, so there is nothing to warn about
+    // (a tail cut mid tool call would read as work stopped partway). Any other in-flight reason (a background task,
+    // a queued message, a loop) can follow a turn that ended with an ask, so it still goes to the model.
+    if (args.gesture === "close" && closed.facts.inFlight === "live") return { close: true };
+    if (args.gesture === "kill") closed.facts = killFacts(closed.facts, !!conv.persistent);
+    const { facts, tail } = await modelInputOf(ctx, conv, args.now, canRead!, closed);
+    // A Kill stopped it: a transcript that ends mid tool call is the person's stop, not work left partway (its note
+    // goes). A Close only sets it aside, so work it halted mid-call is still unfinished.
+    const shown = args.gesture === "kill" ? tail.filter((m) => m.role !== "note") : tail;
+    if (!shown.some((m) => m.role !== "note" && m.content.trim())) return { skip: true };
+    return { conversation_id: String(conv._id), facts, tail: shown, budget: await sessionCallBudget(ctx, conv) };
+  },
+});
+
+/** After the person Closes or Kills (`gesture`) sessions in the app: whether each one
+ *  still asked them something. The client sends only the sessions it did not
+ *  file under Needs You (its own inbox placement, from before the gesture),
+ *  and the server trusts that: it decides only whether a gated, budgeted model
+ *  call runs on a session the caller runs or owns. The first AFTER_CLOSE_MAX are
+ *  advised, together, against one deadline AFTER_CLOSE_CALL_MS from the
+ *  action's start, so the answer lands while the app still waits: a session
+ *  not done by then, an error or no verdict is "close" for it (no warning),
+ *  never a thrown action. Past the deadline its call takes no budget hold and
+ *  stops its fetch, and a hold it took settles through the scheduler
+ *  (withinBudget): the action then waits only for that bookkeeping (at most a
+ *  budget write already in flight), so it never returns with a hold nobody
+ *  will settle. */
+export const adviseAfterClose = action({
+  args: { sessions: v.array(v.string()), gesture: gestureArg },
+  handler: async (ctx, args): Promise<{ results: AfterCloseResult[] }> => {
+    const now = Date.now();
+    const deadline = now + AFTER_CLOSE_CALL_MS;
+    const advise = async (session: string): Promise<AfterCloseResult> => {
+      try {
+        const input: AfterCloseInput = await ctx.runQuery(internal.closeAdvice.afterCloseInput, { session, gesture: args.gesture, now });
+        if ("skip" in input) return { session, verdict: "skip" };
+        if ("close" in input) return { session, verdict: "close" };
+        const out = await adviceFromModel(ctx, input, AFTER_CLOSE_CALL_MS, undefined, deadline);
+        if ("advice" in out && out.advice.verdict === "needs_input") return { session, verdict: "needs_you", reason: out.advice.reason };
+      } catch {
+        // Fall through: no warning.
+      }
+      return { session, verdict: "close" };
+    };
+    // One result per session, however often it was sent: a repeat would buy another model call.
+    const sessions = [...new Set(args.sessions)];
+    const work = sessions.slice(0, AFTER_CLOSE_MAX).map(advise);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<"late">((resolve) => { timer = setTimeout(() => resolve("late"), AFTER_CLOSE_CALL_MS); });
+    const decided = await Promise.all(work.map(async (w, i): Promise<AfterCloseResult> => {
+      const r = await Promise.race([w, late]);
+      return r === "late" ? { session: sessions[i]!, verdict: "close" } : r;
+    }));
+    clearTimeout(timer);
+    await Promise.all(work);
+    return { results: [...decided, ...sessions.slice(AFTER_CLOSE_MAX).map((session): AfterCloseResult => ({ session, verdict: "skip" }))] };
   },
 });

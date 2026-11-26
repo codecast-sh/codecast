@@ -134,7 +134,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
   {
     key: "close_advice",
     name: "Close advice",
-    desc: "cast advise-close: does closing a quiet session lose anything? CLI only. In development.",
+    desc: "After a Close or Kill, the undo bar says when a session you had not seen under Needs You asked you something; also cast advise-close. In development.",
     short: "Whether closing a session loses anything",
     inDevelopment: true,
     personal: true,
