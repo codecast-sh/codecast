@@ -58,7 +58,9 @@ import {
   extractSetupToken,
   readAccountTokenValue,
   parseRateLimitFingerprint,
-  sameAccountFingerprint,
+  compareAccountFingerprints,
+  judgeMintedOwner,
+  fetchRateLimitFingerprint,
   attributeFingerprint,
   ACCOUNT_LAUNCH_UNSET,
 } from "./ccAccounts.js";
@@ -2029,22 +2031,106 @@ describe("per-profile credential stores (sandboxed $HOME, file store)", () => {
   it("a probe that cannot answer is unknown, and is never cached as a negative", async () => {
     const bin = path.join(home, "claude");
     fs.writeFileSync(bin, "#!/bin/sh\n");
+    const ask = (impl: () => Promise<string>) => probeSecureStorageSupport(bin, { execImpl: impl, fresh: true });
     // A first run that waits on Gatekeeper past the timeout, then the same
     // binary answering normally once the machine is quiet again.
-    const thrown = async () => { throw new Error("spawn timed out"); };
-    expect(await probeSecureStorageSupport(bin, { execImpl: thrown })).toBe("unknown");
+    expect(await ask(async () => { throw new Error("spawn timed out"); })).toBe("unknown");
     // Output that is not the JSON we asked for proves nothing either.
-    const garbage = async () => "Downloading update...\n";
-    expect(await probeSecureStorageSupport(bin, { execImpl: garbage })).toBe("unknown");
+    expect(await ask(async () => "Downloading update...\n")).toBe("unknown");
     // A binary answering in a shape we do not understand is also unknown.
-    const shapeless = async () => JSON.stringify({ loggedIn: "no" });
-    expect(await probeSecureStorageSupport(bin, { execImpl: shapeless })).toBe("unknown");
-    // Nothing above poisoned the cache: the same binary is asked again and the
-    // real answer stands.
-    const healthy = async () => JSON.stringify({ loggedIn: false });
-    expect(await probeSecureStorageSupport(bin, { execImpl: healthy })).toBe("supported");
+    expect(await ask(async () => JSON.stringify({ loggedIn: "no" }))).toBe("unknown");
+    expect(await ask(async () => JSON.stringify({ loggedIn: false }))).toBe("supported");
     const cache = path.join(sandbox.dir, "cc-store", ".support.json");
-    expect(JSON.parse(fs.readFileSync(cache, "utf-8")).supported).toBe(true);
+    expect(JSON.parse(fs.readFileSync(cache, "utf-8")).verdict).toBe("supported");
+  });
+
+  // 2026-11-25 review: a remembered negative, then a fresh probe (the person
+  // clicked Sign in again after updating) that times out on Gatekeeper. If the
+  // negative stayed cached, the next beat would delete the store the sign-in
+  // just filled.
+  it("an unknown replaces an older negative, and is asked again after ten minutes", async () => {
+    const bin = path.join(home, "claude");
+    fs.writeFileSync(bin, "#!/bin/sh\n");
+    const t0 = 1_800_000_000_000;
+    let calls = 0;
+    const keychain = async () => { calls++; return JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }); };
+    const timeout = async () => { calls++; throw new Error("spawn timed out"); };
+    const empty = async () => { calls++; return JSON.stringify({ loggedIn: false }); };
+    expect(await probeSecureStorageSupport(bin, { execImpl: keychain, now: t0 })).toBe("unsupported");
+    expect(await probeSecureStorageSupport(bin, { execImpl: timeout, now: t0 + 60_000, fresh: true })).toBe("unknown");
+    // The next beat reads the unknown, not the negative, and asks nothing.
+    expect(await probeSecureStorageSupport(bin, { execImpl: empty, now: t0 + 90_000 })).toBe("unknown");
+    expect(calls).toBe(2);
+    expect(await probeSecureStorageSupport(bin, { execImpl: empty, now: t0 + 60_000 + 10 * 60_000 })).toBe("supported");
+    expect(calls).toBe(3);
+    // Nor by one that times out after another probe proved support meanwhile.
+    const cache = path.join(sandbox.dir, "cc-store", ".support.json");
+    fs.writeFileSync(cache, JSON.stringify({ identity: "other", verdict: "unknown", checked_at: t0 }));
+    const racedBySupport = async () => {
+      const identity = JSON.parse(fs.readFileSync(cache, "utf-8")).identity === "other" ? `${bin}:${fs.statSync(bin).size}:${Math.floor(fs.statSync(bin).mtimeMs)}` : "";
+      fs.writeFileSync(cache, JSON.stringify({ identity, verdict: "supported", checked_at: t0 + 11 * 60_000 }));
+      throw new Error("spawn timed out");
+    };
+    expect(await probeSecureStorageSupport(bin, { execImpl: racedBySupport, now: t0 + 11 * 60_000, fresh: true })).toBe("supported");
+    expect(JSON.parse(fs.readFileSync(cache, "utf-8")).verdict).toBe("supported");
+    // A current proof of support is not displaced by a probe that times out.
+    expect(await probeSecureStorageSupport(bin, { execImpl: timeout, now: t0 + 12 * 60_000, fresh: true })).toBe("supported");
+    expect(await probeSecureStorageSupport(bin, { execImpl: timeout, now: t0 + 13 * 60_000 })).toBe("supported");
+    expect(calls).toBe(4);
+  });
+
+  // 2026-11-25: an Anthropic Console login in ~/.config/anthropic answered
+  // `loggedIn: true` (authMethod "oauth_token") with the store empty, and a
+  // current Claude Code was recorded as ignoring the store.
+  it("asks with every other credential source emptied, and only a keychain login is a negative", async () => {
+    const bin = path.join(home, "claude");
+    fs.writeFileSync(bin, "#!/bin/sh\n");
+    let seen: NodeJS.ProcessEnv = {};
+    const answering = (status: object) => async (_b: string, _a: string[], env: NodeJS.ProcessEnv) => {
+      seen = env;
+      return JSON.stringify(status);
+    };
+    const env = { PATH: "/bin", ANTHROPIC_API_KEY: "k", ANTHROPIC_AUTH_TOKEN: "t", CLAUDE_CODE_OAUTH_TOKEN: "o", ANTHROPIC_CONFIG_DIR: "/real" };
+    const ask = (status: object) => probeSecureStorageSupport(bin, { env, execImpl: answering(status), fresh: true });
+    expect(await ask({ loggedIn: false, authMethod: "none" })).toBe("supported");
+    expect(seen.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(seen.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(seen.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(seen.ANTHROPIC_CONFIG_DIR).not.toBe("/real");
+    expect(seen.ANTHROPIC_CONFIG_DIR!.startsWith(seen.CLAUDE_SECURESTORAGE_CONFIG_DIR!)).toBe(true);
+    expect(seen.PATH).toBe("/bin");
+    expect(await ask({ loggedIn: true, authMethod: "claude.ai" })).toBe("unsupported");
+    expect(await ask({ loggedIn: true })).toBe("unsupported");
+    // Some other source signed in: it says nothing about the store.
+    expect(await ask({ loggedIn: true, authMethod: "oauth_token" })).toBe("unknown");
+    expect(await ask({ loggedIn: true, authMethod: "api_key" })).toBe("unknown");
+  });
+
+  // A launcher script that execs the newest version keeps its size and mtime
+  // across Claude Code updates, so a cached answer must expire on its own.
+  it("a cached answer lasts an hour, and an entry without a check time is stale", async () => {
+    const bin = path.join(home, "claude");
+    fs.writeFileSync(bin, "#!/bin/sh\n");
+    let calls = 0;
+    let answer = true;
+    const exec = async () => { calls++; return JSON.stringify({ loggedIn: answer, authMethod: answer ? "claude.ai" : "none" }); };
+    const t0 = 1_800_000_000_000;
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec, now: t0 })).toBe("unsupported");
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec, now: t0 + 59 * 60_000 })).toBe("unsupported");
+    expect(calls).toBe(1);
+    answer = false; // Claude Code updated behind the same launcher
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec, now: t0 + 61 * 60_000 })).toBe("supported");
+    expect(calls).toBe(2);
+    // An entry written before entries carried a check time is asked again.
+    const cache = path.join(sandbox.dir, "cc-store", ".support.json");
+    const entry = JSON.parse(fs.readFileSync(cache, "utf-8"));
+    fs.writeFileSync(cache, JSON.stringify({ identity: entry.identity, supported: false }));
+    expect(entry.verdict).toBe("supported");
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec, now: t0 + 62 * 60_000 })).toBe("supported");
+    expect(calls).toBe(3);
+    // A clock that stepped back does not keep an entry from the future alive.
+    expect(await probeSecureStorageSupport(bin, { execImpl: exec, now: t0 })).toBe("supported");
+    expect(calls).toBe(4);
   });
 });
 
@@ -2276,13 +2362,138 @@ describe("setup-token extraction + account fingerprint", () => {
     });
   });
 
-  it("same account = both reset timestamps match; unknown windows never match", () => {
+  it("compares reset times: both match = same, either differs = different, no 7d = unknown", () => {
     const a = { five_hour_reset: 1, seven_day_reset: 2, five_hour_utilization: 0.1, seven_day_utilization: 0.5 };
-    expect(sameAccountFingerprint(a, { ...a, five_hour_utilization: 0.9 })).toBe(true);
-    expect(sameAccountFingerprint(a, { ...a, five_hour_reset: 3 })).toBe(false);
-    expect(sameAccountFingerprint(a, { ...a, seven_day_reset: 9 })).toBe(false);
+    expect(compareAccountFingerprints(a, { ...a, five_hour_utilization: 0.9 })).toBe("same");
+    expect(compareAccountFingerprints(a, { ...a, five_hour_reset: 3 })).toBe("different");
+    expect(compareAccountFingerprints(a, { ...a, seven_day_reset: 9 })).toBe("different");
+    expect(compareAccountFingerprints(a, { ...a, seven_day_reset: null })).toBe("unknown");
     const unknown = { five_hour_reset: null, seven_day_reset: null, five_hour_utilization: null, seven_day_utilization: null };
-    expect(sameAccountFingerprint(unknown, unknown)).toBe(false);
+    expect(compareAccountFingerprints(unknown, unknown)).toBe("unknown");
+  });
+
+  // Two Team seats answered with a 7d reset and no 5h headers at all
+  // (2026-11-25); requiring both windows rejected every mint for them.
+  it("an account with no 5-hour window matches on its weekly reset alone", () => {
+    const seat = { five_hour_reset: null, seven_day_reset: 2, five_hour_utilization: null, seven_day_utilization: 0.4 };
+    expect(compareAccountFingerprints(seat, seat)).toBe("weekly");
+    expect(compareAccountFingerprints(seat, { ...seat, seven_day_reset: 3 })).toBe("different");
+    // Only one side with a 5-hour window is two plans, so two accounts.
+    expect(compareAccountFingerprints(seat, { ...seat, five_hour_reset: 1 })).toBe("different");
+    expect(compareAccountFingerprints({ ...seat, five_hour_reset: 1 }, seat)).toBe("different");
+  });
+});
+
+describe("judgeMintedOwner (whose account a minted token is)", () => {
+  const now = 1_788_320_000_000;
+  const fp = (five: number | null, seven: number | null) =>
+    ({ five_hour_reset: five, seven_day_reset: seven, five_hour_utilization: null, seven_day_utilization: null });
+  const profiles = { contact: { uuid: "u-c", email: "contact@x.com" }, jamie: { uuid: "u-j", email: "jamie@x.com" }, other: { uuid: "u-o" } };
+  const usage = {
+    "u-c": { fetched_at: now, weekly: { percent: 1, resets_at: 1_788_861_600_000 } },
+    "u-j": { fetched_at: now, weekly: { percent: 1, resets_at: 1_788_900_000_000 } },
+    "u-o": { fetched_at: now, session: { percent: 1, resets_at: 1_788_330_000_000 }, weekly: { percent: 1, resets_at: 1_788_950_000_000 } },
+  } as any;
+  const judge = (mine: ReturnType<typeof fp> | null, minted: ReturnType<typeof fp>, u = usage) =>
+    judgeMintedOwner({ profile: "contact", label: "contact@x.com", mine, minted, profiles, usage: u, now });
+
+  it("both windows matching stores the token for the profile, with no note", () => {
+    expect(judge(fp(1_788_324_000, 1_788_861_600), fp(1_788_324_000, 1_788_861_600))).toEqual({ owner: "contact" });
+  });
+
+  it("a weekly-only match is stored for the profile and says so", () => {
+    const v = judge(fp(null, 1_788_861_600), fp(null, 1_788_861_600));
+    expect(v).toMatchObject({ owner: "contact" });
+    expect((v as { caveat: string }).caveat).toContain("partly checked");
+  });
+
+  it("a saved account with a 5-hour window, open or closed, is no twin of a token without one", () => {
+    for (const resets_at of [now + 3_600_000, now - 3_600_000]) {
+      const busy = { ...usage, "u-j": { fetched_at: now, session: { percent: 1, resets_at }, weekly: { percent: 5, resets_at: 1_788_861_600_000 } } };
+      const v = judge(fp(null, 1_788_861_600), fp(null, 1_788_861_600), busy);
+      expect((v as { caveat: string }).caveat).toContain("partly checked");
+    }
+  });
+
+  it("a weekly-only match another saved account shares is stored, but not as verified", () => {
+    const twin = { ...usage, "u-j": { fetched_at: now, weekly: { percent: 5, resets_at: 1_788_861_601_000 } } };
+    const v = judge(fp(null, 1_788_861_600), fp(null, 1_788_861_600), twin);
+    expect(v).toMatchObject({ owner: "contact" });
+    expect((v as { caveat: string }).caveat).toContain("without an identity check");
+    expect((v as { caveat: string }).caveat).toContain("jamie@x.com");
+  });
+
+  it("long account names keep every message whole under the dialog's 240 characters", () => {
+    const long = "someone.long@a-rather-long-company-domain.example"; // 49 characters
+    const many = Object.fromEntries(["p1", "p2", "p3", "p4"].map((n) => [n, { uuid: `u-${n}`, email: `${n}.${long}` }]));
+    const twins = Object.fromEntries(["p1", "p2", "p3", "p4"].map((n) => [`u-${n}`, { fetched_at: now, weekly: { percent: 1, resets_at: 1_788_861_600_000 } }])) as any;
+    const all = { contact: profiles.contact, ...many };
+    const shared = judgeMintedOwner({ profile: "contact", label: long, mine: fp(null, 1_788_861_600), minted: fp(null, 1_788_861_600), profiles: all, usage: { ...usage, ...twins }, now });
+    const rejected = judgeMintedOwner({ profile: "contact", label: long, mine: fp(1, 1_788_861_600), minted: fp(2, 1_788_861_600), profiles, usage, now });
+    expect((shared as { caveat: string }).caveat.length).toBeLessThanOrEqual(240);
+    expect((rejected as { rejected: string }).rejected.length).toBeLessThanOrEqual(240);
+  });
+
+  it("a proven different account goes to the saved profile it matches, else is rejected as different", () => {
+    expect(judge(fp(1_788_324_000, 1_788_861_600), fp(1_788_330_000, 1_788_950_000))).toEqual({ owner: "other" });
+    const v = judge(fp(1_788_324_000, 1_788_861_600), fp(1_788_340_000, 1_789_000_000));
+    expect("rejected" in v && v.rejected).toContain("different Claude account than contact@x.com");
+  });
+
+  // Writing the token to another saved profile replaces that profile's token,
+  // so a weekly reset alone (seats created together share one) never moves it.
+  it("a snapshot names another saved profile as owner only on both windows", () => {
+    expect("rejected" in judge(fp(1_788_324_000, 1_788_861_600), fp(null, 1_788_900_000))).toBe(true);
+    // With contact's own snapshot unknown, a weekly-only hit on jamie does not
+    // move the token there.
+    const blindContact = { ...usage, "u-c": undefined };
+    const v = judge(null, fp(null, 1_788_900_000), blindContact);
+    expect(v).toMatchObject({ owner: "contact" });
+    expect((v as { caveat: string }).caveat).toContain("without an identity check");
+  });
+
+  it("with the saved login dead, the profile's own current weekly reset can still rule it out", () => {
+    // contact's snapshot says its week resets at 1_788_861_600; the token's
+    // resets elsewhere, so it is not contact's.
+    expect("rejected" in judge(null, fp(null, 1_788_900_000))).toBe(true);
+    // A snapshot from a week that has already rolled says nothing.
+    const stale = { ...usage, "u-c": { fetched_at: now - 8 * 86_400_000, weekly: { percent: 1, resets_at: now - 86_400_000 } } };
+    expect(judge(null, fp(null, 1_789_000_000), stale)).toMatchObject({ owner: "contact" });
+  });
+
+  it("a snapshot naming the profile cannot overrule a direct comparison that proved otherwise", () => {
+    const v = judge(fp(null, 1_788_900_000), fp(null, 1_788_861_600));
+    expect("rejected" in v).toBe(true);
+  });
+
+  it("when nothing can be compared, a snapshot names the owner, else the profile keeps it with a note", () => {
+    expect(judge(null, fp(1_788_330_000, 1_788_950_000))).toEqual({ owner: "other" });
+    const weeklySelf = judge(null, fp(null, 1_788_861_600));
+    expect(weeklySelf).toMatchObject({ owner: "contact" });
+    expect((weeklySelf as { caveat: string }).caveat).toContain("partly checked");
+    // Nor does contact's own snapshot know this week.
+    const noOwn = { ...usage, "u-c": undefined };
+    const dead = judge(null, fp(null, 1_789_000_000), noOwn);
+    expect(dead).toMatchObject({ owner: "contact" });
+    expect((dead as { caveat: string }).caveat).toContain("could not vouch");
+    const blind = judge(fp(1, null), fp(null, 1_789_000_000), noOwn);
+    expect(blind).toMatchObject({ owner: "contact" });
+    expect((blind as { caveat: string }).caveat).toContain("could not be compared");
+  });
+});
+
+describe("fetchRateLimitFingerprint", () => {
+  const respond = (status: number, headers: Record<string, string>) =>
+    (async () => new Response("{}", { status, headers })) as unknown as typeof fetch;
+
+  it("a limit refusal carrying only the 7d window still fingerprints the account", async () => {
+    const fp = await fetchRateLimitFingerprint("t", respond(429, { "anthropic-ratelimit-unified-7d-reset": "1788861600" }));
+    expect(fp.seven_day_reset).toBe(1_788_861_600);
+    expect(fp.five_hour_reset).toBeNull();
+  });
+
+  it("a refusal naming no 7d window is a failed probe", async () => {
+    await expect(fetchRateLimitFingerprint("t", respond(401, {}))).rejects.toThrow("Account probe failed");
   });
 });
 
