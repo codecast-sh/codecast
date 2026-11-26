@@ -17,7 +17,8 @@ import { useConversationMessages } from "../../../hooks/useConversationMessages"
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore, isConvexId } from "../../../store/inboxStore";
 import { isForeignSession } from "../../../lib/liveEntities";
-import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
+import { PREFILL_PARAM, type ComposerSeed } from "../../../lib/composerPrefill";
+import { conversationLinkDraft } from "../../../lib/composeLink";
 import { getShareTokenScope, setShareTokenScope } from "../../../lib/shareTokenScope";
 import { GuestSuggestComposer } from "../../../components/GuestSuggestComposer";
 import { useLocalAuth } from "../../../lib/localAuth";
@@ -38,25 +39,25 @@ function RedirectToInbox({
   isOwn,
   targetMessageId,
   highlightQuery,
-  prefill,
+  seed,
 }: {
   id: string;
   isOwn: boolean;
   targetMessageId?: string;
   highlightQuery?: string;
-  prefill?: string;
+  seed?: ComposerSeed | null;
 }) {
   const router = useRouter();
   useMountEffect(() => {
     const store = useInboxStore.getState();
     // Seed is_own so the inbox picks the right UI before getConversationWithMeta resolves.
     store.syncRecord("conversations", id, { _id: id, is_own: isOwn });
-    // `?prefill=` rides the store, not the URL: the redirect below drops the
-    // query and the inbox rewrites the address again once the session resolves.
-    // That redirect is also what keeps a refresh from re-seeding the composer —
-    // the param never reaches the address bar the user ends up on.
-    const prefillText = buildPrefillText(prefill);
-    if (prefillText) store.setComposerPrefill({ convId: id, text: prefillText });
+    // `?prefill=` and `?compose=` ride the store, not the URL: the redirect
+    // below drops the query and the inbox rewrites the address again once the
+    // session resolves. That redirect is also what keeps a refresh from
+    // re-seeding the composer — the param never reaches the address bar the
+    // user ends up on.
+    if (seed) store.setComposerPrefill({ convId: id, ...seed });
     // Deep-link state travels through requestNavigate — target session, scroll
     // target, and highlight in ONE action. Setting pendingScrollToMessageId as
     // a bare field first (the old shape) raced: with another inbox pane
@@ -240,7 +241,7 @@ export default function ConversationPage() {
   const treatAsAuthed = authGate === "children";
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
-  const prefill = searchParams.get(PREFILL_PARAM) || undefined;
+  const seed = conversationLinkDraft(searchParams.get(PREFILL_PARAM), searchParams.get("compose"));
   // A share-link visit carries its token (`?share=`, set by the /share/<token>
   // redirect). Access via a link requires PRESENTING the token — the server
   // denies id-only reads of link-shared conversations (issue #27).
@@ -289,7 +290,7 @@ export default function ConversationPage() {
           isOwn={cached === "own"}
           targetMessageId={targetMessageId}
           highlightQuery={highlightQuery}
-          prefill={prefill}
+          seed={seed}
         />
       );
     }
@@ -334,7 +335,7 @@ export default function ConversationPage() {
         shareToken={shareToken}
         targetMessageId={targetMessageId}
         highlightQuery={highlightQuery}
-        prefill={prefill}
+        seed={seed}
       />
     );
   }
@@ -346,7 +347,7 @@ export default function ConversationPage() {
       isOwn={effective.access_level === "owner"}
       targetMessageId={targetMessageId}
       highlightQuery={highlightQuery}
-      prefill={prefill}
+      seed={seed}
     />
   );
 }
@@ -363,13 +364,13 @@ function RedeemThenRedirect({
   shareToken,
   targetMessageId,
   highlightQuery,
-  prefill,
+  seed,
 }: {
   id: string;
   shareToken: string;
   targetMessageId?: string;
   highlightQuery?: string;
-  prefill?: string;
+  seed?: ComposerSeed | null;
 }) {
   const redeem = useMutation(api.conversations.redeemShareToken);
   const [redeemed, setRedeemed] = useState(false);
@@ -385,7 +386,7 @@ function RedeemThenRedirect({
       isOwn={false}
       targetMessageId={targetMessageId}
       highlightQuery={highlightQuery}
-      prefill={prefill}
+      seed={seed}
     />
   );
 }
