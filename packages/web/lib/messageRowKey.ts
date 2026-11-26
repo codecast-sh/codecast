@@ -10,14 +10,18 @@
 // construction) makes the SAME DOM node carry the row through the handoff.
 //
 // The timeline dedup keeps only one of the two copies present at any instant, so
-// this never produces a duplicate key. Messages with no client id (everything
-// not sent through the optimistic path) fall back to their stable `_id`.
+// this never produces a duplicate key. Messages with no client id key by their
+// `message_uuid`, which a fork's copy keeps while its `_id` changes: a fork
+// renders its parent's rows at once, and the server's copies replace them a few
+// seconds later. Keyed on `_id`, every row remounted with no measured height and
+// the transcript jumped. Rows with neither fall back to `_id`.
 export function messageRowKey(m: {
   _id: string;
   client_id?: string;
   _clientId?: string;
+  message_uuid?: string;
 }): string {
-  return m.client_id ?? m._clientId ?? m._id;
+  return m.client_id ?? m._clientId ?? m.message_uuid ?? m._id;
 }
 
 // Force uniqueness across one timeline's row keys. The client id is SUPPOSED to

@@ -21,6 +21,7 @@ export const FORK_BATCH_MAX_BYTES = 8 * 1024 * 1024;
 
 export type ForkMessage = {
   message_uuid?: string;
+  client_id?: string;
   from_user_id?: string;
   role: string;
   content?: string;
@@ -167,6 +168,9 @@ export async function advanceForkCopy(
       conversation_id: forkId,
       from_user_id: msg.from_user_id,
       message_uuid: msg.message_uuid,
+      // Kept so a web-sent prompt keeps its row key (messageRowKey) when this
+      // copy replaces the row the client seeded from the parent.
+      client_id: msg.client_id,
       role: msg.role,
       content: msg.content,
       thinking: msg.thinking,

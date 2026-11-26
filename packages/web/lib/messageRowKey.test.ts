@@ -27,6 +27,18 @@ describe("messageRowKey", () => {
   test("_clientId wins over _id when no server client_id yet (the optimistic row)", () => {
     expect(messageRowKey({ _id: "c1", _clientId: "c1" })).toBe("c1");
   });
+
+  // A fork renders the parent's rows at once; the server's copies replace them
+  // seconds later with new _ids and the same message_uuid. A key change there
+  // remounted every row and jumped the transcript.
+  test("a fork's server copy keeps its parent row's key", () => {
+    const parentRow = { _id: "k17parent", message_uuid: "uuid-1" };
+    const forkCopy = { _id: "k17forkcopy", message_uuid: "uuid-1" };
+    expect(messageRowKey(forkCopy)).toBe(messageRowKey(parentRow));
+    const parentPrompt = { _id: "k17parent2", message_uuid: "uuid-2", client_id: "c9" };
+    const forkPrompt = { _id: "k17forkcopy2", message_uuid: "uuid-2", client_id: "c9" };
+    expect(messageRowKey(forkPrompt)).toBe(messageRowKey(parentPrompt));
+  });
 });
 
 describe("uniqueRowKeys", () => {
