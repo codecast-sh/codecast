@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
 import { appPool, namedForRepo } from "../flowPool";
+import { SHIPPED_FLOWS } from "../shippedFlows.generated";
 import { sessionWorkspaceOf } from "../../../hooks/useRepoFlows";
 import { workspaceRows } from "../../../hooks/useWorkspaceCollection";
 
@@ -79,6 +80,26 @@ describe("the session's pool", () => {
     expect(named.find((f) => f.slug === "climb")!.label).toBe("Climb");
     // With the library's own change, nothing is renamed: it reads Ship.
     expect(namedForRepo(appPool([], []), "acme/union-mobile").find((f) => f.slug === "change")!.label).toBe("Ship");
+  });
+
+  test("the library change as a direct checkout reports it (its start decided there) stays the library's Ship", () => {
+    const lib = SHIPPED_FLOWS.find((f) => f.slug === "change")!;
+    const edges = lib.edges.filter((e) => e.from !== "start" || e.to === "direct_check");
+    const kept = new Set(["start"]);
+    for (let f = ["start"]; f.length; ) {
+      f = edges.filter((e) => f.includes(e.from) && !kept.has(e.to)).map((e) => e.to);
+      f.forEach((id) => kept.add(id));
+    }
+    const graphOnly: RepoFlow = { slug: "change", name: "change", kind: "line", label: lib.label, description: lib.description ?? null, takes: lib.takes, nodes: lib.nodes.filter((n) => kept.has(n.id)), edges: edges.filter((e) => kept.has(e.from) && kept.has(e.to)) };
+    const cut: RepoFlow = { ...graphOnly, decided_from: "change", facts: { ship_mode: "direct" } };
+    const change = namedForRepo(appPool([], [cut]), "acme/sit").find((f) => f.slug === "change")!;
+    expect(change.label).toBe("Ship");
+    expect(change.where).toBe("shipped");
+    expect(change.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["Check", "Review", "Land", "Deploy"]);
+    // A repository's own change.cast, even a copy of the library's graph, is the repository's: only the mark says otherwise.
+    const own = namedForRepo(appPool([], [graphOnly]), "acme/sit").find((f) => f.slug === "change")!;
+    expect(own.label).toBe("Ship · sit");
+    expect(own.where).toBe("repo");
   });
 
   test("a personal flow is in a personal session's pool and out of a team session's", () => {

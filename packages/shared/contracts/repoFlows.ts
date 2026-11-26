@@ -15,6 +15,10 @@ export type RepoFlow = {
   takes: string[];
   nodes: FlowNodeIn[];
   edges: FlowEdgeIn[];
+  /** Set on a shipped flow the checkout reports with its start decided there (cli workflow/startFacts.ts): the shipped
+   *  slug it was cut from, and the facts that cut it. Only this marks a reported flow as the library's own. */
+  decided_from?: string;
+  facts?: Record<string, string>;
 };
 
 export type RepoFlowsReport = { root: string; repository: string; hash: string; flows: RepoFlow[] };

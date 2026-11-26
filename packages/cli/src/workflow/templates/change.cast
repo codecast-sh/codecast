@@ -45,7 +45,7 @@
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
 digraph change {
-  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy; the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
+  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy (a repository that ships straight to main: its check, the review, its ship command); the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
   rankdir=LR
   start [shape=Mdiamond]
   pr [label="PR", shape=parallelogram, timeout=600,
@@ -107,6 +107,24 @@ digraph change {
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
   unshipped [shape=Msquare, label="Not merged", stop="$merge.output"]
 
+  // A repository whose default branch says [ship] mode = "direct" and runs no CI on GitHub lands with no pull request
+  // (startFacts.ts, read from the default branch, never the change). Its check stands in for CI, an independent
+  // reviewer reads the branch, the session fixes what they find, and the default branch's line profile ship command
+  // lands it. A run carries only the path its start takes, so its card shows no pull request there.
+  direct_check [flow="check"]
+  direct_review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@change/direct_review.md"]
+  direct_fix [label="Fix findings", backend=subject, max_visits=3, prompt="@change/direct_fix.md"]
+  direct_revise [label="Fix findings", backend=subject, max_visits=3, prompt="@change/direct_revise.md"]
+  land [flow="ship"]
+  direct_conflict [label="Resolve conflict", backend=subject, max_visits=3, prompt="@change/direct_conflict.md"]
+  // The ship command landed the change and CI on the default branch went red under it (its exit 7, line/ship.sh).
+  direct_ci_red [label="Fix CI", backend=subject, max_visits=3, prompt="@change/direct_ci_red.md"]
+  // Its own Deploy, so the pull request path's stations keep their order.
+  direct_deploy [flow="deploy"]
+  direct_rejected [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
+  direct_changes [shape=Msquare, label="Found work", stop="The reviewer asked for changes, and no session made this change to fix them. $review_note"]
+  direct_unreviewed [shape=Msquare, label="No verdict", machine=true, stop="The reviewer ended its turn without a verdict on the change."]
+
   start -> pr
   pr -> checks [condition="outcome = success"]
   pr -> nopr   [condition="outcome = failure", label="no pull request"]
@@ -156,6 +174,23 @@ digraph change {
   decide -> dropped [condition="outcome = failure and decide.exit = dropped", label="dropped"]
   landed -> deploy
   deploy -> exit
+  // A repository that ships straight to main: its check, the review, its ship command, then Deploy.
+  start -> direct_check [condition="ship_mode = direct", label="straight to main"]
+  direct_check -> direct_review [condition="outcome = success"]
+  direct_check -> direct_fix [condition="outcome = failure and direct_check.exit = failed and change_conversation", label="check failed"]
+  direct_review -> land [condition="review_verdict = approve"]
+  direct_review -> direct_revise [condition="review_verdict = changes and change_conversation", label="changes asked"]
+  direct_review -> direct_changes [condition="review_verdict = changes", label="changes asked, no session"]
+  direct_review -> direct_rejected [condition="review_verdict = reject", label="rejected"]
+  direct_review -> direct_unreviewed [label="no verdict"]
+  direct_fix -> direct_check
+  direct_revise -> direct_check
+  land -> direct_deploy [condition="outcome = success"]
+  land -> direct_conflict [condition="outcome = failure and land.exit = conflict and change_conversation", label="conflicts with main"]
+  land -> direct_ci_red [condition="outcome = failure and land.exit = unshipped and land__ship.exit_code = 7 and change_conversation", label="CI red after landing"]
+  direct_conflict -> direct_check
+  direct_ci_red -> direct_check
+  direct_deploy -> exit
   brief -> pr
   fix_conflict -> pr
   ci_conflict -> pr

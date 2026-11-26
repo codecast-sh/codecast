@@ -462,6 +462,44 @@ PR → (CI ‖ Review) → Verdicts → Merge → Merged → Deploy → Live
  └──── Revise ←── Approval card ←── edits CI
 ```
 
+A repository whose default branch says `[ship] mode = "direct"` in
+`.codecast/workspace.toml` and holds no CI workflows (`.github/workflows/*.yml`
+or `*.yaml`) lands straight onto that branch, and the same flow takes another
+path from its start (`shipModeOf`, `workflow/startFacts.ts`):
+
+```
+Check → Review → Land → Deploy → Live
+  ↑       │        │
+  └── Fix findings, Resolve conflict, Fix CI (the session, at most 3 times each)
+```
+
+Both facts are read from the default branch as origin has it, never from a
+working tree or the change's branch, so a change cannot send itself past pull
+request, CI and the person's card. A repository with CI workflows lands by pull
+request on green whatever its mode says (its mode there is how `cast ship
+checkout` pushes). Only a flow whose start routes on the ship mode reads these
+files, and it reads only `[ship] mode` and `[line.commands]`, past any other
+key a newer cast wrote; when those cannot be read, that flow refuses to start
+rather than guess. A direct run checks and lands with the check and
+ship commands its default branch's line profile names, never the working
+tree's. Check runs that check command in the run's worktree (none named stops
+at No check command). Review is an independent reviewer told that its approve
+lands the change with nothing after it. Land (the `ship` segment) rebases the
+branch onto origin's default branch and runs the ship command; with none, Land
+stops and says to set one, since no pull request may land it. A rebase that
+conflicts goes to the session to resolve, and a ship command that exits 7 (CI
+red on the default branch after landing) goes to it with the command's brief.
+There is no pull request, no CI wait and no Merge.
+
+The start is decided before anything runs (`runGraph`, read by `cast
+workflow run`, the runner, `cast flow ls`, the pipeline and the Ship picker's
+checkout report, which marks the cut flow `decided_from`), so a direct run
+carries, and its card and the picker draw, only this path; every other
+repository keeps the library graph as it is. A resumed run keeps the start it
+took, read from the station it stands at. A variant whose own station hangs
+only on the pull request path (`cast flow edit change add lint --after pr`)
+refuses to start a direct run and names it, rather than skipping it.
+
 PR (`cast flow pr`, `workflow/prStation.ts`) starts each round: it deletes
 the last round's `ci.json`, `review.json`, `merge.json` and `rebase.json` from
 the run's directory, pushes the run's change branch and opens its pull

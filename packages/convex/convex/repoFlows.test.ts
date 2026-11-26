@@ -53,6 +53,12 @@ describe("a checkout's own flows", () => {
     expect(await s.read(s.bo, "/repo")).toEqual([]);
   });
 
+  test("a shipped flow reported with its start decided there keeps its mark and the facts that cut it", async () => {
+    const s = await seed();
+    await s.report("/sit", "h1", [{ ...flow("Ship"), decided_from: "change", facts: { ship_mode: "direct" } }]);
+    expect((await s.read(s.ana, "/sit"))[0].flows[0]).toMatchObject({ decided_from: "change", facts: { ship_mode: "direct" } });
+  });
+
   test("a checkout that never reported reads its repository's newest report", async () => {
     const s = await seed();
     await s.report("/repo", "h1", [flow("Main")]);

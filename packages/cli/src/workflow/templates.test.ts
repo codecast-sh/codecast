@@ -70,7 +70,9 @@ describe("line.cast template", () => {
     // the blind judge's and the intent read's prompts, read as each segment run alone writes them, and the climb's stations (FL10).
     const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "personal", "judge", "intent", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
     const used = new Set(shipped.flatMap((g) => [...g.nodes.values()].flatMap((n) => [n.prompt, n.script])));
-    for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) expect(used.has(withTemplateIncludes(text, ref, LINE_TEMPLATE_FILES))).toBe(true);
+    // A partial (change/direct_return.md) is used where a used file takes it in with `@include`.
+    const included = new Set(Object.entries(LINE_TEMPLATE_FILES).flatMap(([ref, text]) => [...text.matchAll(/^@include[ \t]+(\S+)[ \t]*$/gm)].map((m) => path.posix.normalize(path.posix.join(path.posix.dirname(ref), m[1])))));
+    for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) expect({ ref, used: used.has(withTemplateIncludes(text, ref, LINE_TEMPLATE_FILES)) || included.has(ref) }).toEqual({ ref, used: true });
   });
 
   test("inlineTemplateFiles writes a DOT string the parser reads back exactly", () => {
@@ -118,6 +120,8 @@ describe("line.cast template", () => {
       "review_verdict", "review_note", "handoff", "handoff_note", "goal_ref", "category", "risk", "readiness", "readiness_note",
       "assignee", "project_path", "default_branch", "run_id", "run_date", "worktree", "branch", "human_message", "goal", "outcome",
       "run_dir", "cause_history", "last_error", "sent_back", "diff_base", ...Object.keys(EMPTY_VARS),
+      // What the checkout says before the run (startFacts.ts).
+      "ship_mode",
       // A change frozen from a session (frozenChangeContext): empty on a run with none.
       "change_session", "change_files",
       // The station running, as the graph names it (runNodeLoop).

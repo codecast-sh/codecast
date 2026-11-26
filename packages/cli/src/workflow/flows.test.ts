@@ -175,7 +175,8 @@ describe("the shipped pool", () => {
     expect(change.kind).toBe("line");
     expect(validateWorkflow(change)).toEqual([]);
     const entries = [...change.nodes.values()].filter((n) => n.segment_entry).map((n) => n.segment_flow);
-    expect(entries).toEqual(["decide", "deploy"]);
+    // A repository that ships straight to main checks and lands through the check and ship segments.
+    expect(entries).toEqual(["decide", "deploy", "check", "ship", "deploy"]);
   });
 
   test("segments read the line's own station files, so the prompts are one copy", () => {

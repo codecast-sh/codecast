@@ -116,8 +116,16 @@ export function appPool(pushed: ReadonlyArray<PushedFlowRow> = [], repo: Readonl
   return pool;
 }
 
+/** The shipped flow a checkout reported with its start decided there (cli workflow/startFacts.ts), by the report's own
+ *  mark: a repository's flow that only looks like the library's stays the repository's. */
+const cutOf = (f: RepoFlow): ShippedFlow | null => (f.decided_from === f.slug ? SHIPPED_FLOWS.find((s) => s.slug === f.slug) ?? null : null);
+
 function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<RepoFlow>): AppFlow[] {
-  const own: AppFlow[] = repo.map((f) => ({ ...f, ...foldFlow(f.nodes, f.edges), where: "repo" as const, workflowId: null }));
+  // A cut of a shipped flow is that flow as this checkout runs it: the library's, with the path its start takes.
+  const own: AppFlow[] = repo.map((f) => {
+    const lib = cutOf(f);
+    return lib ? { ...lib, nodes: f.nodes, edges: f.edges, ...foldFlow(f.nodes, f.edges), where: "shipped" as const, workflowId: null } : { ...f, ...foldFlow(f.nodes, f.edges), where: "repo" as const, workflowId: null };
+  });
   const ownSlugs = new Set(own.map((f) => f.slug));
   // The shipped template's graph names no label of its own; people read it as the Standard steps.
   const local = [...own, ...SHIPPED_FLOWS.filter((f) => !ownSlugs.has(f.slug)).map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }))];

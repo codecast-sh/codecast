@@ -42,8 +42,13 @@ describe("a flow built on the shipped check segment routes a check the machine c
     const route = (from: string, ctx: Record<string, string>) =>
       graph.edges.filter((e) => e.from === from && (!e.condition || evalCondition(e.condition, ctx))).map((e) => e.to);
     // The check's command: exit 2 is the machine's, any other failure is the change's.
-    expect(route("check__verify", { outcome: "failure", "check__verify.exit_code": "2" })).toEqual(["check__unjudged"]);
-    expect(route("check__verify", { outcome: "failure", "check__verify.exit_code": "1" })).toEqual(["check__failed"]);
+    const check = { "line.commands.check": "make check" };
+    expect(route("check__verify", { ...check, outcome: "failure", "check__verify.exit_code": "2" })).toEqual(["check__unjudged"]);
+    expect(route("check__verify", { ...check, outcome: "failure", "check__verify.exit_code": "1" })).toEqual(["check__failed"]);
+    // A repository that names no check command stops at its own stop, never at the change's or the machine's.
+    expect(route("check__verify", { "line.commands.check": "", outcome: "failure", "check__verify.exit_code": "1" })).toEqual(["check__nocheck"]);
+    expect(route("check__verify", { "line.commands.check": "", outcome: "failure", "check__verify.exit_code": "2" })).toEqual(["check__nocheck"]);
+    expect(graph.nodes.get("check__nocheck")?.stop).toContain("names no check command");
     expect(route("check__unjudged", { outcome: "failure", "check__unjudged.json": JSON.stringify({ exit: "unjudged" }) })).toEqual(["unchecked"]);
     expect(route("check__failed", { outcome: "failure", "check__failed.json": JSON.stringify({ exit: "failed" }) })).toEqual(["fix_check"]);
     expect(graph.nodes.get("unchecked")?.machine).toBe(true);

@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { defaultFlowOf, foldFlow, flowPathWords, retiredFlowLine, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { graphExtends, parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
+import { decideStart, safeStartFacts } from "./startFacts.js";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 import type { WorkflowGraph } from "./types.js";
 import { defaultFlowsCache, writeTeamFlowIndex } from "./teamFlowIndex.js";
@@ -112,19 +113,21 @@ export function poolFlows(cwd: string, session?: string | null, published: Reado
   const team = [...newest.values()].filter((row) => row.source && !Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, row.slug));
   writeTeamFlowIndex(new Map(team.map((row) => [row.slug, materializePushedFlow(row, cacheRoot)] as const)), cacheRoot);
   const own = new Set<string>();
+  // Each flow is listed as a run here takes it: a direct repository's change shows its direct stages.
+  const facts = safeStartFacts(cwd);
   if (dir) {
     for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".cast")).sort()) {
       const slug = f.replace(/\.cast$/, "");
       own.add(slug);
       const file = path.join(dir, f);
-      const flow = describeFlow(slug, fs.readFileSync(file, "utf-8"), "repo", file, dir);
+      const flow = describeFlow(slug, fs.readFileSync(file, "utf-8"), "repo", file, dir, facts);
       if (flow.draft && !(session && (session.startsWith(flow.draft) || flow.draft.startsWith(session)))) continue;
       out.push(flow);
     }
   }
   for (const [slug, src] of Object.entries(BUILTIN_WORKFLOW_TEMPLATES)) {
     if (own.has(slug) || !joinsPool(slug, src)) continue;
-    out.push(describeFlow(slug, src, "shipped", null, dir ?? undefined));
+    out.push(describeFlow(slug, src, "shipped", null, dir ?? undefined, facts));
   }
   const named = new Set(out.map((f) => f.slug));
   for (const row of pushed) {
@@ -133,7 +136,7 @@ export function poolFlows(cwd: string, session?: string | null, published: Reado
     const base = newest.get(extendsSlug(graphExtendsOf(row.source)) ?? "");
     const file = materializePushedFlow(row, cacheRoot, base);
     const where = row.workspace?.startsWith("team:") ? "team" : "pushed";
-    out.push({ ...describeFlow(row.slug, row.source, where, file), by: row.mine ? null : row.by ?? null, runs_from: row.runs_from ?? null });
+    out.push({ ...describeFlow(row.slug, row.source, where, file, undefined, facts), by: row.mine ? null : row.by ?? null, runs_from: row.runs_from ?? null });
   }
   return out;
 }
@@ -147,11 +150,12 @@ export function joinsPool(slug: string, src: string): boolean {
   return slug === DEFAULT_LINE_SLUG || /graph\s*\[[^\]]*\bkind\s*=/.test(src);
 }
 
-/** One flow in the pool's terms, from its source. A flow that does not parse is listed with why. */
-export function describeFlow(slug: string, src: string, where: PoolWhere, file: string | null, dir?: string): PoolFlow {
+/** One flow in the pool's terms, from its source. A flow that does not parse is listed with why. `facts`: the checkout's,
+ *  which decide its start as a run there decides it (startFacts.ts). */
+export function describeFlow(slug: string, src: string, where: PoolWhere, file: string | null, dir?: string, facts: Record<string, string> = {}): PoolFlow {
   let graph: WorkflowGraph;
   try {
-    graph = parseWorkflowSource(src, file ? path.dirname(file) : dir);
+    graph = decideStart(parseWorkflowSource(src, file ? path.dirname(file) : dir), facts);
   } catch (err) {
     return { slug, kind: "line", label: slug, description: null, takes: [], draft: null, where, file, extends: extendsSlug(graphExtendsOf(src)), stations: [], ends: [], uses: [], errors: [err instanceof Error ? err.message : String(err)] };
   }

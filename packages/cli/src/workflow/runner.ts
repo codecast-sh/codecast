@@ -11,6 +11,7 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
+import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
@@ -2199,6 +2200,20 @@ export type WorkflowRunOutcome = "completed" | "failed" | "invalid";
 
 export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<WorkflowRunOutcome> {
   const cwd = options.cwd || process.cwd();
+  // What the repository's default branch says before anything runs (its ship mode), read only for a flow whose start
+  // routes on it: a start it decides runs, and shows, only its own path. A resumed run keeps the start it took and the
+  // facts it saved, and never reads them again: a main that says otherwise now cannot move it or pick its commands.
+  let facts: Record<string, string> = {};
+  try {
+    if (!options.resume) facts = factsFor(graph, cwd);
+    graph = runGraph(graph, facts, options.resume ? { resumeAt: options.resume.current_node_id } : {});
+  } catch (err) {
+    if (!(err instanceof StartFactsError)) throw err;
+    console.error(`${c.red}✗ ${err.message}${c.reset}`);
+    const start = [...graph.nodes.values()].find((n) => n.type === "start");
+    if (options.runId && !options.dryRun && start) await reportProgress(options, profileFailure(start.id, err.message));
+    return "invalid";
+  }
 
   if (options.goalOverride) {
     graph.goal = options.goalOverride;
@@ -2217,6 +2232,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
 
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
+  Object.assign(initialContext, facts);
   initialContext["default_branch"] = detectDefaultBranch(cwd);
   // Where a reviewer's diff starts ($diff_base...$branch): the default branch as the remote has it (a local one can
   // lag), unless the run's change says where it was cut.
@@ -2249,6 +2265,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     return "invalid";
   }
   Object.assign(initialContext, profile);
+  pinDirectCommands(initialContext);
   // A run with no cause keeps its files under its own id, so a resume finds them.
   initialContext["run_dir"] = lineRunDir(cwd, !initialContext["task_id"] && options.runId ? `${slugPart(graph.name)}-${slugPart(options.runId)}` : runSlug(graph, initialContext, "run"));
   // A change frozen for this run (flows.md FL4) waits on its own branch and worktree: every station starts on it.
@@ -2334,6 +2351,12 @@ async function driveRun(
     // What the run learned before stays; what every run reads fresh (the
     // task, the profile, the run's ids) is read again.
     state.context = { ...resumeAt.context, ...initialContext };
+    // The working tree's profile came in above: a direct run checks and lands with the commands its facts saved.
+    pinDirectCommands(state.context);
+    if (!holdsItsFacts(graph, state.context)) {
+      console.error(`${c.red}✗ cannot resume: this run went its way on facts its checkpoint held, and this machine has no checkpoint of it${c.reset}`);
+      return "invalid";
+    }
     state.visitCounts = resumeAt.visit_counts;
     for (const [id, n] of Object.entries(state.visitCounts)) state.context[`${id}.visits`] = String(n);
     state.completed = resumeAt.completed;
@@ -2562,6 +2585,7 @@ async function runNodeLoop(
       break;
     }
     Object.assign(state.context, profile);
+    pinDirectCommands(state.context);
 
     // ── Stage 2: Print node header ────────────────────────────────────────────
     const icon = nodeIcon(current);
