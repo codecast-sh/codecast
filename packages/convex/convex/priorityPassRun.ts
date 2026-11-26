@@ -560,6 +560,8 @@ export const applyPlan = internalMutation({
       // A milestone of the absorbed priority a session the person placed (or a known link) sits on goes to the survivor too, as a person's merge carries every one
       // (priorities.ts doMerge): the plan saw only its newest sessions. One the plan mapped live already has its key.
       const step_keys: Record<string, string> = { ...(m.step_keys ?? {}) };
+      // A key the plan gave the survivor that this write moved (a person took it since the input was read): the moved key.
+      for (const k of Object.keys(step_keys)) step_keys[k] = rekeyed.get(intoRow.short_id)?.get(step_keys[k]) ?? step_keys[k];
       const survivorLive = liveSteps.get(intoRow.short_id) ?? new Set(intoRow.steps.filter((st) => !st.dropped).map((st) => st.key));
       const held = new Set<string>();
       // Its newest page of sessions, as the anchors of a plain rewrite are read.

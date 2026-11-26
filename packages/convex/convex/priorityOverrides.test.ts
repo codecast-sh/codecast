@@ -780,3 +780,37 @@ describe("corrections", () => {
     await expect(as(w, w.ana).mutation(pri.correct, { short_id: "pri-1", text: "  " })).rejects.toThrow("a correction is 1 to 2000 characters");
   });
 });
+
+describe("a pass merge onto a milestone key a person's merge took", () => {
+  test("the pass carries pri-7/s1 Auth as s4; a person merges pri-9's Billing in first, taking s4; pri-7's placed session and correction land on Auth's new key", async () => {
+    const w = await seeded();
+    const p1 = await byShort(w, "pri-1");
+    const insert = (short_id: string, title: string) => w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "active", ai_rank: 5, step_key_max: 1,
+      steps: [{ key: "s1", title, tier: "critical", refs: [] }], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1,
+    } as any));
+    const p7 = await insert("pri-7", "Auth");
+    await insert("pri-9", "Billing");
+    await w.t.run((ctx) => ctx.db.patch(w.oldConv, { priority_id: p7, priority_step_key: "s1", priority_set_by: "person" } as any));
+    const me = as(w, w.ana);
+    await me.mutation(pri.correct, { short_id: "pri-7", step_key: "s1", text: "Auth waits on SSO" });
+    // The person's merge lands after the pass read pri-1 as s1-s3.
+    await me.mutation(pri.merge, { short_id: "pri-9", into: "pri-1" });
+    expect((await byShort(w, "pri-1")).steps.find((s: any) => s.key === "s4")?.title).toBe("Billing");
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: {
+        creates: [], sessions: [], unmap: [], notes: [], rewritten: [],
+        updates: [{ short_id: "pri-1", seen_steps: p1.steps.map((s: any) => s.key), patch: { steps: [...p1.steps, { key: "s4", title: "Auth", tier: "critical", tier_set_by: "pass", refs: [], done: false }] } }],
+        merges: [{ short_id: "pri-7", merged_into: "pri-1", step_keys: { s1: "s4" } }],
+      },
+    });
+    const after = await byShort(w, "pri-1");
+    const auth = after.steps.find((s: any) => s.title === "Auth")!;
+    expect(auth.key).toBe("s5");
+    expect(after.steps.find((s: any) => s.key === "s4")?.title).toBe("Billing");
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: p1._id, priority_step_key: "s5" });
+    const shown = await me.query(pri.show, { short_id: "pri-1" });
+    expect(shown.corrections.map((c: any) => [c.step_key, c.text])).toContainEqual(["s5", "Auth waits on SSO"]);
+  });
+});
