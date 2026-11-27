@@ -21,11 +21,20 @@ const EAS_LOG = [
 ].join("\n");
 
 describe("deployCauseLine", () => {
-  test("a line naming what the step needed wins over warnings, error banners and frames", () => {
+  test("the cause line nearest the end wins over warnings, error banners and frames", () => {
     expect(deployCauseLine(EAS_LOG)).toBe("An Expo user account is required to proceed.");
   });
 
-  test("with no need named, the first error line; with none, the last line that is no warning or frame", () => {
+  test("an error early in a long log does not beat the one the step failed on", () => {
+    expect(deployCauseLine("note: config not found, using defaults\nbuilding\nError: notarize failed for app.dmg\nexited 1")).toBe("Error: notarize failed for app.dmg");
+  });
+
+  test("a wrapper's line that only says what it ran failed is passed over", () => {
+    const log = ["  ⨯ The specified item could not be found in the keychain.", "    at signApp (x.js:1:1)", "npm error Lifecycle script `build` failed with error:", "npm error code 1", "npm error command failed", "error: script \"build\" exited with code 1", "exited 1"].join("\n");
+    expect(deployCauseLine(log)).toBe("⨯ The specified item could not be found in the keychain.");
+  });
+
+  test("with no cause line, the last line that is no warning or frame", () => {
     expect(deployCauseLine("building\nnpm warn old\nError: notarize failed for app.dmg\n    at sign (x.js:1:1)\nnpm error code 1\nexited 1")).toBe("Error: notarize failed for app.dmg");
     expect(deployCauseLine("Waiting for the CLI release in flight (runs 12)\nnpm warn x\nexited 1")).toBe("Waiting for the CLI release in flight (runs 12)");
     expect(deployCauseLine("npm warn x\n    at y (z.js:1:1)\nexited 1")).toBeNull();
@@ -49,6 +58,8 @@ describe("deployNoteHeadline", () => {
   test("a note that names its cause already, or says nothing more, stands as its first line", () => {
     expect(deployNoteHeadline("Stopped at Send: An Expo user account is required to proceed.\nexited 1\n…")).toBe("Stopped at Send: An Expo user account is required to proceed.");
     expect(deployNoteHeadline("Stopped at Live.")).toBe("Stopped at Live.");
+    // A note whose cause was cut away says no more than where it stopped, never a frame's tail.
+    expect(deployNoteHeadline("Stopped at Send.\n characters cut …\np/src/notarize.js:65:7)\n    at pack (/x/packager.ts:1:2)\nnpm error Lifecycle script `build` failed with error:\nnpm error code 1\nexited 1")).toBe("Stopped at Send.");
     expect(deployNoteHeadline("dp-4 was not live within 90 minutes")).toBe("dp-4 was not live within 90 minutes");
     expect(deployNoteHeadline(null)).toBeNull();
   });

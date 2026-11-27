@@ -162,20 +162,20 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
 /** The deploys a Deploy stop names as failed (awaitDeploy.ts failedWords: "The deploy that carried 929c5d8 failed: desktop
  *  dp-3559 (Stopped at Gate: …), web dp-12.", or "No deploy took 929c5d8 out: cli dp-3789 stopped at Send before sending
  *  anything (…)."), by target, each once. */
-function failedDeploys(reason: string | null | undefined): Array<{ target: string; deploy: string }> {
+function failedDeploys(reason: string | null | undefined): Array<{ target: string; deploy: string; unsent: boolean }> {
   const list = reason?.match(/(?:deploy that carried \S+ failed|No deploy took \S+ out):\s*([\s\S]*)$/)?.[1].replace(/\([^)]*\)/g, "") ?? "";
-  const out = new Map<string, string>();
-  for (const m of list.matchAll(/\b([a-z][a-z0-9-]{0,31}) (dp-\d+)\b/g)) if (!out.has(m[1])) out.set(m[1], m[2]);
-  return [...out].map(([target, deploy]) => ({ target, deploy }));
+  const out = new Map<string, { deploy: string; unsent: boolean }>();
+  for (const m of list.matchAll(/\b([a-z][a-z0-9-]{0,31}) (dp-\d+)\b( stopped at \S+ before sending anything)?/g)) if (!out.has(m[1])) out.set(m[1], { deploy: m[2], unsent: !!m[3] });
+  return [...out].map(([target, f]) => ({ target, ...f }));
 }
 
 /**
  * A change on main whose deploy failed: it is landed, and for each target that deploy failed on, where the change
  * stands there now from the deploy records (`targets`, deploy reach): live in a later deploy, going out in one, else
- * that deploy failed and the target's next deploy takes it live (it is on main, so any later deploy of the target
- * carries it). Without reach, the failed deploys the reason names.
+ * that deploy failed (or sent nothing) and the target's next deploy takes it live (it is on main, so any later deploy of
+ * the target carries it). Without reach, the failed deploys the reason names.
  */
-function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>): string | null {
+function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>): { words: string; notSent: boolean } | null {
   const failed = failedDeploys(run.fail_reason);
   if (!failed.length) return null;
   const now = failed.map((f) => ({ ...f, at: targets.find((t) => t.name === f.target) }));
@@ -185,9 +185,14 @@ function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>):
   const parts = [
     ...live.map((f) => `live on ${f.target}${f.at!.deploy ? ` ${f.at!.deploy}` : ""}`),
     ...going.map((f) => `going out to ${f.target}${f.at!.deploy ? ` in ${f.at!.deploy}` : ""}`),
-    ...(waiting.length ? [`${waiting.map((f) => `${f.target} ${f.deploy}`).join(", ")} failed`, `goes live with the next ${listWords(waiting.map((f) => f.target))} deploy${waiting.length > 1 ? "s" : ""}`] : []),
+    ...(["failed", "not sent"] as const).flatMap((word) => {
+      const these = waiting.filter((f) => (word === "not sent") === f.unsent);
+      return these.length ? [`${these.map((f) => `${f.target} ${f.deploy}`).join(", ")} ${word}`] : [];
+    }),
+    ...(waiting.length ? [`goes live with the next ${listWords(waiting.map((f) => f.target))} deploy${waiting.length > 1 ? "s" : ""}`] : []),
   ];
-  return ["Landed", ...parts].join(" · ");
+  // Not sent: every deploy it names stopped before sending anything, and none has taken it out since.
+  return { words: ["Landed", ...parts].join(" · "), notSent: !live.length && !going.length && waiting.every((f) => f.unsent) };
 }
 
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
@@ -238,8 +243,8 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
       const title = stopTitle(n);
       const onMain = onMainByRun(run, j);
       if (n.fix === "deploy" && onMain) {
-        const words = deployFailedWords(run, ctx.targets ?? []);
-        if (words) return head(title, words);
+        const said = deployFailedWords(run, ctx.targets ?? []);
+        if (said) return head(said.notSent ? "Not sent" : title, said.words);
       }
       return head(title, ctx.pr?.merged && !onMain ? "PR merged on GitHub" : stopDetail(run, graph, title, onMain));
     }

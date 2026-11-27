@@ -26,6 +26,7 @@ describe("runShip", () => {
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] }))).toMatchObject({ words: "Merged", tone: "ok" });
     expect(runShip(run("r", "c", { status: "failed", current_node_id: "unshipped", current_node_label: "Not merged" }))).toMatchObject({ words: "Stopped · Not merged", tone: "bad" });
     expect(runShip(run("r", "c", { status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: The deploy that carried abc failed: web dp-9 (x)." }))).toMatchObject({ words: "Deploy failed" });
+    expect(runShip(run("r", "c", { status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: No deploy took abc out: cli dp-9 stopped at Send before sending anything (x)." }))).toMatchObject({ words: "Not sent", tone: "bad" });
   });
   test("an open card says Your call only to someone who may answer it, the run card's rule", () => {
     const gate = run("r", "c", { status: "paused", user_id: "u1", current_node_id: "decide__decide", gate_decision_id: "d1" });

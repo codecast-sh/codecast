@@ -16,7 +16,7 @@ import { DEPLOY_WAIT_CAP_MS, deployDeadlineMs, fileShipsTo, NOT_YOUR_MACHINE, re
 import { mainRedSince, type MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { deployNoteHeadline } from "@codecast/shared/contracts/lineDeploy";
 import { git, gitTry } from "../wipSnapshot.js";
-import { landsConfig, republishLanded, unknownKeys, withMergedTree } from "./republishLanded.js";
+import { castVersionNeeded, landsConfig, republishLanded, withMergedTree, type Published } from "./republishLanded.js";
 
 /** One deploy of a target, as the targets read lists its history. */
 export type TargetDeploy = { short_id: string; status: string; sha?: string | null; created_at?: number; live_at?: number | null; finished_at?: number | null; note?: string | null };
@@ -239,15 +239,30 @@ function ownLines(last: string, target: string): string {
 }
 
 /**
- * The stop for deploys that failed: one that stopped at CI or Send sent nothing, so it never carried the commit and is
- * not called its deploy ("No deploy took … out"); one that failed later did go out. Each names its headline cause.
+ * A Send that stopped on a refusal before anything went out: a release already in flight, a wait for one that ran out,
+ * another person's machine, or credentials the sending machine lacks (no upload starts without them). Any other Send
+ * failure may have sent part of it (an OTA published to one channel of several, a release dispatched before its run
+ * was read), so it is not called unsent.
+ */
+const PRE_SEND = new RegExp(`(?:already in flight|still waiting for|${NOT_YOUR_MACHINE}|is sent only from|account is required|not logged in|\\bEXPO_TOKEN\\b|\\bGH_TOKEN\\b|credentials|unauthori[sz]ed|authentication (?:required|failed))`, "i");
+
+/** Whether a failed deploy sent nothing: it stopped at CI, or at Send on a refusal that comes before any upload (PRE_SEND). */
+export function sentNothing(d: Pick<TargetDeploy, "note">): boolean {
+  const headline = deployNoteHeadline(d.note) ?? "";
+  return /^Stopped at CI\b/.test(headline) || (/^Stopped at Send\b/.test(headline) && PRE_SEND.test(headline));
+}
+
+/**
+ * The stop for deploys that failed: one that sent nothing (sentNothing) never carried the commit and is not called its
+ * deploy ("No deploy took … out"); any other did or may have gone out. Each names its headline cause, after the
+ * `<target> dp-N` the stop's readers find it by.
  */
 export function failedWords(short: string, failed: Array<{ target: string; deploy: TargetDeploy }>): string {
-  const unsent = (d: TargetDeploy) => /^Stopped at (CI|Send)\b/.test(d.note ?? "");
+  const unsent = sentNothing;
   const said = failed.map(({ target, deploy }) => {
     const headline = deployNoteHeadline(deploy.note);
     if (!unsent(deploy)) return `${target} ${deploy.short_id}${headline ? ` (${headline})` : ""}`;
-    const step = deploy.note!.match(/^Stopped at (CI|Send)/)![1];
+    const step = headline!.match(/^Stopped at (CI|Send)/)![1];
     const cause = headline?.replace(/^Stopped at [^:]+:\s*/, "").replace(/^Stopped at [^.]+\.$/, "");
     return `${target} ${deploy.short_id} stopped at ${step} before sending anything${cause ? ` (${cause})` : ""}`;
   });
@@ -599,18 +614,29 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
   };
   // A change that lands the repository's line profile or deploy targets republishes them beside the wait, from a clean
   // worktree of the merged commit, naming this checkout as where its targets' deploys run (republishLanded.ts).
-  const publishIn = (dir: string, args: string[]) => within(castCmd.cmd, [...castCmd.prefixArgs, ...args], dir, PUBLISH_MS, { ...process.env, CODECAST_CWD: dir, CODECAST_PUBLISH_ROOT: cwd });
+  const publishIn = (dir: string, args: string[]) => within(castCmd.cmd, [...castCmd.prefixArgs, ...args, "--strict"], dir, PUBLISH_MS, { ...process.env, CODECAST_CWD: dir, CODECAST_PUBLISH_ROOT: cwd });
+  // `--strict` exits 3 with what the publishing cast would drop (lineProfileCommand.ts refuseUnknownKeys).
+  const refusal = (r: { code: number; out: string }, dir: string): Published | null => {
+    if (r.code !== 3) return null;
+    try {
+      const said = JSON.parse(r.out.trim().split("\n").pop() ?? "");
+      if (said?.refused === "unknown_keys") return { republished: "refused", version: String(said.version), unknown: (said.unknown ?? []).map(String), needed: castVersionNeeded(dir) };
+    } catch { /* not the refusal */ }
+    return null;
+  };
   const republished = !opts.once && landsConfig(merged.files)
     ? republishLanded(merged.sha, {
       tree: (fn) => withMergedTree(cwd, merged.sha, fn),
-      unknown: unknownKeys,
       publish: async (dir) => {
-        if ((await publishIn(dir, ["line", "profile", "--publish", "--json"])).code === 0) return { republished: "all" };
+        const profile = await publishIn(dir, ["line", "profile", "--publish", "--json"]);
+        if (profile.code === 0) return { republished: "all" };
+        const refusedProfile = refusal(profile, dir);
+        if (refusedProfile) return refusedProfile;
         // A repository with no line profile still has its targets: publish those, and say the profile was not.
-        if ((await publishIn(dir, ["line", "deploy", "targets", "--publish", "--json"])).code === 0) return { republished: "targets", why: `cast line profile --publish failed at ${merged.sha.slice(0, 7)}` };
-        return { republished: "none", why: `cast line profile --publish and cast line deploy targets --publish both failed at ${merged.sha.slice(0, 7)}` };
+        const targets = await publishIn(dir, ["line", "deploy", "targets", "--publish", "--json"]);
+        if (targets.code === 0) return { republished: "targets", why: `cast line profile --publish failed at ${merged.sha.slice(0, 7)}` };
+        return refusal(targets, dir) ?? { republished: "none", why: `cast line profile --publish and cast line deploy targets --publish both failed at ${merged.sha.slice(0, 7)}` };
       },
-      version: `v${(await import("../cliVersion.js")).getVersion()}`,
     })
     : null;
   const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once, held: back?.held }, io);

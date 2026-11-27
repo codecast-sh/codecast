@@ -13,7 +13,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "comm
 const write = (root: string, rel: string, text: string, mode = 0o644) => { fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); fs.writeFileSync(path.join(root, rel), text, { mode }); };
 
 const TARGETS = (run: string) => `[[target]]\nname = "cli"\nrun = "${run}"\npolicy = "release"\n`;
-let dir = "", checkout = "", old = "", landed = "";
+let dir = "", checkout = "", other = "", old = "", landed = "";
 beforeAll(() => {
   dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cast-deploy-at-")));
   checkout = path.join(dir, "checkout");
@@ -26,14 +26,15 @@ beforeAll(() => {
   git(checkout, "commit", "-qm", "base");
   old = git(checkout, "rev-parse", "HEAD");
   // main moves on elsewhere; the checkout fetches it but stays where it is (others' edits keep it from levelling).
-  const other = path.join(dir, "other");
+  other = path.join(dir, "other");
   git(dir, "clone", "-q", checkout, other);
+  git(checkout, "remote", "add", "origin", other);
   write(other, "scripts/send.sh", "#!/bin/bash\necho \"new send from $0 for $1 at $CAST_DEPLOY_SHA\"\n", 0o755);
   write(other, "scripts/send.py", "#!/usr/bin/env python3\nprint('new')\n", 0o755);
   write(other, ".codecast/deploy.toml", TARGETS("scripts/send.sh $sha"));
   git(other, "commit", "-qam", "send waits");
   landed = git(other, "rev-parse", "HEAD");
-  git(checkout, "fetch", "-q", other, "main");
+  git(checkout, "fetch", "-q", "origin");
 });
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -54,6 +55,35 @@ describe("a deploy step in a checkout behind its commit", () => {
     expect(py.command).toBe("scripts/send.py");
     expect(py.said).toContain("not a shell script");
     expect((await commandAtCommit(checkout, "f".repeat(40), "scripts/send.sh")).command).toBe("scripts/send.sh");
+  });
+
+  test("a commit the checkout has not fetched is fetched first; one origin lacks is said plainly", async () => {
+    write(other, "scripts/send.sh", "#!/bin/bash\necho newest\n", 0o755);
+    git(other, "commit", "-qam", "newer");
+    const newest = git(other, "rev-parse", "HEAD");
+    const at = await commandAtCommit(checkout, newest, "scripts/send.sh");
+    expect(at.env.CAST_DEPLOY_SCRIPT).toContain("echo newest");
+    const gone = await commandAtCommit(checkout, "e".repeat(40), "scripts/send.sh");
+    expect(gone.command).toBe("scripts/send.sh");
+    expect(gone.said).toContain("cannot fetch it from origin");
+    git(other, "reset", "-q", "--hard", landed);
+  });
+
+  test("a script that runs itself again from disk is not said to run as the commit has it", async () => {
+    write(other, "scripts/deploy.sh", "#!/bin/bash\n[ -t 0 ] || exec bun run.ts -- \"$PWD/deploy.sh\" \"$@\"\necho deploy\n", 0o755);
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "deploy.sh");
+    const withDeploy = git(other, "rev-parse", "HEAD");
+    write(checkout, "scripts/deploy.sh", "#!/bin/bash\necho old\n", 0o755);
+    const at = await commandAtCommit(checkout, withDeploy, "scripts/deploy.sh");
+    expect(at.said).toContain("runs itself again from this checkout's copy");
+    fs.rmSync(path.join(checkout, "scripts/deploy.sh"));
+    git(other, "reset", "-q", "--hard", landed);
+  });
+
+  test("a deploy that names no commit yet reads the target as origin's head declares it", async () => {
+    // The commit renamed nothing here, but its run line differs from the checkout's: origin's head is the authority.
+    expect((await deployProfileFor({ target: "cli", action: "deploy", sha: null }, checkout)).profile?.command).toBe("scripts/send.sh $sha");
   });
 
   test("the send reads the target from the commit's deploy.toml and runs the commit's script", async () => {

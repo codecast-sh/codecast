@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { spawn, spawnSync } from "./proc.js";
 import { deployCauseLine, deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
-import { commandAtCommit, hasCommit, headHolds } from "./deployAtCommit.js";
+import { behindCommit, commandAtCommit } from "./deployAtCommit.js";
 import type { ResolvedLineProfile } from "./lineProfile.js";
 import { targetFromLineDeploy, type DeployTarget, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
@@ -541,10 +541,12 @@ export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeplo
  */
 export async function deployProfileFor(d: { target: string; action?: string | null; sha?: string | null }, root: string): Promise<{ profile: Partial<LineDeployProfile> | null; root: string; why?: string }> {
   if (d.action) {
-    // A checkout behind the deploy's commit sends what that commit declares (deployAtCommit.ts).
-    const behind = d.sha && !(await headHolds(root, d.sha)) && (await hasCommit(root, d.sha));
-    const t = (behind ? (await commitTargets(root, d.sha!)).targets : await checkoutTargets(root)).find((x) => x.name === d.target);
-    if (!t) return { profile: null, root, why: `No target ${d.target} in ${behind ? `${d.sha!.slice(0, 7)}'s` : "this checkout's"} .codecast/deploy.toml` };
+    // A checkout behind the deploy's commit sends what that commit declares (deployAtCommit.ts). A deploy that names no
+    // commit yet sends origin's head, which its first step fixes as its sha: read that, fetched, as the steps will.
+    const sha = d.sha ?? originHead(root).sha;
+    const behind = sha && (await behindCommit(root, sha)) === "behind" ? sha : null;
+    const t = (behind ? (await commitTargets(root, behind)).targets : await checkoutTargets(root)).find((x) => x.name === d.target);
+    if (!t) return { profile: null, root, why: `No target ${d.target} in ${behind ? `${behind.slice(0, 7)}'s` : "this checkout's"} .codecast/deploy.toml` };
     return { profile: targetDeployProfile(t, d.action as "deploy" | "redeploy" | "rollback"), root };
   }
   const { profile, root: profileRoot } = await loadLineDeployProfile(root);

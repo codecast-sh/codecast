@@ -11,7 +11,7 @@ import { DEPLOY_WAIT_CAP_MS, parseDeployTargets } from "@codecast/shared/contrac
 import type { MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { parseWorkflowSource } from "./parser";
 import { RESUME_ENV } from "./stationReexec";
-import { awaitDeploy, ciGateOf, deployDuties, failedWords, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, runAwaitDeploy, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type DeployWaitPlace, type MainCi } from "./awaitDeploy";
+import { awaitDeploy, ciGateOf, deployDuties, failedWords, sentNothing, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, runAwaitDeploy, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type DeployWaitPlace, type MainCi } from "./awaitDeploy";
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 let dir = "";
@@ -363,8 +363,18 @@ describe("awaitDeploy", () => {
     const f = fake(() => [{ name: "cli", history: [{ ...dp("dp-3", "failed"), note }] }]);
     expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).line)
       .toBe("No deploy took 1a2b3c4 out: cli dp-3 stopped at Send before sending anything (A cut-cli-release.yml run is already in flight: https://github.com/acme/app/actions/runs/9). A later deploy that takes it live ends this run at Live.");
-    expect(failedWords("1a2b3c4", [{ target: "cli", deploy: { short_id: "dp-3", status: "failed", note: "Stopped at Send." } }, { target: "web", deploy: { short_id: "dp-4", status: "failed", note: "Stopped at Live: not answering\nlog" } }]))
-      .toBe("The deploy that carried 1a2b3c4 failed: cli dp-3 stopped at Send before sending anything, web dp-4 (Stopped at Live: not answering). A later deploy that takes it live ends this run at Live.");
+    expect(failedWords("1a2b3c4", [{ target: "cli", deploy: { short_id: "dp-3", status: "failed", note: "Stopped at CI: red" } }, { target: "web", deploy: { short_id: "dp-4", status: "failed", note: "Stopped at Live: not answering\nlog" } }]))
+      .toBe("The deploy that carried 1a2b3c4 failed: cli dp-3 stopped at CI before sending anything (red), web dp-4 (Stopped at Live: not answering). A later deploy that takes it live ends this run at Live.");
+  });
+
+  // An OTA loops over channels: the first can be live when the second fails, so only a refusal before any upload is unsent.
+  test("a Send failure that may have sent part of it is the deploy that carried it", () => {
+    expect(sentNothing({ note: "Stopped at Send: An Expo user account is required to proceed.\nlog" })).toBe(true);
+    expect(sentNothing({ note: "Stopped at Send.\nStill waiting for the CLI release in flight (runs 9) after 4800s\nexited 1" })).toBe(true);
+    expect(sentNothing({ note: "Stopped at CI.\nred" })).toBe(true);
+    for (const note of ["Stopped at Send: Error: update to channel production failed", "Stopped at Send.", "Stopped at Gate: refused"]) expect(sentNothing({ note })).toBe(false);
+    expect(failedWords("1a2b3c4", [{ target: "mobile", deploy: { short_id: "dp-5", status: "failed", note: "Stopped at Send: Error: update to channel production failed" } }]))
+      .toBe("The deploy that carried 1a2b3c4 failed: mobile dp-5 (Stopped at Send: Error: update to channel production failed). A later deploy that takes it live ends this run at Live.");
   });
 
   test("a release that ended without sending a target fails it rather than wait for its deadline", async () => {

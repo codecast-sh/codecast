@@ -293,9 +293,10 @@ said. The carried fixes stay shipped and wait for the next deploy; the
 problem runs on the line like any other.
 
 The cause is one line of the step's whole output (`contracts/lineDeploy`
-`deployCauseLine`): the first that names what it needed (`An Expo user account
-is required`), else the first error line, else the last line that is no
-warning or stack frame. The step prints it last (`exited 1: <cause>`), Returned
+`deployCauseLine`): the last line that names what it needed (`An Expo user
+account is required`) or an error, nearest the end where the step failed, else
+the last line that is no warning or stack frame; a wrapper's line that only says
+the command it ran failed (npm's lifecycle lines) never counts. The step prints it last (`exited 1: <cause>`), Returned
 puts it in the note's first line, and every surface that heads a failed deploy
 shows that line (`deployNoteHeadline`, which reads an older note's log the same
 way) with the whole note behind it.
@@ -357,8 +358,10 @@ repository with no profile) with `CODECAST_PUBLISH_ROOT` naming the run's
 checkout, so the published root stays where the targets' deploys run, removes
 the worktree, and its last line says whether it did. The run's checkout need
 never hold the commit. A cast that does not read a key the files name would
-publish without it, so it publishes nothing and says a cast released from
-that commit or later is needed. A target the checkout stops
+publish without it, so the publish runs with `--strict`: the cast that
+publishes checks the files, publishes nothing and exits 3 naming the keys, and
+the line names the cast that reads them (in codecast's own repository, the
+release after the version the commit's `packages/cli/package.json` holds). A target the checkout stops
 declaring is retired, not deleted. Every reader (the CLI, the server, the
 Deploys page) parses through `contracts/deployTargets`.
 
@@ -506,12 +509,19 @@ runs the line-deploy graph with the target's commands
 target read from elsewhere gets a live step (`cast line deploy await-live`)
 that waits for its reader to record the sha. Its other steps run the
 target's own commands (DP10), and a rollback runs none of them. A checkout
-whose HEAD does not hold the deploy's sha (a shared checkout with others' edits
-is not kept level) runs what that commit declares, not its older files
-(`deployAtCommit.ts`): the target as the commit's deploy.toml has it, and a
-shell script the command starts as the commit has it, run with `bash -c` from
-the checkout's root so `$0` is still its path; `cast deploy` plans from the
-commit's targets the same way. A send that prints `Waiting for …` (a release in
+whose HEAD does not hold the deploy's commit (a shared checkout with others'
+edits is not kept level) runs what that commit declares, not its older files
+(`deployAtCommit.ts`). The commit is the deploy's sha, or, for a deploy that
+names none yet (a target whose command takes no `$sha`, asked for by `cast
+deploy` or the Deploys page), origin's head, fetched, which the first step then
+fixes as its sha. The step reads the target as that commit's deploy.toml has
+it, and runs a shell script the command starts as the commit has it, with
+`bash -c` from the checkout's root so `$0` is still its path; a script that
+runs itself again from disk (backend's deploy.sh) then runs the checkout's
+copy, and the step's log says so. A commit the checkout lacks is fetched from
+origin first; one origin does not have either leaves the checkout's own files,
+and the log says that too. `cast deploy` plans from the commit's targets the
+same way. A send that prints `Waiting for …` (a release in
 flight, CI on main) puts that line on the running deploy's note, and the line
 it moves on with after it, so whoever waits on the deploy reads why: `cli: dp-13
 goes out after the CLI release in flight (runs 4604…), then sends 1a2b3c4`. The steps:
@@ -662,10 +672,13 @@ deploy sends main's head (DP13), so a later commit's deploy that carries the
 merged one satisfies the wait. When the send ends and a target it sent has no
 deploy carrying the commit, the stage fails at once rather than wait out the
 deadline, naming the sha the deploy did send: the checkout that publishes the
-target may be behind origin. A deploy that stopped at CI or Send sent
-nothing, so the stop says no deploy took the commit out (`No deploy took 1a2b3c4
-out: cli dp-3789 stopped at Send before sending anything (<cause>)`); one that
-failed later says the deploy that carried it failed. A target the stage only
+target may be behind origin. A deploy that sent nothing (stopped at CI, or at
+Send on a refusal that comes before any upload: a release already in flight, a
+wait for one that ran out, another person's machine, missing credentials)
+makes the stop say no deploy took the commit out (`No deploy took 1a2b3c4 out:
+cli dp-3789 stopped at Send before sending anything (<cause>)`), and the change
+reads Not sent. Any other failure, Send's included (an OTA can publish to one
+channel and fail on the next), says the deploy that carried it failed. A target the stage only
 waits on names since when nobody has sent it (`nobody has sent desktop since
 46f3912 in dp-3793`).
 

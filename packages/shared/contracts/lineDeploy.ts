@@ -71,22 +71,22 @@ export const normalizeRoleHandle = (s: string | null | undefined): string | null
 };
 
 // A line that says nothing of why a step failed: a warning, a stack frame, a caret under a quoted line, a runtime's
-// version banner, a cut marker, npm's boilerplate under its own error, the bare exit code.
-const NOISE = /^(?:(?:npm )?warn\b|warning\b|at\s|\^+$|node\.js v\d|….*characters cut|exited \d+$|npm (?:err!?|error) (?:code|path|workspace|location|command|errno|syscall|a complete log)\b|<anonymous|\S+:\d+$|[-=_*#.\s]+$)/i;
-// A line that names what the step needed and did not have.
-const NEED = /\b(?:required|not found|denied|missing|unauthori[sz]ed|forbidden|permission|no such|not set|expired|already in flight|still waiting)\b/i;
-const ERROR = /\b(?:error|failed|fatal|cannot|could not|refused)\b/i;
+// version banner, a cut marker, a frame's tail a cut left, the bare exit code, and a wrapper's line that only says what it ran failed (npm's
+// lifecycle and boilerplate lines, bun's and yarn's "exited with code", make's "Error 1").
+const NOISE = /^(?:(?:npm )?warn\b|warning\b|at\s|\^+$|node\.js v\d|.*characters cut …$|exited \d+$|npm (?:err!?|error) |error:? (?:script|command) ["'`]?\S+["'`]? (?:exited|failed)\b|error command failed\b|elifecycle\b|make(?:\[\d+\])?: \*\*\*|command failed with exit code\b|<anonymous|\S+:\d+$|\S*:\d+:\d+\)$|.*\([^()\s]+:\d+:\d+\)$|[-=_*#.\s]+$)/i;
+const CAUSE = /\b(?:required|not found|denied|missing|unauthori[sz]ed|forbidden|permission|no such|not set|expired|already in flight|still waiting|error|failed|fatal|cannot|could not|refused)\b/i;
 const CAUSE_MAX = 240;
 
 /**
- * The one line of a failed step's output that says why (deploys.md DP9): the first that names what it needed (a
- * login, a token, a file), else the first error line, else the last line that is no warning or stack frame; never
- * the warnings and frames a tool prints around it. Cut to one line. Null for output with nothing to say.
+ * The one line of a failed step's output that says why (deploys.md DP9): the last line that names what it needed or an
+ * error, nearest the end where the failure is, else the last line that is no warning or stack frame; never the
+ * warnings and frames a tool prints around it, nor a wrapper's line that only says the command it ran failed. Cut to
+ * one line. Null for output with nothing to say.
  */
 export function deployCauseLine(output: string | null | undefined): string | null {
   // eslint-disable-next-line no-control-regex
   const lines = (output ?? "").replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !NOISE.test(l));
-  const line = lines.find((l) => NEED.test(l)) ?? lines.find((l) => ERROR.test(l)) ?? lines[lines.length - 1];
+  const line = lines.filter((l) => CAUSE.test(l)).pop() ?? lines[lines.length - 1];
   if (!line) return null;
   return line.length > CAUSE_MAX ? `${line.slice(0, CAUSE_MAX - 1)}…` : line;
 }

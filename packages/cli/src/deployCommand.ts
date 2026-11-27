@@ -70,8 +70,8 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
       const sha = pinned?.sha ?? options.carrying ?? head.sha;
       if (!sha) { console.error(`Could not read origin/${head.branch} here`); process.exit(1); }
       // A checkout behind the release's commit sends the targets that commit declares, not its older files (deployAtCommit.ts).
-      const { headHolds, hasCommit } = await import("./deployAtCommit.js");
-      const behind = !(await headHolds(cwd, sha)) && (await hasCommit(cwd, sha));
+      const { behindCommit } = await import("./deployAtCommit.js");
+      const behind = (await behindCommit(cwd, sha)) === "behind";
       const declared = behind ? (await commitTargets(cwd, sha)).targets : await checkoutTargets(cwd);
       if (!declared.length) { console.error("This checkout declares no deploy targets. Add a [[target]] to .codecast/deploy.toml (docs: deploys.md DP10)."); process.exit(1); }
       const readTargets = async () => (await apiPost(deps, "/cli/deploys/targets", { repository }, { read: true }))?.targets ?? [];
