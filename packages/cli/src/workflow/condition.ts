@@ -51,10 +51,11 @@ export function pathsTouch(paths: string, globs: string): boolean {
   const files = paths.split(/\s+/).filter(Boolean).map((f) => f.replace(/^\.\//, ""));
   return whenPaths(globs).some((raw) => {
     const g = raw.replace(/^\.\//, "");
-    if (!/[*?[{]/.test(g)) {
-      const dir = g.replace(/\/+$/, "");
-      return files.some((f) => f === dir || f.startsWith(`${dir}/`));
-    }
+    // A path as written comes first: a route file or folder such as app/task/[id].tsx, read only as a glob, is a
+    // character class that matches nothing (ct-102468).
+    const dir = g.replace(/\/+$/, "");
+    if (files.some((f) => f === dir || f.startsWith(`${dir}/`))) return true;
+    if (!/[*?[{]/.test(g)) return false;
     const glob = new Bun.Glob(g.endsWith("/") ? `${g}**` : g);
     return files.some((f) => glob.match(f));
   });
